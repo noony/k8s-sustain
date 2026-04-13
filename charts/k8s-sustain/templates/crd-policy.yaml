@@ -1,0 +1,205 @@
+{{- if .Values.installCRDs }}
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: policies.k8s.sustain.io
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  group: k8s.sustain.io
+  names:
+    kind: Policy
+    listKind: PolicyList
+    plural: policies
+    singular: policy
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          description: Policy is the Schema for the policies API.
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: PolicySpec defines the desired state of a Policy.
+              type: object
+              properties:
+                rightSizing:
+                  description: RightSizing configures resource recommendation and application.
+                  type: object
+                  properties:
+                    updatePolicy:
+                      description: UpdatePolicy controls eviction behaviour.
+                      type: object
+                      properties:
+                        ignoreAutoscalerSafeToEvictAnnotations:
+                          type: boolean
+                    resourcesConfigs:
+                      description: ResourcesConfigs holds per-resource-dimension recommendation configs.
+                      type: object
+                      properties:
+                        cpu:
+                          description: CPU holds the recommendation config for CPU resources.
+                          type: object
+                          properties:
+                            window:
+                              type: string
+                            requests:
+                              type: object
+                              properties:
+                                headroomPercentage:
+                                  type: integer
+                                  format: int32
+                                keepRequest:
+                                  type: boolean
+                                maxAllowed:
+                                  anyOf:
+                                    - type: integer
+                                    - type: string
+                                  pattern: "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$"
+                                  x-kubernetes-int-or-string: true
+                                minAllowed:
+                                  anyOf:
+                                    - type: integer
+                                    - type: string
+                                  pattern: "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$"
+                                  x-kubernetes-int-or-string: true
+                                percentilePercentage:
+                                  type: integer
+                                  format: int32
+                            limits:
+                              type: object
+                              properties:
+                                equalsToRequest:
+                                  type: boolean
+                                keepLimit:
+                                  type: boolean
+                                keepLimitRequestRatio:
+                                  type: boolean
+                                noLimit:
+                                  type: boolean
+                                requestsLimitsRatio:
+                                  type: number
+                                  format: double
+                        memory:
+                          description: Memory holds the recommendation config for memory resources.
+                          type: object
+                          properties:
+                            window:
+                              type: string
+                            requests:
+                              type: object
+                              properties:
+                                headroomPercentage:
+                                  type: integer
+                                  format: int32
+                                keepRequest:
+                                  type: boolean
+                                maxAllowed:
+                                  anyOf:
+                                    - type: integer
+                                    - type: string
+                                  pattern: "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$"
+                                  x-kubernetes-int-or-string: true
+                                minAllowed:
+                                  anyOf:
+                                    - type: integer
+                                    - type: string
+                                  pattern: "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$"
+                                  x-kubernetes-int-or-string: true
+                                percentilePercentage:
+                                  type: integer
+                                  format: int32
+                            limits:
+                              type: object
+                              properties:
+                                equalsToRequest:
+                                  type: boolean
+                                keepLimit:
+                                  type: boolean
+                                keepLimitRequestRatio:
+                                  type: boolean
+                                noLimit:
+                                  type: boolean
+                                requestsLimitsRatio:
+                                  type: number
+                                  format: double
+                update:
+                  description: Update configures which workload types are reconciled and how.
+                  type: object
+                  properties:
+                    types:
+                      type: object
+                      properties:
+                        deployment:
+                          type: string
+                          enum: [OnCreate, Ongoing]
+                        statefulSet:
+                          type: string
+                          enum: [OnCreate, Ongoing]
+                        daemonSet:
+                          type: string
+                          enum: [OnCreate, Ongoing]
+                        job:
+                          type: string
+                          enum: [OnCreate, Ongoing]
+                        family:
+                          type: string
+                          enum: [OnCreate, Ongoing]
+                        deploymentConfig:
+                          type: string
+                          enum: [OnCreate, Ongoing]
+                        argoRollout:
+                          type: string
+                          enum: [OnCreate, Ongoing]
+            status:
+              description: PolicyStatus defines the observed state of a Policy.
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [lastTransitionTime, message, reason, status, type]
+                    properties:
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: "^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$"
+                      status:
+                        type: string
+                        enum: ["True", "False", Unknown]
+                      type:
+                        type: string
+                        maxLength: 316
+                        pattern: "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$"
+                  x-kubernetes-list-map-keys: [type]
+                  x-kubernetes-list-type: map
+{{- end }}

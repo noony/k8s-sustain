@@ -1,0 +1,78 @@
+site_name: k8s-sustain
+site_description: Kubernetes operator for workload right-sizing and sustainability
+site_url: https://noony.github.io/k8s-sustain
+repo_url: https://github.com/noony/k8s-sustain
+repo_name: noony/k8s-sustain
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  palette:
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Prerequisites: getting-started/prerequisites.md
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quick-start.md
+  - Concepts:
+      - Architecture: concepts/architecture.md
+      - Update Modes: concepts/update-modes.md
+      - In-Place Updates: concepts/in-place-updates.md
+  - Reference:
+      - Policy CRD: reference/policy.md
+      - Annotation: reference/annotation.md
+      - CLI: reference/cli.md
+      - Helm Values: reference/helm-values.md
+  - Guides:
+      - Deployments & StatefulSets: guides/deployments.md
+      - DaemonSets: guides/daemonsets.md
+      - CronJobs: guides/cronjobs.md
+      - TLS with cert-manager: guides/cert-manager.md
+  - Development: development.md

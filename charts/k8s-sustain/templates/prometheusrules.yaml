@@ -1,0 +1,136 @@
+{{/*
+PrometheusRule for the Prometheus Operator (e.g. kube-prometheus-stack).
+Enable with: serviceMonitor.enabled=true
+For standalone prometheus (no operator), rules are configured via
+prometheus.serverFiles.recording_rules.yml in values.yaml instead.
+*/}}
+{{- if .Values.serviceMonitor.enabled }}
+{{- $window := .Values.percentiles.window }}
+{{- $step   := .Values.percentiles.step }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "k8s-sustain.fullname" . }}-percentiles
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: k8s_sustain.workload_mapping
+      interval: 1m
+      rules:
+        # Map pod → workload for direct owners (StatefulSet, DaemonSet, Job).
+        - record: k8s_sustain:pod_workload
+          expr: |
+            max by (namespace, pod, owner_kind, owner_name) (
+              kube_pod_owner{
+                owner_kind=~"StatefulSet|DaemonSet|Job",
+                owner_is_controller="true"
+              }
+            )
+        # Map pod → Deployment by resolving ReplicaSet → Deployment.
+        # Renames owner_name (RS name) → replicaset and clears conflicting labels
+        # so group_left can inject owner_kind/owner_name from kube_replicaset_owner.
+        - record: k8s_sustain:pod_workload
+          expr: |
+            max by (namespace, pod, owner_kind, owner_name) (
+              label_replace(
+                label_replace(
+                  label_replace(
+                    kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"},
+                    "replicaset", "$1", "owner_name", "(.*)"
+                  ),
+                  "owner_kind", "", "owner_kind", ".*"
+                ),
+                "owner_name", "", "owner_name", ".*"
+              )
+              * on(namespace, replicaset) group_left(owner_kind, owner_name)
+              kube_replicaset_owner{owner_kind="Deployment", owner_is_controller="true"}
+            )
+
+    - name: k8s_sustain.cpu_rates
+      interval: {{ $step }}
+      rules:
+        # Per-container CPU usage rate.
+        - record: k8s_sustain:container_cpu_usage:rate5m
+          expr: |
+            rate(container_cpu_usage_seconds_total{
+              container!="",
+              container!="POD",
+              image!=""
+            }[5m])
+        # Per-container CPU rate WITH workload labels — used by the operator.
+        - record: k8s_sustain:container_cpu_usage_by_workload:rate5m
+          expr: |
+            k8s_sustain:container_cpu_usage:rate5m
+            * on(namespace, pod) group_left(owner_kind, owner_name)
+            k8s_sustain:pod_workload
+        # Per-pod CPU rate, enriched with workload labels.
+        # Containers within the same pod are summed.
+        - record: k8s_sustain:pod_cpu_usage:rate5m
+          expr: |
+            sum by (namespace, pod, owner_kind, owner_name) (
+              k8s_sustain:container_cpu_usage:rate5m
+              * on(namespace, pod) group_left(owner_kind, owner_name)
+              k8s_sustain:pod_workload
+            )
+
+    - name: k8s_sustain.cpu_percentiles
+      interval: {{ $step }}
+      rules:
+        {{- range $p, $q := dict "p50" "0.50" "p70" "0.70" "p80" "0.80" "p90" "0.90" "p95" "0.95" "p99" "0.99" }}
+        # {{ $p }} — per pod
+        - record: k8s_sustain:pod_cpu_usage:{{ $p }}
+          expr: quantile_over_time({{ $q }}, k8s_sustain:pod_cpu_usage:rate5m[{{ $window }}:{{ $step }}])
+        # {{ $p }} — per workload (all pods summed)
+        - record: k8s_sustain:workload_cpu_usage:{{ $p }}
+          expr: |
+            quantile_over_time({{ $q }},
+              (sum by (namespace, owner_kind, owner_name)
+                (k8s_sustain:pod_cpu_usage:rate5m))[{{ $window }}:{{ $step }}]
+            )
+        {{- end }}
+
+    - name: k8s_sustain.memory_rates
+      interval: {{ $step }}
+      rules:
+        # Per-container memory working set (excludes reclaimable page cache).
+        - record: k8s_sustain:container_memory_working_set:bytes
+          expr: |
+            container_memory_working_set_bytes{
+              container!="",
+              container!="POD",
+              image!=""
+            }
+        # Per-container memory WITH workload labels — used by the operator.
+        - record: k8s_sustain:container_memory_by_workload:bytes
+          expr: |
+            k8s_sustain:container_memory_working_set:bytes
+            * on(namespace, pod) group_left(owner_kind, owner_name)
+            k8s_sustain:pod_workload
+        # Per-pod memory working set, enriched with workload labels.
+        # Containers within the same pod are summed.
+        - record: k8s_sustain:pod_memory_working_set:bytes
+          expr: |
+            sum by (namespace, pod, owner_kind, owner_name) (
+              k8s_sustain:container_memory_working_set:bytes
+              * on(namespace, pod) group_left(owner_kind, owner_name)
+              k8s_sustain:pod_workload
+            )
+
+    - name: k8s_sustain.memory_percentiles
+      interval: {{ $step }}
+      rules:
+        {{- range $p, $q := dict "p50" "0.50" "p70" "0.70" "p80" "0.80" "p90" "0.90" "p95" "0.95" "p99" "0.99" }}
+        # {{ $p }} — per pod
+        - record: k8s_sustain:pod_memory_working_set:{{ $p }}
+          expr: quantile_over_time({{ $q }}, k8s_sustain:pod_memory_working_set:bytes[{{ $window }}:{{ $step }}])
+        # {{ $p }} — per workload (all pods summed)
+        - record: k8s_sustain:workload_memory_working_set:{{ $p }}
+          expr: |
+            quantile_over_time({{ $q }},
+              (sum by (namespace, owner_kind, owner_name)
+                (k8s_sustain:pod_memory_working_set:bytes))[{{ $window }}:{{ $step }}]
+            )
+        {{- end }}
+{{- end }}

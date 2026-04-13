@@ -1,0 +1,54 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "k8s-sustain.fullname" . }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+rules:
+  # Policy CRD
+  - apiGroups: [k8s.sustain.io]
+    resources: [policies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [k8s.sustain.io]
+    resources: [policies/status]
+    verbs: [get, update, patch]
+  - apiGroups: [k8s.sustain.io]
+    resources: [policies/finalizers]
+    verbs: [update]
+  # Leader election
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Workloads — batch
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get]
+  # Namespaces and Pods (in-place updates)
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [list, watch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, patch]
+  # Events
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "k8s-sustain.fullname" . }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "k8s-sustain.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "k8s-sustain.fullname" . }}
+    namespace: {{ .Release.Namespace }}

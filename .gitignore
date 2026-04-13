@@ -33,3 +33,10 @@ go.work.sum
 
 # IA
 Claude.md
+.claude/
+
+# charts
+charts/k8s-sustain/charts
+
+# misc
+example1.yaml

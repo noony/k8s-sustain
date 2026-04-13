@@ -1,0 +1,29 @@
+# Version control
+.git
+.gitignore
+
+# Go
+vendor/
+
+# Development tools and config
+.github/
+Makefile
+hack/
+
+# Documentation
+docs/
+site/
+mkdocs.yml
+requirements-docs.txt
+*.md
+
+# Helm charts (not needed in the image)
+charts/
+
+# Tests
+**/*_test.go
+
+# IDE / OS
+.idea/
+.vscode/
+*.DS_Store
