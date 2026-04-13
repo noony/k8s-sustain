@@ -17,6 +17,8 @@ manager:
   logLevel: info
 
 serviceAccount:
+  create: true
+  name: ""
   # Annotations to add to the service account (e.g. for IRSA, Workload Identity).
   annotations: {}
 
@@ -58,6 +60,9 @@ webhook:
   # failurePolicy controls what happens when the webhook is unreachable.
   # "Ignore" (default) lets pods through; "Fail" blocks them.
   failurePolicy: Ignore
+  # Extra namespaces to exclude from webhook interception (in addition to the
+  # release namespace and kube-system / kube-public which are always excluded).
+  excludedNamespaces: []
   # Name of the Secret containing tls.crt and tls.key for the webhook server.
   # Created automatically by cert-manager when certManager.enabled=true.
   tlsSecretName: k8s-sustain-webhook-tls

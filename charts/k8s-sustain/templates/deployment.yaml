@@ -19,7 +19,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "k8s-sustain.fullname" . }}
+      serviceAccountName: {{ include "k8s-sustain.serviceAccountName" . }}
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -34,6 +34,7 @@ spec:
             - --health-probe-bind-address={{ .Values.manager.healthProbeBindAddress }}
             - --leader-elect={{ .Values.manager.leaderElect }}
             - --zap-log-level={{ .Values.manager.logLevel }}
+            - --excluded-namespaces={{ concat (list .Release.Namespace "kube-system" "kube-public") .Values.webhook.excludedNamespaces | join "," }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

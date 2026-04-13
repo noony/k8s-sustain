@@ -40,6 +40,9 @@ webhooks:
             - {{ .Release.Namespace }}
             - kube-system
             - kube-public
+            {{- range .Values.webhook.excludedNamespaces }}
+            - {{ . }}
+            {{- end }}
 {{- end }}
 
 {{- if and .Values.webhook.enabled .Values.webhook.certManager.enabled }}

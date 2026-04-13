@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -33,11 +34,16 @@ import (
 // PolicyReconciler reconciles a Policy object.
 type PolicyReconciler struct {
 	client.Client
-	Scheme            *runtime.Scheme
-	PrometheusClient  *promclient.Client
-	ReconcileInterval time.Duration
-	InPlaceUpdates    bool
-	patcher           *workload.Patcher
+	Scheme             *runtime.Scheme
+	PrometheusClient   *promclient.Client
+	ReconcileInterval  time.Duration
+	InPlaceUpdates     bool
+	ExcludedNamespaces []string
+	patcher            *workload.Patcher
+}
+
+func (r *PolicyReconciler) isExcluded(namespace string) bool {
+	return slices.Contains(r.ExcludedNamespaces, namespace)
 }
 
 // SetupWithManager registers the PolicyReconciler with the given manager.
@@ -106,6 +112,9 @@ func (r *PolicyReconciler) reconcileDeployments(ctx context.Context, policy *sus
 
 	for i := range list.Items {
 		d := &list.Items[i]
+		if r.isExcluded(d.Namespace) {
+			continue
+		}
 		if d.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
 			continue
 		}
@@ -141,6 +150,9 @@ func (r *PolicyReconciler) reconcileStatefulSets(ctx context.Context, policy *su
 
 	for i := range list.Items {
 		s := &list.Items[i]
+		if r.isExcluded(s.Namespace) {
+			continue
+		}
 		if s.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
 			continue
 		}
@@ -176,6 +188,9 @@ func (r *PolicyReconciler) reconcileDaemonSets(ctx context.Context, policy *sust
 
 	for i := range list.Items {
 		ds := &list.Items[i]
+		if r.isExcluded(ds.Namespace) {
+			continue
+		}
 		if ds.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
 			continue
 		}
@@ -211,6 +226,9 @@ func (r *PolicyReconciler) reconcileCronJobs(ctx context.Context, policy *sustai
 
 	for i := range list.Items {
 		cj := &list.Items[i]
+		if r.isExcluded(cj.Namespace) {
+			continue
+		}
 		if cj.Spec.JobTemplate.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
 			continue
 		}

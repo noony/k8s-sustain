@@ -57,6 +57,17 @@ Image reference.
 {{- end }}
 
 {{/*
+Service account name.
+*/}}
+{{- define "k8s-sustain.serviceAccountName" -}}
+{{- if .Values.serviceAccount.name }}
+{{- .Values.serviceAccount.name }}
+{{- else }}
+{{- include "k8s-sustain.fullname" . }}
+{{- end }}
+{{- end }}
+
+{{/*
 Webhook server name (appends -webhook to the full name).
 */}}
 {{- define "k8s-sustain.webhookName" -}}

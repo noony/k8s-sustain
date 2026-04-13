@@ -53,5 +53,5 @@ roleRef:
   name: {{ include "k8s-sustain.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "k8s-sustain.fullname" . }}
+    name: {{ include "k8s-sustain.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}

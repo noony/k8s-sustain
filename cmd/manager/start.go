@@ -36,6 +36,7 @@ func init() {
 	startCmd.Flags().String("zap-log-level", "info", "Log level (debug, info, warn, error)")
 	startCmd.Flags().String("prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
 	startCmd.Flags().Duration("reconcile-interval", time.Hour, "How often policies are re-evaluated")
+	startCmd.Flags().StringSlice("excluded-namespaces", nil, "Namespaces the reconciler should never touch")
 
 	_ = viper.BindPFlag("metrics-bind-address", startCmd.Flags().Lookup("metrics-bind-address"))
 	_ = viper.BindPFlag("health-probe-bind-address", startCmd.Flags().Lookup("health-probe-bind-address"))
@@ -43,6 +44,7 @@ func init() {
 	_ = viper.BindPFlag("zap-log-level", startCmd.Flags().Lookup("zap-log-level"))
 	_ = viper.BindPFlag("prometheus-address", startCmd.Flags().Lookup("prometheus-address"))
 	_ = viper.BindPFlag("reconcile-interval", startCmd.Flags().Lookup("reconcile-interval"))
+	_ = viper.BindPFlag("excluded-namespaces", startCmd.Flags().Lookup("excluded-namespaces"))
 
 	rootCmd.AddCommand(startCmd)
 }
@@ -96,11 +98,12 @@ func runStart(_ *cobra.Command, _ []string) error {
 	}
 
 	if err := (&controller.PolicyReconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		PrometheusClient:  promClient,
-		ReconcileInterval: viper.GetDuration("reconcile-interval"),
-		InPlaceUpdates:    inPlaceUpdates,
+		Client:             mgr.GetClient(),
+		Scheme:             mgr.GetScheme(),
+		PrometheusClient:   promClient,
+		ReconcileInterval:  viper.GetDuration("reconcile-interval"),
+		InPlaceUpdates:     inPlaceUpdates,
+		ExcludedNamespaces: viper.GetStringSlice("excluded-namespaces"),
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "Unable to create Policy controller")
 		return err
