@@ -826,27 +826,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#recording-rules" class="md-nav__link">
+  <a href="#kube-prometheus-stack-subchart" class="md-nav__link">
     <span class="md-ellipsis">
-      Recording rules
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#prometheus-subchart" class="md-nav__link">
-    <span class="md-ellipsis">
-      Prometheus subchart
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#node-exporter-subchart" class="md-nav__link">
-    <span class="md-ellipsis">
-      Node Exporter subchart
+      kube-prometheus-stack subchart
     </span>
   </a>
   
@@ -1102,27 +1084,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#recording-rules" class="md-nav__link">
+  <a href="#kube-prometheus-stack-subchart" class="md-nav__link">
     <span class="md-ellipsis">
-      Recording rules
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#prometheus-subchart" class="md-nav__link">
-    <span class="md-ellipsis">
-      Prometheus subchart
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#node-exporter-subchart" class="md-nav__link">
-    <span class="md-ellipsis">
-      Node Exporter subchart
+      kube-prometheus-stack subchart
     </span>
   </a>
   
@@ -1211,16 +1175,6 @@
 <td><code>manager.logLevel</code></td>
 <td><code>info</code></td>
 <td>Log level</td>
-</tr>
-<tr>
-<td><code>manager.prometheusAddress</code></td>
-<td><code>http://localhost:9090</code></td>
-<td>Prometheus address</td>
-</tr>
-<tr>
-<td><code>manager.reconcileInterval</code></td>
-<td><code>1h</code></td>
-<td>Reconcile interval</td>
 </tr>
 <tr>
 <td><code>resources</code></td>
@@ -1388,8 +1342,8 @@
 <tbody>
 <tr>
 <td><code>serviceMonitor.enabled</code></td>
-<td><code>false</code></td>
-<td>Create a Prometheus Operator <code>ServiceMonitor</code></td>
+<td><code>true</code></td>
+<td>Create a Prometheus Operator <code>ServiceMonitor</code> and <code>PrometheusRule</code></td>
 </tr>
 <tr>
 <td><code>serviceMonitor.interval</code></td>
@@ -1422,50 +1376,20 @@
 </tbody>
 </table>
 <hr />
-<h2 id="recording-rules">Recording rules<a class="headerlink" href="#recording-rules" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Value</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>percentiles.window</code></td>
-<td><code>7d</code></td>
-<td>Lookback window for <code>quantile_over_time</code></td>
-</tr>
-<tr>
-<td><code>percentiles.step</code></td>
-<td><code>1m</code></td>
-<td>Subquery step (must match group interval)</td>
-</tr>
-</tbody>
-</table>
-<hr />
-<h2 id="prometheus-subchart">Prometheus subchart<a class="headerlink" href="#prometheus-subchart" title="Permanent link">&para;</a></h2>
-<p>Pass any value supported by the <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">prometheus chart</a> under the <code>prometheus:</code> key.</p>
+<h2 id="kube-prometheus-stack-subchart">kube-prometheus-stack subchart<a class="headerlink" href="#kube-prometheus-stack-subchart" title="Permanent link">&para;</a></h2>
+<p>Pass any value supported by the <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack">kube-prometheus-stack chart</a> under the <code>kube-prometheus-stack:</code> key.</p>
 <p>Common overrides:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">prometheus</span><span class="p">:</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">kube-prometheus-stack</span><span class="p">:</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">server</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">retention</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15d</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">persistentVolume</span><span class="p">:</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">      </span><span class="nt">size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20Gi</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="nt">alertmanager</span><span class="p">:</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
-</code></pre></div>
-<hr />
-<h2 id="node-exporter-subchart">Node Exporter subchart<a class="headerlink" href="#node-exporter-subchart" title="Permanent link">&para;</a></h2>
-<p>Pass any value supported by the <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus-node-exporter">prometheus-node-exporter chart</a> under the <code>prometheus-node-exporter:</code> key.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">prometheus-node-exporter</span><span class="p">:</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">tolerations</span><span class="p">:</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">operator</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Exists</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="nt">effect</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">NoSchedule</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">prometheus</span><span class="p">:</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">prometheusSpec</span><span class="p">:</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">      </span><span class="nt">retention</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15d</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="nt">storageSpec</span><span class="p">:</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="nt">volumeClaimTemplate</span><span class="p">:</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">          </span><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">            </span><span class="nt">resources</span><span class="p">:</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">              </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">                </span><span class="nt">storage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20Gi</span>
 </code></pre></div>
 
 

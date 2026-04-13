@@ -1194,12 +1194,7 @@ The operator logs <code>no metrics yet, skipping</code> for workloads with no da
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>deployment<span class="w"> </span>my-app<span class="w"> </span>-n<span class="w"> </span>staging<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.template.spec.containers[*].resources}&#39;</span>
 </code></pre></div>
-<p>The controller reconciles on the interval configured by <code>manager.reconcileInterval</code> (default: <code>1h</code>). To see changes sooner during testing, reduce the interval:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>k8s-sustain/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span>--set<span class="w"> </span>manager.reconcileInterval<span class="o">=</span>5m
-</code></pre></div>
+<p>The controller reconciles on a fixed <code>1h</code> interval by default. To see changes sooner during testing, run the controller locally with <code>--reconcile-interval=5m</code> (see <a href="../../reference/cli/">CLI Reference</a>).</p>
 <h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Use <strong>OnCreate</strong> mode to inject resources at pod creation without restarting existing pods → <a href="../../concepts/update-modes/">Update Modes</a></li>

@@ -1220,7 +1220,7 @@
 <tbody>
 <tr>
 <td>Go</td>
-<td>≥ 1.22</td>
+<td>≥ 1.26</td>
 <td>Build and test</td>
 </tr>
 <tr>
@@ -1298,7 +1298,7 @@
 <h2 id="building-the-container-image">Building the container image<a class="headerlink" href="#building-the-container-image" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>ghcr.io/noony/k8s-sustain:dev<span class="w"> </span>.
 </code></pre></div>
-<p>The Dockerfile uses a two-stage build: <code>golang:1.23-alpine</code> → <code>gcr.io/distroless/static:nonroot</code>.</p>
+<p>The Dockerfile uses a two-stage build: <code>golang:1.26-alpine</code> → <code>gcr.io/distroless/static:nonroot</code>.</p>
 <h2 id="makefile-targets">Makefile targets<a class="headerlink" href="#makefile-targets" title="Permanent link">&para;</a></h2>
 <table>
 <thead>

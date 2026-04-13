@@ -1104,7 +1104,7 @@
 <li>Query Prometheus for the p<code>N</code> of CPU and memory over the configured window</li>
 <li>Compute per-container recommendations (request + limit)</li>
 <li>Patch the workload's pod template with updated resources</li>
-<li>On clusters ≥ 1.27 with in-place updates enabled: also patch all running pods directly</li>
+<li>Recycle stale running pods: on k8s ≥ 1.27 via in-place resource patching; on k8s &lt; 1.27 via the Eviction API (PDB-respecting)</li>
 </ol>
 <p>The controller requeues after <code>--reconcile-interval</code> (default <code>1h</code>).</p>
 <h2 id="admission-webhook-k8s-sustain-webhook">Admission Webhook (<code>k8s-sustain webhook</code>)<a class="headerlink" href="#admission-webhook-k8s-sustain-webhook" title="Permanent link">&para;</a></h2>
@@ -1127,7 +1127,7 @@
 </ol>
 <p>The webhook <strong>fails open</strong> (<code>failurePolicy: Ignore</code> by default) — if it is unreachable or returns an error, the pod is admitted unchanged. The controller will handle ongoing reconciliation regardless.</p>
 <h2 id="prometheus-recording-rules">Prometheus recording rules<a class="headerlink" href="#prometheus-recording-rules" title="Permanent link">&para;</a></h2>
-<p>k8s-sustain relies on pre-computed recording rules rather than running expensive instant queries at reconcile time. The chart installs six rule groups:</p>
+<p>k8s-sustain relies on pre-computed recording rules to avoid expensive fan-out queries at reconcile time. The chart installs three rule groups:</p>
 <table>
 <thead>
 <tr>
@@ -1148,17 +1148,9 @@
 <td><code>k8s_sustain.memory_rates</code></td>
 <td>Per-container memory working set, with and without workload labels</td>
 </tr>
-<tr>
-<td><code>k8s_sustain.cpu_percentiles</code></td>
-<td>p50/p70/p80/p90/p95/p99 per pod and per workload</td>
-</tr>
-<tr>
-<td><code>k8s_sustain.memory_percentiles</code></td>
-<td>p50/p70/p80/p90/p95/p99 per pod and per workload</td>
-</tr>
 </tbody>
 </table>
-<p>The controller and webhook query <code>k8s_sustain:container_cpu_usage_by_workload:rate5m</code> and <code>k8s_sustain:container_memory_by_workload:bytes</code> using <code>quantile_over_time</code> over the policy's configured window.</p>
+<p>Percentile computation is <strong>not</strong> pre-recorded. At reconcile time the controller and webhook query <code>k8s_sustain:container_cpu_usage_by_workload:rate5m</code> and <code>k8s_sustain:container_memory_by_workload:bytes</code> using <code>quantile_over_time</code> with the exact quantile and window from the policy. This avoids maintaining fixed-window pre-aggregations that would not match per-policy configuration.</p>
 <h2 id="policy-selection">Policy selection<a class="headerlink" href="#policy-selection" title="Permanent link">&para;</a></h2>
 <p>Each workload explicitly declares its policy via the <code>k8s.sustain.io/policy</code> annotation on its pod template. This is a deliberate design choice:</p>
 <ul>

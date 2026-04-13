@@ -1090,14 +1090,17 @@
 <p><strong>Behaviour on clusters without in-place update support (k8s &lt; 1.27):</strong></p>
 <ol>
 <li>Controller patches the workload's pod template with updated resources</li>
-<li>A <code>kubectl.kubernetes.io/restartedAt</code> annotation is added to the template, triggering a rolling restart</li>
-<li>New pods are scheduled with the recommended resources</li>
+<li>Each running pod that has stale resources is evicted via the Eviction API</li>
+<li>The workload controller (Deployment/StatefulSet/DaemonSet) replaces evicted pods from the updated template</li>
+<li>PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle</li>
 </ol>
 <p><strong>Behaviour on clusters with in-place update support (k8s ≥ 1.27):</strong></p>
 <ol>
-<li>Controller patches the workload's pod template (no restart annotation)</li>
+<li>Controller patches the workload's pod template</li>
 <li>Controller also patches each running, non-terminating pod's <code>spec.containers[*].resources</code> directly</li>
 <li>The kubelet applies the new resources without restarting the container</li>
+<li>If the kubelet reports <code>Infeasible</code> (node cannot satisfy the request), the pod is evicted as a fallback</li>
+<li>If the kubelet reports <code>Deferred</code>, the resize is pending kubelet-side conditions and no action is taken</li>
 </ol>
 <p>See <a href="../in-place-updates/">In-Place Updates</a> for details.</p>
 <p><strong>Best for:</strong></p>
@@ -1106,7 +1109,7 @@
 <li>Situations where you want resources to track actual usage over time</li>
 <li>Clusters with in-place update support (zero-disruption updates)</li>
 </ul>
-<p><strong>Limitation:</strong> Causes rolling restarts on clusters without in-place update support (k8s &lt; 1.27).</p>
+<p><strong>Limitation:</strong> On clusters without in-place update support (k8s &lt; 1.27), pods are replaced via eviction rather than in-place patching, which causes pod restarts.</p>
 <hr />
 <h2 id="choosing-a-mode">Choosing a mode<a class="headerlink" href="#choosing-a-mode" title="Permanent link">&para;</a></h2>
 <table>
@@ -1149,10 +1152,10 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">update</span><span class="p">:</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">      </span><span class="c1"># controller updates templates + in-place pods</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">      </span><span class="c1"># controller updates templates + recycles stale pods</span>
 <a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">      </span><span class="nt">statefulSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span><span class="w">    </span><span class="c1"># only inject at pod creation, no disruption</span>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span><span class="w">        </span><span class="c1"># inject at each job pod creation</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">      </span><span class="nt">daemonSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">       </span><span class="c1"># rolling DaemonSet update</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">      </span><span class="nt">daemonSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">       </span><span class="c1"># controller updates templates + recycles stale pods</span>
 </code></pre></div>
 
 

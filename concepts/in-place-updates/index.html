@@ -1062,10 +1062,13 @@
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <p>When <code>Ongoing</code> mode is active and the cluster supports in-place updates:</p>
 <ol>
-<li>The controller patches the workload's pod template with new resources (no <code>restartedAt</code> annotation)</li>
+<li>The controller patches the workload's pod template with new resources</li>
 <li>It then lists all running, non-terminating pods matched by the workload's selector</li>
-<li>For each pod, it patches <code>spec.containers[*].resources</code> directly using a <code>MergePatch</code></li>
-<li>The kubelet on each node detects the changed resources and applies them without restarting the container</li>
+<li>For each pod, it checks the pod's <code>status.resize</code> field:</li>
+<li><strong><code>Infeasible</code></strong>: the node cannot satisfy the request — the pod is evicted so the scheduler can place the replacement elsewhere</li>
+<li><strong><code>Deferred</code></strong>: the kubelet accepted the request but is waiting on conditions (e.g. a memory decrease that requires container restart) — skipped; the kubelet will apply it without further action</li>
+<li><strong><code>InProgress</code> / not set</strong>: proceeds to patch <code>spec.containers[*].resources</code> directly</li>
+<li>The kubelet applies the new resources without restarting the container</li>
 </ol>
 <p>Pods that are terminating or not in <code>Running</code> phase are skipped.</p>
 <h2 id="cluster-version-detection">Cluster version detection<a class="headerlink" href="#cluster-version-detection" title="Permanent link">&para;</a></h2>
@@ -1084,7 +1087,7 @@
 </code></pre></div></li>
 </ul>
 <h2 id="disabling-in-place-updates">Disabling in-place updates<a class="headerlink" href="#disabling-in-place-updates" title="Permanent link">&para;</a></h2>
-<p>To force rollout-restart behavior even on supported clusters, you can disable the feature by overriding the detection at deploy time. This is not exposed as a Helm value today — file a GitHub issue if you need it.</p>
+<p>To force eviction-based behavior even on supported clusters, you can disable the feature by overriding the detection at deploy time. This is not exposed as a Helm value today — file a GitHub issue if you need it.</p>
 
 
 
