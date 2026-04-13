@@ -28,8 +28,8 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
 
 # IA
 Claude.md
@@ -37,6 +37,9 @@ Claude.md
 
 # charts
 charts/k8s-sustain/charts
+
+# doc
+site/
 
 # misc
 example1.yaml
