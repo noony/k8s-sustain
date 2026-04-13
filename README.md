@@ -45,4 +45,4 @@ Then create a `Policy` and annotate your workloads. See the [Quick Start guide](
 
 ## License
 
-Apache 2.0
+ISC License
