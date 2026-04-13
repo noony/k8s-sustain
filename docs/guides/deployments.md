@@ -1,8 +1,8 @@
 # Deployments & StatefulSets
 
-## Ongoing mode with rolling restart (k8s < 1.27)
+## Ongoing mode with eviction (k8s < 1.27)
 
-The controller patches the pod template and adds a `restartedAt` annotation, triggering a rolling update.
+The controller patches the pod template with updated resources, then evicts stale pods via the Eviction API. The workload controller (Deployment/StatefulSet) replaces them from the updated template. PodDisruptionBudgets are respected.
 
 ```yaml
 apiVersion: k8s.sustain.io/v1alpha1
@@ -44,7 +44,7 @@ spec:
 
 ## Ongoing mode with in-place updates (k8s ≥ 1.27)
 
-No additional configuration is needed. The operator detects the cluster version at startup and automatically uses in-place pod patching instead of triggering a rolling restart.
+No additional configuration is needed. The operator detects the cluster version at startup and automatically uses in-place pod patching instead of eviction.
 
 ## OnCreate mode — set resources once, don't touch again
 
