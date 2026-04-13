@@ -1,6 +1,6 @@
 ## :warning: Warning :warning:
 
-It's still in development, please don't install / test it until first release, thanks !
+**It's still in development, please don't install / test it until first release, thanks !**
 
 # k8s-sustain
 
