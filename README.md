@@ -1,4 +1,4 @@
-## :warning: Warning :warning
+## :warning: Warning :warning:
 
 It's still in development, please don't install / test it until first release, thanks !
 
