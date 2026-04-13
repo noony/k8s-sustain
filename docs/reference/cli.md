@@ -22,6 +22,7 @@ k8s-sustain start [flags]
 | `--zap-log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server used for metric queries |
 | `--reconcile-interval` | `1h` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
+| `--excluded-namespaces` | — | Comma-separated list of namespaces the reconciler should never touch |
 | `--config` | — | Path to a config file (YAML); all flags can be set there |
 
 ### Environment variables

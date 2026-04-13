@@ -43,6 +43,7 @@ resources:
 | `webhook.prometheusAddress` | `http://localhost:9090` | Prometheus address |
 | `webhook.logLevel` | `info` | Log level |
 | `webhook.failurePolicy` | `Ignore` | `Ignore` or `Fail` |
+| `webhook.excludedNamespaces` | `[]` | Extra namespaces to exclude from webhook interception (the release namespace, `kube-system`, and `kube-public` are always excluded) |
 | `webhook.tlsSecretName` | `k8s-sustain-webhook-tls` | TLS secret name |
 | `webhook.caBundle` | `""` | Base64-encoded CA cert (required when `certManager.enabled=false`) |
 | `webhook.certManager.enabled` | `false` | Create a cert-manager `Certificate` resource |
