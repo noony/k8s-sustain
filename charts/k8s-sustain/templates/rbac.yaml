@@ -33,6 +33,9 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list, watch, patch]
+  - apiGroups: [""]
+    resources: [pods/eviction]
+    verbs: [create]
   # Events
   - apiGroups: [""]
     resources: [events]

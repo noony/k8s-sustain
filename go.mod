@@ -1,6 +1,6 @@
 module github.com/noony/k8s-sustain
 
-go 1.23
+go 1.26
 
 require (
 	github.com/prometheus/client_golang v1.19.1
