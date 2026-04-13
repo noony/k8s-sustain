@@ -44,14 +44,17 @@ spec:
 **Behaviour on clusters without in-place update support (k8s < 1.27):**
 
 1. Controller patches the workload's pod template with updated resources
-2. A `kubectl.kubernetes.io/restartedAt` annotation is added to the template, triggering a rolling restart
-3. New pods are scheduled with the recommended resources
+2. Each running pod that has stale resources is evicted via the Eviction API
+3. The workload controller (Deployment/StatefulSet/DaemonSet) replaces evicted pods from the updated template
+4. PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle
 
 **Behaviour on clusters with in-place update support (k8s ≥ 1.27):**
 
-1. Controller patches the workload's pod template (no restart annotation)
+1. Controller patches the workload's pod template
 2. Controller also patches each running, non-terminating pod's `spec.containers[*].resources` directly
 3. The kubelet applies the new resources without restarting the container
+4. If the kubelet reports `Infeasible` (node cannot satisfy the request), the pod is evicted as a fallback
+5. If the kubelet reports `Deferred`, the resize is pending kubelet-side conditions and no action is taken
 
 See [In-Place Updates](in-place-updates.md) for details.
 
@@ -61,7 +64,7 @@ See [In-Place Updates](in-place-updates.md) for details.
 - Situations where you want resources to track actual usage over time
 - Clusters with in-place update support (zero-disruption updates)
 
-**Limitation:** Causes rolling restarts on clusters without in-place update support (k8s < 1.27).
+**Limitation:** On clusters without in-place update support (k8s < 1.27), pods are replaced via eviction rather than in-place patching, which causes pod restarts.
 
 ---
 
@@ -86,8 +89,8 @@ A single policy can use different modes for different workload kinds:
 spec:
   update:
     types:
-      deployment: Ongoing      # controller updates templates + in-place pods
+      deployment: Ongoing      # controller updates templates + recycles stale pods
       statefulSet: OnCreate    # only inject at pod creation, no disruption
       cronJob: OnCreate        # inject at each job pod creation
-      daemonSet: Ongoing       # rolling DaemonSet update
+      daemonSet: Ongoing       # controller updates templates + recycles stale pods
 ```

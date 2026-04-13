@@ -17,7 +17,7 @@ helm version
 
 ## Prometheus
 
-k8s-sustain queries Prometheus for historical usage data. The chart can deploy a standalone Prometheus instance for you (default), or you can point it at an existing one.
+k8s-sustain queries Prometheus for historical usage data. The chart bundles [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) (default), or you can point it at an existing Prometheus.
 
 If you bring your own Prometheus, make sure **kube-state-metrics** and **cAdvisor** metrics are scraped:
 

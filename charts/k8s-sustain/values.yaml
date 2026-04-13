@@ -40,24 +40,12 @@ affinity: {}
 # Set to false if you manage CRDs separately.
 installCRDs: true
 
-# ServiceMonitor for the operator's own metrics endpoint.
-# Requires prometheus.enabled=true and the Prometheus Operator CRDs to be present.
+# ServiceMonitor and PrometheusRule for the operator.
+# Requires the Prometheus Operator CRDs (installed by kube-prometheus-stack).
 serviceMonitor:
-  enabled: false
+  enabled: true
   interval: 30s
   scrapeTimeout: 10s
-
-# Pre-computed CPU and memory percentile recording rules.
-# Percentiles are computed with quantile_over_time over `window` at `step` resolution,
-# grouped by workload type (owner_kind), namespace, and workload name (owner_name).
-# Requires kube-state-metrics (included in the prometheus subchart by default) for the
-# pod→workload mapping, cAdvisor for CPU, and kubelet for memory working set.
-# TODO improve this, window should be taken from config in crd
-percentiles:
-  # window: lookback duration passed to quantile_over_time (e.g. 7d, 96h).
-  window: 7d
-  # step: subquery resolution — must match the recording-rule group interval.
-  step: 1m
 
 # Admission webhook — intercepts Pod CREATE and injects resources for OnCreate policies.
 webhook:
@@ -90,248 +78,49 @@ webhook:
     limits:
       memory: 64Mi
 
-# Prometheus subchart — see https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus
-prometheus:
+# kube-prometheus-stack subchart — https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
+# Recording rules are managed via the PrometheusRule CRD (see serviceMonitor.enabled above).
+kube-prometheus-stack:
   enabled: true
-  server:
-    retention: 15d
-    persistentVolume:
-      enabled: true
-      size: 20Gi
-  # Disable components not needed for a minimal scrape setup.
+
+  # Components we don't need.
+  grafana:
+    enabled: false
   alertmanager:
     enabled: false
-  prometheus-pushgateway:
+  nodeExporter:
     enabled: false
-  # Automatically discover ServiceMonitors and PodMonitors.
-  extraScrapeConfigs: ""
-  # Recording rules loaded directly into the standalone Prometheus server.
-  # If you use the Prometheus Operator instead, set prometheusRule.enabled=true
-  # and leave these empty.
-  serverFiles:
-    recording_rules.yml:
-      groups:
-        - name: k8s_sustain.workload_mapping
-          interval: 1m
-          rules:
-            # Map pod → workload for direct owners (StatefulSet, DaemonSet, Job).
-            - record: k8s_sustain:pod_workload
-              expr: |
-                max by (namespace, pod, owner_kind, owner_name) (
-                  kube_pod_owner{
-                    owner_kind=~"StatefulSet|DaemonSet|Job",
-                    owner_is_controller="true"
-                  }
-                )
-            # Map pod → Deployment by resolving ReplicaSet → Deployment.
-            # Step 1: rename owner_name (RS name) to `replicaset` and clear conflicting labels
-            #         so group_left can inject owner_kind/owner_name from kube_replicaset_owner.
-            # Step 2: join with kube_replicaset_owner on (namespace, replicaset).
-            - record: k8s_sustain:pod_workload
-              expr: |
-                max by (namespace, pod, owner_kind, owner_name) (
-                  label_replace(
-                    label_replace(
-                      label_replace(
-                        kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"},
-                        "replicaset", "$1", "owner_name", "(.*)"
-                      ),
-                      "owner_kind", "", "owner_kind", ".*"
-                    ),
-                    "owner_name", "", "owner_name", ".*"
-                  )
-                  * on(namespace, replicaset) group_left(owner_kind, owner_name)
-                  kube_replicaset_owner{owner_kind="Deployment", owner_is_controller="true"}
-                )
+  defaultRules:
+    create: false
 
-        - name: k8s_sustain.cpu_rates
-          interval: 1m
-          rules:
-            # Per-container CPU usage rate.
-            - record: k8s_sustain:container_cpu_usage:rate5m
-              expr: |
-                rate(container_cpu_usage_seconds_total{
-                  container!="",
-                  container!="POD",
-                  image!=""
-                }[5m])
-            # Per-container CPU rate WITH workload labels — used by the operator for
-            # per-container right-sizing queries filtered by owner_kind/owner_name.
-            - record: k8s_sustain:container_cpu_usage_by_workload:rate5m
-              expr: |
-                k8s_sustain:container_cpu_usage:rate5m
-                * on(namespace, pod) group_left(owner_kind, owner_name)
-                k8s_sustain:pod_workload
-            # Per-pod CPU rate, enriched with workload labels (owner_kind / owner_name).
-            # Containers within the same pod are summed.
-            - record: k8s_sustain:pod_cpu_usage:rate5m
-              expr: |
-                sum by (namespace, pod, owner_kind, owner_name) (
-                  k8s_sustain:container_cpu_usage:rate5m
-                  * on(namespace, pod) group_left(owner_kind, owner_name)
-                  k8s_sustain:pod_workload
-                )
+  # Kubernetes component scrapers we don't need.
+  kubeApiServer:
+    enabled: false
+  kubeControllerManager:
+    enabled: false
+  kubeScheduler:
+    enabled: false
+  kubeProxy:
+    enabled: false
+  coreDns:
+    enabled: false
+  kubeEtcd:
+    enabled: false
 
-        - name: k8s_sustain.cpu_percentiles
-          interval: 1m
-          rules:
-            # p50 — per pod
-            - record: k8s_sustain:pod_cpu_usage:p50
-              expr: quantile_over_time(0.50, k8s_sustain:pod_cpu_usage:rate5m[7d:1m])
-            # p50 — per workload (all pods summed)
-            - record: k8s_sustain:workload_cpu_usage:p50
-              expr: |
-                quantile_over_time(0.50,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_cpu_usage:rate5m))[7d:1m]
-                )
-            # p70 — per pod
-            - record: k8s_sustain:pod_cpu_usage:p70
-              expr: quantile_over_time(0.70, k8s_sustain:pod_cpu_usage:rate5m[7d:1m])
-            # p70 — per workload
-            - record: k8s_sustain:workload_cpu_usage:p70
-              expr: |
-                quantile_over_time(0.70,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_cpu_usage:rate5m))[7d:1m]
-                )
-            # p80 — per pod
-            - record: k8s_sustain:pod_cpu_usage:p80
-              expr: quantile_over_time(0.80, k8s_sustain:pod_cpu_usage:rate5m[7d:1m])
-            # p80 — per workload
-            - record: k8s_sustain:workload_cpu_usage:p80
-              expr: |
-                quantile_over_time(0.80,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_cpu_usage:rate5m))[7d:1m]
-                )
-            # p90 — per pod
-            - record: k8s_sustain:pod_cpu_usage:p90
-              expr: quantile_over_time(0.90, k8s_sustain:pod_cpu_usage:rate5m[7d:1m])
-            # p90 — per workload
-            - record: k8s_sustain:workload_cpu_usage:p90
-              expr: |
-                quantile_over_time(0.90,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_cpu_usage:rate5m))[7d:1m]
-                )
-            # p95 — per pod
-            - record: k8s_sustain:pod_cpu_usage:p95
-              expr: quantile_over_time(0.95, k8s_sustain:pod_cpu_usage:rate5m[7d:1m])
-            # p95 — per workload
-            - record: k8s_sustain:workload_cpu_usage:p95
-              expr: |
-                quantile_over_time(0.95,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_cpu_usage:rate5m))[7d:1m]
-                )
-            # p99 — per pod
-            - record: k8s_sustain:pod_cpu_usage:p99
-              expr: quantile_over_time(0.99, k8s_sustain:pod_cpu_usage:rate5m[7d:1m])
-            # p99 — per workload
-            - record: k8s_sustain:workload_cpu_usage:p99
-              expr: |
-                quantile_over_time(0.99,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_cpu_usage:rate5m))[7d:1m]
-                )
+  # Required: kubelet provides cAdvisor metrics, kube-state-metrics provides pod→workload mapping.
+  kubelet:
+    enabled: true
+  kubeStateMetrics:
+    enabled: true
+  prometheusOperator:
+    enabled: true
 
-        - name: k8s_sustain.memory_rates
-          interval: 1m
-          rules:
-            # Per-container memory working set (excludes reclaimable page cache).
-            - record: k8s_sustain:container_memory_working_set:bytes
-              expr: |
-                container_memory_working_set_bytes{
-                  container!="",
-                  container!="POD",
-                  image!=""
-                }
-            # Per-container memory WITH workload labels — used by the operator for
-            # per-container right-sizing queries filtered by owner_kind/owner_name.
-            - record: k8s_sustain:container_memory_by_workload:bytes
-              expr: |
-                k8s_sustain:container_memory_working_set:bytes
-                * on(namespace, pod) group_left(owner_kind, owner_name)
-                k8s_sustain:pod_workload
-            # Per-pod memory working set, enriched with workload labels.
-            # Containers within the same pod are summed.
-            - record: k8s_sustain:pod_memory_working_set:bytes
-              expr: |
-                sum by (namespace, pod, owner_kind, owner_name) (
-                  k8s_sustain:container_memory_working_set:bytes
-                  * on(namespace, pod) group_left(owner_kind, owner_name)
-                  k8s_sustain:pod_workload
-                )
-
-        - name: k8s_sustain.memory_percentiles
-          interval: 1m
-          rules:
-            # p50 — per pod
-            - record: k8s_sustain:pod_memory_working_set:p50
-              expr: quantile_over_time(0.50, k8s_sustain:pod_memory_working_set:bytes[7d:1m])
-            # p50 — per workload (all pods summed)
-            - record: k8s_sustain:workload_memory_working_set:p50
-              expr: |
-                quantile_over_time(0.50,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_memory_working_set:bytes))[7d:1m]
-                )
-            # p70 — per pod
-            - record: k8s_sustain:pod_memory_working_set:p70
-              expr: quantile_over_time(0.70, k8s_sustain:pod_memory_working_set:bytes[7d:1m])
-            # p70 — per workload
-            - record: k8s_sustain:workload_memory_working_set:p70
-              expr: |
-                quantile_over_time(0.70,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_memory_working_set:bytes))[7d:1m]
-                )
-            # p80 — per pod
-            - record: k8s_sustain:pod_memory_working_set:p80
-              expr: quantile_over_time(0.80, k8s_sustain:pod_memory_working_set:bytes[7d:1m])
-            # p80 — per workload
-            - record: k8s_sustain:workload_memory_working_set:p80
-              expr: |
-                quantile_over_time(0.80,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_memory_working_set:bytes))[7d:1m]
-                )
-            # p90 — per pod
-            - record: k8s_sustain:pod_memory_working_set:p90
-              expr: quantile_over_time(0.90, k8s_sustain:pod_memory_working_set:bytes[7d:1m])
-            # p90 — per workload
-            - record: k8s_sustain:workload_memory_working_set:p90
-              expr: |
-                quantile_over_time(0.90,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_memory_working_set:bytes))[7d:1m]
-                )
-            # p95 — per pod
-            - record: k8s_sustain:pod_memory_working_set:p95
-              expr: quantile_over_time(0.95, k8s_sustain:pod_memory_working_set:bytes[7d:1m])
-            # p95 — per workload
-            - record: k8s_sustain:workload_memory_working_set:p95
-              expr: |
-                quantile_over_time(0.95,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_memory_working_set:bytes))[7d:1m]
-                )
-            # p99 — per pod
-            - record: k8s_sustain:pod_memory_working_set:p99
-              expr: quantile_over_time(0.99, k8s_sustain:pod_memory_working_set:bytes[7d:1m])
-            # p99 — per workload
-            - record: k8s_sustain:workload_memory_working_set:p99
-              expr: |
-                quantile_over_time(0.99,
-                  (sum by (namespace, owner_kind, owner_name)
-                    (k8s_sustain:pod_memory_working_set:bytes))[7d:1m]
-                )
-
-# Prometheus Node Exporter subchart — see https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus-node-exporter
-prometheus-node-exporter:
-  enabled: true
-  tolerations:
-    # Run on every node, including control-plane nodes.
-    - operator: Exists
-      effect: NoSchedule
+  prometheus:
+    prometheusSpec:
+      retention: 15d
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            resources:
+              requests:
+                storage: 20Gi

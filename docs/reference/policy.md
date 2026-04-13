@@ -49,6 +49,40 @@ spec:
 
 ---
 
+## `spec.selector`
+
+Restricts which namespaces and workloads this policy applies to. Used by the controller when listing workloads to reconcile.
+
+### `spec.selector.namespaces`
+
+A list of namespace names to target. An empty list matches all namespaces.
+
+```yaml
+spec:
+  selector:
+    namespaces:
+      - production
+      - staging
+```
+
+### `spec.selector.labelSelector`
+
+A standard Kubernetes [label selector](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors) that restricts which workloads are governed by this policy. An empty selector matches all workloads in the targeted namespaces.
+
+```yaml
+spec:
+  selector:
+    labelSelector:
+      matchLabels:
+        team: platform
+      matchExpressions:
+        - key: app
+          operator: In
+          values: [api, worker]
+```
+
+---
+
 ## `spec.update`
 
 ### `spec.update.types`

@@ -4,7 +4,7 @@
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Go | ≥ 1.22 | Build and test |
+| Go | ≥ 1.26 | Build and test |
 | Docker | any | Build container image |
 | kubectl | any | Cluster interaction |
 | helm | ≥ 3.10 | Chart development |
@@ -88,7 +88,7 @@ go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
 docker build -t ghcr.io/noony/k8s-sustain:dev .
 ```
 
-The Dockerfile uses a two-stage build: `golang:1.23-alpine` → `gcr.io/distroless/static:nonroot`.
+The Dockerfile uses a two-stage build: `golang:1.26-alpine` → `gcr.io/distroless/static:nonroot`.
 
 ## Makefile targets
 

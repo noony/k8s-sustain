@@ -15,8 +15,6 @@
 | `manager.healthProbeBindAddress` | `:8081` | Health probe address |
 | `manager.leaderElect` | `true` | Enable leader election |
 | `manager.logLevel` | `info` | Log level |
-| `manager.prometheusAddress` | `http://localhost:9090` | Prometheus address |
-| `manager.reconcileInterval` | `1h` | Reconcile interval |
 | `resources` | see below | Controller container resources |
 | `nodeSelector` | `{}` | Node selector for all pods |
 | `tolerations` | `[]` | Tolerations for all pods |
@@ -87,7 +85,7 @@ webhook:
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `serviceMonitor.enabled` | `false` | Create a Prometheus Operator `ServiceMonitor` |
+| `serviceMonitor.enabled` | `true` | Create a Prometheus Operator `ServiceMonitor` and `PrometheusRule` |
 | `serviceMonitor.interval` | `30s` | Scrape interval |
 | `serviceMonitor.scrapeTimeout` | `10s` | Scrape timeout |
 
@@ -101,43 +99,22 @@ webhook:
 
 ---
 
-## Recording rules
+## kube-prometheus-stack subchart
 
-| Value | Default | Description |
-|-------|---------|-------------|
-| `percentiles.window` | `7d` | Lookback window for `quantile_over_time` |
-| `percentiles.step` | `1m` | Subquery step (must match group interval) |
-
----
-
-## Prometheus subchart
-
-Pass any value supported by the [prometheus chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) under the `prometheus:` key.
+Pass any value supported by the [kube-prometheus-stack chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) under the `kube-prometheus-stack:` key.
 
 Common overrides:
 
 ```yaml
-prometheus:
+kube-prometheus-stack:
   enabled: true
-  server:
-    retention: 15d
-    persistentVolume:
-      enabled: true
-      size: 20Gi
-  alertmanager:
-    enabled: false
-```
-
----
-
-## Node Exporter subchart
-
-Pass any value supported by the [prometheus-node-exporter chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus-node-exporter) under the `prometheus-node-exporter:` key.
-
-```yaml
-prometheus-node-exporter:
-  enabled: true
-  tolerations:
-    - operator: Exists
-      effect: NoSchedule
+  prometheus:
+    prometheusSpec:
+      retention: 15d
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            resources:
+              requests:
+                storage: 20Gi
 ```

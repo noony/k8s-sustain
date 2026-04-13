@@ -107,14 +107,7 @@ kubectl get deployment my-app -n staging \
   -o jsonpath='{.spec.template.spec.containers[*].resources}'
 ```
 
-The controller reconciles on the interval configured by `manager.reconcileInterval` (default: `1h`). To see changes sooner during testing, reduce the interval:
-
-```bash
-helm upgrade k8s-sustain k8s-sustain/k8s-sustain \
-  -n k8s-sustain \
-  --reuse-values \
-  --set manager.reconcileInterval=5m
-```
+The controller reconciles on a fixed `1h` interval by default. To see changes sooner during testing, run the controller locally with `--reconcile-interval=5m` (see [CLI Reference](../reference/cli.md)).
 
 ## Next steps
 

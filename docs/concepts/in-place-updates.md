@@ -8,10 +8,13 @@ k8s-sustain automatically detects whether the cluster supports this feature and 
 
 When `Ongoing` mode is active and the cluster supports in-place updates:
 
-1. The controller patches the workload's pod template with new resources (no `restartedAt` annotation)
+1. The controller patches the workload's pod template with new resources
 2. It then lists all running, non-terminating pods matched by the workload's selector
-3. For each pod, it patches `spec.containers[*].resources` directly using a `MergePatch`
-4. The kubelet on each node detects the changed resources and applies them without restarting the container
+3. For each pod, it checks the pod's `status.resize` field:
+   - **`Infeasible`**: the node cannot satisfy the request — the pod is evicted so the scheduler can place the replacement elsewhere
+   - **`Deferred`**: the kubelet accepted the request but is waiting on conditions (e.g. a memory decrease that requires container restart) — skipped; the kubelet will apply it without further action
+   - **`InProgress` / not set**: proceeds to patch `spec.containers[*].resources` directly
+4. The kubelet applies the new resources without restarting the container
 
 Pods that are terminating or not in `Running` phase are skipped.
 
@@ -40,4 +43,4 @@ INFO  InPlacePodVerticalScaling support  enabled=true
 
 ## Disabling in-place updates
 
-To force rollout-restart behavior even on supported clusters, you can disable the feature by overriding the detection at deploy time. This is not exposed as a Helm value today — file a GitHub issue if you need it.
+To force eviction-based behavior even on supported clusters, you can disable the feature by overriding the detection at deploy time. This is not exposed as a Helm value today — file a GitHub issue if you need it.

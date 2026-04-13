@@ -5,8 +5,6 @@ For standalone prometheus (no operator), rules are configured via
 prometheus.serverFiles.recording_rules.yml in values.yaml instead.
 */}}
 {{- if .Values.serviceMonitor.enabled }}
-{{- $window := .Values.percentiles.window }}
-{{- $step   := .Values.percentiles.step }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -49,7 +47,7 @@ spec:
             )
 
     - name: k8s_sustain.cpu_rates
-      interval: {{ $step }}
+      interval: 1m
       rules:
         # Per-container CPU usage rate.
         - record: k8s_sustain:container_cpu_usage:rate5m
@@ -75,24 +73,8 @@ spec:
               k8s_sustain:pod_workload
             )
 
-    - name: k8s_sustain.cpu_percentiles
-      interval: {{ $step }}
-      rules:
-        {{- range $p, $q := dict "p50" "0.50" "p70" "0.70" "p80" "0.80" "p90" "0.90" "p95" "0.95" "p99" "0.99" }}
-        # {{ $p }} — per pod
-        - record: k8s_sustain:pod_cpu_usage:{{ $p }}
-          expr: quantile_over_time({{ $q }}, k8s_sustain:pod_cpu_usage:rate5m[{{ $window }}:{{ $step }}])
-        # {{ $p }} — per workload (all pods summed)
-        - record: k8s_sustain:workload_cpu_usage:{{ $p }}
-          expr: |
-            quantile_over_time({{ $q }},
-              (sum by (namespace, owner_kind, owner_name)
-                (k8s_sustain:pod_cpu_usage:rate5m))[{{ $window }}:{{ $step }}]
-            )
-        {{- end }}
-
     - name: k8s_sustain.memory_rates
-      interval: {{ $step }}
+      interval: 1m
       rules:
         # Per-container memory working set (excludes reclaimable page cache).
         - record: k8s_sustain:container_memory_working_set:bytes
@@ -118,19 +100,4 @@ spec:
               k8s_sustain:pod_workload
             )
 
-    - name: k8s_sustain.memory_percentiles
-      interval: {{ $step }}
-      rules:
-        {{- range $p, $q := dict "p50" "0.50" "p70" "0.70" "p80" "0.80" "p90" "0.90" "p95" "0.95" "p99" "0.99" }}
-        # {{ $p }} — per pod
-        - record: k8s_sustain:pod_memory_working_set:{{ $p }}
-          expr: quantile_over_time({{ $q }}, k8s_sustain:pod_memory_working_set:bytes[{{ $window }}:{{ $step }}])
-        # {{ $p }} — per workload (all pods summed)
-        - record: k8s_sustain:workload_memory_working_set:{{ $p }}
-          expr: |
-            quantile_over_time({{ $q }},
-              (sum by (namespace, owner_kind, owner_name)
-                (k8s_sustain:pod_memory_working_set:bytes))[{{ $window }}:{{ $step }}]
-            )
-        {{- end }}
 {{- end }}

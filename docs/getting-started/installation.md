@@ -7,9 +7,9 @@ helm repo add k8s-sustain https://noony.github.io/k8s-sustain
 helm repo update
 ```
 
-## Install with bundled Prometheus
+## Install with bundled kube-prometheus-stack
 
-The default installation deploys the operator, the admission webhook, and a standalone Prometheus with the required recording rules pre-configured.
+The default installation deploys the operator, the admission webhook, and a minimal [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) with the required recording rules pre-configured.
 
 ```bash
 helm install k8s-sustain k8s-sustain/k8s-sustain \
@@ -19,22 +19,20 @@ helm install k8s-sustain k8s-sustain/k8s-sustain \
 
 ## Install with an existing Prometheus
 
-If you already have Prometheus running, disable the bundled instance and point the operator at yours:
+If you already have Prometheus running (e.g. via kube-prometheus-stack), disable the bundled instance and point the operator at yours:
 
 ```bash
 helm install k8s-sustain k8s-sustain/k8s-sustain \
   --namespace k8s-sustain \
   --create-namespace \
-  --set prometheus.enabled=false \
-  --set prometheus-node-exporter.enabled=false \
-  --set manager.prometheusAddress=http://prometheus.monitoring.svc:9090 \
+  --set kube-prometheus-stack.enabled=false \
   --set webhook.prometheusAddress=http://prometheus.monitoring.svc:9090
 ```
 
 !!! warning "Recording rules required"
-    You must install the recording rules into your Prometheus manually when `prometheus.enabled=false`.
-    Copy the rules from `charts/k8s-sustain/values.yaml` under `prometheus.serverFiles.recording_rules.yml`
-    into a `PrometheusRule` CRD or your Prometheus configuration.
+    When `kube-prometheus-stack.enabled=false`, you must install the recording rules manually.
+    Apply the `PrometheusRule` CRD from `charts/k8s-sustain/templates/prometheusrules.yaml` into your cluster,
+    or copy the rule groups into your existing Prometheus configuration.
 
 ## Install without the admission webhook
 
@@ -70,8 +68,6 @@ Expected output:
 NAME                                        READY   STATUS    RESTARTS   AGE
 k8s-sustain-<hash>                          1/1     Running   0          1m
 k8s-sustain-webhook-<hash>                  1/1     Running   0          1m
-k8s-sustain-prometheus-server-<hash>        1/1     Running   0          1m
-k8s-sustain-prometheus-node-exporter-<hash> 1/1     Running   0          1m
 ```
 
 Check the controller logs:

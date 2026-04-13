@@ -52,7 +52,7 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
    - Query Prometheus for the p`N` of CPU and memory over the configured window
    - Compute per-container recommendations (request + limit)
    - Patch the workload's pod template with updated resources
-   - On clusters ≥ 1.27 with in-place updates enabled: also patch all running pods directly
+   - Recycle stale running pods: on k8s ≥ 1.27 via in-place resource patching; on k8s < 1.27 via the Eviction API (PDB-respecting)
 
 The controller requeues after `--reconcile-interval` (default `1h`).
 
@@ -80,17 +80,15 @@ The webhook **fails open** (`failurePolicy: Ignore` by default) — if it is unr
 
 ## Prometheus recording rules
 
-k8s-sustain relies on pre-computed recording rules rather than running expensive instant queries at reconcile time. The chart installs six rule groups:
+k8s-sustain relies on pre-computed recording rules to avoid expensive fan-out queries at reconcile time. The chart installs three rule groups:
 
 | Group | Records |
 |-------|---------|
 | `k8s_sustain.workload_mapping` | Maps pods to their workload owner (resolves RS→Deployment) |
 | `k8s_sustain.cpu_rates` | Per-container CPU rate, with and without workload labels |
 | `k8s_sustain.memory_rates` | Per-container memory working set, with and without workload labels |
-| `k8s_sustain.cpu_percentiles` | p50/p70/p80/p90/p95/p99 per pod and per workload |
-| `k8s_sustain.memory_percentiles` | p50/p70/p80/p90/p95/p99 per pod and per workload |
 
-The controller and webhook query `k8s_sustain:container_cpu_usage_by_workload:rate5m` and `k8s_sustain:container_memory_by_workload:bytes` using `quantile_over_time` over the policy's configured window.
+Percentile computation is **not** pre-recorded. At reconcile time the controller and webhook query `k8s_sustain:container_cpu_usage_by_workload:rate5m` and `k8s_sustain:container_memory_by_workload:bytes` using `quantile_over_time` with the exact quantile and window from the policy. This avoids maintaining fixed-window pre-aggregations that would not match per-policy configuration.
 
 ## Policy selection
 
