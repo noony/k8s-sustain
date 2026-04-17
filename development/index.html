@@ -854,6 +854,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../guides/dashboard.md" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dashboard
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../guides/cert-manager/" class="md-nav__link">
         
   
@@ -986,6 +1007,93 @@
   <a href="#start-the-webhook-requires-tls" class="md-nav__link">
     <span class="md-ellipsis">
       Start the webhook (requires TLS)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deploying-on-kind" class="md-nav__link">
+    <span class="md-ellipsis">
+      Deploying on kind
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Deploying on kind">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-create-a-kind-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Create a kind cluster
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-build-and-load-the-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Build and load the image
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-install-with-helm" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Install with Helm
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-verify-pods-are-running" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Verify pods are running
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-access-the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Access the dashboard
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-create-a-test-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Create a test policy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rebuilding-after-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Rebuilding after changes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cleanup
     </span>
   </a>
   
@@ -1145,6 +1253,93 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#deploying-on-kind" class="md-nav__link">
+    <span class="md-ellipsis">
+      Deploying on kind
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Deploying on kind">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-create-a-kind-cluster" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Create a kind cluster
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-build-and-load-the-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Build and load the image
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-install-with-helm" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Install with Helm
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-verify-pods-are-running" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Verify pods are running
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-access-the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Access the dashboard
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-create-a-test-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Create a test policy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rebuilding-after-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Rebuilding after changes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cleanup
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#regenerating-code" class="md-nav__link">
     <span class="md-ellipsis">
       Regenerating code
@@ -1239,7 +1434,7 @@
 <td>Chart development</td>
 </tr>
 <tr>
-<td>kind / k3d</td>
+<td>minikube / kind / k3d</td>
 <td>any</td>
 <td>Local cluster</td>
 </tr>
@@ -1259,19 +1454,23 @@
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>│   ├── policy_types.go
 <a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>│   └── zz_generated.deepcopy.go
 <a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>├── cmd/
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>│   ├── manager/           # Root cobra command + start subcommand
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>│   └── webhook/           # webhook subcommand
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>├── internal/
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>│   ├── controller/        # Policy reconciler
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>│   ├── prometheus/        # Prometheus HTTP API client
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>│   ├── recommender/       # Resource recommendation logic (pure functions)
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>│   ├── webhook/           # Admission webhook HTTP handler
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>│   └── workload/          # Patcher for Deployment/StatefulSet/DaemonSet/CronJob
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>├── charts/k8s-sustain/    # Helm chart
-<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>├── docs/                  # This documentation
-<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>├── Dockerfile
-<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>├── Makefile
-<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>└── main.go
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>│   ├── controller/        # Root cobra command + start subcommand
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>│   ├── webhook/           # webhook subcommand
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>│   └── dashboard/         # dashboard subcommand
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>├── internal/
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>│   ├── config/            # Centralized Viper config (flags, env, file)
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>│   ├── controller/        # Policy reconciler
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>│   ├── dashboard/         # Dashboard HTTP server
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>│   ├── logging/           # Shared zap logger setup
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>│   ├── prometheus/        # Prometheus HTTP API client
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>│   ├── recommender/       # Resource recommendation logic (pure functions)
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>│   ├── webhook/           # Admission webhook HTTP handler
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>│   └── workload/          # Patcher for Deployment/StatefulSet/DaemonSet/CronJob
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>├── charts/k8s-sustain/    # Helm chart
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>├── docs/                  # This documentation
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>├── Dockerfile
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>├── Makefile
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a>└── main.go
 </code></pre></div>
 <h2 id="running-locally-against-a-cluster">Running locally against a cluster<a class="headerlink" href="#running-locally-against-a-cluster" title="Permanent link">&para;</a></h2>
 <h3 id="start-the-controller">Start the controller<a class="headerlink" href="#start-the-controller" title="Permanent link">&para;</a></h3>
@@ -1282,21 +1481,79 @@
 <a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-prometheus-server<span class="w"> </span><span class="m">9090</span>:80<span class="w"> </span><span class="p">&amp;</span>
 <a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
 <a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span>--prometheus-address<span class="o">=</span>http://localhost:9090<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span>--prometheus-address<span class="o">=</span>http://localhost:9090<span class="w"> </span><span class="se">\ </span><span class="w"> </span><span class="c1"># port-forwarded from the cluster</span>
 <a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span>--reconcile-interval<span class="o">=</span>1m<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span>--zap-log-level<span class="o">=</span>debug
 </code></pre></div>
 <h3 id="start-the-webhook-requires-tls">Start the webhook (requires TLS)<a class="headerlink" href="#start-the-webhook-requires-tls" title="Permanent link">&para;</a></h3>
 <p>The webhook must be reachable from the API server, which makes local development more involved. Use <a href="https://www.telepresence.io">telepresence</a> or develop against a local kind cluster with a self-signed cert.</p>
+<h2 id="deploying-on-kind">Deploying on kind<a class="headerlink" href="#deploying-on-kind" title="Permanent link">&para;</a></h2>
+<p>A full local deployment with Prometheus, the controller, webhook, and dashboard:</p>
+<h3 id="1-create-a-kind-cluster">1. Create a kind cluster<a class="headerlink" href="#1-create-a-kind-cluster" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kind<span class="w"> </span>create<span class="w"> </span>cluster<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
+</code></pre></div>
+<h3 id="2-build-and-load-the-image">2. Build and load the image<a class="headerlink" href="#2-build-and-load-the-image" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>k8s-sustain:dev
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>k8s-sustain:dev<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
+</code></pre></div>
+<h3 id="3-install-with-helm">3. Install with Helm<a class="headerlink" href="#3-install-with-helm" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>./charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--set<span class="w"> </span>image.repository<span class="o">=</span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--set<span class="w"> </span>image.tag<span class="o">=</span>dev<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--set<span class="w"> </span>image.pullPolicy<span class="o">=</span>Never<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--set<span class="w"> </span>dashboard.enabled<span class="o">=</span><span class="nb">true</span>
+</code></pre></div>
+<p><code>image.pullPolicy=Never</code> ensures Kubernetes uses the locally loaded image. The <code>prometheusAddress</code> is auto-resolved to the bundled prometheus subchart service.</p>
+<h3 id="4-verify-pods-are-running">4. Verify pods are running<a class="headerlink" href="#4-verify-pods-are-running" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-w
+</code></pre></div>
+<h3 id="5-access-the-dashboard">5. Access the dashboard<a class="headerlink" href="#5-access-the-dashboard" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+</code></pre></div>
+<p>Open <code>http://localhost:8090</code>.</p>
+<h3 id="6-create-a-test-policy">6. Create a test policy<a class="headerlink" href="#6-create-a-test-policy" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt;&#39;EOF&#39;</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="s">apiVersion: sustain.io/v1alpha1</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="s">kind: Policy</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="s">metadata:</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="s">  name: test-policy</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="s">spec:</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="s">  selector:</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="s">    namespaces: [default]</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="s">  update:</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="s">    types:</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="s">      deployment: Ongoing</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="s">  rightSizing:</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="s">    resourcesConfigs:</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="s">      cpu:</span>
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="s">        window: 168h</span>
+<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="s">        requests:</span>
+<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="s">          percentilePercentage: 95</span>
+<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="s">      memory:</span>
+<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="s">        window: 168h</span>
+<a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="s">        requests:</span>
+<a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a><span class="s">          percentilePercentage: 95</span>
+<a id="__codelineno-9-22" name="__codelineno-9-22" href="#__codelineno-9-22"></a><span class="s">EOF</span>
+</code></pre></div>
+<h3 id="rebuilding-after-changes">Rebuilding after changes<a class="headerlink" href="#rebuilding-after-changes" title="Permanent link">&para;</a></h3>
+<p>After modifying code, rebuild and reload:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>k8s-sustain:dev
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>k8s-sustain:dev<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>kubectl<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deployment<span class="w"> </span>k8s-sustain
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>kubectl<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deployment<span class="w"> </span>k8s-sustain-dashboard
+</code></pre></div>
+<h3 id="cleanup">Cleanup<a class="headerlink" href="#cleanup" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>kind<span class="w"> </span>delete<span class="w"> </span>cluster<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
+</code></pre></div>
 <h2 id="regenerating-code">Regenerating code<a class="headerlink" href="#regenerating-code" title="Permanent link">&para;</a></h2>
 <p>If you modify types in <code>api/v1alpha1/</code>, regenerate the deepcopy methods:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>generate
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>make<span class="w"> </span>generate
 </code></pre></div>
 <p>This requires <code>controller-gen</code> to be installed:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>go<span class="w"> </span>install<span class="w"> </span>sigs.k8s.io/controller-tools/cmd/controller-gen@latest
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>go<span class="w"> </span>install<span class="w"> </span>sigs.k8s.io/controller-tools/cmd/controller-gen@latest
 </code></pre></div>
 <h2 id="building-the-container-image">Building the container image<a class="headerlink" href="#building-the-container-image" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>ghcr.io/noony/k8s-sustain:dev<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>ghcr.io/noony/k8s-sustain:dev<span class="w"> </span>.
 </code></pre></div>
 <p>The Dockerfile uses a two-stage build: <code>golang:1.26-alpine</code> → <code>gcr.io/distroless/static:nonroot</code>.</p>
 <h2 id="makefile-targets">Makefile targets<a class="headerlink" href="#makefile-targets" title="Permanent link">&para;</a></h2>

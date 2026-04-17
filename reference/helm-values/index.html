@@ -772,6 +772,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#global" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#controller" class="md-nav__link">
     <span class="md-ellipsis">
       Controller
@@ -790,18 +799,18 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#serviceaccount" class="md-nav__link">
+  <a href="#dashboard" class="md-nav__link">
     <span class="md-ellipsis">
-      ServiceAccount
+      Dashboard
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#service-metrics" class="md-nav__link">
+  <a href="#serviceaccount" class="md-nav__link">
     <span class="md-ellipsis">
-      Service (metrics)
+      ServiceAccount
     </span>
   </a>
   
@@ -826,9 +835,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#kube-prometheus-stack-subchart" class="md-nav__link">
+  <a href="#prometheus-subchart" class="md-nav__link">
     <span class="md-ellipsis">
-      kube-prometheus-stack subchart
+      Prometheus subchart
     </span>
   </a>
   
@@ -962,6 +971,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/dashboard.md" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dashboard
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/cert-manager/" class="md-nav__link">
         
   
@@ -1030,6 +1060,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#global" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#controller" class="md-nav__link">
     <span class="md-ellipsis">
       Controller
@@ -1048,18 +1087,18 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#serviceaccount" class="md-nav__link">
+  <a href="#dashboard" class="md-nav__link">
     <span class="md-ellipsis">
-      ServiceAccount
+      Dashboard
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#service-metrics" class="md-nav__link">
+  <a href="#serviceaccount" class="md-nav__link">
     <span class="md-ellipsis">
-      Service (metrics)
+      ServiceAccount
     </span>
   </a>
   
@@ -1084,9 +1123,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#kube-prometheus-stack-subchart" class="md-nav__link">
+  <a href="#prometheus-subchart" class="md-nav__link">
     <span class="md-ellipsis">
-      kube-prometheus-stack subchart
+      Prometheus subchart
     </span>
   </a>
   
@@ -1111,7 +1150,7 @@
 
 
 <h1 id="helm-values-reference">Helm Values Reference<a class="headerlink" href="#helm-values-reference" title="Permanent link">&para;</a></h1>
-<h2 id="controller">Controller<a class="headerlink" href="#controller" title="Permanent link">&para;</a></h2>
+<h2 id="global">Global<a class="headerlink" href="#global" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
@@ -1121,11 +1160,6 @@
 </tr>
 </thead>
 <tbody>
-<tr>
-<td><code>replicaCount</code></td>
-<td><code>1</code></td>
-<td>Controller replicas</td>
-</tr>
 <tr>
 <td><code>image.repository</code></td>
 <td><code>ghcr.io/noony/k8s-sustain</code></td>
@@ -1157,54 +1191,93 @@
 <td>Override the full release name</td>
 </tr>
 <tr>
-<td><code>manager.metricsBindAddress</code></td>
+<td><code>recommendOnly</code></td>
+<td><code>false</code></td>
+<td>Compute recommendations without patching workloads or mutating pods (dry-run mode)</td>
+</tr>
+<tr>
+<td><code>prometheusAddress</code></td>
+<td><code>""</code></td>
+<td>Prometheus server URL, shared by all components. Leave empty to auto-detect the bundled subchart service.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="controller">Controller<a class="headerlink" href="#controller" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>controller.replicaCount</code></td>
+<td><code>1</code></td>
+<td>Controller replicas</td>
+</tr>
+<tr>
+<td><code>controller.metricsBindAddress</code></td>
 <td><code>:8080</code></td>
 <td>Metrics endpoint address</td>
 </tr>
 <tr>
-<td><code>manager.healthProbeBindAddress</code></td>
+<td><code>controller.healthProbeBindAddress</code></td>
 <td><code>:8081</code></td>
 <td>Health probe address</td>
 </tr>
 <tr>
-<td><code>manager.leaderElect</code></td>
+<td><code>controller.leaderElect</code></td>
 <td><code>true</code></td>
 <td>Enable leader election</td>
 </tr>
 <tr>
-<td><code>manager.logLevel</code></td>
+<td><code>controller.logLevel</code></td>
 <td><code>info</code></td>
 <td>Log level</td>
 </tr>
 <tr>
-<td><code>resources</code></td>
+<td><code>controller.service.type</code></td>
+<td><code>ClusterIP</code></td>
+<td>Service type for the metrics endpoint</td>
+</tr>
+<tr>
+<td><code>controller.service.port</code></td>
+<td><code>8080</code></td>
+<td>Service port</td>
+</tr>
+<tr>
+<td><code>controller.resources</code></td>
 <td>see below</td>
 <td>Controller container resources</td>
 </tr>
 <tr>
-<td><code>nodeSelector</code></td>
+<td><code>controller.nodeSelector</code></td>
 <td><code>{}</code></td>
-<td>Node selector for all pods</td>
+<td>Node selector</td>
 </tr>
 <tr>
-<td><code>tolerations</code></td>
+<td><code>controller.tolerations</code></td>
 <td><code>[]</code></td>
-<td>Tolerations for all pods</td>
+<td>Tolerations</td>
 </tr>
 <tr>
-<td><code>affinity</code></td>
+<td><code>controller.affinity</code></td>
 <td><code>{}</code></td>
-<td>Affinity rules for all pods</td>
+<td>Affinity rules</td>
 </tr>
 </tbody>
 </table>
 <p><strong>Default resources:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">resources</span><span class="p">:</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64Mi</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">limits</span><span class="p">:</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">controller</span><span class="p">:</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64Mi</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
 </code></pre></div>
 <hr />
 <h2 id="webhook">Webhook<a class="headerlink" href="#webhook" title="Permanent link">&para;</a></h2>
@@ -1231,11 +1304,6 @@
 <td><code>webhook.port</code></td>
 <td><code>9443</code></td>
 <td>HTTPS server port</td>
-</tr>
-<tr>
-<td><code>webhook.prometheusAddress</code></td>
-<td><code>http://localhost:9090</code></td>
-<td>Prometheus address</td>
 </tr>
 <tr>
 <td><code>webhook.logLevel</code></td>
@@ -1282,6 +1350,21 @@
 <td>see below</td>
 <td>Webhook container resources</td>
 </tr>
+<tr>
+<td><code>webhook.nodeSelector</code></td>
+<td><code>{}</code></td>
+<td>Node selector</td>
+</tr>
+<tr>
+<td><code>webhook.tolerations</code></td>
+<td><code>[]</code></td>
+<td>Tolerations</td>
+</tr>
+<tr>
+<td><code>webhook.affinity</code></td>
+<td><code>{}</code></td>
+<td>Affinity rules</td>
+</tr>
 </tbody>
 </table>
 <p><strong>Default webhook resources:</strong></p>
@@ -1292,6 +1375,83 @@
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">32Mi</span>
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64Mi</span>
+</code></pre></div>
+<hr />
+<h2 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dashboard.enabled</code></td>
+<td><code>false</code></td>
+<td>Deploy the dashboard</td>
+</tr>
+<tr>
+<td><code>dashboard.replicaCount</code></td>
+<td><code>1</code></td>
+<td>Dashboard replicas</td>
+</tr>
+<tr>
+<td><code>dashboard.port</code></td>
+<td><code>8090</code></td>
+<td>Container port</td>
+</tr>
+<tr>
+<td><code>dashboard.bindAddress</code></td>
+<td><code>:8090</code></td>
+<td>Server bind address</td>
+</tr>
+<tr>
+<td><code>dashboard.logLevel</code></td>
+<td><code>info</code></td>
+<td>Log level</td>
+</tr>
+<tr>
+<td><code>dashboard.service.type</code></td>
+<td><code>ClusterIP</code></td>
+<td>Service type</td>
+</tr>
+<tr>
+<td><code>dashboard.service.port</code></td>
+<td><code>8090</code></td>
+<td>Service port</td>
+</tr>
+<tr>
+<td><code>dashboard.resources</code></td>
+<td>see below</td>
+<td>Dashboard container resources</td>
+</tr>
+<tr>
+<td><code>dashboard.nodeSelector</code></td>
+<td><code>{}</code></td>
+<td>Node selector</td>
+</tr>
+<tr>
+<td><code>dashboard.tolerations</code></td>
+<td><code>[]</code></td>
+<td>Tolerations</td>
+</tr>
+<tr>
+<td><code>dashboard.affinity</code></td>
+<td><code>{}</code></td>
+<td>Affinity rules</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Default dashboard resources:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">dashboard</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">32Mi</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64Mi</span>
 </code></pre></div>
 <hr />
 <h2 id="serviceaccount">ServiceAccount<a class="headerlink" href="#serviceaccount" title="Permanent link">&para;</a></h2>
@@ -1305,6 +1465,16 @@
 </thead>
 <tbody>
 <tr>
+<td><code>serviceAccount.create</code></td>
+<td><code>true</code></td>
+<td>Create a ServiceAccount</td>
+</tr>
+<tr>
+<td><code>serviceAccount.name</code></td>
+<td><code>""</code></td>
+<td>Override the ServiceAccount name</td>
+</tr>
+<tr>
 <td><code>serviceAccount.annotations</code></td>
 <td><code>{}</code></td>
 <td>Annotations on the ServiceAccount (e.g. for IRSA or Workload Identity)</td>
@@ -1312,30 +1482,8 @@
 </tbody>
 </table>
 <hr />
-<h2 id="service-metrics">Service (metrics)<a class="headerlink" href="#service-metrics" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Value</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>service.type</code></td>
-<td><code>ClusterIP</code></td>
-<td>Service type for the metrics endpoint</td>
-</tr>
-<tr>
-<td><code>service.port</code></td>
-<td><code>8080</code></td>
-<td>Service port</td>
-</tr>
-</tbody>
-</table>
-<hr />
 <h2 id="servicemonitor">ServiceMonitor<a class="headerlink" href="#servicemonitor" title="Permanent link">&para;</a></h2>
+<p>Only needed when running the Prometheus Operator externally (not the bundled subchart).</p>
 <table>
 <thead>
 <tr>
@@ -1346,17 +1494,17 @@
 </thead>
 <tbody>
 <tr>
-<td><code>serviceMonitor.enabled</code></td>
-<td><code>true</code></td>
+<td><code>controller.serviceMonitor.enabled</code></td>
+<td><code>false</code></td>
 <td>Create a Prometheus Operator <code>ServiceMonitor</code> and <code>PrometheusRule</code></td>
 </tr>
 <tr>
-<td><code>serviceMonitor.interval</code></td>
+<td><code>controller.serviceMonitor.interval</code></td>
 <td><code>30s</code></td>
 <td>Scrape interval</td>
 </tr>
 <tr>
-<td><code>serviceMonitor.scrapeTimeout</code></td>
+<td><code>controller.serviceMonitor.scrapeTimeout</code></td>
 <td><code>10s</code></td>
 <td>Scrape timeout</td>
 </tr>
@@ -1381,20 +1529,15 @@
 </tbody>
 </table>
 <hr />
-<h2 id="kube-prometheus-stack-subchart">kube-prometheus-stack subchart<a class="headerlink" href="#kube-prometheus-stack-subchart" title="Permanent link">&para;</a></h2>
-<p>Pass any value supported by the <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack">kube-prometheus-stack chart</a> under the <code>kube-prometheus-stack:</code> key.</p>
+<h2 id="prometheus-subchart">Prometheus subchart<a class="headerlink" href="#prometheus-subchart" title="Permanent link">&para;</a></h2>
+<p>Pass any value supported by the <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">prometheus chart</a> under the <code>prometheus:</code> key. Recording rules for k8s-sustain are embedded in <code>prometheus.server.serverFiles</code> by default.</p>
 <p>Common overrides:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">kube-prometheus-stack</span><span class="p">:</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">prometheus</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">prometheusSpec</span><span class="p">:</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">      </span><span class="nt">retention</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15d</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="nt">storageSpec</span><span class="p">:</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="nt">volumeClaimTemplate</span><span class="p">:</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">          </span><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">            </span><span class="nt">resources</span><span class="p">:</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">              </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">                </span><span class="nt">storage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20Gi</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">prometheus</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">server</span><span class="p">:</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">retention</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15d</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">persistentVolume</span><span class="p">:</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">      </span><span class="nt">size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20Gi</span>
 </code></pre></div>
 
 

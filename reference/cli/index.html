@@ -751,6 +751,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#global-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global flags
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#k8s-sustain-start" class="md-nav__link">
     <span class="md-ellipsis">
       k8s-sustain start
@@ -833,6 +842,39 @@
   <a href="#failure-policy" class="md-nav__link">
     <span class="md-ellipsis">
       Failure policy
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#k8s-sustain-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s-sustain dashboard
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="k8s-sustain dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#flags_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Flags
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#health-endpoints_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Health endpoints
     </span>
   </a>
   
@@ -992,6 +1034,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/dashboard.md" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dashboard
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/cert-manager/" class="md-nav__link">
         
   
@@ -1058,6 +1121,15 @@
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#global-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global flags
+    </span>
+  </a>
+  
+</li>
       
         <li class="md-nav__item">
   <a href="#k8s-sustain-start" class="md-nav__link">
@@ -1152,6 +1224,39 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#k8s-sustain-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s-sustain dashboard
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="k8s-sustain dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#flags_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Flags
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#health-endpoints_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Health endpoints
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1171,11 +1276,44 @@
 
 
 <h1 id="cli-reference">CLI Reference<a class="headerlink" href="#cli-reference" title="Permanent link">&para;</a></h1>
-<p>The <code>k8s-sustain</code> binary exposes two subcommands. Both are packaged in the same container image.</p>
+<p>The <code>k8s-sustain</code> binary exposes three subcommands. All are packaged in the same container image.</p>
+<h2 id="global-flags">Global flags<a class="headerlink" href="#global-flags" title="Permanent link">&para;</a></h2>
+<p>These flags are available on every subcommand.</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--recommend-only</code></td>
+<td><code>false</code></td>
+<td>Compute recommendations but never patch workloads or mutate pods (dry-run mode)</td>
+</tr>
+<tr>
+<td><code>--config</code></td>
+<td>—</td>
+<td>Path to a config file (YAML); all flags can be set there</td>
+</tr>
+</tbody>
+</table>
+<p>When <code>--recommend-only</code> is enabled, both the controller and the webhook still query Prometheus and compute recommendations as usual, but they <strong>never</strong> apply changes. Computed recommendations are emitted as structured log lines at <code>info</code> level, so you can inspect them before switching to active mode.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># via flag</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>k8s-sustain<span class="w"> </span>start<span class="w"> </span>--recommend-only
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># via environment variable</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nv">K8SSUSTAIN_RECOMMEND_ONLY</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>k8s-sustain<span class="w"> </span>start
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># via config file (.k8s-sustain.yaml)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>recommend-only:<span class="w"> </span><span class="nb">true</span>
+</code></pre></div>
 <hr />
 <h2 id="k8s-sustain-start"><code>k8s-sustain start</code><a class="headerlink" href="#k8s-sustain-start" title="Permanent link">&para;</a></h2>
-<p>Starts the controller manager. Watches <code>Policy</code> objects and periodically reconciles <code>Ongoing</code>-mode workloads.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>k8s-sustain start [flags]
+<p>Starts the controller. Watches <code>Policy</code> objects and periodically reconciles <code>Ongoing</code>-mode workloads.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>k8s-sustain start [flags]
 </code></pre></div>
 <h3 id="flags">Flags<a class="headerlink" href="#flags" title="Permanent link">&para;</a></h3>
 <table>
@@ -1222,16 +1360,11 @@
 <td>—</td>
 <td>Comma-separated list of namespaces the reconciler should never touch</td>
 </tr>
-<tr>
-<td><code>--config</code></td>
-<td>—</td>
-<td>Path to a config file (YAML); all flags can be set there</td>
-</tr>
 </tbody>
 </table>
 <h3 id="environment-variables">Environment variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h3>
 <p>Every flag can be overridden with an environment variable prefixed by <code>K8SSUSTAIN_</code> (uppercase, hyphens → underscores):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">K8SSUSTAIN_RECONCILE_INTERVAL</span><span class="o">=</span>30m<span class="w"> </span>k8s-sustain<span class="w"> </span>start
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">K8SSUSTAIN_RECONCILE_INTERVAL</span><span class="o">=</span>30m<span class="w"> </span>k8s-sustain<span class="w"> </span>start
 </code></pre></div>
 <h3 id="health-endpoints">Health endpoints<a class="headerlink" href="#health-endpoints" title="Permanent link">&para;</a></h3>
 <table>
@@ -1263,7 +1396,7 @@
 <hr />
 <h2 id="k8s-sustain-webhook"><code>k8s-sustain webhook</code><a class="headerlink" href="#k8s-sustain-webhook" title="Permanent link">&para;</a></h2>
 <p>Starts the mutating admission webhook server. Listens for <code>Pod CREATE</code> admission requests and injects resources from <code>OnCreate</code>-mode policies.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>k8s-sustain webhook [flags]
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>k8s-sustain webhook [flags]
 </code></pre></div>
 <h3 id="flags_1">Flags<a class="headerlink" href="#flags_1" title="Permanent link">&para;</a></h3>
 <table>
@@ -1305,11 +1438,6 @@
 <td><code>:8082</code></td>
 <td>Address the <code>/healthz</code> endpoint binds to</td>
 </tr>
-<tr>
-<td><code>--config</code></td>
-<td>—</td>
-<td>Path to a config file (YAML)</td>
-</tr>
 </tbody>
 </table>
 <h3 id="health-endpoints_1">Health endpoints<a class="headerlink" href="#health-endpoints_1" title="Permanent link">&para;</a></h3>
@@ -1349,14 +1477,64 @@
 <h3 id="failure-policy">Failure policy<a class="headerlink" href="#failure-policy" title="Permanent link">&para;</a></h3>
 <p>The <code>MutatingWebhookConfiguration</code> is set to <code>failurePolicy: Ignore</code> by default. This means if the webhook is unreachable or returns an error, the pod is admitted unchanged. The controller will still apply <code>Ongoing</code> recommendations independently.</p>
 <p>To change the failure policy:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>k8s-sustain/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--set<span class="w"> </span>webhook.failurePolicy<span class="o">=</span>Fail
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>k8s-sustain/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--set<span class="w"> </span>webhook.failurePolicy<span class="o">=</span>Fail
 </code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Using <code>Fail</code> in production</p>
 <p>Setting <code>failurePolicy: Fail</code> means <strong>pod creation is blocked</strong> if the webhook is unavailable. Only use this if you have ≥2 webhook replicas and are confident in the availability of Prometheus.</p>
 </div>
+<hr />
+<h2 id="k8s-sustain-dashboard"><code>k8s-sustain dashboard</code><a class="headerlink" href="#k8s-sustain-dashboard" title="Permanent link">&para;</a></h2>
+<p>Starts the web dashboard server. Provides a UI for policy exploration, workload metrics visualization, and policy simulation.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>k8s-sustain dashboard [flags]
+</code></pre></div>
+<h3 id="flags_2">Flags<a class="headerlink" href="#flags_2" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--bind-address</code></td>
+<td><code>:8090</code></td>
+<td>Address the HTTP server listens on</td>
+</tr>
+<tr>
+<td><code>--prometheus-address</code></td>
+<td><code>http://localhost:9090</code></td>
+<td>Address of the Prometheus server</td>
+</tr>
+<tr>
+<td><code>--zap-log-level</code></td>
+<td><code>info</code></td>
+<td>Log verbosity: <code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="health-endpoints_2">Health endpoints<a class="headerlink" href="#health-endpoints_2" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Port</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/healthz</code></td>
+<td><code>:8090</code></td>
+<td>Returns <code>200 OK</code> — used as liveness/readiness probe</td>
+</tr>
+</tbody>
+</table>
+<p>See the <a href="../guides/dashboard.md">Dashboard guide</a> for full usage instructions.</p>
 
 
 

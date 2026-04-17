@@ -930,6 +930,27 @@
   
   
     <li class="md-nav__item">
+      <a href="guides/dashboard.md" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dashboard
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="guides/cert-manager/" class="md-nav__link">
         
   
@@ -1121,7 +1142,9 @@
 <li><strong>Percentile-based recommendations</strong> — p50 through p99, configurable per policy</li>
 <li><strong>Per-container granularity</strong> — each container gets its own recommendation</li>
 <li><strong>In-place pod updates</strong> — no rolling restart when the cluster supports <code>InPlacePodVerticalScaling</code> (k8s ≥ 1.27)</li>
-<li><strong>Two independent components</strong> — admission webhook (OnCreate) and controller (Ongoing) can run separately</li>
+<li><strong>Recommend-only mode</strong> — dry-run mode that logs recommendations without touching any workloads</li>
+<li><strong>Web dashboard</strong> — explore policies, view workload metrics, and simulate parameter changes</li>
+<li><strong>Three independent components</strong> — controller (Ongoing), admission webhook (OnCreate), and dashboard can run separately</li>
 <li><strong>Headroom control</strong> — add a safety buffer on top of the observed percentile</li>
 <li><strong>Limit strategies</strong> — keep existing ratio, set equal to request, remove limit, or use a custom multiplier</li>
 <li><strong>Prometheus-native</strong> — ships pre-computed recording rules; no external dependency beyond Prometheus</li>
@@ -1144,7 +1167,11 @@
 
 - :material-console: **[CLI](reference/cli.md)**
 
-    `k8s-sustain start` and `k8s-sustain webhook` flags.
+    `k8s-sustain start`, `webhook`, and `dashboard` flags.
+
+- :material-monitor-dashboard: **[Dashboard](guides/dashboard.md)**
+
+    Explore policies, view metrics, and simulate changes.
 
 </div>
 

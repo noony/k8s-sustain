@@ -935,6 +935,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/dashboard.md" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dashboard
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/cert-manager/" class="md-nav__link">
         
   
@@ -1081,7 +1102,7 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>helm<span class="w"> </span>version
 </code></pre></div>
 <h2 id="prometheus">Prometheus<a class="headerlink" href="#prometheus" title="Permanent link">&para;</a></h2>
-<p>k8s-sustain queries Prometheus for historical usage data. The chart bundles <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack">kube-prometheus-stack</a> (default), or you can point it at an existing Prometheus.</p>
+<p>k8s-sustain queries Prometheus for historical usage data. The chart bundles a <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">Prometheus</a> instance by default, or you can point it at an existing Prometheus.</p>
 <p>If you bring your own Prometheus, make sure <strong>kube-state-metrics</strong> and <strong>cAdvisor</strong> metrics are scraped:</p>
 <ul>
 <li><code>kube_pod_owner</code> — maps pods to their workload owner</li>

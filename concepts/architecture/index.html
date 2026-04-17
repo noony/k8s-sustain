@@ -615,6 +615,24 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dashboard-k8s-sustain-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dashboard (k8s-sustain dashboard)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommend-only-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommend-only mode
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#prometheus-recording-rules" class="md-nav__link">
     <span class="md-ellipsis">
       Prometheus recording rules
@@ -935,6 +953,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/dashboard.md" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dashboard
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/cert-manager/" class="md-nav__link">
         
   
@@ -1021,6 +1060,24 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dashboard-k8s-sustain-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dashboard (k8s-sustain dashboard)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommend-only-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommend-only mode
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#prometheus-recording-rules" class="md-nav__link">
     <span class="md-ellipsis">
       Prometheus recording rules
@@ -1057,7 +1114,7 @@
 
 
 <h1 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h1>
-<p>k8s-sustain is split into two independent components that run as separate processes (different container args in the same image):</p>
+<p>k8s-sustain is split into three independent components that run as separate processes (different container args in the same image):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>┌─────────────────────────────────────────────────────────────────┐
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>│                        Kubernetes Cluster                       │
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>│                                                                 │
@@ -1088,8 +1145,13 @@
 <a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>│  │                        Prometheus                        │   │
 <a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>│  │  k8s_sustain:container_cpu_usage_by_workload:rate5m      │   │
 <a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>│  │  k8s_sustain:container_memory_by_workload:bytes          │   │
-<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>│  └──────────────────────────────────────────────────────────┘   │
-<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>└─────────────────────────────────────────────────────────────────┘
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>│  └────────────────────────────┬─────────────────────────────┘   │
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>│                               │                                 │
+<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>│  ┌────────────────────────────┴─────────────────────────────┐   │
+<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>│  │  k8s-sustain-dashboard (optional)                        │   │
+<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>│  │  Web UI: policy exploration, metrics, simulator          │   │
+<a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>│  └──────────────────────────────────────────────────────────┘   │
+<a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>└─────────────────────────────────────────────────────────────────┘
 </code></pre></div>
 <h2 id="controller-k8s-sustain-start">Controller (<code>k8s-sustain start</code>)<a class="headerlink" href="#controller-k8s-sustain-start" title="Permanent link">&para;</a></h2>
 <p>The controller is a standard <a href="https://github.com/kubernetes-sigs/controller-runtime">controller-runtime</a> reconciler that watches <code>Policy</code> objects.</p>
@@ -1103,6 +1165,7 @@
 <li>For each matching workload:</li>
 <li>Query Prometheus for the p<code>N</code> of CPU and memory over the configured window</li>
 <li>Compute per-container recommendations (request + limit)</li>
+<li>If <code>--recommend-only</code> is set, log the recommendation and skip patching</li>
 <li>Patch the workload's pod template with updated resources</li>
 <li>Recycle stale running pods: on k8s ≥ 1.27 via in-place resource patching; on k8s &lt; 1.27 via the Eviction API (PDB-respecting)</li>
 </ol>
@@ -1122,10 +1185,27 @@
 <li>Checks that the policy has <code>OnCreate</code> mode for that workload kind</li>
 <li>Queries Prometheus for current recommendations</li>
 <li>Skips containers that already have a CPU request set</li>
+<li>If <code>--recommend-only</code> is set, logs the recommendation and allows the pod through unchanged</li>
 <li>Returns an RFC 6902 JSON Patch with the recommended resources</li>
 <li>The API server applies the patch before persisting the pod</li>
 </ol>
 <p>The webhook <strong>fails open</strong> (<code>failurePolicy: Ignore</code> by default) — if it is unreachable or returns an error, the pod is admitted unchanged. The controller will handle ongoing reconciliation regardless.</p>
+<h2 id="dashboard-k8s-sustain-dashboard">Dashboard (<code>k8s-sustain dashboard</code>)<a class="headerlink" href="#dashboard-k8s-sustain-dashboard" title="Permanent link">&para;</a></h2>
+<p>The dashboard is an optional web UI that provides:</p>
+<ul>
+<li><strong>Policy overview</strong> — list all policies with status, namespaces, workload types</li>
+<li><strong>Workload metrics</strong> — interactive CPU and memory time-series charts</li>
+<li><strong>Policy simulator</strong> — test "what-if" scenarios with different percentiles, headroom, and min/max values</li>
+</ul>
+<p>It is read-only: it queries the Kubernetes API and Prometheus but never modifies any resources. See the <a href="../guides/dashboard.md">Dashboard guide</a> for details.</p>
+<h2 id="recommend-only-mode">Recommend-only mode<a class="headerlink" href="#recommend-only-mode" title="Permanent link">&para;</a></h2>
+<p>When <code>--recommend-only</code> is passed (or <code>recommendOnly: true</code> in the Helm values), all three components continue to operate normally — querying Prometheus, computing recommendations, resolving workloads — but <strong>no mutations are applied</strong>. Recommendations are emitted as structured JSON log lines at <code>info</code> level.</p>
+<p>This is useful for:</p>
+<ul>
+<li>Validating that the operator produces sensible recommendations before enabling active mode</li>
+<li>Auditing what changes would be made without risk</li>
+<li>Running the operator in a staging environment alongside existing resource settings</li>
+</ul>
 <h2 id="prometheus-recording-rules">Prometheus recording rules<a class="headerlink" href="#prometheus-recording-rules" title="Permanent link">&para;</a></h2>
 <p>k8s-sustain relies on pre-computed recording rules to avoid expensive fan-out queries at reconcile time. The chart installs three rule groups:</p>
 <table>
