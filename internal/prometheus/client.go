@@ -84,6 +84,81 @@ func (c *Client) QueryMemoryRangeByContainer(ctx context.Context, namespace, own
 	return c.queryRangeByContainer(ctx, expr, window, step)
 }
 
+// OOMEvent represents a single OOM kill event for a container.
+type OOMEvent struct {
+	Timestamp time.Time `json:"timestamp"`
+	Container string    `json:"container"`
+	Pod       string    `json:"pod"`
+}
+
+// QueryOOMKillEvents returns OOM kill events for a workload over the specified window.
+// Uses kube_pod_container_status_restarts_total joined with
+// kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} to detect
+// restart events caused by OOM kills.
+func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName, window, step string) ([]OOMEvent, error) {
+	// Detect restarts where the last termination reason was OOMKilled,
+	// scoped to the workload via the pod_workload mapping.
+	expr := fmt.Sprintf(
+		`increase(kube_pod_container_status_restarts_total{namespace=%q, container!="", container!="POD"}[%s])
+		 * on(namespace, pod, container) group_left()
+		   kube_pod_container_status_last_terminated_reason{namespace=%q, reason="OOMKilled", container!="", container!="POD"}
+		 * on(namespace, pod) group_left(owner_kind, owner_name)
+		   k8s_sustain:pod_workload{namespace=%q, owner_kind=%q, owner_name=%q}`,
+		namespace, step,
+		namespace,
+		namespace, ownerKind, ownerName,
+	)
+
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	windowDur, err := model.ParseDuration(window)
+	if err != nil {
+		return nil, fmt.Errorf("parsing window %q: %w", window, err)
+	}
+	stepDur, err := model.ParseDuration(step)
+	if err != nil {
+		return nil, fmt.Errorf("parsing step %q: %w", step, err)
+	}
+
+	end := time.Now()
+	start := end.Add(-time.Duration(windowDur))
+
+	result, _, err := c.api.QueryRange(ctx, expr, prometheusv1.Range{
+		Start: start,
+		End:   end,
+		Step:  time.Duration(stepDur),
+	})
+	if err != nil {
+		// Non-fatal: OOM data may not be available (missing kube-state-metrics etc.)
+		return nil, nil //nolint:nilerr
+	}
+
+	matrix, ok := result.(model.Matrix)
+	if !ok {
+		return nil, nil
+	}
+
+	var events []OOMEvent
+	for _, stream := range matrix {
+		container := string(stream.Metric["container"])
+		pod := string(stream.Metric["pod"])
+		if container == "" {
+			continue
+		}
+		for _, v := range stream.Values {
+			if float64(v.Value) > 0 {
+				events = append(events, OOMEvent{
+					Timestamp: v.Timestamp.Time(),
+					Container: container,
+					Pod:       pod,
+				})
+			}
+		}
+	}
+	return events, nil
+}
+
 func (c *Client) queryRangeByContainer(ctx context.Context, expr, window, step string) (ContainerTimeSeries, error) {
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()

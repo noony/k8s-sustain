@@ -93,7 +93,7 @@ func ComputeLimit(request *resource.Quantity, currentRequest, currentLimit *reso
 	}
 	if cfg.RequestsLimitsRatio != nil {
 		q := resource.NewMilliQuantity(
-			int64(math.Ceil(float64(request.MilliValue()) * *cfg.RequestsLimitsRatio)),
+			int64(math.Ceil(float64(request.MilliValue())**cfg.RequestsLimitsRatio)),
 			request.Format,
 		)
 		return LimitResult{Quantity: q}

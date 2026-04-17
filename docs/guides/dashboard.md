@@ -105,7 +105,11 @@ Shows a comprehensive view of a single workload:
 - **CPU and Memory charts** — Interactive time-series with recommendation lines overlaid (for automated workloads)
 - **Open in Simulator** — Jump to the simulator with the workload pre-filled
 
-Charts default to a 7-day window with 5-minute resolution. Enable **Auto-refresh** to keep data current.
+Charts default to a 7-day window with 5-minute resolution. Each chart overlays the workload's **current resource request** (amber dashed line) and **limit** (orange dashed line) so you can see how actual usage compares to configured resources. If the workload is automated, the **recommendation** line (red dashed) is also shown.
+
+Memory charts also display **OOM kill events** as red vertical markers with a count badge in the chart header. These are detected via `kube_pod_container_status_restarts_total` correlated with `kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}`. If no kube-state-metrics is available, OOM markers are silently omitted.
+
+Enable **Auto-refresh** to keep data current.
 
 ### Policy Simulator
 
@@ -122,7 +126,7 @@ The simulator lets you test "what-if" scenarios:
 The results show:
 
 - Computed recommendation per container (CPU request, memory request)
-- Time-series charts with the **recommendation line** overlaid on historical usage, making it easy to see how the recommendation relates to actual consumption
+- Time-series charts with the **recommendation line** (red), **current request** (amber), and **current limit** (orange) overlaid on historical usage, making it easy to compare recommendations against both actual consumption and current configuration
 
 #### Exporting Results
 
@@ -130,6 +134,16 @@ After running a simulation, use the export buttons to download recommendations:
 
 - **YAML** — Downloads a Kubernetes resource patch you can apply with `kubectl apply -f`
 - **CSV** — Downloads a spreadsheet-compatible file with per-container recommendations
+
+## Troubleshooting
+
+### "No metrics data available"
+
+This message appears when Prometheus returns no time-series data for the workload. Common causes:
+
+- **Recording rules not loaded** — k8s-sustain requires recording rules (`k8s_sustain:pod_workload`, `k8s_sustain:container_cpu_usage_by_workload:rate5m`, etc.). Verify they exist by querying `k8s_sustain:pod_workload` in Prometheus. If using the bundled Prometheus subchart, they are embedded automatically. If using an external Prometheus with the Prometheus Operator, set `controller.serviceMonitor.enabled=true` to deploy `PrometheusRule` resources.
+- **Duplicate kube-state-metrics instances** — If multiple kube-state-metrics are scraped, the workload mapping rules can fail with "many-to-many matching not allowed". Either remove the duplicate kube-state-metrics or upgrade the chart (the recording rules deduplicate series automatically since v0.3).
+- **Missing upstream metrics** — The recording rules depend on `kube_pod_owner`, `kube_replicaset_owner`, `container_cpu_usage_seconds_total`, and `container_memory_working_set_bytes`. Ensure kube-state-metrics and cAdvisor metrics are scraped.
 
 ## Helm Values Reference
 

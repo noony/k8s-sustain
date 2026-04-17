@@ -29,13 +29,17 @@ spec:
         # Map pod → Deployment by resolving ReplicaSet → Deployment.
         # Renames owner_name (RS name) → replicaset and clears conflicting labels
         # so group_left can inject owner_kind/owner_name from kube_replicaset_owner.
+        # Both sides are deduplicated with max by() to handle multiple
+        # kube-state-metrics instances producing duplicate series.
         - record: k8s_sustain:pod_workload
           expr: |
             max by (namespace, pod, owner_kind, owner_name) (
               label_replace(
                 label_replace(
                   label_replace(
-                    kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"},
+                    max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
+                      kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"}
+                    ),
                     "replicaset", "$1", "owner_name", "(.*)"
                   ),
                   "owner_kind", "", "owner_kind", ".*"
@@ -43,7 +47,9 @@ spec:
                 "owner_name", "", "owner_name", ".*"
               )
               * on(namespace, replicaset) group_left(owner_kind, owner_name)
-              kube_replicaset_owner{owner_kind="Deployment", owner_is_controller="true"}
+              max by (namespace, replicaset, owner_kind, owner_name) (
+                kube_replicaset_owner{owner_kind="Deployment", owner_is_controller="true"}
+              )
             )
 
     - name: k8s_sustain.cpu_rates

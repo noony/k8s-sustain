@@ -42,10 +42,10 @@ func Scheme() *runtime.Scheme { return dashboardScheme }
 
 // Server is the dashboard HTTP server.
 type Server struct {
-	K8sClient    client.Client
-	PromClient   *promclient.Client
-	Logger       logr.Logger
-	CORSOrigins  []string // Allowed CORS origins. Empty or ["*"] means allow all.
+	K8sClient   client.Client
+	PromClient  *promclient.Client
+	Logger      logr.Logger
+	CORSOrigins []string // Allowed CORS origins. Empty or ["*"] means allow all.
 }
 
 // Handler returns an http.Handler with all dashboard routes registered.
@@ -58,6 +58,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/workloads", s.handleAllWorkloads)
 	mux.HandleFunc("/api/workloads/", s.handleWorkloadRoutes)
 	mux.HandleFunc("/api/simulate", s.handleSimulate)
+	mux.HandleFunc("/api/summary", s.handleSummary)
 
 	// Health
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {

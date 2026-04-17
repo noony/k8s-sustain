@@ -135,78 +135,82 @@ prometheus:
       enabled: true
       size: 20Gi
 
-    # k8s-sustain recording rules — embedded directly in the Prometheus config.
-    serverFiles:
-      recording_rules.yml:
-        groups:
-          - name: k8s_sustain.workload_mapping
-            interval: 1m
-            rules:
-              - record: k8s_sustain:pod_workload
-                expr: |
-                  max by (namespace, pod, owner_kind, owner_name) (
-                    kube_pod_owner{
-                      owner_kind=~"StatefulSet|DaemonSet|Job",
-                      owner_is_controller="true"
-                    }
-                  )
-              - record: k8s_sustain:pod_workload
-                expr: |
-                  max by (namespace, pod, owner_kind, owner_name) (
+  # k8s-sustain recording rules — embedded directly in the Prometheus config.
+  serverFiles:
+    recording_rules.yml:
+      groups:
+        - name: k8s_sustain.workload_mapping
+          interval: 1m
+          rules:
+            - record: k8s_sustain:pod_workload
+              expr: |
+                max by (namespace, pod, owner_kind, owner_name) (
+                  kube_pod_owner{
+                    owner_kind=~"StatefulSet|DaemonSet|Job",
+                    owner_is_controller="true"
+                  }
+                )
+            - record: k8s_sustain:pod_workload
+              expr: |
+                max by (namespace, pod, owner_kind, owner_name) (
+                  label_replace(
                     label_replace(
                       label_replace(
-                        label_replace(
-                          kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"},
-                          "replicaset", "$1", "owner_name", "(.*)"
+                        max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
+                          kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"}
                         ),
-                        "owner_kind", "", "owner_kind", ".*"
+                        "replicaset", "$1", "owner_name", "(.*)"
                       ),
-                      "owner_name", "", "owner_name", ".*"
-                    )
-                    * on(namespace, replicaset) group_left(owner_kind, owner_name)
+                      "owner_kind", "", "owner_kind", ".*"
+                    ),
+                    "owner_name", "", "owner_name", ".*"
+                  )
+                  * on(namespace, replicaset) group_left(owner_kind, owner_name)
+                  max by (namespace, replicaset, owner_kind, owner_name) (
                     kube_replicaset_owner{owner_kind="Deployment", owner_is_controller="true"}
                   )
-          - name: k8s_sustain.cpu_rates
-            interval: 1m
-            rules:
-              - record: k8s_sustain:container_cpu_usage:rate5m
-                expr: |
-                  rate(container_cpu_usage_seconds_total{
-                    container!="",
-                    container!="POD",
-                    image!=""
-                  }[5m])
-              - record: k8s_sustain:container_cpu_usage_by_workload:rate5m
-                expr: |
+                )
+        - name: k8s_sustain.cpu_rates
+          interval: 1m
+          rules:
+            - record: k8s_sustain:container_cpu_usage:rate5m
+              expr: |
+                rate(container_cpu_usage_seconds_total{
+                  container!="",
+                  container!="POD",
+                  image!=""
+                }[5m])
+            - record: k8s_sustain:container_cpu_usage_by_workload:rate5m
+              expr: |
+                k8s_sustain:container_cpu_usage:rate5m
+                * on(namespace, pod) group_left(owner_kind, owner_name)
+                k8s_sustain:pod_workload
+            - record: k8s_sustain:pod_cpu_usage:rate5m
+              expr: |
+                sum by (namespace, pod, owner_kind, owner_name) (
                   k8s_sustain:container_cpu_usage:rate5m
                   * on(namespace, pod) group_left(owner_kind, owner_name)
                   k8s_sustain:pod_workload
-              - record: k8s_sustain:pod_cpu_usage:rate5m
-                expr: |
-                  sum by (namespace, pod, owner_kind, owner_name) (
-                    k8s_sustain:container_cpu_usage:rate5m
-                    * on(namespace, pod) group_left(owner_kind, owner_name)
-                    k8s_sustain:pod_workload
-                  )
-          - name: k8s_sustain.memory_rates
-            interval: 1m
-            rules:
-              - record: k8s_sustain:container_memory_working_set:bytes
-                expr: |
-                  container_memory_working_set_bytes{
-                    container!="",
-                    container!="POD",
-                    image!=""
-                  }
-              - record: k8s_sustain:container_memory_by_workload:bytes
-                expr: |
+                )
+        - name: k8s_sustain.memory_rates
+          interval: 1m
+          rules:
+            - record: k8s_sustain:container_memory_working_set:bytes
+              expr: |
+                container_memory_working_set_bytes{
+                  container!="",
+                  container!="POD",
+                  image!=""
+                }
+            - record: k8s_sustain:container_memory_by_workload:bytes
+              expr: |
+                k8s_sustain:container_memory_working_set:bytes
+                * on(namespace, pod) group_left(owner_kind, owner_name)
+                k8s_sustain:pod_workload
+            - record: k8s_sustain:pod_memory_working_set:bytes
+              expr: |
+                sum by (namespace, pod, owner_kind, owner_name) (
                   k8s_sustain:container_memory_working_set:bytes
                   * on(namespace, pod) group_left(owner_kind, owner_name)
                   k8s_sustain:pod_workload
-              - record: k8s_sustain:pod_memory_working_set:bytes
-                expr: |
-                  sum by (namespace, pod, owner_kind, owner_name) (
-                    k8s_sustain:container_memory_working_set:bytes
-                    * on(namespace, pod) group_left(owner_kind, owner_name)
-                    k8s_sustain:pod_workload
-                  )
+                )

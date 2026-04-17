@@ -15,6 +15,7 @@ type simulationResult struct {
 	Containers map[string]simulationContainerResult `json:"containers"`
 	CPUSeries  promclient.ContainerTimeSeries       `json:"cpuSeries"`
 	MemSeries  promclient.ContainerTimeSeries       `json:"memorySeries"`
+	Resources  map[string]containerResources        `json:"resources,omitempty"`
 }
 
 type simulationContainerResult struct {
@@ -83,10 +84,13 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		containers[name] = result
 	}
 
+	resources := s.getContainerResources(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
+
 	return &simulationResult{
 		Containers: containers,
 		CPUSeries:  cpuSeries,
 		MemSeries:  memSeries,
+		Resources:  resources,
 	}, nil
 }
 

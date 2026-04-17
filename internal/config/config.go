@@ -128,23 +128,23 @@ func BindWebhookFlags(cmd *cobra.Command) {
 
 // WebhookConfig holds resolved configuration for the webhook server.
 type WebhookConfig struct {
-	TLSCertFile   string
-	TLSKeyFile    string
-	Port          int
+	TLSCertFile       string
+	TLSKeyFile        string
+	Port              int
 	PrometheusAddress string
-	LogLevel      string
-	RecommendOnly bool
+	LogLevel          string
+	RecommendOnly     bool
 }
 
 // LoadWebhookConfig reads the current Viper state and returns a WebhookConfig.
 func LoadWebhookConfig() WebhookConfig {
 	return WebhookConfig{
-		TLSCertFile:   viper.GetString("webhook.tls-cert-file"),
-		TLSKeyFile:    viper.GetString("webhook.tls-key-file"),
-		Port:          viper.GetInt("webhook.port"),
+		TLSCertFile:       viper.GetString("webhook.tls-cert-file"),
+		TLSKeyFile:        viper.GetString("webhook.tls-key-file"),
+		Port:              viper.GetInt("webhook.port"),
 		PrometheusAddress: viper.GetString("webhook.prometheus-address"),
-		LogLevel:      viper.GetString("webhook.zap-log-level"),
-		RecommendOnly: RecommendOnly(),
+		LogLevel:          viper.GetString("webhook.zap-log-level"),
+		RecommendOnly:     RecommendOnly(),
 	}
 }
 

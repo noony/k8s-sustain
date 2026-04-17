@@ -1,30 +1,9 @@
+version: "2"
 run:
-  timeout: 5m
+  timeout: 2m
 
 linters:
-  enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    - gosimple
-    - gocritic
-    - gofmt
-    - misspell
-    - unconvert
-    - unparam
-    - errorlint
-    - nilerr
-    - bodyclose
-
-linters-settings:
-  govet:
-    shadow: true
-  errorlint:
-    errorf: true
-    asserts: true
-    comparison: true
+  default: standard
 
 issues:
   exclude-rules:

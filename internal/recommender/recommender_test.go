@@ -10,9 +10,9 @@ import (
 
 // helpers
 
-func int32p(i int32) *int32     { return &i }
-func float64p(f float64) *float64 { return &f }
-func qty(s string) resource.Quantity { return resource.MustParse(s) }
+func int32p(i int32) *int32            { return &i }
+func float64p(f float64) *float64      { return &f }
+func qty(s string) resource.Quantity   { return resource.MustParse(s) }
 func qtyp(s string) *resource.Quantity { q := qty(s); return &q }
 
 // --- ComputeCPURequest ---
@@ -115,10 +115,10 @@ func TestComputeMemoryRequest(t *testing.T) {
 			wantQty:  "110Mi",
 		},
 		{
-			name:    "keep request returns nil",
+			name:     "keep request returns nil",
 			rawBytes: 512 * 1024 * 1024,
-			cfg:     sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true},
-			wantNil: true,
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true},
+			wantNil:  true,
 		},
 		{
 			name:     "clamp to min",

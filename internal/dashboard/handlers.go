@@ -21,7 +21,7 @@ import (
 type policyListItem struct {
 	Name       string                      `json:"name"`
 	Namespaces []string                    `json:"namespaces"`
-	Update     sustainv1alpha1.UpdateTypes  `json:"update"`
+	Update     sustainv1alpha1.UpdateTypes `json:"update"`
 	Conditions []conditionSummary          `json:"conditions"`
 	CreatedAt  string                      `json:"createdAt"`
 }
@@ -46,11 +46,11 @@ type workloadSummary struct {
 }
 
 type containerStatus struct {
-	Name           string `json:"name"`
-	CPURequest     string `json:"cpuRequest"`
-	CPULimit       string `json:"cpuLimit"`
-	MemoryRequest  string `json:"memoryRequest"`
-	MemoryLimit    string `json:"memoryLimit"`
+	Name          string `json:"name"`
+	CPURequest    string `json:"cpuRequest"`
+	CPULimit      string `json:"cpuLimit"`
+	MemoryRequest string `json:"memoryRequest"`
+	MemoryLimit   string `json:"memoryLimit"`
 }
 
 // ---- Handlers ----
@@ -111,6 +111,10 @@ func (s *Server) handlePolicyRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 2 && parts[1] == "workloads" {
 		s.handlePolicyWorkloads(w, r, policyName)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "batch-simulate" {
+		s.handlePolicyBatchSimulate(w, r, policyName)
 		return
 	}
 	writeError(w, http.StatusNotFound, "not found")
@@ -732,10 +736,89 @@ func (s *Server) handleWorkloadRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// OOM kill events (best-effort, non-fatal)
+	oomEvents, _ := s.PromClient.QueryOOMKillEvents(r.Context(), namespace, kind, name, window, step)
+
+	// Fetch current resource requests/limits from the workload spec
+	resources := s.getContainerResources(r.Context(), namespace, kind, name)
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"cpu":    cpuSeries,
-		"memory": memSeries,
+		"cpu":       cpuSeries,
+		"memory":    memSeries,
+		"resources": resources,
+		"oomEvents": oomEvents,
 	})
+}
+
+// ---- Container resources ----
+
+type containerResources struct {
+	CPURequest    string `json:"cpuRequest,omitempty"`
+	CPULimit      string `json:"cpuLimit,omitempty"`
+	MemoryRequest string `json:"memoryRequest,omitempty"`
+	MemoryLimit   string `json:"memoryLimit,omitempty"`
+}
+
+func (s *Server) getContainerResources(ctx context.Context, namespace, kind, name string) map[string]containerResources {
+	containers, err := s.getWorkloadContainers(ctx, namespace, kind, name)
+	if err != nil {
+		s.Logger.Error(err, "failed to get workload containers", "namespace", namespace, "kind", kind, "name", name)
+		return nil
+	}
+	result := make(map[string]containerResources, len(containers))
+	for _, c := range containers {
+		cr := containerResources{}
+		if req := c.Resources.Requests; req != nil {
+			if cpu := req.Cpu(); cpu != nil && !cpu.IsZero() {
+				cr.CPURequest = cpu.String()
+			}
+			if mem := req.Memory(); mem != nil && !mem.IsZero() {
+				cr.MemoryRequest = mem.String()
+			}
+		}
+		if lim := c.Resources.Limits; lim != nil {
+			if cpu := lim.Cpu(); cpu != nil && !cpu.IsZero() {
+				cr.CPULimit = cpu.String()
+			}
+			if mem := lim.Memory(); mem != nil && !mem.IsZero() {
+				cr.MemoryLimit = mem.String()
+			}
+		}
+		result[c.Name] = cr
+	}
+	return result
+}
+
+func (s *Server) getWorkloadContainers(ctx context.Context, namespace, kind, name string) ([]corev1.Container, error) {
+	key := client.ObjectKey{Namespace: namespace, Name: name}
+	switch kind {
+	case "Deployment":
+		obj := &appsv1.Deployment{}
+		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
+			return nil, err
+		}
+		return obj.Spec.Template.Spec.Containers, nil
+	case "StatefulSet":
+		obj := &appsv1.StatefulSet{}
+		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
+			return nil, err
+		}
+		return obj.Spec.Template.Spec.Containers, nil
+	case "DaemonSet":
+		obj := &appsv1.DaemonSet{}
+		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
+			return nil, err
+		}
+		return obj.Spec.Template.Spec.Containers, nil
+	case "CronJob":
+		obj := &batchv1.CronJob{}
+		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
+			return nil, err
+		}
+		return obj.Spec.JobTemplate.Spec.Template.Spec.Containers, nil
+	default:
+		return nil, fmt.Errorf("unsupported kind %q", kind)
+	}
 }
 
 // ---- Simulate ----

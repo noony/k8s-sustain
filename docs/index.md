@@ -2,6 +2,12 @@
 
 **k8s-sustain** is a Kubernetes operator that automatically right-sizes workload resource requests and limits using historical Prometheus metrics. It reduces cloud waste and carbon footprint without requiring manual tuning.
 
+## Why k8s-sustain?
+
+Most Kubernetes clusters run significantly over-provisioned. Engineers set resource requests based on worst-case estimates, and those numbers rarely get revisited. The result is idle CPU and memory that still costs money, consumes energy, and contributes to the environmental footprint of cloud infrastructure.
+
+**We believe resource optimization should be accessible to everyone** — from a solo developer running a side project to a platform team managing thousands of workloads. Every cluster that right-sizes its workloads wastes less energy and needs fewer resources to do the same job. By keeping this tool free and open source, we hope to make it easy for any organization to reduce waste and do its part to preserve the planet.
+
 ---
 
 ## How it works
