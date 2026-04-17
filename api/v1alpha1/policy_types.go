@@ -27,6 +27,8 @@ const (
 type ResourceRequestsConfig struct {
 	// HeadroomPercentage adds a safety buffer on top of the computed recommendation.
 	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
 	HeadroomPercentage *int32 `json:"headroomPercentage,omitempty"`
 	// KeepRequest disables request updates when true.
 	// +optional
@@ -39,6 +41,8 @@ type ResourceRequestsConfig struct {
 	MinAllowed *resource.Quantity `json:"minAllowed,omitempty"`
 	// PercentilePercentage is the histogram percentile used for the recommendation (e.g. 95).
 	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
 	PercentilePercentage *int32 `json:"percentilePercentage,omitempty"`
 }
 

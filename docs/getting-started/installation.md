@@ -7,9 +7,9 @@ helm repo add k8s-sustain https://noony.github.io/k8s-sustain
 helm repo update
 ```
 
-## Install with bundled kube-prometheus-stack
+## Install with bundled Prometheus
 
-The default installation deploys the operator, the admission webhook, and a minimal [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) with the required recording rules pre-configured.
+The default installation deploys the operator, the admission webhook, and a [Prometheus](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) instance with the required recording rules pre-configured.
 
 ```bash
 helm install k8s-sustain k8s-sustain/k8s-sustain \
@@ -19,20 +19,20 @@ helm install k8s-sustain k8s-sustain/k8s-sustain \
 
 ## Install with an existing Prometheus
 
-If you already have Prometheus running (e.g. via kube-prometheus-stack), disable the bundled instance and point the operator at yours:
+If you already have Prometheus running, disable the bundled instance and point the operator at yours:
 
 ```bash
 helm install k8s-sustain k8s-sustain/k8s-sustain \
   --namespace k8s-sustain \
   --create-namespace \
-  --set kube-prometheus-stack.enabled=false \
-  --set webhook.prometheusAddress=http://prometheus.monitoring.svc:9090
+  --set prometheus.enabled=false \
+  --set prometheusAddress=http://prometheus.monitoring.svc:80
 ```
 
 !!! warning "Recording rules required"
-    When `kube-prometheus-stack.enabled=false`, you must install the recording rules manually.
-    Apply the `PrometheusRule` CRD from `charts/k8s-sustain/templates/prometheusrules.yaml` into your cluster,
-    or copy the rule groups into your existing Prometheus configuration.
+    When `prometheus.enabled=false`, you must install the recording rules manually.
+    Copy the rule groups from `prometheus.server.serverFiles` in `values.yaml` into your existing Prometheus configuration.
+    If you use the Prometheus Operator, enable `controller.serviceMonitor.enabled=true` to deploy the `PrometheusRule` and `ServiceMonitor` CRDs instead.
 
 ## Install without the admission webhook
 
@@ -43,6 +43,26 @@ helm install k8s-sustain k8s-sustain/k8s-sustain \
   --namespace k8s-sustain \
   --create-namespace \
   --set webhook.enabled=false
+```
+
+## Install in recommend-only mode (dry-run)
+
+Run the operator without applying any changes. Recommendations are logged as structured JSON but workloads and pods are never modified.
+
+```bash
+helm install k8s-sustain k8s-sustain/k8s-sustain \
+  --namespace k8s-sustain \
+  --create-namespace \
+  --set recommendOnly=true
+```
+
+Once you are satisfied with the logged recommendations, disable recommend-only mode:
+
+```bash
+helm upgrade k8s-sustain k8s-sustain/k8s-sustain \
+  --namespace k8s-sustain \
+  --reuse-values \
+  --set recommendOnly=false
 ```
 
 ## Install with cert-manager (recommended for production)

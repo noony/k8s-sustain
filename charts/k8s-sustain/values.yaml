@@ -1,5 +1,3 @@
-replicaCount: 1
-
 image:
   repository: ghcr.io/noony/k8s-sustain
   pullPolicy: IfNotPresent
@@ -10,11 +8,41 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-manager:
+# When true, both the controller and webhook compute recommendations but never
+# patch workloads or mutate pods (dry-run mode).
+recommendOnly: false
+
+# Prometheus server URL, shared by all components (controller, webhook, dashboard).
+# Leave empty to auto-detect the bundled prometheus subchart service.
+# Override only when using an external Prometheus instance.
+# Example: http://prometheus.monitoring.svc:9090
+prometheusAddress: ""
+
+controller:
+  replicaCount: 1
   metricsBindAddress: ":8080"
   healthProbeBindAddress: ":8081"
   leaderElect: true
   logLevel: info
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+  # ServiceMonitor for the controller metrics endpoint.
+  # Only useful when running the Prometheus Operator (e.g. kube-prometheus-stack).
+  # Not needed when using the bundled prometheus subchart.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
 serviceAccount:
   create: true
@@ -22,32 +50,9 @@ serviceAccount:
   # Annotations to add to the service account (e.g. for IRSA, Workload Identity).
   annotations: {}
 
-service:
-  # Expose the metrics endpoint.
-  type: ClusterIP
-  port: 8080
-
-resources:
-  requests:
-    cpu: 10m
-    memory: 64Mi
-  limits:
-    memory: 128Mi
-
-nodeSelector: {}
-tolerations: []
-affinity: {}
-
 # Install the CRD as part of the chart.
 # Set to false if you manage CRDs separately.
 installCRDs: true
-
-# ServiceMonitor and PrometheusRule for the operator.
-# Requires the Prometheus Operator CRDs (installed by kube-prometheus-stack).
-serviceMonitor:
-  enabled: true
-  interval: 30s
-  scrapeTimeout: 10s
 
 # Admission webhook — intercepts Pod CREATE and injects resources for OnCreate policies.
 webhook:
@@ -55,7 +60,6 @@ webhook:
   # Number of webhook server replicas. ≥2 recommended for production HA.
   replicaCount: 1
   port: 9443
-  prometheusAddress: http://localhost:9090
   logLevel: info
   # failurePolicy controls what happens when the webhook is unreachable.
   # "Ignore" (default) lets pods through; "Fail" blocks them.
@@ -82,50 +86,127 @@ webhook:
       memory: 32Mi
     limits:
       memory: 64Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
-# kube-prometheus-stack subchart — https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
-# Recording rules are managed via the PrometheusRule CRD (see serviceMonitor.enabled above).
-kube-prometheus-stack:
+# Dashboard — web UI for policy exploration, workload metrics, and simulation.
+dashboard:
+  enabled: false
+  replicaCount: 1
+  port: 8090
+  bindAddress: ":8090"
+  logLevel: info
+  # Allowed CORS origins. Use ["*"] to allow all origins (default).
+  corsAllowedOrigins:
+    - "*"
+  service:
+    type: ClusterIP
+    port: 8090
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# prometheus subchart — https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus
+prometheus:
   enabled: true
 
   # Components we don't need.
-  grafana:
-    enabled: false
   alertmanager:
     enabled: false
-  nodeExporter:
+  prometheus-node-exporter:
     enabled: false
-  defaultRules:
-    create: false
-
-  # Kubernetes component scrapers we don't need.
-  kubeApiServer:
-    enabled: false
-  kubeControllerManager:
-    enabled: false
-  kubeScheduler:
-    enabled: false
-  kubeProxy:
-    enabled: false
-  coreDns:
-    enabled: false
-  kubeEtcd:
+  prometheus-pushgateway:
     enabled: false
 
-  # Required: kubelet provides cAdvisor metrics, kube-state-metrics provides pod→workload mapping.
-  kubelet:
-    enabled: true
-  kubeStateMetrics:
-    enabled: true
-  prometheusOperator:
+  # Required: kube-state-metrics provides pod→workload mapping labels.
+  kube-state-metrics:
     enabled: true
 
-  prometheus:
-    prometheusSpec:
-      retention: 15d
-      storageSpec:
-        volumeClaimTemplate:
-          spec:
-            resources:
-              requests:
-                storage: 20Gi
+  server:
+    retention: 15d
+    persistentVolume:
+      enabled: true
+      size: 20Gi
+
+    # k8s-sustain recording rules — embedded directly in the Prometheus config.
+    serverFiles:
+      recording_rules.yml:
+        groups:
+          - name: k8s_sustain.workload_mapping
+            interval: 1m
+            rules:
+              - record: k8s_sustain:pod_workload
+                expr: |
+                  max by (namespace, pod, owner_kind, owner_name) (
+                    kube_pod_owner{
+                      owner_kind=~"StatefulSet|DaemonSet|Job",
+                      owner_is_controller="true"
+                    }
+                  )
+              - record: k8s_sustain:pod_workload
+                expr: |
+                  max by (namespace, pod, owner_kind, owner_name) (
+                    label_replace(
+                      label_replace(
+                        label_replace(
+                          kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"},
+                          "replicaset", "$1", "owner_name", "(.*)"
+                        ),
+                        "owner_kind", "", "owner_kind", ".*"
+                      ),
+                      "owner_name", "", "owner_name", ".*"
+                    )
+                    * on(namespace, replicaset) group_left(owner_kind, owner_name)
+                    kube_replicaset_owner{owner_kind="Deployment", owner_is_controller="true"}
+                  )
+          - name: k8s_sustain.cpu_rates
+            interval: 1m
+            rules:
+              - record: k8s_sustain:container_cpu_usage:rate5m
+                expr: |
+                  rate(container_cpu_usage_seconds_total{
+                    container!="",
+                    container!="POD",
+                    image!=""
+                  }[5m])
+              - record: k8s_sustain:container_cpu_usage_by_workload:rate5m
+                expr: |
+                  k8s_sustain:container_cpu_usage:rate5m
+                  * on(namespace, pod) group_left(owner_kind, owner_name)
+                  k8s_sustain:pod_workload
+              - record: k8s_sustain:pod_cpu_usage:rate5m
+                expr: |
+                  sum by (namespace, pod, owner_kind, owner_name) (
+                    k8s_sustain:container_cpu_usage:rate5m
+                    * on(namespace, pod) group_left(owner_kind, owner_name)
+                    k8s_sustain:pod_workload
+                  )
+          - name: k8s_sustain.memory_rates
+            interval: 1m
+            rules:
+              - record: k8s_sustain:container_memory_working_set:bytes
+                expr: |
+                  container_memory_working_set_bytes{
+                    container!="",
+                    container!="POD",
+                    image!=""
+                  }
+              - record: k8s_sustain:container_memory_by_workload:bytes
+                expr: |
+                  k8s_sustain:container_memory_working_set:bytes
+                  * on(namespace, pod) group_left(owner_kind, owner_name)
+                  k8s_sustain:pod_workload
+              - record: k8s_sustain:pod_memory_working_set:bytes
+                expr: |
+                  sum by (namespace, pod, owner_kind, owner_name) (
+                    k8s_sustain:container_memory_working_set:bytes
+                    * on(namespace, pod) group_left(owner_kind, owner_name)
+                    k8s_sustain:pod_workload
+                  )

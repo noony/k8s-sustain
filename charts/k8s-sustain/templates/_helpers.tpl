@@ -82,3 +82,33 @@ app.kubernetes.io/name: {{ include "k8s-sustain.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: webhook
 {{- end }}
+
+{{/*
+Dashboard server name (appends -dashboard to the full name).
+*/}}
+{{- define "k8s-sustain.dashboardName" -}}
+{{- printf "%s-dashboard" (include "k8s-sustain.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Prometheus address. Auto-detects the bundled prometheus subchart service
+when prometheusAddress is empty and prometheus.enabled=true.
+*/}}
+{{- define "k8s-sustain.prometheusAddress" -}}
+{{- if .Values.prometheusAddress }}
+{{- .Values.prometheusAddress }}
+{{- else if .Values.prometheus.enabled }}
+{{- printf "http://%s-prometheus-server.%s.svc:80" .Release.Name .Release.Namespace }}
+{{- else }}
+{{- "http://localhost:9090" }}
+{{- end }}
+{{- end }}
+
+{{/*
+Selector labels for the dashboard Deployment / Service.
+*/}}
+{{- define "k8s-sustain.dashboardSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "k8s-sustain.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: dashboard
+{{- end }}

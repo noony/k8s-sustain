@@ -1,10 +1,10 @@
 {{/*
-PrometheusRule for the Prometheus Operator (e.g. kube-prometheus-stack).
-Enable with: serviceMonitor.enabled=true
-For standalone prometheus (no operator), rules are configured via
-prometheus.serverFiles.recording_rules.yml in values.yaml instead.
+PrometheusRule for users running the Prometheus Operator externally.
+Enable with: controller.serviceMonitor.enabled=true
+When using the bundled prometheus subchart, recording rules are
+embedded in prometheus.server.serverFiles instead.
 */}}
-{{- if .Values.serviceMonitor.enabled }}
+{{- if .Values.controller.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:

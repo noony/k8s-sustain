@@ -6,10 +6,10 @@ RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -a -trimpath -ldflags="-s -w" -o manager .
+    go build -a -trimpath -ldflags="-s -w" -o k8s-sustain .
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
-COPY --from=builder /workspace/manager .
+COPY --from=builder /workspace/k8s-sustain .
 USER 65532:65532
-ENTRYPOINT ["/manager"]
+ENTRYPOINT ["/k8s-sustain"]

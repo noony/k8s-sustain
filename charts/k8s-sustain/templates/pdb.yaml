@@ -1,0 +1,46 @@
+{{- if gt (int .Values.controller.replicaCount) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "k8s-sustain.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "k8s-sustain.selectorLabels" . | nindent 6 }}
+{{- end }}
+---
+{{- if and .Values.webhook.enabled (gt (int .Values.webhook.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "k8s-sustain.webhookName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "k8s-sustain.webhookSelectorLabels" . | nindent 6 }}
+{{- end }}
+---
+{{- if and .Values.dashboard.enabled (gt (int .Values.dashboard.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "k8s-sustain.dashboardName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "k8s-sustain.dashboardSelectorLabels" . | nindent 6 }}
+{{- end }}

@@ -15,6 +15,7 @@ webhooks:
     admissionReviewVersions: [v1]
     sideEffects: None
     failurePolicy: {{ .Values.webhook.failurePolicy }}
+    timeoutSeconds: 5
     # Only fire on CREATE — Ongoing mode and in-place updates are handled by the controller.
     rules:
       - apiGroups: [""]

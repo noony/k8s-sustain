@@ -1,6 +1,6 @@
 # Architecture
 
-k8s-sustain is split into two independent components that run as separate processes (different container args in the same image):
+k8s-sustain is split into three independent components that run as separate processes (different container args in the same image):
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -33,6 +33,11 @@ k8s-sustain is split into two independent components that run as separate proces
 │  │                        Prometheus                        │   │
 │  │  k8s_sustain:container_cpu_usage_by_workload:rate5m      │   │
 │  │  k8s_sustain:container_memory_by_workload:bytes          │   │
+│  └────────────────────────────┬─────────────────────────────┘   │
+│                               │                                 │
+│  ┌────────────────────────────┴─────────────────────────────┐   │
+│  │  k8s-sustain-dashboard (optional)                        │   │
+│  │  Web UI: policy exploration, metrics, simulator          │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -51,6 +56,7 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
 3. For each matching workload:
    - Query Prometheus for the p`N` of CPU and memory over the configured window
    - Compute per-container recommendations (request + limit)
+   - If `--recommend-only` is set, log the recommendation and skip patching
    - Patch the workload's pod template with updated resources
    - Recycle stale running pods: on k8s ≥ 1.27 via in-place resource patching; on k8s < 1.27 via the Eviction API (PDB-respecting)
 
@@ -73,10 +79,31 @@ The webhook is a [mutating admission webhook](https://kubernetes.io/docs/referen
 6. Checks that the policy has `OnCreate` mode for that workload kind
 7. Queries Prometheus for current recommendations
 8. Skips containers that already have a CPU request set
-9. Returns an RFC 6902 JSON Patch with the recommended resources
-10. The API server applies the patch before persisting the pod
+9. If `--recommend-only` is set, logs the recommendation and allows the pod through unchanged
+10. Returns an RFC 6902 JSON Patch with the recommended resources
+11. The API server applies the patch before persisting the pod
 
 The webhook **fails open** (`failurePolicy: Ignore` by default) — if it is unreachable or returns an error, the pod is admitted unchanged. The controller will handle ongoing reconciliation regardless.
+
+## Dashboard (`k8s-sustain dashboard`)
+
+The dashboard is an optional web UI that provides:
+
+- **Policy overview** — list all policies with status, namespaces, workload types
+- **Workload metrics** — interactive CPU and memory time-series charts
+- **Policy simulator** — test "what-if" scenarios with different percentiles, headroom, and min/max values
+
+It is read-only: it queries the Kubernetes API and Prometheus but never modifies any resources. See the [Dashboard guide](../guides/dashboard.md) for details.
+
+## Recommend-only mode
+
+When `--recommend-only` is passed (or `recommendOnly: true` in the Helm values), all three components continue to operate normally — querying Prometheus, computing recommendations, resolving workloads — but **no mutations are applied**. Recommendations are emitted as structured JSON log lines at `info` level.
+
+This is useful for:
+
+- Validating that the operator produces sensible recommendations before enabling active mode
+- Auditing what changes would be made without risk
+- Running the operator in a staging environment alongside existing resource settings
 
 ## Prometheus recording rules
 

@@ -13,42 +13,19 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
-	"go.uber.org/zap/zapcore"
-	"k8s.io/apimachinery/pkg/runtime"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/cmd/manager"
+	"github.com/noony/k8s-sustain/cmd/controller"
+	"github.com/noony/k8s-sustain/internal/config"
+	"github.com/noony/k8s-sustain/internal/logging"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	whhandler "github.com/noony/k8s-sustain/internal/webhook"
 )
 
-var webhookScheme = runtime.NewScheme()
-
 func init() {
-	utilruntime.Must(clientgoscheme.AddToScheme(webhookScheme))
-	utilruntime.Must(sustainv1alpha1.AddToScheme(webhookScheme))
-
-	serveCmd.Flags().String("tls-cert-file", "/tls/tls.crt", "Path to TLS certificate file")
-	serveCmd.Flags().String("tls-key-file", "/tls/tls.key", "Path to TLS private key file")
-	serveCmd.Flags().Int("port", 9443, "Port the webhook server listens on")
-	serveCmd.Flags().String("prometheus-address", "http://localhost:9090", "Prometheus server address")
-	serveCmd.Flags().String("zap-log-level", "info", "Log level (debug, info, warn, error)")
-	serveCmd.Flags().String("health-probe-bind-address", ":8082", "Address the health probe endpoint binds to")
-
-	_ = viper.BindPFlag("webhook.tls-cert-file", serveCmd.Flags().Lookup("tls-cert-file"))
-	_ = viper.BindPFlag("webhook.tls-key-file", serveCmd.Flags().Lookup("tls-key-file"))
-	_ = viper.BindPFlag("webhook.port", serveCmd.Flags().Lookup("port"))
-	_ = viper.BindPFlag("webhook.prometheus-address", serveCmd.Flags().Lookup("prometheus-address"))
-	_ = viper.BindPFlag("webhook.zap-log-level", serveCmd.Flags().Lookup("zap-log-level"))
-	_ = viper.BindPFlag("webhook.health-probe-bind-address", serveCmd.Flags().Lookup("health-probe-bind-address"))
-
-	manager.RootCmd().AddCommand(serveCmd)
+	config.BindWebhookFlags(serveCmd)
+	controller.RootCmd().AddCommand(serveCmd)
 }
 
 var serveCmd = &cobra.Command{
@@ -63,31 +40,34 @@ Use cert-manager or provide a pre-existing Secret mounted at /tls.`,
 }
 
 func runWebhook(_ *cobra.Command, _ []string) error {
-	logLevel := zapcore.InfoLevel
-	if err := logLevel.UnmarshalText([]byte(viper.GetString("webhook.zap-log-level"))); err != nil {
-		logLevel = zapcore.InfoLevel
-	}
+	cfg := config.LoadWebhookConfig()
+	log := logging.Setup(cfg.LogLevel, "webhook")
 
-	logger := ctrlzap.New(ctrlzap.UseDevMode(logLevel == zapcore.DebugLevel), ctrlzap.Level(logLevel))
-	ctrl.SetLogger(logger)
-	log := ctrl.Log.WithName("webhook")
-
-	promClient, err := promclient.New(viper.GetString("webhook.prometheus-address"))
+	promClient, err := promclient.New(cfg.PrometheusAddress)
 	if err != nil {
 		log.Error(err, "Unable to create Prometheus client")
 		return err
 	}
 
-	cfg := ctrl.GetConfigOrDie()
-	k8sClient, err := client.New(cfg, client.Options{Scheme: webhookScheme})
+	restCfg := ctrl.GetConfigOrDie()
+	k8sClient, err := client.New(restCfg, client.Options{Scheme: config.Scheme()})
 	if err != nil {
 		log.Error(err, "Unable to create Kubernetes client")
 		return err
 	}
 
+	// Validate TLS files exist before starting the server.
+	if _, err := os.Stat(cfg.TLSCertFile); err != nil {
+		return fmt.Errorf("tls cert file %q: %w", cfg.TLSCertFile, err)
+	}
+	if _, err := os.Stat(cfg.TLSKeyFile); err != nil {
+		return fmt.Errorf("tls key file %q: %w", cfg.TLSKeyFile, err)
+	}
+
 	handler := &whhandler.Handler{
 		Client:           k8sClient,
 		PrometheusClient: promClient,
+		RecommendOnly:    cfg.RecommendOnly,
 	}
 
 	mux := http.NewServeMux()
@@ -96,21 +76,21 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	addr := fmt.Sprintf(":%d", viper.GetInt("webhook.port"))
-	certFile := viper.GetString("webhook.tls-cert-file")
-	keyFile := viper.GetString("webhook.tls-key-file")
-
+	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
-	log.Info("Starting webhook server", "addr", addr, "certFile", certFile)
+	log.Info("Starting webhook server", "addr", addr, "certFile", cfg.TLSCertFile)
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 	}()

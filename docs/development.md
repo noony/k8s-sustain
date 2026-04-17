@@ -8,7 +8,7 @@
 | Docker | any | Build container image |
 | kubectl | any | Cluster interaction |
 | helm | ≥ 3.10 | Chart development |
-| kind / k3d | any | Local cluster |
+| minikube / kind / k3d | any | Local cluster |
 
 ## Clone and build
 
@@ -32,10 +32,14 @@ k8s-sustain/
 │   ├── policy_types.go
 │   └── zz_generated.deepcopy.go
 ├── cmd/
-│   ├── manager/           # Root cobra command + start subcommand
-│   └── webhook/           # webhook subcommand
+│   ├── controller/        # Root cobra command + start subcommand
+│   ├── webhook/           # webhook subcommand
+│   └── dashboard/         # dashboard subcommand
 ├── internal/
+│   ├── config/            # Centralized Viper config (flags, env, file)
 │   ├── controller/        # Policy reconciler
+│   ├── dashboard/         # Dashboard HTTP server
+│   ├── logging/           # Shared zap logger setup
 │   ├── prometheus/        # Prometheus HTTP API client
 │   ├── recommender/       # Resource recommendation logic (pure functions)
 │   ├── webhook/           # Admission webhook HTTP handler
@@ -59,7 +63,7 @@ export KUBECONFIG=~/.kube/config
 kubectl port-forward -n k8s-sustain svc/k8s-sustain-prometheus-server 9090:80 &
 
 go run main.go start \
-  --prometheus-address=http://localhost:9090 \
+  --prometheus-address=http://localhost:9090 \  # port-forwarded from the cluster
   --reconcile-interval=1m \
   --zap-log-level=debug
 ```
@@ -67,6 +71,93 @@ go run main.go start \
 ### Start the webhook (requires TLS)
 
 The webhook must be reachable from the API server, which makes local development more involved. Use [telepresence](https://www.telepresence.io) or develop against a local kind cluster with a self-signed cert.
+
+## Deploying on kind
+
+A full local deployment with Prometheus, the controller, webhook, and dashboard:
+
+### 1. Create a kind cluster
+
+```bash
+kind create cluster --name k8s-sustain
+```
+
+### 2. Build and load the image
+
+```bash
+make docker-build IMG=k8s-sustain:dev
+kind load docker-image k8s-sustain:dev --name k8s-sustain
+```
+
+### 3. Install with Helm
+
+```bash
+helm install k8s-sustain ./charts/k8s-sustain \
+  --set image.repository=k8s-sustain \
+  --set image.tag=dev \
+  --set image.pullPolicy=Never \
+  --set dashboard.enabled=true
+```
+
+`image.pullPolicy=Never` ensures Kubernetes uses the locally loaded image. The `prometheusAddress` is auto-resolved to the bundled prometheus subchart service.
+
+### 4. Verify pods are running
+
+```bash
+kubectl get pods -w
+```
+
+### 5. Access the dashboard
+
+```bash
+kubectl port-forward svc/k8s-sustain-dashboard 8090:8090
+```
+
+Open `http://localhost:8090`.
+
+### 6. Create a test policy
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: sustain.io/v1alpha1
+kind: Policy
+metadata:
+  name: test-policy
+spec:
+  selector:
+    namespaces: [default]
+  update:
+    types:
+      deployment: Ongoing
+  rightSizing:
+    resourcesConfigs:
+      cpu:
+        window: 168h
+        requests:
+          percentilePercentage: 95
+      memory:
+        window: 168h
+        requests:
+          percentilePercentage: 95
+EOF
+```
+
+### Rebuilding after changes
+
+After modifying code, rebuild and reload:
+
+```bash
+make docker-build IMG=k8s-sustain:dev
+kind load docker-image k8s-sustain:dev --name k8s-sustain
+kubectl rollout restart deployment k8s-sustain
+kubectl rollout restart deployment k8s-sustain-dashboard
+```
+
+### Cleanup
+
+```bash
+kind delete cluster --name k8s-sustain
+```
 
 ## Regenerating code
 

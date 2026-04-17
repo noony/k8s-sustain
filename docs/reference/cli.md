@@ -1,12 +1,34 @@
 # CLI Reference
 
-The `k8s-sustain` binary exposes two subcommands. Both are packaged in the same container image.
+The `k8s-sustain` binary exposes three subcommands. All are packaged in the same container image.
+
+## Global flags
+
+These flags are available on every subcommand.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--recommend-only` | `false` | Compute recommendations but never patch workloads or mutate pods (dry-run mode) |
+| `--config` | — | Path to a config file (YAML); all flags can be set there |
+
+When `--recommend-only` is enabled, both the controller and the webhook still query Prometheus and compute recommendations as usual, but they **never** apply changes. Computed recommendations are emitted as structured log lines at `info` level, so you can inspect them before switching to active mode.
+
+```bash
+# via flag
+k8s-sustain start --recommend-only
+
+# via environment variable
+K8SSUSTAIN_RECOMMEND_ONLY=true k8s-sustain start
+
+# via config file (.k8s-sustain.yaml)
+recommend-only: true
+```
 
 ---
 
 ## `k8s-sustain start`
 
-Starts the controller manager. Watches `Policy` objects and periodically reconciles `Ongoing`-mode workloads.
+Starts the controller. Watches `Policy` objects and periodically reconciles `Ongoing`-mode workloads.
 
 ```
 k8s-sustain start [flags]
@@ -23,7 +45,6 @@ k8s-sustain start [flags]
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server used for metric queries |
 | `--reconcile-interval` | `1h` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces the reconciler should never touch |
-| `--config` | — | Path to a config file (YAML); all flags can be set there |
 
 ### Environment variables
 
@@ -61,7 +82,6 @@ k8s-sustain webhook [flags]
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
 | `--zap-log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--health-probe-bind-address` | `:8082` | Address the `/healthz` endpoint binds to |
-| `--config` | — | Path to a config file (YAML) |
 
 ### Health endpoints
 
@@ -89,3 +109,29 @@ helm upgrade k8s-sustain k8s-sustain/k8s-sustain \
 
 !!! warning "Using `Fail` in production"
     Setting `failurePolicy: Fail` means **pod creation is blocked** if the webhook is unavailable. Only use this if you have ≥2 webhook replicas and are confident in the availability of Prometheus.
+
+---
+
+## `k8s-sustain dashboard`
+
+Starts the web dashboard server. Provides a UI for policy exploration, workload metrics visualization, and policy simulation.
+
+```
+k8s-sustain dashboard [flags]
+```
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--bind-address` | `:8090` | Address the HTTP server listens on |
+| `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
+| `--zap-log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
+
+### Health endpoints
+
+| Path | Port | Description |
+|------|------|-------------|
+| `/healthz` | `:8090` | Returns `200 OK` — used as liveness/readiness probe |
+
+See the [Dashboard guide](../guides/dashboard.md) for full usage instructions.

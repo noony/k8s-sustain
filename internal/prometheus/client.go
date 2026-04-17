@@ -49,7 +49,107 @@ func (c *Client) QueryMemoryByContainer(ctx context.Context, namespace, ownerKin
 	return c.queryByContainer(ctx, expr)
 }
 
+// TimeSeries holds a single time-series: metric labels plus timestamped values.
+type TimeSeries struct {
+	Labels map[string]string `json:"labels"`
+	Values []TimeValue       `json:"values"`
+}
+
+// TimeValue is a single (timestamp, value) data point.
+type TimeValue struct {
+	Timestamp time.Time `json:"timestamp"`
+	Value     float64   `json:"value"`
+}
+
+// ContainerTimeSeries maps container name → time-series data points.
+type ContainerTimeSeries map[string][]TimeValue
+
+// QueryCPURangeByContainer returns per-container CPU usage time-series (cores)
+// over the specified window with the given step resolution.
+func (c *Client) QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
+	expr := fmt.Sprintf(
+		`avg by (container) (k8s_sustain:container_cpu_usage_by_workload:rate5m{namespace=%q,owner_kind=%q,owner_name=%q})`,
+		namespace, ownerKind, ownerName,
+	)
+	return c.queryRangeByContainer(ctx, expr, window, step)
+}
+
+// QueryMemoryRangeByContainer returns per-container memory working set time-series (bytes)
+// over the specified window with the given step resolution.
+func (c *Client) QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
+	expr := fmt.Sprintf(
+		`avg by (container) (k8s_sustain:container_memory_by_workload:bytes{namespace=%q,owner_kind=%q,owner_name=%q})`,
+		namespace, ownerKind, ownerName,
+	)
+	return c.queryRangeByContainer(ctx, expr, window, step)
+}
+
+func (c *Client) queryRangeByContainer(ctx context.Context, expr, window, step string) (ContainerTimeSeries, error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	windowDur, err := model.ParseDuration(window)
+	if err != nil {
+		return nil, fmt.Errorf("parsing window %q: %w", window, err)
+	}
+	stepDur, err := model.ParseDuration(step)
+	if err != nil {
+		return nil, fmt.Errorf("parsing step %q: %w", step, err)
+	}
+
+	end := time.Now()
+	start := end.Add(-time.Duration(windowDur))
+
+	result, _, err := c.api.QueryRange(ctx, expr, prometheusv1.Range{
+		Start: start,
+		End:   end,
+		Step:  time.Duration(stepDur),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prometheus range query %q: %w", expr, err)
+	}
+
+	matrix, ok := result.(model.Matrix)
+	if !ok {
+		return nil, fmt.Errorf("unexpected prometheus result type %T for range query", result)
+	}
+
+	series := make(ContainerTimeSeries, len(matrix))
+	for _, stream := range matrix {
+		name := string(stream.Metric["container"])
+		if name == "" {
+			continue
+		}
+		values := make([]TimeValue, 0, len(stream.Values))
+		for _, v := range stream.Values {
+			values = append(values, TimeValue{
+				Timestamp: v.Timestamp.Time(),
+				Value:     float64(v.Value),
+			})
+		}
+		series[name] = values
+	}
+	return series, nil
+}
+
+// queryTimeout is the maximum duration for a single Prometheus query.
+const queryTimeout = 30 * time.Second
+
+// Ping checks that the Prometheus server is reachable by executing a trivial query.
+func (c *Client) Ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, _, err := c.api.Query(ctx, "up", time.Now())
+	if err != nil {
+		return fmt.Errorf("prometheus unreachable: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) queryByContainer(ctx context.Context, expr string) (ContainerValues, error) {
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
 	result, _, err := c.api.Query(ctx, expr, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("prometheus query %q: %w", expr, err)

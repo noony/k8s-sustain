@@ -7,13 +7,17 @@ import (
 	"slices"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -39,6 +43,8 @@ type PolicyReconciler struct {
 	ReconcileInterval  time.Duration
 	InPlaceUpdates     bool
 	ExcludedNamespaces []string
+	RecommendOnly      bool
+	recorder           record.EventRecorder
 	patcher            *workload.Patcher
 }
 
@@ -49,6 +55,7 @@ func (r *PolicyReconciler) isExcluded(namespace string) bool {
 // SetupWithManager registers the PolicyReconciler with the given manager.
 func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.patcher = workload.New(r.Client, r.InPlaceUpdates)
+	r.recorder = mgr.GetEventRecorderFor("k8s-sustain")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sustainv1alpha1.Policy{}).
 		Complete(r)
@@ -65,6 +72,30 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Handle deletion: remove finalizer and let garbage collection clean up.
+	const finalizerName = "k8s.sustain.io/cleanup"
+	if !policy.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(policy, finalizerName) {
+			r.recorder.Event(policy, corev1.EventTypeNormal, "Cleanup", "Policy deleted, removing finalizer.")
+			controllerutil.RemoveFinalizer(policy, finalizerName)
+			if err := r.Update(ctx, policy); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Add finalizer if not present.
+	if !controllerutil.ContainsFinalizer(policy, finalizerName) {
+		controllerutil.AddFinalizer(policy, finalizerName)
+		if err := r.Update(ctx, policy); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	timer := prometheus.NewTimer(reconcileDuration.WithLabelValues(policy.Name))
+	defer timer.ObserveDuration()
+
 	var errs []error
 	if err := r.reconcileDeployments(ctx, policy); err != nil {
 		errs = append(errs, err)
@@ -80,7 +111,10 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if len(errs) > 0 {
-		_ = r.failCondition(ctx, policy, "ReconciliationFailed", errors.Join(errs...))
+		combined := errors.Join(errs...)
+		_ = r.failCondition(ctx, policy, "ReconciliationFailed", combined)
+		r.recorder.Event(policy, corev1.EventTypeWarning, "ReconciliationFailed", combined.Error())
+		reconcileTotal.WithLabelValues(policy.Name, "error").Inc()
 	} else {
 		_ = r.setCondition(ctx, policy, metav1.Condition{
 			Type:               "Ready",
@@ -89,6 +123,8 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			Message:            "All targeted workloads have been processed.",
 			ObservedGeneration: policy.Generation,
 		})
+		r.recorder.Event(policy, corev1.EventTypeNormal, "ReconciliationSucceeded", "All targeted workloads have been processed.")
+		reconcileTotal.WithLabelValues(policy.Name, "success").Inc()
 	}
 
 	return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
@@ -111,6 +147,9 @@ func (r *PolicyReconciler) reconcileDeployments(ctx context.Context, policy *sus
 	}
 
 	for i := range list.Items {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		d := &list.Items[i]
 		if r.isExcluded(d.Namespace) {
 			continue
@@ -118,17 +157,22 @@ func (r *PolicyReconciler) reconcileDeployments(ctx context.Context, policy *sus
 		if d.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
 			continue
 		}
+		wl := logger.WithValues("deployment", d.Name, "namespace", d.Namespace)
 		recs, err := r.buildRecommendations(ctx, policy, d.Namespace, "Deployment", d.Name, d.Spec.Template.Spec.Containers)
 		if err != nil {
-			logger.Error(err, "prometheus query failed", "deployment", d.Name)
+			wl.Error(err, "prometheus query failed")
 			continue
 		}
 		if len(recs) == 0 {
-			logger.Info("no metrics yet, skipping", "deployment", d.Name)
+			wl.Info("no metrics yet, skipping")
+			continue
+		}
+		if r.RecommendOnly {
+			wl.Info("recommend-only: computed recommendations", "recommendations", recs)
 			continue
 		}
 		if err := r.patcher.PatchDeployment(ctx, d, mode, recs); err != nil {
-			logger.Error(err, "patch failed", "deployment", d.Name)
+			wl.Error(err, "patch failed")
 		}
 	}
 	return nil
@@ -149,6 +193,9 @@ func (r *PolicyReconciler) reconcileStatefulSets(ctx context.Context, policy *su
 	}
 
 	for i := range list.Items {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		s := &list.Items[i]
 		if r.isExcluded(s.Namespace) {
 			continue
@@ -156,17 +203,22 @@ func (r *PolicyReconciler) reconcileStatefulSets(ctx context.Context, policy *su
 		if s.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
 			continue
 		}
+		wl := logger.WithValues("statefulset", s.Name, "namespace", s.Namespace)
 		recs, err := r.buildRecommendations(ctx, policy, s.Namespace, "StatefulSet", s.Name, s.Spec.Template.Spec.Containers)
 		if err != nil {
-			logger.Error(err, "prometheus query failed", "statefulset", s.Name)
+			wl.Error(err, "prometheus query failed")
 			continue
 		}
 		if len(recs) == 0 {
-			logger.Info("no metrics yet, skipping", "statefulset", s.Name)
+			wl.Info("no metrics yet, skipping")
+			continue
+		}
+		if r.RecommendOnly {
+			wl.Info("recommend-only: computed recommendations", "recommendations", recs)
 			continue
 		}
 		if err := r.patcher.PatchStatefulSet(ctx, s, mode, recs); err != nil {
-			logger.Error(err, "patch failed", "statefulset", s.Name)
+			wl.Error(err, "patch failed")
 		}
 	}
 	return nil
@@ -187,6 +239,9 @@ func (r *PolicyReconciler) reconcileDaemonSets(ctx context.Context, policy *sust
 	}
 
 	for i := range list.Items {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		ds := &list.Items[i]
 		if r.isExcluded(ds.Namespace) {
 			continue
@@ -194,17 +249,22 @@ func (r *PolicyReconciler) reconcileDaemonSets(ctx context.Context, policy *sust
 		if ds.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
 			continue
 		}
+		wl := logger.WithValues("daemonset", ds.Name, "namespace", ds.Namespace)
 		recs, err := r.buildRecommendations(ctx, policy, ds.Namespace, "DaemonSet", ds.Name, ds.Spec.Template.Spec.Containers)
 		if err != nil {
-			logger.Error(err, "prometheus query failed", "daemonset", ds.Name)
+			wl.Error(err, "prometheus query failed")
 			continue
 		}
 		if len(recs) == 0 {
-			logger.Info("no metrics yet, skipping", "daemonset", ds.Name)
+			wl.Info("no metrics yet, skipping")
+			continue
+		}
+		if r.RecommendOnly {
+			wl.Info("recommend-only: computed recommendations", "recommendations", recs)
 			continue
 		}
 		if err := r.patcher.PatchDaemonSet(ctx, ds, mode, recs); err != nil {
-			logger.Error(err, "patch failed", "daemonset", ds.Name)
+			wl.Error(err, "patch failed")
 		}
 	}
 	return nil
@@ -225,6 +285,9 @@ func (r *PolicyReconciler) reconcileCronJobs(ctx context.Context, policy *sustai
 	}
 
 	for i := range list.Items {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		cj := &list.Items[i]
 		if r.isExcluded(cj.Namespace) {
 			continue
@@ -232,18 +295,23 @@ func (r *PolicyReconciler) reconcileCronJobs(ctx context.Context, policy *sustai
 		if cj.Spec.JobTemplate.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
 			continue
 		}
+		wl := logger.WithValues("cronjob", cj.Name, "namespace", cj.Namespace)
 		recs, err := r.buildRecommendations(ctx, policy, cj.Namespace, "CronJob", cj.Name,
 			cj.Spec.JobTemplate.Spec.Template.Spec.Containers)
 		if err != nil {
-			logger.Error(err, "prometheus query failed", "cronjob", cj.Name)
+			wl.Error(err, "prometheus query failed")
 			continue
 		}
 		if len(recs) == 0 {
-			logger.Info("no metrics yet, skipping", "cronjob", cj.Name)
+			wl.Info("no metrics yet, skipping")
+			continue
+		}
+		if r.RecommendOnly {
+			wl.Info("recommend-only: computed recommendations", "recommendations", recs)
 			continue
 		}
 		if err := r.patcher.PatchCronJob(ctx, cj, recs); err != nil {
-			logger.Error(err, "patch failed", "cronjob", cj.Name)
+			wl.Error(err, "patch failed")
 		}
 	}
 	return nil

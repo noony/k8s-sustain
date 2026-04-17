@@ -74,5 +74,6 @@ nav:
       - Deployments & StatefulSets: guides/deployments.md
       - DaemonSets: guides/daemonsets.md
       - CronJobs: guides/cronjobs.md
+      - Dashboard: guides/dashboard.md
       - TLS with cert-manager: guides/cert-manager.md
   - Development: development.md

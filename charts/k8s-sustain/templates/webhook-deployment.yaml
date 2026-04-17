@@ -24,6 +24,9 @@ spec:
       serviceAccountName: {{ include "k8s-sustain.fullname" . }}
       securityContext:
         runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -33,10 +36,13 @@ spec:
           args:
             - webhook
             - --port={{ .Values.webhook.port }}
-            - --prometheus-address={{ .Values.webhook.prometheusAddress }}
+            - --prometheus-address={{ include "k8s-sustain.prometheusAddress" . }}
             - --zap-log-level={{ .Values.webhook.logLevel }}
             - --tls-cert-file=/tls/tls.crt
             - --tls-key-file=/tls/tls.key
+            {{- if .Values.recommendOnly }}
+            - --recommend-only=true
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -72,15 +78,15 @@ spec:
         - name: tls
           secret:
             secretName: {{ .Values.webhook.tlsSecretName }}
-      {{- with .Values.nodeSelector }}
+      {{- with .Values.webhook.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- with .Values.webhook.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tolerations }}
+      {{- with .Values.webhook.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}

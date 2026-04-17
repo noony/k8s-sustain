@@ -144,6 +144,9 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 
 	var errs []error
 	for i := range podList.Items {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		pod := &podList.Items[i]
 		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
 			continue
@@ -211,14 +214,19 @@ func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string
 			Namespace: pod.Namespace,
 		},
 	}
+	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
+
 	err := p.client.SubResource("eviction").Create(ctx, pod, eviction)
 	if err == nil {
 		return nil
 	}
+	if apierrors.IsNotFound(err) {
+		logger.Info("pod already deleted, skipping eviction")
+		return nil
+	}
 	if apierrors.IsTooManyRequests(err) {
 		// PDB is blocking — log and move on; next reconcile will retry.
-		log.FromContext(ctx).Info("eviction blocked by PodDisruptionBudget, will retry",
-			"pod", pod.Name, "namespace", pod.Namespace)
+		logger.Info("eviction blocked by PodDisruptionBudget, will retry")
 		return nil
 	}
 	return err

@@ -1,0 +1,53 @@
+k8s-sustain has been installed.
+
+1. Verify the pods are running:
+
+   kubectl get pods -n {{ .Release.Namespace }}
+
+2. Check the controller logs:
+
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "k8s-sustain.name" . }},app.kubernetes.io/instance={{ .Release.Name }} --tail=50
+
+{{- if .Values.webhook.enabled }}
+
+3. Check the webhook logs:
+
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=webhook --tail=50
+{{- end }}
+
+4. Create a Policy and annotate a workload to get started:
+
+   kubectl apply -f - <<EOF
+   apiVersion: k8s.sustain.io/v1alpha1
+   kind: Policy
+   metadata:
+     name: default
+   spec:
+     rightSizing:
+       resourcesConfigs:
+         cpu:
+           window: "96h"
+           requests:
+             percentilePercentage: 95
+             headroomPercentage: 15
+         memory:
+           window: "96h"
+           requests:
+             percentilePercentage: 95
+             headroomPercentage: 15
+     update:
+       types:
+         deployment: Ongoing
+   EOF
+
+   kubectl annotate deployment/<name> k8s.sustain.io/policy=default --overwrite
+
+{{- if .Values.recommendOnly }}
+
+NOTE: recommend-only mode is enabled. Recommendations will be logged
+but no workloads or pods will be modified. Disable with:
+
+   helm upgrade {{ .Release.Name }} k8s-sustain/k8s-sustain --reuse-values --set recommendOnly=false
+{{- end }}
+
+Documentation: https://noony.github.io/k8s-sustain

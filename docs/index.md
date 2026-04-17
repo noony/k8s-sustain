@@ -39,7 +39,9 @@ metadata:
 - **Percentile-based recommendations** — p50 through p99, configurable per policy
 - **Per-container granularity** — each container gets its own recommendation
 - **In-place pod updates** — no rolling restart when the cluster supports `InPlacePodVerticalScaling` (k8s ≥ 1.27)
-- **Two independent components** — admission webhook (OnCreate) and controller (Ongoing) can run separately
+- **Recommend-only mode** — dry-run mode that logs recommendations without touching any workloads
+- **Web dashboard** — explore policies, view workload metrics, and simulate parameter changes
+- **Three independent components** — controller (Ongoing), admission webhook (OnCreate), and dashboard can run separately
 - **Headroom control** — add a safety buffer on top of the observed percentile
 - **Limit strategies** — keep existing ratio, set equal to request, remove limit, or use a custom multiplier
 - **Prometheus-native** — ships pre-computed recording rules; no external dependency beyond Prometheus
@@ -64,6 +66,10 @@ metadata:
 
 - :material-console: **[CLI](reference/cli.md)**
 
-    `k8s-sustain start` and `k8s-sustain webhook` flags.
+    `k8s-sustain start`, `webhook`, and `dashboard` flags.
+
+- :material-monitor-dashboard: **[Dashboard](guides/dashboard.md)**
+
+    Explore policies, view metrics, and simulate changes.
 
 </div>

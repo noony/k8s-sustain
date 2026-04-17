@@ -26,6 +26,7 @@ import (
 type Handler struct {
 	Client           client.Client
 	PrometheusClient *promclient.Client
+	RecommendOnly    bool
 }
 
 type jsonPatch struct {
@@ -125,6 +126,11 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allow
 	}
 	if patchBytes == nil {
+		return allow
+	}
+
+	if h.RecommendOnly {
+		logger.Info("recommend-only: would inject resources", "containers", len(filtered), "recommendations", filtered)
 		return allow
 	}
 

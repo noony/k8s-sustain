@@ -81,6 +81,18 @@ See [In-Place Updates](in-place-updates.md) for details.
 
 ---
 
+## Recommend-only mode
+
+Independently of `OnCreate` or `Ongoing`, you can run the entire operator in **recommend-only** mode by passing `--recommend-only` or setting `recommendOnly: true` in the Helm values. In this mode:
+
+- The controller still reconciles and computes recommendations, but **never patches workloads or recycles pods**
+- The webhook still intercepts pod creation and computes recommendations, but **never mutates the pod**
+- Computed recommendations are logged as structured JSON at `info` level
+
+This is useful for validating recommendations before switching to active mode. See the [CLI reference](../reference/cli.md) for details.
+
+---
+
 ## Mixing modes
 
 A single policy can use different modes for different workload kinds:

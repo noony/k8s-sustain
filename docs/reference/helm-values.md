@@ -1,34 +1,46 @@
 # Helm Values Reference
 
-## Controller
+## Global
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `replicaCount` | `1` | Controller replicas |
 | `image.repository` | `ghcr.io/noony/k8s-sustain` | Container image repository |
 | `image.tag` | `""` | Image tag; defaults to `Chart.appVersion` |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy |
 | `imagePullSecrets` | `[]` | Image pull secrets |
 | `nameOverride` | `""` | Override the chart name |
 | `fullnameOverride` | `""` | Override the full release name |
-| `manager.metricsBindAddress` | `:8080` | Metrics endpoint address |
-| `manager.healthProbeBindAddress` | `:8081` | Health probe address |
-| `manager.leaderElect` | `true` | Enable leader election |
-| `manager.logLevel` | `info` | Log level |
-| `resources` | see below | Controller container resources |
-| `nodeSelector` | `{}` | Node selector for all pods |
-| `tolerations` | `[]` | Tolerations for all pods |
-| `affinity` | `{}` | Affinity rules for all pods |
+| `recommendOnly` | `false` | Compute recommendations without patching workloads or mutating pods (dry-run mode) |
+| `prometheusAddress` | `""` | Prometheus server URL, shared by all components. Leave empty to auto-detect the bundled subchart service. |
+
+---
+
+## Controller
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `controller.replicaCount` | `1` | Controller replicas |
+| `controller.metricsBindAddress` | `:8080` | Metrics endpoint address |
+| `controller.healthProbeBindAddress` | `:8081` | Health probe address |
+| `controller.leaderElect` | `true` | Enable leader election |
+| `controller.logLevel` | `info` | Log level |
+| `controller.service.type` | `ClusterIP` | Service type for the metrics endpoint |
+| `controller.service.port` | `8080` | Service port |
+| `controller.resources` | see below | Controller container resources |
+| `controller.nodeSelector` | `{}` | Node selector |
+| `controller.tolerations` | `[]` | Tolerations |
+| `controller.affinity` | `{}` | Affinity rules |
 
 **Default resources:**
 
 ```yaml
-resources:
-  requests:
-    cpu: 10m
-    memory: 64Mi
-  limits:
-    memory: 128Mi
+controller:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
 ```
 
 ---
@@ -40,7 +52,6 @@ resources:
 | `webhook.enabled` | `true` | Deploy the admission webhook |
 | `webhook.replicaCount` | `1` | Webhook replicas (≥2 recommended for production) |
 | `webhook.port` | `9443` | HTTPS server port |
-| `webhook.prometheusAddress` | `http://localhost:9090` | Prometheus address |
 | `webhook.logLevel` | `info` | Log level |
 | `webhook.failurePolicy` | `Ignore` | `Ignore` or `Fail` |
 | `webhook.excludedNamespaces` | `[]` | Extra namespaces to exclude from webhook interception (the release namespace, `kube-system`, and `kube-public` are always excluded) |
@@ -50,6 +61,9 @@ resources:
 | `webhook.certManager.issuerRef.name` | `selfsigned-issuer` | Issuer name |
 | `webhook.certManager.issuerRef.kind` | `ClusterIssuer` | Issuer kind |
 | `webhook.resources` | see below | Webhook container resources |
+| `webhook.nodeSelector` | `{}` | Node selector |
+| `webhook.tolerations` | `[]` | Tolerations |
+| `webhook.affinity` | `{}` | Affinity rules |
 
 **Default webhook resources:**
 
@@ -65,30 +79,55 @@ webhook:
 
 ---
 
+## Dashboard
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `dashboard.enabled` | `false` | Deploy the dashboard |
+| `dashboard.replicaCount` | `1` | Dashboard replicas |
+| `dashboard.port` | `8090` | Container port |
+| `dashboard.bindAddress` | `:8090` | Server bind address |
+| `dashboard.logLevel` | `info` | Log level |
+| `dashboard.service.type` | `ClusterIP` | Service type |
+| `dashboard.service.port` | `8090` | Service port |
+| `dashboard.resources` | see below | Dashboard container resources |
+| `dashboard.nodeSelector` | `{}` | Node selector |
+| `dashboard.tolerations` | `[]` | Tolerations |
+| `dashboard.affinity` | `{}` | Affinity rules |
+
+**Default dashboard resources:**
+
+```yaml
+dashboard:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 64Mi
+```
+
+---
+
 ## ServiceAccount
 
 | Value | Default | Description |
 |-------|---------|-------------|
+| `serviceAccount.create` | `true` | Create a ServiceAccount |
+| `serviceAccount.name` | `""` | Override the ServiceAccount name |
 | `serviceAccount.annotations` | `{}` | Annotations on the ServiceAccount (e.g. for IRSA or Workload Identity) |
-
----
-
-## Service (metrics)
-
-| Value | Default | Description |
-|-------|---------|-------------|
-| `service.type` | `ClusterIP` | Service type for the metrics endpoint |
-| `service.port` | `8080` | Service port |
 
 ---
 
 ## ServiceMonitor
 
+Only needed when running the Prometheus Operator externally (not the bundled subchart).
+
 | Value | Default | Description |
 |-------|---------|-------------|
-| `serviceMonitor.enabled` | `true` | Create a Prometheus Operator `ServiceMonitor` and `PrometheusRule` |
-| `serviceMonitor.interval` | `30s` | Scrape interval |
-| `serviceMonitor.scrapeTimeout` | `10s` | Scrape timeout |
+| `controller.serviceMonitor.enabled` | `false` | Create a Prometheus Operator `ServiceMonitor` and `PrometheusRule` |
+| `controller.serviceMonitor.interval` | `30s` | Scrape interval |
+| `controller.serviceMonitor.scrapeTimeout` | `10s` | Scrape timeout |
 
 ---
 
@@ -100,22 +139,17 @@ webhook:
 
 ---
 
-## kube-prometheus-stack subchart
+## Prometheus subchart
 
-Pass any value supported by the [kube-prometheus-stack chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) under the `kube-prometheus-stack:` key.
+Pass any value supported by the [prometheus chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) under the `prometheus:` key. Recording rules for k8s-sustain are embedded in `prometheus.server.serverFiles` by default.
 
 Common overrides:
 
 ```yaml
-kube-prometheus-stack:
+prometheus:
   enabled: true
-  prometheus:
-    prometheusSpec:
-      retention: 15d
-      storageSpec:
-        volumeClaimTemplate:
-          spec:
-            resources:
-              requests:
-                storage: 20Gi
+  server:
+    retention: 15d
+    persistentVolume:
+      size: 20Gi
 ```
