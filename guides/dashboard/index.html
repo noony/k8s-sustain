@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://noony.github.io/k8s-sustain/concepts/in-place-updates/">
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/guides/dashboard/">
       
       
-        <link rel="prev" href="../update-modes/">
+        <link rel="prev" href="../cronjobs/">
       
       
-        <link rel="next" href="../../reference/policy/">
+        <link rel="next" href="../cert-manager/">
       
       
       <link rel="icon" href="../../assets/logo.svg">
@@ -24,7 +24,7 @@
     
     
       
-        <title>In-Place Updates - k8s-sustain</title>
+        <title>Dashboard - k8s-sustain</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#in-place-updates" class="md-skip">
+        <a href="#dashboard" class="md-skip">
           Skip to content
         </a>
       
@@ -111,7 +111,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              In-Place Updates
+              Dashboard
             
           </span>
         </div>
@@ -247,13 +247,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../architecture/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../concepts/architecture/" class="md-tabs__link">
           
   
   Concepts
@@ -285,11 +283,13 @@
         
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../guides/deployments/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../deployments/" class="md-tabs__link">
           
   
   Guides
@@ -503,30 +503,27 @@
       
   
   
-    
   
   
-  
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -537,7 +534,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             Concepts
@@ -551,7 +548,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../architecture/" class="md-nav__link">
+      <a href="../../concepts/architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -572,7 +569,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../update-modes/" class="md-nav__link">
+      <a href="../../concepts/update-modes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -590,30 +587,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    In-Place Updates
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../concepts/in-place-updates/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -622,62 +599,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
-    <span class="md-ellipsis">
-      How it works
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cluster-version-detection" class="md-nav__link">
-    <span class="md-ellipsis">
-      Cluster version detection
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#caveats" class="md-nav__link">
-    <span class="md-ellipsis">
-      Caveats
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#disabling-in-place-updates" class="md-nav__link">
-    <span class="md-ellipsis">
-      Disabling in-place updates
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -827,27 +748,30 @@
       
   
   
+    
   
   
+  
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
-        
-          
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -858,7 +782,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             Guides
@@ -872,7 +796,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/deployments/" class="md-nav__link">
+      <a href="../deployments/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -893,7 +817,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/daemonsets/" class="md-nav__link">
+      <a href="../daemonsets/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -914,7 +838,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/cronjobs/" class="md-nav__link">
+      <a href="../cronjobs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -932,10 +856,30 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../guides/dashboard/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Dashboard
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -944,6 +888,161 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Features
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running the Dashboard
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running the Dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#standalone-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      Standalone (CLI)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      CLI Flags
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#helm-chart" class="md-nav__link">
+    <span class="md-ellipsis">
+      Helm Chart
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#using-the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      Using the Dashboard
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Using the Dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#policies-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policies Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policy Detail
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workloads-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workloads Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workload-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workload Detail
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-simulator" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policy Simulator
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Policy Simulator">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#exporting-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      Exporting Results
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#helm-values-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      Helm Values Reference
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -956,7 +1055,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/cert-manager/" class="md-nav__link">
+      <a href="../cert-manager/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1024,36 +1123,135 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
+  <a href="#features" class="md-nav__link">
     <span class="md-ellipsis">
-      How it works
+      Features
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#cluster-version-detection" class="md-nav__link">
+  <a href="#running-the-dashboard" class="md-nav__link">
     <span class="md-ellipsis">
-      Cluster version detection
+      Running the Dashboard
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running the Dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#standalone-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      Standalone (CLI)
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#caveats" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#cli-flags" class="md-nav__link">
     <span class="md-ellipsis">
-      Caveats
+      CLI Flags
     </span>
   </a>
   
 </li>
+        
+          <li class="md-nav__item">
+  <a href="#helm-chart" class="md-nav__link">
+    <span class="md-ellipsis">
+      Helm Chart
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
       
         <li class="md-nav__item">
-  <a href="#disabling-in-place-updates" class="md-nav__link">
+  <a href="#using-the-dashboard" class="md-nav__link">
     <span class="md-ellipsis">
-      Disabling in-place updates
+      Using the Dashboard
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Using the Dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#policies-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policies Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policy Detail
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workloads-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workloads Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workload-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workload Detail
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-simulator" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policy Simulator
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Policy Simulator">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#exporting-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      Exporting Results
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#helm-values-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      Helm Values Reference
     </span>
   </a>
   
@@ -1077,38 +1275,212 @@
   
 
 
-<h1 id="in-place-updates">In-Place Updates<a class="headerlink" href="#in-place-updates" title="Permanent link">&para;</a></h1>
-<p>Kubernetes 1.27 introduced the <code>InPlacePodVerticalScaling</code> feature gate (alpha), which became beta (on by default) in Kubernetes 1.29. It allows changing a pod's resource requests and limits <strong>without restarting the container</strong>.</p>
-<p>k8s-sustain automatically detects whether the cluster supports this feature and enables it when available.</p>
-<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
-<p>When <code>Ongoing</code> mode is active and the cluster supports in-place updates:</p>
-<ol>
-<li>The controller patches the workload's pod template with new resources</li>
-<li>It then lists all running, non-terminating pods matched by the workload's selector</li>
-<li>For each pod, it checks the pod's <code>status.resize</code> field:</li>
-<li><strong><code>Infeasible</code></strong>: the node cannot satisfy the request — the pod is evicted so the scheduler can place the replacement elsewhere</li>
-<li><strong><code>Deferred</code></strong>: the kubelet accepted the request but is waiting on conditions (e.g. a memory decrease that requires container restart) — skipped; the kubelet will apply it without further action</li>
-<li><strong><code>InProgress</code> / not set</strong>: proceeds to patch <code>spec.containers[*].resources</code> directly</li>
-<li>The kubelet applies the new resources without restarting the container</li>
-</ol>
-<p>Pods that are terminating or not in <code>Running</code> phase are skipped.</p>
-<h2 id="cluster-version-detection">Cluster version detection<a class="headerlink" href="#cluster-version-detection" title="Permanent link">&para;</a></h2>
-<p>The operator detects the server version at startup using the discovery API:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>major=1, minor≥27 → in-place updates enabled
-</code></pre></div>
-<p>You can check whether it is enabled in the controller logs:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>INFO  InPlacePodVerticalScaling support  enabled=true
-</code></pre></div>
-<h2 id="caveats">Caveats<a class="headerlink" href="#caveats" title="Permanent link">&para;</a></h2>
+<h1 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h1>
+<p>k8s-sustain includes a built-in web dashboard for exploring policies, viewing workload resource usage, and simulating policy changes before applying them.</p>
+<h2 id="features">Features<a class="headerlink" href="#features" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>CPU is always resizable in-place.</strong> Memory resize may require a container restart if the requested memory exceeds the current cgroup limit. The kubelet handles this transparently.</li>
-<li><strong>VPA conflicts.</strong> If you run Vertical Pod Autoscaler alongside k8s-sustain, ensure they do not target the same pods to avoid conflicting patches.</li>
-<li><strong>Resource resize status.</strong> You can inspect the resize status on a pod:
-  <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.containerStatuses[*].resources}&#39;</span>
-</code></pre></div></li>
+<li><strong>Policy Overview</strong> — List all policies with their status, targeted namespaces, and workload types. Supports auto-refresh.</li>
+<li><strong>Policy Detail</strong> — View configuration parameters and matched workloads for each policy with namespace filtering and pagination.</li>
+<li><strong>Workload Metrics</strong> — Interactive CPU and memory usage graphs (time-series) for each container in a workload. Supports auto-refresh.</li>
+<li><strong>Policy Simulator</strong> — Tweak percentile, headroom, min/max parameters and instantly see how they would affect recommendations against historical data. Export results as YAML or CSV.</li>
+<li><strong>Health Checks</strong> — The <code>/healthz</code> endpoint verifies Prometheus connectivity for reliable readiness probes.</li>
+<li><strong>Request Logging</strong> — Structured HTTP access logs for debugging and observability.</li>
 </ul>
-<h2 id="disabling-in-place-updates">Disabling in-place updates<a class="headerlink" href="#disabling-in-place-updates" title="Permanent link">&para;</a></h2>
-<p>To force eviction-based behavior even on supported clusters, you can disable the feature by overriding the detection at deploy time. This is not exposed as a Helm value today — file a GitHub issue if you need it.</p>
+<h2 id="running-the-dashboard">Running the Dashboard<a class="headerlink" href="#running-the-dashboard" title="Permanent link">&para;</a></h2>
+<h3 id="standalone-cli">Standalone (CLI)<a class="headerlink" href="#standalone-cli" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>k8s-sustain<span class="w"> </span>dashboard<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--bind-address<span class="o">=</span>:8090<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--prometheus-address<span class="o">=</span>http://prometheus:9090
+</code></pre></div>
+<p>The dashboard is then available at <code>http://localhost:8090</code>.</p>
+<p>At startup, the dashboard validates Prometheus connectivity and logs a warning if it is unreachable.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The dashboard requires access to:</p>
+<ul>
+<li>A <strong>Kubernetes cluster</strong> (via kubeconfig or in-cluster config) to list policies and workloads</li>
+<li>A <strong>Prometheus server</strong> with the k8s-sustain recording rules to query metrics</li>
+</ul>
+</div>
+<h3 id="cli-flags">CLI Flags<a class="headerlink" href="#cli-flags" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--bind-address</code></td>
+<td><code>:8090</code></td>
+<td>Address the dashboard server listens on</td>
+</tr>
+<tr>
+<td><code>--prometheus-address</code></td>
+<td><code>http://localhost:9090</code></td>
+<td>Prometheus server URL</td>
+</tr>
+<tr>
+<td><code>--zap-log-level</code></td>
+<td><code>info</code></td>
+<td>Log level (debug, info, warn, error)</td>
+</tr>
+<tr>
+<td><code>--cors-allowed-origins</code></td>
+<td><code>*</code></td>
+<td>Allowed CORS origins (comma-separated)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="helm-chart">Helm Chart<a class="headerlink" href="#helm-chart" title="Permanent link">&para;</a></h3>
+<p>Enable the dashboard in your Helm values:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">prometheusAddress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://prometheus.monitoring.svc:9090</span><span class="w">  </span><span class="c1"># only if using an external Prometheus</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">dashboard</span><span class="p">:</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">corsAllowedOrigins</span><span class="p">:</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;https://my-domain.example.com&quot;</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">service</span><span class="p">:</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ClusterIP</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8090</span>
+</code></pre></div>
+<p>Then access it via port-forward:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>svc/&lt;release&gt;-k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+</code></pre></div>
+<h2 id="using-the-dashboard">Using the Dashboard<a class="headerlink" href="#using-the-dashboard" title="Permanent link">&para;</a></h2>
+<h3 id="policies-page">Policies Page<a class="headerlink" href="#policies-page" title="Permanent link">&para;</a></h3>
+<p>The main page shows all <code>Policy</code> resources in your cluster with:</p>
+<ul>
+<li>Current status (Ready / Not Ready)</li>
+<li>Targeted namespaces</li>
+<li>Configured workload types and update modes</li>
+<li>Creation time</li>
+</ul>
+<p>Click any policy to view its details. Enable <strong>Auto-refresh</strong> (30s interval) to keep the view up to date.</p>
+<h3 id="policy-detail">Policy Detail<a class="headerlink" href="#policy-detail" title="Permanent link">&para;</a></h3>
+<p>Shows the full configuration (percentile, headroom, min/max, window) for both CPU and memory, plus a table of all workloads matched by the policy with their current resource requests.</p>
+<ul>
+<li><strong>Namespace filter</strong> — When a policy matches workloads in multiple namespaces, use the dropdown to filter by namespace.</li>
+<li><strong>Pagination</strong> — Large workload lists are paginated (50 per page) with Previous/Next controls.</li>
+<li><strong>Auto-refresh</strong> — Toggle to periodically reload data.</li>
+</ul>
+<p>Click any workload to view its detail page.</p>
+<h3 id="workloads-page">Workloads Page<a class="headerlink" href="#workloads-page" title="Permanent link">&para;</a></h3>
+<p>Lists all workloads (Deployments, StatefulSets, DaemonSets, CronJobs) across the cluster, regardless of whether they are managed by a policy.</p>
+<ul>
+<li><strong>Status column</strong> — Shows whether each workload is <strong>Automated</strong> (has a sustain policy) or <strong>Manual</strong></li>
+<li><strong>Filters</strong> — Filter by namespace, kind, automation status, or search by name</li>
+<li><strong>Policy link</strong> — Automated workloads show a clickable link to their policy</li>
+<li><strong>Pagination</strong> and <strong>Auto-refresh</strong> — Same controls as other pages</li>
+</ul>
+<p>Click any workload to view its detail page.</p>
+<h3 id="workload-detail">Workload Detail<a class="headerlink" href="#workload-detail" title="Permanent link">&para;</a></h3>
+<p>Shows a comprehensive view of a single workload:</p>
+<ul>
+<li><strong>Automation status</strong> — Whether the workload is managed by a policy, with a link to the policy</li>
+<li><strong>Recommendations</strong> — If automated, shows the computed CPU and memory recommendations per container</li>
+<li><strong>CPU and Memory charts</strong> — Interactive time-series with recommendation lines overlaid (for automated workloads)</li>
+<li><strong>Open in Simulator</strong> — Jump to the simulator with the workload pre-filled</li>
+</ul>
+<p>Charts default to a 7-day window with 5-minute resolution. Enable <strong>Auto-refresh</strong> to keep data current.</p>
+<h3 id="policy-simulator">Policy Simulator<a class="headerlink" href="#policy-simulator" title="Permanent link">&para;</a></h3>
+<p>The simulator lets you test "what-if" scenarios:</p>
+<ol>
+<li>Select a <strong>workload target</strong> (namespace, kind, name) — both fields are required</li>
+<li>Choose a <strong>time window</strong> (24h to 30 days)</li>
+<li>Adjust <strong>CPU and Memory parameters</strong>:<ul>
+<li>Percentile (50th to 99th)</li>
+<li>Headroom percentage (0-100%)</li>
+<li>Min/Max allowed values</li>
+</ul>
+</li>
+<li>Click <strong>Run Simulation</strong></li>
+</ol>
+<p>The results show:</p>
+<ul>
+<li>Computed recommendation per container (CPU request, memory request)</li>
+<li>Time-series charts with the <strong>recommendation line</strong> overlaid on historical usage, making it easy to see how the recommendation relates to actual consumption</li>
+</ul>
+<h4 id="exporting-results">Exporting Results<a class="headerlink" href="#exporting-results" title="Permanent link">&para;</a></h4>
+<p>After running a simulation, use the export buttons to download recommendations:</p>
+<ul>
+<li><strong>YAML</strong> — Downloads a Kubernetes resource patch you can apply with <code>kubectl apply -f</code></li>
+<li><strong>CSV</strong> — Downloads a spreadsheet-compatible file with per-container recommendations</li>
+</ul>
+<h2 id="helm-values-reference">Helm Values Reference<a class="headerlink" href="#helm-values-reference" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dashboard.enabled</code></td>
+<td><code>false</code></td>
+<td>Enable the dashboard deployment</td>
+</tr>
+<tr>
+<td><code>dashboard.replicaCount</code></td>
+<td><code>1</code></td>
+<td>Number of dashboard replicas</td>
+</tr>
+<tr>
+<td><code>dashboard.port</code></td>
+<td><code>8090</code></td>
+<td>Container port</td>
+</tr>
+<tr>
+<td><code>dashboard.bindAddress</code></td>
+<td><code>:8090</code></td>
+<td>Server bind address</td>
+</tr>
+<tr>
+<td><code>dashboard.logLevel</code></td>
+<td><code>info</code></td>
+<td>Log level</td>
+</tr>
+<tr>
+<td><code>dashboard.corsAllowedOrigins</code></td>
+<td><code>["*"]</code></td>
+<td>Allowed CORS origins</td>
+</tr>
+<tr>
+<td><code>dashboard.service.type</code></td>
+<td><code>ClusterIP</code></td>
+<td>Service type</td>
+</tr>
+<tr>
+<td><code>dashboard.service.port</code></td>
+<td><code>8090</code></td>
+<td>Service port</td>
+</tr>
+<tr>
+<td><code>dashboard.resources</code></td>
+<td>10m CPU / 32-64Mi memory</td>
+<td>Pod resource requests/limits</td>
+</tr>
+<tr>
+<td><code>dashboard.nodeSelector</code></td>
+<td><code>{}</code></td>
+<td>Node selector</td>
+</tr>
+<tr>
+<td><code>dashboard.tolerations</code></td>
+<td><code>[]</code></td>
+<td>Tolerations</td>
+</tr>
+<tr>
+<td><code>dashboard.affinity</code></td>
+<td><code>{}</code></td>
+<td>Affinity rules</td>
+</tr>
+</tbody>
+</table>
 
 
 
@@ -1146,7 +1518,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../update-modes/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Update Modes">
+          <a href="../cronjobs/" class="md-footer__link md-footer__link--prev" aria-label="Previous: CronJobs">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1156,20 +1528,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Update Modes
+                CronJobs
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../reference/policy/" class="md-footer__link md-footer__link--next" aria-label="Next: Policy CRD">
+          <a href="../cert-manager/" class="md-footer__link md-footer__link--next" aria-label="Next: TLS with cert-manager">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Policy CRD
+                TLS with cert-manager
               </div>
             </div>
             <div class="md-footer__button md-icon">

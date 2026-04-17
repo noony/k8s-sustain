@@ -953,7 +953,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/dashboard.md" class="md-nav__link">
+      <a href="../../guides/dashboard/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1197,7 +1197,7 @@
 <li><strong>Workload metrics</strong> — interactive CPU and memory time-series charts</li>
 <li><strong>Policy simulator</strong> — test "what-if" scenarios with different percentiles, headroom, and min/max values</li>
 </ul>
-<p>It is read-only: it queries the Kubernetes API and Prometheus but never modifies any resources. See the <a href="../guides/dashboard.md">Dashboard guide</a> for details.</p>
+<p>It is read-only: it queries the Kubernetes API and Prometheus but never modifies any resources. See the <a href="../../guides/dashboard/">Dashboard guide</a> for details.</p>
 <h2 id="recommend-only-mode">Recommend-only mode<a class="headerlink" href="#recommend-only-mode" title="Permanent link">&para;</a></h2>
 <p>When <code>--recommend-only</code> is passed (or <code>recommendOnly: true</code> in the Helm values), all three components continue to operate normally — querying Prometheus, computing recommendations, resolving workloads — but <strong>no mutations are applied</strong>. Recommendations are emitted as structured JSON log lines at <code>info</code> level.</p>
 <p>This is useful for:</p>
