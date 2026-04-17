@@ -1,0 +1,1551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>k8s-sustain Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<style>
+:root {
+  --bg: #0f1117;
+  --bg-card: #1a1d27;
+  --bg-hover: #22263a;
+  --border: #2a2e3f;
+  --text: #e4e6ed;
+  --text-dim: #8b8fa3;
+  --accent: #6366f1;
+  --accent-light: #818cf8;
+  --green: #22c55e;
+  --yellow: #eab308;
+  --red: #ef4444;
+  --blue: #3b82f6;
+  --cyan: #06b6d4;
+  --radius: 12px;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  min-height: 100vh;
+}
+a { color: var(--accent-light); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.app { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 260px;
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
+  padding: 24px 0;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+.sidebar-header {
+  padding: 0 20px 24px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.sidebar-header h1 {
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sidebar-header h1 .logo {
+  width: 28px;
+  height: 28px;
+  background: var(--accent);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 800;
+  color: #fff;
+}
+.sidebar-header .subtitle {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.nav-section {
+  padding: 8px 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  font-size: 14px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+  border-left: 3px solid transparent;
+}
+.nav-item:hover { background: var(--bg-hover); color: var(--text); }
+.nav-item.active {
+  background: var(--bg-hover);
+  color: var(--accent-light);
+  border-left-color: var(--accent);
+  font-weight: 500;
+}
+.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+.main { flex: 1; padding: 32px; max-width: 1200px; }
+.main-wide { max-width: 100%; }
+
+/* Cards */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 20px;
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.card-header h2 { font-size: 16px; font-weight: 600; }
+.card-header h3 { font-size: 14px; font-weight: 600; }
+
+/* Page header */
+.page-header {
+  margin-bottom: 28px;
+}
+.page-header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.page-header p {
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+.breadcrumb span { color: var(--text-dim); }
+
+/* Table */
+.table-wrap { overflow-x: auto; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+thead th {
+  text-align: left;
+  padding: 10px 16px;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+tbody td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+tbody tr { cursor: pointer; transition: background 0.15s; }
+tbody tr:hover { background: var(--bg-hover); }
+tbody tr:last-child td { border-bottom: none; }
+
+/* Badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.badge-green { background: rgba(34,197,94,.15); color: var(--green); }
+.badge-red { background: rgba(239,68,68,.15); color: var(--red); }
+.badge-yellow { background: rgba(234,179,8,.15); color: var(--yellow); }
+.badge-blue { background: rgba(59,130,246,.15); color: var(--blue); }
+.badge-dim { background: rgba(139,143,163,.12); color: var(--text-dim); }
+.badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Kind badge */
+.kind-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.kind-Deployment { background: rgba(99,102,241,.15); color: var(--accent-light); }
+.kind-StatefulSet { background: rgba(6,182,212,.15); color: var(--cyan); }
+.kind-DaemonSet { background: rgba(234,179,8,.15); color: var(--yellow); }
+.kind-CronJob { background: rgba(59,130,246,.15); color: var(--blue); }
+
+/* Charts */
+.chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.chart-container {
+  position: relative;
+  height: 320px;
+}
+
+/* Simulator form */
+.sim-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+.sim-section h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.form-group {
+  margin-bottom: 16px;
+}
+.form-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.form-group input, .form-group select {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: var(--font);
+  transition: border-color 0.15s;
+}
+.form-group input:focus, .form-group select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.slider-row input[type=range] {
+  flex: 1;
+  accent-color: var(--accent);
+  height: 6px;
+}
+.slider-row .slider-value {
+  min-width: 48px;
+  text-align: right;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent-light);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+  font-family: var(--font);
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--accent-light); }
+.btn-secondary {
+  background: var(--bg-hover);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover { background: var(--border); }
+
+/* Recommendation result cards */
+.rec-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+.rec-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+.rec-card h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--accent-light);
+}
+.rec-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.rec-row .label { color: var(--text-dim); }
+.rec-row .value {
+  font-weight: 600;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+/* Stats row */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.stat-card .stat-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+.stat-card .stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  margin-top: 4px;
+}
+
+/* Workload selector */
+.workload-selector {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.workload-selector .form-group { margin-bottom: 0; flex: 1; min-width: 180px; }
+
+/* Loading & empty */
+.loading {
+  text-align: center;
+  padding: 48px;
+  color: var(--text-dim);
+}
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 12px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.empty-state {
+  text-align: center;
+  padding: 48px;
+  color: var(--text-dim);
+}
+.empty-state svg { width: 48px; height: 48px; margin-bottom: 12px; opacity: 0.4; }
+
+/* Pagination */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.pagination button {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font);
+}
+.pagination button:hover:not(:disabled) { background: var(--bg-hover); }
+.pagination button:disabled { opacity: 0.4; cursor: default; }
+
+/* Filter bar */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.filter-bar select, .filter-bar input[type=text] {
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--font);
+}
+.filter-bar input[type=text] { min-width: 200px; }
+.filter-bar input[type=text]:focus { outline: none; border-color: var(--accent); }
+
+/* Container detail cards */
+.container-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.container-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+.container-card h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--accent-light);
+}
+.resource-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.resource-row .label { color: var(--text-dim); }
+.resource-row .current {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-weight: 500;
+}
+.resource-row .recommended {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-weight: 600;
+  color: var(--green);
+}
+
+/* Auto-refresh toggle */
+.auto-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.auto-refresh input { accent-color: var(--accent); }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .sidebar { display: none; }
+  .main { padding: 16px; }
+  .chart-grid, .sim-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="app" id="app">
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <h1><span class="logo">S</span> k8s-sustain</h1>
+      <div class="subtitle">Resource Right-Sizing Dashboard</div>
+    </div>
+    <div class="nav-section">Overview</div>
+    <div class="nav-item active" data-page="policies" onclick="navigate('policies')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+      Policies
+    </div>
+    <div class="nav-item" data-page="workloads" onclick="navigate('workloads')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      Workloads
+    </div>
+    <div class="nav-section">Tools</div>
+    <div class="nav-item" data-page="simulator" onclick="navigate('simulator')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+      Simulator
+    </div>
+  </nav>
+  <main class="main" id="content">
+  </main>
+</div>
+
+<script>
+const API = '';
+let currentPage = 'policies';
+let policyCache = [];
+let chartInstances = {};
+let autoRefreshTimer = null;
+let lastSimulationData = null;
+let lastSimulationBody = null;
+
+// ---- Auto-refresh ----
+function stopAutoRefresh() {
+  if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+}
+function startAutoRefresh(fn, intervalMs) {
+  stopAutoRefresh();
+  autoRefreshTimer = setInterval(fn, intervalMs || 30000);
+}
+function autoRefreshToggle(checkbox, fn) {
+  if (checkbox.checked) startAutoRefresh(fn, 30000);
+  else stopAutoRefresh();
+}
+
+// ---- Navigation ----
+function navigate(page, params) {
+  stopAutoRefresh();
+  currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.page === page);
+  });
+  const content = document.getElementById('content');
+  content.className = 'main';
+
+  switch (page) {
+    case 'policies': renderPolicies(); break;
+    case 'policy-detail': renderPolicyDetail(params.name); break;
+    case 'workloads': renderAllWorkloads(); break;
+    case 'workload-detail': renderWorkloadDetail(params); break;
+    case 'workload-metrics': renderWorkloadMetrics(params); break;
+    case 'simulator': content.className = 'main main-wide'; renderSimulator(); break;
+    default: renderPolicies();
+  }
+}
+
+// ---- API helpers ----
+async function api(path, opts) {
+  const res = await fetch(API + path, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.json();
+}
+
+function destroyCharts() {
+  Object.values(chartInstances).forEach(c => c.destroy());
+  chartInstances = {};
+}
+
+// ---- Policies List ----
+async function renderPolicies() {
+  const content = document.getElementById('content');
+  content.innerHTML = `
+    <div class="page-header">
+      <h1>Policies</h1>
+      <p>All right-sizing policies in your cluster</p>
+    </div>
+    <div class="loading"><div class="spinner"></div>Loading policies...</div>
+  `;
+  destroyCharts();
+
+  try {
+    const policies = await api('/api/policies');
+    policyCache = policies;
+
+    if (policies.length === 0) {
+      content.innerHTML = `
+        <div class="page-header">
+          <h1>Policies</h1>
+          <p>All right-sizing policies in your cluster</p>
+        </div>
+        <div class="empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+          <p>No policies found. Create a Policy resource to get started.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const readyCount = policies.filter(p => p.conditions?.some(c => c.type === 'Ready' && c.status === 'True')).length;
+    const nsSet = new Set(policies.flatMap(p => p.namespaces || []));
+
+    content.innerHTML = `
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">
+        <div>
+          <h1>Policies</h1>
+          <p>All right-sizing policies in your cluster</p>
+        </div>
+        <label class="auto-refresh">
+          <input type="checkbox" onchange="autoRefreshToggle(this, renderPolicies)"> Auto-refresh (30s)
+        </label>
+      </div>
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">Total Policies</div>
+          <div class="stat-value">${policies.length}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Ready</div>
+          <div class="stat-value" style="color:var(--green)">${readyCount}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Namespaces Covered</div>
+          <div class="stat-value">${nsSet.size || 'All'}</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Namespaces</th>
+                <th>Workload Types</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${policies.map(p => `
+                <tr onclick="navigate('policy-detail', {name:'${p.name}'})">
+                  <td style="font-weight:600">${p.name}</td>
+                  <td>${statusBadge(p.conditions)}</td>
+                  <td>${(p.namespaces && p.namespaces.length) ? p.namespaces.join(', ') : '<span class="badge badge-dim">All</span>'}</td>
+                  <td>${updateTypeBadges(p.update)}</td>
+                  <td style="color:var(--text-dim)">${timeAgo(p.createdAt)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    content.innerHTML = `
+      <div class="page-header"><h1>Policies</h1></div>
+      <div class="card"><p style="color:var(--red)">Error: ${err.message}</p></div>
+    `;
+  }
+}
+
+// ---- Policy Detail ----
+let policyDetailState = {};
+
+async function renderPolicyDetail(name, opts) {
+  const content = document.getElementById('content');
+  if (!opts?.silent) {
+    content.innerHTML = `<div class="loading"><div class="spinner"></div>Loading policy...</div>`;
+    destroyCharts();
+  }
+
+  const nsFilter = opts?.nsFilter || '';
+  const page = opts?.page || 1;
+
+  try {
+    const qs = `?page=${page}&pageSize=50${nsFilter ? '&namespace=' + encodeURIComponent(nsFilter) : ''}`;
+    const [policy, wlData] = await Promise.all([
+      api(`/api/policies/${name}`),
+      api(`/api/policies/${name}/workloads${qs}`)
+    ]);
+
+    const workloads = wlData.items || [];
+    const total = wlData.total || 0;
+    const totalPages = Math.ceil(total / (wlData.pageSize || 50));
+    const namespaces = wlData.namespaces || [];
+
+    policyDetailState = { name, nsFilter, page };
+
+    const rs = policy.spec?.rightSizing?.resourcesConfigs || {};
+    const cpuCfg = rs.cpu || {};
+    const memCfg = rs.memory || {};
+
+    content.innerHTML = `
+      <div class="breadcrumb">
+        <a href="#" onclick="event.preventDefault();navigate('policies')">Policies</a>
+        <span>/</span>
+        <span>${name}</span>
+      </div>
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">
+        <div>
+          <h1>${name}</h1>
+          <p>Policy configuration and matched workloads</p>
+        </div>
+        <label class="auto-refresh">
+          <input type="checkbox" onchange="autoRefreshToggle(this, () => renderPolicyDetail('${name}', {silent:true, nsFilter:'${nsFilter}', page:${page}}))"> Auto-refresh (30s)
+        </label>
+      </div>
+
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">Status</div>
+          <div class="stat-value">${statusBadge(policy.conditions)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Matched Workloads</div>
+          <div class="stat-value">${total}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">CPU Percentile</div>
+          <div class="stat-value">${cpuCfg.requests?.percentilePercentage || 95}th</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Memory Percentile</div>
+          <div class="stat-value">${memCfg.requests?.percentilePercentage || 95}th</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><h2>Configuration</h2></div>
+        <div class="sim-grid">
+          <div>
+            <h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">CPU</h3>
+            <div class="rec-card">
+              <div class="rec-row"><span class="label">Window</span><span class="value">${cpuCfg.window || '168h'}</span></div>
+              <div class="rec-row"><span class="label">Percentile</span><span class="value">${cpuCfg.requests?.percentilePercentage || 95}%</span></div>
+              <div class="rec-row"><span class="label">Headroom</span><span class="value">${cpuCfg.requests?.headroomPercentage || 0}%</span></div>
+              <div class="rec-row"><span class="label">Min</span><span class="value">${cpuCfg.requests?.minAllowed || '-'}</span></div>
+              <div class="rec-row"><span class="label">Max</span><span class="value">${cpuCfg.requests?.maxAllowed || '-'}</span></div>
+            </div>
+          </div>
+          <div>
+            <h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">Memory</h3>
+            <div class="rec-card">
+              <div class="rec-row"><span class="label">Window</span><span class="value">${memCfg.window || '168h'}</span></div>
+              <div class="rec-row"><span class="label">Percentile</span><span class="value">${memCfg.requests?.percentilePercentage || 95}%</span></div>
+              <div class="rec-row"><span class="label">Headroom</span><span class="value">${memCfg.requests?.headroomPercentage || 0}%</span></div>
+              <div class="rec-row"><span class="label">Min</span><span class="value">${memCfg.requests?.minAllowed || '-'}</span></div>
+              <div class="rec-row"><span class="label">Max</span><span class="value">${memCfg.requests?.maxAllowed || '-'}</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>Matched Workloads</h2>
+          <div class="filter-bar">
+            ${namespaces.length > 1 ? `
+            <select onchange="renderPolicyDetail('${name}', {nsFilter: this.value, page: 1})">
+              <option value="">All namespaces</option>
+              ${namespaces.sort().map(ns => `<option value="${ns}" ${ns === nsFilter ? 'selected' : ''}>${ns}</option>`).join('')}
+            </select>` : ''}
+            <span class="badge badge-blue">${total} workloads</span>
+          </div>
+        </div>
+        ${workloads.length === 0 ? '<div class="empty-state"><p>No workloads matched by this policy yet.</p></div>' : `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Namespace</th><th>Kind</th><th>Name</th><th>Containers</th><th>CPU Req</th><th>Mem Req</th></tr></thead>
+            <tbody>
+              ${workloads.map(w => `
+                <tr onclick="navigate('workload-detail', {namespace:'${w.namespace}',kind:'${w.kind}',name:'${w.name}',policy:'${name}'})">
+                  <td style="color:var(--text-dim)">${w.namespace}</td>
+                  <td><span class="kind-badge kind-${w.kind}">${w.kind}</span></td>
+                  <td style="font-weight:600">${w.name}</td>
+                  <td style="color:var(--text-dim)">${w.containers.map(c => c.name).join(', ')}</td>
+                  <td><code>${w.containers.map(c => c.cpuRequest || '-').join(', ')}</code></td>
+                  <td><code>${w.containers.map(c => c.memoryRequest || '-').join(', ')}</code></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        ${totalPages > 1 ? `
+        <div class="pagination">
+          <button ${page <= 1 ? 'disabled' : ''} onclick="renderPolicyDetail('${name}', {nsFilter:'${nsFilter}', page:${page - 1}})">Previous</button>
+          <span>Page ${page} of ${totalPages}</span>
+          <button ${page >= totalPages ? 'disabled' : ''} onclick="renderPolicyDetail('${name}', {nsFilter:'${nsFilter}', page:${page + 1}})">Next</button>
+        </div>` : ''}`}
+      </div>
+    `;
+  } catch (err) {
+    content.innerHTML = `<div class="card"><p style="color:var(--red)">Error: ${err.message}</p></div>`;
+  }
+}
+
+// ---- All Workloads ----
+let allWorkloadsState = { namespace: '', kind: '', automated: '', search: '', page: 1 };
+let searchTimer = null;
+
+async function renderAllWorkloads(opts) {
+  const st = Object.assign(allWorkloadsState, opts || {});
+  const content = document.getElementById('content');
+  if (!opts?.silent) {
+    content.innerHTML = `<div class="loading"><div class="spinner"></div>Loading workloads...</div>`;
+    destroyCharts();
+  }
+
+  try {
+    const qs = new URLSearchParams({page: st.page, pageSize: 50});
+    if (st.namespace) qs.set('namespace', st.namespace);
+    if (st.kind) qs.set('kind', st.kind);
+    if (st.automated) qs.set('automated', st.automated);
+    if (st.search) qs.set('search', st.search);
+
+    const data = await api(`/api/workloads?${qs}`);
+    const workloads = data.items || [];
+    const totalPages = Math.ceil(data.total / (data.pageSize || 50));
+
+    content.innerHTML = `
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">
+        <div>
+          <h1>Workloads</h1>
+          <p>All workloads across the cluster</p>
+        </div>
+        <label class="auto-refresh">
+          <input type="checkbox" onchange="autoRefreshToggle(this, () => renderAllWorkloads({silent:true}))"> Auto-refresh (30s)
+        </label>
+      </div>
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">Total</div>
+          <div class="stat-value">${data.counts.total}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Automated</div>
+          <div class="stat-value" style="color:var(--green)">${data.counts.automated}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Manual</div>
+          <div class="stat-value" style="color:var(--text-dim)">${data.counts.manual}</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <h2>Workloads</h2>
+          <div class="filter-bar">
+            <select onchange="renderAllWorkloads({namespace:this.value, page:1})">
+              <option value="">All namespaces</option>
+              ${(data.namespaces||[]).sort().map(ns => `<option value="${ns}" ${ns===st.namespace?'selected':''}>${ns}</option>`).join('')}
+            </select>
+            <select onchange="renderAllWorkloads({kind:this.value, page:1})">
+              <option value="">All kinds</option>
+              ${(data.kinds||[]).sort().map(k => `<option value="${k}" ${k===st.kind?'selected':''}>${k}</option>`).join('')}
+            </select>
+            <select onchange="renderAllWorkloads({automated:this.value, page:1})">
+              <option value="" ${st.automated===''?'selected':''}>All status</option>
+              <option value="true" ${st.automated==='true'?'selected':''}>Automated</option>
+              <option value="false" ${st.automated==='false'?'selected':''}>Manual</option>
+            </select>
+            <input type="text" placeholder="Search by name..." value="${st.search||''}" oninput="clearTimeout(searchTimer); searchTimer=setTimeout(()=>renderAllWorkloads({search:this.value, page:1}), 300)">
+          </div>
+        </div>
+        ${workloads.length === 0 ? '<div class="empty-state"><p>No workloads found matching the filters.</p></div>' : `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Namespace</th><th>Kind</th><th>Name</th><th>Status</th><th>Policy</th><th>Containers</th><th>CPU Req</th><th>Mem Req</th></tr></thead>
+            <tbody>
+              ${workloads.map(w => `
+                <tr onclick="navigate('workload-detail', {namespace:'${w.namespace}',kind:'${w.kind}',name:'${w.name}',policy:'${w.policyName||''}'})">
+                  <td style="color:var(--text-dim)">${w.namespace}</td>
+                  <td><span class="kind-badge kind-${w.kind}">${w.kind}</span></td>
+                  <td style="font-weight:600">${w.name}</td>
+                  <td>${w.automated ? '<span class="badge badge-green">Automated</span>' : '<span class="badge badge-dim">Manual</span>'}</td>
+                  <td>${w.policyName ? `<a href="#" onclick="event.stopPropagation();event.preventDefault();navigate('policy-detail',{name:'${w.policyName}'})">${w.policyName}</a>` : '-'}</td>
+                  <td style="color:var(--text-dim)">${w.containers.map(c => c.name).join(', ')}</td>
+                  <td><code>${w.containers.map(c => c.cpuRequest || '-').join(', ')}</code></td>
+                  <td><code>${w.containers.map(c => c.memoryRequest || '-').join(', ')}</code></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        ${totalPages > 1 ? `
+        <div class="pagination">
+          <button ${st.page <= 1 ? 'disabled' : ''} onclick="renderAllWorkloads({page:${st.page - 1}})">Previous</button>
+          <span>Page ${st.page} of ${totalPages}</span>
+          <button ${st.page >= totalPages ? 'disabled' : ''} onclick="renderAllWorkloads({page:${st.page + 1}})">Next</button>
+        </div>` : ''}`}
+      </div>
+    `;
+  } catch (err) {
+    content.innerHTML = `<div class="card"><p style="color:var(--red)">Error: ${err.message}</p></div>`;
+  }
+}
+
+// ---- Workload Detail ----
+async function renderWorkloadDetail(params) {
+  const { namespace, kind, name, policy } = params;
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="loading"><div class="spinner"></div>Loading workload...</div>`;
+  destroyCharts();
+
+  try {
+    const [metrics, recs] = await Promise.all([
+      api(`/api/workloads/${namespace}/${kind}/${name}/metrics?window=168h&step=5m`),
+      api(`/api/workloads/${namespace}/${kind}/${name}/recommendations`),
+    ]);
+
+    const containers = new Set([...Object.keys(metrics.cpu || {}), ...Object.keys(metrics.memory || {})]);
+    const policyName = recs.policyName || policy || '';
+
+    // Find container current requests/limits from the all-workloads list if cached, otherwise show what we have
+    const recContainers = recs.containers || {};
+
+    content.innerHTML = `
+      <div class="breadcrumb">
+        <a href="#" onclick="event.preventDefault();navigate('workloads')">Workloads</a>
+        <span>/</span>
+        <span>${name}</span>
+      </div>
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">
+        <div>
+          <h1><span class="kind-badge kind-${kind}" style="font-size:14px;margin-right:4px">${kind}</span> ${name}</h1>
+          <p>${namespace} &mdash; ${containers.size} container(s) &mdash;
+            ${recs.automated
+              ? `<span class="badge badge-green">Automated</span> <a href="#" onclick="event.preventDefault();navigate('policy-detail',{name:'${policyName}'})">${policyName}</a>`
+              : '<span class="badge badge-dim">Manual</span>'}
+          </p>
+        </div>
+        <label class="auto-refresh">
+          <input type="checkbox" onchange="autoRefreshToggle(this, () => renderWorkloadDetail({namespace:'${namespace}',kind:'${kind}',name:'${name}',policy:'${policyName}'}))"> Auto-refresh (30s)
+        </label>
+      </div>
+
+      ${recs.automated && Object.keys(recContainers).length > 0 ? `
+      <div class="card">
+        <div class="card-header"><h2>Recommendations</h2></div>
+        <div class="container-grid">
+          ${Object.entries(recContainers).map(([cname, rec]) => `
+            <div class="container-card">
+              <h4>${cname}</h4>
+              <div class="resource-row"><span class="label">CPU Request</span><span class="recommended">${rec.cpuRequest || '-'}</span></div>
+              <div class="resource-row"><span class="label">Memory Request</span><span class="recommended">${rec.memoryRequest || '-'}</span></div>
+            </div>
+          `).join('')}
+        </div>
+      </div>` : ''}
+
+      ${Array.from(containers).map(cname => `
+        <div class="card">
+          <div class="card-header"><h2>Container: <code>${cname}</code></h2></div>
+          <div class="chart-grid">
+            <div>
+              <h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">CPU Usage (cores)</h3>
+              <div class="chart-container"><canvas id="cpu-${cname}"></canvas></div>
+            </div>
+            <div>
+              <h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">Memory Usage (MiB)</h3>
+              <div class="chart-container"><canvas id="mem-${cname}"></canvas></div>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+      ${containers.size === 0 ? '<div class="card"><div class="empty-state"><p>No metrics data available.</p></div></div>' : ''}
+      <div style="margin-top:16px">
+        <button class="btn btn-secondary" onclick="navigate('simulator',{prefill:{namespace:'${namespace}',kind:'${kind}',name:'${name}'}})">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+          Open in Simulator
+        </button>
+      </div>
+    `;
+
+    // Render charts with recommendation lines if automated
+    containers.forEach(cname => {
+      const rec = recContainers[cname] || {};
+      if (metrics.cpu && metrics.cpu[cname]) {
+        const cpuRecValue = recs.automated ? parseCPUQuantity(rec.cpuRequest) : null;
+        createTimeSeriesChart(`cpu-${cname}`, metrics.cpu[cname], {
+          label: 'CPU',
+          color: '#6366f1',
+          unit: 'cores',
+          yFormat: v => v.toFixed(3),
+          annotationValue: cpuRecValue,
+          annotationLabel: rec.cpuRequest ? `Recommendation: ${rec.cpuRequest}` : undefined
+        });
+      }
+      if (metrics.memory && metrics.memory[cname]) {
+        const memRecValue = recs.automated ? parseMemoryQuantity(rec.memoryRequest) : null;
+        createTimeSeriesChart(`mem-${cname}`, metrics.memory[cname], {
+          label: 'Memory',
+          color: '#06b6d4',
+          unit: 'MiB',
+          transform: v => v / (1024 * 1024),
+          yFormat: v => v.toFixed(0),
+          annotationValue: memRecValue,
+          annotationLabel: rec.memoryRequest ? `Recommendation: ${rec.memoryRequest}` : undefined
+        });
+      }
+    });
+  } catch (err) {
+    content.innerHTML = `<div class="card"><p style="color:var(--red)">Error: ${err.message}</p></div>`;
+  }
+}
+
+// ---- Workload Metrics ----
+let workloadMetricsParams = null;
+
+async function renderWorkloadMetrics(params) {
+  workloadMetricsParams = params;
+  const { namespace, kind, name, policy } = params;
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="loading"><div class="spinner"></div>Loading metrics...</div>`;
+  destroyCharts();
+
+  try {
+    const data = await api(`/api/workloads/${namespace}/${kind}/${name}/metrics?window=168h&step=5m`);
+
+    const containers = new Set([...Object.keys(data.cpu || {}), ...Object.keys(data.memory || {})]);
+
+    content.innerHTML = `
+      <div class="breadcrumb">
+        <a href="#" onclick="event.preventDefault();navigate('policies')">Policies</a>
+        <span>/</span>
+        <a href="#" onclick="event.preventDefault();navigate('policy-detail',{name:'${policy}'})">${policy}</a>
+        <span>/</span>
+        <span>${name}</span>
+      </div>
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">
+        <div>
+          <h1><span class="kind-badge kind-${kind}" style="font-size:14px;margin-right:4px">${kind}</span> ${name}</h1>
+          <p>${namespace} &mdash; ${containers.size} container(s)</p>
+        </div>
+        <label class="auto-refresh">
+          <input type="checkbox" onchange="autoRefreshToggle(this, () => renderWorkloadMetrics(workloadMetricsParams))"> Auto-refresh (30s)
+        </label>
+      </div>
+      ${Array.from(containers).map(cname => `
+        <div class="card">
+          <div class="card-header"><h2>Container: <code>${cname}</code></h2></div>
+          <div class="chart-grid">
+            <div>
+              <h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">CPU Usage (cores)</h3>
+              <div class="chart-container"><canvas id="cpu-${cname}"></canvas></div>
+            </div>
+            <div>
+              <h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">Memory Usage (MiB)</h3>
+              <div class="chart-container"><canvas id="mem-${cname}"></canvas></div>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+      ${containers.size === 0 ? '<div class="card"><div class="empty-state"><p>No metrics data available for this workload.</p></div></div>' : ''}
+      <div style="margin-top:16px">
+        <button class="btn btn-secondary" onclick="navigate('simulator',{prefill:{namespace:'${namespace}',kind:'${kind}',name:'${name}'}})">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+          Open in Simulator
+        </button>
+      </div>
+    `;
+
+    // Render charts
+    containers.forEach(cname => {
+      if (data.cpu && data.cpu[cname]) {
+        createTimeSeriesChart(`cpu-${cname}`, data.cpu[cname], {
+          label: 'CPU',
+          color: '#6366f1',
+          unit: 'cores',
+          yFormat: v => v.toFixed(3)
+        });
+      }
+      if (data.memory && data.memory[cname]) {
+        createTimeSeriesChart(`mem-${cname}`, data.memory[cname], {
+          label: 'Memory',
+          color: '#06b6d4',
+          unit: 'MiB',
+          transform: v => v / (1024 * 1024),
+          yFormat: v => v.toFixed(0)
+        });
+      }
+    });
+  } catch (err) {
+    content.innerHTML = `<div class="card"><p style="color:var(--red)">Error: ${err.message}</p></div>`;
+  }
+}
+
+// ---- Simulator ----
+function renderSimulator(prefill) {
+  const pf = prefill || {};
+  const content = document.getElementById('content');
+  destroyCharts();
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1>Policy Simulator</h1>
+      <p>Simulate policy parameter changes and preview their effect on historical metrics</p>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h2>Workload Target</h2></div>
+      <div class="workload-selector">
+        <div class="form-group">
+          <label>Namespace</label>
+          <input id="sim-ns" type="text" placeholder="default" value="${pf.namespace || ''}">
+        </div>
+        <div class="form-group">
+          <label>Kind</label>
+          <select id="sim-kind">
+            <option value="Deployment" ${pf.kind==='Deployment'?'selected':''}>Deployment</option>
+            <option value="StatefulSet" ${pf.kind==='StatefulSet'?'selected':''}>StatefulSet</option>
+            <option value="DaemonSet" ${pf.kind==='DaemonSet'?'selected':''}>DaemonSet</option>
+            <option value="CronJob" ${pf.kind==='CronJob'?'selected':''}>CronJob</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Name</label>
+          <input id="sim-name" type="text" placeholder="my-app" value="${pf.name || ''}">
+        </div>
+        <div class="form-group">
+          <label>Window</label>
+          <select id="sim-window">
+            <option value="24h">24h</option>
+            <option value="72h">3 days</option>
+            <option value="168h" selected>7 days</option>
+            <option value="336h">14 days</option>
+            <option value="720h">30 days</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="sim-grid">
+      <div class="card sim-section">
+        <h3><span style="color:var(--accent-light)">CPU</span> Configuration</h3>
+        <div class="form-group">
+          <label>Percentile</label>
+          <div class="slider-row">
+            <input type="range" id="sim-cpu-pct" min="50" max="99" value="95" oninput="document.getElementById('sim-cpu-pct-val').textContent=this.value+'%'">
+            <span class="slider-value" id="sim-cpu-pct-val">95%</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Headroom</label>
+          <div class="slider-row">
+            <input type="range" id="sim-cpu-hr" min="0" max="100" value="0" oninput="document.getElementById('sim-cpu-hr-val').textContent=this.value+'%'">
+            <span class="slider-value" id="sim-cpu-hr-val">0%</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Min Allowed</label>
+          <input type="text" id="sim-cpu-min" placeholder="e.g. 50m">
+        </div>
+        <div class="form-group">
+          <label>Max Allowed</label>
+          <input type="text" id="sim-cpu-max" placeholder="e.g. 4000m">
+        </div>
+      </div>
+      <div class="card sim-section">
+        <h3><span style="color:var(--cyan)">Memory</span> Configuration</h3>
+        <div class="form-group">
+          <label>Percentile</label>
+          <div class="slider-row">
+            <input type="range" id="sim-mem-pct" min="50" max="99" value="95" oninput="document.getElementById('sim-mem-pct-val').textContent=this.value+'%'">
+            <span class="slider-value" id="sim-mem-pct-val">95%</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Headroom</label>
+          <div class="slider-row">
+            <input type="range" id="sim-mem-hr" min="0" max="100" value="0" oninput="document.getElementById('sim-mem-hr-val').textContent=this.value+'%'">
+            <span class="slider-value" id="sim-mem-hr-val">0%</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Min Allowed</label>
+          <input type="text" id="sim-mem-min" placeholder="e.g. 64Mi">
+        </div>
+        <div class="form-group">
+          <label>Max Allowed</label>
+          <input type="text" id="sim-mem-max" placeholder="e.g. 8Gi">
+        </div>
+      </div>
+    </div>
+
+    <div style="margin:20px 0; display:flex; gap:12px">
+      <button class="btn btn-primary" onclick="runSimulation()">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Run Simulation
+      </button>
+    </div>
+
+    <div id="sim-results"></div>
+  `;
+
+  // If prefill has values, auto-run
+  if (pf.namespace && pf.name) {
+    setTimeout(runSimulation, 300);
+  }
+}
+
+async function runSimulation() {
+  const resultsDiv = document.getElementById('sim-results');
+  resultsDiv.innerHTML = `<div class="loading"><div class="spinner"></div>Running simulation...</div>`;
+  destroyCharts();
+
+  const ns = document.getElementById('sim-ns').value;
+  const ownerName = document.getElementById('sim-name').value;
+  if (!ns) {
+    resultsDiv.innerHTML = `<div class="card"><p style="color:var(--red)">Namespace is required.</p></div>`;
+    return;
+  }
+  if (!ownerName) {
+    resultsDiv.innerHTML = `<div class="card"><p style="color:var(--red)">Workload name is required.</p></div>`;
+    return;
+  }
+
+  const cpuPct = parseInt(document.getElementById('sim-cpu-pct').value);
+  const cpuHr = parseInt(document.getElementById('sim-cpu-hr').value);
+  const memPct = parseInt(document.getElementById('sim-mem-pct').value);
+  const memHr = parseInt(document.getElementById('sim-mem-hr').value);
+
+  const body = {
+    namespace: ns,
+    ownerKind: document.getElementById('sim-kind').value,
+    ownerName: ownerName,
+    window: document.getElementById('sim-window').value,
+    step: '5m',
+    cpu: {
+      percentilePercentage: cpuPct,
+      headroomPercentage: cpuHr,
+    },
+    memory: {
+      percentilePercentage: memPct,
+      headroomPercentage: memHr,
+    }
+  };
+
+  const cpuMin = document.getElementById('sim-cpu-min').value;
+  const cpuMax = document.getElementById('sim-cpu-max').value;
+  const memMin = document.getElementById('sim-mem-min').value;
+  const memMax = document.getElementById('sim-mem-max').value;
+  if (cpuMin) body.cpu.minAllowed = cpuMin;
+  if (cpuMax) body.cpu.maxAllowed = cpuMax;
+  if (memMin) body.memory.minAllowed = memMin;
+  if (memMax) body.memory.maxAllowed = memMax;
+
+  try {
+    const data = await api('/api/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    lastSimulationData = data;
+    lastSimulationBody = body;
+
+    const containers = Object.keys(data.containers || {});
+    if (containers.length === 0) {
+      resultsDiv.innerHTML = `<div class="card"><div class="empty-state"><p>No metrics data found for this workload. Make sure the namespace, kind, and name are correct.</p></div></div>`;
+      return;
+    }
+
+    resultsDiv.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h2>Simulation Results</h2>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" onclick="exportYAML()" title="Download as YAML patch">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+              YAML
+            </button>
+            <button class="btn btn-secondary" onclick="exportCSV()" title="Download as CSV">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+              CSV
+            </button>
+          </div>
+        </div>
+        <div class="rec-grid">
+          ${containers.map(c => `
+            <div class="rec-card">
+              <h4>${c}</h4>
+              <div class="rec-row"><span class="label">CPU Request</span><span class="value">${data.containers[c].cpuRequest || '-'}</span></div>
+              <div class="rec-row"><span class="label">Memory Request</span><span class="value">${data.containers[c].memoryRequest || '-'}</span></div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      ${containers.map(cname => `
+        <div class="card">
+          <div class="card-header"><h2>Container: <code>${cname}</code></h2></div>
+          <div class="chart-grid">
+            <div>
+              <h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">CPU Usage + Recommendation</h3>
+              <div class="chart-container"><canvas id="simcpu-${cname}"></canvas></div>
+            </div>
+            <div>
+              <h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">Memory Usage + Recommendation</h3>
+              <div class="chart-container"><canvas id="simmem-${cname}"></canvas></div>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    `;
+
+    // Render charts with recommendation lines
+    containers.forEach(cname => {
+      const rec = data.containers[cname];
+      if (data.cpuSeries && data.cpuSeries[cname]) {
+        const cpuRecValue = parseCPUQuantity(rec.cpuRequest);
+        createTimeSeriesChart(`simcpu-${cname}`, data.cpuSeries[cname], {
+          label: 'CPU Usage',
+          color: '#6366f1',
+          unit: 'cores',
+          yFormat: v => v.toFixed(3),
+          annotationValue: cpuRecValue,
+          annotationLabel: `Recommendation: ${rec.cpuRequest}`
+        });
+      }
+      if (data.memorySeries && data.memorySeries[cname]) {
+        const memRecValue = parseMemoryQuantity(rec.memoryRequest);
+        createTimeSeriesChart(`simmem-${cname}`, data.memorySeries[cname], {
+          label: 'Memory Usage',
+          color: '#06b6d4',
+          unit: 'MiB',
+          transform: v => v / (1024 * 1024),
+          yFormat: v => v.toFixed(0),
+          annotationValue: memRecValue,
+          annotationLabel: `Recommendation: ${rec.memoryRequest}`
+        });
+      }
+    });
+  } catch (err) {
+    resultsDiv.innerHTML = `<div class="card"><p style="color:var(--red)">Error: ${err.message}</p></div>`;
+  }
+}
+
+// ---- Export functions ----
+function exportYAML() {
+  if (!lastSimulationData || !lastSimulationBody) return;
+  const b = lastSimulationBody;
+  const containers = Object.entries(lastSimulationData.containers);
+  const resourceLines = containers.map(([name, rec]) => {
+    const parts = [`        - name: ${name}\n          resources:\n            requests:`];
+    if (rec.cpuRequest) parts.push(`              cpu: "${rec.cpuRequest}"`);
+    if (rec.memoryRequest) parts.push(`              memory: "${rec.memoryRequest}"`);
+    return parts.join('\n');
+  }).join('\n');
+
+  const yaml = `# k8s-sustain simulation recommendation
+# Workload: ${b.namespace}/${b.ownerKind}/${b.ownerName}
+# Window: ${b.window} | CPU P${b.cpu.percentilePercentage}+${b.cpu.headroomPercentage}% | Mem P${b.memory.percentilePercentage}+${b.memory.headroomPercentage}%
+apiVersion: apps/v1
+kind: ${b.ownerKind}
+metadata:
+  name: ${b.ownerName}
+  namespace: ${b.namespace}
+spec:
+  template:
+    spec:
+      containers:
+${resourceLines}
+`;
+  downloadFile(`${b.ownerName}-recommendations.yaml`, yaml, 'text/yaml');
+}
+
+function exportCSV() {
+  if (!lastSimulationData || !lastSimulationBody) return;
+  const b = lastSimulationBody;
+  const rows = [['Container', 'CPU Request', 'Memory Request']];
+  for (const [name, rec] of Object.entries(lastSimulationData.containers)) {
+    rows.push([name, rec.cpuRequest || '', rec.memoryRequest || '']);
+  }
+  const csv = rows.map(r => r.join(',')).join('\n');
+  downloadFile(`${b.ownerName}-recommendations.csv`, csv, 'text/csv');
+}
+
+function downloadFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ---- Chart helpers ----
+function createTimeSeriesChart(canvasId, points, opts) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+
+  const transform = opts.transform || (v => v);
+  const chartData = points.map(p => ({
+    x: new Date(p.timestamp),
+    y: transform(p.value)
+  }));
+
+  const datasets = [{
+    label: opts.label,
+    data: chartData,
+    borderColor: opts.color,
+    backgroundColor: opts.color + '18',
+    fill: true,
+    borderWidth: 1.5,
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    tension: 0.3,
+  }];
+
+  // Add recommendation annotation line
+  if (opts.annotationValue != null && !isNaN(opts.annotationValue)) {
+    const annoValue = opts.transform ? opts.transform(opts.annotationValue) : opts.annotationValue;
+    datasets.push({
+      label: opts.annotationLabel || 'Recommendation',
+      data: chartData.map(p => ({ x: p.x, y: annoValue })),
+      borderColor: '#ef4444',
+      borderWidth: 2,
+      borderDash: [8, 4],
+      pointRadius: 0,
+      fill: false,
+    });
+  }
+
+  chartInstances[canvasId] = new Chart(canvas, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: datasets.length > 1,
+          labels: { color: '#8b8fa3', font: { size: 11 } }
+        },
+        tooltip: {
+          backgroundColor: '#1a1d27',
+          borderColor: '#2a2e3f',
+          borderWidth: 1,
+          titleColor: '#e4e6ed',
+          bodyColor: '#e4e6ed',
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: ${opts.yFormat(ctx.parsed.y)} ${opts.unit}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'time',
+          grid: { color: '#2a2e3f' },
+          ticks: { color: '#8b8fa3', font: { size: 11 }, maxTicksLimit: 8 },
+        },
+        y: {
+          grid: { color: '#2a2e3f' },
+          ticks: {
+            color: '#8b8fa3',
+            font: { size: 11 },
+            callback: v => opts.yFormat(v),
+          },
+          beginAtZero: true,
+        }
+      }
+    }
+  });
+}
+
+// ---- Helpers ----
+function statusBadge(conditions) {
+  if (!conditions || conditions.length === 0) return '<span class="badge badge-dim">Unknown</span>';
+  const ready = conditions.find(c => c.type === 'Ready');
+  if (!ready) return '<span class="badge badge-dim">Unknown</span>';
+  if (ready.status === 'True') return '<span class="badge badge-green">Ready</span>';
+  return `<span class="badge badge-red">${ready.reason || 'Not Ready'}</span>`;
+}
+
+function updateTypeBadges(update) {
+  if (!update) return '';
+  const types = [];
+  if (update.deployment) types.push(`<span class="kind-badge kind-Deployment">Deploy:${update.deployment}</span>`);
+  if (update.statefulSet) types.push(`<span class="kind-badge kind-StatefulSet">STS:${update.statefulSet}</span>`);
+  if (update.daemonSet) types.push(`<span class="kind-badge kind-DaemonSet">DS:${update.daemonSet}</span>`);
+  if (update.cronJob) types.push(`<span class="kind-badge kind-CronJob">CJ:${update.cronJob}</span>`);
+  return types.join(' ') || '<span style="color:var(--text-dim)">-</span>';
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '-';
+  const d = new Date(dateStr);
+  const diff = Date.now() - d.getTime();
+  const hours = Math.floor(diff / 3600000);
+  if (hours < 1) return 'just now';
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return d.toLocaleDateString();
+}
+
+function parseCPUQuantity(str) {
+  if (!str) return NaN;
+  if (str.endsWith('m')) return parseInt(str) / 1000;
+  return parseFloat(str);
+}
+
+function parseMemoryQuantity(str) {
+  if (!str) return NaN;
+  const units = { Ki: 1024, Mi: 1024**2, Gi: 1024**3, Ti: 1024**4 };
+  for (const [suffix, mult] of Object.entries(units)) {
+    if (str.endsWith(suffix)) return parseInt(str) * mult;
+  }
+  return parseFloat(str);
+}
+
+// Handle navigate from simulator prefill
+const origNavigate = navigate;
+window.navigate = function(page, params) {
+  if (page === 'simulator' && params?.prefill) {
+    stopAutoRefresh();
+    currentPage = page;
+    document.querySelectorAll('.nav-item').forEach(el => {
+      el.classList.toggle('active', el.dataset.page === page);
+    });
+    const content = document.getElementById('content');
+    content.className = 'main main-wide';
+    renderSimulator(params.prefill);
+    return;
+  }
+  origNavigate(page, params);
+};
+
+// Boot
+navigate('policies');
+</script>
+</body>
+</html>
