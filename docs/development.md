@@ -119,7 +119,7 @@ Open `http://localhost:8090`.
 
 ```bash
 kubectl apply -f - <<'EOF'
-apiVersion: sustain.io/v1alpha1
+apiVersion: k8s.sustain.io/v1alpha1
 kind: Policy
 metadata:
   name: test-policy

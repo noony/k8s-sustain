@@ -77,9 +77,13 @@ webhook:
     # Set to true to create a cert-manager Certificate and inject the CA bundle
     # automatically via the cert-manager.io/inject-ca-from annotation.
     enabled: false
+    # Create a self-signed Issuer in the release namespace.
+    # Set to false if you want to use your own Issuer/ClusterIssuer (configure issuerRef below).
+    createIssuer: true
     issuerRef:
-      name: selfsigned-issuer
-      kind: ClusterIssuer
+      # Only used when createIssuer is false.
+      name: ""
+      kind: Issuer
   resources:
     requests:
       cpu: 10m

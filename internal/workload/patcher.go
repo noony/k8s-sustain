@@ -32,9 +32,10 @@ type ContainerRecommendation struct {
 // Patcher applies ContainerRecommendations to Kubernetes workloads.
 //
 // Ongoing mode behaviour:
-//   - k8s ≥ 1.27 (inPlace=true): patches running pods directly via
-//     InPlacePodVerticalScaling — zero restarts.
-//   - k8s < 1.27 (inPlace=false): evicts stale pods one by one via the
+//   - k8s ≥ 1.31 (inPlace=true): patches running pods directly via
+//     InPlacePodVerticalScaling — zero restarts. Uses the /resize subresource
+//     on k8s ≥ 1.33, falls back to a direct pod patch on 1.31-1.32.
+//   - k8s < 1.31 (inPlace=false): evicts stale pods one by one via the
 //     Eviction API so the workload controller replaces them from the updated
 //     template. PodDisruptionBudgets are respected; pods blocked by a PDB are
 //     skipped and retried on the next reconcile cycle.
@@ -44,7 +45,7 @@ type Patcher struct {
 }
 
 // New returns a Patcher. Set inPlace=true when the cluster supports
-// InPlacePodVerticalScaling (k8s ≥ 1.27).
+// InPlacePodVerticalScaling (k8s ≥ 1.31).
 func New(c client.Client, inPlace bool) *Patcher {
 	return &Patcher{client: c, inPlace: inPlace}
 }
@@ -194,7 +195,25 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 		return nil
 	}
 	pod.Spec.Containers = containers
-	return p.client.Patch(ctx, pod, client.MergeFrom(base))
+
+	// K8s 1.33+ requires the /resize subresource for in-place pod resource
+	// changes. Try that first; fall back to a regular pod patch for 1.31-1.32
+	// where the subresource doesn't exist yet.
+	err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(base))
+	if apierrors.IsNotFound(err) {
+		// /resize subresource not available (k8s < 1.33) — try direct pod patch.
+		err = p.client.Patch(ctx, pod, client.MergeFrom(base))
+	}
+	if apierrors.IsInvalid(err) {
+		// The API server rejected the pod resource patch — InPlacePodVerticalScaling
+		// feature gate is not enabled on this cluster. Disable in-place for the rest
+		// of this reconcile cycle and fall back to eviction.
+		logger.Info("in-place pod resource patch rejected, feature gate likely disabled; falling back to eviction")
+		p.inPlace = false
+		pod.Spec.Containers = base.Spec.Containers
+		return p.evictPod(ctx, pod, recs)
+	}
+	return err
 }
 
 // evictPod evicts a pod if it is running stale resources, so the workload

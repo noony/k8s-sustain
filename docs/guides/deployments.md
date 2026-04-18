@@ -1,6 +1,6 @@
 # Deployments & StatefulSets
 
-## Ongoing mode with eviction (k8s < 1.27)
+## Ongoing mode with eviction (k8s < 1.31)
 
 The controller patches the pod template with updated resources, then evicts stale pods via the Eviction API. The workload controller (Deployment/StatefulSet) replaces them from the updated template. PodDisruptionBudgets are respected.
 
@@ -42,7 +42,7 @@ spec:
         k8s.sustain.io/policy: web-rightsizing
 ```
 
-## Ongoing mode with in-place updates (k8s ≥ 1.27)
+## Ongoing mode with in-place updates (k8s ≥ 1.31)
 
 No additional configuration is needed. The operator detects the cluster version at startup and automatically uses in-place pod patching instead of eviction.
 

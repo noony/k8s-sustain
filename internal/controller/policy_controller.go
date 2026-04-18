@@ -33,6 +33,7 @@ import (
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups="",resources=pods/resize,verbs=patch
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
 
 // PolicyReconciler reconciles a Policy object.

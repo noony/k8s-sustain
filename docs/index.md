@@ -17,7 +17,7 @@ k8s-sustain continuously observes CPU and memory usage through Prometheus record
 | Mode | Mechanism | When |
 |------|-----------|------|
 | **OnCreate** | Mutating admission webhook injects resources before the pod is scheduled | Each new pod creation |
-| **Ongoing** | Controller periodically patches workload templates (with optional in-place pod patching on k8s ≥ 1.27) | On a configurable interval |
+| **Ongoing** | Controller periodically patches workload templates (with optional in-place pod patching on k8s ≥ 1.31) | On a configurable interval |
 
 A workload opts in to a policy by setting a single annotation on its pod template:
 
@@ -44,7 +44,7 @@ metadata:
 
 - **Percentile-based recommendations** — p50 through p99, configurable per policy
 - **Per-container granularity** — each container gets its own recommendation
-- **In-place pod updates** — no rolling restart when the cluster supports `InPlacePodVerticalScaling` (k8s ≥ 1.27)
+- **In-place pod updates** — no rolling restart when the cluster supports `InPlacePodVerticalScaling` (k8s ≥ 1.31)
 - **Recommend-only mode** — dry-run mode that logs recommendations without touching any workloads
 - **Web dashboard** — explore policies, view workload metrics, and simulate parameter changes
 - **Three independent components** — controller (Ongoing), admission webhook (OnCreate), and dashboard can run separately

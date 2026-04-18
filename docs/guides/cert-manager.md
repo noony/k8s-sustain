@@ -12,74 +12,51 @@ helm repo update
 helm install cert-manager jetstack/cert-manager \
   --namespace cert-manager \
   --create-namespace \
-  --set installCRDs=true
+  --set crds.enabled=true
 ```
 
-## Using a ClusterIssuer
+## Default setup (self-signed)
 
-### Self-signed (development)
+The chart creates a self-signed `Issuer` and `Certificate` automatically. No external Issuer is required:
 
 ```bash
-kubectl apply -f - <<EOF
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: selfsigned-issuer
-spec:
-  selfSigned: {}
-EOF
+helm install k8s-sustain k8s-sustain/k8s-sustain \
+  --namespace k8s-sustain \
+  --create-namespace \
+  --set webhook.certManager.enabled=true
 ```
+
+This is the simplest approach and works for both development and production. The webhook only needs to be trusted by the Kubernetes API server, and cert-manager handles CA bundle injection automatically.
+
+## Using your own Issuer
+
+If you already have an Issuer or ClusterIssuer in the cluster (e.g. a corporate CA), disable the built-in one and point to yours:
 
 ```bash
 helm install k8s-sustain k8s-sustain/k8s-sustain \
   --namespace k8s-sustain \
   --create-namespace \
   --set webhook.certManager.enabled=true \
-  --set webhook.certManager.issuerRef.name=selfsigned-issuer \
+  --set webhook.certManager.createIssuer=false \
+  --set webhook.certManager.issuerRef.name=my-ca-issuer \
   --set webhook.certManager.issuerRef.kind=ClusterIssuer
 ```
 
-### Let's Encrypt (production)
-
-```bash
-kubectl apply -f - <<EOF
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: your-email@example.com
-    privateKeySecretRef:
-      name: letsencrypt-prod
-    solvers:
-      - http01:
-          ingress:
-            class: nginx
-EOF
-```
-
-```bash
-helm install k8s-sustain k8s-sustain/k8s-sustain \
-  --namespace k8s-sustain \
-  --create-namespace \
-  --set webhook.certManager.enabled=true \
-  --set webhook.certManager.issuerRef.name=letsencrypt-prod \
-  --set webhook.certManager.issuerRef.kind=ClusterIssuer
-```
+!!! note "ACME / Let's Encrypt issuers"
+    ACME issuers (e.g. Let's Encrypt) cannot issue certificates for internal Kubernetes service DNS names like `*.svc.cluster.local`. Use a self-signed or CA issuer instead.
 
 ## How it works
 
 When `webhook.certManager.enabled=true`, the chart creates:
 
-1. A `Certificate` resource targeting the webhook service DNS names:
+1. A self-signed `Issuer` (unless `createIssuer=false`)
+2. A `Certificate` resource targeting the webhook service DNS names:
    ```
    k8s-sustain-webhook.<namespace>.svc
    k8s-sustain-webhook.<namespace>.svc.cluster.local
    ```
-2. cert-manager issues the certificate and stores it in `webhook.tlsSecretName` (default: `k8s-sustain-webhook-tls`)
-3. The `MutatingWebhookConfiguration` is annotated with `cert-manager.io/inject-ca-from`, so cert-manager automatically updates the `caBundle` when the certificate is renewed
+3. cert-manager issues the certificate and stores it in `webhook.tlsSecretName` (default: `k8s-sustain-webhook-tls`)
+4. The `MutatingWebhookConfiguration` is annotated with `cert-manager.io/inject-ca-from`, so cert-manager automatically updates the `caBundle` when the certificate is renewed
 
 ## Manual certificate (without cert-manager)
 
@@ -96,7 +73,7 @@ kubectl create secret tls k8s-sustain-webhook-tls \
   --key=tls.key \
   -n k8s-sustain
 
-# Base64-encode the CA cert
+# Base64-encode the CA cert (use -b 0 on macOS instead of -w0)
 CA_BUNDLE=$(base64 -w0 tls.crt)
 
 helm install k8s-sustain k8s-sustain/k8s-sustain \

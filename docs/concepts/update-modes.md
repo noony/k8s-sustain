@@ -41,14 +41,14 @@ spec:
       deployment: Ongoing
 ```
 
-**Behaviour on clusters without in-place update support (k8s < 1.27):**
+**Behaviour on clusters without in-place update support (k8s < 1.31):**
 
 1. Controller patches the workload's pod template with updated resources
 2. Each running pod that has stale resources is evicted via the Eviction API
 3. The workload controller (Deployment/StatefulSet/DaemonSet) replaces evicted pods from the updated template
 4. PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle
 
-**Behaviour on clusters with in-place update support (k8s ≥ 1.27):**
+**Behaviour on clusters with in-place update support (k8s ≥ 1.31):**
 
 1. Controller patches the workload's pod template
 2. Controller also patches each running, non-terminating pod's `spec.containers[*].resources` directly
@@ -62,9 +62,9 @@ See [In-Place Updates](in-place-updates.md) for details.
 
 - Long-running workloads that accumulate meaningful usage history
 - Situations where you want resources to track actual usage over time
-- Clusters with in-place update support (zero-disruption updates)
+- Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.31)
 
-**Limitation:** On clusters without in-place update support (k8s < 1.27), pods are replaced via eviction rather than in-place patching, which causes pod restarts.
+**Limitation:** On clusters without in-place update support (k8s < 1.31), pods are replaced via eviction rather than in-place patching, which causes pod restarts.
 
 ---
 
@@ -74,9 +74,9 @@ See [In-Place Updates](in-place-updates.md) for details.
 |----------|-----------------|
 | New cluster, no baseline yet | `OnCreate` — sets a sensible default at creation |
 | Existing workloads, must avoid downtime | `OnCreate` — only affects future pods |
-| Existing workloads, k8s ≥ 1.27 | `Ongoing` — in-place updates, zero restarts |
+| Existing workloads, k8s ≥ 1.31 | `Ongoing` — in-place updates, zero restarts |
 | CronJob pods (ephemeral per-run) | `OnCreate` — each run gets fresh recommendations |
-| StatefulSets with persistent state | `Ongoing` + k8s ≥ 1.27, or `OnCreate` |
+| StatefulSets with persistent state | `Ongoing` + k8s ≥ 1.31, or `OnCreate` |
 | DaemonSets | `Ongoing` (rolling update is DaemonSet's normal behaviour) |
 
 ---

@@ -58,7 +58,7 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
    - Compute per-container recommendations (request + limit)
    - If `--recommend-only` is set, log the recommendation and skip patching
    - Patch the workload's pod template with updated resources
-   - Recycle stale running pods: on k8s ≥ 1.27 via in-place resource patching; on k8s < 1.27 via the Eviction API (PDB-respecting)
+   - Recycle stale running pods: on k8s ≥ 1.31 via in-place resource patching (using the `/resize` subresource on k8s ≥ 1.33); on k8s < 1.31 via the Eviction API (PDB-respecting)
 
 The controller requeues after `--reconcile-interval` (default `1h`).
 

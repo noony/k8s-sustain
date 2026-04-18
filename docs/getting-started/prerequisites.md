@@ -5,7 +5,7 @@
 | Requirement | Version |
 |-------------|---------|
 | Kubernetes | ≥ 1.24 |
-| Kubernetes (in-place updates) | ≥ 1.27 |
+| Kubernetes (in-place updates) | ≥ 1.31 |
 
 ## Helm
 

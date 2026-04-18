@@ -67,14 +67,16 @@ helm upgrade k8s-sustain k8s-sustain/k8s-sustain \
 
 ## Install with cert-manager (recommended for production)
 
+The chart creates a self-signed Issuer and Certificate automatically — just enable cert-manager:
+
 ```bash
 helm install k8s-sustain k8s-sustain/k8s-sustain \
   --namespace k8s-sustain \
   --create-namespace \
-  --set webhook.certManager.enabled=true \
-  --set webhook.certManager.issuerRef.name=letsencrypt-prod \
-  --set webhook.certManager.issuerRef.kind=ClusterIssuer
+  --set webhook.certManager.enabled=true
 ```
+
+See the [cert-manager guide](../guides/cert-manager.md) for using your own Issuer.
 
 ## Verify the installation
 

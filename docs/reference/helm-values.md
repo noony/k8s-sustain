@@ -58,8 +58,9 @@ controller:
 | `webhook.tlsSecretName` | `k8s-sustain-webhook-tls` | TLS secret name |
 | `webhook.caBundle` | `""` | Base64-encoded CA cert (required when `certManager.enabled=false`) |
 | `webhook.certManager.enabled` | `false` | Create a cert-manager `Certificate` resource |
-| `webhook.certManager.issuerRef.name` | `selfsigned-issuer` | Issuer name |
-| `webhook.certManager.issuerRef.kind` | `ClusterIssuer` | Issuer kind |
+| `webhook.certManager.createIssuer` | `true` | Create a self-signed `Issuer` in the release namespace. Set to `false` to use your own. |
+| `webhook.certManager.issuerRef.name` | `""` | Issuer name (only used when `createIssuer=false`) |
+| `webhook.certManager.issuerRef.kind` | `Issuer` | Issuer kind (only used when `createIssuer=false`) |
 | `webhook.resources` | see below | Webhook container resources |
 | `webhook.nodeSelector` | `{}` | Node selector |
 | `webhook.tolerations` | `[]` | Tolerations |

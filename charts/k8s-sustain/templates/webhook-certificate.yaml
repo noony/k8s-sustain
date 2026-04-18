@@ -1,0 +1,40 @@
+{{- if and .Values.webhook.enabled .Values.webhook.certManager.enabled }}
+{{- if .Values.webhook.certManager.createIssuer }}
+# Self-signed Issuer created by the chart so that cert-manager works out of the
+# box without requiring an external Issuer/ClusterIssuer.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "k8s-sustain.webhookName" . }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+{{- end }}
+# cert-manager Certificate — issues a TLS cert for the webhook service.
+# Requires cert-manager CRDs to be installed in the cluster.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "k8s-sustain.webhookName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.webhook.tlsSecretName }}
+  dnsNames:
+    - {{ include "k8s-sustain.webhookName" . }}
+    - {{ include "k8s-sustain.webhookName" . }}.{{ .Release.Namespace }}
+    - {{ include "k8s-sustain.webhookName" . }}.{{ .Release.Namespace }}.svc
+    - {{ include "k8s-sustain.webhookName" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    {{- if .Values.webhook.certManager.createIssuer }}
+    name: {{ include "k8s-sustain.webhookName" . }}-selfsigned
+    kind: Issuer
+    {{- else }}
+    name: {{ .Values.webhook.certManager.issuerRef.name }}
+    kind: {{ .Values.webhook.certManager.issuerRef.kind }}
+    {{- end }}
+{{- end }}

@@ -112,5 +112,5 @@ The controller reconciles on a fixed `1h` interval by default. To see changes so
 ## Next steps
 
 - Use **OnCreate** mode to inject resources at pod creation without restarting existing pods → [Update Modes](../concepts/update-modes.md)
-- Enable **in-place updates** for zero-restart resource changes on k8s ≥ 1.27 → [In-Place Updates](../concepts/in-place-updates.md)
+- Enable **in-place updates** for zero-restart resource changes on k8s ≥ 1.31 → [In-Place Updates](../concepts/in-place-updates.md)
 - Right-size **CronJobs** → [CronJob guide](../guides/cronjobs.md)
