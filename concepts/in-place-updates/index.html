@@ -648,6 +648,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#automatic-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      Automatic fallback
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#cluster-version-detection" class="md-nav__link">
     <span class="md-ellipsis">
       Cluster version detection
@@ -1033,6 +1042,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#automatic-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      Automatic fallback
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#cluster-version-detection" class="md-nav__link">
     <span class="md-ellipsis">
       Cluster version detection
@@ -1078,24 +1096,28 @@
 
 
 <h1 id="in-place-updates">In-Place Updates<a class="headerlink" href="#in-place-updates" title="Permanent link">&para;</a></h1>
-<p>Kubernetes 1.27 introduced the <code>InPlacePodVerticalScaling</code> feature gate (alpha), which became beta (on by default) in Kubernetes 1.29. It allows changing a pod's resource requests and limits <strong>without restarting the container</strong>.</p>
+<p>Kubernetes 1.27 introduced the <code>InPlacePodVerticalScaling</code> feature gate (alpha), which became beta (on by default) in Kubernetes 1.31 and GA in Kubernetes 1.33. It allows changing a pod's resource requests and limits <strong>without restarting the container</strong>.</p>
 <p>k8s-sustain automatically detects whether the cluster supports this feature and enables it when available.</p>
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <p>When <code>Ongoing</code> mode is active and the cluster supports in-place updates:</p>
 <ol>
-<li>The controller patches the workload's pod template with new resources</li>
+<li>The controller patches the workload template with the new resources (so new pods from scaling or node failures get the right values)</li>
 <li>It then lists all running, non-terminating pods matched by the workload's selector</li>
 <li>For each pod, it checks the pod's <code>status.resize</code> field:</li>
 <li><strong><code>Infeasible</code></strong>: the node cannot satisfy the request — the pod is evicted so the scheduler can place the replacement elsewhere</li>
 <li><strong><code>Deferred</code></strong>: the kubelet accepted the request but is waiting on conditions (e.g. a memory decrease that requires container restart) — skipped; the kubelet will apply it without further action</li>
-<li><strong><code>InProgress</code> / not set</strong>: proceeds to patch <code>spec.containers[*].resources</code> directly</li>
+<li><strong><code>InProgress</code> / not set</strong>: proceeds to patch <code>spec.containers[*].resources</code> via the pod's <code>/resize</code> subresource</li>
 <li>The kubelet applies the new resources without restarting the container</li>
 </ol>
+<p>On Kubernetes 1.33+, pod resource changes go through the <code>/resize</code> subresource. On Kubernetes 1.31-1.32, the operator falls back to a direct pod patch.</p>
 <p>Pods that are terminating or not in <code>Running</code> phase are skipped.</p>
+<h2 id="automatic-fallback">Automatic fallback<a class="headerlink" href="#automatic-fallback" title="Permanent link">&para;</a></h2>
+<p>If the API server rejects an in-place pod patch (e.g. the <code>InPlacePodVerticalScaling</code> feature gate is disabled), the operator automatically falls back to eviction-based updates for the rest of the reconcile cycle. No manual intervention is needed.</p>
 <h2 id="cluster-version-detection">Cluster version detection<a class="headerlink" href="#cluster-version-detection" title="Permanent link">&para;</a></h2>
 <p>The operator detects the server version at startup using the discovery API:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>major=1, minor≥27 → in-place updates enabled
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>major=1, minor&gt;=31 → in-place updates enabled
 </code></pre></div>
+<p>The feature gate was alpha (disabled by default) in Kubernetes 1.27-1.30. The operator requires &gt;= 1.31 where it is beta and enabled by default.</p>
 <p>You can check whether it is enabled in the controller logs:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>INFO  InPlacePodVerticalScaling support  enabled=true
 </code></pre></div>

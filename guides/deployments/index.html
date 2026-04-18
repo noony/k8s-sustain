@@ -842,18 +842,18 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#ongoing-mode-with-eviction-k8s-127" class="md-nav__link">
+  <a href="#ongoing-mode-with-eviction-k8s-131" class="md-nav__link">
     <span class="md-ellipsis">
-      Ongoing mode with eviction (k8s &lt; 1.27)
+      Ongoing mode with eviction (k8s &lt; 1.31)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#ongoing-mode-with-in-place-updates-k8s-127" class="md-nav__link">
+  <a href="#ongoing-mode-with-in-place-updates-k8s-131" class="md-nav__link">
     <span class="md-ellipsis">
-      Ongoing mode with in-place updates (k8s ≥ 1.27)
+      Ongoing mode with in-place updates (k8s ≥ 1.31)
     </span>
   </a>
   
@@ -1042,18 +1042,18 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#ongoing-mode-with-eviction-k8s-127" class="md-nav__link">
+  <a href="#ongoing-mode-with-eviction-k8s-131" class="md-nav__link">
     <span class="md-ellipsis">
-      Ongoing mode with eviction (k8s &lt; 1.27)
+      Ongoing mode with eviction (k8s &lt; 1.31)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#ongoing-mode-with-in-place-updates-k8s-127" class="md-nav__link">
+  <a href="#ongoing-mode-with-in-place-updates-k8s-131" class="md-nav__link">
     <span class="md-ellipsis">
-      Ongoing mode with in-place updates (k8s ≥ 1.27)
+      Ongoing mode with in-place updates (k8s ≥ 1.31)
     </span>
   </a>
   
@@ -1114,7 +1114,7 @@
 
 
 <h1 id="deployments-statefulsets">Deployments &amp; StatefulSets<a class="headerlink" href="#deployments-statefulsets" title="Permanent link">&para;</a></h1>
-<h2 id="ongoing-mode-with-eviction-k8s-127">Ongoing mode with eviction (k8s &lt; 1.27)<a class="headerlink" href="#ongoing-mode-with-eviction-k8s-127" title="Permanent link">&para;</a></h2>
+<h2 id="ongoing-mode-with-eviction-k8s-131">Ongoing mode with eviction (k8s &lt; 1.31)<a class="headerlink" href="#ongoing-mode-with-eviction-k8s-131" title="Permanent link">&para;</a></h2>
 <p>The controller patches the pod template with updated resources, then evicts stale pods via the Eviction API. The workload controller (Deployment/StatefulSet) replaces them from the updated template. PodDisruptionBudgets are respected.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
@@ -1149,7 +1149,7 @@
 <a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">      </span><span class="nt">annotations</span><span class="p">:</span>
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web-rightsizing</span>
 </code></pre></div>
-<h2 id="ongoing-mode-with-in-place-updates-k8s-127">Ongoing mode with in-place updates (k8s ≥ 1.27)<a class="headerlink" href="#ongoing-mode-with-in-place-updates-k8s-127" title="Permanent link">&para;</a></h2>
+<h2 id="ongoing-mode-with-in-place-updates-k8s-131">Ongoing mode with in-place updates (k8s ≥ 1.31)<a class="headerlink" href="#ongoing-mode-with-in-place-updates-k8s-131" title="Permanent link">&para;</a></h2>
 <p>No additional configuration is needed. The operator detects the cluster version at startup and automatically uses in-place pod patching instead of eviction.</p>
 <h2 id="oncreate-mode-set-resources-once-dont-touch-again">OnCreate mode — set resources once, don't touch again<a class="headerlink" href="#oncreate-mode-set-resources-once-dont-touch-again" title="Permanent link">&para;</a></h2>
 <p>Use <code>OnCreate</code> if you want to inject a good initial resource profile when pods are first created, but don't want the controller to continuously update them. Existing running pods are not affected.</p>

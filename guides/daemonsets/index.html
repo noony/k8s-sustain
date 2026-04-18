@@ -1121,7 +1121,7 @@
 <p>DaemonSet <code>Ongoing</code> mode updates the pod template and triggers a DaemonSet rolling update (<code>updateStrategy.type: RollingUpdate</code>). This is DaemonSet's normal update path — one node at a time.</p>
 <div class="admonition warning">
 <p class="admonition-title">OnDelete strategy</p>
-<p>If your DaemonSet uses <code>updateStrategy.type: OnDelete</code>, the template is updated but pods are only replaced when deleted manually. In-place updates (k8s ≥ 1.27) bypass this restriction and patch running pods directly.</p>
+<p>If your DaemonSet uses <code>updateStrategy.type: OnDelete</code>, the template is updated but pods are only replaced when deleted manually. In-place updates (k8s ≥ 1.31) bypass this restriction and patch running pods directly.</p>
 </div>
 <h2 id="node-critical-agents-use-higher-percentiles">Node-critical agents: use higher percentiles<a class="headerlink" href="#node-critical-agents-use-higher-percentiles" title="Permanent link">&para;</a></h2>
 <p>For agents that must not be OOM-killed, use <strong>p99</strong> and a generous headroom. A terminated log shipper or CNI plugin can cause node-level issues.</p>

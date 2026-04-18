@@ -1114,7 +1114,7 @@
 </tr>
 <tr>
 <td><strong>Ongoing</strong></td>
-<td>Controller periodically patches workload templates (with optional in-place pod patching on k8s ≥ 1.27)</td>
+<td>Controller periodically patches workload templates (with optional in-place pod patching on k8s ≥ 1.31)</td>
 <td>On a configurable interval</td>
 </tr>
 </tbody>
@@ -1162,7 +1162,7 @@
 <ul>
 <li><strong>Percentile-based recommendations</strong> — p50 through p99, configurable per policy</li>
 <li><strong>Per-container granularity</strong> — each container gets its own recommendation</li>
-<li><strong>In-place pod updates</strong> — no rolling restart when the cluster supports <code>InPlacePodVerticalScaling</code> (k8s ≥ 1.27)</li>
+<li><strong>In-place pod updates</strong> — no rolling restart when the cluster supports <code>InPlacePodVerticalScaling</code> (k8s ≥ 1.31)</li>
 <li><strong>Recommend-only mode</strong> — dry-run mode that logs recommendations without touching any workloads</li>
 <li><strong>Web dashboard</strong> — explore policies, view workload metrics, and simulate parameter changes</li>
 <li><strong>Three independent components</strong> — controller (Ongoing), admission webhook (OnCreate), and dashboard can run separately</li>

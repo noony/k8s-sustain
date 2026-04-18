@@ -1336,14 +1336,19 @@
 <td>Create a cert-manager <code>Certificate</code> resource</td>
 </tr>
 <tr>
+<td><code>webhook.certManager.createIssuer</code></td>
+<td><code>true</code></td>
+<td>Create a self-signed <code>Issuer</code> in the release namespace. Set to <code>false</code> to use your own.</td>
+</tr>
+<tr>
 <td><code>webhook.certManager.issuerRef.name</code></td>
-<td><code>selfsigned-issuer</code></td>
-<td>Issuer name</td>
+<td><code>""</code></td>
+<td>Issuer name (only used when <code>createIssuer=false</code>)</td>
 </tr>
 <tr>
 <td><code>webhook.certManager.issuerRef.kind</code></td>
-<td><code>ClusterIssuer</code></td>
-<td>Issuer kind</td>
+<td><code>Issuer</code></td>
+<td>Issuer kind (only used when <code>createIssuer=false</code>)</td>
 </tr>
 <tr>
 <td><code>webhook.resources</code></td>
