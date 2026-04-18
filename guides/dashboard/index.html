@@ -1031,6 +1031,30 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#no-metrics-data-available" class="md-nav__link">
+    <span class="md-ellipsis">
+      "No metrics data available"
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#helm-values-reference" class="md-nav__link">
     <span class="md-ellipsis">
       Helm Values Reference
@@ -1249,6 +1273,30 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#no-metrics-data-available" class="md-nav__link">
+    <span class="md-ellipsis">
+      "No metrics data available"
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#helm-values-reference" class="md-nav__link">
     <span class="md-ellipsis">
       Helm Values Reference
@@ -1384,7 +1432,9 @@
 <li><strong>CPU and Memory charts</strong> — Interactive time-series with recommendation lines overlaid (for automated workloads)</li>
 <li><strong>Open in Simulator</strong> — Jump to the simulator with the workload pre-filled</li>
 </ul>
-<p>Charts default to a 7-day window with 5-minute resolution. Enable <strong>Auto-refresh</strong> to keep data current.</p>
+<p>Charts default to a 7-day window with 5-minute resolution. Each chart overlays the workload's <strong>current resource request</strong> (amber dashed line) and <strong>limit</strong> (orange dashed line) so you can see how actual usage compares to configured resources. If the workload is automated, the <strong>recommendation</strong> line (red dashed) is also shown.</p>
+<p>Memory charts also display <strong>OOM kill events</strong> as red vertical markers with a count badge in the chart header. These are detected via <code>kube_pod_container_status_restarts_total</code> correlated with <code>kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}</code>. If no kube-state-metrics is available, OOM markers are silently omitted.</p>
+<p>Enable <strong>Auto-refresh</strong> to keep data current.</p>
 <h3 id="policy-simulator">Policy Simulator<a class="headerlink" href="#policy-simulator" title="Permanent link">&para;</a></h3>
 <p>The simulator lets you test "what-if" scenarios:</p>
 <ol>
@@ -1401,13 +1451,21 @@
 <p>The results show:</p>
 <ul>
 <li>Computed recommendation per container (CPU request, memory request)</li>
-<li>Time-series charts with the <strong>recommendation line</strong> overlaid on historical usage, making it easy to see how the recommendation relates to actual consumption</li>
+<li>Time-series charts with the <strong>recommendation line</strong> (red), <strong>current request</strong> (amber), and <strong>current limit</strong> (orange) overlaid on historical usage, making it easy to compare recommendations against both actual consumption and current configuration</li>
 </ul>
 <h4 id="exporting-results">Exporting Results<a class="headerlink" href="#exporting-results" title="Permanent link">&para;</a></h4>
 <p>After running a simulation, use the export buttons to download recommendations:</p>
 <ul>
 <li><strong>YAML</strong> — Downloads a Kubernetes resource patch you can apply with <code>kubectl apply -f</code></li>
 <li><strong>CSV</strong> — Downloads a spreadsheet-compatible file with per-container recommendations</li>
+</ul>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<h3 id="no-metrics-data-available">"No metrics data available"<a class="headerlink" href="#no-metrics-data-available" title="Permanent link">&para;</a></h3>
+<p>This message appears when Prometheus returns no time-series data for the workload. Common causes:</p>
+<ul>
+<li><strong>Recording rules not loaded</strong> — k8s-sustain requires recording rules (<code>k8s_sustain:pod_workload</code>, <code>k8s_sustain:container_cpu_usage_by_workload:rate5m</code>, etc.). Verify they exist by querying <code>k8s_sustain:pod_workload</code> in Prometheus. If using the bundled Prometheus subchart, they are embedded automatically. If using an external Prometheus with the Prometheus Operator, set <code>controller.serviceMonitor.enabled=true</code> to deploy <code>PrometheusRule</code> resources.</li>
+<li><strong>Duplicate kube-state-metrics instances</strong> — If multiple kube-state-metrics are scraped, the workload mapping rules can fail with "many-to-many matching not allowed". Either remove the duplicate kube-state-metrics or upgrade the chart (the recording rules deduplicate series automatically since v0.3).</li>
+<li><strong>Missing upstream metrics</strong> — The recording rules depend on <code>kube_pod_owner</code>, <code>kube_replicaset_owner</code>, <code>container_cpu_usage_seconds_total</code>, and <code>container_memory_working_set_bytes</code>. Ensure kube-state-metrics and cAdvisor metrics are scraped.</li>
 </ul>
 <h2 id="helm-values-reference">Helm Values Reference<a class="headerlink" href="#helm-values-reference" title="Permanent link">&para;</a></h2>
 <table>

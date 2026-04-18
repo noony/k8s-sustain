@@ -418,6 +418,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#why-k8s-sustain" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why k8s-sustain?
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
       How it works
@@ -1019,6 +1028,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#why-k8s-sustain" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why k8s-sustain?
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
       How it works
@@ -1074,6 +1092,9 @@
 
 <h1 id="k8s-sustain">k8s-sustain<a class="headerlink" href="#k8s-sustain" title="Permanent link">&para;</a></h1>
 <p><strong>k8s-sustain</strong> is a Kubernetes operator that automatically right-sizes workload resource requests and limits using historical Prometheus metrics. It reduces cloud waste and carbon footprint without requiring manual tuning.</p>
+<h2 id="why-k8s-sustain">Why k8s-sustain?<a class="headerlink" href="#why-k8s-sustain" title="Permanent link">&para;</a></h2>
+<p>Most Kubernetes clusters run significantly over-provisioned. Engineers set resource requests based on worst-case estimates, and those numbers rarely get revisited. The result is idle CPU and memory that still costs money, consumes energy, and contributes to the environmental footprint of cloud infrastructure.</p>
+<p><strong>We believe resource optimization should be accessible to everyone</strong> — from a solo developer running a side project to a platform team managing thousands of workloads. Every cluster that right-sizes its workloads wastes less energy and needs fewer resources to do the same job. By keeping this tool free and open source, we hope to make it easy for any organization to reduce waste and do its part to preserve the planet.</p>
 <hr />
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <p>k8s-sustain continuously observes CPU and memory usage through Prometheus recording rules and produces per-container recommendations at a configurable percentile. It then applies those recommendations in one of two modes:</p>
