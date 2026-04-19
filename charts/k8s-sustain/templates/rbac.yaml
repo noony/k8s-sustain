@@ -28,8 +28,8 @@ rules:
     verbs: [get, list, watch]
   # Workloads — batch (webhook handles CronJob pods at creation time)
   - apiGroups: [batch]
-    resources: [jobs]
-    verbs: [get]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
   # Namespaces and Pods (in-place updates)
   - apiGroups: [""]
     resources: [namespaces]

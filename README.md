@@ -25,17 +25,9 @@ metadata:
     k8s.sustain.io/policy: my-policy
 ```
 
-## Quick start
+## Dashboard
 
-```bash
-helm repo add k8s-sustain https://noony.github.io/k8s-sustain
-helm repo update
-helm install k8s-sustain k8s-sustain/k8s-sustain \
-  --namespace k8s-sustain \
-  --create-namespace
-```
-
-Then create a `Policy` and annotate your workloads. See the [Quick Start guide](https://noony.github.io/k8s-sustain/getting-started/quick-start/) for a full walkthrough.
+![Workload resizing dashboard](docs/assets/dashboard-workload-resizing.png)
 
 ## Documentation
 

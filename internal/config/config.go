@@ -72,7 +72,7 @@ func BindControllerFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool("leader-elect", false, "Enable leader election for high availability")
 	cmd.Flags().String("zap-log-level", "info", "Log level (debug, info, warn, error)")
 	cmd.Flags().String("prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
-	cmd.Flags().Duration("reconcile-interval", 10*time.Minute, "How often policies are re-evaluated")
+	cmd.Flags().Duration("reconcile-interval", 10*time.Second, "How often policies are re-evaluated")
 	cmd.Flags().StringSlice("excluded-namespaces", nil, "Namespaces the reconciler should never touch")
 
 	_ = viper.BindPFlag("metrics-bind-address", cmd.Flags().Lookup("metrics-bind-address"))
