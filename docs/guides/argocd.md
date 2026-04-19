@@ -1,6 +1,6 @@
 # Argo CD Integration
 
-k8s-sustain **never patches workload specs** (Deployments, StatefulSets, etc.) — it only mutates Pods at admission time via the webhook and recycles stale pods via eviction or in-place patching. Because the workload spec in the cluster always matches what is stored in Git, **no `ignoreDifferences` configuration is needed**.
+k8s-sustain **never patches workload specs** (Deployments, StatefulSets, etc.) — it only mutates Pods at admission time via the webhook and recycles stale pods via PDB-respecting eviction or in-place patching. Because the workload spec in the cluster always matches what is stored in Git, **no `ignoreDifferences` configuration is needed**.
 
 ## Why no special configuration?
 

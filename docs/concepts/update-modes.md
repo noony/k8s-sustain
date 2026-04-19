@@ -68,7 +68,7 @@ See [In-Place Updates](in-place-updates.md) for details.
 - Situations where you want resources to track actual usage over time
 - Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.31)
 
-**Note:** The controller never patches workload templates (Deployment, StatefulSet, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s < 1.31), pods are replaced via eviction, which causes pod restarts.
+**Note:** The controller never patches workload templates (Deployment, StatefulSet, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s < 1.31), pods are replaced via PDB-respecting eviction, which causes pod restarts.
 
 ---
 

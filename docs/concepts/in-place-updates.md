@@ -21,7 +21,7 @@ Pods that are terminating or not in `Running` phase are skipped.
 
 ## Automatic fallback
 
-If the API server rejects an in-place pod patch (e.g. the `InPlacePodVerticalScaling` feature gate is disabled), the operator automatically falls back to eviction-based updates for the rest of the reconcile cycle. No manual intervention is needed.
+If the API server rejects an in-place pod patch (e.g. the `InPlacePodVerticalScaling` feature gate is disabled), the operator automatically falls back to PDB-respecting eviction-based updates for the rest of the reconcile cycle. No manual intervention is needed.
 
 ## Cluster version detection
 

@@ -14,7 +14,7 @@ Over-provisioned clusters are one of the largest hidden sources of cloud waste: 
 
 k8s-sustain watches `Policy` objects and applies percentile-based resource recommendations to opted-in workloads. Two independent components handle updates:
 
-- **Controller** — periodically patches workload templates (Deployments, StatefulSets, DaemonSets, CronJobs); uses in-place pod updates on k8s ≥ 1.27
+- **Controller** — periodically reconciles Policy objects and recycles stale pods; uses in-place pod updates on k8s ≥ 1.31, PDB-respecting eviction otherwise
 - **Admission webhook** — injects resources at pod creation time, before scheduling
 
 Workloads opt in with a single annotation:
