@@ -1219,7 +1219,7 @@ async function renderWorkloadDetail(params) {
   try {
     var results = await Promise.all([
       api('/api/workloads/' + namespace + '/' + kind + '/' + name + '/metrics?window=' + window + '&step=' + step),
-      api('/api/workloads/' + namespace + '/' + kind + '/' + name + '/recommendations'),
+      api('/api/workloads/' + namespace + '/' + kind + '/' + name + '/recommendations?window=' + window + '&step=' + step),
     ]);
     var metrics = results[0], recs = results[1];
 
@@ -1278,8 +1278,9 @@ async function renderWorkloadDetail(params) {
           ' Open in Simulator</button></div>';
 
     // Render charts
+    var cpuRecSeries = recs.cpuRecommendations || {};
+    var memRecSeries = recs.memoryRecommendations || {};
     containers.forEach(function(cname) {
-      var rec = recContainers[cname] || {};
       var res = resources[cname] || {};
       if (metrics.cpu && metrics.cpu[cname]) {
         var cpuAnnotations = [];
@@ -1290,11 +1291,12 @@ async function renderWorkloadDetail(params) {
           cpuAnnotations.push({ value: parseCPUQuantity(res.cpuRequest), label: 'Request: ' + res.cpuRequest, color: '#f59e0b', dash: [4, 4] });
         }
         if (res.cpuLimit) cpuAnnotations.push({ value: parseCPUQuantity(res.cpuLimit), label: 'Limit: ' + res.cpuLimit, color: '#f97316', dash: [2, 2] });
+        if (recs.automated && cpuRecSeries[cname] && cpuRecSeries[cname].length) {
+          cpuExtra.push({ data: cpuRecSeries[cname], label: 'Recommendation', color: '#ef4444', dash: [8, 4], stepped: false });
+        }
         createTimeSeriesChart('cpu-' + cname, metrics.cpu[cname], {
           label: 'CPU Usage', color: '#6366f1', unit: 'cores',
           yFormat: function(v) { return v.toFixed(3); },
-          annotationValue: recs.automated ? parseCPUQuantity(rec.cpuRequest) : null,
-          annotationLabel: rec.cpuRequest ? 'Recommendation: ' + rec.cpuRequest : undefined,
           annotations: cpuAnnotations,
           extraSeries: cpuExtra,
         });
@@ -1308,12 +1310,13 @@ async function renderWorkloadDetail(params) {
           memAnnotations.push({ value: parseMemoryQuantity(res.memoryRequest), label: 'Request: ' + res.memoryRequest, color: '#f59e0b', dash: [4, 4] });
         }
         if (res.memoryLimit) memAnnotations.push({ value: parseMemoryQuantity(res.memoryLimit), label: 'Limit: ' + res.memoryLimit, color: '#f97316', dash: [2, 2] });
+        if (recs.automated && memRecSeries[cname] && memRecSeries[cname].length) {
+          memExtra.push({ data: memRecSeries[cname], label: 'Recommendation', color: '#ef4444', dash: [8, 4], stepped: false });
+        }
         createTimeSeriesChart('mem-' + cname, metrics.memory[cname], {
           label: 'Memory Usage', color: '#06b6d4', unit: 'MiB',
           transform: function(v) { return v / (1024 * 1024); },
           yFormat: function(v) { return v.toFixed(0); },
-          annotationValue: recs.automated ? parseMemoryQuantity(rec.memoryRequest) : null,
-          annotationLabel: rec.memoryRequest ? 'Recommendation: ' + rec.memoryRequest : undefined,
           annotations: memAnnotations,
           extraSeries: memExtra,
           oomEvents: oomByContainer[cname] || [],
@@ -1419,25 +1422,79 @@ async function renderWorkloadMetrics(params) {
 }
 
 // ---- Simulator ----
-function buildSimWindowSelector(selectedWindow) {
+function buildSimWindowSelector(id, selectedWindow) {
   return '<div class="time-range-group">' +
     timeRangeOptions.map(function(opt) {
-      return '<button type="button"' + (opt.window === selectedWindow ? ' class="active"' : '') +
-        ' onclick="selectSimWindow(this,\'' + opt.window + '\')">' + opt.label + '</button>';
+      return '<button type="button" data-window="' + opt.window + '"' + (opt.window === selectedWindow ? ' class="active"' : '') +
+        ' onclick="selectSimWindow(\'' + id + '\',this,\'' + opt.window + '\')">' + opt.label + '</button>';
     }).join('') + '</div>' +
-    '<input type="hidden" id="sim-window" value="' + selectedWindow + '">';
+    '<input type="hidden" id="' + id + '" value="' + selectedWindow + '">';
 }
-function selectSimWindow(btn, window) {
-  document.getElementById('sim-window').value = window;
-  var btns = btn.parentElement.querySelectorAll('button');
-  btns.forEach(function(b) { b.classList.remove('active'); });
-  btn.classList.add('active');
+function selectSimWindow(id, btn, win) {
+  document.getElementById(id).value = win;
+  var container = btn ? btn.parentElement : document.getElementById(id).parentElement.querySelector('.time-range-group');
+  if (container) {
+    container.querySelectorAll('button').forEach(function(b) {
+      b.classList.toggle('active', b.getAttribute('data-window') === win);
+    });
+  }
 }
 
-function renderSimulator(prefill) {
+async function loadPolicyIntoSimulator(policyName) {
+  if (!policyName) return;
+  try {
+    var policy = await api('/api/policies/' + encodeURIComponent(policyName));
+    var rs = (policy.spec && policy.spec.rightSizing && policy.spec.rightSizing.resourcesConfigs) || {};
+    var cpuCfg = rs.cpu || {};
+    var memCfg = rs.memory || {};
+    var cpuReq = cpuCfg.requests || {};
+    var memReq = memCfg.requests || {};
+
+    // CPU fields
+    var cpuPct = cpuReq.percentile || 95;
+    document.getElementById('sim-cpu-pct').value = cpuPct;
+    document.getElementById('sim-cpu-pct-val').textContent = cpuPct + '%';
+    var cpuHr = cpuReq.headroom || 0;
+    document.getElementById('sim-cpu-hr').value = cpuHr;
+    document.getElementById('sim-cpu-hr-val').textContent = cpuHr + '%';
+    document.getElementById('sim-cpu-min').value = cpuReq.minAllowed || '';
+    document.getElementById('sim-cpu-max').value = cpuReq.maxAllowed || '';
+
+    // Memory fields
+    var memPct = memReq.percentile || 95;
+    document.getElementById('sim-mem-pct').value = memPct;
+    document.getElementById('sim-mem-pct-val').textContent = memPct + '%';
+    var memHr = memReq.headroom || 0;
+    document.getElementById('sim-mem-hr').value = memHr;
+    document.getElementById('sim-mem-hr-val').textContent = memHr + '%';
+    document.getElementById('sim-mem-min').value = memReq.minAllowed || '';
+    document.getElementById('sim-mem-max').value = memReq.maxAllowed || '';
+
+    // Per-resource windows
+    var cpuWin = cpuCfg.window || '';
+    if (cpuWin) { selectSimWindow('sim-cpu-window', null, cpuWin); }
+    var memWin = memCfg.window || '';
+    if (memWin) { selectSimWindow('sim-mem-window', null, memWin); }
+  } catch (err) {
+    console.error('Failed to load policy:', err);
+  }
+}
+
+async function renderSimulator(prefill) {
   var pf = prefill || {};
   var content = document.getElementById('content');
   destroyCharts();
+
+  // Ensure policy list is loaded for the dropdown
+  if (!policyCache || policyCache.length === 0) {
+    try { policyCache = await api('/api/policies'); } catch(e) { policyCache = []; }
+  }
+
+  // Build policy dropdown options from cache
+  var policyOptions = '<option value="">-- Select a policy --</option>';
+  (policyCache || []).forEach(function(p) {
+    policyOptions += '<option value="' + p.name + '">' + p.name + '</option>';
+  });
 
   content.innerHTML =
     '<div class="page-header"><h1>Policy Simulator</h1>' +
@@ -1452,16 +1509,25 @@ function renderSimulator(prefill) {
           '<option value="CronJob"' + (pf.kind==='CronJob'?' selected':'') + '>CronJob</option>' +
         '</select></div>' +
         '<div class="form-group"><label>Name</label><input id="sim-name" type="text" placeholder="my-app" value="' + (pf.name || '') + '"></div>' +
-        '<div class="form-group"><label>Window</label>' + buildSimWindowSelector(pf.window || defaultTimeRange) + '</div>' +
+        '<div class="form-group"><label>Time range</label>' + buildSimWindowSelector('sim-time-range', pf.window || defaultTimeRange) + '</div>' +
       '</div></div>' +
+    '<div class="card" style="margin-bottom:0"><div class="card-header" style="display:flex;align-items:center;justify-content:space-between">' +
+      '<h2>Configuration</h2>' +
+      '<div class="form-group" style="margin:0;display:flex;align-items:center;gap:8px">' +
+        '<label style="margin:0;white-space:nowrap;font-size:12px">Load from policy</label>' +
+        '<select id="sim-policy-select" style="min-width:160px" onchange="loadPolicyIntoSimulator(this.value)">' + policyOptions + '</select>' +
+      '</div>' +
+    '</div></div>' +
     '<div class="sim-grid">' +
-      '<div class="card sim-section"><h3><span style="color:var(--accent-light)">CPU</span> Configuration</h3>' +
+      '<div class="card sim-section" style="border-top-left-radius:0;border-top-right-radius:0"><h3><span style="color:var(--accent-light)">CPU</span> Configuration</h3>' +
+        '<div class="form-group"><label>Window</label>' + buildSimWindowSelector('sim-cpu-window', pf.window || defaultTimeRange) + '</div>' +
         '<div class="form-group"><label>Percentile</label><div class="slider-row"><input type="range" id="sim-cpu-pct" min="50" max="99" value="95" oninput="document.getElementById(\'sim-cpu-pct-val\').textContent=this.value+\'%\'"><span class="slider-value" id="sim-cpu-pct-val">95%</span></div></div>' +
         '<div class="form-group"><label>Headroom</label><div class="slider-row"><input type="range" id="sim-cpu-hr" min="0" max="100" value="0" oninput="document.getElementById(\'sim-cpu-hr-val\').textContent=this.value+\'%\'"><span class="slider-value" id="sim-cpu-hr-val">0%</span></div></div>' +
         '<div class="form-group"><label>Min Allowed</label><input type="text" id="sim-cpu-min" placeholder="e.g. 50m"></div>' +
         '<div class="form-group"><label>Max Allowed</label><input type="text" id="sim-cpu-max" placeholder="e.g. 4000m"></div>' +
       '</div>' +
-      '<div class="card sim-section"><h3><span style="color:var(--cyan)">Memory</span> Configuration</h3>' +
+      '<div class="card sim-section" style="border-top-left-radius:0;border-top-right-radius:0"><h3><span style="color:var(--cyan)">Memory</span> Configuration</h3>' +
+        '<div class="form-group"><label>Window</label>' + buildSimWindowSelector('sim-mem-window', pf.window || defaultTimeRange) + '</div>' +
         '<div class="form-group"><label>Percentile</label><div class="slider-row"><input type="range" id="sim-mem-pct" min="50" max="99" value="95" oninput="document.getElementById(\'sim-mem-pct-val\').textContent=this.value+\'%\'"><span class="slider-value" id="sim-mem-pct-val">95%</span></div></div>' +
         '<div class="form-group"><label>Headroom</label><div class="slider-row"><input type="range" id="sim-mem-hr" min="0" max="100" value="0" oninput="document.getElementById(\'sim-mem-hr-val\').textContent=this.value+\'%\'"><span class="slider-value" id="sim-mem-hr-val">0%</span></div></div>' +
         '<div class="form-group"><label>Min Allowed</label><input type="text" id="sim-mem-min" placeholder="e.g. 64Mi"></div>' +
@@ -1492,11 +1558,15 @@ async function runSimulation() {
   var memPct = parseInt(document.getElementById('sim-mem-pct').value);
   var memHr = parseInt(document.getElementById('sim-mem-hr').value);
 
+  var timeRange = document.getElementById('sim-time-range').value;
+  var cpuWindow = document.getElementById('sim-cpu-window').value;
+  var memWindow = document.getElementById('sim-mem-window').value;
+
   var body = {
     namespace: ns, ownerKind: document.getElementById('sim-kind').value, ownerName: ownerName,
-    window: document.getElementById('sim-window').value, step: getTimeRangeStep(document.getElementById('sim-window').value),
-    cpu: { percentile: cpuPct, headroom: cpuHr },
-    memory: { percentile: memPct, headroom: memHr }
+    window: timeRange, step: getTimeRangeStep(timeRange),
+    cpu: { percentile: cpuPct, headroom: cpuHr, window: cpuWindow },
+    memory: { percentile: memPct, headroom: memHr, window: memWindow }
   };
 
   var cpuMin = document.getElementById('sim-cpu-min').value;
@@ -1554,6 +1624,8 @@ async function runSimulation() {
     var simResources = data.resources || {};
     var simCpuReq = data.cpuRequests || {};
     var simMemReq = data.memoryRequests || {};
+    var simCpuRec = data.cpuRecommendations || {};
+    var simMemRec = data.memoryRecommendations || {};
     containers.forEach(function(cname) {
       var rec = data.containers[cname];
       var res = simResources[cname] || {};
@@ -1566,11 +1638,12 @@ async function runSimulation() {
           cpuAnnotations.push({ value: parseCPUQuantity(res.cpuRequest), label: 'Request: ' + res.cpuRequest, color: '#f59e0b', dash: [4, 4] });
         }
         if (res.cpuLimit) cpuAnnotations.push({ value: parseCPUQuantity(res.cpuLimit), label: 'Limit: ' + res.cpuLimit, color: '#f97316', dash: [2, 2] });
+        if (simCpuRec[cname] && simCpuRec[cname].length) {
+          cpuExtra.push({ data: simCpuRec[cname], label: 'Recommendation', color: '#ef4444', dash: [8, 4], stepped: false });
+        }
         createTimeSeriesChart('simcpu-' + cname, data.cpuSeries[cname], {
           label: 'CPU Usage', color: '#6366f1', unit: 'cores',
           yFormat: function(v) { return v.toFixed(3); },
-          annotationValue: parseCPUQuantity(rec.cpuRequest),
-          annotationLabel: 'Recommendation: ' + rec.cpuRequest,
           annotations: cpuAnnotations,
           extraSeries: cpuExtra,
         });
@@ -1584,12 +1657,13 @@ async function runSimulation() {
           memAnnotations.push({ value: parseMemoryQuantity(res.memoryRequest), label: 'Request: ' + res.memoryRequest, color: '#f59e0b', dash: [4, 4] });
         }
         if (res.memoryLimit) memAnnotations.push({ value: parseMemoryQuantity(res.memoryLimit), label: 'Limit: ' + res.memoryLimit, color: '#f97316', dash: [2, 2] });
+        if (simMemRec[cname] && simMemRec[cname].length) {
+          memExtra.push({ data: simMemRec[cname], label: 'Recommendation', color: '#ef4444', dash: [8, 4], stepped: false });
+        }
         createTimeSeriesChart('simmem-' + cname, data.memorySeries[cname], {
           label: 'Memory Usage', color: '#06b6d4', unit: 'MiB',
           transform: function(v) { return v / (1024 * 1024); },
           yFormat: function(v) { return v.toFixed(0); },
-          annotationValue: parseMemoryQuantity(rec.memoryRequest),
-          annotationLabel: 'Recommendation: ' + rec.memoryRequest,
           annotations: memAnnotations,
           extraSeries: memExtra,
         });
@@ -1738,12 +1812,13 @@ function createTimeSeriesChart(canvasId, points, opts) {
   (opts.extraSeries || []).forEach(function(s) {
     if (!s.data || !s.data.length) return;
     var seriesData = s.data.map(function(p) { return { x: new Date(p.timestamp), y: transform(p.value) }; });
-    datasets.push({
+    var ds = {
       label: s.label, data: seriesData,
       borderColor: s.color || '#f59e0b', borderWidth: 1.5,
       borderDash: s.dash || [4, 4], pointRadius: 0, fill: false,
-      stepped: 'before',
-    });
+    };
+    if (s.stepped !== false) ds.stepped = 'before';
+    datasets.push(ds);
   });
 
   var annotations = (opts.annotations || []).slice();

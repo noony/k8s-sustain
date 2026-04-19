@@ -106,6 +106,26 @@ func (c *Client) QueryMemoryRequestRangeByContainer(ctx context.Context, namespa
 	return c.queryRangeByContainer(ctx, expr, window, step)
 }
 
+// QueryCPURecommendationRangeByContainer returns per-container sliding-window CPU recommendation
+// time-series (cores) — at each step, the quantile is computed over the trailing window.
+func (c *Client) QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (ContainerTimeSeries, error) {
+	expr := fmt.Sprintf(
+		`avg by (container) (quantile_over_time(%.2f, k8s_sustain:container_cpu_usage_by_workload:rate5m{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
+		quantile, namespace, ownerKind, ownerName, recWindow,
+	)
+	return c.queryRangeByContainer(ctx, expr, timeRange, step)
+}
+
+// QueryMemoryRecommendationRangeByContainer returns per-container sliding-window memory recommendation
+// time-series (bytes) — at each step, the quantile is computed over the trailing window.
+func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (ContainerTimeSeries, error) {
+	expr := fmt.Sprintf(
+		`avg by (container) (quantile_over_time(%.2f, k8s_sustain:container_memory_by_workload:bytes{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
+		quantile, namespace, ownerKind, ownerName, recWindow,
+	)
+	return c.queryRangeByContainer(ctx, expr, timeRange, step)
+}
+
 // OOMEvent represents a single OOM kill event for a container.
 type OOMEvent struct {
 	Timestamp time.Time `json:"timestamp"`

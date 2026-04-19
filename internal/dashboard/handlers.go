@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 // ---- Policy types ----
@@ -571,9 +572,11 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 // ---- Workload recommendations ----
 
 type recommendationResult struct {
-	Automated  bool                                 `json:"automated"`
-	PolicyName string                               `json:"policyName,omitempty"`
-	Containers map[string]simulationContainerResult `json:"containers,omitempty"`
+	Automated          bool                                 `json:"automated"`
+	PolicyName         string                               `json:"policyName,omitempty"`
+	Containers         map[string]simulationContainerResult `json:"containers,omitempty"`
+	CPURecommendations promclient.ContainerTimeSeries       `json:"cpuRecommendations,omitempty"`
+	MemRecommendations promclient.ContainerTimeSeries       `json:"memoryRecommendations,omitempty"`
 }
 
 func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
@@ -603,24 +606,41 @@ func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Re
 	cpuCfg := policy.Spec.RightSizing.ResourcesConfigs.CPU
 	memCfg := policy.Spec.RightSizing.ResourcesConfigs.Memory
 
-	window := cpuCfg.Window
-	if window == "" {
-		window = "168h"
+	cpuWindow := cpuCfg.Window
+	if cpuWindow == "" {
+		cpuWindow = "168h"
+	}
+
+	memWindow := memCfg.Window
+	if memWindow == "" {
+		memWindow = "168h"
+	}
+
+	// Chart time range from query params (defaults to CPU window for backward compat)
+	chartTimeRange := r.URL.Query().Get("window")
+	if chartTimeRange == "" {
+		chartTimeRange = cpuWindow
+	}
+	step := r.URL.Query().Get("step")
+	if step == "" {
+		step = "5m"
 	}
 
 	req := simulateRequest{
 		Namespace: namespace,
 		OwnerKind: kind,
 		OwnerName: name,
-		Window:    window,
-		Step:      "5m",
+		Window:    chartTimeRange,
+		Step:      step,
 		CPU: simulateResourceConfig{
 			Percentile: cpuCfg.Requests.Percentile,
 			Headroom:   cpuCfg.Requests.Headroom,
+			Window:     cpuWindow,
 		},
 		Memory: simulateResourceConfig{
 			Percentile: memCfg.Requests.Percentile,
 			Headroom:   memCfg.Requests.Headroom,
+			Window:     memWindow,
 		},
 	}
 	if cpuCfg.Requests.MinAllowed != nil {
@@ -647,9 +667,11 @@ func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Re
 	}
 
 	writeJSON(w, http.StatusOK, recommendationResult{
-		Automated:  true,
-		PolicyName: policyName,
-		Containers: result.Containers,
+		Automated:          true,
+		PolicyName:         policyName,
+		Containers:         result.Containers,
+		CPURecommendations: result.CPURecommendations,
+		MemRecommendations: result.MemRecommendations,
 	})
 }
 
@@ -845,6 +867,7 @@ type simulateResourceConfig struct {
 	Headroom   *int32  `json:"headroom,omitempty"`
 	MinAllowed           *string `json:"minAllowed,omitempty"`
 	MaxAllowed           *string `json:"maxAllowed,omitempty"`
+	Window               string  `json:"window,omitempty"`
 }
 
 type simulateContainerResult struct {

@@ -102,7 +102,7 @@ Shows a comprehensive view of a single workload:
 
 - **Automation status** — Whether the workload is managed by a policy, with a link to the policy
 - **Recommendations** — If automated, shows the computed CPU and memory recommendations per container
-- **CPU and Memory charts** — Interactive time-series with recommendation lines overlaid (for automated workloads)
+- **CPU and Memory charts** — Interactive time-series with a sliding-window recommendation line overlaid (for automated workloads). The recommendation evolves over time, showing how it would have been computed at each point using the policy's configured window and parameters, rather than a flat line.
 - **Open in Simulator** — Jump to the simulator with the workload pre-filled
 
 A **time range selector** in the top-right lets you choose how much history to display: 1h, 4h, 12h, 1 day, 3 days, 7 days (default), or 30 days. The step resolution adjusts automatically for each range. You can also **drag to zoom** on any chart to focus on a specific time window — click and drag horizontally to select the region of interest. Zooming on a CPU chart automatically applies the same time range to the corresponding memory chart, and vice versa. A **Reset zoom** button appears in the top-right corner of each chart to return to the original view (resetting one also resets its paired chart). Panning is supported after zooming, and pinch-to-zoom works on touch devices. Each chart overlays the workload's **historical resource request** (amber dashed stepped line) and **limit** (orange dashed line) so you can see how actual usage compares to configured resources over time. The request line reflects real changes (e.g. from k8s-sustain patching or manual edits) rather than a flat snapshot. If historical request data is not available in Prometheus, the dashboard falls back to a static line from the current workload spec. If the workload is automated, the **recommendation** line (red dashed) is also shown.
@@ -116,8 +116,10 @@ Enable **Auto-refresh** to keep data current.
 The simulator lets you test "what-if" scenarios:
 
 1. Select a **workload target** (namespace, kind, name) — both fields are required
-2. Choose a **time window** (24h to 30 days)
-3. Adjust **CPU and Memory parameters**:
+2. Choose a **time range** (1h to 30 days) — controls how much history is displayed on the charts
+3. Optionally, use the **Load from policy** dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window) from an existing policy — useful as a starting point before tweaking values
+4. Adjust **CPU and Memory parameters** independently:
+    - Window (1h to 30 days) — the lookback period used to compute the recommendation, matching the policy CRD structure. This is independent of the chart time range.
     - Percentile (50th to 99th)
     - Headroom percentage (0-100%)
     - Min/Max allowed values
@@ -126,7 +128,7 @@ The simulator lets you test "what-if" scenarios:
 The results show:
 
 - Computed recommendation per container (CPU request, memory request)
-- Time-series charts with the **recommendation line** (red), **historical request** (amber stepped), and **current limit** (orange) overlaid on historical usage, making it easy to compare recommendations against both actual consumption and how resource requests evolved over time
+- Time-series charts with a **sliding-window recommendation line** (red) that shows how the recommendation would have evolved at each point in time, **historical request** (amber stepped), and **current limit** (orange) overlaid on historical usage, making it easy to compare recommendations against both actual consumption and how resource requests evolved over time
 
 #### Exporting Results
 
