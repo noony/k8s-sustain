@@ -123,7 +123,8 @@ The simulator lets you test "what-if" scenarios:
     - Percentile (50th to 99th)
     - Headroom percentage (0-100%)
     - Min/Max allowed values
-4. Click **Run Simulation**
+
+The simulation runs automatically whenever any parameter changes (with a short debounce to avoid excessive queries). There is no manual "Run" button — results update live as you adjust sliders, change windows, or modify min/max values.
 
 The results show:
 

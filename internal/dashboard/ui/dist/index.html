@@ -1430,7 +1430,7 @@ function buildSimWindowSelector(id, selectedWindow) {
     }).join('') + '</div>' +
     '<input type="hidden" id="' + id + '" value="' + selectedWindow + '">';
 }
-function selectSimWindow(id, btn, win) {
+function selectSimWindow(id, btn, win, skipSim) {
   document.getElementById(id).value = win;
   var container = btn ? btn.parentElement : document.getElementById(id).parentElement.querySelector('.time-range-group');
   if (container) {
@@ -1438,6 +1438,13 @@ function selectSimWindow(id, btn, win) {
       b.classList.toggle('active', b.getAttribute('data-window') === win);
     });
   }
+  if (!skipSim) scheduleSimulation();
+}
+
+var _simDebounceTimer = null;
+function scheduleSimulation() {
+  clearTimeout(_simDebounceTimer);
+  _simDebounceTimer = setTimeout(runSimulation, 400);
 }
 
 async function loadPolicyIntoSimulator(policyName) {
@@ -1475,6 +1482,8 @@ async function loadPolicyIntoSimulator(policyName) {
     if (cpuWin) { selectSimWindow('sim-cpu-window', null, cpuWin); }
     var memWin = memCfg.window || '';
     if (memWin) { selectSimWindow('sim-mem-window', null, memWin); }
+
+    scheduleSimulation();
   } catch (err) {
     console.error('Failed to load policy:', err);
   }
@@ -1501,14 +1510,14 @@ async function renderSimulator(prefill) {
       '<p>Simulate policy parameter changes and preview their effect on historical metrics</p></div>' +
     '<div class="card"><div class="card-header"><h2>Workload Target</h2></div>' +
       '<div class="workload-selector">' +
-        '<div class="form-group"><label>Namespace</label><input id="sim-ns" type="text" placeholder="default" value="' + (pf.namespace || '') + '"></div>' +
-        '<div class="form-group"><label>Kind</label><select id="sim-kind">' +
+        '<div class="form-group"><label>Namespace</label><input id="sim-ns" type="text" placeholder="default" value="' + (pf.namespace || '') + '" oninput="scheduleSimulation()"></div>' +
+        '<div class="form-group"><label>Kind</label><select id="sim-kind" onchange="scheduleSimulation()">' +
           '<option value="Deployment"' + (pf.kind==='Deployment'?' selected':'') + '>Deployment</option>' +
           '<option value="StatefulSet"' + (pf.kind==='StatefulSet'?' selected':'') + '>StatefulSet</option>' +
           '<option value="DaemonSet"' + (pf.kind==='DaemonSet'?' selected':'') + '>DaemonSet</option>' +
           '<option value="CronJob"' + (pf.kind==='CronJob'?' selected':'') + '>CronJob</option>' +
         '</select></div>' +
-        '<div class="form-group"><label>Name</label><input id="sim-name" type="text" placeholder="my-app" value="' + (pf.name || '') + '"></div>' +
+        '<div class="form-group"><label>Name</label><input id="sim-name" type="text" placeholder="my-app" value="' + (pf.name || '') + '" oninput="scheduleSimulation()"></div>' +
         '<div class="form-group"><label>Time range</label>' + buildSimWindowSelector('sim-time-range', pf.window || defaultTimeRange) + '</div>' +
       '</div></div>' +
     '<div class="card" style="margin-bottom:0"><div class="card-header" style="display:flex;align-items:center;justify-content:space-between">' +
@@ -1521,37 +1530,40 @@ async function renderSimulator(prefill) {
     '<div class="sim-grid">' +
       '<div class="card sim-section" style="border-top-left-radius:0;border-top-right-radius:0"><h3><span style="color:var(--accent-light)">CPU</span> Configuration</h3>' +
         '<div class="form-group"><label>Window</label>' + buildSimWindowSelector('sim-cpu-window', pf.window || defaultTimeRange) + '</div>' +
-        '<div class="form-group"><label>Percentile</label><div class="slider-row"><input type="range" id="sim-cpu-pct" min="50" max="99" value="95" oninput="document.getElementById(\'sim-cpu-pct-val\').textContent=this.value+\'%\'"><span class="slider-value" id="sim-cpu-pct-val">95%</span></div></div>' +
-        '<div class="form-group"><label>Headroom</label><div class="slider-row"><input type="range" id="sim-cpu-hr" min="0" max="100" value="0" oninput="document.getElementById(\'sim-cpu-hr-val\').textContent=this.value+\'%\'"><span class="slider-value" id="sim-cpu-hr-val">0%</span></div></div>' +
-        '<div class="form-group"><label>Min Allowed</label><input type="text" id="sim-cpu-min" placeholder="e.g. 50m"></div>' +
-        '<div class="form-group"><label>Max Allowed</label><input type="text" id="sim-cpu-max" placeholder="e.g. 4000m"></div>' +
+        '<div class="form-group"><label>Percentile</label><div class="slider-row"><input type="range" id="sim-cpu-pct" min="50" max="99" value="95" oninput="document.getElementById(\'sim-cpu-pct-val\').textContent=this.value+\'%\';scheduleSimulation()"><span class="slider-value" id="sim-cpu-pct-val">95%</span></div></div>' +
+        '<div class="form-group"><label>Headroom</label><div class="slider-row"><input type="range" id="sim-cpu-hr" min="0" max="100" value="0" oninput="document.getElementById(\'sim-cpu-hr-val\').textContent=this.value+\'%\';scheduleSimulation()"><span class="slider-value" id="sim-cpu-hr-val">0%</span></div></div>' +
+        '<div class="form-group"><label>Min Allowed</label><input type="text" id="sim-cpu-min" placeholder="e.g. 50m" oninput="scheduleSimulation()"></div>' +
+        '<div class="form-group"><label>Max Allowed</label><input type="text" id="sim-cpu-max" placeholder="e.g. 4000m" oninput="scheduleSimulation()"></div>' +
       '</div>' +
       '<div class="card sim-section" style="border-top-left-radius:0;border-top-right-radius:0"><h3><span style="color:var(--cyan)">Memory</span> Configuration</h3>' +
         '<div class="form-group"><label>Window</label>' + buildSimWindowSelector('sim-mem-window', pf.window || defaultTimeRange) + '</div>' +
-        '<div class="form-group"><label>Percentile</label><div class="slider-row"><input type="range" id="sim-mem-pct" min="50" max="99" value="95" oninput="document.getElementById(\'sim-mem-pct-val\').textContent=this.value+\'%\'"><span class="slider-value" id="sim-mem-pct-val">95%</span></div></div>' +
-        '<div class="form-group"><label>Headroom</label><div class="slider-row"><input type="range" id="sim-mem-hr" min="0" max="100" value="0" oninput="document.getElementById(\'sim-mem-hr-val\').textContent=this.value+\'%\'"><span class="slider-value" id="sim-mem-hr-val">0%</span></div></div>' +
-        '<div class="form-group"><label>Min Allowed</label><input type="text" id="sim-mem-min" placeholder="e.g. 64Mi"></div>' +
-        '<div class="form-group"><label>Max Allowed</label><input type="text" id="sim-mem-max" placeholder="e.g. 8Gi"></div>' +
+        '<div class="form-group"><label>Percentile</label><div class="slider-row"><input type="range" id="sim-mem-pct" min="50" max="99" value="95" oninput="document.getElementById(\'sim-mem-pct-val\').textContent=this.value+\'%\';scheduleSimulation()"><span class="slider-value" id="sim-mem-pct-val">95%</span></div></div>' +
+        '<div class="form-group"><label>Headroom</label><div class="slider-row"><input type="range" id="sim-mem-hr" min="0" max="100" value="0" oninput="document.getElementById(\'sim-mem-hr-val\').textContent=this.value+\'%\';scheduleSimulation()"><span class="slider-value" id="sim-mem-hr-val">0%</span></div></div>' +
+        '<div class="form-group"><label>Min Allowed</label><input type="text" id="sim-mem-min" placeholder="e.g. 64Mi" oninput="scheduleSimulation()"></div>' +
+        '<div class="form-group"><label>Max Allowed</label><input type="text" id="sim-mem-max" placeholder="e.g. 8Gi" oninput="scheduleSimulation()"></div>' +
       '</div></div>' +
-    '<div style="margin:20px 0; display:flex; gap:12px">' +
-      '<button class="btn btn-primary" onclick="runSimulation()">' +
-        '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> Run Simulation</button></div>' +
     '<div id="sim-results"></div>';
 
   if (pf.namespace && pf.name) {
-    setTimeout(runSimulation, 300);
+    runSimulation();
   }
 }
 
+var _simRequestId = 0;
 async function runSimulation() {
   var resultsDiv = document.getElementById('sim-results');
-  resultsDiv.innerHTML = '<div class="loading"><div class="spinner"></div>Running simulation...</div>';
-  destroyCharts();
+  if (!resultsDiv) return;
 
   var ns = document.getElementById('sim-ns').value;
   var ownerName = document.getElementById('sim-name').value;
-  if (!ns) { resultsDiv.innerHTML = '<div class="card"><p style="color:var(--red)">Namespace is required.</p></div>'; return; }
-  if (!ownerName) { resultsDiv.innerHTML = '<div class="card"><p style="color:var(--red)">Workload name is required.</p></div>'; return; }
+  if (!ns || !ownerName) { resultsDiv.innerHTML = ''; destroyCharts(); return; }
+
+  var requestId = ++_simRequestId;
+
+  // Show loading only on first run (empty results), otherwise keep existing content
+  if (!resultsDiv.children.length) {
+    resultsDiv.innerHTML = '<div class="loading"><div class="spinner"></div>Running simulation...</div>';
+  }
 
   var cpuPct = parseInt(document.getElementById('sim-cpu-pct').value);
   var cpuHr = parseInt(document.getElementById('sim-cpu-hr').value);
@@ -1585,6 +1597,10 @@ async function runSimulation() {
       body: JSON.stringify(body),
     });
 
+    // Discard stale response if a newer request was fired
+    if (requestId !== _simRequestId) return;
+
+    destroyCharts();
     lastSimulationData = data;
     lastSimulationBody = body;
 
@@ -1670,7 +1686,10 @@ async function runSimulation() {
       }
     });
   } catch (err) {
-    resultsDiv.innerHTML = '<div class="card"><p style="color:var(--red)">Error: ' + err.message + '</p></div>';
+    if (requestId === _simRequestId) {
+      destroyCharts();
+      resultsDiv.innerHTML = '<div class="card"><p style="color:var(--red)">Error: ' + err.message + '</p></div>';
+    }
   }
 }
 
