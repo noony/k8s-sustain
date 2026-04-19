@@ -966,6 +966,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#overview-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#policies-page" class="md-nav__link">
     <span class="md-ellipsis">
       Policies Page
@@ -1022,6 +1031,39 @@
         
       </ul>
     </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Development
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Development">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local-development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local development
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#building" class="md-nav__link">
+    <span class="md-ellipsis">
+      Building
+    </span>
+  </a>
   
 </li>
         
@@ -1229,6 +1271,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#overview-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#policies-page" class="md-nav__link">
     <span class="md-ellipsis">
       Policies Page
@@ -1285,6 +1336,39 @@
         
       </ul>
     </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Development
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Development">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local-development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local development
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#building" class="md-nav__link">
+    <span class="md-ellipsis">
+      Building
+    </span>
+  </a>
   
 </li>
         
@@ -1419,6 +1503,14 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>svc/&lt;release&gt;-k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
 </code></pre></div>
 <h2 id="using-the-dashboard">Using the Dashboard<a class="headerlink" href="#using-the-dashboard" title="Permanent link">&para;</a></h2>
+<h3 id="overview-page">Overview Page<a class="headerlink" href="#overview-page" title="Permanent link">&para;</a></h3>
+<p>The overview page provides a cluster-wide summary of resource right-sizing:</p>
+<ul>
+<li><strong>Workload counts</strong> — Total, automated, and manual workloads</li>
+<li><strong>CPU and Memory usage vs recommendation</strong> — Aggregated across all automated workloads, showing actual Prometheus usage compared to computed recommendations with the delta percentage</li>
+<li><strong>Needs Attention table</strong> — Workloads where the CPU or memory delta between usage and recommendation exceeds 5%, sorted by the largest gap. Click any workload to view its detail page.</li>
+</ul>
+<p>The delta compares actual workload usage (at the configured percentile) against the recommendation. A negative delta means the recommendation is lower than current usage; a positive delta means the recommendation adds headroom above usage.</p>
 <h3 id="policies-page">Policies Page<a class="headerlink" href="#policies-page" title="Permanent link">&para;</a></h3>
 <p>The main page shows all <code>Policy</code> resources in your cluster with:</p>
 <ul>
@@ -1450,29 +1542,31 @@
 <ul>
 <li><strong>Automation status</strong> — Whether the workload is managed by a policy, with a link to the policy</li>
 <li><strong>Recommendations</strong> — If automated, shows the computed CPU and memory recommendations per container</li>
-<li><strong>CPU and Memory charts</strong> — Interactive time-series with recommendation lines overlaid (for automated workloads)</li>
+<li><strong>CPU and Memory charts</strong> — Interactive time-series with a sliding-window recommendation line overlaid (for automated workloads). The recommendation evolves over time, showing how it would have been computed at each point using the policy's configured window and parameters, rather than a flat line.</li>
 <li><strong>Open in Simulator</strong> — Jump to the simulator with the workload pre-filled</li>
 </ul>
-<p>A <strong>time range selector</strong> in the top-right lets you choose how much history to display: 1h, 4h, 12h, 1 day, 3 days, 7 days (default), or 30 days. The step resolution adjusts automatically for each range. Each chart overlays the workload's <strong>historical resource request</strong> (amber dashed stepped line) and <strong>limit</strong> (orange dashed line) so you can see how actual usage compares to configured resources over time. The request line reflects real changes (e.g. from k8s-sustain patching or manual edits) rather than a flat snapshot. If historical request data is not available in Prometheus, the dashboard falls back to a static line from the current workload spec. If the workload is automated, the <strong>recommendation</strong> line (red dashed) is also shown.</p>
+<p>A <strong>time range selector</strong> in the top-right lets you choose how much history to display: 1h, 4h, 12h, 1 day, 3 days, 7 days (default), or 30 days. The step resolution adjusts automatically for each range. You can also <strong>drag to zoom</strong> on any chart to focus on a specific time window — click and drag horizontally to select the region of interest. Zooming on a CPU chart automatically applies the same time range to the corresponding memory chart, and vice versa. A <strong>Reset zoom</strong> button appears in the top-right corner of each chart to return to the original view (resetting one also resets its paired chart). Panning is supported after zooming, and pinch-to-zoom works on touch devices. Each chart overlays the workload's <strong>historical resource request</strong> (amber dashed stepped line) and <strong>limit</strong> (orange dashed line) so you can see how actual usage compares to configured resources over time. The request line reflects real changes (e.g. from k8s-sustain patching or manual edits) rather than a flat snapshot. If historical request data is not available in Prometheus, the dashboard falls back to a static line from the current workload spec. If the workload is automated, the <strong>recommendation</strong> line (red dashed) is also shown.</p>
 <p>Memory charts also display <strong>OOM kill events</strong> as red vertical markers with a count badge in the chart header. These are detected via <code>kube_pod_container_status_restarts_total</code> correlated with <code>kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}</code>. If no kube-state-metrics is available, OOM markers are silently omitted.</p>
 <p>Enable <strong>Auto-refresh</strong> to keep data current.</p>
 <h3 id="policy-simulator">Policy Simulator<a class="headerlink" href="#policy-simulator" title="Permanent link">&para;</a></h3>
 <p>The simulator lets you test "what-if" scenarios:</p>
 <ol>
 <li>Select a <strong>workload target</strong> (namespace, kind, name) — both fields are required</li>
-<li>Choose a <strong>time window</strong> (24h to 30 days)</li>
-<li>Adjust <strong>CPU and Memory parameters</strong>:<ul>
+<li>Choose a <strong>time range</strong> (1h to 30 days) — controls how much history is displayed on the charts</li>
+<li>Optionally, use the <strong>Load from policy</strong> dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window) from an existing policy — useful as a starting point before tweaking values</li>
+<li>Adjust <strong>CPU and Memory parameters</strong> independently:<ul>
+<li>Window (1h to 30 days) — the lookback period used to compute the recommendation, matching the policy CRD structure. This is independent of the chart time range.</li>
 <li>Percentile (50th to 99th)</li>
 <li>Headroom percentage (0-100%)</li>
 <li>Min/Max allowed values</li>
 </ul>
 </li>
-<li>Click <strong>Run Simulation</strong></li>
 </ol>
+<p>The simulation runs automatically whenever any parameter changes (with a short debounce to avoid excessive queries). There is no manual "Run" button — results update live as you adjust sliders, change windows, or modify min/max values.</p>
 <p>The results show:</p>
 <ul>
 <li>Computed recommendation per container (CPU request, memory request)</li>
-<li>Time-series charts with the <strong>recommendation line</strong> (red), <strong>historical request</strong> (amber stepped), and <strong>current limit</strong> (orange) overlaid on historical usage, making it easy to compare recommendations against both actual consumption and how resource requests evolved over time</li>
+<li>Time-series charts with a <strong>sliding-window recommendation line</strong> (red) that shows how the recommendation would have evolved at each point in time, <strong>historical request</strong> (amber stepped), and <strong>current limit</strong> (orange) overlaid on historical usage, making it easy to compare recommendations against both actual consumption and how resource requests evolved over time</li>
 </ul>
 <h4 id="exporting-results">Exporting Results<a class="headerlink" href="#exporting-results" title="Permanent link">&para;</a></h4>
 <p>After running a simulation, use the export buttons to download recommendations:</p>
@@ -1480,6 +1574,19 @@
 <li><strong>YAML</strong> — Downloads a Kubernetes resource patch you can apply with <code>kubectl apply -f</code></li>
 <li><strong>CSV</strong> — Downloads a spreadsheet-compatible file with per-container recommendations</li>
 </ul>
+<h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">&para;</a></h2>
+<p>The dashboard frontend is a Vue 3 + TypeScript SPA built with Vite, located in <code>internal/dashboard/ui/frontend/</code>. The compiled output goes to <code>internal/dashboard/ui/dist/</code> and is embedded into the Go binary via <code>go:embed</code>.</p>
+<h3 id="local-development">Local development<a class="headerlink" href="#local-development" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">cd</span><span class="w"> </span>internal/dashboard/ui/frontend
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>npm<span class="w"> </span>install
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>npm<span class="w"> </span>run<span class="w"> </span>dev<span class="w">    </span><span class="c1"># starts Vite dev server with API proxy to localhost:8090</span>
+</code></pre></div>
+<p>Run the Go dashboard backend separately (<code>k8s-sustain dashboard --bind-address=:8090</code>), and access the Vite dev server (default <code>http://localhost:5173</code>).</p>
+<h3 id="building">Building<a class="headerlink" href="#building" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>build-ui<span class="w">   </span><span class="c1"># builds the frontend (npm ci + npm run build)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>make<span class="w"> </span>build<span class="w">      </span><span class="c1"># builds frontend then Go binary</span>
+</code></pre></div>
+<p>The Docker build automatically handles the frontend build in a separate stage.</p>
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
 <h3 id="no-metrics-data-available">"No metrics data available"<a class="headerlink" href="#no-metrics-data-available" title="Permanent link">&para;</a></h3>
 <p>This message appears when Prometheus returns no time-series data for the workload. Common causes:</p>
