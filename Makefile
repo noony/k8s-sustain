@@ -9,7 +9,10 @@ IMG ?= ghcr.io/noony/k8s-sustain:dev
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-build: ## Build binary to bin/k8s-sustain
+build-ui: ## Build dashboard frontend
+	cd internal/dashboard/ui/frontend && npm ci && npm run build
+
+build: build-ui ## Build binary to bin/k8s-sustain
 	go build -o bin/$(BINARY) ./
 
 test: ## Run all tests

@@ -23,8 +23,10 @@ type simulationResult struct {
 }
 
 type simulationContainerResult struct {
-	CPURequest    string `json:"cpuRequest"`
-	MemoryRequest string `json:"memoryRequest"`
+	CPURequest       string  `json:"cpuRequest"`
+	MemoryRequest    string  `json:"memoryRequest"`
+	CPUUsageCores    float64 `json:"cpuUsageCores,omitempty"`
+	MemoryUsageBytes float64 `json:"memoryUsageBytes,omitempty"`
 }
 
 func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simulationResult, error) {

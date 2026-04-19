@@ -23,6 +23,10 @@ charts/
 # Tests
 **/*_test.go
 
+# Frontend build artifacts (built in Docker)
+internal/dashboard/ui/frontend/node_modules/
+internal/dashboard/ui/dist/
+
 # IDE / OS
 .idea/
 .vscode/

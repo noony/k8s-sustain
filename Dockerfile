@@ -1,3 +1,10 @@
+FROM node:22-alpine AS ui-builder
+WORKDIR /workspace/internal/dashboard/ui/frontend
+COPY internal/dashboard/ui/frontend/package.json internal/dashboard/ui/frontend/package-lock.json ./
+RUN npm ci
+COPY internal/dashboard/ui/frontend/ ./
+RUN npm run build
+
 FROM golang:1.26-alpine AS builder
 WORKDIR /workspace
 
@@ -5,6 +12,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+COPY --from=ui-builder /workspace/internal/dashboard/ui/dist internal/dashboard/ui/dist
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -a -trimpath -ldflags="-s -w" -o k8s-sustain .
 

@@ -42,6 +42,9 @@ charts/k8s-sustain/charts
 # doc
 site/
 
+# Frontend
+internal/dashboard/ui/frontend/node_modules/
+
 # misc
 example1.yaml
 test-chart/

@@ -247,18 +247,19 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 			bcr := batchContainerResult{}
 			var cpuCurr, memCurr int64
 
-			if req := c.Resources.Requests; req != nil {
-				if cpu := req.Cpu(); cpu != nil && !cpu.IsZero() {
-					cpuCurr = cpu.MilliValue()
-					bcr.CurrentCPU = cpu.String()
-				}
-				if mem := req.Memory(); mem != nil && !mem.IsZero() {
-					memCurr = mem.MilliValue()
-					bcr.CurrentMemory = mem.String()
-				}
-			}
-
 			if rec, ok := r.recs[c.Name]; ok {
+				// Use actual Prometheus usage for "current" instead of k8s resource requests
+				if rec.CPUUsageCores > 0 {
+					cpuCurr = int64(rec.CPUUsageCores * 1000)
+					cpuQty := resource.NewMilliQuantity(cpuCurr, resource.DecimalSI)
+					bcr.CurrentCPU = cpuQty.String()
+				}
+				if rec.MemoryUsageBytes > 0 {
+					memCurr = int64(rec.MemoryUsageBytes) * 1000
+					memQty := resource.NewQuantity(int64(rec.MemoryUsageBytes), resource.BinarySI)
+					bcr.CurrentMemory = memQty.String()
+				}
+
 				bcr.RecommendedCPU = rec.CPURequest
 				bcr.RecommendedMemory = rec.MemoryRequest
 
@@ -332,11 +333,13 @@ func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, na
 	for n := range allContainers {
 		cr := simulationContainerResult{}
 		if cores, ok := cpuValues[n]; ok {
+			cr.CPUUsageCores = cores
 			if qty := recommender.ComputeCPURequest(cores, cpuCfg.Requests); qty != nil {
 				cr.CPURequest = qty.String()
 			}
 		}
 		if bytes, ok := memValues[n]; ok {
+			cr.MemoryUsageBytes = bytes
 			if qty := recommender.ComputeMemoryRequest(bytes, memCfg.Requests); qty != nil {
 				cr.MemoryRequest = qty.String()
 			}
@@ -484,18 +487,19 @@ func buildWorkloadSaving(wl automatedWorkload, recs map[string]simulationContain
 		cs := containerSaving{Name: c.Name}
 		var cpuCurr, memCurr int64
 
-		if req := c.Resources.Requests; req != nil {
-			if cpu := req.Cpu(); cpu != nil && !cpu.IsZero() {
-				cpuCurr = cpu.MilliValue()
-				cs.CurrentCPU = cpu.String()
-			}
-			if mem := req.Memory(); mem != nil && !mem.IsZero() {
-				memCurr = mem.MilliValue()
-				cs.CurrentMemory = mem.String()
-			}
-		}
-
 		if rec, ok := recs[c.Name]; ok {
+			// Use actual Prometheus usage for "current" instead of k8s resource requests
+			if rec.CPUUsageCores > 0 {
+				cpuCurr = int64(rec.CPUUsageCores * 1000) // cores to milliCPU
+				cpuQty := resource.NewMilliQuantity(cpuCurr, resource.DecimalSI)
+				cs.CurrentCPU = cpuQty.String()
+			}
+			if rec.MemoryUsageBytes > 0 {
+				memCurr = int64(rec.MemoryUsageBytes) * 1000 // bytes to milli-bytes for consistent units
+				memQty := resource.NewQuantity(int64(rec.MemoryUsageBytes), resource.BinarySI)
+				cs.CurrentMemory = memQty.String()
+			}
+
 			cs.RecommendedCPU = rec.CPURequest
 			cs.RecommendedMemory = rec.MemoryRequest
 

@@ -19,11 +19,49 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: internal/dashboard/ui/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: cd internal/dashboard/ui/frontend && npm ci
+
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
 
       - uses: pre-commit/action@v3.0.1
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: internal/dashboard/ui/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: internal/dashboard/ui/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
 
   test:
     runs-on: ubuntu-latest
@@ -47,6 +85,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: internal/dashboard/ui/frontend/package-lock.json
 
       - uses: actions/setup-go@v5
         with:

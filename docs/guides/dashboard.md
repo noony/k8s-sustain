@@ -64,6 +64,16 @@ kubectl port-forward svc/<release>-k8s-sustain-dashboard 8090:8090
 
 ## Using the Dashboard
 
+### Overview Page
+
+The overview page provides a cluster-wide summary of resource right-sizing:
+
+- **Workload counts** — Total, automated, and manual workloads
+- **CPU and Memory usage vs recommendation** — Aggregated across all automated workloads, showing actual Prometheus usage compared to computed recommendations with the delta percentage
+- **Needs Attention table** — Workloads where the CPU or memory delta between usage and recommendation exceeds 5%, sorted by the largest gap. Click any workload to view its detail page.
+
+The delta compares actual workload usage (at the configured percentile) against the recommendation. A negative delta means the recommendation is lower than current usage; a positive delta means the recommendation adds headroom above usage.
+
 ### Policies Page
 
 The main page shows all `Policy` resources in your cluster with:
@@ -137,6 +147,29 @@ After running a simulation, use the export buttons to download recommendations:
 
 - **YAML** — Downloads a Kubernetes resource patch you can apply with `kubectl apply -f`
 - **CSV** — Downloads a spreadsheet-compatible file with per-container recommendations
+
+## Development
+
+The dashboard frontend is a Vue 3 + TypeScript SPA built with Vite, located in `internal/dashboard/ui/frontend/`. The compiled output goes to `internal/dashboard/ui/dist/` and is embedded into the Go binary via `go:embed`.
+
+### Local development
+
+```bash
+cd internal/dashboard/ui/frontend
+npm install
+npm run dev    # starts Vite dev server with API proxy to localhost:8090
+```
+
+Run the Go dashboard backend separately (`k8s-sustain dashboard --bind-address=:8090`), and access the Vite dev server (default `http://localhost:5173`).
+
+### Building
+
+```bash
+make build-ui   # builds the frontend (npm ci + npm run build)
+make build      # builds frontend then Go binary
+```
+
+The Docker build automatically handles the frontend build in a separate stage.
 
 ## Troubleshooting
 
