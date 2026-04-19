@@ -53,6 +53,7 @@ docker-push: ## Push Docker image
 	docker push $(IMG)
 
 helm-deps: ## Fetch Helm chart dependencies
+	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
 	helm dependency build charts/k8s-sustain
 
 helm-lint: helm-deps ## Lint Helm chart
