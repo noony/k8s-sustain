@@ -19,17 +19,14 @@ rules:
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
     verbs: [get, list, watch, create, update, patch, delete]
-  # Workloads — apps
+  # Workloads — apps (read-only; the webhook handles resource injection)
   - apiGroups: [apps]
     resources: [deployments, statefulsets, daemonsets]
-    verbs: [get, list, watch, patch]
+    verbs: [get, list, watch]
   - apiGroups: [apps]
     resources: [replicasets]
     verbs: [get, list, watch]
-  # Workloads — batch
-  - apiGroups: [batch]
-    resources: [cronjobs]
-    verbs: [get, list, watch, patch]
+  # Workloads — batch (webhook handles CronJob pods at creation time)
   - apiGroups: [batch]
     resources: [jobs]
     verbs: [get]

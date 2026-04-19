@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,8 +14,6 @@ import (
 	klabels "k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
 // ContainerRecommendation holds computed resource changes for a single container.
@@ -29,15 +26,19 @@ type ContainerRecommendation struct {
 	RemoveMemoryLimit bool
 }
 
-// Patcher applies ContainerRecommendations to Kubernetes workloads.
+// Patcher recycles pods of Kubernetes workloads so they pick up the latest
+// resource recommendations (injected by the admission webhook at pod creation).
+//
+// The Patcher never modifies workload specs (Deployment, StatefulSet, etc.).
 //
 // Ongoing mode behaviour:
 //   - k8s ≥ 1.31 (inPlace=true): patches running pods directly via
 //     InPlacePodVerticalScaling — zero restarts. Uses the /resize subresource
 //     on k8s ≥ 1.33, falls back to a direct pod patch on 1.31-1.32.
 //   - k8s < 1.31 (inPlace=false): evicts stale pods one by one via the
-//     Eviction API so the workload controller replaces them from the updated
-//     template. PodDisruptionBudgets are respected; pods blocked by a PDB are
+//     Eviction API so the workload controller replaces them. The webhook
+//     injects the latest resources into the replacement pods.
+//     PodDisruptionBudgets are respected; pods blocked by a PDB are
 //     skipped and retried on the next reconcile cycle.
 type Patcher struct {
 	client  client.Client
@@ -50,20 +51,10 @@ func New(c client.Client, inPlace bool) *Patcher {
 	return &Patcher{client: c, inPlace: inPlace}
 }
 
-// PatchDeployment applies recs to deploy according to mode.
-func (p *Patcher) PatchDeployment(ctx context.Context, deploy *appsv1.Deployment, mode sustainv1alpha1.UpdateMode, recs map[string]ContainerRecommendation) error {
-	base := deploy.DeepCopy()
-	containers, changed := applyRecommendations(deploy.Spec.Template.Spec.Containers, recs)
-	if !changed {
-		return nil
-	}
-	deploy.Spec.Template.Spec.Containers = containers
-	if err := p.client.Patch(ctx, deploy, client.MergeFrom(base)); err != nil {
-		return err
-	}
-	if mode != sustainv1alpha1.UpdateModeOngoing {
-		return nil
-	}
+// RecycleDeploymentPods recycles pods of a Deployment so they pick up the latest
+// recommendations via the admission webhook. The Deployment template is intentionally
+// left untouched — the webhook injects resources at pod creation time.
+func (p *Patcher) RecycleDeploymentPods(ctx context.Context, deploy *appsv1.Deployment, recs map[string]ContainerRecommendation) error {
 	sel, err := metav1.LabelSelectorAsSelector(deploy.Spec.Selector)
 	if err != nil {
 		return fmt.Errorf("building pod selector for %s: %w", deploy.Name, err)
@@ -71,20 +62,9 @@ func (p *Patcher) PatchDeployment(ctx context.Context, deploy *appsv1.Deployment
 	return p.recyclePods(ctx, deploy.Namespace, sel, recs)
 }
 
-// PatchStatefulSet applies recs to sts according to mode.
-func (p *Patcher) PatchStatefulSet(ctx context.Context, sts *appsv1.StatefulSet, mode sustainv1alpha1.UpdateMode, recs map[string]ContainerRecommendation) error {
-	base := sts.DeepCopy()
-	containers, changed := applyRecommendations(sts.Spec.Template.Spec.Containers, recs)
-	if !changed {
-		return nil
-	}
-	sts.Spec.Template.Spec.Containers = containers
-	if err := p.client.Patch(ctx, sts, client.MergeFrom(base)); err != nil {
-		return err
-	}
-	if mode != sustainv1alpha1.UpdateModeOngoing {
-		return nil
-	}
+// RecycleStatefulSetPods recycles pods of a StatefulSet so they pick up the latest
+// recommendations via the admission webhook.
+func (p *Patcher) RecycleStatefulSetPods(ctx context.Context, sts *appsv1.StatefulSet, recs map[string]ContainerRecommendation) error {
 	sel, err := metav1.LabelSelectorAsSelector(sts.Spec.Selector)
 	if err != nil {
 		return fmt.Errorf("building pod selector for %s: %w", sts.Name, err)
@@ -92,20 +72,9 @@ func (p *Patcher) PatchStatefulSet(ctx context.Context, sts *appsv1.StatefulSet,
 	return p.recyclePods(ctx, sts.Namespace, sel, recs)
 }
 
-// PatchDaemonSet applies recs to ds according to mode.
-func (p *Patcher) PatchDaemonSet(ctx context.Context, ds *appsv1.DaemonSet, mode sustainv1alpha1.UpdateMode, recs map[string]ContainerRecommendation) error {
-	base := ds.DeepCopy()
-	containers, changed := applyRecommendations(ds.Spec.Template.Spec.Containers, recs)
-	if !changed {
-		return nil
-	}
-	ds.Spec.Template.Spec.Containers = containers
-	if err := p.client.Patch(ctx, ds, client.MergeFrom(base)); err != nil {
-		return err
-	}
-	if mode != sustainv1alpha1.UpdateModeOngoing {
-		return nil
-	}
+// RecycleDaemonSetPods recycles pods of a DaemonSet so they pick up the latest
+// recommendations via the admission webhook.
+func (p *Patcher) RecycleDaemonSetPods(ctx context.Context, ds *appsv1.DaemonSet, recs map[string]ContainerRecommendation) error {
 	sel, err := metav1.LabelSelectorAsSelector(ds.Spec.Selector)
 	if err != nil {
 		return fmt.Errorf("building pod selector for %s: %w", ds.Name, err)
@@ -113,20 +82,6 @@ func (p *Patcher) PatchDaemonSet(ctx context.Context, ds *appsv1.DaemonSet, mode
 	return p.recyclePods(ctx, ds.Namespace, sel, recs)
 }
 
-// PatchCronJob applies recs to the CronJob's job template so future runs use
-// updated resources. No pod recycling needed — each scheduled run creates fresh pods.
-func (p *Patcher) PatchCronJob(ctx context.Context, cj *batchv1.CronJob, recs map[string]ContainerRecommendation) error {
-	base := cj.DeepCopy()
-	containers, changed := applyRecommendations(
-		cj.Spec.JobTemplate.Spec.Template.Spec.Containers,
-		recs,
-	)
-	if !changed {
-		return nil
-	}
-	cj.Spec.JobTemplate.Spec.Template.Spec.Containers = containers
-	return p.client.Patch(ctx, cj, client.MergeFrom(base))
-}
 
 // recyclePods drives running pods toward the updated resource spec.
 // On clusters that support InPlacePodVerticalScaling the pod's resources are

@@ -8,13 +8,12 @@ k8s-sustain automatically detects whether the cluster supports this feature and 
 
 When `Ongoing` mode is active and the cluster supports in-place updates:
 
-1. The controller patches the workload template with the new resources (so new pods from scaling or node failures get the right values)
-2. It then lists all running, non-terminating pods matched by the workload's selector
-3. For each pod, it checks the pod's `status.resize` field:
-   - **`Infeasible`**: the node cannot satisfy the request — the pod is evicted so the scheduler can place the replacement elsewhere
+1. The controller lists all running, non-terminating pods matched by the workload's selector
+2. For each pod, it checks the pod's `status.resize` field:
+   - **`Infeasible`**: the node cannot satisfy the request — the pod is evicted so the scheduler can place the replacement elsewhere (the webhook injects the latest resources into the new pod)
    - **`Deferred`**: the kubelet accepted the request but is waiting on conditions (e.g. a memory decrease that requires container restart) — skipped; the kubelet will apply it without further action
    - **`InProgress` / not set**: proceeds to patch `spec.containers[*].resources` via the pod's `/resize` subresource
-4. The kubelet applies the new resources without restarting the container
+3. The kubelet applies the new resources without restarting the container
 
 On Kubernetes 1.33+, pod resource changes go through the `/resize` subresource. On Kubernetes 1.31-1.32, the operator falls back to a direct pod patch.
 

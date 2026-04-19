@@ -48,18 +48,17 @@ spec:
 
 **Ongoing reconciliation (controller) on clusters without in-place update support (k8s < 1.31):**
 
-1. Controller patches the workload's pod template with updated resources
-2. Each running pod that has stale resources is evicted via the Eviction API
-3. The workload controller (Deployment/StatefulSet/DaemonSet) replaces evicted pods from the updated template
+1. Each running pod that has stale resources is evicted via the Eviction API
+2. The workload controller (Deployment/StatefulSet/DaemonSet) creates replacement pods
+3. The webhook injects the latest recommendations into the new pods at creation time
 4. PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle
 
 **Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.31):**
 
-1. Controller patches the workload's pod template
-2. Controller also patches each running, non-terminating pod's `spec.containers[*].resources` directly
-3. The kubelet applies the new resources without restarting the container
-4. If the kubelet reports `Infeasible` (node cannot satisfy the request), the pod is evicted as a fallback
-5. If the kubelet reports `Deferred`, the resize is pending kubelet-side conditions and no action is taken
+1. Controller patches each running, non-terminating pod's `spec.containers[*].resources` directly
+2. The kubelet applies the new resources without restarting the container
+3. If the kubelet reports `Infeasible` (node cannot satisfy the request), the pod is evicted as a fallback
+4. If the kubelet reports `Deferred`, the resize is pending kubelet-side conditions and no action is taken
 
 See [In-Place Updates](in-place-updates.md) for details.
 
@@ -69,7 +68,7 @@ See [In-Place Updates](in-place-updates.md) for details.
 - Situations where you want resources to track actual usage over time
 - Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.31)
 
-**Limitation:** On clusters without in-place update support (k8s < 1.31), pods are replaced via eviction rather than in-place patching, which causes pod restarts.
+**Note:** The controller never patches workload templates (Deployment, StatefulSet, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s < 1.31), pods are replaced via eviction, which causes pod restarts.
 
 ---
 
@@ -90,7 +89,7 @@ See [In-Place Updates](in-place-updates.md) for details.
 
 Independently of `OnCreate` or `Ongoing`, you can run the entire operator in **recommend-only** mode by passing `--recommend-only` or setting `recommendOnly: true` in the Helm values. In this mode:
 
-- The controller still reconciles and computes recommendations, but **never patches workloads or recycles pods**
+- The controller still reconciles and computes recommendations, but **never recycles pods**
 - The webhook still intercepts pod creation and computes recommendations, but **never mutates the pod**
 - Computed recommendations are logged as structured JSON at `info` level
 
@@ -106,8 +105,8 @@ A single policy can use different modes for different workload kinds:
 spec:
   update:
     types:
-      deployment: Ongoing      # controller updates templates + recycles stale pods
+      deployment: Ongoing      # controller recycles stale pods; webhook injects resources
       statefulSet: OnCreate    # only inject at pod creation, no disruption
       cronJob: OnCreate        # inject at each job pod creation
-      daemonSet: Ongoing       # controller updates templates + recycles stale pods
+      daemonSet: Ongoing       # controller recycles stale pods; webhook injects resources
 ```

@@ -57,10 +57,9 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
    - Query Prometheus for the p`N` of CPU and memory over the configured window
    - Compute per-container recommendations (request + limit)
    - If `--recommend-only` is set, log the recommendation and skip patching
-   - Patch the workload's pod template with updated resources
-   - Recycle stale running pods: on k8s ≥ 1.31 via in-place resource patching (using the `/resize` subresource on k8s ≥ 1.33); on k8s < 1.31 via the Eviction API (PDB-respecting)
+   - Recycle stale running pods: on k8s ≥ 1.31 via in-place resource patching (using the `/resize` subresource on k8s ≥ 1.33); on k8s < 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time
 
-The controller requeues after `--reconcile-interval` (default `1h`).
+The controller requeues after `--reconcile-interval` (default `10m`).
 
 ## Admission Webhook (`k8s-sustain webhook`)
 

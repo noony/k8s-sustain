@@ -48,10 +48,10 @@ spec:
 
 ## Behaviour with Ongoing mode
 
-DaemonSet `Ongoing` mode updates the pod template and triggers a DaemonSet rolling update (`updateStrategy.type: RollingUpdate`). This is DaemonSet's normal update path — one node at a time.
+DaemonSet `Ongoing` mode evicts stale pods so they are replaced with the latest recommendations (injected by the webhook). On k8s >= 1.31, in-place pod patching is used instead, avoiding restarts.
 
 !!! warning "OnDelete strategy"
-    If your DaemonSet uses `updateStrategy.type: OnDelete`, the template is updated but pods are only replaced when deleted manually. In-place updates (k8s ≥ 1.31) bypass this restriction and patch running pods directly.
+    If your DaemonSet uses `updateStrategy.type: OnDelete`, evicted pods may not be replaced immediately. In-place updates (k8s ≥ 1.31) bypass this restriction and patch running pods directly.
 
 ## Node-critical agents: use higher percentiles
 

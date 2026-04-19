@@ -17,7 +17,7 @@ k8s-sustain continuously observes CPU and memory usage through Prometheus record
 | Mode | Mechanism | When |
 |------|-----------|------|
 | **OnCreate** | Mutating admission webhook injects resources before the pod is scheduled | Each new pod creation |
-| **Ongoing** | Controller periodically patches workload templates (with optional in-place pod patching on k8s ≥ 1.31) | On a configurable interval |
+| **Ongoing** | Controller recycles stale pods (in-place on k8s ≥ 1.31, eviction otherwise); webhook injects resources into new pods | On a configurable interval |
 
 A workload opts in to a policy by setting a single annotation on its pod template:
 

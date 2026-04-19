@@ -8,7 +8,7 @@ These flags are available on every subcommand.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--recommend-only` | `false` | Compute recommendations but never patch workloads or mutate pods (dry-run mode) |
+| `--recommend-only` | `false` | Compute recommendations but never recycle pods or mutate pods (dry-run mode) |
 | `--config` | — | Path to a config file (YAML); all flags can be set there |
 
 When `--recommend-only` is enabled, both the controller and the webhook still query Prometheus and compute recommendations as usual, but they **never** apply changes. Computed recommendations are emitted as structured log lines at `info` level, so you can inspect them before switching to active mode.
@@ -43,7 +43,7 @@ k8s-sustain start [flags]
 | `--leader-elect` | `false` | Enable leader election for high-availability deployments |
 | `--zap-log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server used for metric queries |
-| `--reconcile-interval` | `1h` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
+| `--reconcile-interval` | `10m` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces the reconciler should never touch |
 
 ### Environment variables

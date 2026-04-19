@@ -10,7 +10,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,8 +28,7 @@ import (
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=policies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=policies/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=policies/finalizers,verbs=update
-// +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets;daemonsets,verbs=get;list;watch;patch
-// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets;daemonsets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=pods/resize,verbs=patch
@@ -107,9 +105,6 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err := r.reconcileDaemonSets(ctx, policy); err != nil {
 		errs = append(errs, err)
 	}
-	if err := r.reconcileCronJobs(ctx, policy); err != nil {
-		errs = append(errs, err)
-	}
 
 	if len(errs) > 0 {
 		combined := errors.Join(errs...)
@@ -139,7 +134,6 @@ func (r *PolicyReconciler) reconcileDeployments(ctx context.Context, policy *sus
 		*policy.Spec.Update.Types.Deployment == sustainv1alpha1.UpdateModeOnCreate {
 		return nil
 	}
-	mode := *policy.Spec.Update.Types.Deployment
 	logger := log.FromContext(ctx).WithValues("kind", "Deployment")
 
 	var list appsv1.DeploymentList
@@ -172,8 +166,8 @@ func (r *PolicyReconciler) reconcileDeployments(ctx context.Context, policy *sus
 			wl.Info("recommend-only: computed recommendations", "recommendations", recs)
 			continue
 		}
-		if err := r.patcher.PatchDeployment(ctx, d, mode, recs); err != nil {
-			wl.Error(err, "patch failed")
+		if err := r.patcher.RecycleDeploymentPods(ctx, d, recs); err != nil {
+			wl.Error(err, "pod recycle failed")
 		}
 	}
 	return nil
@@ -185,7 +179,6 @@ func (r *PolicyReconciler) reconcileStatefulSets(ctx context.Context, policy *su
 		*policy.Spec.Update.Types.StatefulSet == sustainv1alpha1.UpdateModeOnCreate {
 		return nil
 	}
-	mode := *policy.Spec.Update.Types.StatefulSet
 	logger := log.FromContext(ctx).WithValues("kind", "StatefulSet")
 
 	var list appsv1.StatefulSetList
@@ -218,8 +211,8 @@ func (r *PolicyReconciler) reconcileStatefulSets(ctx context.Context, policy *su
 			wl.Info("recommend-only: computed recommendations", "recommendations", recs)
 			continue
 		}
-		if err := r.patcher.PatchStatefulSet(ctx, s, mode, recs); err != nil {
-			wl.Error(err, "patch failed")
+		if err := r.patcher.RecycleStatefulSetPods(ctx, s, recs); err != nil {
+			wl.Error(err, "pod recycle failed")
 		}
 	}
 	return nil
@@ -231,7 +224,6 @@ func (r *PolicyReconciler) reconcileDaemonSets(ctx context.Context, policy *sust
 		*policy.Spec.Update.Types.DaemonSet == sustainv1alpha1.UpdateModeOnCreate {
 		return nil
 	}
-	mode := *policy.Spec.Update.Types.DaemonSet
 	logger := log.FromContext(ctx).WithValues("kind", "DaemonSet")
 
 	var list appsv1.DaemonSetList
@@ -264,59 +256,13 @@ func (r *PolicyReconciler) reconcileDaemonSets(ctx context.Context, policy *sust
 			wl.Info("recommend-only: computed recommendations", "recommendations", recs)
 			continue
 		}
-		if err := r.patcher.PatchDaemonSet(ctx, ds, mode, recs); err != nil {
-			wl.Error(err, "patch failed")
+		if err := r.patcher.RecycleDaemonSetPods(ctx, ds, recs); err != nil {
+			wl.Error(err, "pod recycle failed")
 		}
 	}
 	return nil
 }
 
-// reconcileCronJobs lists all CronJobs cluster-wide annotated with this policy
-// and updates their job template resources for future runs.
-func (r *PolicyReconciler) reconcileCronJobs(ctx context.Context, policy *sustainv1alpha1.Policy) error {
-	if policy.Spec.Update.Types.CronJob == nil ||
-		*policy.Spec.Update.Types.CronJob == sustainv1alpha1.UpdateModeOnCreate {
-		return nil // OnCreate is handled by the admission webhook for each job pod
-	}
-	logger := log.FromContext(ctx).WithValues("kind", "CronJob")
-
-	var list batchv1.CronJobList
-	if err := r.List(ctx, &list); err != nil {
-		return fmt.Errorf("listing cronjobs: %w", err)
-	}
-
-	for i := range list.Items {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		cj := &list.Items[i]
-		if r.isExcluded(cj.Namespace) {
-			continue
-		}
-		if cj.Spec.JobTemplate.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
-			continue
-		}
-		wl := logger.WithValues("cronjob", cj.Name, "namespace", cj.Namespace)
-		recs, err := r.buildRecommendations(ctx, policy, cj.Namespace, "CronJob", cj.Name,
-			cj.Spec.JobTemplate.Spec.Template.Spec.Containers)
-		if err != nil {
-			wl.Error(err, "prometheus query failed")
-			continue
-		}
-		if len(recs) == 0 {
-			wl.Info("no metrics yet, skipping")
-			continue
-		}
-		if r.RecommendOnly {
-			wl.Info("recommend-only: computed recommendations", "recommendations", recs)
-			continue
-		}
-		if err := r.patcher.PatchCronJob(ctx, cj, recs); err != nil {
-			wl.Error(err, "patch failed")
-		}
-	}
-	return nil
-}
 
 // buildRecommendations queries Prometheus and computes per-container recommendations
 // for the given workload. Returns an empty map when no data is available yet.

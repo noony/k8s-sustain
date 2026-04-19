@@ -22,7 +22,7 @@ metadata:
 spec:
   update:
     types:
-      deployment: Ongoing       # controller patches workload templates periodically
+      deployment: Ongoing       # controller recycles stale pods; webhook injects resources
   rightSizing:
     resourcesConfigs:
       cpu:
@@ -107,7 +107,7 @@ kubectl get deployment my-app -n staging \
   -o jsonpath='{.spec.template.spec.containers[*].resources}'
 ```
 
-The controller reconciles on a fixed `1h` interval by default. To see changes sooner during testing, run the controller locally with `--reconcile-interval=5m` (see [CLI Reference](../reference/cli.md)).
+The controller reconciles on a fixed `10m` interval by default. To see changes sooner during testing, run the controller locally with `--reconcile-interval=2m` (see [CLI Reference](../reference/cli.md)).
 
 ## Next steps
 

@@ -2,7 +2,7 @@
 
 ## Ongoing mode with eviction (k8s < 1.31)
 
-The controller patches the pod template with updated resources, then evicts stale pods via the Eviction API. The workload controller (Deployment/StatefulSet) replaces them from the updated template. PodDisruptionBudgets are respected.
+The controller evicts stale pods via the Eviction API. The workload controller (Deployment/StatefulSet) creates replacement pods, and the webhook injects the latest recommendations at creation time. PodDisruptionBudgets are respected.
 
 ```yaml
 apiVersion: k8s.sustain.io/v1alpha1

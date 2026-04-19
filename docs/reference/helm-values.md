@@ -10,7 +10,7 @@
 | `imagePullSecrets` | `[]` | Image pull secrets |
 | `nameOverride` | `""` | Override the chart name |
 | `fullnameOverride` | `""` | Override the full release name |
-| `recommendOnly` | `false` | Compute recommendations without patching workloads or mutating pods (dry-run mode) |
+| `recommendOnly` | `false` | Compute recommendations without recycling or mutating pods (dry-run mode) |
 | `prometheusAddress` | `""` | Prometheus server URL, shared by all components. Leave empty to auto-detect the bundled subchart service. |
 
 ---

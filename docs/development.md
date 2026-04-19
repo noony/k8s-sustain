@@ -43,7 +43,7 @@ k8s-sustain/
 │   ├── prometheus/        # Prometheus HTTP API client
 │   ├── recommender/       # Resource recommendation logic (pure functions)
 │   ├── webhook/           # Admission webhook HTTP handler
-│   └── workload/          # Patcher for Deployment/StatefulSet/DaemonSet/CronJob
+│   └── workload/          # Pod recycler for Deployment/StatefulSet/DaemonSet
 ├── charts/k8s-sustain/    # Helm chart
 ├── docs/                  # This documentation
 ├── Dockerfile
@@ -198,7 +198,7 @@ To support a new workload kind (e.g. `Rollout` from Argo):
 
 1. Add `ArgoRollout *UpdateMode` to `UpdateTypes` in `api/v1alpha1/policy_types.go` (already present as a placeholder)
 2. Add the deepcopy block to `zz_generated.deepcopy.go`
-3. Add `PatchRollout` to `internal/workload/patcher.go`
+3. Add `RecycleRolloutPods` to `internal/workload/patcher.go`
 4. Add `reconcileRollouts` to `internal/controller/policy_controller.go`
 5. Add the case to `modeForKind` and `resolveOwner` in `internal/webhook/handler.go`
 6. Add RBAC markers (`+kubebuilder:rbac:...`) to the controller
