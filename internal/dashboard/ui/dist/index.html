@@ -6,6 +6,8 @@
 <title>k8s-sustain Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 :root {
   --bg: #0f1117;
@@ -226,6 +228,7 @@ tbody tr:last-child td { border-bottom: none; }
   position: relative;
   height: 320px;
 }
+.chart-container canvas { cursor: crosshair; }
 
 /* Simulator form */
 .sim-grid {
@@ -579,6 +582,25 @@ tbody tr:last-child td { border-bottom: none; }
   background: var(--accent);
   color: #fff;
 }
+.chart-wrapper { position: relative; }
+.reset-zoom-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: var(--font);
+  cursor: pointer;
+  display: none;
+  z-index: 10;
+  opacity: 0.9;
+  transition: opacity 0.15s;
+}
+.reset-zoom-btn:hover { opacity: 1; }
 
 /* Responsive */
 @media (max-width: 900px) {
@@ -1243,10 +1265,10 @@ async function renderWorkloadDetail(params) {
         return '<div class="card"><div class="card-header"><h2>Container: <code>' + cname + '</code></h2></div>' +
           '<div class="chart-grid"><div>' +
             '<h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">CPU Usage (cores)</h3>' +
-            '<div class="chart-container"><canvas id="cpu-' + cname + '"></canvas></div>' +
+            '<div class="chart-wrapper"><button class="reset-zoom-btn" id="rz-cpu-' + cname + '" onclick="resetZoom(\'cpu-' + cname + '\')">Reset zoom</button><div class="chart-container"><canvas id="cpu-' + cname + '"></canvas></div></div>' +
           '</div><div>' +
             '<h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">Memory Usage (MiB)' + oomBadge + '</h3>' +
-            '<div class="chart-container"><canvas id="mem-' + cname + '"></canvas></div>' +
+            '<div class="chart-wrapper"><button class="reset-zoom-btn" id="rz-mem-' + cname + '" onclick="resetZoom(\'mem-' + cname + '\')">Reset zoom</button><div class="chart-container"><canvas id="mem-' + cname + '"></canvas></div></div>' +
           '</div></div></div>';
       }).join('') +
       (containers.size === 0 ? '<div class="card"><div class="empty-state"><p>No metrics data available.</p></div></div>' : '') +
@@ -1340,10 +1362,10 @@ async function renderWorkloadMetrics(params) {
         return '<div class="card"><div class="card-header"><h2>Container: <code>' + cname + '</code></h2></div>' +
           '<div class="chart-grid"><div>' +
             '<h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">CPU Usage (cores)</h3>' +
-            '<div class="chart-container"><canvas id="cpu-' + cname + '"></canvas></div>' +
+            '<div class="chart-wrapper"><button class="reset-zoom-btn" id="rz-cpu-' + cname + '" onclick="resetZoom(\'cpu-' + cname + '\')">Reset zoom</button><div class="chart-container"><canvas id="cpu-' + cname + '"></canvas></div></div>' +
           '</div><div>' +
             '<h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">Memory Usage (MiB)' + oomBadge + '</h3>' +
-            '<div class="chart-container"><canvas id="mem-' + cname + '"></canvas></div>' +
+            '<div class="chart-wrapper"><button class="reset-zoom-btn" id="rz-mem-' + cname + '" onclick="resetZoom(\'mem-' + cname + '\')">Reset zoom</button><div class="chart-container"><canvas id="mem-' + cname + '"></canvas></div></div>' +
           '</div></div></div>';
       }).join('') +
       (containers.size === 0 ? '<div class="card"><div class="empty-state"><p>No metrics data available for this workload.</p></div></div>' : '') +
@@ -1522,10 +1544,10 @@ async function runSimulation() {
         return '<div class="card"><div class="card-header"><h2>Container: <code>' + cname + '</code></h2></div>' +
           '<div class="chart-grid"><div>' +
             '<h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">CPU Usage + Recommendation</h3>' +
-            '<div class="chart-container"><canvas id="simcpu-' + cname + '"></canvas></div>' +
+            '<div class="chart-wrapper"><button class="reset-zoom-btn" id="rz-simcpu-' + cname + '" onclick="resetZoom(\'simcpu-' + cname + '\')">Reset zoom</button><div class="chart-container"><canvas id="simcpu-' + cname + '"></canvas></div></div>' +
           '</div><div>' +
             '<h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">Memory Usage + Recommendation</h3>' +
-            '<div class="chart-container"><canvas id="simmem-' + cname + '"></canvas></div>' +
+            '<div class="chart-wrapper"><button class="reset-zoom-btn" id="rz-simmem-' + cname + '" onclick="resetZoom(\'simmem-' + cname + '\')">Reset zoom</button><div class="chart-container"><canvas id="simmem-' + cname + '"></canvas></div></div>' +
           '</div></div></div>';
       }).join('');
 
@@ -1621,6 +1643,34 @@ function downloadFile(filename, content, mimeType) {
 }
 
 // ---- Chart helpers ----
+
+// Chart.js plugin: vertical crosshair line following the mouse (Grafana-style)
+var crosshairPlugin = {
+  id: 'crosshair',
+  afterEvent: function(chart, args) {
+    var evt = args.event;
+    if (evt.type === 'mouseout') { chart._crosshairX = null; chart.draw(); return; }
+    if (evt.type === 'mousemove') { chart._crosshairX = evt.x; chart.draw(); }
+  },
+  afterDatasetsDraw: function(chart) {
+    var x = chart._crosshairX;
+    if (x == null) return;
+    var yScale = chart.scales.y;
+    var xScale = chart.scales.x;
+    if (x < xScale.left || x > xScale.right) return;
+    var ctx = chart.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = 'rgba(228,230,237,0.35)';
+    ctx.lineWidth = 1;
+    ctx.moveTo(x, yScale.top);
+    ctx.lineTo(x, yScale.bottom);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+Chart.register(crosshairPlugin);
 
 // Chart.js plugin: draws vertical lines + skull markers for OOM kill events
 var oomEventPlugin = {
@@ -1732,6 +1782,13 @@ function createTimeSeriesChart(canvasId, points, opts) {
           titleColor: '#e4e6ed', bodyColor: '#e4e6ed',
           callbacks: { label: function(ctx) { return ctx.dataset.label + ': ' + opts.yFormat(ctx.parsed.y) + ' ' + opts.unit; } }
         },
+        zoom: {
+          zoom: {
+            drag: { enabled: true, backgroundColor: 'rgba(99,102,241,0.25)', borderColor: 'rgba(99,102,241,0.6)', borderWidth: 1, threshold: 5 },
+            mode: 'x',
+            onZoomComplete: function(ctx) { syncZoom(ctx.chart); }
+          }
+        },
         oomEvents: oomMarkers
       },
       scales: {
@@ -1740,6 +1797,40 @@ function createTimeSeriesChart(canvasId, points, opts) {
       }
     }
   });
+
+  // Double-click to reset zoom (Grafana-style)
+  canvas.addEventListener('dblclick', function() { resetZoom(canvasId); });
+}
+
+function showResetZoomBtn(canvasId, show) {
+  var btn = document.getElementById('rz-' + canvasId);
+  if (btn) btn.style.display = show ? 'block' : 'none';
+}
+
+function pairedCanvasId(canvasId) {
+  if (canvasId.startsWith('simcpu-')) return 'simmem-' + canvasId.slice(7);
+  if (canvasId.startsWith('simmem-')) return 'simcpu-' + canvasId.slice(7);
+  if (canvasId.startsWith('cpu-')) return 'mem-' + canvasId.slice(4);
+  if (canvasId.startsWith('mem-')) return 'cpu-' + canvasId.slice(4);
+  return null;
+}
+
+function syncZoom(sourceChart) {
+  var id = sourceChart.canvas.id;
+  var pairId = pairedCanvasId(id);
+  if (!pairId || !chartInstances[pairId]) return;
+  var pair = chartInstances[pairId];
+  var srcScale = sourceChart.scales.x;
+  pair.zoomScale('x', { min: srcScale.min, max: srcScale.max }, 'none');
+  showResetZoomBtn(id, true);
+  showResetZoomBtn(pairId, true);
+}
+
+function resetZoom(canvasId) {
+  var chart = chartInstances[canvasId];
+  if (chart) { chart.resetZoom(); showResetZoomBtn(canvasId, false); }
+  var pairId = pairedCanvasId(canvasId);
+  if (pairId && chartInstances[pairId]) { chartInstances[pairId].resetZoom(); showResetZoomBtn(pairId, false); }
 }
 
 // ---- OOM event helpers ----
