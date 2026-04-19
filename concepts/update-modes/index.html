@@ -1173,7 +1173,7 @@
 <li>Situations where you want resources to track actual usage over time</li>
 <li>Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.31)</li>
 </ul>
-<p><strong>Note:</strong> The controller never patches workload templates (Deployment, StatefulSet, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s &lt; 1.31), pods are replaced via eviction, which causes pod restarts.</p>
+<p><strong>Note:</strong> The controller never patches workload templates (Deployment, StatefulSet, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s &lt; 1.31), pods are replaced via PDB-respecting eviction, which causes pod restarts.</p>
 <hr />
 <h2 id="choosing-a-mode">Choosing a mode<a class="headerlink" href="#choosing-a-mode" title="Permanent link">&para;</a></h2>
 <table>

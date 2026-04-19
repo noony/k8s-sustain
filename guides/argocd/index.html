@@ -1063,7 +1063,7 @@
 
 
 <h1 id="argo-cd-integration">Argo CD Integration<a class="headerlink" href="#argo-cd-integration" title="Permanent link">&para;</a></h1>
-<p>k8s-sustain <strong>never patches workload specs</strong> (Deployments, StatefulSets, etc.) — it only mutates Pods at admission time via the webhook and recycles stale pods via eviction or in-place patching. Because the workload spec in the cluster always matches what is stored in Git, <strong>no <code>ignoreDifferences</code> configuration is needed</strong>.</p>
+<p>k8s-sustain <strong>never patches workload specs</strong> (Deployments, StatefulSets, etc.) — it only mutates Pods at admission time via the webhook and recycles stale pods via PDB-respecting eviction or in-place patching. Because the workload spec in the cluster always matches what is stored in Git, <strong>no <code>ignoreDifferences</code> configuration is needed</strong>.</p>
 <h2 id="why-no-special-configuration">Why no special configuration?<a class="headerlink" href="#why-no-special-configuration" title="Permanent link">&para;</a></h2>
 <ul>
 <li>The <strong>webhook</strong> intercepts <code>Pod CREATE</code> requests and injects resources via an admission response patch. This does not modify the workload spec that Argo CD tracks.</li>

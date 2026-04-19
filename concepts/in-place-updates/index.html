@@ -1132,7 +1132,7 @@
 <p>On Kubernetes 1.33+, pod resource changes go through the <code>/resize</code> subresource. On Kubernetes 1.31-1.32, the operator falls back to a direct pod patch.</p>
 <p>Pods that are terminating or not in <code>Running</code> phase are skipped.</p>
 <h2 id="automatic-fallback">Automatic fallback<a class="headerlink" href="#automatic-fallback" title="Permanent link">&para;</a></h2>
-<p>If the API server rejects an in-place pod patch (e.g. the <code>InPlacePodVerticalScaling</code> feature gate is disabled), the operator automatically falls back to eviction-based updates for the rest of the reconcile cycle. No manual intervention is needed.</p>
+<p>If the API server rejects an in-place pod patch (e.g. the <code>InPlacePodVerticalScaling</code> feature gate is disabled), the operator automatically falls back to PDB-respecting eviction-based updates for the rest of the reconcile cycle. No manual intervention is needed.</p>
 <h2 id="cluster-version-detection">Cluster version detection<a class="headerlink" href="#cluster-version-detection" title="Permanent link">&para;</a></h2>
 <p>The operator detects the server version at startup using the discovery API:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>major=1, minor&gt;=31 → in-place updates enabled
