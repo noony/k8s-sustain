@@ -1187,10 +1187,9 @@
 <li>Query Prometheus for the p<code>N</code> of CPU and memory over the configured window</li>
 <li>Compute per-container recommendations (request + limit)</li>
 <li>If <code>--recommend-only</code> is set, log the recommendation and skip patching</li>
-<li>Patch the workload's pod template with updated resources</li>
-<li>Recycle stale running pods: on k8s ≥ 1.31 via in-place resource patching (using the <code>/resize</code> subresource on k8s ≥ 1.33); on k8s &lt; 1.31 via the Eviction API (PDB-respecting)</li>
+<li>Recycle stale running pods: on k8s ≥ 1.31 via in-place resource patching (using the <code>/resize</code> subresource on k8s ≥ 1.33); on k8s &lt; 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time</li>
 </ol>
-<p>The controller requeues after <code>--reconcile-interval</code> (default <code>1h</code>).</p>
+<p>The controller requeues after <code>--reconcile-interval</code> (default <code>10m</code>).</p>
 <h2 id="admission-webhook-k8s-sustain-webhook">Admission Webhook (<code>k8s-sustain webhook</code>)<a class="headerlink" href="#admission-webhook-k8s-sustain-webhook" title="Permanent link">&para;</a></h2>
 <p>The webhook is a <a href="https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#mutatingadmissionwebhook">mutating admission webhook</a> that intercepts <code>pods/CREATE</code> requests.</p>
 <p><strong>Admission flow:</strong></p>

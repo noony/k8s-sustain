@@ -1136,7 +1136,7 @@
 
 <h1 id="deployments-statefulsets">Deployments &amp; StatefulSets<a class="headerlink" href="#deployments-statefulsets" title="Permanent link">&para;</a></h1>
 <h2 id="ongoing-mode-with-eviction-k8s-131">Ongoing mode with eviction (k8s &lt; 1.31)<a class="headerlink" href="#ongoing-mode-with-eviction-k8s-131" title="Permanent link">&para;</a></h2>
-<p>The controller patches the pod template with updated resources, then evicts stale pods via the Eviction API. The workload controller (Deployment/StatefulSet) replaces them from the updated template. PodDisruptionBudgets are respected.</p>
+<p>The controller evicts stale pods via the Eviction API. The workload controller (Deployment/StatefulSet) creates replacement pods, and the webhook injects the latest recommendations at creation time. PodDisruptionBudgets are respected.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>

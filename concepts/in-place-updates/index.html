@@ -1122,10 +1122,9 @@
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <p>When <code>Ongoing</code> mode is active and the cluster supports in-place updates:</p>
 <ol>
-<li>The controller patches the workload template with the new resources (so new pods from scaling or node failures get the right values)</li>
-<li>It then lists all running, non-terminating pods matched by the workload's selector</li>
+<li>The controller lists all running, non-terminating pods matched by the workload's selector</li>
 <li>For each pod, it checks the pod's <code>status.resize</code> field:</li>
-<li><strong><code>Infeasible</code></strong>: the node cannot satisfy the request — the pod is evicted so the scheduler can place the replacement elsewhere</li>
+<li><strong><code>Infeasible</code></strong>: the node cannot satisfy the request — the pod is evicted so the scheduler can place the replacement elsewhere (the webhook injects the latest resources into the new pod)</li>
 <li><strong><code>Deferred</code></strong>: the kubelet accepted the request but is waiting on conditions (e.g. a memory decrease that requires container restart) — skipped; the kubelet will apply it without further action</li>
 <li><strong><code>InProgress</code> / not set</strong>: proceeds to patch <code>spec.containers[*].resources</code> via the pod's <code>/resize</code> subresource</li>
 <li>The kubelet applies the new resources without restarting the container</li>

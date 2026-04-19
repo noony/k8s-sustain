@@ -1139,10 +1139,10 @@
 <a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">monitoring-rightsizing</span>
 </code></pre></div>
 <h2 id="behaviour-with-ongoing-mode">Behaviour with Ongoing mode<a class="headerlink" href="#behaviour-with-ongoing-mode" title="Permanent link">&para;</a></h2>
-<p>DaemonSet <code>Ongoing</code> mode updates the pod template and triggers a DaemonSet rolling update (<code>updateStrategy.type: RollingUpdate</code>). This is DaemonSet's normal update path — one node at a time.</p>
+<p>DaemonSet <code>Ongoing</code> mode evicts stale pods so they are replaced with the latest recommendations (injected by the webhook). On k8s &gt;= 1.31, in-place pod patching is used instead, avoiding restarts.</p>
 <div class="admonition warning">
 <p class="admonition-title">OnDelete strategy</p>
-<p>If your DaemonSet uses <code>updateStrategy.type: OnDelete</code>, the template is updated but pods are only replaced when deleted manually. In-place updates (k8s ≥ 1.31) bypass this restriction and patch running pods directly.</p>
+<p>If your DaemonSet uses <code>updateStrategy.type: OnDelete</code>, evicted pods may not be replaced immediately. In-place updates (k8s ≥ 1.31) bypass this restriction and patch running pods directly.</p>
 </div>
 <h2 id="node-critical-agents-use-higher-percentiles">Node-critical agents: use higher percentiles<a class="headerlink" href="#node-critical-agents-use-higher-percentiles" title="Permanent link">&para;</a></h2>
 <p>For agents that must not be OOM-killed, use <strong>p99</strong> and a generous headroom. A terminated log shipper or CNI plugin can cause node-level issues.</p>

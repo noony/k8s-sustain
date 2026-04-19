@@ -926,18 +926,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#cluster-wide-configuration-recommended" class="md-nav__link">
+  <a href="#why-no-special-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Cluster-wide configuration (recommended)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#per-application-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Per-Application configuration
+      Why no special configuration?
     </span>
   </a>
   
@@ -947,15 +938,6 @@
   <a href="#self-heal-and-sync-policy" class="md-nav__link">
     <span class="md-ellipsis">
       Self-heal and sync policy
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#oncreate-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      OnCreate mode
     </span>
   </a>
   
@@ -1045,18 +1027,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#cluster-wide-configuration-recommended" class="md-nav__link">
+  <a href="#why-no-special-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Cluster-wide configuration (recommended)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#per-application-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Per-Application configuration
+      Why no special configuration?
     </span>
   </a>
   
@@ -1066,15 +1039,6 @@
   <a href="#self-heal-and-sync-policy" class="md-nav__link">
     <span class="md-ellipsis">
       Self-heal and sync policy
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#oncreate-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      OnCreate mode
     </span>
   </a>
   
@@ -1099,62 +1063,15 @@
 
 
 <h1 id="argo-cd-integration">Argo CD Integration<a class="headerlink" href="#argo-cd-integration" title="Permanent link">&para;</a></h1>
-<p>When k8s-sustain runs in <strong>Ongoing</strong> mode it patches workload resource requests and limits directly on the cluster. Argo CD detects these changes as out-of-sync diffs because the live state no longer matches the manifests stored in Git.</p>
-<p>To prevent Argo CD from flagging or reverting resource changes made by k8s-sustain, configure <code>ignoreDifferences</code> to ignore fields managed by the <code>k8s-sustain</code> field manager.</p>
-<h2 id="cluster-wide-configuration-recommended">Cluster-wide configuration (recommended)<a class="headerlink" href="#cluster-wide-configuration-recommended" title="Permanent link">&para;</a></h2>
-<p>The simplest approach is to tell Argo CD to ignore all fields owned by the <code>k8s-sustain</code> managed-fields manager. Add this to the <code>argocd-cm</code> ConfigMap:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ConfigMap</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">argocd-cm</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">argocd</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">data</span><span class="p">:</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">resource.customizations.ignoreDifferences.all</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="no">managedFieldsManagers:</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">      </span><span class="no">- k8s-sustain</span>
-</code></pre></div>
-<p>This covers Deployments, StatefulSets, DaemonSets, and CronJobs — any resource that k8s-sustain patches — without needing to enumerate specific paths or kinds.</p>
-<div class="admonition tip">
-<p class="admonition-title">Tip</p>
-<p>This is the recommended approach. It automatically covers all current and future resource types managed by k8s-sustain and requires no maintenance when new workload kinds are added.</p>
-</div>
-<h2 id="per-application-configuration">Per-Application configuration<a class="headerlink" href="#per-application-configuration" title="Permanent link">&para;</a></h2>
-<p>If you prefer to scope the exclusion to specific Applications rather than cluster-wide, add <code>ignoreDifferences</code> to each Application:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">argoproj.io/v1alpha1</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Application</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-app</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">ignoreDifferences</span><span class="p">:</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">group</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">      </span><span class="nt">managedFieldsManagers</span><span class="p">:</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s-sustain</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">group</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">StatefulSet</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">      </span><span class="nt">managedFieldsManagers</span><span class="p">:</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s-sustain</span>
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">group</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps</span>
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">DaemonSet</span>
-<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">      </span><span class="nt">managedFieldsManagers</span><span class="p">:</span>
-<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s-sustain</span>
-<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">group</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch</span>
-<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CronJob</span>
-<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a><span class="w">      </span><span class="nt">managedFieldsManagers</span><span class="p">:</span>
-<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s-sustain</span>
-</code></pre></div>
-<p>You can further restrict with <code>name</code> and <code>namespace</code> fields if needed.</p>
+<p>k8s-sustain <strong>never patches workload specs</strong> (Deployments, StatefulSets, etc.) — it only mutates Pods at admission time via the webhook and recycles stale pods via eviction or in-place patching. Because the workload spec in the cluster always matches what is stored in Git, <strong>no <code>ignoreDifferences</code> configuration is needed</strong>.</p>
+<h2 id="why-no-special-configuration">Why no special configuration?<a class="headerlink" href="#why-no-special-configuration" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The <strong>webhook</strong> intercepts <code>Pod CREATE</code> requests and injects resources via an admission response patch. This does not modify the workload spec that Argo CD tracks.</li>
+<li>The <strong>controller</strong> (Ongoing mode) recycles pods by evicting them or patching them in-place. It does not modify the Deployment, StatefulSet, DaemonSet, or CronJob objects.</li>
+</ul>
+<p>Since Argo CD tracks workload specs (not running Pod specs), there is no drift to detect or ignore.</p>
 <h2 id="self-heal-and-sync-policy">Self-heal and sync policy<a class="headerlink" href="#self-heal-and-sync-policy" title="Permanent link">&para;</a></h2>
-<p>If your Application has <code>selfHeal: true</code>, Argo CD will revert the resource changes made by k8s-sustain on each sync cycle — even if you configure <code>ignoreDifferences</code>. To prevent this, make sure <code>RespectIgnoreDifferences=true</code> is set in the sync options:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">syncPolicy</span><span class="p">:</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">automated</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">selfHeal</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">syncOptions</span><span class="p">:</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">RespectIgnoreDifferences=true</span>
-</code></pre></div>
-<h2 id="oncreate-mode">OnCreate mode<a class="headerlink" href="#oncreate-mode" title="Permanent link">&para;</a></h2>
-<p>If you use only the <strong>OnCreate</strong> update mode, k8s-sustain never patches workload specs — it only mutates Pods at admission time via a webhook. In this case no <code>ignoreDifferences</code> configuration is needed because Argo CD tracks the workload spec, not the running Pod spec.</p>
+<p>With this architecture, <code>selfHeal: true</code> works without issues — Argo CD will never detect a diff caused by k8s-sustain, so there is nothing to revert.</p>
 
 
 

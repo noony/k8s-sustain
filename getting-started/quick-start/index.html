@@ -1169,7 +1169,7 @@
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nt">spec</span><span class="p">:</span>
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">update</span><span class="p">:</span>
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">      </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">       </span><span class="c1"># controller patches workload templates periodically</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">      </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">       </span><span class="c1"># controller recycles stale pods; webhook injects resources</span>
 <a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
 <a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">resourcesConfigs</span><span class="p">:</span>
 <a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span>
@@ -1236,7 +1236,7 @@ The operator logs <code>no metrics yet, skipping</code> for workloads with no da
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>deployment<span class="w"> </span>my-app<span class="w"> </span>-n<span class="w"> </span>staging<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.template.spec.containers[*].resources}&#39;</span>
 </code></pre></div>
-<p>The controller reconciles on a fixed <code>1h</code> interval by default. To see changes sooner during testing, run the controller locally with <code>--reconcile-interval=5m</code> (see <a href="../../reference/cli/">CLI Reference</a>).</p>
+<p>The controller reconciles on a fixed <code>10m</code> interval by default. To see changes sooner during testing, run the controller locally with <code>--reconcile-interval=2m</code> (see <a href="../../reference/cli/">CLI Reference</a>).</p>
 <h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Use <strong>OnCreate</strong> mode to inject resources at pod creation without restarting existing pods → <a href="../../concepts/update-modes/">Update Modes</a></li>

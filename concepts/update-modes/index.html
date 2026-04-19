@@ -1154,15 +1154,14 @@
 </ul>
 <p><strong>Ongoing reconciliation (controller) on clusters without in-place update support (k8s &lt; 1.31):</strong></p>
 <ol>
-<li>Controller patches the workload's pod template with updated resources</li>
 <li>Each running pod that has stale resources is evicted via the Eviction API</li>
-<li>The workload controller (Deployment/StatefulSet/DaemonSet) replaces evicted pods from the updated template</li>
+<li>The workload controller (Deployment/StatefulSet/DaemonSet) creates replacement pods</li>
+<li>The webhook injects the latest recommendations into the new pods at creation time</li>
 <li>PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle</li>
 </ol>
 <p><strong>Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.31):</strong></p>
 <ol>
-<li>Controller patches the workload's pod template</li>
-<li>Controller also patches each running, non-terminating pod's <code>spec.containers[*].resources</code> directly</li>
+<li>Controller patches each running, non-terminating pod's <code>spec.containers[*].resources</code> directly</li>
 <li>The kubelet applies the new resources without restarting the container</li>
 <li>If the kubelet reports <code>Infeasible</code> (node cannot satisfy the request), the pod is evicted as a fallback</li>
 <li>If the kubelet reports <code>Deferred</code>, the resize is pending kubelet-side conditions and no action is taken</li>
@@ -1174,7 +1173,7 @@
 <li>Situations where you want resources to track actual usage over time</li>
 <li>Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.31)</li>
 </ul>
-<p><strong>Limitation:</strong> On clusters without in-place update support (k8s &lt; 1.31), pods are replaced via eviction rather than in-place patching, which causes pod restarts.</p>
+<p><strong>Note:</strong> The controller never patches workload templates (Deployment, StatefulSet, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s &lt; 1.31), pods are replaced via eviction, which causes pod restarts.</p>
 <hr />
 <h2 id="choosing-a-mode">Choosing a mode<a class="headerlink" href="#choosing-a-mode" title="Permanent link">&para;</a></h2>
 <table>
@@ -1215,7 +1214,7 @@
 <h2 id="recommend-only-mode">Recommend-only mode<a class="headerlink" href="#recommend-only-mode" title="Permanent link">&para;</a></h2>
 <p>Independently of <code>OnCreate</code> or <code>Ongoing</code>, you can run the entire operator in <strong>recommend-only</strong> mode by passing <code>--recommend-only</code> or setting <code>recommendOnly: true</code> in the Helm values. In this mode:</p>
 <ul>
-<li>The controller still reconciles and computes recommendations, but <strong>never patches workloads or recycles pods</strong></li>
+<li>The controller still reconciles and computes recommendations, but <strong>never recycles pods</strong></li>
 <li>The webhook still intercepts pod creation and computes recommendations, but <strong>never mutates the pod</strong></li>
 <li>Computed recommendations are logged as structured JSON at <code>info</code> level</li>
 </ul>
@@ -1226,10 +1225,10 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">update</span><span class="p">:</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">      </span><span class="c1"># controller updates templates + recycles stale pods</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">      </span><span class="c1"># controller recycles stale pods; webhook injects resources</span>
 <a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">      </span><span class="nt">statefulSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span><span class="w">    </span><span class="c1"># only inject at pod creation, no disruption</span>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">      </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span><span class="w">        </span><span class="c1"># inject at each job pod creation</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">      </span><span class="nt">daemonSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">       </span><span class="c1"># controller updates templates + recycles stale pods</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">      </span><span class="nt">daemonSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">       </span><span class="c1"># controller recycles stale pods; webhook injects resources</span>
 </code></pre></div>
 
 
