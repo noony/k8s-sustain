@@ -80,9 +80,9 @@ spec:
                             description: Requests configures how resource requests
                               are computed.
                             properties:
-                              headroomPercentage:
-                                description: HeadroomPercentage adds a safety buffer
-                                  on top of the computed recommendation.
+                              headroom:
+                                description: Headroom adds a safety buffer on top
+                                  of the computed recommendation (percentage, 0-100).
                                 format: int32
                                 maximum: 100
                                 minimum: 0
@@ -107,9 +107,9 @@ spec:
                                   value.
                                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                 x-kubernetes-int-or-string: true
-                              percentilePercentage:
-                                description: PercentilePercentage is the histogram
-                                  percentile used for the recommendation (e.g. 95).
+                              percentile:
+                                description: Percentile is the histogram percentile
+                                  used for the recommendation (e.g. 95).
                                 format: int32
                                 maximum: 100
                                 minimum: 1
@@ -151,9 +151,9 @@ spec:
                             description: Requests configures how resource requests
                               are computed.
                             properties:
-                              headroomPercentage:
-                                description: HeadroomPercentage adds a safety buffer
-                                  on top of the computed recommendation.
+                              headroom:
+                                description: Headroom adds a safety buffer on top
+                                  of the computed recommendation (percentage, 0-100).
                                 format: int32
                                 maximum: 100
                                 minimum: 0
@@ -178,9 +178,9 @@ spec:
                                   value.
                                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                 x-kubernetes-int-or-string: true
-                              percentilePercentage:
-                                description: PercentilePercentage is the histogram
-                                  percentile used for the recommendation (e.g. 95).
+                              percentile:
+                                description: Percentile is the histogram percentile
+                                  used for the recommendation (e.g. 95).
                                 format: int32
                                 maximum: 100
                                 minimum: 1

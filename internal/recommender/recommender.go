@@ -14,7 +14,7 @@ const (
 	mebibyte          = 1 << 20
 )
 
-// PercentileQuantile converts a percentilePercentage pointer (e.g. 95) to a
+// PercentileQuantile converts a percentile pointer (e.g. 95) to a
 // Prometheus quantile float (0.95). Returns 0.95 when p is nil.
 func PercentileQuantile(p *int32) float64 {
 	if p == nil {
@@ -47,8 +47,8 @@ func ComputeCPURequest(rawCores float64, cfg sustainv1alpha1.ResourceRequestsCon
 	}
 
 	milliCores := rawCores * 1000
-	if cfg.HeadroomPercentage != nil && *cfg.HeadroomPercentage > 0 {
-		milliCores *= 1.0 + float64(*cfg.HeadroomPercentage)/100.0
+	if cfg.Headroom != nil && *cfg.Headroom > 0 {
+		milliCores *= 1.0 + float64(*cfg.Headroom)/100.0
 	}
 
 	qty := resource.NewMilliQuantity(int64(math.Ceil(milliCores)), resource.DecimalSI)
@@ -67,8 +67,8 @@ func ComputeMemoryRequest(rawBytes float64, cfg sustainv1alpha1.ResourceRequests
 
 	// Truncate to integer bytes first; headroom provides the safety margin.
 	b := int64(rawBytes)
-	if cfg.HeadroomPercentage != nil && *cfg.HeadroomPercentage > 0 {
-		b = b * int64(100+*cfg.HeadroomPercentage) / 100
+	if cfg.Headroom != nil && *cfg.Headroom > 0 {
+		b = b * int64(100+*cfg.Headroom) / 100
 	}
 
 	// Round up to the nearest MiB.

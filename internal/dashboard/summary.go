@@ -308,8 +308,8 @@ func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, na
 
 	cpuWindow := recommender.ResourceWindow(cpuCfg.Window)
 	memWindow := recommender.ResourceWindow(memCfg.Window)
-	cpuQuantile := recommender.PercentileQuantile(cpuCfg.Requests.PercentilePercentage)
-	memQuantile := recommender.PercentileQuantile(memCfg.Requests.PercentilePercentage)
+	cpuQuantile := recommender.PercentileQuantile(cpuCfg.Requests.Percentile)
+	memQuantile := recommender.PercentileQuantile(memCfg.Requests.Percentile)
 
 	cpuValues, err := s.PromClient.QueryCPUByContainer(ctx, namespace, kind, name, cpuQuantile, cpuWindow)
 	if err != nil {

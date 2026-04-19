@@ -53,7 +53,7 @@ func New(c client.Client, inPlace bool) *Patcher {
 // PatchDeployment applies recs to deploy according to mode.
 func (p *Patcher) PatchDeployment(ctx context.Context, deploy *appsv1.Deployment, mode sustainv1alpha1.UpdateMode, recs map[string]ContainerRecommendation) error {
 	base := deploy.DeepCopy()
-	containers, changed := applyRecommendations(deploy.Spec.Template.Spec.Containers, mode, recs)
+	containers, changed := applyRecommendations(deploy.Spec.Template.Spec.Containers, recs)
 	if !changed {
 		return nil
 	}
@@ -74,7 +74,7 @@ func (p *Patcher) PatchDeployment(ctx context.Context, deploy *appsv1.Deployment
 // PatchStatefulSet applies recs to sts according to mode.
 func (p *Patcher) PatchStatefulSet(ctx context.Context, sts *appsv1.StatefulSet, mode sustainv1alpha1.UpdateMode, recs map[string]ContainerRecommendation) error {
 	base := sts.DeepCopy()
-	containers, changed := applyRecommendations(sts.Spec.Template.Spec.Containers, mode, recs)
+	containers, changed := applyRecommendations(sts.Spec.Template.Spec.Containers, recs)
 	if !changed {
 		return nil
 	}
@@ -95,7 +95,7 @@ func (p *Patcher) PatchStatefulSet(ctx context.Context, sts *appsv1.StatefulSet,
 // PatchDaemonSet applies recs to ds according to mode.
 func (p *Patcher) PatchDaemonSet(ctx context.Context, ds *appsv1.DaemonSet, mode sustainv1alpha1.UpdateMode, recs map[string]ContainerRecommendation) error {
 	base := ds.DeepCopy()
-	containers, changed := applyRecommendations(ds.Spec.Template.Spec.Containers, mode, recs)
+	containers, changed := applyRecommendations(ds.Spec.Template.Spec.Containers, recs)
 	if !changed {
 		return nil
 	}
@@ -119,7 +119,6 @@ func (p *Patcher) PatchCronJob(ctx context.Context, cj *batchv1.CronJob, recs ma
 	base := cj.DeepCopy()
 	containers, changed := applyRecommendations(
 		cj.Spec.JobTemplate.Spec.Template.Spec.Containers,
-		sustainv1alpha1.UpdateModeOngoing,
 		recs,
 	)
 	if !changed {
@@ -190,7 +189,7 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	}
 
 	base := pod.DeepCopy()
-	containers, changed := applyRecommendations(pod.Spec.Containers, sustainv1alpha1.UpdateModeOngoing, recs)
+	containers, changed := applyRecommendations(pod.Spec.Containers, recs)
 	if !changed {
 		return nil
 	}
@@ -201,6 +200,7 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	// where the subresource doesn't exist yet.
 	err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(base))
 	if apierrors.IsNotFound(err) {
+		logger.Info(err.Error())
 		// /resize subresource not available (k8s < 1.33) — try direct pod patch.
 		err = p.client.Patch(ctx, pod, client.MergeFrom(base))
 	}
@@ -276,11 +276,9 @@ func podIsStale(pod *corev1.Pod, recs map[string]ContainerRecommendation) bool {
 	return false
 }
 
-// applyRecommendations modifies container resources following mode rules and returns
+// applyRecommendations modifies container resources and returns
 // (updated slice, whether any change was made).
-// OnCreate: only sets resources on containers that have no CPU request yet.
-// Ongoing:  always applies.
-func applyRecommendations(in []corev1.Container, mode sustainv1alpha1.UpdateMode, recs map[string]ContainerRecommendation) ([]corev1.Container, bool) {
+func applyRecommendations(in []corev1.Container, recs map[string]ContainerRecommendation) ([]corev1.Container, bool) {
 	out := make([]corev1.Container, len(in))
 	copy(out, in)
 	changed := false
@@ -289,11 +287,6 @@ func applyRecommendations(in []corev1.Container, mode sustainv1alpha1.UpdateMode
 		rec, ok := recs[c.Name]
 		if !ok {
 			continue
-		}
-		if mode == sustainv1alpha1.UpdateModeOnCreate {
-			if c.Resources.Requests != nil && !c.Resources.Requests.Cpu().IsZero() {
-				continue
-			}
 		}
 
 		if out[i].Resources.Requests == nil {

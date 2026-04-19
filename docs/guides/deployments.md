@@ -19,15 +19,15 @@ spec:
       cpu:
         window: 168h
         requests:
-          percentilePercentage: 95
-          headroomPercentage: 10
+          percentile: 95
+          headroom: 10
         limits:
           keepLimitRequestRatio: true
       memory:
         window: 168h
         requests:
-          percentilePercentage: 95
-          headroomPercentage: 20
+          percentile: 95
+          headroom: 20
         limits:
           keepLimitRequestRatio: true
 ```

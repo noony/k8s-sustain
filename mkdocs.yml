@@ -75,5 +75,6 @@ nav:
       - DaemonSets: guides/daemonsets.md
       - CronJobs: guides/cronjobs.md
       - Dashboard: guides/dashboard.md
+      - Argo CD: guides/argocd.md
       - TLS with cert-manager: guides/cert-manager.md
   - Development: development.md

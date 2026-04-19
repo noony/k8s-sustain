@@ -18,15 +18,15 @@ spec:
       cpu:
         window: 168h
         requests:
-          percentilePercentage: 99   # use p99 for node-critical agents
-          headroomPercentage: 15
+          percentile: 99   # use p99 for node-critical agents
+          headroom: 15
         limits:
           keepLimitRequestRatio: true
       memory:
         window: 168h
         requests:
-          percentilePercentage: 99
-          headroomPercentage: 25
+          percentile: 99
+          headroom: 25
         limits:
           keepLimitRequestRatio: true
 ```

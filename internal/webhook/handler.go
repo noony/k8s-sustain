@@ -22,7 +22,10 @@ import (
 
 // Handler is the HTTP handler for the mutating admission webhook.
 // It intercepts Pod CREATE requests and injects resource requests/limits
-// based on matching OnCreate policies backed by Prometheus data.
+// based on matching policies backed by Prometheus data.
+// Both OnCreate and Ongoing policies are handled so that pods start with
+// the latest recommendation immediately, without waiting for the controller
+// to reconcile.
 type Handler struct {
 	Client           client.Client
 	PrometheusClient *promclient.Client
@@ -92,9 +95,11 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allow // standalone pod — no workload type to determine mode
 	}
 
-	// Only act when the policy targets this workload kind with OnCreate mode.
+	// Act on both OnCreate and Ongoing policies so that pods always start
+	// with the latest recommendation. Without this, Ongoing pods would start
+	// with whatever the template currently has and only be resized later.
 	mode := modeForKind(policy.Spec.Update.Types, ownerKind)
-	if mode == nil || *mode != sustainv1alpha1.UpdateModeOnCreate {
+	if mode == nil {
 		return allow
 	}
 
@@ -104,14 +109,12 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allow
 	}
 
-	// Only inject into containers that have no CPU request yet (OnCreate semantics).
+	// Always inject the latest recommendation regardless of mode.
+	// The workload is annotated with a policy — the intent is to apply it.
 	filtered := make(map[string]workload.ContainerRecommendation)
 	for _, c := range pod.Spec.Containers {
 		rec, ok := recs[c.Name]
 		if !ok {
-			continue
-		}
-		if c.Resources.Requests != nil && !c.Resources.Requests.Cpu().IsZero() {
 			continue
 		}
 		filtered[c.Name] = rec
@@ -212,7 +215,7 @@ func (h *Handler) buildRecommendations(
 
 	cpuValues, err := h.PrometheusClient.QueryCPUByContainer(
 		ctx, ns, ownerKind, ownerName,
-		recommender.PercentileQuantile(rsCfg.CPU.Requests.PercentilePercentage),
+		recommender.PercentileQuantile(rsCfg.CPU.Requests.Percentile),
 		recommender.ResourceWindow(rsCfg.CPU.Window),
 	)
 	if err != nil {
@@ -221,7 +224,7 @@ func (h *Handler) buildRecommendations(
 
 	memValues, err := h.PrometheusClient.QueryMemoryByContainer(
 		ctx, ns, ownerKind, ownerName,
-		recommender.PercentileQuantile(rsCfg.Memory.Requests.PercentilePercentage),
+		recommender.PercentileQuantile(rsCfg.Memory.Requests.Percentile),
 		recommender.ResourceWindow(rsCfg.Memory.Window),
 	)
 	if err != nil {

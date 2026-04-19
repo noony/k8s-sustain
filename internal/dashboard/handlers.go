@@ -615,12 +615,12 @@ func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Re
 		Window:    window,
 		Step:      "5m",
 		CPU: simulateResourceConfig{
-			PercentilePercentage: cpuCfg.Requests.PercentilePercentage,
-			HeadroomPercentage:   cpuCfg.Requests.HeadroomPercentage,
+			Percentile: cpuCfg.Requests.Percentile,
+			Headroom:   cpuCfg.Requests.Headroom,
 		},
 		Memory: simulateResourceConfig{
-			PercentilePercentage: memCfg.Requests.PercentilePercentage,
-			HeadroomPercentage:   memCfg.Requests.HeadroomPercentage,
+			Percentile: memCfg.Requests.Percentile,
+			Headroom:   memCfg.Requests.Headroom,
 		},
 	}
 	if cpuCfg.Requests.MinAllowed != nil {
@@ -742,11 +742,17 @@ func (s *Server) handleWorkloadRoutes(w http.ResponseWriter, r *http.Request) {
 	// Fetch current resource requests/limits from the workload spec
 	resources := s.getContainerResources(r.Context(), namespace, kind, name)
 
+	// Fetch historical resource request time-series from Prometheus (best-effort)
+	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(r.Context(), namespace, kind, name, window, step)
+	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(r.Context(), namespace, kind, name, window, step)
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"cpu":       cpuSeries,
-		"memory":    memSeries,
-		"resources": resources,
-		"oomEvents": oomEvents,
+		"cpu":            cpuSeries,
+		"memory":         memSeries,
+		"resources":      resources,
+		"cpuRequests":    cpuRequests,
+		"memoryRequests": memRequests,
+		"oomEvents":      oomEvents,
 	})
 }
 
@@ -835,8 +841,8 @@ type simulateRequest struct {
 }
 
 type simulateResourceConfig struct {
-	PercentilePercentage *int32  `json:"percentilePercentage,omitempty"`
-	HeadroomPercentage   *int32  `json:"headroomPercentage,omitempty"`
+	Percentile *int32  `json:"percentile,omitempty"`
+	Headroom   *int32  `json:"headroom,omitempty"`
 	MinAllowed           *string `json:"minAllowed,omitempty"`
 	MaxAllowed           *string `json:"maxAllowed,omitempty"`
 }

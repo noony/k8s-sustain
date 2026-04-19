@@ -106,4 +106,24 @@ spec:
               k8s_sustain:pod_workload
             )
 
+    - name: k8s_sustain.resource_requests
+      interval: 1m
+      rules:
+        # Per-container CPU requests WITH workload labels — used by the dashboard.
+        - record: k8s_sustain:container_cpu_requests_by_workload:cores
+          expr: |
+            max by (namespace, container, owner_kind, owner_name) (
+              kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}
+              * on(namespace, pod) group_left(owner_kind, owner_name)
+              k8s_sustain:pod_workload
+            )
+        # Per-container memory requests WITH workload labels — used by the dashboard.
+        - record: k8s_sustain:container_memory_requests_by_workload:bytes
+          expr: |
+            max by (namespace, container, owner_kind, owner_name) (
+              kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}
+              * on(namespace, pod) group_left(owner_kind, owner_name)
+              k8s_sustain:pod_workload
+            )
+
 {{- end }}

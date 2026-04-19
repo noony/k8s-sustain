@@ -28,13 +28,13 @@ k8s-sustain has been installed.
          cpu:
            window: "96h"
            requests:
-             percentilePercentage: 95
-             headroomPercentage: 15
+             percentile: 95
+             headroom: 15
          memory:
            window: "96h"
            requests:
-             percentilePercentage: 95
-             headroomPercentage: 15
+             percentile: 95
+             headroom: 15
      update:
        types:
          deployment: Ongoing

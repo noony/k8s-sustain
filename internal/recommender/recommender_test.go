@@ -34,7 +34,7 @@ func TestComputeCPURequest(t *testing.T) {
 		{
 			name:     "with 20% headroom",
 			rawCores: 0.1,
-			cfg:      sustainv1alpha1.ResourceRequestsConfig{HeadroomPercentage: int32p(20)},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: int32p(20)},
 			wantQty:  "120m",
 		},
 		{
@@ -59,7 +59,7 @@ func TestComputeCPURequest(t *testing.T) {
 			name:     "headroom then clamped to max",
 			rawCores: 0.9,
 			cfg: sustainv1alpha1.ResourceRequestsConfig{
-				HeadroomPercentage: int32p(50),
+				Headroom: int32p(50),
 				MaxAllowed:         qtyp("1"),
 			},
 			wantQty: "1", // 0.9 * 1.5 = 1.35 → clamped to 1
@@ -111,7 +111,7 @@ func TestComputeMemoryRequest(t *testing.T) {
 		{
 			name:     "with 10% headroom",
 			rawBytes: 100 * 1024 * 1024,
-			cfg:      sustainv1alpha1.ResourceRequestsConfig{HeadroomPercentage: int32p(10)},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: int32p(10)},
 			wantQty:  "110Mi",
 		},
 		{

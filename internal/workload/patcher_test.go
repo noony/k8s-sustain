@@ -5,54 +5,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
 func qtyp(s string) *resource.Quantity { q := resource.MustParse(s); return &q }
 
-func TestApplyRecommendations_OnCreate_SkipsExistingCPU(t *testing.T) {
-	containers := []corev1.Container{
-		{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU: resource.MustParse("100m"),
-				},
-			},
-		},
-	}
-	recs := map[string]ContainerRecommendation{
-		"app": {CPURequest: qtyp("200m")},
-	}
-
-	out, changed := applyRecommendations(containers, sustainv1alpha1.UpdateModeOnCreate, recs)
-	if changed {
-		t.Error("expected no change for OnCreate with existing CPU request")
-	}
-	if out[0].Resources.Requests.Cpu().Cmp(resource.MustParse("100m")) != 0 {
-		t.Errorf("expected 100m, got %s", out[0].Resources.Requests.Cpu())
-	}
-}
-
-func TestApplyRecommendations_OnCreate_SetsWhenNoCPU(t *testing.T) {
-	containers := []corev1.Container{
-		{Name: "app"},
-	}
-	recs := map[string]ContainerRecommendation{
-		"app": {CPURequest: qtyp("200m")},
-	}
-
-	out, changed := applyRecommendations(containers, sustainv1alpha1.UpdateModeOnCreate, recs)
-	if !changed {
-		t.Error("expected change for OnCreate with no CPU request")
-	}
-	if out[0].Resources.Requests.Cpu().Cmp(resource.MustParse("200m")) != 0 {
-		t.Errorf("expected 200m, got %s", out[0].Resources.Requests.Cpu())
-	}
-}
-
-func TestApplyRecommendations_Ongoing_AlwaysApplies(t *testing.T) {
+func TestApplyRecommendations_AlwaysApplies(t *testing.T) {
 	containers := []corev1.Container{
 		{
 			Name: "app",
@@ -67,15 +24,32 @@ func TestApplyRecommendations_Ongoing_AlwaysApplies(t *testing.T) {
 		"app": {CPURequest: qtyp("200m"), MemoryRequest: qtyp("64Mi")},
 	}
 
-	out, changed := applyRecommendations(containers, sustainv1alpha1.UpdateModeOngoing, recs)
+	out, changed := applyRecommendations(containers, recs)
 	if !changed {
-		t.Error("expected change for Ongoing mode")
+		t.Error("expected change")
 	}
 	if out[0].Resources.Requests.Cpu().Cmp(resource.MustParse("200m")) != 0 {
 		t.Errorf("expected 200m CPU, got %s", out[0].Resources.Requests.Cpu())
 	}
 	if out[0].Resources.Requests.Memory().Cmp(resource.MustParse("64Mi")) != 0 {
 		t.Errorf("expected 64Mi memory, got %s", out[0].Resources.Requests.Memory())
+	}
+}
+
+func TestApplyRecommendations_SetsWhenNoCPU(t *testing.T) {
+	containers := []corev1.Container{
+		{Name: "app"},
+	}
+	recs := map[string]ContainerRecommendation{
+		"app": {CPURequest: qtyp("200m")},
+	}
+
+	out, changed := applyRecommendations(containers, recs)
+	if !changed {
+		t.Error("expected change when no CPU request set")
+	}
+	if out[0].Resources.Requests.Cpu().Cmp(resource.MustParse("200m")) != 0 {
+		t.Errorf("expected 200m, got %s", out[0].Resources.Requests.Cpu())
 	}
 }
 
@@ -94,7 +68,7 @@ func TestApplyRecommendations_RemovesLimit(t *testing.T) {
 		"app": {CPURequest: qtyp("100m"), RemoveCPULimit: true},
 	}
 
-	out, changed := applyRecommendations(containers, sustainv1alpha1.UpdateModeOngoing, recs)
+	out, changed := applyRecommendations(containers, recs)
 	if !changed {
 		t.Error("expected change")
 	}
@@ -111,7 +85,7 @@ func TestApplyRecommendations_NoMatchingContainer(t *testing.T) {
 		"sidecar": {CPURequest: qtyp("100m")},
 	}
 
-	_, changed := applyRecommendations(containers, sustainv1alpha1.UpdateModeOngoing, recs)
+	_, changed := applyRecommendations(containers, recs)
 	if changed {
 		t.Error("expected no change when container names don't match")
 	}

@@ -16,7 +16,7 @@ spec:
 **Behaviour:**
 
 - The webhook intercepts every `Pod CREATE` request for pods that carry the policy annotation
-- If a container already has a non-zero CPU request, it is left unchanged (idempotent)
+- The latest recommendation is always injected — the webhook overrides whatever the pod template currently specifies
 - Existing running pods are **not** affected — only newly created pods receive the recommendation
 - If the webhook is unavailable, the pod is admitted without resource injection (`failurePolicy: Ignore`)
 
@@ -32,7 +32,7 @@ spec:
 
 ## Ongoing
 
-Resources are updated by the **controller** on a recurring interval.
+Resources are updated by the **controller** on a recurring interval. Additionally, the **admission webhook** injects the latest recommendation at pod creation time so that new pods start with correct resources immediately, without waiting for the controller to reconcile.
 
 ```yaml
 spec:
@@ -41,14 +41,19 @@ spec:
       deployment: Ongoing
 ```
 
-**Behaviour on clusters without in-place update support (k8s < 1.31):**
+**At pod creation (webhook):**
+
+- The webhook intercepts `Pod CREATE` requests for pods that carry the policy annotation
+- Unlike OnCreate mode, the webhook always injects the latest recommendation — even if the container already has a CPU request — ensuring new pods never start with stale resources
+
+**Ongoing reconciliation (controller) on clusters without in-place update support (k8s < 1.31):**
 
 1. Controller patches the workload's pod template with updated resources
 2. Each running pod that has stale resources is evicted via the Eviction API
 3. The workload controller (Deployment/StatefulSet/DaemonSet) replaces evicted pods from the updated template
 4. PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle
 
-**Behaviour on clusters with in-place update support (k8s ≥ 1.31):**
+**Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.31):**
 
 1. Controller patches the workload's pod template
 2. Controller also patches each running, non-terminating pod's `spec.containers[*].resources` directly

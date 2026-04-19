@@ -134,11 +134,11 @@ spec:
       cpu:
         window: 168h
         requests:
-          percentilePercentage: 95
+          percentile: 95
       memory:
         window: 168h
         requests:
-          percentilePercentage: 95
+          percentile: 95
 EOF
 ```
 

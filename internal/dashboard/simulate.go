@@ -12,10 +12,12 @@ import (
 )
 
 type simulationResult struct {
-	Containers map[string]simulationContainerResult `json:"containers"`
-	CPUSeries  promclient.ContainerTimeSeries       `json:"cpuSeries"`
-	MemSeries  promclient.ContainerTimeSeries       `json:"memorySeries"`
-	Resources  map[string]containerResources        `json:"resources,omitempty"`
+	Containers     map[string]simulationContainerResult `json:"containers"`
+	CPUSeries      promclient.ContainerTimeSeries       `json:"cpuSeries"`
+	MemSeries      promclient.ContainerTimeSeries       `json:"memorySeries"`
+	Resources      map[string]containerResources        `json:"resources,omitempty"`
+	CPURequests    promclient.ContainerTimeSeries       `json:"cpuRequests,omitempty"`
+	MemoryRequests promclient.ContainerTimeSeries       `json:"memoryRequests,omitempty"`
 }
 
 type simulationContainerResult struct {
@@ -27,8 +29,8 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	cpuCfg := buildRequestsConfig(req.CPU)
 	memCfg := buildRequestsConfig(req.Memory)
 
-	cpuQuantile := recommender.PercentileQuantile(cpuCfg.PercentilePercentage)
-	memQuantile := recommender.PercentileQuantile(memCfg.PercentilePercentage)
+	cpuQuantile := recommender.PercentileQuantile(cpuCfg.Percentile)
+	memQuantile := recommender.PercentileQuantile(memCfg.Percentile)
 	window := recommender.ResourceWindow(req.Window)
 
 	// Query single-value percentiles for recommendations
@@ -86,18 +88,24 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 
 	resources := s.getContainerResources(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
 
+	// Fetch historical resource request time-series (best-effort)
+	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, window, step)
+	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, window, step)
+
 	return &simulationResult{
-		Containers: containers,
-		CPUSeries:  cpuSeries,
-		MemSeries:  memSeries,
-		Resources:  resources,
+		Containers:     containers,
+		CPUSeries:      cpuSeries,
+		MemSeries:      memSeries,
+		Resources:      resources,
+		CPURequests:    cpuRequests,
+		MemoryRequests: memRequests,
 	}, nil
 }
 
 func buildRequestsConfig(cfg simulateResourceConfig) sustainv1alpha1.ResourceRequestsConfig {
 	rc := sustainv1alpha1.ResourceRequestsConfig{
-		PercentilePercentage: cfg.PercentilePercentage,
-		HeadroomPercentage:   cfg.HeadroomPercentage,
+		Percentile: cfg.Percentile,
+		Headroom:   cfg.Headroom,
 	}
 	if cfg.MinAllowed != nil {
 		q := resource.MustParse(*cfg.MinAllowed)

@@ -105,7 +105,7 @@ Shows a comprehensive view of a single workload:
 - **CPU and Memory charts** — Interactive time-series with recommendation lines overlaid (for automated workloads)
 - **Open in Simulator** — Jump to the simulator with the workload pre-filled
 
-Charts default to a 7-day window with 5-minute resolution. Each chart overlays the workload's **current resource request** (amber dashed line) and **limit** (orange dashed line) so you can see how actual usage compares to configured resources. If the workload is automated, the **recommendation** line (red dashed) is also shown.
+A **time range selector** in the top-right lets you choose how much history to display: 1h, 4h, 12h, 1 day, 3 days, 7 days (default), or 30 days. The step resolution adjusts automatically for each range. Each chart overlays the workload's **historical resource request** (amber dashed stepped line) and **limit** (orange dashed line) so you can see how actual usage compares to configured resources over time. The request line reflects real changes (e.g. from k8s-sustain patching or manual edits) rather than a flat snapshot. If historical request data is not available in Prometheus, the dashboard falls back to a static line from the current workload spec. If the workload is automated, the **recommendation** line (red dashed) is also shown.
 
 Memory charts also display **OOM kill events** as red vertical markers with a count badge in the chart header. These are detected via `kube_pod_container_status_restarts_total` correlated with `kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}`. If no kube-state-metrics is available, OOM markers are silently omitted.
 
@@ -126,7 +126,7 @@ The simulator lets you test "what-if" scenarios:
 The results show:
 
 - Computed recommendation per container (CPU request, memory request)
-- Time-series charts with the **recommendation line** (red), **current request** (amber), and **current limit** (orange) overlaid on historical usage, making it easy to compare recommendations against both actual consumption and current configuration
+- Time-series charts with the **recommendation line** (red), **historical request** (amber stepped), and **current limit** (orange) overlaid on historical usage, making it easy to compare recommendations against both actual consumption and how resource requests evolved over time
 
 #### Exporting Results
 
@@ -143,7 +143,7 @@ This message appears when Prometheus returns no time-series data for the workloa
 
 - **Recording rules not loaded** — k8s-sustain requires recording rules (`k8s_sustain:pod_workload`, `k8s_sustain:container_cpu_usage_by_workload:rate5m`, etc.). Verify they exist by querying `k8s_sustain:pod_workload` in Prometheus. If using the bundled Prometheus subchart, they are embedded automatically. If using an external Prometheus with the Prometheus Operator, set `controller.serviceMonitor.enabled=true` to deploy `PrometheusRule` resources.
 - **Duplicate kube-state-metrics instances** — If multiple kube-state-metrics are scraped, the workload mapping rules can fail with "many-to-many matching not allowed". Either remove the duplicate kube-state-metrics or upgrade the chart (the recording rules deduplicate series automatically since v0.3).
-- **Missing upstream metrics** — The recording rules depend on `kube_pod_owner`, `kube_replicaset_owner`, `container_cpu_usage_seconds_total`, and `container_memory_working_set_bytes`. Ensure kube-state-metrics and cAdvisor metrics are scraped.
+- **Missing upstream metrics** — The recording rules depend on `kube_pod_owner`, `kube_replicaset_owner`, `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`, and `kube_pod_container_resource_requests` (for historical request lines). Ensure kube-state-metrics and cAdvisor metrics are scraped.
 
 ## Helm Values Reference
 

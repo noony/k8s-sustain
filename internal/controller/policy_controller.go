@@ -328,9 +328,9 @@ func (r *PolicyReconciler) buildRecommendations(
 ) (map[string]workload.ContainerRecommendation, error) {
 	rsCfg := policy.Spec.RightSizing.ResourcesConfigs
 
-	cpuQuantile := recommender.PercentileQuantile(rsCfg.CPU.Requests.PercentilePercentage)
+	cpuQuantile := recommender.PercentileQuantile(rsCfg.CPU.Requests.Percentile)
 	cpuWindow := recommender.ResourceWindow(rsCfg.CPU.Window)
-	memQuantile := recommender.PercentileQuantile(rsCfg.Memory.Requests.PercentilePercentage)
+	memQuantile := recommender.PercentileQuantile(rsCfg.Memory.Requests.Percentile)
 	memWindow := recommender.ResourceWindow(rsCfg.Memory.Window)
 
 	cpuValues, err := r.PrometheusClient.QueryCPUByContainer(ctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)

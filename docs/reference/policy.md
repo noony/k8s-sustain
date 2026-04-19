@@ -30,8 +30,8 @@ spec:
       cpu:
         window: 168h
         requests:
-          percentilePercentage: 95
-          headroomPercentage: 10
+          percentile: 95
+          headroom: 10
           minAllowed: 10m
           maxAllowed: 4000m
         limits:
@@ -39,8 +39,8 @@ spec:
       memory:
         window: 168h
         requests:
-          percentilePercentage: 95
-          headroomPercentage: 20
+          percentile: 95
+          headroom: 20
           minAllowed: 32Mi
           maxAllowed: 8Gi
         limits:
@@ -123,8 +123,8 @@ Configures recommendations for CPU and memory independently.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `percentilePercentage` | int32 | `95` | Percentile of usage to use as the recommendation (50–99) |
-| `headroomPercentage` | int32 | `0` | Safety buffer added on top of the observed percentile value |
+| `percentile` | int32 | `95` | Percentile of usage to use as the recommendation (50–99) |
+| `headroom` | int32 | `0` | Safety buffer added on top of the observed percentile value |
 | `keepRequest` | bool | `false` | When `true`, the request is not changed |
 | `minAllowed` | Quantity | — | Floor value for the computed request |
 | `maxAllowed` | Quantity | — | Cap value for the computed request |

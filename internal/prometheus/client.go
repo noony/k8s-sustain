@@ -84,6 +84,28 @@ func (c *Client) QueryMemoryRangeByContainer(ctx context.Context, namespace, own
 	return c.queryRangeByContainer(ctx, expr, window, step)
 }
 
+// QueryCPURequestRangeByContainer returns per-container CPU request time-series (cores)
+// over the specified window with the given step resolution.
+// Uses the k8s_sustain:container_cpu_requests_by_workload:cores recording rule.
+func (c *Client) QueryCPURequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
+	expr := fmt.Sprintf(
+		`max by (container) (k8s_sustain:container_cpu_requests_by_workload:cores{namespace=%q,owner_kind=%q,owner_name=%q})`,
+		namespace, ownerKind, ownerName,
+	)
+	return c.queryRangeByContainer(ctx, expr, window, step)
+}
+
+// QueryMemoryRequestRangeByContainer returns per-container memory request time-series (bytes)
+// over the specified window with the given step resolution.
+// Uses the k8s_sustain:container_memory_requests_by_workload:bytes recording rule.
+func (c *Client) QueryMemoryRequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
+	expr := fmt.Sprintf(
+		`max by (container) (k8s_sustain:container_memory_requests_by_workload:bytes{namespace=%q,owner_kind=%q,owner_name=%q})`,
+		namespace, ownerKind, ownerName,
+	)
+	return c.queryRangeByContainer(ctx, expr, window, step)
+}
+
 // OOMEvent represents a single OOM kill event for a container.
 type OOMEvent struct {
 	Timestamp time.Time `json:"timestamp"`

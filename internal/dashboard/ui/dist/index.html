@@ -549,6 +549,37 @@ tbody tr:last-child td { border-bottom: none; }
 }
 .auto-refresh input { accent-color: var(--accent); }
 
+/* Time range selector */
+.time-range-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.time-range-group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.time-range-group button {
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: all 0.15s;
+  border-right: 1px solid var(--border);
+}
+.time-range-group button:last-child { border-right: none; }
+.time-range-group button:hover { background: var(--bg-hover); color: var(--text); }
+.time-range-group button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
 /* Responsive */
 @media (max-width: 900px) {
   .sidebar { display: none; }
@@ -602,6 +633,33 @@ let allWorkloadsState = { namespace: '', kind: '', automated: '', search: '', pa
 let searchTimer = null;
 let policyDetailState = {};
 let workloadMetricsParams = null;
+
+// ---- Time range selector ----
+var timeRangeOptions = [
+  { label: '1h',  window: '1h',   step: '1m'  },
+  { label: '4h',  window: '4h',   step: '1m'  },
+  { label: '12h', window: '12h',  step: '5m'  },
+  { label: '1d',  window: '24h',  step: '5m'  },
+  { label: '3d',  window: '72h',  step: '5m'  },
+  { label: '7d',  window: '168h', step: '15m' },
+  { label: '30d', window: '720h', step: '1h'  },
+];
+var defaultTimeRange = '168h';
+
+function buildTimeRangeSelector(selectedWindow, onChangeFn) {
+  return '<div class="time-range-group">' +
+    timeRangeOptions.map(function(opt) {
+      return '<button' + (opt.window === selectedWindow ? ' class="active"' : '') +
+        ' onclick="' + onChangeFn + '(\'' + opt.window + '\')">' + opt.label + '</button>';
+    }).join('') + '</div>';
+}
+
+function getTimeRangeStep(window) {
+  for (var i = 0; i < timeRangeOptions.length; i++) {
+    if (timeRangeOptions[i].window === window) return timeRangeOptions[i].step;
+  }
+  return '5m';
+}
 
 // ---- Auto-refresh ----
 function stopAutoRefresh() {
@@ -926,16 +984,16 @@ async function renderPolicyDetail(name, opts) {
     '<div class="stats-row">' +
       '<div class="stat-card"><div class="stat-label">Status</div><div class="stat-value">' + statusBadge(policy.conditions) + '</div></div>' +
       '<div class="stat-card"><div class="stat-label">Matched Workloads</div><div class="stat-value">' + total + '</div></div>' +
-      '<div class="stat-card"><div class="stat-label">CPU Percentile</div><div class="stat-value">' + ((cpuCfg.requests && cpuCfg.requests.percentilePercentage) || 95) + 'th</div></div>' +
-      '<div class="stat-card"><div class="stat-label">Memory Percentile</div><div class="stat-value">' + ((memCfg.requests && memCfg.requests.percentilePercentage) || 95) + 'th</div></div>' +
+      '<div class="stat-card"><div class="stat-label">CPU Percentile</div><div class="stat-value">' + ((cpuCfg.requests && cpuCfg.requests.percentile) || 95) + 'th</div></div>' +
+      '<div class="stat-card"><div class="stat-label">Memory Percentile</div><div class="stat-value">' + ((memCfg.requests && memCfg.requests.percentile) || 95) + 'th</div></div>' +
     '</div>' +
     '<div class="card"><div class="card-header"><h2>Configuration</h2></div>' +
       '<div class="sim-grid"><div>' +
         '<h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">CPU</h3>' +
         '<div class="rec-card">' +
           '<div class="rec-row"><span class="label">Window</span><span class="value">' + (cpuCfg.window || '168h') + '</span></div>' +
-          '<div class="rec-row"><span class="label">Percentile</span><span class="value">' + ((cpuCfg.requests && cpuCfg.requests.percentilePercentage) || 95) + '%</span></div>' +
-          '<div class="rec-row"><span class="label">Headroom</span><span class="value">' + ((cpuCfg.requests && cpuCfg.requests.headroomPercentage) || 0) + '%</span></div>' +
+          '<div class="rec-row"><span class="label">Percentile</span><span class="value">' + ((cpuCfg.requests && cpuCfg.requests.percentile) || 95) + '%</span></div>' +
+          '<div class="rec-row"><span class="label">Headroom</span><span class="value">' + ((cpuCfg.requests && cpuCfg.requests.headroom) || 0) + '%</span></div>' +
           '<div class="rec-row"><span class="label">Min</span><span class="value">' + ((cpuCfg.requests && cpuCfg.requests.minAllowed) || '-') + '</span></div>' +
           '<div class="rec-row"><span class="label">Max</span><span class="value">' + ((cpuCfg.requests && cpuCfg.requests.maxAllowed) || '-') + '</span></div>' +
         '</div>' +
@@ -943,8 +1001,8 @@ async function renderPolicyDetail(name, opts) {
         '<h3 style="font-size:13px;color:var(--text-dim);margin-bottom:8px">Memory</h3>' +
         '<div class="rec-card">' +
           '<div class="rec-row"><span class="label">Window</span><span class="value">' + (memCfg.window || '168h') + '</span></div>' +
-          '<div class="rec-row"><span class="label">Percentile</span><span class="value">' + ((memCfg.requests && memCfg.requests.percentilePercentage) || 95) + '%</span></div>' +
-          '<div class="rec-row"><span class="label">Headroom</span><span class="value">' + ((memCfg.requests && memCfg.requests.headroomPercentage) || 0) + '%</span></div>' +
+          '<div class="rec-row"><span class="label">Percentile</span><span class="value">' + ((memCfg.requests && memCfg.requests.percentile) || 95) + '%</span></div>' +
+          '<div class="rec-row"><span class="label">Headroom</span><span class="value">' + ((memCfg.requests && memCfg.requests.headroom) || 0) + '%</span></div>' +
           '<div class="rec-row"><span class="label">Min</span><span class="value">' + ((memCfg.requests && memCfg.requests.minAllowed) || '-') + '</span></div>' +
           '<div class="rec-row"><span class="label">Max</span><span class="value">' + ((memCfg.requests && memCfg.requests.maxAllowed) || '-') + '</span></div>' +
         '</div>' +
@@ -1121,15 +1179,24 @@ async function renderAllWorkloads(opts) {
 }
 
 // ---- Workload Detail ----
+function changeWorkloadDetailTimeRange(window) {
+  var p = workloadDetailParams;
+  if (p) renderWorkloadDetail({namespace: p.namespace, kind: p.kind, name: p.name, policy: p.policy, window: window});
+}
+var workloadDetailParams = null;
+
 async function renderWorkloadDetail(params) {
   var namespace = params.namespace, kind = params.kind, name = params.name, policy = params.policy || '';
+  var window = params.window || defaultTimeRange;
+  var step = getTimeRangeStep(window);
+  workloadDetailParams = {namespace: namespace, kind: kind, name: name, policy: policy, window: window};
   var content = document.getElementById('content');
   content.innerHTML = '<div class="loading"><div class="spinner"></div>Loading workload...</div>';
   destroyCharts();
 
   try {
     var results = await Promise.all([
-      api('/api/workloads/' + namespace + '/' + kind + '/' + name + '/metrics?window=168h&step=5m'),
+      api('/api/workloads/' + namespace + '/' + kind + '/' + name + '/metrics?window=' + window + '&step=' + step),
       api('/api/workloads/' + namespace + '/' + kind + '/' + name + '/recommendations'),
     ]);
     var metrics = results[0], recs = results[1];
@@ -1138,6 +1205,8 @@ async function renderWorkloadDetail(params) {
     var policyName = recs.policyName || policy || '';
     var recContainers = recs.containers || {};
     var resources = metrics.resources || {};
+    var cpuRequests = metrics.cpuRequests || {};
+    var memoryRequests = metrics.memoryRequests || {};
     var oomByContainer = groupOOMEventsByContainer(metrics.oomEvents);
 
     content.innerHTML =
@@ -1149,7 +1218,10 @@ async function renderWorkloadDetail(params) {
             ? '<span class="badge badge-green">Automated</span> <a href="#" onclick="event.preventDefault();navigate(\'policy-detail\',{name:\'' + policyName + '\'})">' + policyName + '</a>'
             : '<span class="badge badge-dim">Manual</span>') +
         '</p></div>' +
-        '<label class="auto-refresh"><input type="checkbox" onchange="autoRefreshToggle(this, function(){ renderWorkloadDetail({namespace:\'' + namespace + '\',kind:\'' + kind + '\',name:\'' + name + '\',policy:\'' + policyName + '\'}) })"> Auto-refresh (30s)</label>' +
+        '<div class="time-range-bar">' +
+          buildTimeRangeSelector(window, 'changeWorkloadDetailTimeRange') +
+          '<label class="auto-refresh"><input type="checkbox" onchange="autoRefreshToggle(this, function(){ renderWorkloadDetail({namespace:\'' + namespace + '\',kind:\'' + kind + '\',name:\'' + name + '\',policy:\'' + policyName + '\',window:\'' + window + '\'}) })"> Auto-refresh (30s)</label>' +
+        '</div>' +
       '</div>' +
 
       (recs.automated && Object.keys(recContainers).length > 0 ?
@@ -1189,7 +1261,12 @@ async function renderWorkloadDetail(params) {
       var res = resources[cname] || {};
       if (metrics.cpu && metrics.cpu[cname]) {
         var cpuAnnotations = [];
-        if (res.cpuRequest) cpuAnnotations.push({ value: parseCPUQuantity(res.cpuRequest), label: 'Request: ' + res.cpuRequest, color: '#f59e0b', dash: [4, 4] });
+        var cpuExtra = [];
+        if (cpuRequests[cname] && cpuRequests[cname].length) {
+          cpuExtra.push({ data: cpuRequests[cname], label: 'Request', color: '#f59e0b', dash: [4, 4] });
+        } else if (res.cpuRequest) {
+          cpuAnnotations.push({ value: parseCPUQuantity(res.cpuRequest), label: 'Request: ' + res.cpuRequest, color: '#f59e0b', dash: [4, 4] });
+        }
         if (res.cpuLimit) cpuAnnotations.push({ value: parseCPUQuantity(res.cpuLimit), label: 'Limit: ' + res.cpuLimit, color: '#f97316', dash: [2, 2] });
         createTimeSeriesChart('cpu-' + cname, metrics.cpu[cname], {
           label: 'CPU Usage', color: '#6366f1', unit: 'cores',
@@ -1197,11 +1274,17 @@ async function renderWorkloadDetail(params) {
           annotationValue: recs.automated ? parseCPUQuantity(rec.cpuRequest) : null,
           annotationLabel: rec.cpuRequest ? 'Recommendation: ' + rec.cpuRequest : undefined,
           annotations: cpuAnnotations,
+          extraSeries: cpuExtra,
         });
       }
       if (metrics.memory && metrics.memory[cname]) {
         var memAnnotations = [];
-        if (res.memoryRequest) memAnnotations.push({ value: parseMemoryQuantity(res.memoryRequest), label: 'Request: ' + res.memoryRequest, color: '#f59e0b', dash: [4, 4] });
+        var memExtra = [];
+        if (memoryRequests[cname] && memoryRequests[cname].length) {
+          memExtra.push({ data: memoryRequests[cname], label: 'Request', color: '#f59e0b', dash: [4, 4] });
+        } else if (res.memoryRequest) {
+          memAnnotations.push({ value: parseMemoryQuantity(res.memoryRequest), label: 'Request: ' + res.memoryRequest, color: '#f59e0b', dash: [4, 4] });
+        }
         if (res.memoryLimit) memAnnotations.push({ value: parseMemoryQuantity(res.memoryLimit), label: 'Limit: ' + res.memoryLimit, color: '#f97316', dash: [2, 2] });
         createTimeSeriesChart('mem-' + cname, metrics.memory[cname], {
           label: 'Memory Usage', color: '#06b6d4', unit: 'MiB',
@@ -1210,6 +1293,7 @@ async function renderWorkloadDetail(params) {
           annotationValue: recs.automated ? parseMemoryQuantity(rec.memoryRequest) : null,
           annotationLabel: rec.memoryRequest ? 'Recommendation: ' + rec.memoryRequest : undefined,
           annotations: memAnnotations,
+          extraSeries: memExtra,
           oomEvents: oomByContainer[cname] || [],
         });
       }
@@ -1220,15 +1304,22 @@ async function renderWorkloadDetail(params) {
 }
 
 // ---- Workload Metrics (legacy) ----
+function changeWorkloadMetricsTimeRange(window) {
+  var p = workloadMetricsParams;
+  if (p) renderWorkloadMetrics({namespace: p.namespace, kind: p.kind, name: p.name, policy: p.policy, window: window});
+}
+
 async function renderWorkloadMetrics(params) {
   workloadMetricsParams = params;
   var namespace = params.namespace, kind = params.kind, name = params.name, policy = params.policy || '';
+  var window = params.window || defaultTimeRange;
+  var step = getTimeRangeStep(window);
   var content = document.getElementById('content');
   content.innerHTML = '<div class="loading"><div class="spinner"></div>Loading metrics...</div>';
   destroyCharts();
 
   try {
-    var data = await api('/api/workloads/' + namespace + '/' + kind + '/' + name + '/metrics?window=168h&step=5m');
+    var data = await api('/api/workloads/' + namespace + '/' + kind + '/' + name + '/metrics?window=' + window + '&step=' + step);
     var containers = new Set([].concat(Object.keys(data.cpu || {}), Object.keys(data.memory || {})));
     var oomByContainer = groupOOMEventsByContainer(data.oomEvents);
 
@@ -1238,7 +1329,10 @@ async function renderWorkloadMetrics(params) {
       '<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">' +
         '<div><h1><span class="kind-badge kind-' + kind + '" style="font-size:14px;margin-right:4px">' + kind + '</span> ' + name + '</h1>' +
         '<p>' + namespace + ' &mdash; ' + containers.size + ' container(s)</p></div>' +
-        '<label class="auto-refresh"><input type="checkbox" onchange="autoRefreshToggle(this, function(){ renderWorkloadMetrics(workloadMetricsParams) })"> Auto-refresh (30s)</label>' +
+        '<div class="time-range-bar">' +
+          buildTimeRangeSelector(window, 'changeWorkloadMetricsTimeRange') +
+          '<label class="auto-refresh"><input type="checkbox" onchange="autoRefreshToggle(this, function(){ renderWorkloadMetrics(workloadMetricsParams) })"> Auto-refresh (30s)</label>' +
+        '</div>' +
       '</div>' +
       Array.from(containers).map(function(cname) {
         var oomCount = (oomByContainer[cname] || []).length;
@@ -1258,27 +1352,41 @@ async function renderWorkloadMetrics(params) {
         ' Open in Simulator</button></div>';
 
     var resData = data.resources || {};
+    var cpuReqData = data.cpuRequests || {};
+    var memReqData = data.memoryRequests || {};
     containers.forEach(function(cname) {
       var res = resData[cname] || {};
       if (data.cpu && data.cpu[cname]) {
         var cpuAnnotations = [];
-        if (res.cpuRequest) cpuAnnotations.push({ value: parseCPUQuantity(res.cpuRequest), label: 'Request: ' + res.cpuRequest, color: '#f59e0b', dash: [4, 4] });
+        var cpuExtra = [];
+        if (cpuReqData[cname] && cpuReqData[cname].length) {
+          cpuExtra.push({ data: cpuReqData[cname], label: 'Request', color: '#f59e0b', dash: [4, 4] });
+        } else if (res.cpuRequest) {
+          cpuAnnotations.push({ value: parseCPUQuantity(res.cpuRequest), label: 'Request: ' + res.cpuRequest, color: '#f59e0b', dash: [4, 4] });
+        }
         if (res.cpuLimit) cpuAnnotations.push({ value: parseCPUQuantity(res.cpuLimit), label: 'Limit: ' + res.cpuLimit, color: '#f97316', dash: [2, 2] });
         createTimeSeriesChart('cpu-' + cname, data.cpu[cname], {
           label: 'CPU Usage', color: '#6366f1', unit: 'cores',
           yFormat: function(v) { return v.toFixed(3); },
           annotations: cpuAnnotations,
+          extraSeries: cpuExtra,
         });
       }
       if (data.memory && data.memory[cname]) {
         var memAnnotations = [];
-        if (res.memoryRequest) memAnnotations.push({ value: parseMemoryQuantity(res.memoryRequest), label: 'Request: ' + res.memoryRequest, color: '#f59e0b', dash: [4, 4] });
+        var memExtra = [];
+        if (memReqData[cname] && memReqData[cname].length) {
+          memExtra.push({ data: memReqData[cname], label: 'Request', color: '#f59e0b', dash: [4, 4] });
+        } else if (res.memoryRequest) {
+          memAnnotations.push({ value: parseMemoryQuantity(res.memoryRequest), label: 'Request: ' + res.memoryRequest, color: '#f59e0b', dash: [4, 4] });
+        }
         if (res.memoryLimit) memAnnotations.push({ value: parseMemoryQuantity(res.memoryLimit), label: 'Limit: ' + res.memoryLimit, color: '#f97316', dash: [2, 2] });
         createTimeSeriesChart('mem-' + cname, data.memory[cname], {
           label: 'Memory Usage', color: '#06b6d4', unit: 'MiB',
           transform: function(v) { return v / (1024 * 1024); },
           yFormat: function(v) { return v.toFixed(0); },
           annotations: memAnnotations,
+          extraSeries: memExtra,
           oomEvents: oomByContainer[cname] || [],
         });
       }
@@ -1289,6 +1397,21 @@ async function renderWorkloadMetrics(params) {
 }
 
 // ---- Simulator ----
+function buildSimWindowSelector(selectedWindow) {
+  return '<div class="time-range-group">' +
+    timeRangeOptions.map(function(opt) {
+      return '<button type="button"' + (opt.window === selectedWindow ? ' class="active"' : '') +
+        ' onclick="selectSimWindow(this,\'' + opt.window + '\')">' + opt.label + '</button>';
+    }).join('') + '</div>' +
+    '<input type="hidden" id="sim-window" value="' + selectedWindow + '">';
+}
+function selectSimWindow(btn, window) {
+  document.getElementById('sim-window').value = window;
+  var btns = btn.parentElement.querySelectorAll('button');
+  btns.forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+}
+
 function renderSimulator(prefill) {
   var pf = prefill || {};
   var content = document.getElementById('content');
@@ -1307,10 +1430,7 @@ function renderSimulator(prefill) {
           '<option value="CronJob"' + (pf.kind==='CronJob'?' selected':'') + '>CronJob</option>' +
         '</select></div>' +
         '<div class="form-group"><label>Name</label><input id="sim-name" type="text" placeholder="my-app" value="' + (pf.name || '') + '"></div>' +
-        '<div class="form-group"><label>Window</label><select id="sim-window">' +
-          '<option value="24h">24h</option><option value="72h">3 days</option>' +
-          '<option value="168h" selected>7 days</option><option value="336h">14 days</option>' +
-          '<option value="720h">30 days</option></select></div>' +
+        '<div class="form-group"><label>Window</label>' + buildSimWindowSelector(pf.window || defaultTimeRange) + '</div>' +
       '</div></div>' +
     '<div class="sim-grid">' +
       '<div class="card sim-section"><h3><span style="color:var(--accent-light)">CPU</span> Configuration</h3>' +
@@ -1352,9 +1472,9 @@ async function runSimulation() {
 
   var body = {
     namespace: ns, ownerKind: document.getElementById('sim-kind').value, ownerName: ownerName,
-    window: document.getElementById('sim-window').value, step: '5m',
-    cpu: { percentilePercentage: cpuPct, headroomPercentage: cpuHr },
-    memory: { percentilePercentage: memPct, headroomPercentage: memHr }
+    window: document.getElementById('sim-window').value, step: getTimeRangeStep(document.getElementById('sim-window').value),
+    cpu: { percentile: cpuPct, headroom: cpuHr },
+    memory: { percentile: memPct, headroom: memHr }
   };
 
   var cpuMin = document.getElementById('sim-cpu-min').value;
@@ -1410,12 +1530,19 @@ async function runSimulation() {
       }).join('');
 
     var simResources = data.resources || {};
+    var simCpuReq = data.cpuRequests || {};
+    var simMemReq = data.memoryRequests || {};
     containers.forEach(function(cname) {
       var rec = data.containers[cname];
       var res = simResources[cname] || {};
       if (data.cpuSeries && data.cpuSeries[cname]) {
         var cpuAnnotations = [];
-        if (res.cpuRequest) cpuAnnotations.push({ value: parseCPUQuantity(res.cpuRequest), label: 'Request: ' + res.cpuRequest, color: '#f59e0b', dash: [4, 4] });
+        var cpuExtra = [];
+        if (simCpuReq[cname] && simCpuReq[cname].length) {
+          cpuExtra.push({ data: simCpuReq[cname], label: 'Request', color: '#f59e0b', dash: [4, 4] });
+        } else if (res.cpuRequest) {
+          cpuAnnotations.push({ value: parseCPUQuantity(res.cpuRequest), label: 'Request: ' + res.cpuRequest, color: '#f59e0b', dash: [4, 4] });
+        }
         if (res.cpuLimit) cpuAnnotations.push({ value: parseCPUQuantity(res.cpuLimit), label: 'Limit: ' + res.cpuLimit, color: '#f97316', dash: [2, 2] });
         createTimeSeriesChart('simcpu-' + cname, data.cpuSeries[cname], {
           label: 'CPU Usage', color: '#6366f1', unit: 'cores',
@@ -1423,11 +1550,17 @@ async function runSimulation() {
           annotationValue: parseCPUQuantity(rec.cpuRequest),
           annotationLabel: 'Recommendation: ' + rec.cpuRequest,
           annotations: cpuAnnotations,
+          extraSeries: cpuExtra,
         });
       }
       if (data.memorySeries && data.memorySeries[cname]) {
         var memAnnotations = [];
-        if (res.memoryRequest) memAnnotations.push({ value: parseMemoryQuantity(res.memoryRequest), label: 'Request: ' + res.memoryRequest, color: '#f59e0b', dash: [4, 4] });
+        var memExtra = [];
+        if (simMemReq[cname] && simMemReq[cname].length) {
+          memExtra.push({ data: simMemReq[cname], label: 'Request', color: '#f59e0b', dash: [4, 4] });
+        } else if (res.memoryRequest) {
+          memAnnotations.push({ value: parseMemoryQuantity(res.memoryRequest), label: 'Request: ' + res.memoryRequest, color: '#f59e0b', dash: [4, 4] });
+        }
         if (res.memoryLimit) memAnnotations.push({ value: parseMemoryQuantity(res.memoryLimit), label: 'Limit: ' + res.memoryLimit, color: '#f97316', dash: [2, 2] });
         createTimeSeriesChart('simmem-' + cname, data.memorySeries[cname], {
           label: 'Memory Usage', color: '#06b6d4', unit: 'MiB',
@@ -1436,6 +1569,7 @@ async function runSimulation() {
           annotationValue: parseMemoryQuantity(rec.memoryRequest),
           annotationLabel: 'Recommendation: ' + rec.memoryRequest,
           annotations: memAnnotations,
+          extraSeries: memExtra,
         });
       }
     });
@@ -1459,7 +1593,7 @@ function exportYAML() {
 
   var yaml = '# k8s-sustain simulation recommendation\n' +
     '# Workload: ' + b.namespace + '/' + b.ownerKind + '/' + b.ownerName + '\n' +
-    '# Window: ' + b.window + ' | CPU P' + b.cpu.percentilePercentage + '+' + b.cpu.headroomPercentage + '% | Mem P' + b.memory.percentilePercentage + '+' + b.memory.headroomPercentage + '%\n' +
+    '# Window: ' + b.window + ' | CPU P' + b.cpu.percentile + '+' + b.cpu.headroom + '% | Mem P' + b.memory.percentile + '+' + b.memory.headroom + '%\n' +
     'apiVersion: apps/v1\nkind: ' + b.ownerKind + '\nmetadata:\n  name: ' + b.ownerName + '\n  namespace: ' + b.namespace + '\n' +
     'spec:\n  template:\n    spec:\n      containers:\n' + resourceLines + '\n';
   downloadFile(b.ownerName + '-recommendations.yaml', yaml, 'text/yaml');
@@ -1549,6 +1683,18 @@ function createTimeSeriesChart(canvasId, points, opts) {
     borderColor: opts.color, backgroundColor: opts.color + '18',
     fill: true, borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 4, tension: 0.3,
   }];
+
+  // Extra time-series (e.g. historical requests/limits from Prometheus)
+  (opts.extraSeries || []).forEach(function(s) {
+    if (!s.data || !s.data.length) return;
+    var seriesData = s.data.map(function(p) { return { x: new Date(p.timestamp), y: transform(p.value) }; });
+    datasets.push({
+      label: s.label, data: seriesData,
+      borderColor: s.color || '#f59e0b', borderWidth: 1.5,
+      borderDash: s.dash || [4, 4], pointRadius: 0, fill: false,
+      stepped: 'before',
+    });
+  });
 
   var annotations = (opts.annotations || []).slice();
   if (opts.annotationValue != null && !isNaN(opts.annotationValue)) {

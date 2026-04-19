@@ -30,15 +30,15 @@ spec:
       cpu:
         window: 336h          # 14 days — more history for irregular jobs
         requests:
-          percentilePercentage: 90
-          headroomPercentage: 10
+          percentile: 90
+          headroom: 10
         limits:
           equalsToRequest: true   # Guaranteed QoS for batch jobs
       memory:
         window: 336h
         requests:
-          percentilePercentage: 95
-          headroomPercentage: 15
+          percentile: 95
+          headroom: 15
         limits:
           equalsToRequest: true
 ```
