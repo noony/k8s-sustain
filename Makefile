@@ -22,12 +22,6 @@ coverage: ## Run tests with coverage report
 lint: ## Run golangci-lint
 	golangci-lint run
 
-fmt: ## Format Go source files
-	go fmt ./...
-
-vet: ## Run go vet
-	go vet ./...
-
 tidy: ## Run go mod tidy
 	go mod tidy
 
