@@ -16,7 +16,7 @@
         <link rel="prev" href="../cronjobs/">
       
       
-        <link rel="next" href="../cert-manager/">
+        <link rel="next" href="../argocd/">
       
       
       <link rel="icon" href="../../assets/logo.svg">
@@ -1079,6 +1079,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../argocd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Argo CD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../cert-manager/" class="md-nav__link">
         
   
@@ -1432,7 +1453,7 @@
 <li><strong>CPU and Memory charts</strong> — Interactive time-series with recommendation lines overlaid (for automated workloads)</li>
 <li><strong>Open in Simulator</strong> — Jump to the simulator with the workload pre-filled</li>
 </ul>
-<p>Charts default to a 7-day window with 5-minute resolution. Each chart overlays the workload's <strong>current resource request</strong> (amber dashed line) and <strong>limit</strong> (orange dashed line) so you can see how actual usage compares to configured resources. If the workload is automated, the <strong>recommendation</strong> line (red dashed) is also shown.</p>
+<p>A <strong>time range selector</strong> in the top-right lets you choose how much history to display: 1h, 4h, 12h, 1 day, 3 days, 7 days (default), or 30 days. The step resolution adjusts automatically for each range. Each chart overlays the workload's <strong>historical resource request</strong> (amber dashed stepped line) and <strong>limit</strong> (orange dashed line) so you can see how actual usage compares to configured resources over time. The request line reflects real changes (e.g. from k8s-sustain patching or manual edits) rather than a flat snapshot. If historical request data is not available in Prometheus, the dashboard falls back to a static line from the current workload spec. If the workload is automated, the <strong>recommendation</strong> line (red dashed) is also shown.</p>
 <p>Memory charts also display <strong>OOM kill events</strong> as red vertical markers with a count badge in the chart header. These are detected via <code>kube_pod_container_status_restarts_total</code> correlated with <code>kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}</code>. If no kube-state-metrics is available, OOM markers are silently omitted.</p>
 <p>Enable <strong>Auto-refresh</strong> to keep data current.</p>
 <h3 id="policy-simulator">Policy Simulator<a class="headerlink" href="#policy-simulator" title="Permanent link">&para;</a></h3>
@@ -1451,7 +1472,7 @@
 <p>The results show:</p>
 <ul>
 <li>Computed recommendation per container (CPU request, memory request)</li>
-<li>Time-series charts with the <strong>recommendation line</strong> (red), <strong>current request</strong> (amber), and <strong>current limit</strong> (orange) overlaid on historical usage, making it easy to compare recommendations against both actual consumption and current configuration</li>
+<li>Time-series charts with the <strong>recommendation line</strong> (red), <strong>historical request</strong> (amber stepped), and <strong>current limit</strong> (orange) overlaid on historical usage, making it easy to compare recommendations against both actual consumption and how resource requests evolved over time</li>
 </ul>
 <h4 id="exporting-results">Exporting Results<a class="headerlink" href="#exporting-results" title="Permanent link">&para;</a></h4>
 <p>After running a simulation, use the export buttons to download recommendations:</p>
@@ -1465,7 +1486,7 @@
 <ul>
 <li><strong>Recording rules not loaded</strong> — k8s-sustain requires recording rules (<code>k8s_sustain:pod_workload</code>, <code>k8s_sustain:container_cpu_usage_by_workload:rate5m</code>, etc.). Verify they exist by querying <code>k8s_sustain:pod_workload</code> in Prometheus. If using the bundled Prometheus subchart, they are embedded automatically. If using an external Prometheus with the Prometheus Operator, set <code>controller.serviceMonitor.enabled=true</code> to deploy <code>PrometheusRule</code> resources.</li>
 <li><strong>Duplicate kube-state-metrics instances</strong> — If multiple kube-state-metrics are scraped, the workload mapping rules can fail with "many-to-many matching not allowed". Either remove the duplicate kube-state-metrics or upgrade the chart (the recording rules deduplicate series automatically since v0.3).</li>
-<li><strong>Missing upstream metrics</strong> — The recording rules depend on <code>kube_pod_owner</code>, <code>kube_replicaset_owner</code>, <code>container_cpu_usage_seconds_total</code>, and <code>container_memory_working_set_bytes</code>. Ensure kube-state-metrics and cAdvisor metrics are scraped.</li>
+<li><strong>Missing upstream metrics</strong> — The recording rules depend on <code>kube_pod_owner</code>, <code>kube_replicaset_owner</code>, <code>container_cpu_usage_seconds_total</code>, <code>container_memory_working_set_bytes</code>, and <code>kube_pod_container_resource_requests</code> (for historical request lines). Ensure kube-state-metrics and cAdvisor metrics are scraped.</li>
 </ul>
 <h2 id="helm-values-reference">Helm Values Reference<a class="headerlink" href="#helm-values-reference" title="Permanent link">&para;</a></h2>
 <table>
@@ -1593,13 +1614,13 @@
         
         
           
-          <a href="../cert-manager/" class="md-footer__link md-footer__link--next" aria-label="Next: TLS with cert-manager">
+          <a href="../argocd/" class="md-footer__link md-footer__link--next" aria-label="Next: Argo CD">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                TLS with cert-manager
+                Argo CD
               </div>
             </div>
             <div class="md-footer__button md-icon">
