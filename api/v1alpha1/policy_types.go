@@ -88,12 +88,54 @@ type ResourcesConfigs struct {
 	Memory ResourceConfig `json:"memory,omitempty"`
 }
 
+// HpaMode defines how the controller interacts with Horizontal Pod Autoscalers.
+// +kubebuilder:validation:Enum=HpaAware;UpdateTargetValue;Ignore
+type HpaMode string
+
+const (
+	HpaModeHpaAware          HpaMode = "HpaAware"
+	HpaModeUpdateTargetValue HpaMode = "UpdateTargetValue"
+	HpaModeIgnore            HpaMode = "Ignore"
+)
+
+// HpaResourceConfig allows overriding the auto-detected HPA target utilization
+// for a specific resource dimension.
+type HpaResourceConfig struct {
+	// TargetUtilizationOverride overrides the auto-detected HPA target utilization
+	// for this resource. When set, the controller uses this value instead of reading
+	// the HPA spec. Value is a percentage (1-100).
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	TargetUtilizationOverride *int32 `json:"targetUtilizationOverride,omitempty"`
+}
+
+// HpaConfig configures how the controller interacts with HPAs targeting
+// the same workloads.
+type HpaConfig struct {
+	// Mode determines the HPA interaction strategy.
+	// Default: HpaAware.
+	// +optional
+	// +kubebuilder:default=HpaAware
+	Mode HpaMode `json:"mode,omitempty"`
+	// CPU holds optional overrides for CPU-related HPA settings.
+	// +optional
+	CPU *HpaResourceConfig `json:"cpu,omitempty"`
+	// Memory holds optional overrides for memory-related HPA settings.
+	// +optional
+	Memory *HpaResourceConfig `json:"memory,omitempty"`
+}
+
 // RightSizingUpdatePolicy controls eviction-related behaviour during right-sizing.
 type RightSizingUpdatePolicy struct {
 	// IgnoreAutoscalerSafeToEvictAnnotations skips the cluster-autoscaler safe-to-evict
 	// annotation check when restarting pods for right-sizing.
 	// +optional
 	IgnoreAutoscalerSafeToEvictAnnotations bool `json:"ignoreAutoscalerSafeToEvictAnnotations,omitempty"`
+	// Hpa configures interaction with Horizontal Pod Autoscalers.
+	// When nil, defaults to HpaAware mode with no overrides (auto-detect and adjust).
+	// +optional
+	Hpa *HpaConfig `json:"hpa,omitempty"`
 }
 
 // RightSizingSpec defines how resource recommendations are computed and applied.

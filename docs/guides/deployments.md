@@ -72,10 +72,44 @@ If a container already has a non-zero CPU request set when the webhook intercept
 
 ## Combining with HPA
 
-k8s-sustain right-sizes **requests** (which HPA uses to compute utilization targets). When used together:
+k8s-sustain right-sizes **requests**, which HPA uses to compute utilization. By default, k8s-sustain is **HPA-aware** and automatically adjusts its recommendations so HPA scaling decisions remain correct.
 
-1. k8s-sustain sets accurate per-container requests based on observed usage
-2. HPA scales the number of replicas based on `cpu`/`memory` utilization relative to those requests
+### How it works
 
-!!! tip
-    Use a slightly lower percentile (e.g. p80) for workloads managed by HPA so that individual pod requests remain tight — HPA will add replicas when aggregate load increases.
+HPA computes: `utilization = actual_usage / requests`. If k8s-sustain changes requests, utilization shifts — even though load hasn't changed. The `HpaAware` mode (default) factors the HPA's target utilization into the recommendation formula:
+
+```
+request = observed_usage × (1 + headroom) / (hpa_target / 100)
+```
+
+This means k8s-sustain sets requests to a value where HPA's utilization math produces the correct scaling behavior.
+
+**Example** (p95 = 400m, headroom = 20%, HPA target = 80%):
+
+| Scenario | Requests | Utilization | HPA reaction |
+|---|---|---|---|
+| Before k8s-sustain | 1000m | 40% | wants to scale down |
+| Without HPA awareness | 480m | 83% | scales up (wrong) |
+| With HPA awareness | 600m | 67% | calm (correct) |
+
+### Configuration
+
+```yaml
+spec:
+  rightSizing:
+    updatePolicy:
+      hpa:
+        mode: HpaAware      # default — auto-detect and adjust
+        cpu:
+          targetUtilizationOverride: 75  # optional, overrides auto-detected value
+```
+
+### Modes
+
+- **`HpaAware`** (default) — Auto-detect HPAs, adjust recommendation formula. No HPA objects are modified.
+- **`UpdateTargetValue`** — Convert HPA metrics from percentage-based (`Utilization`) to absolute (`AverageValue`), fully decoupling the two systems. The HPA object is modified.
+- **`Ignore`** — No HPA awareness. Use this only if your HPA scales on custom metrics (queue depth, requests/sec) that are unaffected by resource changes.
+
+### KEDA
+
+When using KEDA, k8s-sustain auto-detects that the HPA is managed by a ScaledObject. `HpaAware` mode (default) works seamlessly with KEDA. See the [KEDA guide](keda.md) for details.

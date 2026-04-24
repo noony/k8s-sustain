@@ -24,7 +24,7 @@ controller:
   healthProbeBindAddress: ":8081"
   leaderElect: true
   concurrencyLimit: 5
-  logLevel: info
+  logLevel: error
   service:
     type: ClusterIP
     port: 8080
@@ -61,7 +61,7 @@ webhook:
   # Number of webhook server replicas. ≥2 recommended for production HA.
   replicaCount: 1
   port: 9443
-  logLevel: info
+  logLevel: error
   # failurePolicy controls what happens when the webhook is unreachable.
   # "Ignore" (default) lets pods through; "Fail" blocks them.
   failurePolicy: Ignore
@@ -101,7 +101,7 @@ dashboard:
   replicaCount: 1
   port: 8090
   bindAddress: ":8090"
-  logLevel: info
+  logLevel: error
   # Allowed CORS origins. Use ["*"] to allow all origins (default).
   corsAllowedOrigins:
     - "*"

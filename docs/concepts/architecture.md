@@ -59,6 +59,9 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
    - Compute per-container recommendations (request + limit)
    - If `--recommend-only` is set, log the recommendation and skip patching
    - Recycle stale running pods: on k8s >= 1.31 via in-place resource patching (using the `/resize` subresource on k8s >= 1.33); on k8s < 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time
+   - Detect if an HPA targets the workload (by matching `scaleTargetRef`)
+   - If HPA found and mode is `HpaAware`: adjust recommendations to factor in HPA's target utilization
+   - If HPA found and mode is `UpdateTargetValue`: patch the HPA (or KEDA ScaledObject) to use absolute `AverageValue` metrics
    - Emit a `ResourcesUpdated` event on the workload object on success
    - On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a `ReconciliationRetryScheduled` warning event on the workload
 

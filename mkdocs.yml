@@ -76,5 +76,6 @@ nav:
       - CronJobs: guides/cronjobs.md
       - Dashboard: guides/dashboard.md
       - Argo CD: guides/argocd.md
+      - KEDA: guides/keda.md
       - TLS with cert-manager: guides/cert-manager.md
   - Development: development.md

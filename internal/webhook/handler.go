@@ -62,8 +62,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // admit processes a single AdmissionRequest. On any error it fails open
 // (allows the pod) to avoid blocking the cluster.
 func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) *admissionv1.AdmissionResponse {
-	logger := log.FromContext(ctx).WithValues("namespace", req.Namespace, "name", req.Name)
+	logger := log.FromContext(ctx).WithValues("namespace", req.Namespace, "name", req.Name, "uid", req.UID)
 	allow := &admissionv1.AdmissionResponse{Allowed: true}
+
+	logger.V(1).Info("admit invoked", "operation", req.Operation, "kind", req.Kind.Kind)
 
 	var pod corev1.Pod
 	if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
@@ -74,15 +76,19 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 
 	policyName := pod.Annotations[sustainv1alpha1.PolicyAnnotation]
 	if policyName == "" {
+		logger.V(1).Info("pod has no policy annotation, allowing without injection")
 		return allow // no annotation — pod is not managed by any policy
 	}
+	logger = logger.WithValues("policy", policyName)
+	logger.V(1).Info("pod is annotated with policy")
 
 	var policy sustainv1alpha1.Policy
 	if err := h.Client.Get(ctx, types.NamespacedName{Name: policyName}, &policy); err != nil {
 		if client.IgnoreNotFound(err) == nil {
+			logger.V(1).Info("policy not found, allowing pod")
 			return allow // policy deleted — let pod through
 		}
-		logger.Error(err, "failed to fetch policy", "policy", policyName)
+		logger.Error(err, "failed to fetch policy")
 		return allow
 	}
 
@@ -92,16 +98,21 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allow
 	}
 	if ownerKind == "" {
+		logger.V(1).Info("standalone pod (no controller owner), skipping injection")
 		return allow // standalone pod — no workload type to determine mode
 	}
+	logger = logger.WithValues("ownerKind", ownerKind, "ownerName", ownerName)
+	logger.V(1).Info("resolved pod owner")
 
 	// Act on both OnCreate and Ongoing policies so that pods always start
 	// with the latest recommendation. Without this, Ongoing pods would start
 	// with whatever the template currently has and only be resized later.
 	mode := modeForKind(policy.Spec.Update.Types, ownerKind)
 	if mode == nil {
+		logger.V(1).Info("policy does not configure this workload kind, skipping")
 		return allow
 	}
+	logger.V(1).Info("policy configured for workload kind", "mode", *mode)
 
 	recs, err := h.buildRecommendations(ctx, &policy, req.Namespace, ownerKind, ownerName, pod.Spec.Containers)
 	if err != nil {
@@ -120,6 +131,8 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		filtered[c.Name] = rec
 	}
 	if len(filtered) == 0 {
+		logger.V(1).Info("no recommendations match pod containers, allowing without injection",
+			"podContainers", len(pod.Spec.Containers), "recommendations", len(recs))
 		return allow
 	}
 
@@ -129,6 +142,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allow
 	}
 	if patchBytes == nil {
+		logger.V(1).Info("no patch needed (recommendations match current pod spec)")
 		return allow
 	}
 
@@ -139,6 +153,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 
 	pt := admissionv1.PatchTypeJSONPatch
 	logger.Info("injecting resources", "containers", len(filtered))
+	logger.V(1).Info("injection details", "recommendations", filtered, "patchBytes", len(patchBytes))
 	return &admissionv1.AdmissionResponse{
 		Allowed:   true,
 		Patch:     patchBytes,
@@ -213,25 +228,28 @@ func (h *Handler) buildRecommendations(
 	ns, ownerKind, ownerName string,
 	containers []corev1.Container,
 ) (map[string]workload.ContainerRecommendation, error) {
+	logger := log.FromContext(ctx).WithValues("kind", ownerKind, "name", ownerName, "namespace", ns)
 	rsCfg := policy.Spec.RightSizing.ResourcesConfigs
 
-	cpuValues, err := h.PrometheusClient.QueryCPUByContainer(
-		ctx, ns, ownerKind, ownerName,
-		recommender.PercentileQuantile(rsCfg.CPU.Requests.Percentile),
-		recommender.ResourceWindow(rsCfg.CPU.Window),
-	)
+	cpuQuantile := recommender.PercentileQuantile(rsCfg.CPU.Requests.Percentile)
+	cpuWindow := recommender.ResourceWindow(rsCfg.CPU.Window)
+	memQuantile := recommender.PercentileQuantile(rsCfg.Memory.Requests.Percentile)
+	memWindow := recommender.ResourceWindow(rsCfg.Memory.Window)
+	logger.V(1).Info("querying Prometheus from webhook",
+		"cpuQuantile", cpuQuantile, "cpuWindow", cpuWindow,
+		"memQuantile", memQuantile, "memWindow", memWindow)
+
+	cpuValues, err := h.PrometheusClient.QueryCPUByContainer(ctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
 	if err != nil {
 		return nil, fmt.Errorf("cpu query: %w", err)
 	}
+	logger.V(1).Info("cpu query returned", "containers", len(cpuValues))
 
-	memValues, err := h.PrometheusClient.QueryMemoryByContainer(
-		ctx, ns, ownerKind, ownerName,
-		recommender.PercentileQuantile(rsCfg.Memory.Requests.Percentile),
-		recommender.ResourceWindow(rsCfg.Memory.Window),
-	)
+	memValues, err := h.PrometheusClient.QueryMemoryByContainer(ctx, ns, ownerKind, ownerName, memQuantile, memWindow)
 	if err != nil {
 		return nil, fmt.Errorf("memory query: %w", err)
 	}
+	logger.V(1).Info("memory query returned", "containers", len(memValues))
 
 	recs := make(map[string]workload.ContainerRecommendation)
 	for _, c := range containers {

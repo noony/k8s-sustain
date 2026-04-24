@@ -37,7 +37,7 @@ spec:
             - dashboard
             - --bind-address={{ .Values.dashboard.bindAddress }}
             - --prometheus-address={{ include "k8s-sustain.prometheusAddress" . }}
-            - --zap-log-level={{ .Values.dashboard.logLevel }}
+            - --log-level={{ .Values.dashboard.logLevel }}
             {{- if .Values.dashboard.corsAllowedOrigins }}
             - --cors-allowed-origins={{ join "," .Values.dashboard.corsAllowedOrigins }}
             {{- end }}

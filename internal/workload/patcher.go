@@ -62,6 +62,8 @@ func (p *Patcher) RecyclePods(ctx context.Context, namespace string, selector kl
 // via the Eviction API so the workload controller replaces it from the updated
 // template; PDB-blocked pods are skipped and retried on the next reconcile.
 func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation) error {
+	logger := log.FromContext(ctx).WithValues("namespace", namespace, "selector", selector.String())
+
 	var podList corev1.PodList
 	if err := p.client.List(ctx, &podList,
 		client.InNamespace(namespace),
@@ -69,14 +71,22 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 	); err != nil {
 		return fmt.Errorf("listing pods: %w", err)
 	}
+	strategy := "eviction"
+	if p.inPlace {
+		strategy = "inPlace"
+	}
+	logger.V(1).Info("listed pods for recycle", "count", len(podList.Items), "strategy", strategy)
 
 	var errs []error
+	processed, skipped := 0, 0
 	for i := range podList.Items {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		pod := &podList.Items[i]
 		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
+			logger.V(1).Info("skipping pod", "pod", pod.Name, "phase", pod.Status.Phase, "deleting", pod.DeletionTimestamp != nil)
+			skipped++
 			continue
 		}
 		var err error
@@ -88,7 +98,9 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 		if err != nil {
 			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
 		}
+		processed++
 	}
+	logger.Info("recycle pass complete", "processed", processed, "skipped", skipped, "errors", len(errs), "strategy", strategy)
 	return errors.Join(errs...)
 }
 
@@ -119,6 +131,7 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	base := pod.DeepCopy()
 	containers, changed := applyRecommendations(pod.Spec.Containers, recs)
 	if !changed {
+		logger.V(1).Info("pod already at target resources, no in-place patch needed")
 		return nil
 	}
 	pod.Spec.Containers = containers
@@ -126,9 +139,10 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	// K8s 1.33+ requires the /resize subresource for in-place pod resource
 	// changes. Try that first; fall back to a regular pod patch for 1.31-1.32
 	// where the subresource doesn't exist yet.
+	logger.V(1).Info("attempting in-place resize via /resize subresource")
 	err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(base))
 	if apierrors.IsNotFound(err) {
-		logger.Info(err.Error())
+		logger.V(1).Info("/resize subresource not available, falling back to direct pod patch", "err", err.Error())
 		// /resize subresource not available (k8s < 1.33) — try direct pod patch.
 		err = p.client.Patch(ctx, pod, client.MergeFrom(base))
 	}
@@ -141,6 +155,9 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 		pod.Spec.Containers = base.Spec.Containers
 		return p.evictPod(ctx, pod, recs)
 	}
+	if err == nil {
+		logger.Info("in-place resize applied")
+	}
 	return err
 }
 
@@ -151,7 +168,10 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 // PodDisruptionBudget is blocking the eviction. The pod is skipped silently —
 // it will be retried on the next reconcile cycle.
 func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) error {
+	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
+
 	if !podIsStale(pod, recs) {
+		logger.V(1).Info("pod already running recommended resources, eviction skipped")
 		return nil // already running with the recommended resources
 	}
 
@@ -161,8 +181,8 @@ func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string
 			Namespace: pod.Namespace,
 		},
 	}
-	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
+	logger.Info("evicting stale pod")
 	err := p.client.SubResource("eviction").Create(ctx, pod, eviction)
 	if err == nil {
 		return nil

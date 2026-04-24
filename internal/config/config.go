@@ -72,16 +72,16 @@ func BindControllerFlags(cmd *cobra.Command) {
 	cmd.Flags().String("metrics-bind-address", ":8080", "Address the metrics endpoint binds to")
 	cmd.Flags().String("health-probe-bind-address", ":8081", "Address the health probe endpoint binds to")
 	cmd.Flags().Bool("leader-elect", false, "Enable leader election for high availability")
-	cmd.Flags().String("zap-log-level", "info", "Log level (debug, info, warn, error)")
+	cmd.Flags().String("log-level", "info", "Log level (debug, info, warn, error)")
 	cmd.Flags().String("prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
-	cmd.Flags().Duration("reconcile-interval", 10*time.Minute, "How often policies are re-evaluated")
+	cmd.Flags().Duration("reconcile-interval", 5*time.Minute, "How often policies are re-evaluated")
 	cmd.Flags().StringSlice("excluded-namespaces", nil, "Namespaces the reconciler should never touch")
 	cmd.Flags().Int("concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
 
 	_ = viper.BindPFlag("metrics-bind-address", cmd.Flags().Lookup("metrics-bind-address"))
 	_ = viper.BindPFlag("health-probe-bind-address", cmd.Flags().Lookup("health-probe-bind-address"))
 	_ = viper.BindPFlag("leader-elect", cmd.Flags().Lookup("leader-elect"))
-	_ = viper.BindPFlag("zap-log-level", cmd.Flags().Lookup("zap-log-level"))
+	_ = viper.BindPFlag("log-level", cmd.Flags().Lookup("log-level"))
 	_ = viper.BindPFlag("prometheus-address", cmd.Flags().Lookup("prometheus-address"))
 	_ = viper.BindPFlag("reconcile-interval", cmd.Flags().Lookup("reconcile-interval"))
 	_ = viper.BindPFlag("excluded-namespaces", cmd.Flags().Lookup("excluded-namespaces"))
@@ -107,7 +107,7 @@ func LoadControllerConfig() ControllerConfig {
 		MetricsBindAddress:     viper.GetString("metrics-bind-address"),
 		HealthProbeBindAddress: viper.GetString("health-probe-bind-address"),
 		LeaderElect:            viper.GetBool("leader-elect"),
-		LogLevel:               viper.GetString("zap-log-level"),
+		LogLevel:               viper.GetString("log-level"),
 		PrometheusAddress:      viper.GetString("prometheus-address"),
 		ReconcileInterval:      viper.GetDuration("reconcile-interval"),
 		ExcludedNamespaces:     viper.GetStringSlice("excluded-namespaces"),
@@ -124,12 +124,12 @@ func BindWebhookFlags(cmd *cobra.Command) {
 	cmd.Flags().String("tls-key-file", "/tls/tls.key", "Path to TLS private key file")
 	cmd.Flags().Int("port", 9443, "Port the webhook server listens on")
 	cmd.Flags().String("prometheus-address", "http://localhost:9090", "Prometheus server address")
-	cmd.Flags().String("zap-log-level", "info", "Log level (debug, info, warn, error)")
+	cmd.Flags().String("log-level", "info", "Log level (debug, info, warn, error)")
 	_ = viper.BindPFlag("webhook.tls-cert-file", cmd.Flags().Lookup("tls-cert-file"))
 	_ = viper.BindPFlag("webhook.tls-key-file", cmd.Flags().Lookup("tls-key-file"))
 	_ = viper.BindPFlag("webhook.port", cmd.Flags().Lookup("port"))
 	_ = viper.BindPFlag("webhook.prometheus-address", cmd.Flags().Lookup("prometheus-address"))
-	_ = viper.BindPFlag("webhook.zap-log-level", cmd.Flags().Lookup("zap-log-level"))
+	_ = viper.BindPFlag("webhook.log-level", cmd.Flags().Lookup("log-level"))
 }
 
 // WebhookConfig holds resolved configuration for the webhook server.
@@ -149,7 +149,7 @@ func LoadWebhookConfig() WebhookConfig {
 		TLSKeyFile:        viper.GetString("webhook.tls-key-file"),
 		Port:              viper.GetInt("webhook.port"),
 		PrometheusAddress: viper.GetString("webhook.prometheus-address"),
-		LogLevel:          viper.GetString("webhook.zap-log-level"),
+		LogLevel:          viper.GetString("webhook.log-level"),
 		RecommendOnly:     RecommendOnly(),
 	}
 }
@@ -160,12 +160,12 @@ func LoadWebhookConfig() WebhookConfig {
 func BindDashboardFlags(cmd *cobra.Command) {
 	cmd.Flags().String("bind-address", ":8090", "Address the dashboard server listens on")
 	cmd.Flags().String("prometheus-address", "http://localhost:9090", "Prometheus server address")
-	cmd.Flags().String("zap-log-level", "info", "Log level (debug, info, warn, error)")
+	cmd.Flags().String("log-level", "info", "Log level (debug, info, warn, error)")
 	cmd.Flags().StringSlice("cors-allowed-origins", []string{"*"}, "Allowed CORS origins (e.g. http://localhost:3000). Use * to allow all.")
 
 	_ = viper.BindPFlag("dashboard.bind-address", cmd.Flags().Lookup("bind-address"))
 	_ = viper.BindPFlag("dashboard.prometheus-address", cmd.Flags().Lookup("prometheus-address"))
-	_ = viper.BindPFlag("dashboard.zap-log-level", cmd.Flags().Lookup("zap-log-level"))
+	_ = viper.BindPFlag("dashboard.log-level", cmd.Flags().Lookup("log-level"))
 	_ = viper.BindPFlag("dashboard.cors-allowed-origins", cmd.Flags().Lookup("cors-allowed-origins"))
 }
 
@@ -182,7 +182,7 @@ func LoadDashboardConfig() DashboardConfig {
 	return DashboardConfig{
 		BindAddress:        viper.GetString("dashboard.bind-address"),
 		PrometheusAddress:  viper.GetString("dashboard.prometheus-address"),
-		LogLevel:           viper.GetString("dashboard.zap-log-level"),
+		LogLevel:           viper.GetString("dashboard.log-level"),
 		CORSAllowedOrigins: viper.GetStringSlice("dashboard.cors-allowed-origins"),
 	}
 }

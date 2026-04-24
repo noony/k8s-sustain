@@ -109,6 +109,21 @@ func ComputeLimit(request *resource.Quantity, currentRequest, currentLimit *reso
 	return LimitResult{}
 }
 
+// AdjustForHpa adjusts a computed request to account for an HPA's target utilization.
+// The formula is: adjusted = request / (targetUtilization / 100).
+// This ensures that at the original expected usage, HPA sees the utilization it expects.
+// Returns nil when request is nil.
+func AdjustForHpa(request *resource.Quantity, targetUtilization int32) *resource.Quantity {
+	if request == nil {
+		return nil
+	}
+	// adjusted = request * 100 / targetUtilization (integer math, round up)
+	millis := request.MilliValue() * 100
+	adjusted := (millis + int64(targetUtilization) - 1) / int64(targetUtilization)
+	q := resource.NewMilliQuantity(adjusted, request.Format)
+	return q
+}
+
 func clampQuantity(qty *resource.Quantity, min, max *resource.Quantity) {
 	if min != nil && qty.Cmp(*min) < 0 {
 		*qty = min.DeepCopy()

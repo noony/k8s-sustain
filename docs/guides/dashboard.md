@@ -37,7 +37,7 @@ At startup, the dashboard validates Prometheus connectivity and logs a warning i
 |---------------------------|----------------------------|------------------------------------------|
 | `--bind-address`          | `:8090`                    | Address the dashboard server listens on  |
 | `--prometheus-address`    | `http://localhost:9090`    | Prometheus server URL                    |
-| `--zap-log-level`         | `info`                     | Log level (debug, info, warn, error)     |
+| `--log-level`             | `info`                     | Log level (debug, info, warn, error)     |
 | `--cors-allowed-origins`  | `*`                        | Allowed CORS origins (comma-separated)   |
 
 ### Helm Chart

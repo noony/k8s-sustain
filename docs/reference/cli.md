@@ -41,7 +41,7 @@ k8s-sustain start [flags]
 | `--metrics-bind-address` | `:8080` | Address the Prometheus metrics endpoint binds to |
 | `--health-probe-bind-address` | `:8081` | Address the `/healthz` and `/readyz` endpoints bind to |
 | `--leader-elect` | `false` | Enable leader election for high-availability deployments |
-| `--zap-log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server used for metric queries |
 | `--reconcile-interval` | `10m` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces the reconciler should never touch |
@@ -54,6 +54,13 @@ Every flag can be overridden with an environment variable prefixed by `K8SSUSTAI
 ```bash
 K8SSUSTAIN_RECONCILE_INTERVAL=30m k8s-sustain start
 ```
+
+### Log verbosity
+
+- `info` (default) — high-signal events: reconcile cycle start/end with target counts, HPA detection, recommendations computed, in-place resize applied, pod evictions, recommendation injection by the webhook.
+- `debug` — adds per-container traces: Prometheus query parameters and result counts, raw percentile values, per-resource recommendations, HPA-aware adjustments, retry-backoff skips, eviction skips for non-stale or non-running pods, webhook admit decisions including standalone-pod / no-policy / no-data branches.
+
+Use `debug` when investigating why a workload was or wasn't resized, or why an HPA adjustment behaved unexpectedly.
 
 ### Health endpoints
 
@@ -81,7 +88,7 @@ k8s-sustain webhook [flags]
 | `--tls-cert-file` | `/tls/tls.crt` | Path to the TLS certificate file |
 | `--tls-key-file` | `/tls/tls.key` | Path to the TLS private key file |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
-| `--zap-log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--health-probe-bind-address` | `:8082` | Address the `/healthz` endpoint binds to |
 
 ### Health endpoints
@@ -127,7 +134,7 @@ k8s-sustain dashboard [flags]
 |------|---------|-------------|
 | `--bind-address` | `:8090` | Address the HTTP server listens on |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
-| `--zap-log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 
 ### Health endpoints
 

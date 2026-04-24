@@ -197,6 +197,50 @@ spec:
                   updatePolicy:
                     description: UpdatePolicy controls eviction behaviour.
                     properties:
+                      hpa:
+                        description: |-
+                          Hpa configures interaction with Horizontal Pod Autoscalers.
+                          When nil, defaults to HpaAware mode with no overrides (auto-detect and adjust).
+                        properties:
+                          cpu:
+                            description: CPU holds optional overrides for CPU-related
+                              HPA settings.
+                            properties:
+                              targetUtilizationOverride:
+                                description: |-
+                                  TargetUtilizationOverride overrides the auto-detected HPA target utilization
+                                  for this resource. When set, the controller uses this value instead of reading
+                                  the HPA spec. Value is a percentage (1-100).
+                                format: int32
+                                maximum: 100
+                                minimum: 1
+                                type: integer
+                            type: object
+                          memory:
+                            description: Memory holds optional overrides for memory-related
+                              HPA settings.
+                            properties:
+                              targetUtilizationOverride:
+                                description: |-
+                                  TargetUtilizationOverride overrides the auto-detected HPA target utilization
+                                  for this resource. When set, the controller uses this value instead of reading
+                                  the HPA spec. Value is a percentage (1-100).
+                                format: int32
+                                maximum: 100
+                                minimum: 1
+                                type: integer
+                            type: object
+                          mode:
+                            default: HpaAware
+                            description: |-
+                              Mode determines the HPA interaction strategy.
+                              Default: HpaAware.
+                            enum:
+                            - HpaAware
+                            - UpdateTargetValue
+                            - Ignore
+                            type: string
+                        type: object
                       ignoreAutoscalerSafeToEvictAnnotations:
                         description: |-
                           IgnoreAutoscalerSafeToEvictAnnotations skips the cluster-autoscaler safe-to-evict

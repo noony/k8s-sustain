@@ -27,6 +27,8 @@ spec:
   rightSizing:
     updatePolicy:
       ignoreAutoscalerSafeToEvictAnnotations: false
+      hpa:
+        mode: HpaAware
     resourcesConfigs:
       cpu:
         window: 168h
@@ -110,6 +112,29 @@ See [Update Modes](../concepts/update-modes.md) for the difference between `OnCr
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `ignoreAutoscalerSafeToEvictAnnotations` | bool | `false` | Skip the cluster-autoscaler `safe-to-evict` annotation check when restarting pods |
+| `hpa` | object | — | Configure interaction with Horizontal Pod Autoscalers (see below) |
+
+### `spec.rightSizing.updatePolicy.hpa`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `HpaAware` | HPA interaction strategy: `HpaAware`, `UpdateTargetValue`, or `Ignore` |
+| `cpu` | object | — | CPU-specific HPA overrides |
+| `memory` | object | — | Memory-specific HPA overrides |
+
+**Modes:**
+
+| Mode | Description |
+|------|-------------|
+| `HpaAware` | Auto-detect HPAs and adjust requests so HPA utilization math remains correct. Formula: `request = base_recommendation / (target_utilization / 100)` |
+| `UpdateTargetValue` | Convert HPA metrics from `Utilization` to `AverageValue` (absolute), then apply recommendations normally. For KEDA workloads, patches the ScaledObject instead |
+| `Ignore` | No HPA awareness. Current behavior — use at your own risk with HPA |
+
+### `spec.rightSizing.updatePolicy.hpa.cpu` / `hpa.memory`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `targetUtilizationOverride` | int32 | — | Override the auto-detected HPA target utilization (1-100). When set, the controller uses this value instead of reading the HPA spec |
 
 ### `spec.rightSizing.resourcesConfigs`
 

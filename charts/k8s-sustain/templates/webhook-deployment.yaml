@@ -37,7 +37,7 @@ spec:
             - webhook
             - --port={{ .Values.webhook.port }}
             - --prometheus-address={{ include "k8s-sustain.prometheusAddress" . }}
-            - --zap-log-level={{ .Values.webhook.logLevel }}
+            - --log-level={{ .Values.webhook.logLevel }}
             - --tls-cert-file=/tls/tls.crt
             - --tls-key-file=/tls/tls.key
             {{- if .Values.recommendOnly }}

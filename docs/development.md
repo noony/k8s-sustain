@@ -65,7 +65,7 @@ kubectl port-forward -n k8s-sustain svc/k8s-sustain-prometheus-server 9090:80 &
 go run main.go start \
   --prometheus-address=http://localhost:9090 \  # port-forwarded from the cluster
   --reconcile-interval=1m \
-  --zap-log-level=debug
+  --log-level=debug
 ```
 
 ### Start the webhook (requires TLS)
