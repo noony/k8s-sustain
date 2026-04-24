@@ -22,6 +22,7 @@ spec:
       deployment: Ongoing
       statefulSet: Ongoing
       daemonSet: Ongoing
+      argoRollout: Ongoing
       cronJob: OnCreate
   rightSizing:
     updatePolicy:
@@ -94,6 +95,7 @@ Defines which workload kinds are managed and in what mode. Omitting a kind means
 | `deployment` | `OnCreate` \| `Ongoing` | Manages `Deployment` objects |
 | `statefulSet` | `OnCreate` \| `Ongoing` | Manages `StatefulSet` objects |
 | `daemonSet` | `OnCreate` \| `Ongoing` | Manages `DaemonSet` objects |
+| `argoRollout` | `OnCreate` \| `Ongoing` | Manages Argo Rollouts `Rollout` objects |
 | `cronJob` | `OnCreate` \| `Ongoing` | Manages `CronJob` objects |
 | `job` | `OnCreate` \| `Ongoing` | Manages standalone `Job` objects |
 

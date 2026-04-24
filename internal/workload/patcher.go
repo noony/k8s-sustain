@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -51,37 +50,11 @@ func New(c client.Client, inPlace bool) *Patcher {
 	return &Patcher{client: c, inPlace: inPlace}
 }
 
-// RecycleDeploymentPods recycles pods of a Deployment so they pick up the latest
-// recommendations via the admission webhook. The Deployment template is intentionally
-// left untouched — the webhook injects resources at pod creation time.
-func (p *Patcher) RecycleDeploymentPods(ctx context.Context, deploy *appsv1.Deployment, recs map[string]ContainerRecommendation) error {
-	sel, err := metav1.LabelSelectorAsSelector(deploy.Spec.Selector)
-	if err != nil {
-		return fmt.Errorf("building pod selector for %s: %w", deploy.Name, err)
-	}
-	return p.recyclePods(ctx, deploy.Namespace, sel, recs)
+// RecyclePods drives running pods matching the given selector toward the
+// recommended resources. This is the only public entry point for pod recycling.
+func (p *Patcher) RecyclePods(ctx context.Context, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation) error {
+	return p.recyclePods(ctx, namespace, selector, recs)
 }
-
-// RecycleStatefulSetPods recycles pods of a StatefulSet so they pick up the latest
-// recommendations via the admission webhook.
-func (p *Patcher) RecycleStatefulSetPods(ctx context.Context, sts *appsv1.StatefulSet, recs map[string]ContainerRecommendation) error {
-	sel, err := metav1.LabelSelectorAsSelector(sts.Spec.Selector)
-	if err != nil {
-		return fmt.Errorf("building pod selector for %s: %w", sts.Name, err)
-	}
-	return p.recyclePods(ctx, sts.Namespace, sel, recs)
-}
-
-// RecycleDaemonSetPods recycles pods of a DaemonSet so they pick up the latest
-// recommendations via the admission webhook.
-func (p *Patcher) RecycleDaemonSetPods(ctx context.Context, ds *appsv1.DaemonSet, recs map[string]ContainerRecommendation) error {
-	sel, err := metav1.LabelSelectorAsSelector(ds.Spec.Selector)
-	if err != nil {
-		return fmt.Errorf("building pod selector for %s: %w", ds.Name, err)
-	}
-	return p.recyclePods(ctx, ds.Namespace, sel, recs)
-}
-
 
 // recyclePods drives running pods toward the updated resource spec.
 // On clusters that support InPlacePodVerticalScaling the pod's resources are

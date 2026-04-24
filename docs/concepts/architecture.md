@@ -27,7 +27,7 @@ k8s-sustain is split into three independent components that run as separate proc
 │           ┌────────────────┼────────────────┐                   │
 │           ▼                ▼                ▼                   │
 │    Deployments      StatefulSets        CronJobs                │
-│    DaemonSets                                                   │
+│    DaemonSets       Argo Rollouts                               │
 │                                                                 │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                        Prometheus                        │   │
@@ -49,15 +49,18 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
 **Reconcile loop:**
 
 1. A `Policy` event is received (create / update / periodic requeue)
-2. For each workload kind enabled in the policy (`deployment`, `statefulSet`, `daemonSet`, `cronJob`):
-   - List all objects of that kind cluster-wide
+2. For each workload kind enabled in the policy (`deployment`, `statefulSet`, `daemonSet`, `argoRollout`):
+   - List all objects of that kind — scoped to the namespaces in `selector.namespaces` when specified, or cluster-wide otherwise
    - Filter by the `k8s.sustain.io/policy` annotation in the pod template
    - Skip workloads with `OnCreate` mode (handled by the webhook)
-3. For each matching workload:
+   - Skip workloads in retry backoff from a previous transient failure
+3. Process matching workloads in parallel (bounded by `--concurrency-limit`, default 5):
    - Query Prometheus for the p`N` of CPU and memory over the configured window
    - Compute per-container recommendations (request + limit)
    - If `--recommend-only` is set, log the recommendation and skip patching
-   - Recycle stale running pods: on k8s ≥ 1.31 via in-place resource patching (using the `/resize` subresource on k8s ≥ 1.33); on k8s < 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time
+   - Recycle stale running pods: on k8s >= 1.31 via in-place resource patching (using the `/resize` subresource on k8s >= 1.33); on k8s < 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time
+   - Emit a `ResourcesUpdated` event on the workload object on success
+   - On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a `ReconciliationRetryScheduled` warning event on the workload
 
 The controller requeues after `--reconcile-interval` (default `10m`).
 

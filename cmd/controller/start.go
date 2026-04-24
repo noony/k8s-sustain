@@ -39,6 +39,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		"leaderElect", cfg.LeaderElect,
 		"prometheusAddr", cfg.PrometheusAddress,
 		"reconcileInterval", cfg.ReconcileInterval,
+		"concurrencyLimit", cfg.ConcurrencyLimit,
 		"recommendOnly", cfg.RecommendOnly,
 	)
 
@@ -74,6 +75,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		InPlaceUpdates:     inPlaceUpdates,
 		ExcludedNamespaces: cfg.ExcludedNamespaces,
 		RecommendOnly:      cfg.RecommendOnly,
+		ConcurrencyLimit:   cfg.ConcurrencyLimit,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "Unable to create Policy controller")
 		return err

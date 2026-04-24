@@ -39,6 +39,7 @@ spec:
             - --prometheus-address={{ include "k8s-sustain.prometheusAddress" . }}
             - --zap-log-level={{ .Values.controller.logLevel }}
             - --excluded-namespaces={{ concat (list .Release.Namespace "kube-system" "kube-public") .Values.webhook.excludedNamespaces | join "," }}
+            - --concurrency-limit={{ .Values.controller.concurrencyLimit }}
             {{- if .Values.recommendOnly }}
             - --recommend-only=true
             {{- end }}

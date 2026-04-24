@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -54,6 +55,7 @@ var scheme = func() *runtime.Scheme {
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(sustainv1alpha1.AddToScheme(s))
+	utilruntime.Must(rolloutsv1alpha1.AddToScheme(s))
 	return s
 }()
 
@@ -74,6 +76,7 @@ func BindControllerFlags(cmd *cobra.Command) {
 	cmd.Flags().String("prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
 	cmd.Flags().Duration("reconcile-interval", 10*time.Minute, "How often policies are re-evaluated")
 	cmd.Flags().StringSlice("excluded-namespaces", nil, "Namespaces the reconciler should never touch")
+	cmd.Flags().Int("concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
 
 	_ = viper.BindPFlag("metrics-bind-address", cmd.Flags().Lookup("metrics-bind-address"))
 	_ = viper.BindPFlag("health-probe-bind-address", cmd.Flags().Lookup("health-probe-bind-address"))
@@ -82,6 +85,7 @@ func BindControllerFlags(cmd *cobra.Command) {
 	_ = viper.BindPFlag("prometheus-address", cmd.Flags().Lookup("prometheus-address"))
 	_ = viper.BindPFlag("reconcile-interval", cmd.Flags().Lookup("reconcile-interval"))
 	_ = viper.BindPFlag("excluded-namespaces", cmd.Flags().Lookup("excluded-namespaces"))
+	_ = viper.BindPFlag("concurrency-limit", cmd.Flags().Lookup("concurrency-limit"))
 }
 
 // ControllerConfig holds resolved configuration for the controller.
@@ -93,6 +97,7 @@ type ControllerConfig struct {
 	PrometheusAddress      string
 	ReconcileInterval      time.Duration
 	ExcludedNamespaces     []string
+	ConcurrencyLimit       int
 	RecommendOnly          bool
 }
 
@@ -106,6 +111,7 @@ func LoadControllerConfig() ControllerConfig {
 		PrometheusAddress:      viper.GetString("prometheus-address"),
 		ReconcileInterval:      viper.GetDuration("reconcile-interval"),
 		ExcludedNamespaces:     viper.GetStringSlice("excluded-namespaces"),
+		ConcurrencyLimit:       viper.GetInt("concurrency-limit"),
 		RecommendOnly:          RecommendOnly(),
 	}
 }

@@ -1,11 +1,33 @@
 package workload
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestRecyclePods_ExposesPublicMethod(t *testing.T) {
+	p := New(nil, false)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
+		MatchLabels: map[string]string{"app": "test"},
+	})
+
+	defer func() {
+		if r := recover(); r != nil {
+			// nil client causes a panic when listing pods — that's expected
+			// and confirms RecyclePods delegates to the real implementation.
+			t.Logf("recovered expected panic: %v", r)
+		}
+	}()
+
+	err := p.RecyclePods(context.Background(), "default", sel, nil)
+	if err == nil {
+		t.Error("expected error with nil client")
+	}
+}
 
 func qtyp(s string) *resource.Quantity { q := resource.MustParse(s); return &q }
 

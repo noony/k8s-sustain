@@ -45,6 +45,7 @@ k8s-sustain start [flags]
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server used for metric queries |
 | `--reconcile-interval` | `10m` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces the reconciler should never touch |
+| `--concurrency-limit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
 
 ### Environment variables
 

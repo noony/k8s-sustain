@@ -2,12 +2,13 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"slices"
+	"sync/atomic"
 	"time"
 
+	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/errgroup"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -33,6 +34,7 @@ import (
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=pods/resize,verbs=patch
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
+// +kubebuilder:rbac:groups=argoproj.io,resources=rollouts,verbs=get;list;watch
 
 // PolicyReconciler reconciles a Policy object.
 type PolicyReconciler struct {
@@ -43,18 +45,20 @@ type PolicyReconciler struct {
 	InPlaceUpdates     bool
 	ExcludedNamespaces []string
 	RecommendOnly      bool
+	ConcurrencyLimit   int
 	recorder           record.EventRecorder
 	patcher            *workload.Patcher
-}
-
-func (r *PolicyReconciler) isExcluded(namespace string) bool {
-	return slices.Contains(r.ExcludedNamespaces, namespace)
+	retries            *retryTracker
 }
 
 // SetupWithManager registers the PolicyReconciler with the given manager.
 func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.patcher = workload.New(r.Client, r.InPlaceUpdates)
 	r.recorder = mgr.GetEventRecorderFor("k8s-sustain")
+	r.retries = newRetryTracker()
+	if r.ConcurrencyLimit <= 0 {
+		r.ConcurrencyLimit = 5
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sustainv1alpha1.Policy{}).
 		Complete(r)
@@ -95,174 +99,265 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	timer := prometheus.NewTimer(reconcileDuration.WithLabelValues(policy.Name))
 	defer timer.ObserveDuration()
 
-	var errs []error
-	if err := r.reconcileDeployments(ctx, policy); err != nil {
-		errs = append(errs, err)
-	}
-	if err := r.reconcileStatefulSets(ctx, policy); err != nil {
-		errs = append(errs, err)
-	}
-	if err := r.reconcileDaemonSets(ctx, policy); err != nil {
-		errs = append(errs, err)
+	// Collect all matching workload targets across all enabled kinds.
+	targets, listErr := r.collectTargets(ctx, policy)
+	if listErr != nil {
+		_ = r.failCondition(ctx, policy, "ListFailed", listErr)
+		r.recorder.Event(policy, corev1.EventTypeWarning, "ListFailed", listErr.Error())
+		reconcileTotal.WithLabelValues(policy.Name, "error").Inc()
+		return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
 	}
 
-	if len(errs) > 0 {
-		combined := errors.Join(errs...)
-		_ = r.failCondition(ctx, policy, "ReconciliationFailed", combined)
-		r.recorder.Event(policy, corev1.EventTypeWarning, "ReconciliationFailed", combined.Error())
+	// Process targets in parallel with bounded concurrency.
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(r.ConcurrencyLimit)
+	var failCount atomic.Int32
+
+	for _, t := range targets {
+		if r.retries.shouldSkip(t.key()) {
+			continue
+		}
+		g.Go(func() error {
+			if err := r.reconcileWorkload(gctx, policy, &t); err != nil {
+				failCount.Add(1)
+			}
+			return nil // never cancel sibling goroutines
+		})
+	}
+	_ = g.Wait() // goroutines always return nil; errors are tracked via failCount
+
+	failed := int(failCount.Load())
+	if failed > 0 {
+		msg := fmt.Sprintf("%d of %d workloads failed", failed, len(targets))
+		_ = r.failCondition(ctx, policy, "PartialFailure", fmt.Errorf("%d of %d workloads failed", failed, len(targets)))
+		r.recorder.Event(policy, corev1.EventTypeWarning, "PartialFailure", msg)
 		reconcileTotal.WithLabelValues(policy.Name, "error").Inc()
 	} else {
 		_ = r.setCondition(ctx, policy, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
 			Reason:             "ReconciliationSucceeded",
-			Message:            "All targeted workloads have been processed.",
+			Message:            fmt.Sprintf("All %d targeted workloads have been processed.", len(targets)),
 			ObservedGeneration: policy.Generation,
 		})
-		r.recorder.Event(policy, corev1.EventTypeNormal, "ReconciliationSucceeded", "All targeted workloads have been processed.")
+		r.recorder.Event(policy, corev1.EventTypeNormal, "ReconciliationSucceeded",
+			fmt.Sprintf("All %d targeted workloads have been processed.", len(targets)))
 		reconcileTotal.WithLabelValues(policy.Name, "success").Inc()
 	}
 
 	return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
 }
 
-// reconcileDeployments lists all Deployments cluster-wide whose pod template
-// carries the policy annotation pointing to this policy, then applies Ongoing
-// recommendations. OnCreate is skipped — the admission webhook owns that path.
-func (r *PolicyReconciler) reconcileDeployments(ctx context.Context, policy *sustainv1alpha1.Policy) error {
-	if policy.Spec.Update.Types.Deployment == nil ||
-		*policy.Spec.Update.Types.Deployment == sustainv1alpha1.UpdateModeOnCreate {
-		return nil
+// collectTargets lists workloads of all enabled kinds and returns matching targets.
+func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1alpha1.Policy) ([]workloadTarget, error) {
+	types := policy.Spec.Update.Types
+	namespaces := policy.Spec.Selector.Namespaces
+	var targets []workloadTarget
+
+	if types.Deployment != nil && *types.Deployment == sustainv1alpha1.UpdateModeOngoing {
+		t, err := r.listDeploymentTargets(ctx, namespaces)
+		if err != nil {
+			return nil, fmt.Errorf("listing deployments: %w", err)
+		}
+		targets = append(targets, t...)
 	}
-	logger := log.FromContext(ctx).WithValues("kind", "Deployment")
+
+	if types.StatefulSet != nil && *types.StatefulSet == sustainv1alpha1.UpdateModeOngoing {
+		t, err := r.listStatefulSetTargets(ctx, namespaces)
+		if err != nil {
+			return nil, fmt.Errorf("listing statefulsets: %w", err)
+		}
+		targets = append(targets, t...)
+	}
+
+	if types.DaemonSet != nil && *types.DaemonSet == sustainv1alpha1.UpdateModeOngoing {
+		t, err := r.listDaemonSetTargets(ctx, namespaces)
+		if err != nil {
+			return nil, fmt.Errorf("listing daemonsets: %w", err)
+		}
+		targets = append(targets, t...)
+	}
+
+	if types.ArgoRollout != nil && *types.ArgoRollout == sustainv1alpha1.UpdateModeOngoing {
+		t, err := r.listRolloutTargets(ctx, namespaces)
+		if err != nil {
+			return nil, fmt.Errorf("listing rollouts: %w", err)
+		}
+		targets = append(targets, t...)
+	}
+
+	return filterTargets(targets, policy.Name, r.ExcludedNamespaces), nil
+}
+
+// listDeploymentTargets lists Deployments, scoped to namespaces if provided.
+func (r *PolicyReconciler) listDeploymentTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+	var targets []workloadTarget
+
+	if len(namespaces) > 0 {
+		for _, ns := range namespaces {
+			var list appsv1.DeploymentList
+			if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
+				return nil, err
+			}
+			for i := range list.Items {
+				targets = append(targets, deploymentToTarget(&list.Items[i]))
+			}
+		}
+		return targets, nil
+	}
 
 	var list appsv1.DeploymentList
 	if err := r.List(ctx, &list); err != nil {
-		return fmt.Errorf("listing deployments: %w", err)
+		return nil, err
 	}
-
 	for i := range list.Items {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		d := &list.Items[i]
-		if r.isExcluded(d.Namespace) {
-			continue
-		}
-		if d.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
-			continue
-		}
-		wl := logger.WithValues("deployment", d.Name, "namespace", d.Namespace)
-		recs, err := r.buildRecommendations(ctx, policy, d.Namespace, "Deployment", d.Name, d.Spec.Template.Spec.Containers)
-		if err != nil {
-			wl.Error(err, "prometheus query failed")
-			continue
-		}
-		if len(recs) == 0 {
-			wl.Info("no metrics yet, skipping")
-			continue
-		}
-		if r.RecommendOnly {
-			wl.Info("recommend-only: computed recommendations", "recommendations", recs)
-			continue
-		}
-		if err := r.patcher.RecycleDeploymentPods(ctx, d, recs); err != nil {
-			wl.Error(err, "pod recycle failed")
-		}
+		targets = append(targets, deploymentToTarget(&list.Items[i]))
 	}
-	return nil
+	return targets, nil
 }
 
-// reconcileStatefulSets lists all StatefulSets cluster-wide annotated with this policy.
-func (r *PolicyReconciler) reconcileStatefulSets(ctx context.Context, policy *sustainv1alpha1.Policy) error {
-	if policy.Spec.Update.Types.StatefulSet == nil ||
-		*policy.Spec.Update.Types.StatefulSet == sustainv1alpha1.UpdateModeOnCreate {
-		return nil
+// listStatefulSetTargets lists StatefulSets, scoped to namespaces if provided.
+func (r *PolicyReconciler) listStatefulSetTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+	var targets []workloadTarget
+
+	if len(namespaces) > 0 {
+		for _, ns := range namespaces {
+			var list appsv1.StatefulSetList
+			if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
+				return nil, err
+			}
+			for i := range list.Items {
+				targets = append(targets, statefulSetToTarget(&list.Items[i]))
+			}
+		}
+		return targets, nil
 	}
-	logger := log.FromContext(ctx).WithValues("kind", "StatefulSet")
 
 	var list appsv1.StatefulSetList
 	if err := r.List(ctx, &list); err != nil {
-		return fmt.Errorf("listing statefulsets: %w", err)
+		return nil, err
 	}
-
 	for i := range list.Items {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		s := &list.Items[i]
-		if r.isExcluded(s.Namespace) {
-			continue
-		}
-		if s.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
-			continue
-		}
-		wl := logger.WithValues("statefulset", s.Name, "namespace", s.Namespace)
-		recs, err := r.buildRecommendations(ctx, policy, s.Namespace, "StatefulSet", s.Name, s.Spec.Template.Spec.Containers)
-		if err != nil {
-			wl.Error(err, "prometheus query failed")
-			continue
-		}
-		if len(recs) == 0 {
-			wl.Info("no metrics yet, skipping")
-			continue
-		}
-		if r.RecommendOnly {
-			wl.Info("recommend-only: computed recommendations", "recommendations", recs)
-			continue
-		}
-		if err := r.patcher.RecycleStatefulSetPods(ctx, s, recs); err != nil {
-			wl.Error(err, "pod recycle failed")
-		}
+		targets = append(targets, statefulSetToTarget(&list.Items[i]))
 	}
-	return nil
+	return targets, nil
 }
 
-// reconcileDaemonSets lists all DaemonSets cluster-wide annotated with this policy.
-func (r *PolicyReconciler) reconcileDaemonSets(ctx context.Context, policy *sustainv1alpha1.Policy) error {
-	if policy.Spec.Update.Types.DaemonSet == nil ||
-		*policy.Spec.Update.Types.DaemonSet == sustainv1alpha1.UpdateModeOnCreate {
-		return nil
+// listDaemonSetTargets lists DaemonSets, scoped to namespaces if provided.
+func (r *PolicyReconciler) listDaemonSetTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+	var targets []workloadTarget
+
+	if len(namespaces) > 0 {
+		for _, ns := range namespaces {
+			var list appsv1.DaemonSetList
+			if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
+				return nil, err
+			}
+			for i := range list.Items {
+				targets = append(targets, daemonSetToTarget(&list.Items[i]))
+			}
+		}
+		return targets, nil
 	}
-	logger := log.FromContext(ctx).WithValues("kind", "DaemonSet")
 
 	var list appsv1.DaemonSetList
 	if err := r.List(ctx, &list); err != nil {
-		return fmt.Errorf("listing daemonsets: %w", err)
+		return nil, err
 	}
-
 	for i := range list.Items {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		ds := &list.Items[i]
-		if r.isExcluded(ds.Namespace) {
-			continue
-		}
-		if ds.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policy.Name {
-			continue
-		}
-		wl := logger.WithValues("daemonset", ds.Name, "namespace", ds.Namespace)
-		recs, err := r.buildRecommendations(ctx, policy, ds.Namespace, "DaemonSet", ds.Name, ds.Spec.Template.Spec.Containers)
-		if err != nil {
-			wl.Error(err, "prometheus query failed")
-			continue
-		}
-		if len(recs) == 0 {
-			wl.Info("no metrics yet, skipping")
-			continue
-		}
-		if r.RecommendOnly {
-			wl.Info("recommend-only: computed recommendations", "recommendations", recs)
-			continue
-		}
-		if err := r.patcher.RecycleDaemonSetPods(ctx, ds, recs); err != nil {
-			wl.Error(err, "pod recycle failed")
-		}
+		targets = append(targets, daemonSetToTarget(&list.Items[i]))
 	}
-	return nil
+	return targets, nil
 }
 
+// listRolloutTargets lists Argo Rollouts, scoped to namespaces if provided.
+func (r *PolicyReconciler) listRolloutTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+	var targets []workloadTarget
+
+	if len(namespaces) > 0 {
+		for _, ns := range namespaces {
+			var list rolloutsv1alpha1.RolloutList
+			if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
+				return nil, err
+			}
+			for i := range list.Items {
+				targets = append(targets, rolloutToTarget(&list.Items[i]))
+			}
+		}
+		return targets, nil
+	}
+
+	var list rolloutsv1alpha1.RolloutList
+	if err := r.List(ctx, &list); err != nil {
+		return nil, err
+	}
+	for i := range list.Items {
+		targets = append(targets, rolloutToTarget(&list.Items[i]))
+	}
+	return targets, nil
+}
+
+// reconcileWorkload processes a single workload target: queries Prometheus,
+// computes recommendations, recycles pods, emits events, and tracks retries.
+func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustainv1alpha1.Policy, t *workloadTarget) error {
+	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
+
+	recs, err := r.buildRecommendations(ctx, policy, t.Namespace, t.Kind, t.Name, t.Containers)
+	if err != nil {
+		if !isTransientError(err) {
+			r.retries.remove(t.key())
+			return nil
+		}
+		r.retries.recordFailure(t.key())
+		state := r.retries.getState(t.key())
+		r.recorder.Eventf(t.Object, corev1.EventTypeWarning, "ReconciliationRetryScheduled",
+			"Prometheus query failed: %v. Retry attempt %d at %s", err, state.attempts, state.nextRetry.Format(time.RFC3339))
+		logger.Error(err, "prometheus query failed, retry scheduled", "attempt", state.attempts)
+		return err
+	}
+
+	if len(recs) == 0 {
+		r.retries.recordSuccess(t.key())
+		return nil
+	}
+
+	if r.RecommendOnly {
+		logger.Info("recommend-only: computed recommendations", "recommendations", recs)
+		r.retries.recordSuccess(t.key())
+		return nil
+	}
+
+	sel, err := metav1.LabelSelectorAsSelector(t.Selector)
+	if err != nil {
+		r.retries.remove(t.key())
+		return err
+	}
+
+	if err := r.patcher.RecyclePods(ctx, t.Namespace, sel, recs); err != nil {
+		if !isTransientError(err) {
+			r.retries.remove(t.key())
+			return nil
+		}
+		r.retries.recordFailure(t.key())
+		state := r.retries.getState(t.key())
+		r.recorder.Eventf(t.Object, corev1.EventTypeWarning, "ReconciliationRetryScheduled",
+			"Pod recycle failed: %v. Retry attempt %d at %s", err, state.attempts, state.nextRetry.Format(time.RFC3339))
+		logger.Error(err, "pod recycle failed, retry scheduled", "attempt", state.attempts)
+		return err
+	}
+
+	r.retries.recordSuccess(t.key())
+
+	// Build a summary of the applied recommendations for the event message.
+	var containers []string
+	for name := range recs {
+		containers = append(containers, name)
+	}
+	r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "ResourcesUpdated",
+		"Updated resources for containers: %v", containers)
+
+	return nil
+}
 
 // buildRecommendations queries Prometheus and computes per-container recommendations
 // for the given workload. Returns an empty map when no data is available yet.
@@ -328,7 +423,7 @@ func (r *PolicyReconciler) setCondition(ctx context.Context, policy *sustainv1al
 			continue
 		}
 		if c.Status == cond.Status {
-			cond.LastTransitionTime = c.LastTransitionTime // no change in status, keep time
+			cond.LastTransitionTime = c.LastTransitionTime
 		}
 		policy.Status.Conditions[i] = cond
 		return r.Status().Update(ctx, policy)

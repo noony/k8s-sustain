@@ -199,6 +199,8 @@ func modeForKind(ut sustainv1alpha1.UpdateTypes, kind string) *sustainv1alpha1.U
 		return ut.CronJob
 	case "Job":
 		return ut.Job
+	case "Rollout":
+		return ut.ArgoRollout
 	}
 	return nil
 }

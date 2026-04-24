@@ -23,6 +23,7 @@
 | `controller.metricsBindAddress` | `:8080` | Metrics endpoint address |
 | `controller.healthProbeBindAddress` | `:8081` | Health probe address |
 | `controller.leaderElect` | `true` | Enable leader election |
+| `controller.concurrencyLimit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
 | `controller.logLevel` | `info` | Log level |
 | `controller.service.type` | `ClusterIP` | Service type for the metrics endpoint |
 | `controller.service.port` | `8080` | Service port |

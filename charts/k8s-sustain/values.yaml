@@ -23,6 +23,7 @@ controller:
   metricsBindAddress: ":8080"
   healthProbeBindAddress: ":8081"
   leaderElect: true
+  concurrencyLimit: 5
   logLevel: info
   service:
     type: ClusterIP
@@ -172,6 +173,27 @@ prometheus:
                   * on(namespace, replicaset) group_left(owner_kind, owner_name)
                   max by (namespace, replicaset, owner_kind, owner_name) (
                     kube_replicaset_owner{owner_kind="Deployment", owner_is_controller="true"}
+                  )
+                )
+            # Argo Rollouts: Pod → ReplicaSet → Rollout
+            - record: k8s_sustain:pod_workload
+              expr: |
+                max by (namespace, pod, owner_kind, owner_name) (
+                  label_replace(
+                    label_replace(
+                      label_replace(
+                        max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
+                          kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"}
+                        ),
+                        "replicaset", "$1", "owner_name", "(.*)"
+                      ),
+                      "owner_kind", "", "owner_kind", ".*"
+                    ),
+                    "owner_name", "", "owner_name", ".*"
+                  )
+                  * on(namespace, replicaset) group_left(owner_kind, owner_name)
+                  max by (namespace, replicaset, owner_kind, owner_name) (
+                    kube_replicaset_owner{owner_kind="Rollout", owner_is_controller="true"}
                   )
                 )
         - name: k8s_sustain.cpu_rates

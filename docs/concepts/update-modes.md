@@ -82,6 +82,7 @@ See [In-Place Updates](in-place-updates.md) for details.
 | CronJob pods (ephemeral per-run) | `OnCreate` — each run gets fresh recommendations |
 | StatefulSets with persistent state | `Ongoing` + k8s ≥ 1.31, or `OnCreate` |
 | DaemonSets | `Ongoing` (rolling update is DaemonSet's normal behaviour) |
+| Argo Rollouts | `Ongoing` or `OnCreate` — works like Deployments with canary/blue-green strategies |
 
 ---
 

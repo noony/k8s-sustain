@@ -26,6 +26,10 @@ rules:
   - apiGroups: [apps]
     resources: [replicasets]
     verbs: [get, list, watch]
+  # Workloads — Argo Rollouts (read-only)
+  - apiGroups: [argoproj.io]
+    resources: [rollouts]
+    verbs: [get, list, watch]
   # Workloads — batch (webhook handles CronJob pods at creation time)
   - apiGroups: [batch]
     resources: [jobs, cronjobs]
