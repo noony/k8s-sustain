@@ -1013,6 +1013,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/keda/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    KEDA
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/cert-manager/" class="md-nav__link">
         
   
@@ -1253,6 +1274,11 @@
 <td><code>controller.leaderElect</code></td>
 <td><code>true</code></td>
 <td>Enable leader election</td>
+</tr>
+<tr>
+<td><code>controller.concurrencyLimit</code></td>
+<td><code>5</code></td>
+<td>Maximum number of workloads processed in parallel per reconcile cycle</td>
 </tr>
 <tr>
 <td><code>controller.logLevel</code></td>

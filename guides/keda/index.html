@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://noony.github.io/k8s-sustain/guides/daemonsets/">
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/guides/keda/">
       
       
-        <link rel="prev" href="../deployments/">
+        <link rel="prev" href="../argocd/">
       
       
-        <link rel="next" href="../cronjobs/">
+        <link rel="next" href="../cert-manager/">
       
       
       <link rel="icon" href="../../assets/logo.svg">
@@ -24,7 +24,7 @@
     
     
       
-        <title>DaemonSets - k8s-sustain</title>
+        <title>KEDA - k8s-sustain</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#daemonsets" class="md-skip">
+        <a href="#keda-integration" class="md-skip">
           Skip to content
         </a>
       
@@ -111,7 +111,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              DaemonSets
+              KEDA
             
           </span>
         </div>
@@ -814,30 +814,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    DaemonSets
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../daemonsets/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -846,62 +826,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#policy-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      Policy example
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#behaviour-with-ongoing-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      Behaviour with Ongoing mode
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#node-critical-agents-use-higher-percentiles" class="md-nav__link">
-    <span class="md-ellipsis">
-      Node-critical agents: use higher percentiles
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#oncreate-mode-for-daemonsets" class="md-nav__link">
-    <span class="md-ellipsis">
-      OnCreate mode for DaemonSets
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -974,10 +898,30 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../keda/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    KEDA
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -986,6 +930,62 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      How it works
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom metrics
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Requirements
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1066,36 +1066,36 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#policy-example" class="md-nav__link">
+  <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
-      Policy example
+      How it works
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#behaviour-with-ongoing-mode" class="md-nav__link">
+  <a href="#configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Behaviour with Ongoing mode
+      Configuration
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#node-critical-agents-use-higher-percentiles" class="md-nav__link">
+  <a href="#custom-metrics" class="md-nav__link">
     <span class="md-ellipsis">
-      Node-critical agents: use higher percentiles
+      Custom metrics
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#oncreate-mode-for-daemonsets" class="md-nav__link">
+  <a href="#requirements" class="md-nav__link">
     <span class="md-ellipsis">
-      OnCreate mode for DaemonSets
+      Requirements
     </span>
   </a>
   
@@ -1119,56 +1119,34 @@
   
 
 
-<h1 id="daemonsets">DaemonSets<a class="headerlink" href="#daemonsets" title="Permanent link">&para;</a></h1>
-<p>DaemonSets run one pod per node and are commonly used for monitoring agents, log shippers, and CNI plugins. Right-sizing them can yield significant cluster-wide savings since every node is affected.</p>
-<h2 id="policy-example">Policy example<a class="headerlink" href="#policy-example" title="Permanent link">&para;</a></h2>
+<h1 id="keda-integration">KEDA Integration<a class="headerlink" href="#keda-integration" title="Permanent link">&para;</a></h1>
+<p>k8s-sustain works alongside <a href="https://keda.sh">KEDA</a> (Kubernetes Event-Driven Autoscaling). KEDA creates and manages HPA objects based on ScaledObject definitions.</p>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<p>When k8s-sustain detects an HPA targeting a workload, it checks if the HPA is owned by a KEDA ScaledObject (via <code>ownerReferences</code>). This affects behavior in <code>UpdateTargetValue</code> mode:</p>
+<ul>
+<li><strong>Native HPA</strong> — k8s-sustain patches the HPA directly</li>
+<li><strong>KEDA-managed HPA</strong> — <code>UpdateTargetValue</code> mode is not yet supported for KEDA-managed HPAs. k8s-sustain detects the KEDA ownership and emits a warning event. Use <code>HpaAware</code> mode (default) instead, which works correctly with KEDA without modifying any objects.</li>
+</ul>
+<p>In <code>HpaAware</code> mode (default), no objects are modified regardless of whether KEDA manages the HPA — the recommendation formula is adjusted internally.</p>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<p>No special configuration is needed. k8s-sustain auto-detects KEDA ownership.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">monitoring-rightsizing</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">keda-workloads</span>
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">      </span><span class="nt">daemonSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">resourcesConfigs</span><span class="p">:</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">168h</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">          </span><span class="nt">percentile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">99</span><span class="w">   </span><span class="c1"># use p99 for node-critical agents</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">          </span><span class="nt">headroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">          </span><span class="nt">keepLimitRequestRatio</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span>
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">168h</span>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">          </span><span class="nt">percentile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">99</span>
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">          </span><span class="nt">headroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">25</span>
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span>
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">          </span><span class="nt">keepLimitRequestRatio</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">updatePolicy</span><span class="p">:</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">      </span><span class="nt">hpa</span><span class="p">:</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">        </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">HpaAware</span><span class="w">  </span><span class="c1"># recommended for KEDA workloads</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="nt">update</span><span class="p">:</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">types</span><span class="p">:</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">      </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
 </code></pre></div>
-<p>Opt in your DaemonSet:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">DaemonSet</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fluentd</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">logging</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">template</span><span class="p">:</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">      </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">monitoring-rightsizing</span>
-</code></pre></div>
-<h2 id="behaviour-with-ongoing-mode">Behaviour with Ongoing mode<a class="headerlink" href="#behaviour-with-ongoing-mode" title="Permanent link">&para;</a></h2>
-<p>DaemonSet <code>Ongoing</code> mode evicts stale pods so they are replaced with the latest recommendations (injected by the webhook). On k8s &gt;= 1.31, in-place pod patching is used instead, avoiding restarts.</p>
-<div class="admonition warning">
-<p class="admonition-title">OnDelete strategy</p>
-<p>If your DaemonSet uses <code>updateStrategy.type: OnDelete</code>, evicted pods may not be replaced immediately. In-place updates (k8s ≥ 1.31) bypass this restriction and patch running pods directly.</p>
-</div>
-<h2 id="node-critical-agents-use-higher-percentiles">Node-critical agents: use higher percentiles<a class="headerlink" href="#node-critical-agents-use-higher-percentiles" title="Permanent link">&para;</a></h2>
-<p>For agents that must not be OOM-killed, use <strong>p99</strong> and a generous headroom. A terminated log shipper or CNI plugin can cause node-level issues.</p>
-<h2 id="oncreate-mode-for-daemonsets">OnCreate mode for DaemonSets<a class="headerlink" href="#oncreate-mode-for-daemonsets" title="Permanent link">&para;</a></h2>
-<p>OnCreate mode for DaemonSets is less common since DaemonSet pods are typically long-running. However, it is useful during initial cluster setup to ensure new nodes get properly-sized agent pods.</p>
+<h2 id="custom-metrics">Custom metrics<a class="headerlink" href="#custom-metrics" title="Permanent link">&para;</a></h2>
+<p>If your KEDA ScaledObject uses only custom or external metrics (e.g., queue depth, Kafka lag), there is no conflict with k8s-sustain. The <code>HpaAware</code> mode detects this and applies no adjustment — right-sizing proceeds normally.</p>
+<h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
+<p>KEDA ScaledObject support requires the KEDA CRD to be installed. If the CRD is not present, k8s-sustain gracefully skips ScaledObject detection and logs an informational message at startup.</p>
 
 
 
@@ -1206,7 +1184,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../deployments/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Deployments &amp; StatefulSets">
+          <a href="../argocd/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Argo CD">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1216,20 +1194,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Deployments & StatefulSets
+                Argo CD
               </div>
             </div>
           </a>
         
         
           
-          <a href="../cronjobs/" class="md-footer__link md-footer__link--next" aria-label="Next: CronJobs">
+          <a href="../cert-manager/" class="md-footer__link md-footer__link--next" aria-label="Next: TLS with cert-manager">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                CronJobs
+                TLS with cert-manager
               </div>
             </div>
             <div class="md-footer__button md-icon">

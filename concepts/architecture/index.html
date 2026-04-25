@@ -995,6 +995,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/keda/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    KEDA
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/cert-manager/" class="md-nav__link">
         
   
@@ -1160,7 +1181,7 @@
 <a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>│           ┌────────────────┼────────────────┐                   │
 <a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>│           ▼                ▼                ▼                   │
 <a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>│    Deployments      StatefulSets        CronJobs                │
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>│    DaemonSets                                                   │
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>│    DaemonSets       Argo Rollouts                               │
 <a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>│                                                                 │
 <a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>│  ┌──────────────────────────────────────────────────────────┐   │
 <a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>│  │                        Prometheus                        │   │
@@ -1179,15 +1200,21 @@
 <p><strong>Reconcile loop:</strong></p>
 <ol>
 <li>A <code>Policy</code> event is received (create / update / periodic requeue)</li>
-<li>For each workload kind enabled in the policy (<code>deployment</code>, <code>statefulSet</code>, <code>daemonSet</code>, <code>cronJob</code>):</li>
-<li>List all objects of that kind cluster-wide</li>
+<li>For each workload kind enabled in the policy (<code>deployment</code>, <code>statefulSet</code>, <code>daemonSet</code>, <code>argoRollout</code>):</li>
+<li>List all objects of that kind — scoped to the namespaces in <code>selector.namespaces</code> when specified, or cluster-wide otherwise</li>
 <li>Filter by the <code>k8s.sustain.io/policy</code> annotation in the pod template</li>
 <li>Skip workloads with <code>OnCreate</code> mode (handled by the webhook)</li>
-<li>For each matching workload:</li>
+<li>Skip workloads in retry backoff from a previous transient failure</li>
+<li>Process matching workloads in parallel (bounded by <code>--concurrency-limit</code>, default 5):</li>
 <li>Query Prometheus for the p<code>N</code> of CPU and memory over the configured window</li>
 <li>Compute per-container recommendations (request + limit)</li>
 <li>If <code>--recommend-only</code> is set, log the recommendation and skip patching</li>
-<li>Recycle stale running pods: on k8s ≥ 1.31 via in-place resource patching (using the <code>/resize</code> subresource on k8s ≥ 1.33); on k8s &lt; 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time</li>
+<li>Recycle stale running pods: on k8s &gt;= 1.31 via in-place resource patching (using the <code>/resize</code> subresource on k8s &gt;= 1.33); on k8s &lt; 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time</li>
+<li>Detect if an HPA targets the workload (by matching <code>scaleTargetRef</code>)</li>
+<li>If HPA found and mode is <code>HpaAware</code>: adjust recommendations to factor in HPA's target utilization</li>
+<li>If HPA found and mode is <code>UpdateTargetValue</code>: patch the HPA (or KEDA ScaledObject) to use absolute <code>AverageValue</code> metrics</li>
+<li>Emit a <code>ResourcesUpdated</code> event on the workload object on success</li>
+<li>On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a <code>ReconciliationRetryScheduled</code> warning event on the workload</li>
 </ol>
 <p>The controller requeues after <code>--reconcile-interval</code> (default <code>10m</code>).</p>
 <h2 id="admission-webhook-k8s-sustain-webhook">Admission Webhook (<code>k8s-sustain webhook</code>)<a class="headerlink" href="#admission-webhook-k8s-sustain-webhook" title="Permanent link">&para;</a></h2>

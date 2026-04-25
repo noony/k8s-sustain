@@ -893,6 +893,48 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Combining with HPA">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      How it works
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Modes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keda" class="md-nav__link">
+    <span class="md-ellipsis">
+      KEDA
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -979,6 +1021,27 @@
   
   <span class="md-ellipsis">
     Argo CD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../keda/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    KEDA
   </span>
   
 
@@ -1114,6 +1177,48 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Combining with HPA">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      How it works
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Modes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#keda" class="md-nav__link">
+    <span class="md-ellipsis">
+      KEDA
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -1214,15 +1319,60 @@
 </tbody>
 </table>
 <h2 id="combining-with-hpa">Combining with HPA<a class="headerlink" href="#combining-with-hpa" title="Permanent link">&para;</a></h2>
-<p>k8s-sustain right-sizes <strong>requests</strong> (which HPA uses to compute utilization targets). When used together:</p>
-<ol>
-<li>k8s-sustain sets accurate per-container requests based on observed usage</li>
-<li>HPA scales the number of replicas based on <code>cpu</code>/<code>memory</code> utilization relative to those requests</li>
-</ol>
-<div class="admonition tip">
-<p class="admonition-title">Tip</p>
-<p>Use a slightly lower percentile (e.g. p80) for workloads managed by HPA so that individual pod requests remain tight — HPA will add replicas when aggregate load increases.</p>
-</div>
+<p>k8s-sustain right-sizes <strong>requests</strong>, which HPA uses to compute utilization. By default, k8s-sustain is <strong>HPA-aware</strong> and automatically adjusts its recommendations so HPA scaling decisions remain correct.</p>
+<h3 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h3>
+<p>HPA computes: <code>utilization = actual_usage / requests</code>. If k8s-sustain changes requests, utilization shifts — even though load hasn't changed. The <code>HpaAware</code> mode (default) factors the HPA's target utilization into the recommendation formula:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>request = observed_usage × (1 + headroom) / (hpa_target / 100)
+</code></pre></div>
+<p>This means k8s-sustain sets requests to a value where HPA's utilization math produces the correct scaling behavior.</p>
+<p><strong>Example</strong> (p95 = 400m, headroom = 20%, HPA target = 80%):</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Requests</th>
+<th>Utilization</th>
+<th>HPA reaction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Before k8s-sustain</td>
+<td>1000m</td>
+<td>40%</td>
+<td>wants to scale down</td>
+</tr>
+<tr>
+<td>Without HPA awareness</td>
+<td>480m</td>
+<td>83%</td>
+<td>scales up (wrong)</td>
+</tr>
+<tr>
+<td>With HPA awareness</td>
+<td>600m</td>
+<td>67%</td>
+<td>calm (correct)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">updatePolicy</span><span class="p">:</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="nt">hpa</span><span class="p">:</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">        </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">HpaAware</span><span class="w">      </span><span class="c1"># default — auto-detect and adjust</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">        </span><span class="nt">cpu</span><span class="p">:</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">          </span><span class="nt">targetUtilizationOverride</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">75</span><span class="w">  </span><span class="c1"># optional, overrides auto-detected value</span>
+</code></pre></div>
+<h3 id="modes">Modes<a class="headerlink" href="#modes" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong><code>HpaAware</code></strong> (default) — Auto-detect HPAs, adjust recommendation formula. No HPA objects are modified.</li>
+<li><strong><code>UpdateTargetValue</code></strong> — Convert HPA metrics from percentage-based (<code>Utilization</code>) to absolute (<code>AverageValue</code>), fully decoupling the two systems. The HPA object is modified.</li>
+<li><strong><code>Ignore</code></strong> — No HPA awareness. Use this only if your HPA scales on custom metrics (queue depth, requests/sec) that are unaffected by resource changes.</li>
+</ul>
+<h3 id="keda">KEDA<a class="headerlink" href="#keda" title="Permanent link">&para;</a></h3>
+<p>When using KEDA, k8s-sustain auto-detects that the HPA is managed by a ScaledObject. <code>HpaAware</code> mode (default) works seamlessly with KEDA. See the <a href="../keda/">KEDA guide</a> for details.</p>
 
 
 

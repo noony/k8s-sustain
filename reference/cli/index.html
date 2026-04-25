@@ -788,6 +788,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#log-verbosity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Log verbosity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#health-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       Health endpoints
@@ -1076,6 +1085,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/keda/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    KEDA
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/cert-manager/" class="md-nav__link">
         
   
@@ -1175,6 +1205,15 @@
   <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       Environment variables
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log-verbosity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Log verbosity
     </span>
   </a>
   
@@ -1362,7 +1401,7 @@
 <td>Enable leader election for high-availability deployments</td>
 </tr>
 <tr>
-<td><code>--zap-log-level</code></td>
+<td><code>--log-level</code></td>
 <td><code>info</code></td>
 <td>Log verbosity: <code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code></td>
 </tr>
@@ -1381,12 +1420,23 @@
 <td>—</td>
 <td>Comma-separated list of namespaces the reconciler should never touch</td>
 </tr>
+<tr>
+<td><code>--concurrency-limit</code></td>
+<td><code>5</code></td>
+<td>Maximum number of workloads processed in parallel per reconcile cycle</td>
+</tr>
 </tbody>
 </table>
 <h3 id="environment-variables">Environment variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h3>
 <p>Every flag can be overridden with an environment variable prefixed by <code>K8SSUSTAIN_</code> (uppercase, hyphens → underscores):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">K8SSUSTAIN_RECONCILE_INTERVAL</span><span class="o">=</span>30m<span class="w"> </span>k8s-sustain<span class="w"> </span>start
 </code></pre></div>
+<h3 id="log-verbosity">Log verbosity<a class="headerlink" href="#log-verbosity" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>info</code> (default) — high-signal events: reconcile cycle start/end with target counts, HPA detection, recommendations computed, in-place resize applied, pod evictions, recommendation injection by the webhook.</li>
+<li><code>debug</code> — adds per-container traces: Prometheus query parameters and result counts, raw percentile values, per-resource recommendations, HPA-aware adjustments, retry-backoff skips, eviction skips for non-stale or non-running pods, webhook admit decisions including standalone-pod / no-policy / no-data branches.</li>
+</ul>
+<p>Use <code>debug</code> when investigating why a workload was or wasn't resized, or why an HPA adjustment behaved unexpectedly.</p>
 <h3 id="health-endpoints">Health endpoints<a class="headerlink" href="#health-endpoints" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -1450,7 +1500,7 @@
 <td>Address of the Prometheus server</td>
 </tr>
 <tr>
-<td><code>--zap-log-level</code></td>
+<td><code>--log-level</code></td>
 <td><code>info</code></td>
 <td>Log verbosity: <code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code></td>
 </tr>
@@ -1532,7 +1582,7 @@
 <td>Address of the Prometheus server</td>
 </tr>
 <tr>
-<td><code>--zap-log-level</code></td>
+<td><code>--log-level</code></td>
 <td><code>info</code></td>
 <td>Log verbosity: <code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code></td>
 </tr>

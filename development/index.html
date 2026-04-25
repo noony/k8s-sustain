@@ -896,6 +896,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../guides/keda/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    KEDA
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../guides/cert-manager/" class="md-nav__link">
         
   
@@ -1504,7 +1525,7 @@
 <a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span>--prometheus-address<span class="o">=</span>http://localhost:9090<span class="w"> </span><span class="se">\ </span><span class="w"> </span><span class="c1"># port-forwarded from the cluster</span>
 <a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span>--reconcile-interval<span class="o">=</span>1m<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span>--zap-log-level<span class="o">=</span>debug
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span>--log-level<span class="o">=</span>debug
 </code></pre></div>
 <h3 id="start-the-webhook-requires-tls">Start the webhook (requires TLS)<a class="headerlink" href="#start-the-webhook-requires-tls" title="Permanent link">&para;</a></h3>
 <p>The webhook must be reachable from the API server, which makes local development more involved. Use <a href="https://www.telepresence.io">telepresence</a> or develop against a local kind cluster with a self-signed cert.</p>
