@@ -147,6 +147,7 @@ prometheus:
         - name: k8s_sustain.workload_mapping
           interval: 1m
           rules:
+            # Map pod → workload for direct owners (StatefulSet, DaemonSet, Job).
             - record: k8s_sustain:pod_workload
               expr: |
                 max by (namespace, pod, owner_kind, owner_name) (
@@ -155,6 +156,11 @@ prometheus:
                     owner_is_controller="true"
                   }
                 )
+            # Map pod → Deployment by resolving ReplicaSet → Deployment.
+            # Renames owner_name (RS name) → replicaset and clears conflicting labels
+            # so group_left can inject owner_kind/owner_name from kube_replicaset_owner.
+            # Both sides are deduplicated with max by() to handle multiple
+            # kube-state-metrics instances producing duplicate series.
             - record: k8s_sustain:pod_workload
               expr: |
                 max by (namespace, pod, owner_kind, owner_name) (
@@ -199,6 +205,7 @@ prometheus:
         - name: k8s_sustain.cpu_rates
           interval: 1m
           rules:
+            # Per-container CPU usage rate.
             - record: k8s_sustain:container_cpu_usage:rate5m
               expr: |
                 rate(container_cpu_usage_seconds_total{
@@ -206,11 +213,14 @@ prometheus:
                   container!="POD",
                   image!=""
                 }[5m])
+            # Per-container CPU rate WITH workload labels — used by the operator.
             - record: k8s_sustain:container_cpu_usage_by_workload:rate5m
               expr: |
                 k8s_sustain:container_cpu_usage:rate5m
                 * on(namespace, pod) group_left(owner_kind, owner_name)
                 k8s_sustain:pod_workload
+            # Per-pod CPU rate, enriched with workload labels.
+            # Containers within the same pod are summed.
             - record: k8s_sustain:pod_cpu_usage:rate5m
               expr: |
                 sum by (namespace, pod, owner_kind, owner_name) (
@@ -221,6 +231,7 @@ prometheus:
         - name: k8s_sustain.memory_rates
           interval: 1m
           rules:
+            # Per-container memory working set (excludes reclaimable page cache).
             - record: k8s_sustain:container_memory_working_set:bytes
               expr: |
                 container_memory_working_set_bytes{
@@ -228,11 +239,14 @@ prometheus:
                   container!="POD",
                   image!=""
                 }
+            # Per-container memory WITH workload labels — used by the operator.
             - record: k8s_sustain:container_memory_by_workload:bytes
               expr: |
                 k8s_sustain:container_memory_working_set:bytes
                 * on(namespace, pod) group_left(owner_kind, owner_name)
                 k8s_sustain:pod_workload
+            # Per-pod memory working set, enriched with workload labels.
+            # Containers within the same pod are summed.
             - record: k8s_sustain:pod_memory_working_set:bytes
               expr: |
                 sum by (namespace, pod, owner_kind, owner_name) (
@@ -259,3 +273,114 @@ prometheus:
                   * on(namespace, pod) group_left(owner_kind, owner_name)
                   k8s_sustain:pod_workload
                 )
+
+        - name: k8s_sustain.savings_aggregates
+          interval: 1m
+          rules:
+            - record: k8s_sustain:cluster_cpu_savings_cores
+              expr: |
+                sum(
+                  k8s_sustain:container_cpu_requests_by_workload:cores
+                  - on(namespace, owner_kind, owner_name, container)
+                  k8s_sustain_recommended_cpu_cores
+                )
+
+            - record: k8s_sustain:cluster_memory_savings_bytes
+              expr: |
+                sum(
+                  k8s_sustain:container_memory_requests_by_workload:bytes
+                  - on(namespace, owner_kind, owner_name, container)
+                  k8s_sustain_recommended_memory_bytes
+                )
+
+            - record: k8s_sustain:cluster_cpu_savings_ratio
+              expr: |
+                k8s_sustain:cluster_cpu_savings_cores
+                / on() group_left()
+                sum(k8s_sustain:container_cpu_requests_by_workload:cores)
+
+            - record: k8s_sustain:cluster_memory_savings_ratio
+              expr: |
+                k8s_sustain:cluster_memory_savings_bytes
+                / on() group_left()
+                sum(k8s_sustain:container_memory_requests_by_workload:bytes)
+
+            - record: k8s_sustain:policy_cpu_savings_cores
+              labels:
+                resource: cpu
+              expr: |
+                sum by (policy) (
+                  (
+                    k8s_sustain:container_cpu_requests_by_workload:cores
+                    - on(namespace, owner_kind, owner_name, container)
+                    k8s_sustain_recommended_cpu_cores
+                  )
+                  * on(namespace, owner_kind, owner_name, container) group_left(policy)
+                  k8s_sustain_recommended_cpu_cores
+                )
+
+            - record: k8s_sustain:policy_memory_savings_bytes
+              labels:
+                resource: memory
+              expr: |
+                sum by (policy) (
+                  (
+                    k8s_sustain:container_memory_requests_by_workload:bytes
+                    - on(namespace, owner_kind, owner_name, container)
+                    k8s_sustain_recommended_memory_bytes
+                  )
+                  * on(namespace, owner_kind, owner_name, container) group_left(policy)
+                  k8s_sustain_recommended_memory_bytes
+                )
+
+        - name: k8s_sustain.headroom
+          interval: 1m
+          rules:
+            - record: k8s_sustain:cluster_cpu_headroom_breakdown
+              expr: |
+                label_replace(sum(k8s_sustain:pod_cpu_usage:rate5m), "segment", "used", "", "")
+                or
+                label_replace(
+                  sum(k8s_sustain:container_cpu_requests_by_workload:cores) - sum(k8s_sustain:pod_cpu_usage:rate5m),
+                  "segment", "idle", "", ""
+                )
+                or
+                label_replace(
+                  sum(kube_node_status_allocatable{resource="cpu"}) - sum(k8s_sustain:container_cpu_requests_by_workload:cores),
+                  "segment", "free", "", ""
+                )
+
+            - record: k8s_sustain:cluster_memory_headroom_breakdown
+              expr: |
+                label_replace(sum(k8s_sustain:pod_memory_working_set:bytes), "segment", "used", "", "")
+                or
+                label_replace(
+                  sum(k8s_sustain:container_memory_requests_by_workload:bytes) - sum(k8s_sustain:pod_memory_working_set:bytes),
+                  "segment", "idle", "", ""
+                )
+                or
+                label_replace(
+                  sum(kube_node_status_allocatable{resource="memory"}) - sum(k8s_sustain:container_memory_requests_by_workload:bytes),
+                  "segment", "free", "", ""
+                )
+
+        - name: k8s_sustain.workload_signals
+          interval: 1m
+          rules:
+            - record: k8s_sustain:workload_oom_24h
+              expr: |
+                sum by (namespace, owner_kind, owner_name) (
+                  increase(
+                    kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[24h]
+                  )
+                  * on(namespace, pod) group_left(owner_kind, owner_name)
+                  k8s_sustain:pod_workload
+                )
+
+            - record: k8s_sustain:workload_drifted
+              expr: |
+                (
+                  max by (namespace, owner_kind, owner_name) (
+                    abs(1 - k8s_sustain_workload_drift_ratio)
+                  ) > 0.10
+                ) * 1
