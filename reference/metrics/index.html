@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://noony.github.io/k8s-sustain/guides/cert-manager/">
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/reference/metrics/">
       
       
-        <link rel="prev" href="../keda/">
+        <link rel="prev" href="../helm-values/">
       
       
-        <link rel="next" href="../../development/">
+        <link rel="next" href="../../guides/deployments/">
       
       
       <link rel="icon" href="../../assets/logo.svg">
@@ -24,7 +24,7 @@
     
     
       
-        <title>TLS with cert-manager - k8s-sustain</title>
+        <title>Metrics - k8s-sustain</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#tls-with-cert-manager" class="md-skip">
+        <a href="#metrics-recording-rules" class="md-skip">
           Skip to content
         </a>
       
@@ -111,7 +111,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              TLS with cert-manager
+              Metrics
             
           </span>
         </div>
@@ -265,11 +265,13 @@
         
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../reference/policy/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../policy/" class="md-tabs__link">
           
   
   Reference
@@ -283,13 +285,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../deployments/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../guides/deployments/" class="md-tabs__link">
           
   
   Guides
@@ -615,160 +615,6 @@
       
   
   
-  
-  
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
-        
-          
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
-            
-  
-  <span class="md-ellipsis">
-    Reference
-  </span>
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
-            <span class="md-nav__icon md-icon"></span>
-            Reference
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/policy/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Policy CRD
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/annotation/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Annotation
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/cli/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    CLI
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/helm-values/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Helm Values
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/metrics/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Metrics
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
     
   
   
@@ -789,24 +635,24 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
             
   
   <span class="md-ellipsis">
-    Guides
+    Reference
   </span>
   
 
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
-            Guides
+            Reference
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -817,11 +663,11 @@
   
   
     <li class="md-nav__item">
-      <a href="../deployments/" class="md-nav__link">
+      <a href="../policy/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Deployments & StatefulSets
+    Policy CRD
   </span>
   
 
@@ -838,11 +684,11 @@
   
   
     <li class="md-nav__item">
-      <a href="../daemonsets/" class="md-nav__link">
+      <a href="../annotation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    DaemonSets
+    Annotation
   </span>
   
 
@@ -859,11 +705,11 @@
   
   
     <li class="md-nav__item">
-      <a href="../cronjobs/" class="md-nav__link">
+      <a href="../cli/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    CronJobs
+    CLI
   </span>
   
 
@@ -880,53 +726,11 @@
   
   
     <li class="md-nav__item">
-      <a href="../dashboard/" class="md-nav__link">
+      <a href="../helm-values/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    Dashboard
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../argocd/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Argo CD
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../keda/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    KEDA
+    Helm Values
   </span>
   
 
@@ -956,7 +760,7 @@
           
   
   <span class="md-ellipsis">
-    TLS with cert-manager
+    Metrics
   </span>
   
 
@@ -967,7 +771,7 @@
         
   
   <span class="md-ellipsis">
-    TLS with cert-manager
+    Metrics
   </span>
   
 
@@ -989,47 +793,122 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#metrics-emitted-by-the-controller" class="md-nav__link">
     <span class="md-ellipsis">
-      Prerequisites
+      Metrics emitted by the controller
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics emitted by the controller">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reconcile" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reconcile
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#default-setup-self-signed" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
     <span class="md-ellipsis">
-      Default setup (self-signed)
+      Recommendations
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#using-your-own-issuer" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#drift-retry-hpa" class="md-nav__link">
     <span class="md-ellipsis">
-      Using your own Issuer
+      Drift, retry, HPA
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#dashboard-server" class="md-nav__link">
     <span class="md-ellipsis">
-      How it works
+      Dashboard server
     </span>
   </a>
   
 </li>
+        
+      </ul>
+    </nav>
+  
+</li>
       
         <li class="md-nav__item">
-  <a href="#manual-certificate-without-cert-manager" class="md-nav__link">
+  <a href="#recording-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      Manual certificate (without cert-manager)
+      Recording rules
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Recording rules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#workload-mapping-existing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workload mapping (existing)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage-rates-existing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage rates (existing)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resource-requests-existing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Resource requests (existing)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#savings-aggregates-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      Savings aggregates (new)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#headroom-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      Headroom (new)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workload-signals-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workload signals (new)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1037,6 +916,202 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/deployments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployments & StatefulSets
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/daemonsets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DaemonSets
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/cronjobs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CronJobs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/dashboard/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dashboard
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/argocd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Argo CD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/keda/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    KEDA
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/cert-manager/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    TLS with cert-manager
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -1096,47 +1171,122 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#metrics-emitted-by-the-controller" class="md-nav__link">
     <span class="md-ellipsis">
-      Prerequisites
+      Metrics emitted by the controller
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics emitted by the controller">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#reconcile" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reconcile
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#default-setup-self-signed" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
     <span class="md-ellipsis">
-      Default setup (self-signed)
+      Recommendations
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#using-your-own-issuer" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#drift-retry-hpa" class="md-nav__link">
     <span class="md-ellipsis">
-      Using your own Issuer
+      Drift, retry, HPA
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#dashboard-server" class="md-nav__link">
     <span class="md-ellipsis">
-      How it works
+      Dashboard server
     </span>
   </a>
   
 </li>
+        
+      </ul>
+    </nav>
+  
+</li>
       
         <li class="md-nav__item">
-  <a href="#manual-certificate-without-cert-manager" class="md-nav__link">
+  <a href="#recording-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      Manual certificate (without cert-manager)
+      Recording rules
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Recording rules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#workload-mapping-existing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workload mapping (existing)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage-rates-existing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage rates (existing)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resource-requests-existing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Resource requests (existing)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#savings-aggregates-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      Savings aggregates (new)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#headroom-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      Headroom (new)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workload-signals-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workload signals (new)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1158,74 +1308,148 @@
   
 
 
-<h1 id="tls-with-cert-manager">TLS with cert-manager<a class="headerlink" href="#tls-with-cert-manager" title="Permanent link">&para;</a></h1>
-<p>The admission webhook requires a valid TLS certificate. The recommended approach for production is to use <a href="https://cert-manager.io">cert-manager</a> to issue and automatically rotate the certificate.</p>
-<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
-<p>cert-manager must be installed in the cluster:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>helm<span class="w"> </span>repo<span class="w"> </span>add<span class="w"> </span>jetstack<span class="w"> </span>https://charts.jetstack.io
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>helm<span class="w"> </span>repo<span class="w"> </span>update
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>helm<span class="w"> </span>install<span class="w"> </span>cert-manager<span class="w"> </span>jetstack/cert-manager<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--namespace<span class="w"> </span>cert-manager<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>--set<span class="w"> </span>crds.enabled<span class="o">=</span><span class="nb">true</span>
-</code></pre></div>
-<h2 id="default-setup-self-signed">Default setup (self-signed)<a class="headerlink" href="#default-setup-self-signed" title="Permanent link">&para;</a></h2>
-<p>The chart creates a self-signed <code>Issuer</code> and <code>Certificate</code> automatically. No external Issuer is required:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>k8s-sustain/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.enabled<span class="o">=</span><span class="nb">true</span>
-</code></pre></div>
-<p>This is the simplest approach and works for both development and production. The webhook only needs to be trusted by the Kubernetes API server, and cert-manager handles CA bundle injection automatically.</p>
-<h2 id="using-your-own-issuer">Using your own Issuer<a class="headerlink" href="#using-your-own-issuer" title="Permanent link">&para;</a></h2>
-<p>If you already have an Issuer or ClusterIssuer in the cluster (e.g. a corporate CA), disable the built-in one and point to yours:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>k8s-sustain/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.enabled<span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.createIssuer<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.issuerRef.name<span class="o">=</span>my-ca-issuer<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.issuerRef.kind<span class="o">=</span>ClusterIssuer
-</code></pre></div>
-<div class="admonition note">
-<p class="admonition-title">ACME / Let's Encrypt issuers</p>
-<p>ACME issuers (e.g. Let's Encrypt) cannot issue certificates for internal Kubernetes service DNS names like <code>*.svc.cluster.local</code>. Use a self-signed or CA issuer instead.</p>
-</div>
-<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
-<p>When <code>webhook.certManager.enabled=true</code>, the chart creates:</p>
-<ol>
-<li>A self-signed <code>Issuer</code> (unless <code>createIssuer=false</code>)</li>
-<li>A <code>Certificate</code> resource targeting the webhook service DNS names:
-   <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>k8s-sustain-webhook.&lt;namespace&gt;.svc
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>k8s-sustain-webhook.&lt;namespace&gt;.svc.cluster.local
-</code></pre></div></li>
-<li>cert-manager issues the certificate and stores it in <code>webhook.tlsSecretName</code> (default: <code>k8s-sustain-webhook-tls</code>)</li>
-<li>The <code>MutatingWebhookConfiguration</code> is annotated with <code>cert-manager.io/inject-ca-from</code>, so cert-manager automatically updates the <code>caBundle</code> when the certificate is renewed</li>
-</ol>
-<h2 id="manual-certificate-without-cert-manager">Manual certificate (without cert-manager)<a class="headerlink" href="#manual-certificate-without-cert-manager" title="Permanent link">&para;</a></h2>
-<p>Create a TLS secret manually and provide the base64-encoded CA certificate:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Generate a self-signed cert (example only)</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>openssl<span class="w"> </span>req<span class="w"> </span>-x509<span class="w"> </span>-newkey<span class="w"> </span>rsa:4096<span class="w"> </span>-keyout<span class="w"> </span>tls.key<span class="w"> </span>-out<span class="w"> </span>tls.crt<span class="w"> </span>-days<span class="w"> </span><span class="m">365</span><span class="w"> </span>-nodes<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-subj<span class="w"> </span><span class="s2">&quot;/CN=k8s-sustain-webhook.k8s-sustain.svc&quot;</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># Create the secret</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>kubectl<span class="w"> </span>create<span class="w"> </span>secret<span class="w"> </span>tls<span class="w"> </span>k8s-sustain-webhook-tls<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>--cert<span class="o">=</span>tls.crt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>--key<span class="o">=</span>tls.key<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span>-n<span class="w"> </span>k8s-sustain
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="c1"># Base64-encode the CA cert (use -b 0 on macOS instead of -w0)</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="nv">CA_BUNDLE</span><span class="o">=</span><span class="k">$(</span>base64<span class="w"> </span>-w0<span class="w"> </span>tls.crt<span class="k">)</span>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>k8s-sustain/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">  </span>--set<span class="w"> </span>webhook.caBundle<span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">CA_BUNDLE</span><span class="si">}</span><span class="s2">&quot;</span>
-</code></pre></div>
-<div class="admonition warning">
-<p class="admonition-title">Certificate rotation</p>
-<p>Without cert-manager, you are responsible for rotating the certificate before it expires and updating <code>webhook.caBundle</code> via <code>helm upgrade</code>.</p>
-</div>
+<h1 id="metrics-recording-rules">Metrics &amp; Recording Rules<a class="headerlink" href="#metrics-recording-rules" title="Permanent link">&para;</a></h1>
+<p>This page lists every metric exposed by k8s-sustain plus the recording rules
+shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</p>
+<h2 id="metrics-emitted-by-the-controller">Metrics emitted by the controller<a class="headerlink" href="#metrics-emitted-by-the-controller" title="Permanent link">&para;</a></h2>
+<h3 id="reconcile">Reconcile<a class="headerlink" href="#reconcile" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Labels</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>k8s_sustain_reconcile_total</code></td>
+<td>counter</td>
+<td><code>policy</code>, <code>result</code></td>
+<td>Total reconciliations per policy and outcome.</td>
+</tr>
+<tr>
+<td><code>k8s_sustain_reconcile_duration_seconds</code></td>
+<td>histogram</td>
+<td><code>policy</code></td>
+<td>Reconcile duration.</td>
+</tr>
+<tr>
+<td><code>k8s_sustain_workload_patch_total</code></td>
+<td>counter</td>
+<td><code>kind</code>, <code>result</code></td>
+<td>Workload patches by kind and outcome.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="recommendations">Recommendations<a class="headerlink" href="#recommendations" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Labels</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>k8s_sustain_recommended_cpu_cores</code></td>
+<td>gauge</td>
+<td><code>namespace</code>, <code>kind</code>, <code>name</code>, <code>container</code>, <code>policy</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_recommended_memory_bytes</code></td>
+<td>gauge</td>
+<td><code>namespace</code>, <code>kind</code>, <code>name</code>, <code>container</code>, <code>policy</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="drift-retry-hpa">Drift, retry, HPA<a class="headerlink" href="#drift-retry-hpa" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Labels</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>k8s_sustain_workload_drift_ratio</code></td>
+<td>gauge</td>
+<td><code>namespace</code>, <code>kind</code>, <code>name</code>, <code>container</code>, <code>resource</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_workload_retry_state</code></td>
+<td>gauge</td>
+<td><code>namespace</code>, <code>kind</code>, <code>name</code>, <code>reason</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_workload_retry_attempts</code></td>
+<td>counter</td>
+<td><code>namespace</code>, <code>kind</code>, <code>name</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_policy_workload_count</code></td>
+<td>gauge</td>
+<td><code>policy</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_policy_at_risk_count</code></td>
+<td>gauge</td>
+<td><code>policy</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_hpa_present</code></td>
+<td>gauge</td>
+<td><code>namespace</code>, <code>kind</code>, <code>name</code>, <code>mode</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="dashboard-server">Dashboard server<a class="headerlink" href="#dashboard-server" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Labels</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>k8s_sustain_dashboard_request_duration_seconds</code></td>
+<td>histogram</td>
+<td><code>path</code>, <code>status</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_dashboard_prometheus_query_duration_seconds</code></td>
+<td>histogram</td>
+<td><code>rule</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="recording-rules">Recording rules<a class="headerlink" href="#recording-rules" title="Permanent link">&para;</a></h2>
+<p>All rules are evaluated every minute. They live in
+<code>charts/k8s-sustain/templates/prometheusrules.yaml</code>.</p>
+<h3 id="workload-mapping-existing">Workload mapping (existing)<a class="headerlink" href="#workload-mapping-existing" title="Permanent link">&para;</a></h3>
+<p><code>k8s_sustain:pod_workload</code> resolves Pod → owner workload via kube-state-metrics.</p>
+<h3 id="usage-rates-existing">Usage rates (existing)<a class="headerlink" href="#usage-rates-existing" title="Permanent link">&para;</a></h3>
+<p><code>k8s_sustain:container_cpu_usage:rate5m</code>, <code>k8s_sustain:container_cpu_usage_by_workload:rate5m</code>,
+<code>k8s_sustain:container_memory_working_set:bytes</code>, <code>k8s_sustain:container_memory_by_workload:bytes</code>,
+<code>k8s_sustain:pod_cpu_usage:rate5m</code>, <code>k8s_sustain:pod_memory_working_set:bytes</code>.</p>
+<h3 id="resource-requests-existing">Resource requests (existing)<a class="headerlink" href="#resource-requests-existing" title="Permanent link">&para;</a></h3>
+<p><code>k8s_sustain:container_cpu_requests_by_workload:cores</code>,
+<code>k8s_sustain:container_memory_requests_by_workload:bytes</code>.</p>
+<h3 id="savings-aggregates-new">Savings aggregates (new)<a class="headerlink" href="#savings-aggregates-new" title="Permanent link">&para;</a></h3>
+<p><code>k8s_sustain:cluster_cpu_savings_cores</code>, <code>k8s_sustain:cluster_memory_savings_bytes</code>,
+<code>k8s_sustain:cluster_cpu_savings_ratio</code>, <code>k8s_sustain:cluster_memory_savings_ratio</code>,
+<code>k8s_sustain:policy_cpu_savings_cores</code>, <code>k8s_sustain:policy_memory_savings_bytes</code>.</p>
+<h3 id="headroom-new">Headroom (new)<a class="headerlink" href="#headroom-new" title="Permanent link">&para;</a></h3>
+<p><code>k8s_sustain:cluster_cpu_headroom_breakdown</code> and
+<code>k8s_sustain:cluster_memory_headroom_breakdown</code> with label <code>segment={used,idle,free}</code>.</p>
+<h3 id="workload-signals-new">Workload signals (new)<a class="headerlink" href="#workload-signals-new" title="Permanent link">&para;</a></h3>
+<p><code>k8s_sustain:workload_oom_24h</code>, <code>k8s_sustain:workload_drifted</code> (boolean: drift &gt; 10%).</p>
 
 
 
@@ -1263,7 +1487,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../keda/" class="md-footer__link md-footer__link--prev" aria-label="Previous: KEDA">
+          <a href="../helm-values/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Helm Values">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1273,20 +1497,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                KEDA
+                Helm Values
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../development/" class="md-footer__link md-footer__link--next" aria-label="Next: Development">
+          <a href="../../guides/deployments/" class="md-footer__link md-footer__link--next" aria-label="Next: Deployments &amp; StatefulSets">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Development
+                Deployments & StatefulSets
               </div>
             </div>
             <div class="md-footer__button md-icon">

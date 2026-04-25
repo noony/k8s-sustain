@@ -737,6 +737,27 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -975,24 +996,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#policies-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      Policies Page
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#policy-detail" class="md-nav__link">
-    <span class="md-ellipsis">
-      Policy Detail
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#workloads-page" class="md-nav__link">
     <span class="md-ellipsis">
       Workloads Page
@@ -1005,6 +1008,24 @@
   <a href="#workload-detail" class="md-nav__link">
     <span class="md-ellipsis">
       Workload Detail
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policies-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policies Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policy Detail
     </span>
   </a>
   
@@ -1301,24 +1322,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#policies-page" class="md-nav__link">
-    <span class="md-ellipsis">
-      Policies Page
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#policy-detail" class="md-nav__link">
-    <span class="md-ellipsis">
-      Policy Detail
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#workloads-page" class="md-nav__link">
     <span class="md-ellipsis">
       Workloads Page
@@ -1331,6 +1334,24 @@
   <a href="#workload-detail" class="md-nav__link">
     <span class="md-ellipsis">
       Workload Detail
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policies-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policies Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policy Detail
     </span>
   </a>
   
@@ -1453,10 +1474,12 @@
 <p>k8s-sustain includes a built-in web dashboard for exploring policies, viewing workload resource usage, and simulating policy changes before applying them.</p>
 <h2 id="features">Features<a class="headerlink" href="#features" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Policy Overview</strong> — List all policies with their status, targeted namespaces, and workload types. Supports auto-refresh.</li>
-<li><strong>Policy Detail</strong> — View configuration parameters and matched workloads for each policy with namespace filtering and pagination.</li>
-<li><strong>Workload Metrics</strong> — Interactive CPU and memory usage graphs (time-series) for each container in a workload. Supports auto-refresh.</li>
-<li><strong>Policy Simulator</strong> — Tweak percentile, headroom, min/max parameters and instantly see how they would affect recommendations against historical data. Export results as YAML or CSV.</li>
+<li><strong>Overview Story Flow</strong> — Six-band cluster summary covering savings KPIs, 7-day trend, headroom breakdown, attention queue (at risk / drifted / blocked), policy effectiveness, and recent activity.</li>
+<li><strong>Workloads</strong> — Cluster-wide list with risk/drift/HPA columns, plus filters for namespace, kind, risk state, and HPA presence.</li>
+<li><strong>Workload Detail</strong> — Status snapshot (mode, last recycle, drift, OOM 24h), risk and HPA badges, blocked-state diagnostics, copy-as-YAML, and interactive CPU/memory charts with sliding-window recommendation, historical requests/limits, and OOM markers.</li>
+<li><strong>Policies</strong> — 4-card stat strip (total policies, active workloads, CPU &amp; memory savings) plus per-policy effectiveness columns.</li>
+<li><strong>Policy Detail</strong> — Effectiveness time-series, view-as-YAML modal, time range selector, and matched workloads with risk/drift columns.</li>
+<li><strong>Policy Simulator</strong> — Tweak percentile, headroom, min/max parameters; supports Argo Rollouts; shows projected savings impact; exports results as YAML, CSV, or Helm <code>--set</code> overrides.</li>
 <li><strong>Health Checks</strong> — The <code>/healthz</code> endpoint verifies Prometheus connectivity for reliable readiness probes.</li>
 <li><strong>Request Logging</strong> — Structured HTTP access logs for debugging and observability.</li>
 </ul>
@@ -1525,56 +1548,63 @@
 </code></pre></div>
 <h2 id="using-the-dashboard">Using the Dashboard<a class="headerlink" href="#using-the-dashboard" title="Permanent link">&para;</a></h2>
 <h3 id="overview-page">Overview Page<a class="headerlink" href="#overview-page" title="Permanent link">&para;</a></h3>
-<p>The overview page provides a cluster-wide summary of resource right-sizing:</p>
-<ul>
-<li><strong>Workload counts</strong> — Total, automated, and manual workloads</li>
-<li><strong>CPU and Memory usage vs recommendation</strong> — Aggregated across all automated workloads, showing actual Prometheus usage compared to computed recommendations with the delta percentage</li>
-<li><strong>Needs Attention table</strong> — Workloads where the CPU or memory delta between usage and recommendation exceeds 5%, sorted by the largest gap. Click any workload to view its detail page.</li>
-</ul>
-<p>The delta compares actual workload usage (at the configured percentile) against the recommendation. A negative delta means the recommendation is lower than current usage; a positive delta means the recommendation adds headroom above usage.</p>
-<h3 id="policies-page">Policies Page<a class="headerlink" href="#policies-page" title="Permanent link">&para;</a></h3>
-<p>The main page shows all <code>Policy</code> resources in your cluster with:</p>
-<ul>
-<li>Current status (Ready / Not Ready)</li>
-<li>Targeted namespaces</li>
-<li>Configured workload types and update modes</li>
-<li>Creation time</li>
-</ul>
-<p>Click any policy to view its details. Enable <strong>Auto-refresh</strong> (30s interval) to keep the view up to date.</p>
-<h3 id="policy-detail">Policy Detail<a class="headerlink" href="#policy-detail" title="Permanent link">&para;</a></h3>
-<p>Shows the full configuration (percentile, headroom, min/max, window) for both CPU and memory, plus a table of all workloads matched by the policy with their current resource requests.</p>
-<ul>
-<li><strong>Namespace filter</strong> — When a policy matches workloads in multiple namespaces, use the dropdown to filter by namespace.</li>
-<li><strong>Pagination</strong> — Large workload lists are paginated (50 per page) with Previous/Next controls.</li>
-<li><strong>Auto-refresh</strong> — Toggle to periodically reload data.</li>
-</ul>
-<p>Click any workload to view its detail page.</p>
+<p>The overview is organised as a vertical "Story Flow" with six bands, each answering a specific operator question — from "what am I saving?" down to "what just happened?".</p>
+<ol>
+<li><strong>KPI strip</strong> — Headline savings cards for CPU (cores) and memory (bytes), each showing the absolute saving, the savings ratio versus current requests, and a sparkline of the last 24h. Two complementary cards count workloads currently <strong>at risk</strong> (drift exceeds the policy threshold) and <strong>drifted</strong> (request differs from the latest recommendation).</li>
+<li><strong>Trend</strong> — A 7-day cluster-wide chart of CPU and memory consumption, so you can correlate savings against real load.</li>
+<li><strong>Headroom breakdown</strong> — A stacked horizontal bar for CPU and memory split into <code>used</code>, <code>idle</code>, and <code>free</code> segments, sourced from the <code>k8s_sustain:cluster_cpu_headroom_breakdown</code> and <code>..._memory_headroom_breakdown</code> recording rules.</li>
+<li><strong>Attention queue</strong> — Three grouped lists: <strong>At risk</strong> (workloads exceeding the drift threshold), <strong>Drifted</strong> (request out-of-date with respect to the recommendation), and <strong>Blocked</strong> (workloads where the controller is in an exponential-backoff retry state). Each row links to the workload detail page.</li>
+<li><strong>Policy effectiveness</strong> — Per-policy rollup with the matched workload count, projected CPU/memory savings, and the count of at-risk workloads, so you can spot policies that need tuning.</li>
+<li><strong>Activity feed</strong> — Most recent reconcile and pod-recycle events from the controller, with timestamps and outcomes.</li>
+</ol>
 <h3 id="workloads-page">Workloads Page<a class="headerlink" href="#workloads-page" title="Permanent link">&para;</a></h3>
-<p>Lists all workloads (Deployments, StatefulSets, DaemonSets, CronJobs) across the cluster, regardless of whether they are managed by a policy.</p>
+<p>Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs) across the cluster, regardless of whether it is governed by a policy.</p>
 <ul>
-<li><strong>Status column</strong> — Shows whether each workload is <strong>Automated</strong> (has a sustain policy) or <strong>Manual</strong></li>
-<li><strong>Filters</strong> — Filter by namespace, kind, automation status, or search by name</li>
-<li><strong>Policy link</strong> — Automated workloads show a clickable link to their policy</li>
-<li><strong>Pagination</strong> and <strong>Auto-refresh</strong> — Same controls as other pages</li>
+<li><strong>Filters</strong> — Filter by namespace, kind, <strong>risk state</strong> (healthy, drifted, at risk, blocked), and <strong>HPA presence</strong> (with HPA / without HPA). The free-text name search remains.</li>
+<li><strong>Columns</strong> — A <strong>Risk</strong> badge summarises the workload's state at a glance, a <strong>Drift %</strong> column shows the gap between current request and recommendation, and an <strong>HPA</strong> column indicates whether the workload is paired with an HPA (and the configured mode). The previous CPU/Memory request columns have been removed because the workload detail view now displays them in context.</li>
+<li><strong>Status column</strong> — Still shows whether the workload is <strong>Automated</strong> (has a sustain policy) or <strong>Manual</strong>, with a link to the policy when applicable.</li>
 </ul>
 <p>Click any workload to view its detail page.</p>
 <h3 id="workload-detail">Workload Detail<a class="headerlink" href="#workload-detail" title="Permanent link">&para;</a></h3>
 <p>Shows a comprehensive view of a single workload:</p>
 <ul>
-<li><strong>Automation status</strong> — Whether the workload is managed by a policy, with a link to the policy</li>
-<li><strong>Recommendations</strong> — If automated, shows the computed CPU and memory recommendations per container</li>
+<li><strong>Status snapshot band</strong> — A row of four KPI cards at the top of the page: <strong>Update mode</strong> (<code>OnCreate</code> / <code>Ongoing</code>), <strong>Last recycled</strong> (timestamp of the last controller-driven pod recycle), <strong>Drift</strong> (current request vs. recommendation as a percentage), and <strong>OOM (24h)</strong> (count of OOM kills observed in the last 24 hours).</li>
+<li><strong>Header badges</strong> — A <strong>Risk</strong> badge mirrors the value shown in the Workloads list. When the workload has a paired HPA, an additional <strong>HPA: <mode></strong> badge displays the configured mode (<code>HpaAware</code>, <code>UpdateTargetValue</code>, or <code>Ignore</code>).</li>
+<li><strong>Blocked card</strong> — Visible only when the controller has a retry record for this workload; surfaces the failure <strong>reason</strong>, the number of <strong>attempts</strong>, the <strong>next retry</strong> time, and the <strong>last error</strong> message. Hidden once retries clear.</li>
+<li><strong>Recommendations</strong> — If automated, shows the computed CPU and memory recommendations per container.</li>
+<li><strong>Copy as YAML</strong> — Builds a runnable manifest fragment (the <code>resources:</code> block keyed by container) that you can paste straight into a Helm values file or a workload spec.</li>
 <li><strong>CPU and Memory charts</strong> — Interactive time-series with a sliding-window recommendation line overlaid (for automated workloads). The recommendation evolves over time, showing how it would have been computed at each point using the policy's configured window and parameters, rather than a flat line.</li>
-<li><strong>Open in Simulator</strong> — Jump to the simulator with the workload pre-filled</li>
+<li><strong>Open in Simulator</strong> — Jump to the simulator with the workload pre-filled.</li>
 </ul>
 <p>A <strong>time range selector</strong> in the top-right lets you choose how much history to display: 1h, 4h, 12h, 1 day, 3 days, 7 days (default), or 30 days. The step resolution adjusts automatically for each range. You can also <strong>drag to zoom</strong> on any chart to focus on a specific time window — click and drag horizontally to select the region of interest. Zooming on a CPU chart automatically applies the same time range to the corresponding memory chart, and vice versa. A <strong>Reset zoom</strong> button appears in the top-right corner of each chart to return to the original view (resetting one also resets its paired chart). Panning is supported after zooming, and pinch-to-zoom works on touch devices. Each chart overlays the workload's <strong>historical resource request</strong> (amber dashed stepped line) and <strong>limit</strong> (orange dashed line) so you can see how actual usage compares to configured resources over time. The request line reflects real changes (e.g. from k8s-sustain patching or manual edits) rather than a flat snapshot. If historical request data is not available in Prometheus, the dashboard falls back to a static line from the current workload spec. If the workload is automated, the <strong>recommendation</strong> line (red dashed) is also shown.</p>
 <p>Memory charts also display <strong>OOM kill events</strong> as red vertical markers with a count badge in the chart header. These are detected via <code>kube_pod_container_status_restarts_total</code> correlated with <code>kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}</code>. If no kube-state-metrics is available, OOM markers are silently omitted.</p>
 <p>Enable <strong>Auto-refresh</strong> to keep data current.</p>
+<h3 id="policies-page">Policies Page<a class="headerlink" href="#policies-page" title="Permanent link">&para;</a></h3>
+<p>The Policies page leads with a <strong>4-card stat strip</strong> summarising the cluster-wide picture:</p>
+<ul>
+<li><strong>Total policies</strong> — number of <code>Policy</code> resources in the cluster</li>
+<li><strong>Active workloads</strong> — total workloads currently matched by any policy</li>
+<li><strong>CPU savings</strong> — aggregated cluster-wide CPU saved (cores)</li>
+<li><strong>Memory savings</strong> — aggregated cluster-wide memory saved (bytes)</li>
+</ul>
+<p>Below the strip, the policy table replaces the previous Ready/Namespace columns with <strong>effectiveness columns</strong>: matched <strong>workload count</strong>, <strong>CPU savings</strong> and <strong>memory savings</strong> per policy, <strong>at-risk</strong> workload count, and <strong>last applied</strong> timestamp. The Ready status indicator is still shown alongside the policy name. Click any row to view the policy detail page.</p>
+<h3 id="policy-detail">Policy Detail<a class="headerlink" href="#policy-detail" title="Permanent link">&para;</a></h3>
+<p>Shows the full configuration (percentile, headroom, min/max, window) for both CPU and memory, plus the matched workloads table.</p>
+<ul>
+<li><strong>Header rows</strong> — In addition to the existing summary fields, the header now displays the policy's <strong>Update mode</strong> and the configured <strong>HPA mode</strong> so you can see at a glance how the policy interacts with autoscalers.</li>
+<li><strong>Effectiveness card</strong> — A dedicated band with two time-series charts (CPU and memory) showing how this policy's savings have evolved over the selected time range.</li>
+<li><strong>TimeRangeSelector</strong> — A range picker (1h to 30 days) drives the Effectiveness charts, matching the selector used elsewhere in the dashboard.</li>
+<li><strong>View as YAML modal</strong> — Renders the entire <code>Policy</code> resource (sanitised of managed fields) inside a modal with a copy button — handy for sharing or storing in version control.</li>
+<li><strong>Matched workloads table</strong> — Each row now shows <strong>Risk</strong> and <strong>Drift %</strong> columns alongside the existing namespace/kind/name and current resource requests, so you can prioritise which workloads to investigate from inside the policy view.</li>
+<li><strong>Namespace filter</strong>, <strong>pagination</strong> (50 per page), and <strong>auto-refresh</strong> controls remain unchanged.</li>
+</ul>
+<p>Click any workload to view its detail page.</p>
 <h3 id="policy-simulator">Policy Simulator<a class="headerlink" href="#policy-simulator" title="Permanent link">&para;</a></h3>
 <p>The simulator lets you test "what-if" scenarios:</p>
 <ol>
-<li>Select a <strong>workload target</strong> (namespace, kind, name) — both fields are required</li>
-<li>Choose a <strong>time range</strong> (1h to 30 days) — controls how much history is displayed on the charts</li>
-<li>Optionally, use the <strong>Load from policy</strong> dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window) from an existing policy — useful as a starting point before tweaking values</li>
+<li>Select a <strong>workload target</strong> (namespace, kind, name). The kind picker now includes <strong>Argo Rollout</strong> alongside Deployment, StatefulSet, and DaemonSet.</li>
+<li>Choose a <strong>time range</strong> (1h to 30 days) — controls how much history is displayed on the charts.</li>
+<li>Optionally, use the <strong>Load from policy</strong> dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window) from an existing policy — useful as a starting point before tweaking values.</li>
 <li>Adjust <strong>CPU and Memory parameters</strong> independently:<ul>
 <li>Window (1h to 30 days) — the lookback period used to compute the recommendation, matching the policy CRD structure. This is independent of the chart time range.</li>
 <li>Percentile (50th to 99th)</li>
@@ -1587,13 +1617,15 @@
 <p>The results show:</p>
 <ul>
 <li>Computed recommendation per container (CPU request, memory request)</li>
-<li>Time-series charts with a <strong>sliding-window recommendation line</strong> (red) that shows how the recommendation would have evolved at each point in time, <strong>historical request</strong> (amber stepped), and <strong>current limit</strong> (orange) overlaid on historical usage, making it easy to compare recommendations against both actual consumption and how resource requests evolved over time</li>
+<li>A <strong>savings impact band</strong> that summarises the projected CPU and memory delta as both a percentage change and an absolute saving (cores / bytes), so you can immediately see whether the candidate parameters reduce or increase footprint</li>
+<li>Time-series charts with a <strong>sliding-window recommendation line</strong> (red) that shows how the recommendation would have evolved at each point in time, <strong>historical request</strong> (amber stepped), and <strong>current limit</strong> (orange) overlaid on historical usage</li>
 </ul>
 <h4 id="exporting-results">Exporting Results<a class="headerlink" href="#exporting-results" title="Permanent link">&para;</a></h4>
 <p>After running a simulation, use the export buttons to download recommendations:</p>
 <ul>
 <li><strong>YAML</strong> — Downloads a Kubernetes resource patch you can apply with <code>kubectl apply -f</code></li>
 <li><strong>CSV</strong> — Downloads a spreadsheet-compatible file with per-container recommendations</li>
+<li><strong>Helm export</strong> — Generates a block of <code>--set</code> overrides (or values-file fragment) you can copy/paste into a Helm install/upgrade command, mapping the simulated requests/limits onto the workload's container paths</li>
 </ul>
 <h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">&para;</a></h2>
 <p>The dashboard frontend is a Vue 3 + TypeScript SPA built with Vite, located in <code>internal/dashboard/ui/frontend/</code>. The compiled output goes to <code>internal/dashboard/ui/dist/</code> and is embedded into the Go binary via <code>go:embed</code>.</p>
