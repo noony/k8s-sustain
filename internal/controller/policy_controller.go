@@ -145,6 +145,14 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		"failed", failCount.Load(),
 		"concurrency", r.ConcurrencyLimit)
 
+	// Per-policy rollup: total matched workloads and how many are blocked in retry.
+	keys := make([]string, 0, len(targets))
+	for i := range targets {
+		keys = append(keys, targets[i].key())
+	}
+	atRisk := r.retries.blockedCountAmong(keys)
+	EmitPolicyRollup(policy.Name, len(targets), atRisk)
+
 	failed := int(failCount.Load())
 	if failed > 0 {
 		msg := fmt.Sprintf("%d of %d workloads failed", failed, len(targets))
@@ -342,6 +350,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	// HPA-aware adjustment: detect HPA before building recommendations
 	// so limits are derived from adjusted requests.
 	var hpaDet *hpaDetection
+	hpaPresentForWorkload := false
 	hpaMode := resolveHpaMode(policy)
 	logger.V(1).Info("resolved HPA mode", "mode", hpaMode)
 	if hpaMode == sustainv1alpha1.HpaModeHpaAware || hpaMode == sustainv1alpha1.HpaModeUpdateTargetValue {
@@ -349,6 +358,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		if hpaErr != nil {
 			logger.Error(hpaErr, "HPA detection failed, proceeding without adjustment")
 		} else if det != nil {
+			hpaPresentForWorkload = true
 			r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "HpaDetected",
 				"HPA %s detected targeting %s/%s", det.hpa.Name, t.Kind, t.Name)
 			if hpaMode == sustainv1alpha1.HpaModeHpaAware {
@@ -380,11 +390,13 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 			}
 		}
 	}
+	EmitHPAPresent(t.Namespace, t.Kind, t.Name, string(hpaMode), hpaPresentForWorkload)
 
 	recs, err := r.buildRecommendations(ctx, policy, t.Namespace, t.Kind, t.Name, t.Containers, hpaDet)
 	if err != nil {
 		if !isTransientError(err) {
 			r.retries.remove(t.key())
+			EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 			return nil
 		}
 		r.retries.recordFailure(t.key())
@@ -392,27 +404,35 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		r.recorder.Eventf(t.Object, corev1.EventTypeWarning, "ReconciliationRetryScheduled",
 			"Prometheus query failed: %v. Retry attempt %d at %s", err, state.attempts, state.nextRetry.Format(time.RFC3339))
 		logger.Error(err, "prometheus query failed, retry scheduled", "attempt", state.attempts)
+		EmitRetryState(t.Namespace, t.Kind, t.Name, "prometheus", true)
+		IncrementRetryAttempt(t.Namespace, t.Kind, t.Name)
 		return err
 	}
 
 	if len(recs) == 0 {
 		logger.V(1).Info("no recommendations available yet (no Prometheus data)")
 		r.retries.recordSuccess(t.key())
+		EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 		return nil
 	}
 
 	logger.Info("computed recommendations", "containers", len(recs))
 	logger.V(1).Info("recommendation details", "recommendations", recs)
 
+	// Emit per-container recommendation/drift metrics before recycling pods.
+	emitWorkloadFromRecs(t, policy.Name, recs)
+
 	if r.RecommendOnly {
 		logger.Info("recommend-only: computed recommendations", "recommendations", recs)
 		r.retries.recordSuccess(t.key())
+		EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 		return nil
 	}
 
 	sel, err := metav1.LabelSelectorAsSelector(t.Selector)
 	if err != nil {
 		r.retries.remove(t.key())
+		EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 		return err
 	}
 
@@ -420,6 +440,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	if err := r.patcher.RecyclePods(ctx, t.Namespace, sel, recs); err != nil {
 		if !isTransientError(err) {
 			r.retries.remove(t.key())
+			EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 			return nil
 		}
 		r.retries.recordFailure(t.key())
@@ -427,10 +448,13 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		r.recorder.Eventf(t.Object, corev1.EventTypeWarning, "ReconciliationRetryScheduled",
 			"Pod recycle failed: %v. Retry attempt %d at %s", err, state.attempts, state.nextRetry.Format(time.RFC3339))
 		logger.Error(err, "pod recycle failed, retry scheduled", "attempt", state.attempts)
+		EmitRetryState(t.Namespace, t.Kind, t.Name, "patch", true)
+		IncrementRetryAttempt(t.Namespace, t.Kind, t.Name)
 		return err
 	}
 
 	r.retries.recordSuccess(t.key())
+	EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 
 	// Build a summary of the applied recommendations for the event message.
 	var containers []string

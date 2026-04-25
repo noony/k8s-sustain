@@ -20,11 +20,15 @@ import (
 // ---- Policy types ----
 
 type policyListItem struct {
-	Name       string                      `json:"name"`
-	Namespaces []string                    `json:"namespaces"`
-	Update     sustainv1alpha1.UpdateTypes `json:"update"`
-	Conditions []conditionSummary          `json:"conditions"`
-	CreatedAt  string                      `json:"createdAt"`
+	Name            string                      `json:"name"`
+	Namespaces      []string                    `json:"namespaces"`
+	Update          sustainv1alpha1.UpdateTypes `json:"update"`
+	Conditions      []conditionSummary          `json:"conditions"`
+	CreatedAt       string                      `json:"createdAt"`
+	WorkloadCount   int                         `json:"workloadCount"`
+	CPUSavingsCores float64                     `json:"cpuSavingsCores"`
+	MemSavingsBytes float64                     `json:"memSavingsBytes"`
+	AtRiskCount     int                         `json:"atRiskCount"`
 }
 
 type conditionSummary struct {
@@ -64,11 +68,17 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Cache-Control", "public, max-age=30")
 
+	ctx := r.Context()
 	var list sustainv1alpha1.PolicyList
-	if err := s.K8sClient.List(r.Context(), &list); err != nil {
+	if err := s.K8sClient.List(ctx, &list); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("listing policies: %s", err))
 		return
 	}
+
+	wl, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_policy_workload_count", "policy")
+	cpu, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain:policy_cpu_savings_cores", "policy")
+	mem, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain:policy_memory_savings_bytes", "policy")
+	risk, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_policy_at_risk_count", "policy")
 
 	items := make([]policyListItem, 0, len(list.Items))
 	for _, p := range list.Items {
@@ -82,11 +92,15 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		items = append(items, policyListItem{
-			Name:       p.Name,
-			Namespaces: p.Spec.Selector.Namespaces,
-			Update:     p.Spec.Update.Types,
-			Conditions: conditions,
-			CreatedAt:  p.CreationTimestamp.Format("2006-01-02T15:04:05Z"),
+			Name:            p.Name,
+			Namespaces:      p.Spec.Selector.Namespaces,
+			Update:          p.Spec.Update.Types,
+			Conditions:      conditions,
+			CreatedAt:       p.CreationTimestamp.Format("2006-01-02T15:04:05Z"),
+			WorkloadCount:   int(wl[p.Name]),
+			CPUSavingsCores: cpu[p.Name],
+			MemSavingsBytes: mem[p.Name],
+			AtRiskCount:     int(risk[p.Name]),
 		})
 	}
 	writeJSON(w, http.StatusOK, items)
@@ -122,8 +136,9 @@ func (s *Server) handlePolicyRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name string) {
+	ctx := r.Context()
 	policy := &sustainv1alpha1.Policy{}
-	if err := s.K8sClient.Get(r.Context(), client.ObjectKey{Name: name}, policy); err != nil {
+	if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: name}, policy); err != nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("policy %q not found: %v", name, err))
 		return
 	}
@@ -138,15 +153,49 @@ func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name
 		})
 	}
 
-	writeJSON(w, http.StatusOK, policyDetail{
-		policyListItem: policyListItem{
-			Name:       policy.Name,
-			Namespaces: policy.Spec.Selector.Namespaces,
-			Update:     policy.Spec.Update.Types,
-			Conditions: conditions,
-			CreatedAt:  policy.CreationTimestamp.Format("2006-01-02T15:04:05Z"),
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "30d"
+	}
+	step := r.URL.Query().Get("step")
+	if step == "" {
+		step = "1h"
+	}
+
+	cpuSeries, _ := s.PromClient.QueryRange(ctx, fmt.Sprintf(`k8s_sustain:policy_cpu_savings_cores{policy=%q}`, name), window, step)
+	memSeries, _ := s.PromClient.QueryRange(ctx, fmt.Sprintf(`k8s_sustain:policy_memory_savings_bytes{policy=%q}`, name), window, step)
+	if cpuSeries == nil {
+		cpuSeries = []promclient.TimeValue{}
+	}
+	if memSeries == nil {
+		memSeries = []promclient.TimeValue{}
+	}
+
+	// Query the policy-level rollup gauges so the detail view also has them.
+	wl, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_policy_workload_count", "policy")
+	cpuByPolicy, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain:policy_cpu_savings_cores", "policy")
+	memByPolicy, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain:policy_memory_savings_bytes", "policy")
+	risk, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_policy_at_risk_count", "policy")
+
+	writeJSON(w, http.StatusOK, struct {
+		policyDetail
+		EffectivenessSeries map[string][]promclient.TimeValue `json:"effectivenessSeries"`
+	}{
+		policyDetail: policyDetail{
+			policyListItem: policyListItem{
+				Name:            policy.Name,
+				Namespaces:      policy.Spec.Selector.Namespaces,
+				Update:          policy.Spec.Update.Types,
+				Conditions:      conditions,
+				CreatedAt:       policy.CreationTimestamp.Format("2006-01-02T15:04:05Z"),
+				WorkloadCount:   int(wl[name]),
+				CPUSavingsCores: cpuByPolicy[name],
+				MemSavingsBytes: memByPolicy[name],
+				AtRiskCount:     int(risk[name]),
+			},
+			Spec: policy.Spec,
 		},
-		Spec: policy.Spec,
+		EffectivenessSeries: map[string][]promclient.TimeValue{"cpu": cpuSeries, "memory": memSeries},
 	})
 }
 
@@ -369,12 +418,16 @@ func containerStatuses(containers []corev1.Container) []containerStatus {
 // ---- All workloads (cluster-wide) ----
 
 type allWorkloadSummary struct {
-	Namespace  string            `json:"namespace"`
-	Kind       string            `json:"kind"`
-	Name       string            `json:"name"`
-	Containers []containerStatus `json:"containers"`
-	Automated  bool              `json:"automated"`
-	PolicyName string            `json:"policyName,omitempty"`
+	Namespace      string            `json:"namespace"`
+	Kind           string            `json:"kind"`
+	Name           string            `json:"name"`
+	Containers     []containerStatus `json:"containers"`
+	Automated      bool              `json:"automated"`
+	PolicyName     string            `json:"policyName,omitempty"`
+	RiskState      string            `json:"riskState"` // safe | drifted | at-risk | blocked
+	DriftPercent   float64           `json:"driftPercent"`
+	LastRecycledAt string            `json:"lastRecycledAt,omitempty"`
+	HPAPresent     bool              `json:"hpaPresent"`
 }
 
 type paginatedAllWorkloads struct {
@@ -406,6 +459,8 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	kindFilter := r.URL.Query().Get("kind")
 	automatedFilter := r.URL.Query().Get("automated")
 	search := strings.ToLower(r.URL.Query().Get("search"))
+	riskFilter := r.URL.Query().Get("risk")
+	hpaFilter := r.URL.Query().Get("hpa")
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
 	if page < 1 {
@@ -499,6 +554,30 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 		workloads = []allWorkloadSummary{}
 	}
 
+	// Decorate workloads with Prometheus-derived risk/drift/HPA signals.
+	oomByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain:workload_oom_24h", "owner_name")
+	driftByName, _ := s.PromClient.QueryByLabel(ctx, "max by (owner_name) (abs(1 - k8s_sustain_workload_drift_ratio))", "owner_name")
+	blockedByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_workload_retry_state == 1", "owner_name")
+	hpaByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_hpa_present", "owner_name")
+
+	for i := range workloads {
+		wl := &workloads[i]
+		wl.HPAPresent = hpaByName[wl.Name] > 0
+		if drift, ok := driftByName[wl.Name]; ok {
+			wl.DriftPercent = drift * 100
+		}
+		switch {
+		case oomByName[wl.Name] > 0:
+			wl.RiskState = "at-risk"
+		case blockedByName[wl.Name] > 0:
+			wl.RiskState = "blocked"
+		case wl.DriftPercent > 10:
+			wl.RiskState = "drifted"
+		default:
+			wl.RiskState = "safe"
+		}
+	}
+
 	// Collect unique namespaces and kinds before filtering
 	nsSet := make(map[string]struct{})
 	kindSet := make(map[string]struct{})
@@ -532,6 +611,29 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 		filtered := workloads[:0]
 		for _, w := range workloads {
 			if strings.Contains(strings.ToLower(w.Name), search) {
+				filtered = append(filtered, w)
+			}
+		}
+		workloads = filtered
+	}
+
+	// Apply risk filter
+	if riskFilter != "" {
+		filtered := workloads[:0]
+		for _, w := range workloads {
+			if w.RiskState == riskFilter {
+				filtered = append(filtered, w)
+			}
+		}
+		workloads = filtered
+	}
+
+	// Apply HPA filter
+	if hpaFilter == "has-hpa" || hpaFilter == "no-hpa" {
+		wantHPA := hpaFilter == "has-hpa"
+		filtered := workloads[:0]
+		for _, w := range workloads {
+			if w.HPAPresent == wantHPA {
 				filtered = append(filtered, w)
 			}
 		}
@@ -715,16 +817,21 @@ func (s *Server) handleWorkloadRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// /api/workloads/:namespace/:kind/:name/metrics|recommendations
+	// /api/workloads/:namespace/:kind/:name[/metrics|recommendations]
 	parts := parsePath(r.URL.Path, "/api/workloads/")
-	if len(parts) < 4 {
-		writeError(w, http.StatusBadRequest, "expected /api/workloads/:namespace/:kind/:name/metrics|recommendations")
+	if len(parts) < 3 {
+		writeError(w, http.StatusBadRequest, "expected /api/workloads/:namespace/:kind/:name[/metrics|recommendations]")
 		return
 	}
 
 	namespace := parts[0]
 	kind := parts[1]
 	name := parts[2]
+
+	if len(parts) == 3 {
+		s.handleWorkloadDetail(w, r, namespace, kind, name)
+		return
+	}
 
 	if parts[3] == "recommendations" {
 		s.handleWorkloadRecommendations(w, r, namespace, kind, name)
@@ -916,4 +1023,105 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+// ---- Workload detail snapshot ----
+
+type workloadDetailResponse struct {
+	UpdateMode     string                 `json:"updateMode,omitempty"`
+	LastRecycledAt string                 `json:"lastRecycledAt,omitempty"`
+	DriftPercent   float64                `json:"driftPercent"`
+	OOM24h         int                    `json:"oom24h"`
+	HPAMode        string                 `json:"hpaMode,omitempty"`
+	Blocked        *workloadDetailBlocked `json:"blocked,omitempty"`
+	RecentEvents   []activityItem         `json:"recentEvents"`
+}
+
+type workloadDetailBlocked struct {
+	Reason      string `json:"reason"`
+	Attempts    int    `json:"attempts"`
+	NextRetryAt string `json:"nextRetryAt,omitempty"`
+	LastError   string `json:"lastError,omitempty"`
+}
+
+func (s *Server) handleWorkloadDetail(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	ctx := r.Context()
+	w.Header().Set("Cache-Control", "public, max-age=30")
+
+	resp := workloadDetailResponse{}
+
+	if policyName, _ := s.getWorkloadPolicyAnnotation(ctx, namespace, kind, name); policyName != "" {
+		policy := &sustainv1alpha1.Policy{}
+		if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: policyName}, policy); err == nil {
+			var modePtr *sustainv1alpha1.UpdateMode
+			switch kind {
+			case "Deployment":
+				modePtr = policy.Spec.Update.Types.Deployment
+			case "StatefulSet":
+				modePtr = policy.Spec.Update.Types.StatefulSet
+			case "DaemonSet":
+				modePtr = policy.Spec.Update.Types.DaemonSet
+			case "CronJob":
+				modePtr = policy.Spec.Update.Types.CronJob
+			}
+			if modePtr != nil {
+				resp.UpdateMode = string(*modePtr)
+			}
+			if policy.Spec.RightSizing.UpdatePolicy.Hpa != nil {
+				resp.HPAMode = string(policy.Spec.RightSizing.UpdatePolicy.Hpa.Mode)
+			}
+		}
+	}
+
+	oomExpr := fmt.Sprintf(`k8s_sustain:workload_oom_24h{namespace=%q,owner_kind=%q,owner_name=%q}`, namespace, kind, name)
+	if v, _ := s.PromClient.QueryInstant(ctx, oomExpr); v > 0 {
+		resp.OOM24h = int(v)
+	}
+	driftExpr := fmt.Sprintf(`max(abs(1 - k8s_sustain_workload_drift_ratio{namespace=%q,owner_kind=%q,owner_name=%q}))`, namespace, kind, name)
+	if v, _ := s.PromClient.QueryInstant(ctx, driftExpr); v > 0 {
+		resp.DriftPercent = v * 100
+	}
+	blockedExpr := fmt.Sprintf(`k8s_sustain_workload_retry_state{namespace=%q,owner_kind=%q,owner_name=%q} == 1`, namespace, kind, name)
+	blockedByReason, _ := s.PromClient.QueryByLabel(ctx, blockedExpr, "reason")
+	if len(blockedByReason) > 0 {
+		var reason string
+		for k := range blockedByReason {
+			reason = k
+			break
+		}
+		attemptsExpr := fmt.Sprintf(`k8s_sustain_workload_retry_attempts{namespace=%q,owner_kind=%q,owner_name=%q}`, namespace, kind, name)
+		attempts, _ := s.PromClient.QueryInstant(ctx, attemptsExpr)
+		resp.Blocked = &workloadDetailBlocked{Reason: reason, Attempts: int(attempts)}
+	}
+
+	var list corev1.EventList
+	_ = s.K8sClient.List(ctx, &list, client.InNamespace(namespace))
+	for _, e := range list.Items {
+		if e.InvolvedObject.Kind != kind || e.InvolvedObject.Name != name {
+			continue
+		}
+		if e.Source.Component != "k8s-sustain" {
+			continue
+		}
+		resp.RecentEvents = append(resp.RecentEvents, activityItem{
+			Timestamp: e.LastTimestamp.Format("2006-01-02T15:04:05Z"),
+			Namespace: e.InvolvedObject.Namespace,
+			Kind:      e.InvolvedObject.Kind,
+			Name:      e.InvolvedObject.Name,
+			Reason:    e.Reason,
+			Message:   e.Message,
+		})
+		if len(resp.RecentEvents) >= 10 {
+			break
+		}
+	}
+	if resp.RecentEvents == nil {
+		resp.RecentEvents = []activityItem{}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }

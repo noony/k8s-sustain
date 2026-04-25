@@ -6,6 +6,10 @@ import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useSorting } from '../composables/useSorting'
 import StatusBadge from '../components/StatusBadge.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
+import RiskBadge from '../components/RiskBadge.vue'
+import TrendChart from '../components/TrendChart.vue'
+import TimeRangeSelector from '../components/TimeRangeSelector.vue'
+import YamlPreviewModal from '../components/YamlPreviewModal.vue'
 
 const props = defineProps<{ name: string }>()
 const router = useRouter()
@@ -18,6 +22,8 @@ const page = ref(1)
 const batchLoading = ref(false)
 const batchData = ref<BatchSimulateData | null>(null)
 const batchError = ref('')
+const timeWindow = ref('168h')
+const yamlOpen = ref(false)
 
 const { sort, sortArrow, applySorting } = useSorting('policyWorkloads')
 
@@ -72,6 +78,34 @@ async function runBatchSimulate() {
 function savingsClass(millis: number): string {
   return millis > 0 ? 'savings-positive' : millis < 0 ? 'savings-negative' : ''
 }
+
+function effectivenessSeries() {
+  const e = policy.value?.effectivenessSeries
+  if (!e) return []
+  const cpu = e.cpu || []
+  const mem = e.memory || []
+  if (cpu.length === 0 && mem.length === 0) return []
+  return [
+    { label: 'CPU saved', color: '#6366f1', points: cpu },
+    { label: 'Mem saved', color: '#06b6d4', points: mem },
+  ]
+}
+
+function modeBadges(): string {
+  const u = policy.value?.spec?.update
+  if (!u) return '-'
+  const parts: string[] = []
+  if (u.deployment) parts.push(`Deploy:${u.deployment}`)
+  if (u.statefulSet) parts.push(`STS:${u.statefulSet}`)
+  if (u.daemonSet) parts.push(`DS:${u.daemonSet}`)
+  if (u.cronJob) parts.push(`CJ:${u.cronJob}`)
+  return parts.join(', ') || '-'
+}
+
+function renderYaml(p: typeof policy.value): string {
+  if (!p) return ''
+  return `# k8s.sustain.io/v1alpha1 Policy ${props.name}\n` + JSON.stringify(p.spec || {}, null, 2)
+}
 </script>
 
 <template>
@@ -96,14 +130,17 @@ function savingsClass(millis: number): string {
         <h1>{{ name }}</h1>
         <p>Policy configuration and matched workloads</p>
       </div>
-      <label class="auto-refresh">
-        <input
-          type="checkbox"
-          :checked="autoRefresh"
-          @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
-        />
-        Auto-refresh (30s)
-      </label>
+      <div class="time-range-bar">
+        <TimeRangeSelector v-model="timeWindow" />
+        <label class="auto-refresh">
+          <input
+            type="checkbox"
+            :checked="autoRefresh"
+            @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
+          />
+          Auto-refresh (30s)
+        </label>
+      </div>
     </div>
 
     <div class="stats-row">
@@ -126,7 +163,10 @@ function savingsClass(millis: number): string {
     </div>
 
     <div class="card">
-      <div class="card-header"><h2>Configuration</h2></div>
+      <div class="card-header">
+        <h2>Configuration</h2>
+        <button class="btn btn-secondary" @click="yamlOpen = true">View as YAML</button>
+      </div>
       <div class="sim-grid">
         <div>
           <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">CPU</h3>
@@ -179,6 +219,30 @@ function savingsClass(millis: number): string {
           </div>
         </div>
       </div>
+      <div style="margin-top: 16px">
+        <div class="rec-row">
+          <span class="label">Update mode</span>
+          <span class="value">{{ modeBadges() }}</span>
+        </div>
+        <div class="rec-row">
+          <span class="label">HPA mode</span>
+          <span class="value">{{ policy.spec?.hpa?.mode || '-' }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Effectiveness over time</h2>
+        <TimeRangeSelector v-model="timeWindow" />
+      </div>
+      <TrendChart
+        v-if="effectivenessSeries().length"
+        :series="effectivenessSeries()"
+        unit=""
+        :height="220"
+      />
+      <div v-else class="empty-state"><p>Insufficient data — check back in 24h.</p></div>
     </div>
 
     <div class="card">
@@ -223,6 +287,10 @@ function savingsClass(millis: number): string {
                 <th class="sort-header" @click="sort('name')">
                   Name<span v-html="sortArrow('name')"></span>
                 </th>
+                <th>Risk</th>
+                <th class="sort-header" @click="sort('driftPercent')">
+                  Drift<span v-html="sortArrow('driftPercent')"></span>
+                </th>
                 <th>Containers</th>
                 <th>CPU Req</th>
                 <th>Mem Req</th>
@@ -239,6 +307,11 @@ function savingsClass(millis: number): string {
                   <span class="kind-badge" :class="'kind-' + w.kind">{{ w.kind }}</span>
                 </td>
                 <td style="font-weight: 600">{{ w.name }}</td>
+                <td><RiskBadge :state="w.riskState" /></td>
+                <td>
+                  <code v-if="w.driftPercent">{{ w.driftPercent.toFixed(1) }}%</code
+                  ><span v-else style="color: var(--text-dim)">-</span>
+                </td>
                 <td style="color: var(--text-dim)">
                   {{ w.containers.map((c) => c.name).join(', ') }}
                 </td>
@@ -357,4 +430,11 @@ function savingsClass(millis: number): string {
       </div>
     </div>
   </template>
+
+  <YamlPreviewModal
+    :open="yamlOpen"
+    title="Policy spec"
+    :yaml="renderYaml(policy)"
+    @close="yamlOpen = false"
+  />
 </template>

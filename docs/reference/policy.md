@@ -130,6 +130,8 @@ See [Update Modes](../concepts/update-modes.md) for the difference between `OnCr
 | `UpdateTargetValue` | Convert HPA metrics from `Utilization` to `AverageValue` (absolute), then apply recommendations normally. For KEDA workloads, patches the ScaledObject instead |
 | `Ignore` | No HPA awareness. Current behavior — use at your own risk with HPA |
 
+The dashboard surfaces the active HPA mode in two places: the **Policy Detail** page header shows the configured mode for each policy, and the **Workload Detail** page renders an `HPA: <mode>` badge in the header for any matched workload paired with an HPA.
+
 ### `spec.rightSizing.updatePolicy.hpa.cpu` / `hpa.memory`
 
 | Field | Type | Default | Description |

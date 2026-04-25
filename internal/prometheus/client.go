@@ -286,3 +286,82 @@ func (c *Client) queryByContainer(ctx context.Context, expr string) (ContainerVa
 	}
 	return values, nil
 }
+
+// dashboardQueryTimeout bounds dashboard-side reads of recording rules.
+const dashboardQueryTimeout = 10 * time.Second
+
+// QueryInstant runs a single instant query and returns the scalar/first-vector
+// value. Returns 0 with no error if the query produces no samples.
+func (c *Client) QueryInstant(ctx context.Context, expr string) (float64, error) {
+	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
+	defer cancel()
+	v, _, err := c.api.Query(ctx, expr, time.Now())
+	if err != nil {
+		return 0, fmt.Errorf("instant query %q: %w", expr, err)
+	}
+	switch typed := v.(type) {
+	case model.Vector:
+		if len(typed) == 0 {
+			return 0, nil
+		}
+		return float64(typed[0].Value), nil
+	case *model.Scalar:
+		return float64(typed.Value), nil
+	default:
+		return 0, nil
+	}
+}
+
+// QueryRange runs a range query for a single series and returns its time-stamped
+// values. If the query produces multiple series, only the first is returned.
+func (c *Client) QueryRange(ctx context.Context, expr, window, step string) ([]TimeValue, error) {
+	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
+	defer cancel()
+	end := time.Now()
+	dur, err := model.ParseDuration(window)
+	if err != nil {
+		return nil, fmt.Errorf("parse window %q: %w", window, err)
+	}
+	stp, err := model.ParseDuration(step)
+	if err != nil {
+		return nil, fmt.Errorf("parse step %q: %w", step, err)
+	}
+	r := prometheusv1.Range{Start: end.Add(-time.Duration(dur)), End: end, Step: time.Duration(stp)}
+	v, _, err := c.api.QueryRange(ctx, expr, r)
+	if err != nil {
+		return nil, fmt.Errorf("range query %q: %w", expr, err)
+	}
+	matrix, ok := v.(model.Matrix)
+	if !ok || len(matrix) == 0 {
+		return nil, nil
+	}
+	out := make([]TimeValue, 0, len(matrix[0].Values))
+	for _, p := range matrix[0].Values {
+		out = append(out, TimeValue{Timestamp: p.Timestamp.Time(), Value: float64(p.Value)})
+	}
+	return out, nil
+}
+
+// QueryByLabel runs an instant query and returns a map of label-value -> sample value.
+// Used for per-policy and per-workload aggregates.
+func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error) {
+	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
+	defer cancel()
+	v, _, err := c.api.Query(ctx, expr, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("by-label query %q: %w", expr, err)
+	}
+	vec, ok := v.(model.Vector)
+	if !ok {
+		return map[string]float64{}, nil
+	}
+	out := map[string]float64{}
+	for _, sample := range vec {
+		key := string(sample.Metric[model.LabelName(label)])
+		if key == "" {
+			continue
+		}
+		out[key] = float64(sample.Value)
+	}
+	return out, nil
+}

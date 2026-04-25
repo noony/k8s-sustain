@@ -7,8 +7,15 @@ import {
   getTimeRangeStep,
   type MetricsData,
   type RecommendationsData,
+  type WorkloadDetailSnapshot,
 } from '../lib/api'
-import { parseCPUQuantity, parseMemoryQuantity } from '../lib/format'
+import {
+  parseCPUQuantity,
+  parseMemoryQuantity,
+  timeAgo,
+  buildRecommendationYaml,
+  downloadFile,
+} from '../lib/format'
 import {
   createTimeSeriesChart,
   destroyAllCharts,
@@ -19,8 +26,11 @@ import {
   type ChartAnnotation,
 } from '../lib/chart'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
+import { useApi } from '../composables/useApi'
 import TimeRangeSelector from '../components/TimeRangeSelector.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
+import KpiCard from '../components/KpiCard.vue'
+import RiskBadge from '../components/RiskBadge.vue'
 
 const props = defineProps<{
   namespace: string
@@ -35,6 +45,10 @@ const timeRange = ref(defaultTimeRange)
 const metrics = ref<MetricsData | null>(null)
 const recs = ref<RecommendationsData | null>(null)
 
+const snapshot = useApi<WorkloadDetailSnapshot>(() =>
+  api<WorkloadDetailSnapshot>(`/api/workloads/${props.namespace}/${props.kind}/${props.name}`),
+)
+
 async function load() {
   const step = getTimeRangeStep(timeRange.value)
   try {
@@ -45,6 +59,7 @@ async function load() {
       api<RecommendationsData>(
         `/api/workloads/${props.namespace}/${props.kind}/${props.name}/recommendations?window=${timeRange.value}&step=${step}`,
       ),
+      snapshot.run(),
     ])
     metrics.value = m
     recs.value = r
@@ -189,6 +204,26 @@ function renderCharts() {
     }
   })
 }
+
+function snapshotRiskState(): 'safe' | 'drifted' | 'at-risk' | 'blocked' | '' {
+  const s = snapshot.data.value
+  if (!s) return ''
+  if (s.blocked) return 'blocked'
+  if (s.oom24h > 0) return 'at-risk'
+  if (s.driftPercent > 10) return 'drifted'
+  return 'safe'
+}
+
+function copyRecommendationYaml() {
+  if (!recs.value?.containers) return
+  const containers = Object.entries(recs.value.containers).map(([name, rec]) => ({
+    name,
+    cpuRequest: rec.cpuRequest,
+    memoryRequest: rec.memoryRequest,
+  }))
+  const yaml = buildRecommendationYaml(props.namespace, props.kind, props.name, containers)
+  downloadFile(`${props.name}-recommendation.yaml`, yaml, 'text/yaml')
+}
 </script>
 
 <template>
@@ -229,6 +264,12 @@ function renderCharts() {
           </template>
           <span v-else class="badge badge-dim">Manual</span>
         </p>
+        <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
+          <span v-if="snapshot.data.value?.hpaMode" class="badge badge-blue"
+            >HPA · {{ snapshot.data.value.hpaMode }}</span
+          >
+          <RiskBadge v-if="snapshotRiskState()" :state="snapshotRiskState() as any" />
+        </div>
       </div>
       <div class="time-range-bar">
         <TimeRangeSelector v-model="timeRange" />
@@ -241,6 +282,44 @@ function renderCharts() {
           Auto-refresh (30s)
         </label>
       </div>
+    </div>
+
+    <!-- Status snapshot -->
+    <div class="card">
+      <div class="card-header"><h2>Status</h2></div>
+      <div class="stats-row">
+        <KpiCard label="Mode" :value="snapshot.data.value?.updateMode || '-'" />
+        <KpiCard
+          label="Last recycled"
+          :value="
+            snapshot.data.value?.lastRecycledAt
+              ? timeAgo(snapshot.data.value.lastRecycledAt)
+              : 'never'
+          "
+        />
+        <KpiCard
+          label="Drift"
+          :value="(snapshot.data.value?.driftPercent || 0).toFixed(1) + '%'"
+          :tone="snapshot.data.value && snapshot.data.value.driftPercent > 10 ? 'warn' : 'neutral'"
+        />
+        <KpiCard
+          label="OOM 24h"
+          :value="String(snapshot.data.value?.oom24h || 0)"
+          :tone="snapshot.data.value && snapshot.data.value.oom24h > 0 ? 'danger' : 'neutral'"
+        />
+      </div>
+    </div>
+
+    <!-- Blocked band -->
+    <div v-if="snapshot.data.value?.blocked" class="card" style="border-color: var(--red)">
+      <div class="card-header"><h2 style="color: var(--red)">Currently blocked</h2></div>
+      <p>
+        Reason: <code>{{ snapshot.data.value.blocked.reason }}</code> ·
+        {{ snapshot.data.value.blocked.attempts }} attempts
+      </p>
+      <p v-if="snapshot.data.value.blocked.lastError" style="color: var(--text-dim)">
+        Last error: {{ snapshot.data.value.blocked.lastError }}
+      </p>
     </div>
 
     <!-- Recommendations -->
@@ -323,7 +402,7 @@ function renderCharts() {
       <div class="empty-state"><p>No metrics data available.</p></div>
     </div>
 
-    <div style="margin-top: 16px">
+    <div style="margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap">
       <button
         class="btn btn-secondary"
         @click="router.push(`/simulator/${namespace}/${kind}/${name}`)"
@@ -342,6 +421,7 @@ function renderCharts() {
         </svg>
         Open in Simulator
       </button>
+      <button class="btn btn-secondary" @click="copyRecommendationYaml">Copy as YAML</button>
     </div>
   </template>
 </template>

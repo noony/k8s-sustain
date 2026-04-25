@@ -84,6 +84,25 @@ func (rt *retryTracker) getState(key string) *retryState {
 	return &cp
 }
 
+// blockedCountAmong returns the number of given keys currently in retry-backoff.
+// Used to compute per-policy at-risk counts after a reconcile cycle.
+func (rt *retryTracker) blockedCountAmong(keys []string) int {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	now := time.Now()
+	count := 0
+	for _, k := range keys {
+		s, ok := rt.states[k]
+		if !ok {
+			continue
+		}
+		if now.Before(s.nextRetry) {
+			count++
+		}
+	}
+	return count
+}
+
 // isTransientError returns true for errors that should trigger a retry with backoff.
 // Permanent errors (not found, invalid, context cancellation) return false.
 func isTransientError(err error) bool {

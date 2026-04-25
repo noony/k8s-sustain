@@ -3,10 +3,12 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -18,6 +20,28 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
+
+// PromQuerier is the subset of the Prometheus client used by the dashboard.
+// Defining it as an interface lets tests inject fakes.
+type PromQuerier interface {
+	Ping(ctx context.Context) error
+
+	// Generic helpers used by /api/summary.
+	QueryInstant(ctx context.Context, expr string) (float64, error)
+	QueryRange(ctx context.Context, expr, window, step string) ([]promclient.TimeValue, error)
+	QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error)
+
+	// Per-workload helpers used by /api/workloads/* and /api/simulate.
+	QueryCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
+	QueryMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
+	QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
+	QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
+	QueryCPURequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
+	QueryMemoryRequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
+	QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName, window, step string) ([]promclient.OOMEvent, error)
+}
 
 // responseWriter wraps http.ResponseWriter to capture the status code.
 type responseWriter struct {
@@ -43,13 +67,26 @@ func Scheme() *runtime.Scheme { return dashboardScheme }
 // Server is the dashboard HTTP server.
 type Server struct {
 	K8sClient   client.Client
-	PromClient  *promclient.Client
+	PromClient  PromQuerier
 	Logger      logr.Logger
 	CORSOrigins []string // Allowed CORS origins. Empty or ["*"] means allow all.
+
+	cacheInit    sync.Once
+	summaryCache *Cache
+	policyCache  *Cache
 }
 
 // Handler returns an http.Handler with all dashboard routes registered.
 func (s *Server) Handler() http.Handler {
+	s.cacheInit.Do(func() {
+		if s.summaryCache == nil {
+			s.summaryCache = NewCache(8, 60*time.Second)
+		}
+		if s.policyCache == nil {
+			s.policyCache = NewCache(32, 30*time.Second)
+		}
+	})
+
 	mux := http.NewServeMux()
 
 	// API routes
@@ -59,6 +96,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/workloads/", s.handleWorkloadRoutes)
 	mux.HandleFunc("/api/simulate", s.handleSimulate)
 	mux.HandleFunc("/api/summary", s.handleSummary)
+	mux.HandleFunc("/api/summary/trend", s.handleSummaryTrend)
+	mux.HandleFunc("/api/summary/activity", s.handleSummaryActivity)
 
 	// Health
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -69,7 +108,7 @@ func (s *Server) Handler() http.Handler {
 	// Serve embedded UI
 	mux.HandleFunc("/", s.handleUI)
 
-	return s.withLogging(s.withCORS(mux))
+	return s.withTelemetry(s.withCORS(mux))
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
@@ -129,16 +168,18 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) withLogging(next http.Handler) http.Handler {
+func (s *Server) withTelemetry(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(rw, r)
+		dur := time.Since(start)
+		requestDuration.WithLabelValues(r.URL.Path, http.StatusText(rw.statusCode)).Observe(dur.Seconds())
 		s.Logger.V(1).Info("http request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", rw.statusCode,
-			"duration", time.Since(start).String(),
+			"duration", dur.String(),
 			"remote", r.RemoteAddr,
 		)
 	})

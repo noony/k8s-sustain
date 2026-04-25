@@ -9,7 +9,7 @@ import {
   type SimulationResult,
   type SimulateRequest,
 } from '../lib/api'
-import { parseCPUQuantity, parseMemoryQuantity, downloadFile } from '../lib/format'
+import { parseCPUQuantity, parseMemoryQuantity, downloadFile, formatBytes } from '../lib/format'
 import {
   createTimeSeriesChart,
   destroyAllCharts,
@@ -20,6 +20,8 @@ import {
 } from '../lib/chart'
 import TimeRangeSelector from '../components/TimeRangeSelector.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
+import KpiCard from '../components/KpiCard.vue'
+import { type WorkloadListData } from '../lib/api'
 
 const props = defineProps<{
   namespace?: string
@@ -275,6 +277,87 @@ function exportCSV() {
   downloadFile(simName.value + '-recommendations.csv', csv, 'text/csv')
 }
 
+function cpuDeltaSummary(): string {
+  if (!simData.value) return '-'
+  let curMillis = 0,
+    recMillis = 0
+  for (const [cname, rec] of Object.entries(simData.value.containers)) {
+    const cur = simData.value.resources?.[cname]?.cpuRequest
+    if (cur) curMillis += parseCPUQuantity(cur) * 1000
+    if (rec.cpuRequest) recMillis += parseCPUQuantity(rec.cpuRequest) * 1000
+  }
+  const deltaMillis = recMillis - curMillis
+  const sign = deltaMillis > 0 ? '+' : ''
+  return `${sign}${(deltaMillis / 1000).toFixed(2)} cores`
+}
+
+function cpuDeltaTone(): 'positive' | 'danger' | 'neutral' {
+  if (!simData.value) return 'neutral'
+  let curMillis = 0,
+    recMillis = 0
+  for (const [cname, rec] of Object.entries(simData.value.containers)) {
+    const cur = simData.value.resources?.[cname]?.cpuRequest
+    if (cur) curMillis += parseCPUQuantity(cur) * 1000
+    if (rec.cpuRequest) recMillis += parseCPUQuantity(rec.cpuRequest) * 1000
+  }
+  if (recMillis < curMillis) return 'positive'
+  if (recMillis > curMillis) return 'danger'
+  return 'neutral'
+}
+
+function memDeltaSummary(): string {
+  if (!simData.value) return '-'
+  let curBytes = 0,
+    recBytes = 0
+  for (const [cname, rec] of Object.entries(simData.value.containers)) {
+    const cur = simData.value.resources?.[cname]?.memoryRequest
+    if (cur) curBytes += parseMemoryQuantity(cur)
+    if (rec.memoryRequest) recBytes += parseMemoryQuantity(rec.memoryRequest)
+  }
+  const delta = recBytes - curBytes
+  const sign = delta > 0 ? '+' : delta < 0 ? '-' : ''
+  return `${sign}${formatBytes(Math.abs(delta))}`
+}
+
+function memDeltaTone(): 'positive' | 'danger' | 'neutral' {
+  if (!simData.value) return 'neutral'
+  let curBytes = 0,
+    recBytes = 0
+  for (const [cname, rec] of Object.entries(simData.value.containers)) {
+    const cur = simData.value.resources?.[cname]?.memoryRequest
+    if (cur) curBytes += parseMemoryQuantity(cur)
+    if (rec.memoryRequest) recBytes += parseMemoryQuantity(rec.memoryRequest)
+  }
+  if (recBytes < curBytes) return 'positive'
+  if (recBytes > curBytes) return 'danger'
+  return 'neutral'
+}
+
+function exportHelmValues() {
+  if (!simData.value) return
+  const lines: string[] = ['resources:']
+  for (const [cname, rec] of Object.entries(simData.value.containers)) {
+    lines.push(`  ${cname}:`)
+    lines.push(`    requests:`)
+    if (rec.cpuRequest) lines.push(`      cpu: "${rec.cpuRequest}"`)
+    if (rec.memoryRequest) lines.push(`      memory: "${rec.memoryRequest}"`)
+  }
+  downloadFile(simName.value + '-values.yaml', lines.join('\n') + '\n', 'text/yaml')
+}
+
+async function trySample() {
+  try {
+    const list = await api<WorkloadListData>('/api/workloads?automated=true&pageSize=1')
+    const item = list.items?.[0]
+    if (!item) return
+    simNs.value = item.namespace
+    simKind.value = item.kind
+    simName.value = item.name
+  } catch (e) {
+    console.error('Failed to load sample workload:', e)
+  }
+}
+
 // Watch all form inputs for debounced auto-simulation
 watch(
   [
@@ -330,6 +413,7 @@ onUnmounted(() => {
           <option value="StatefulSet">StatefulSet</option>
           <option value="DaemonSet">DaemonSet</option>
           <option value="CronJob">CronJob</option>
+          <option value="Rollout">Rollout</option>
         </select>
       </div>
       <div class="form-group">
@@ -428,6 +512,16 @@ onUnmounted(() => {
     </div>
   </div>
 
+  <!-- Empty state: no workload selected -->
+  <div v-if="!simNs || !simName" class="card">
+    <div class="empty-state">
+      <p>
+        Pick a workload above to simulate. Or
+        <a href="#" @click.prevent="trySample">try a sample workload</a>.
+      </p>
+    </div>
+  </div>
+
   <!-- Results -->
   <div v-if="firstRun && !simData && !simError"></div>
   <div v-else-if="simError" class="card">
@@ -443,6 +537,13 @@ onUnmounted(() => {
       </div>
     </div>
     <template v-else>
+      <div class="card">
+        <div class="card-header"><h2>Savings impact</h2></div>
+        <div class="stats-row">
+          <KpiCard label="CPU change" :value="cpuDeltaSummary()" :tone="cpuDeltaTone()" />
+          <KpiCard label="Memory change" :value="memDeltaSummary()" :tone="memDeltaTone()" />
+        </div>
+      </div>
       <div class="card">
         <div class="card-header">
           <h2>Simulation Results</h2>
@@ -472,6 +573,23 @@ onUnmounted(() => {
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
               </svg>
               CSV
+            </button>
+            <button
+              class="btn btn-secondary"
+              @click="exportHelmValues"
+              title="Download as Helm values"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+              </svg>
+              Helm values
             </button>
           </div>
         </div>

@@ -1,44 +1,62 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, watch, computed, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api, type WorkloadListData } from '../lib/api'
+import { useApi } from '../composables/useApi'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useSorting } from '../composables/useSorting'
+import RiskBadge from '../components/RiskBadge.vue'
+import { timeAgo } from '../lib/format'
 
+const route = useRoute()
 const router = useRouter()
-const loading = ref(true)
-const error = ref('')
-const data = ref<WorkloadListData | null>(null)
 
 const nsFilter = ref('')
 const kindFilter = ref('')
 const automatedFilter = ref('')
+const riskFilter = ref(String(route.query.risk || ''))
+const hpaFilter = ref(String(route.query.hpa || ''))
 const search = ref('')
 const page = ref(1)
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 
 const { sort, sortArrow, applySorting } = useSorting('allWorkloads')
 
-async function load() {
-  try {
-    const qs = new URLSearchParams({ page: String(page.value), pageSize: '50' })
-    if (nsFilter.value) qs.set('namespace', nsFilter.value)
-    if (kindFilter.value) qs.set('kind', kindFilter.value)
-    if (automatedFilter.value) qs.set('automated', automatedFilter.value)
-    if (search.value) qs.set('search', search.value)
-    data.value = await api<WorkloadListData>('/api/workloads?' + qs)
-    error.value = ''
-  } catch (e: any) {
-    error.value = e.message
-  } finally {
-    loading.value = false
-  }
+function buildQs() {
+  const qs = new URLSearchParams({ page: String(page.value), pageSize: '50' })
+  if (nsFilter.value) qs.set('namespace', nsFilter.value)
+  if (kindFilter.value) qs.set('kind', kindFilter.value)
+  if (automatedFilter.value) qs.set('automated', automatedFilter.value)
+  if (riskFilter.value) qs.set('risk', riskFilter.value)
+  if (hpaFilter.value) qs.set('hpa', hpaFilter.value)
+  if (search.value) qs.set('search', search.value)
+  return qs
+}
+
+const list = useApi<WorkloadListData>(() =>
+  api<WorkloadListData>('/api/workloads?' + buildQs().toString()),
+)
+
+function load() {
+  list.run()
 }
 
 const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh(load)
 
 onMounted(load)
 watch([nsFilter, kindFilter, automatedFilter, page], load)
+
+watch([riskFilter, hpaFilter], () => {
+  router.replace({
+    query: {
+      ...route.query,
+      risk: riskFilter.value || undefined,
+      hpa: hpaFilter.value || undefined,
+    },
+  })
+  page.value = 1
+  load()
+})
 
 function onSearch(val: string) {
   if (searchTimer) clearTimeout(searchTimer)
@@ -49,22 +67,22 @@ function onSearch(val: string) {
   }, 300)
 }
 
-const sorted = computed(() => applySorting(data.value?.items || []))
+const sorted = computed(() => applySorting(list.data.value?.items || []))
 const totalPages = computed(() => {
-  if (!data.value) return 1
-  return Math.ceil(data.value.total / (data.value.pageSize || 50))
+  if (!list.data.value) return 1
+  return Math.ceil(list.data.value.total / (list.data.value.pageSize || 50))
 })
 </script>
 
 <template>
-  <div v-if="loading" class="loading">
+  <div v-if="list.loading.value && !list.data.value" class="loading">
     <div class="spinner"></div>
     Loading workloads...
   </div>
-  <div v-else-if="error" class="card">
-    <p style="color: var(--red)">Error: {{ error }}</p>
+  <div v-else-if="list.error.value" class="card">
+    <p style="color: var(--red)">Error: {{ list.error.value }}</p>
   </div>
-  <template v-else-if="data">
+  <template v-else-if="list.data.value">
     <div
       class="page-header"
       style="display: flex; align-items: flex-start; justify-content: space-between"
@@ -86,15 +104,19 @@ const totalPages = computed(() => {
     <div class="stats-row">
       <div class="stat-card">
         <div class="stat-label">Total</div>
-        <div class="stat-value">{{ data.counts.total }}</div>
+        <div class="stat-value">{{ list.data.value.counts.total }}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Automated</div>
-        <div class="stat-value" style="color: var(--green)">{{ data.counts.automated }}</div>
+        <div class="stat-value" style="color: var(--green)">
+          {{ list.data.value.counts.automated }}
+        </div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Manual</div>
-        <div class="stat-value" style="color: var(--text-dim)">{{ data.counts.manual }}</div>
+        <div class="stat-value" style="color: var(--text-dim)">
+          {{ list.data.value.counts.manual }}
+        </div>
       </div>
     </div>
 
@@ -104,18 +126,32 @@ const totalPages = computed(() => {
         <div class="filter-bar">
           <select v-model="nsFilter" @change="page = 1">
             <option value="">All namespaces</option>
-            <option v-for="ns in (data.namespaces || []).sort()" :key="ns" :value="ns">
+            <option v-for="ns in (list.data.value.namespaces || []).sort()" :key="ns" :value="ns">
               {{ ns }}
             </option>
           </select>
           <select v-model="kindFilter" @change="page = 1">
             <option value="">All kinds</option>
-            <option v-for="k in (data.kinds || []).sort()" :key="k" :value="k">{{ k }}</option>
+            <option v-for="k in (list.data.value.kinds || []).sort()" :key="k" :value="k">
+              {{ k }}
+            </option>
           </select>
           <select v-model="automatedFilter" @change="page = 1">
             <option value="">All status</option>
             <option value="true">Automated</option>
             <option value="false">Manual</option>
+          </select>
+          <select v-model="riskFilter">
+            <option value="">Any risk</option>
+            <option value="safe">Safe</option>
+            <option value="drifted">Drifted</option>
+            <option value="at-risk">At risk</option>
+            <option value="blocked">Blocked</option>
+          </select>
+          <select v-model="hpaFilter">
+            <option value="">Any HPA</option>
+            <option value="has-hpa">Has HPA</option>
+            <option value="no-hpa">No HPA</option>
           </select>
           <input
             type="text"
@@ -143,13 +179,17 @@ const totalPages = computed(() => {
                 <th class="sort-header" @click="sort('name')">
                   Name<span v-html="sortArrow('name')"></span>
                 </th>
-                <th>Status</th>
+                <th>Risk</th>
+                <th class="sort-header" @click="sort('driftPercent')">
+                  Drift<span v-html="sortArrow('driftPercent')"></span>
+                </th>
                 <th class="sort-header" @click="sort('policyName')">
                   Policy<span v-html="sortArrow('policyName')"></span>
                 </th>
                 <th>Containers</th>
-                <th>CPU Req</th>
-                <th>Mem Req</th>
+                <th class="sort-header" @click="sort('lastRecycledAt')">
+                  Last recycled<span v-html="sortArrow('lastRecycledAt')"></span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -162,10 +202,16 @@ const totalPages = computed(() => {
                 <td>
                   <span class="kind-badge" :class="'kind-' + w.kind">{{ w.kind }}</span>
                 </td>
-                <td style="font-weight: 600">{{ w.name }}</td>
+                <td style="font-weight: 600">
+                  {{ w.name
+                  }}<span v-if="w.hpaPresent" class="badge badge-blue" style="margin-left: 8px"
+                    >HPA</span
+                  >
+                </td>
+                <td><RiskBadge :state="w.riskState" /></td>
                 <td>
-                  <span v-if="w.automated" class="badge badge-green">Automated</span>
-                  <span v-else class="badge badge-dim">Manual</span>
+                  <code v-if="w.driftPercent">{{ w.driftPercent.toFixed(1) }}%</code
+                  ><span v-else style="color: var(--text-dim)">-</span>
                 </td>
                 <td>
                   <a
@@ -173,17 +219,11 @@ const totalPages = computed(() => {
                     href="#"
                     @click.stop.prevent="router.push(`/policies/${w.policyName}`)"
                     >{{ w.policyName }}</a
-                  >
-                  <span v-else>-</span>
+                  ><span v-else>-</span>
                 </td>
+                <td style="color: var(--text-dim)">{{ w.containers.length }}</td>
                 <td style="color: var(--text-dim)">
-                  {{ w.containers.map((c) => c.name).join(', ') }}
-                </td>
-                <td>
-                  <code>{{ w.containers.map((c) => c.cpuRequest || '-').join(', ') }}</code>
-                </td>
-                <td>
-                  <code>{{ w.containers.map((c) => c.memoryRequest || '-').join(', ') }}</code>
+                  {{ w.lastRecycledAt ? timeAgo(w.lastRecycledAt) : '-' }}
                 </td>
               </tr>
             </tbody>

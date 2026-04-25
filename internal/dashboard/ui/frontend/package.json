@@ -11,7 +11,9 @@
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "chart.js": "^4.5.1",
@@ -28,13 +30,16 @@
     "@types/hammerjs": "^2.0.46",
     "@types/node": "^24.12.2",
     "@vitejs/plugin-vue": "^6.0.5",
+    "@vue/test-utils": "^2.4.6",
     "@vue/tsconfig": "^0.9.1",
     "eslint": "^10.2.1",
     "eslint-plugin-vue": "^10.8.0",
+    "jsdom": "^25.0.0",
     "prettier": "^3.8.3",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.4",
+    "vitest": "^2.1.0",
     "vue-tsc": "^3.2.6"
   }
 }

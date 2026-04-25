@@ -110,3 +110,19 @@ func TestIsTransientError(t *testing.T) {
 // in the test table name, but it's actually used in retry.go. The import here is for
 // the apierrors.NewTooManyRequests helper. Keeping the import clean.
 var _ = http.StatusOK
+
+func TestBlockedCountAmong(t *testing.T) {
+	rt := newRetryTracker()
+	keys := []string{
+		"Deployment/prod/web",
+		"Deployment/prod/api",
+		"Deployment/prod/worker",
+	}
+	// Two of the three workloads are in backoff; the third has no entry.
+	rt.recordFailure(keys[0])
+	rt.recordFailure(keys[1])
+
+	if got := rt.blockedCountAmong(keys); got != 2 {
+		t.Errorf("blockedCountAmong: got %d, want 2", got)
+	}
+}

@@ -46,9 +46,15 @@ export interface PolicySummary {
   conditions?: Condition[]
   update?: Record<string, string>
   createdAt?: string
+  workloadCount?: number
+  cpuSavingsCores?: number
+  memSavingsBytes?: number
+  atRiskCount?: number
+  lastAppliedAt?: string
 }
 
 export interface PolicySpec {
+  name?: string
   spec?: {
     rightSizing?: {
       resourcesConfigs?: {
@@ -56,8 +62,11 @@ export interface PolicySpec {
         memory?: ResourceConfig
       }
     }
+    hpa?: { mode?: string }
+    update?: Record<string, string>
   }
   conditions?: Condition[]
+  effectivenessSeries?: { cpu: TimeValue[]; memory: TimeValue[] }
 }
 
 export interface ResourceConfig {
@@ -112,7 +121,7 @@ export interface OverviewWorkload {
 }
 
 export interface WorkloadListData {
-  items: WorkloadItem[]
+  items: WorkloadItemV2[]
   total: number
   pageSize: number
   namespaces?: string[]
@@ -121,7 +130,7 @@ export interface WorkloadListData {
 }
 
 export interface PolicyWorkloadsData {
-  items: WorkloadItem[]
+  items: WorkloadItemV2[]
   total: number
   pageSize: number
   namespaces?: string[]
@@ -216,4 +225,81 @@ export interface BatchWorkloadResult {
       recommendedMemory?: string
     }
   >
+}
+
+export interface SummaryV2 {
+  kpi: {
+    cpuSavedCores: number
+    cpuSavedRatio: number
+    cpuSpark7d: number[]
+    memSavedBytes: number
+    memSavedRatio: number
+    memSpark7d: number[]
+    atRiskCount: number
+    driftedCount: number
+  }
+  headroom: { cpu: HeadroomBreakdown; memory: HeadroomBreakdown }
+  attention: {
+    risk: AttentionRow[]
+    drift: AttentionRow[]
+    blocked: AttentionRow[]
+  }
+  policies: PolicyRollup[]
+}
+
+export interface HeadroomBreakdown {
+  used: number
+  idle: number
+  free: number
+}
+
+export interface AttentionRow {
+  namespace: string
+  kind: string
+  name: string
+  policy?: string
+  signal: string
+  detail?: string
+  lastSeen?: string
+}
+
+export interface PolicyRollup {
+  name: string
+  workloadCount: number
+  cpuSavingsCores: number
+  memSavingsBytes: number
+  atRiskCount: number
+  lastAppliedAt?: string
+}
+
+export interface TrendData {
+  cpu: TimeValue[]
+  memory: TimeValue[]
+}
+
+export interface ActivityItem {
+  timestamp: string
+  namespace: string
+  kind: string
+  name: string
+  reason: string
+  message: string
+}
+
+export interface WorkloadDetailSnapshot {
+  updateMode?: string
+  lastRecycledAt?: string
+  driftPercent: number
+  oom24h: number
+  hpaMode?: string
+  blocked?: { reason: string; attempts: number; nextRetryAt?: string; lastError?: string }
+  recentEvents: ActivityItem[]
+}
+
+// Extend WorkloadItem with the new fields exposed by /api/workloads:
+export interface WorkloadItemV2 extends WorkloadItem {
+  riskState: 'safe' | 'drifted' | 'at-risk' | 'blocked'
+  driftPercent: number
+  lastRecycledAt?: string
+  hpaPresent: boolean
 }

@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, type PolicySummary } from '../lib/api'
-import { timeAgo } from '../lib/format'
+import { timeAgo, formatBytes } from '../lib/format'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useSorting } from '../composables/useSorting'
 import StatusBadge from '../components/StatusBadge.vue'
@@ -31,17 +31,11 @@ onMounted(load)
 
 const sorted = computed(() => applySorting(policies.value))
 
-const readyCount = computed(
-  () =>
-    policies.value.filter(
-      (p) => p.conditions && p.conditions.some((c) => c.type === 'Ready' && c.status === 'True'),
-    ).length,
+const totalWorkloads = computed(() =>
+  policies.value.reduce((a, p) => a + (p.workloadCount || 0), 0),
 )
-
-const nsCount = computed(() => {
-  const ns = new Set(policies.value.flatMap((p) => p.namespaces || []))
-  return ns.size || 'All'
-})
+const totalCpu = computed(() => policies.value.reduce((a, p) => a + (p.cpuSavingsCores || 0), 0))
+const totalMem = computed(() => policies.value.reduce((a, p) => a + (p.memSavingsBytes || 0), 0))
 
 function updateTypeBadges(update?: Record<string, string>): string {
   if (!update) return ''
@@ -93,16 +87,20 @@ function updateTypeBadges(update?: Record<string, string>): string {
     <template v-else>
       <div class="stats-row">
         <div class="stat-card">
-          <div class="stat-label">Total Policies</div>
+          <div class="stat-label">Total policies</div>
           <div class="stat-value">{{ policies.length }}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Ready</div>
-          <div class="stat-value" style="color: var(--green)">{{ readyCount }}</div>
+          <div class="stat-label">Workloads covered</div>
+          <div class="stat-value">{{ totalWorkloads }}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Namespaces Covered</div>
-          <div class="stat-value">{{ nsCount }}</div>
+          <div class="stat-label">Cluster CPU saved</div>
+          <div class="stat-value" style="color: var(--green)">{{ totalCpu.toFixed(2) }}c</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Cluster Mem saved</div>
+          <div class="stat-value" style="color: var(--green)">{{ formatBytes(totalMem) }}</div>
         </div>
       </div>
 
@@ -115,23 +113,41 @@ function updateTypeBadges(update?: Record<string, string>): string {
                   Name<span v-html="sortArrow('name')"></span>
                 </th>
                 <th>Status</th>
-                <th>Namespaces</th>
-                <th>Workload Types</th>
-                <th class="sort-header" @click="sort('createdAt')">
-                  Created<span v-html="sortArrow('createdAt')"></span>
+                <th>Mode</th>
+                <th class="sort-header" @click="sort('workloadCount')">
+                  Workloads<span v-html="sortArrow('workloadCount')"></span>
                 </th>
+                <th class="sort-header" @click="sort('cpuSavingsCores')">
+                  CPU saved<span v-html="sortArrow('cpuSavingsCores')"></span>
+                </th>
+                <th class="sort-header" @click="sort('memSavingsBytes')">
+                  Mem saved<span v-html="sortArrow('memSavingsBytes')"></span>
+                </th>
+                <th class="sort-header" @click="sort('atRiskCount')">
+                  At risk<span v-html="sortArrow('atRiskCount')"></span>
+                </th>
+                <th>Last applied</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="p in sorted" :key="p.name" @click="router.push(`/policies/${p.name}`)">
                 <td style="font-weight: 600">{{ p.name }}</td>
                 <td><StatusBadge :conditions="p.conditions" /></td>
-                <td>
-                  {{ p.namespaces?.length ? p.namespaces.join(', ') : ''
-                  }}<span v-if="!p.namespaces?.length" class="badge badge-dim">All</span>
-                </td>
                 <td>{{ updateTypeBadges(p.update) }}</td>
-                <td style="color: var(--text-dim)">{{ timeAgo(p.createdAt) }}</td>
+                <td>{{ p.workloadCount || 0 }}</td>
+                <td>
+                  <code>{{ (p.cpuSavingsCores || 0).toFixed(2) }}c</code>
+                </td>
+                <td>
+                  <code>{{ formatBytes(p.memSavingsBytes || 0) }}</code>
+                </td>
+                <td>
+                  <span v-if="p.atRiskCount" class="badge badge-red">{{ p.atRiskCount }}</span
+                  ><span v-else>-</span>
+                </td>
+                <td style="color: var(--text-dim)">
+                  {{ p.lastAppliedAt ? timeAgo(p.lastAppliedAt) : '-' }}
+                </td>
               </tr>
             </tbody>
           </table>
