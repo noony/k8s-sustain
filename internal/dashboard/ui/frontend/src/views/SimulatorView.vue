@@ -344,7 +344,7 @@ onUnmounted(() => {
   </div>
 
   <!-- Configuration -->
-  <div class="card" style="margin-bottom: 0">
+  <div class="card">
     <div
       class="card-header"
       style="display: flex; align-items: center; justify-content: space-between"
@@ -362,68 +362,68 @@ onUnmounted(() => {
         </select>
       </div>
     </div>
-  </div>
 
-  <div class="sim-grid">
-    <!-- CPU -->
-    <div class="card sim-section" style="border-top-left-radius: 0; border-top-right-radius: 0">
-      <h3><span style="color: var(--accent-light)">CPU</span> Configuration</h3>
-      <div class="form-group">
-        <label>Window</label>
-        <TimeRangeSelector v-model="cpuWindow" />
-      </div>
-      <div class="form-group">
-        <label>Percentile</label>
-        <div class="slider-row">
-          <input type="range" v-model.number="cpuPct" min="50" max="99" />
-          <span class="slider-value">{{ cpuPct }}%</span>
+    <div class="sim-grid">
+      <!-- CPU -->
+      <div class="sim-section">
+        <h3><span style="color: var(--accent-light)">CPU</span> Configuration</h3>
+        <div class="form-group">
+          <label>Window</label>
+          <TimeRangeSelector v-model="cpuWindow" />
+        </div>
+        <div class="form-group">
+          <label>Percentile</label>
+          <div class="slider-row">
+            <input type="range" v-model.number="cpuPct" min="50" max="99" />
+            <span class="slider-value">{{ cpuPct }}%</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Headroom</label>
+          <div class="slider-row">
+            <input type="range" v-model.number="cpuHr" min="0" max="100" />
+            <span class="slider-value">{{ cpuHr }}%</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Min Allowed</label>
+          <input v-model="cpuMin" type="text" placeholder="e.g. 50m" />
+        </div>
+        <div class="form-group">
+          <label>Max Allowed</label>
+          <input v-model="cpuMax" type="text" placeholder="e.g. 4000m" />
         </div>
       </div>
-      <div class="form-group">
-        <label>Headroom</label>
-        <div class="slider-row">
-          <input type="range" v-model.number="cpuHr" min="0" max="100" />
-          <span class="slider-value">{{ cpuHr }}%</span>
-        </div>
-      </div>
-      <div class="form-group">
-        <label>Min Allowed</label>
-        <input v-model="cpuMin" type="text" placeholder="e.g. 50m" />
-      </div>
-      <div class="form-group">
-        <label>Max Allowed</label>
-        <input v-model="cpuMax" type="text" placeholder="e.g. 4000m" />
-      </div>
-    </div>
 
-    <!-- Memory -->
-    <div class="card sim-section" style="border-top-left-radius: 0; border-top-right-radius: 0">
-      <h3><span style="color: var(--cyan)">Memory</span> Configuration</h3>
-      <div class="form-group">
-        <label>Window</label>
-        <TimeRangeSelector v-model="memWindow" />
-      </div>
-      <div class="form-group">
-        <label>Percentile</label>
-        <div class="slider-row">
-          <input type="range" v-model.number="memPct" min="50" max="99" />
-          <span class="slider-value">{{ memPct }}%</span>
+      <!-- Memory -->
+      <div class="sim-section">
+        <h3><span style="color: var(--cyan)">Memory</span> Configuration</h3>
+        <div class="form-group">
+          <label>Window</label>
+          <TimeRangeSelector v-model="memWindow" />
         </div>
-      </div>
-      <div class="form-group">
-        <label>Headroom</label>
-        <div class="slider-row">
-          <input type="range" v-model.number="memHr" min="0" max="100" />
-          <span class="slider-value">{{ memHr }}%</span>
+        <div class="form-group">
+          <label>Percentile</label>
+          <div class="slider-row">
+            <input type="range" v-model.number="memPct" min="50" max="99" />
+            <span class="slider-value">{{ memPct }}%</span>
+          </div>
         </div>
-      </div>
-      <div class="form-group">
-        <label>Min Allowed</label>
-        <input v-model="memMin" type="text" placeholder="e.g. 64Mi" />
-      </div>
-      <div class="form-group">
-        <label>Max Allowed</label>
-        <input v-model="memMax" type="text" placeholder="e.g. 8Gi" />
+        <div class="form-group">
+          <label>Headroom</label>
+          <div class="slider-row">
+            <input type="range" v-model.number="memHr" min="0" max="100" />
+            <span class="slider-value">{{ memHr }}%</span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Min Allowed</label>
+          <input v-model="memMin" type="text" placeholder="e.g. 64Mi" />
+        </div>
+        <div class="form-group">
+          <label>Max Allowed</label>
+          <input v-model="memMax" type="text" placeholder="e.g. 8Gi" />
+        </div>
       </div>
     </div>
   </div>
