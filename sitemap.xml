@@ -2,82 +2,82 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://noony.github.io/k8s-sustain/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/development/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/concepts/architecture/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/concepts/in-place-updates/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/concepts/update-modes/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/getting-started/installation/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/getting-started/prerequisites/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/getting-started/quick-start/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/guides/argocd/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/guides/cert-manager/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/guides/cronjobs/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/guides/daemonsets/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/guides/dashboard/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/guides/deployments/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/guides/keda/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/reference/annotation/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/reference/cli/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/reference/helm-values/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/reference/metrics/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/reference/policy/</loc>
-         <lastmod>2026-04-25</lastmod>
+         <lastmod>2026-04-26</lastmod>
     </url>
 </urlset>
