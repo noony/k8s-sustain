@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/api"
@@ -44,6 +45,28 @@ func (c *Client) QueryCPUByContainer(ctx context.Context, namespace, ownerKind, 
 func (c *Client) QueryMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
 	expr := fmt.Sprintf(
 		`avg by (container) (quantile_over_time(%.2f, k8s_sustain:container_memory_by_workload:bytes{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
+		quantile, namespace, ownerKind, ownerName, window,
+	)
+	return c.queryByContainer(ctx, expr)
+}
+
+// QueryWorkloadCPUByContainer returns the total CPU (cores) per container summed
+// across all replicas of the workload, at the given quantile over the window.
+// Reads the k8s_sustain:workload_cpu_usage:cores recording rule.
+func (c *Client) QueryWorkloadCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
+	expr := fmt.Sprintf(
+		`quantile_over_time(%.2f, k8s_sustain:workload_cpu_usage:cores{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m])`,
+		quantile, namespace, ownerKind, ownerName, window,
+	)
+	return c.queryByContainer(ctx, expr)
+}
+
+// QueryWorkloadMemoryByContainer returns the total memory (bytes) per container summed
+// across all replicas of the workload, at the given quantile over the window.
+// Reads the k8s_sustain:workload_memory_usage:bytes recording rule.
+func (c *Client) QueryWorkloadMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
+	expr := fmt.Sprintf(
+		`quantile_over_time(%.2f, k8s_sustain:workload_memory_usage:bytes{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m])`,
 		quantile, namespace, ownerKind, ownerName, window,
 	)
 	return c.queryByContainer(ctx, expr)
@@ -287,6 +310,29 @@ func (c *Client) queryByContainer(ctx context.Context, expr string) (ContainerVa
 	return values, nil
 }
 
+// QueryReplicaCountMedian returns the median replica count of the workload over
+// the window. Returns 0 with no error if the rule produced no samples.
+// Reads the k8s_sustain:workload_replicas:count recording rule.
+func (c *Client) QueryReplicaCountMedian(ctx context.Context, namespace, ownerKind, ownerName, window string) (float64, error) {
+	expr := fmt.Sprintf(
+		`quantile_over_time(0.50, k8s_sustain:workload_replicas:count{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m])`,
+		namespace, ownerKind, ownerName, window,
+	)
+
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	result, _, err := c.api.Query(ctx, expr, time.Now())
+	if err != nil {
+		return 0, fmt.Errorf("prometheus query %q: %w", expr, err)
+	}
+	vector, ok := result.(model.Vector)
+	if !ok || len(vector) == 0 {
+		return 0, nil
+	}
+	return float64(vector[0].Value), nil
+}
+
 // dashboardQueryTimeout bounds dashboard-side reads of recording rules.
 const dashboardQueryTimeout = 10 * time.Second
 
@@ -362,6 +408,40 @@ func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[stri
 			continue
 		}
 		out[key] = float64(sample.Value)
+	}
+	return out, nil
+}
+
+// QueryByLabels runs an instant query and returns a map keyed by the named
+// labels joined with '|'. Samples missing any of the requested labels are
+// skipped. Useful when several labels jointly identify a series.
+func (c *Client) QueryByLabels(ctx context.Context, query string, labels ...string) (map[string]float64, error) {
+	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
+	defer cancel()
+	v, _, err := c.api.Query(ctx, query, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("by-labels query %q: %w", query, err)
+	}
+	vec, ok := v.(model.Vector)
+	if !ok {
+		return map[string]float64{}, nil
+	}
+	out := make(map[string]float64, len(vec))
+	for _, s := range vec {
+		parts := make([]string, 0, len(labels))
+		complete := true
+		for _, l := range labels {
+			lv, ok := s.Metric[model.LabelName(l)]
+			if !ok {
+				complete = false
+				break
+			}
+			parts = append(parts, string(lv))
+		}
+		if !complete {
+			continue
+		}
+		out[strings.Join(parts, "|")] = float64(s.Value)
 	}
 	return out, nil
 }

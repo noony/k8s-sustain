@@ -20,10 +20,10 @@ kind: Policy
 metadata:
   name: staging-rightsizing
 spec:
-  update:
-    types:
-      deployment: Ongoing       # controller recycles stale pods; webhook injects resources
   rightSizing:
+    update:
+      types:
+        deployment: Ongoing     # controller recycles stale pods; webhook injects resources
     resourcesConfigs:
       cpu:
         window: 168h            # 7-day lookback

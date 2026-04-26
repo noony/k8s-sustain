@@ -30,6 +30,7 @@ type PromQuerier interface {
 	QueryInstant(ctx context.Context, expr string) (float64, error)
 	QueryRange(ctx context.Context, expr, window, step string) ([]promclient.TimeValue, error)
 	QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error)
+	QueryByLabels(ctx context.Context, query string, labels ...string) (map[string]float64, error)
 
 	// Per-workload helpers used by /api/workloads/* and /api/simulate.
 	QueryCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)

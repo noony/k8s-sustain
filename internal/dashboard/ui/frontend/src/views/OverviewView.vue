@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   api,
@@ -7,6 +7,8 @@ import {
   type TrendData,
   type AttentionRow,
   type ActivityItem,
+  type WorkloadListData,
+  type WorkloadItemV2,
 } from '../lib/api'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useApi } from '../composables/useApi'
@@ -28,10 +30,18 @@ const trend = useApi<TrendData>(() =>
 const activity = useApi<{ items: ActivityItem[] }>(() =>
   api<{ items: ActivityItem[] }>('/api/summary/activity?limit=20'),
 )
+const workloads = useApi<WorkloadListData>(() =>
+  api<WorkloadListData>('/api/workloads?pageSize=200'),
+)
 
 async function loadAll() {
-  await Promise.all([summary.run(), trend.run(), activity.run()])
+  await Promise.all([summary.run(), trend.run(), activity.run(), workloads.run()])
 }
+
+const coordinatedCount = computed(() => {
+  const items = (workloads.data.value?.items ?? []) as WorkloadItemV2[]
+  return items.filter((w) => w.coordinationFactors?.enabled).length
+})
 
 const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh(loadAll)
 
@@ -113,6 +123,12 @@ function trendSeries() {
         detail=">10% from rec"
         @click="gotoFiltered('drifted')"
         style="cursor: pointer"
+      />
+      <KpiCard
+        label="Coordinated"
+        :value="String(coordinatedCount)"
+        tone="neutral"
+        detail="Autoscaler-aware"
       />
     </div>
 

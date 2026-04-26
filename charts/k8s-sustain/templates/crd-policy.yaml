@@ -48,6 +48,24 @@ spec:
               rightSizing:
                 description: RightSizing configures resource recommendation and application.
                 properties:
+                  autoscalerCoordination:
+                    description: AutoscalerCoordination configures HPA/ScaledObject-aware
+                      request shaping.
+                    properties:
+                      enabled:
+                        description: |-
+                          Enabled turns on the overhead formula for any resource the autoscaler
+                          targets on averageUtilization (HPA Resource metric or KEDA cpu/memory trigger).
+                        type: boolean
+                      replicaBudgetAnchor:
+                        description: |-
+                          ReplicaBudgetAnchor enables CPU replica-budget correction. Value is the
+                          fraction into [minReplicas, maxReplicas] at which the workload should sit
+                          at steady state. Typical value: 0.10. Nil disables replica correction.
+                        maximum: 1
+                        minimum: 0
+                        type: number
+                    type: object
                   resourcesConfigs:
                     description: ResourcesConfigs holds per-resource-dimension recommendation
                       configs.
@@ -74,10 +92,22 @@ spec:
                                 description: NoLimit removes the limit entirely.
                                 type: boolean
                               requestsLimitsRatio:
-                                description: RequestsLimitsRatio explicitly sets the
-                                  limit as a multiple of the request.
+                                description: |-
+                                  RequestsLimitsRatio explicitly sets the limit as a multiple of the request.
+                                  Must be >= 1 so the derived limit is never below the request.
+                                minimum: 1
                                 type: number
                             type: object
+                            x-kubernetes-validations:
+                            - message: at most one of equalsToRequest, keepLimit,
+                                keepLimitRequestRatio, noLimit, requestsLimitsRatio
+                                may be set
+                              rule: '((has(self.equalsToRequest) && self.equalsToRequest)
+                                ? 1 : 0) + ((has(self.keepLimit) && self.keepLimit)
+                                ? 1 : 0) + ((has(self.keepLimitRequestRatio) && self.keepLimitRequestRatio)
+                                ? 1 : 0) + ((has(self.noLimit) && self.noLimit) ?
+                                1 : 0) + (has(self.requestsLimitsRatio) ? 1 : 0) <=
+                                1'
                           requests:
                             description: Requests configures how resource requests
                               are computed.
@@ -117,9 +147,17 @@ spec:
                                 minimum: 1
                                 type: integer
                             type: object
+                            x-kubernetes-validations:
+                            - message: minAllowed must be less than or equal to maxAllowed
+                              rule: '!has(self.minAllowed) || !has(self.maxAllowed)
+                                || quantity(self.minAllowed).compareTo(quantity(self.maxAllowed))
+                                <= 0'
                           window:
-                            description: Window is the historical observation window
-                              used for recommendation (e.g. "96h").
+                            description: |-
+                              Window is the historical observation window used for recommendation (e.g. "96h").
+                              Must be a Prometheus duration: integer followed by one of ms, s, m, h, d, w, y
+                              (compounds like "1h30m" are also allowed).
+                            pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
                             type: string
                         type: object
                       memory:
@@ -145,10 +183,22 @@ spec:
                                 description: NoLimit removes the limit entirely.
                                 type: boolean
                               requestsLimitsRatio:
-                                description: RequestsLimitsRatio explicitly sets the
-                                  limit as a multiple of the request.
+                                description: |-
+                                  RequestsLimitsRatio explicitly sets the limit as a multiple of the request.
+                                  Must be >= 1 so the derived limit is never below the request.
+                                minimum: 1
                                 type: number
                             type: object
+                            x-kubernetes-validations:
+                            - message: at most one of equalsToRequest, keepLimit,
+                                keepLimitRequestRatio, noLimit, requestsLimitsRatio
+                                may be set
+                              rule: '((has(self.equalsToRequest) && self.equalsToRequest)
+                                ? 1 : 0) + ((has(self.keepLimit) && self.keepLimit)
+                                ? 1 : 0) + ((has(self.keepLimitRequestRatio) && self.keepLimitRequestRatio)
+                                ? 1 : 0) + ((has(self.noLimit) && self.noLimit) ?
+                                1 : 0) + (has(self.requestsLimitsRatio) ? 1 : 0) <=
+                                1'
                           requests:
                             description: Requests configures how resource requests
                               are computed.
@@ -188,64 +238,127 @@ spec:
                                 minimum: 1
                                 type: integer
                             type: object
+                            x-kubernetes-validations:
+                            - message: minAllowed must be less than or equal to maxAllowed
+                              rule: '!has(self.minAllowed) || !has(self.maxAllowed)
+                                || quantity(self.minAllowed).compareTo(quantity(self.maxAllowed))
+                                <= 0'
                           window:
-                            description: Window is the historical observation window
-                              used for recommendation (e.g. "96h").
+                            description: |-
+                              Window is the historical observation window used for recommendation (e.g. "96h").
+                              Must be a Prometheus duration: integer followed by one of ms, s, m, h, d, w, y
+                              (compounds like "1h30m" are also allowed).
+                            pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
                             type: string
                         type: object
                     type: object
-                  updatePolicy:
-                    description: UpdatePolicy controls eviction behaviour.
+                  update:
+                    description: Update configures which workload types are reconciled
+                      and how.
                     properties:
-                      hpa:
-                        description: |-
-                          Hpa configures interaction with Horizontal Pod Autoscalers.
-                          When nil, defaults to HpaAware mode with no overrides (auto-detect and adjust).
+                      eviction:
+                        description: Eviction controls eviction behaviour during right-sizing.
                         properties:
-                          cpu:
-                            description: CPU holds optional overrides for CPU-related
-                              HPA settings.
-                            properties:
-                              targetUtilizationOverride:
-                                description: |-
-                                  TargetUtilizationOverride overrides the auto-detected HPA target utilization
-                                  for this resource. When set, the controller uses this value instead of reading
-                                  the HPA spec. Value is a percentage (1-100).
-                                format: int32
-                                maximum: 100
-                                minimum: 1
-                                type: integer
-                            type: object
-                          memory:
-                            description: Memory holds optional overrides for memory-related
-                              HPA settings.
-                            properties:
-                              targetUtilizationOverride:
-                                description: |-
-                                  TargetUtilizationOverride overrides the auto-detected HPA target utilization
-                                  for this resource. When set, the controller uses this value instead of reading
-                                  the HPA spec. Value is a percentage (1-100).
-                                format: int32
-                                maximum: 100
-                                minimum: 1
-                                type: integer
-                            type: object
-                          mode:
-                            default: HpaAware
+                          ignoreAutoscalerSafeToEvictAnnotations:
                             description: |-
-                              Mode determines the HPA interaction strategy.
-                              Default: HpaAware.
-                            enum:
-                            - HpaAware
-                            - UpdateTargetValue
-                            - Ignore
+                              IgnoreAutoscalerSafeToEvictAnnotations skips the cluster-autoscaler safe-to-evict
+                              annotation check when restarting pods for right-sizing.
+                            type: boolean
+                        type: object
+                      types:
+                        description: Types lists the workload types and their update
+                          modes.
+                        properties:
+                          argoRollout:
+                            allOf:
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            description: UpdateMode defines how resources are updated
+                              on a given workload type.
+                            type: string
+                          cronJob:
+                            allOf:
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            description: |-
+                              CronJob patches the job template so future runs use updated resources.
+                              OnCreate injects resources at pod admission for each spawned job pod.
+                            type: string
+                          daemonSet:
+                            allOf:
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            description: UpdateMode defines how resources are updated
+                              on a given workload type.
+                            type: string
+                          deployment:
+                            allOf:
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            description: UpdateMode defines how resources are updated
+                              on a given workload type.
+                            type: string
+                          deploymentConfig:
+                            allOf:
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            description: UpdateMode defines how resources are updated
+                              on a given workload type.
+                            type: string
+                          family:
+                            allOf:
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            description: UpdateMode defines how resources are updated
+                              on a given workload type.
+                            type: string
+                          job:
+                            allOf:
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            description: UpdateMode defines how resources are updated
+                              on a given workload type.
+                            type: string
+                          statefulSet:
+                            allOf:
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            - enum:
+                              - OnCreate
+                              - Ongoing
+                            description: UpdateMode defines how resources are updated
+                              on a given workload type.
                             type: string
                         type: object
-                      ignoreAutoscalerSafeToEvictAnnotations:
-                        description: |-
-                          IgnoreAutoscalerSafeToEvictAnnotations skips the cluster-autoscaler safe-to-evict
-                          annotation check when restarting pods for right-sizing.
-                        type: boolean
                     type: object
                 type: object
               selector:
@@ -307,104 +420,6 @@ spec:
                     items:
                       type: string
                     type: array
-                type: object
-              update:
-                description: Update configures which workload types are reconciled
-                  and how.
-                properties:
-                  types:
-                    description: Types lists the workload types and their update modes.
-                    properties:
-                      argoRollout:
-                        allOf:
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        description: UpdateMode defines how resources are updated
-                          on a given workload type.
-                        type: string
-                      cronJob:
-                        allOf:
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        description: |-
-                          CronJob patches the job template so future runs use updated resources.
-                          OnCreate injects resources at pod admission for each spawned job pod.
-                        type: string
-                      daemonSet:
-                        allOf:
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        description: UpdateMode defines how resources are updated
-                          on a given workload type.
-                        type: string
-                      deployment:
-                        allOf:
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        description: UpdateMode defines how resources are updated
-                          on a given workload type.
-                        type: string
-                      deploymentConfig:
-                        allOf:
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        description: UpdateMode defines how resources are updated
-                          on a given workload type.
-                        type: string
-                      family:
-                        allOf:
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        description: UpdateMode defines how resources are updated
-                          on a given workload type.
-                        type: string
-                      job:
-                        allOf:
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        description: UpdateMode defines how resources are updated
-                          on a given workload type.
-                        type: string
-                      statefulSet:
-                        allOf:
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        - enum:
-                          - OnCreate
-                          - Ongoing
-                        description: UpdateMode defines how resources are updated
-                          on a given workload type.
-                        type: string
-                    type: object
                 type: object
             type: object
           status:

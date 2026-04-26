@@ -33,7 +33,7 @@ func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	f.Close()
+	_ = f.Close()
 
 	http.FileServer(http.FS(sub)).ServeHTTP(w, r)
 }

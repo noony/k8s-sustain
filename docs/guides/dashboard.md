@@ -5,7 +5,7 @@ k8s-sustain includes a built-in web dashboard for exploring policies, viewing wo
 ## Features
 
 - **Overview Story Flow** — Six-band cluster summary covering savings KPIs, 7-day trend, headroom breakdown, attention queue (at risk / drifted / blocked), policy effectiveness, and recent activity.
-- **Workloads** — Cluster-wide list with risk/drift/HPA columns, plus filters for namespace, kind, risk state, and HPA presence.
+- **Workloads** — Cluster-wide list with risk/drift/autoscaler columns, plus filters for namespace, kind, risk state, and autoscaler presence.
 - **Workload Detail** — Status snapshot (mode, last recycle, drift, OOM 24h), risk and HPA badges, blocked-state diagnostics, copy-as-YAML, and interactive CPU/memory charts with sliding-window recommendation, historical requests/limits, and OOM markers.
 - **Policies** — 4-card stat strip (total policies, active workloads, CPU & memory savings) plus per-policy effectiveness columns.
 - **Policy Detail** — Effectiveness time-series, view-as-YAML modal, time range selector, and matched workloads with risk/drift columns.
@@ -81,8 +81,8 @@ The overview is organised as a vertical "Story Flow" with six bands, each answer
 
 Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs) across the cluster, regardless of whether it is governed by a policy.
 
-- **Filters** — Filter by namespace, kind, **risk state** (healthy, drifted, at risk, blocked), and **HPA presence** (with HPA / without HPA). The free-text name search remains.
-- **Columns** — A **Risk** badge summarises the workload's state at a glance, a **Drift %** column shows the gap between current request and recommendation, and an **HPA** column indicates whether the workload is paired with an HPA (and the configured mode). The previous CPU/Memory request columns have been removed because the workload detail view now displays them in context.
+- **Filters** — Filter by namespace, kind, **risk state** (healthy, drifted, at risk, blocked), and **autoscaler presence** (with autoscaler / without autoscaler). The free-text name search remains.
+- **Columns** — A **Risk** badge summarises the workload's state at a glance, a **Drift %** column shows the gap between current request and recommendation, and an **Autoscaler** column indicates whether the workload is paired with an HPA or KEDA ScaledObject. The previous CPU/Memory request columns have been removed because the workload detail view now displays them in context.
 - **Status column** — Still shows whether the workload is **Automated** (has a sustain policy) or **Manual**, with a link to the policy when applicable.
 
 Click any workload to view its detail page.
@@ -92,7 +92,7 @@ Click any workload to view its detail page.
 Shows a comprehensive view of a single workload:
 
 - **Status snapshot band** — A row of four KPI cards at the top of the page: **Update mode** (`OnCreate` / `Ongoing`), **Last recycled** (timestamp of the last controller-driven pod recycle), **Drift** (current request vs. recommendation as a percentage), and **OOM (24h)** (count of OOM kills observed in the last 24 hours).
-- **Header badges** — A **Risk** badge mirrors the value shown in the Workloads list. When the workload has a paired HPA, an additional **HPA: <mode>** badge displays the configured mode (`HpaAware`, `UpdateTargetValue`, or `Ignore`).
+- **Header badges** — A **Risk** badge mirrors the value shown in the Workloads list. When the workload has a paired autoscaler (HPA or KEDA ScaledObject), an **Autoscaler** badge is shown.
 - **Blocked card** — Visible only when the controller has a retry record for this workload; surfaces the failure **reason**, the number of **attempts**, the **next retry** time, and the **last error** message. Hidden once retries clear.
 - **Recommendations** — If automated, shows the computed CPU and memory recommendations per container.
 - **Copy as YAML** — Builds a runnable manifest fragment (the `resources:` block keyed by container) that you can paste straight into a Helm values file or a workload spec.
@@ -120,7 +120,7 @@ Below the strip, the policy table replaces the previous Ready/Namespace columns 
 
 Shows the full configuration (percentile, headroom, min/max, window) for both CPU and memory, plus the matched workloads table.
 
-- **Header rows** — In addition to the existing summary fields, the header now displays the policy's **Update mode** and the configured **HPA mode** so you can see at a glance how the policy interacts with autoscalers.
+- **Header rows** — In addition to the existing summary fields, the header now displays the policy's **Update mode** so you can see at a glance how the policy is configured.
 - **Effectiveness card** — A dedicated band with two time-series charts (CPU and memory) showing how this policy's savings have evolved over the selected time range.
 - **TimeRangeSelector** — A range picker (1h to 30 days) drives the Effectiveness charts, matching the selector used elsewhere in the dashboard.
 - **View as YAML modal** — Renders the entire `Policy` resource (sanitised of managed fields) inside a modal with a copy button — handy for sharing or storing in version control.

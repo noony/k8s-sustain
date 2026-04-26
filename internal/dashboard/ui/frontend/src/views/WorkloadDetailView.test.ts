@@ -11,7 +11,7 @@ const router = createRouter({
 })
 
 describe('WorkloadDetailView', () => {
-  it('renders status snapshot and HPA badge', async () => {
+  it('renders status snapshot', async () => {
     ;(api.api as any).mockImplementation((path: string) => {
       if (path.endsWith('/metrics?window=168h&step=15m'))
         return Promise.resolve({ cpu: {}, memory: {} })
@@ -22,7 +22,6 @@ describe('WorkloadDetailView', () => {
           updateMode: 'Ongoing',
           oom24h: 2,
           driftPercent: 18,
-          hpaMode: 'HpaAware',
           recentEvents: [],
         })
       return Promise.resolve({})
@@ -35,7 +34,6 @@ describe('WorkloadDetailView', () => {
       },
     })
     await flushPromises()
-    expect(w.text()).toContain('HPA')
     expect(w.text()).toContain('Ongoing')
     expect(w.text()).toContain('OOM')
   })

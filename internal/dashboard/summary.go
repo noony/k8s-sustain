@@ -438,7 +438,7 @@ func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, na
 func (s *Server) collectPolicyWorkloads(ctx context.Context, policyName string, policy *sustainv1alpha1.Policy) []automatedWorkload {
 	var workloads []automatedWorkload
 
-	if policy.Spec.Update.Types.Deployment != nil {
+	if policy.Spec.RightSizing.Update.Types.Deployment != nil {
 		var list appsv1.DeploymentList
 		if err := s.K8sClient.List(ctx, &list); err == nil {
 			for _, d := range list.Items {
@@ -452,7 +452,7 @@ func (s *Server) collectPolicyWorkloads(ctx context.Context, policyName string, 
 		}
 	}
 
-	if policy.Spec.Update.Types.StatefulSet != nil {
+	if policy.Spec.RightSizing.Update.Types.StatefulSet != nil {
 		var list appsv1.StatefulSetList
 		if err := s.K8sClient.List(ctx, &list); err == nil {
 			for _, st := range list.Items {
@@ -466,7 +466,7 @@ func (s *Server) collectPolicyWorkloads(ctx context.Context, policyName string, 
 		}
 	}
 
-	if policy.Spec.Update.Types.DaemonSet != nil {
+	if policy.Spec.RightSizing.Update.Types.DaemonSet != nil {
 		var list appsv1.DaemonSetList
 		if err := s.K8sClient.List(ctx, &list); err == nil {
 			for _, ds := range list.Items {
@@ -480,7 +480,7 @@ func (s *Server) collectPolicyWorkloads(ctx context.Context, policyName string, 
 		}
 	}
 
-	if policy.Spec.Update.Types.CronJob != nil {
+	if policy.Spec.RightSizing.Update.Types.CronJob != nil {
 		var list batchv1.CronJobList
 		if err := s.K8sClient.List(ctx, &list); err == nil {
 			for _, cj := range list.Items {

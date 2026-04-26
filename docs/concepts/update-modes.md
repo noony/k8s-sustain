@@ -8,9 +8,10 @@ Resources are injected by the **admission webhook** at pod creation time, before
 
 ```yaml
 spec:
-  update:
-    types:
-      deployment: OnCreate
+  rightSizing:
+    update:
+      types:
+        deployment: OnCreate
 ```
 
 **Behaviour:**
@@ -36,9 +37,10 @@ Resources are updated by the **controller** on a recurring interval. Additionall
 
 ```yaml
 spec:
-  update:
-    types:
-      deployment: Ongoing
+  rightSizing:
+    update:
+      types:
+        deployment: Ongoing
 ```
 
 **At pod creation (webhook):**
@@ -104,10 +106,11 @@ A single policy can use different modes for different workload kinds:
 
 ```yaml
 spec:
-  update:
-    types:
-      deployment: Ongoing      # controller recycles stale pods; webhook injects resources
-      statefulSet: OnCreate    # only inject at pod creation, no disruption
-      cronJob: OnCreate        # inject at each job pod creation
-      daemonSet: Ongoing       # controller recycles stale pods; webhook injects resources
+  rightSizing:
+    update:
+      types:
+        deployment: Ongoing      # controller recycles stale pods; webhook injects resources
+        statefulSet: OnCreate    # only inject at pod creation, no disruption
+        cronJob: OnCreate        # inject at each job pod creation
+        daemonSet: Ongoing       # controller recycles stale pods; webhook injects resources
 ```

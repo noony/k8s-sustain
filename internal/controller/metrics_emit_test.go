@@ -3,6 +3,8 @@ package controller
 import (
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
@@ -112,23 +114,37 @@ func TestEmitRetryStateClearsAllReasons(t *testing.T) {
 	}
 }
 
-func TestEmitHPAPresentReplacesPriorMode(t *testing.T) {
-	const ns, kind, name = "ns", "Deployment", "mode-test"
+func TestEmitAutoscalerPresentReplacesPriorKind(t *testing.T) {
+	const ns, kind, name = "ns", "Deployment", "kind-test"
 
-	EmitHPAPresent(ns, kind, name, "HpaAware", true)
-	EmitHPAPresent(ns, kind, name, "Ignore", true)
+	EmitAutoscalerPresent(ns, kind, name, "HPA")
+	EmitAutoscalerPresent(ns, kind, name, "KEDA")
 
-	series := seriesForWorkload(t, "k8s_sustain_hpa_present", ns, kind, name)
+	series := seriesForWorkload(t, "k8s_sustain_autoscaler_present", ns, kind, name)
 	if len(series) != 1 {
-		t.Fatalf("expected exactly 1 hpa_present series, got %d", len(series))
+		t.Fatalf("expected exactly one series, got %d", len(series))
 	}
-	var mode string
-	for _, l := range series[0].Label {
-		if l.GetName() == "mode" {
-			mode = l.GetValue()
-		}
+}
+
+func TestEmitAutoscalerPresentNoneClearsSeries(t *testing.T) {
+	const ns, kind, name = "ns", "Deployment", "none-test"
+
+	EmitAutoscalerPresent(ns, kind, name, "HPA")
+	EmitAutoscalerPresent(ns, kind, name, "None")
+
+	series := seriesForWorkload(t, "k8s_sustain_autoscaler_present", ns, kind, name)
+	if len(series) != 0 {
+		t.Errorf("expected series cleared on None, got %d", len(series))
 	}
-	if mode != "Ignore" {
-		t.Errorf("expected mode label %q, got %q", "Ignore", mode)
+}
+
+func TestEmitCoordinationFactor(t *testing.T) {
+	EmitCoordinationFactor("ns", "Deployment", "w", "cpu", "overhead", 1.57)
+	val := testutil.ToFloat64(coordinationFactor.With(prometheus.Labels{
+		"namespace": "ns", "owner_kind": "Deployment", "owner_name": "w",
+		"resource": "cpu", "kind": "overhead",
+	}))
+	if got, want := val, 1.57; got < want-1e-6 || got > want+1e-6 {
+		t.Errorf("coordination factor: got %v, want %v", got, want)
 	}
 }

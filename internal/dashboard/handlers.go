@@ -44,14 +44,15 @@ type policyDetail struct {
 }
 
 type workloadSummary struct {
-	Namespace      string            `json:"namespace"`
-	Kind           string            `json:"kind"`
-	Name           string            `json:"name"`
-	Containers     []containerStatus `json:"containers"`
-	RiskState      string            `json:"riskState"` // safe | drifted | at-risk | blocked
-	DriftPercent   float64           `json:"driftPercent"`
-	LastRecycledAt string            `json:"lastRecycledAt,omitempty"`
-	HPAPresent     bool              `json:"hpaPresent"`
+	Namespace           string               `json:"namespace"`
+	Kind                string               `json:"kind"`
+	Name                string               `json:"name"`
+	Containers          []containerStatus    `json:"containers"`
+	RiskState           string               `json:"riskState"` // safe | drifted | at-risk | blocked
+	DriftPercent        float64              `json:"driftPercent"`
+	LastRecycledAt      string               `json:"lastRecycledAt,omitempty"`
+	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
+	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
 }
 
 type containerStatus struct {
@@ -60,6 +61,13 @@ type containerStatus struct {
 	CPULimit      string `json:"cpuLimit"`
 	MemoryRequest string `json:"memoryRequest"`
 	MemoryLimit   string `json:"memoryLimit"`
+}
+
+type coordinationFactors struct {
+	Enabled        bool    `json:"enabled"`
+	CPUOverhead    float64 `json:"cpuOverhead,omitempty"`
+	MemoryOverhead float64 `json:"memoryOverhead,omitempty"`
+	CPUReplica     float64 `json:"cpuReplica,omitempty"`
 }
 
 // ---- Handlers ----
@@ -98,7 +106,7 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 		items = append(items, policyListItem{
 			Name:            p.Name,
 			Namespaces:      p.Spec.Selector.Namespaces,
-			Update:          p.Spec.Update.Types,
+			Update:          p.Spec.RightSizing.Update.Types,
 			Conditions:      conditions,
 			CreatedAt:       p.CreationTimestamp.Format("2006-01-02T15:04:05Z"),
 			WorkloadCount:   int(wl[p.Name]),
@@ -189,7 +197,7 @@ func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name
 			policyListItem: policyListItem{
 				Name:            policy.Name,
 				Namespaces:      policy.Spec.Selector.Namespaces,
-				Update:          policy.Spec.Update.Types,
+				Update:          policy.Spec.RightSizing.Update.Types,
 				Conditions:      conditions,
 				CreatedAt:       policy.CreationTimestamp.Format("2006-01-02T15:04:05Z"),
 				WorkloadCount:   int(wl[name]),
@@ -235,7 +243,7 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 
 	var workloads []workloadSummary
 
-	if policy.Spec.Update.Types.Deployment != nil {
+	if policy.Spec.RightSizing.Update.Types.Deployment != nil {
 		wl, err := s.listDeploymentWorkloads(ctx, policyName)
 		if err != nil {
 			s.Logger.Error(err, "failed to list deployments", "policy", policyName)
@@ -243,7 +251,7 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 			workloads = append(workloads, wl...)
 		}
 	}
-	if policy.Spec.Update.Types.StatefulSet != nil {
+	if policy.Spec.RightSizing.Update.Types.StatefulSet != nil {
 		wl, err := s.listStatefulSetWorkloads(ctx, policyName)
 		if err != nil {
 			s.Logger.Error(err, "failed to list statefulsets", "policy", policyName)
@@ -251,7 +259,7 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 			workloads = append(workloads, wl...)
 		}
 	}
-	if policy.Spec.Update.Types.DaemonSet != nil {
+	if policy.Spec.RightSizing.Update.Types.DaemonSet != nil {
 		wl, err := s.listDaemonSetWorkloads(ctx, policyName)
 		if err != nil {
 			s.Logger.Error(err, "failed to list daemonsets", "policy", policyName)
@@ -259,7 +267,7 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 			workloads = append(workloads, wl...)
 		}
 	}
-	if policy.Spec.Update.Types.CronJob != nil {
+	if policy.Spec.RightSizing.Update.Types.CronJob != nil {
 		wl, err := s.listCronJobWorkloads(ctx, policyName)
 		if err != nil {
 			s.Logger.Error(err, "failed to list cronjobs", "policy", policyName)
@@ -272,28 +280,39 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 		workloads = []workloadSummary{}
 	}
 
-	// Decorate workloads with Prometheus-derived risk/drift/HPA signals.
-	oomByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain:workload_oom_24h", "owner_name")
-	driftByName, _ := s.PromClient.QueryByLabel(ctx, "max by (owner_name) (abs(1 - k8s_sustain_workload_drift_ratio))", "owner_name")
-	blockedByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_workload_retry_state == 1", "owner_name")
-	hpaByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_hpa_present", "owner_name")
+	// Decorate workloads with Prometheus-derived risk/drift/autoscaler signals.
+	// Keyed by (namespace, owner_kind, owner_name) so identically-named workloads
+	// in different namespaces don't cross-contaminate.
+	oomByWL, _ := s.PromClient.QueryByLabels(ctx, "k8s_sustain:workload_oom_24h", "namespace", "owner_kind", "owner_name")
+	driftByWL, _ := s.PromClient.QueryByLabels(ctx, "max by (namespace, owner_kind, owner_name) (abs(1 - k8s_sustain_workload_drift_ratio))", "namespace", "owner_kind", "owner_name")
+	blockedByWL, _ := s.PromClient.QueryByLabels(ctx, "k8s_sustain_workload_retry_state == 1", "namespace", "owner_kind", "owner_name")
+	autoByWL, _ := s.PromClient.QueryByLabels(ctx, "k8s_sustain_autoscaler_present", "namespace", "owner_kind", "owner_name")
 
 	for i := range workloads {
 		wl := &workloads[i]
-		wl.HPAPresent = hpaByName[wl.Name] > 0
-		if drift, ok := driftByName[wl.Name]; ok {
+		key := wl.Namespace + "|" + wl.Kind + "|" + wl.Name
+		wl.AutoscalerPresent = autoByWL[key] > 0
+		if drift, ok := driftByWL[key]; ok {
 			wl.DriftPercent = drift * 100
 		}
 		switch {
-		case oomByName[wl.Name] > 0:
+		case oomByWL[key] > 0:
 			wl.RiskState = "at-risk"
-		case blockedByName[wl.Name] > 0:
+		case blockedByWL[key] > 0:
 			wl.RiskState = "blocked"
 		case wl.DriftPercent > 10:
 			wl.RiskState = "drifted"
 		default:
 			wl.RiskState = "safe"
 		}
+	}
+
+	for i := range workloads {
+		wl := &workloads[i]
+		if !wl.AutoscalerPresent {
+			continue
+		}
+		wl.CoordinationFactors = s.fetchCoordinationFactors(ctx, wl.Namespace, wl.Kind, wl.Name)
 	}
 
 	// Collect unique namespaces before filtering
@@ -418,6 +437,33 @@ func (s *Server) listCronJobWorkloads(ctx context.Context, policyName string) ([
 	return out, nil
 }
 
+// fetchCoordinationFactors queries `k8s_sustain_coordination_factor` for one
+// workload and assembles a coordinationFactors payload describing the per-
+// resource overhead and replica correction factors that the controller and
+// webhook applied. Returns nil when no series exist for this workload.
+func (s *Server) fetchCoordinationFactors(ctx context.Context, namespace, kind, name string) *coordinationFactors {
+	expr := fmt.Sprintf(
+		`k8s_sustain_coordination_factor{namespace=%q,owner_kind=%q,owner_name=%q}`,
+		namespace, kind, name,
+	)
+	byLabels, err := s.PromClient.QueryByLabels(ctx, expr, "resource", "kind")
+	if err != nil || len(byLabels) == 0 {
+		return nil
+	}
+	out := &coordinationFactors{Enabled: true}
+	for k, v := range byLabels {
+		switch k {
+		case "cpu|overhead":
+			out.CPUOverhead = v
+		case "memory|overhead":
+			out.MemoryOverhead = v
+		case "cpu|replica":
+			out.CPUReplica = v
+		}
+	}
+	return out
+}
+
 func containerStatuses(containers []corev1.Container) []containerStatus {
 	out := make([]containerStatus, 0, len(containers))
 	for _, c := range containers {
@@ -446,16 +492,17 @@ func containerStatuses(containers []corev1.Container) []containerStatus {
 // ---- All workloads (cluster-wide) ----
 
 type allWorkloadSummary struct {
-	Namespace      string            `json:"namespace"`
-	Kind           string            `json:"kind"`
-	Name           string            `json:"name"`
-	Containers     []containerStatus `json:"containers"`
-	Automated      bool              `json:"automated"`
-	PolicyName     string            `json:"policyName,omitempty"`
-	RiskState      string            `json:"riskState"` // safe | drifted | at-risk | blocked
-	DriftPercent   float64           `json:"driftPercent"`
-	LastRecycledAt string            `json:"lastRecycledAt,omitempty"`
-	HPAPresent     bool              `json:"hpaPresent"`
+	Namespace           string               `json:"namespace"`
+	Kind                string               `json:"kind"`
+	Name                string               `json:"name"`
+	Containers          []containerStatus    `json:"containers"`
+	Automated           bool                 `json:"automated"`
+	PolicyName          string               `json:"policyName,omitempty"`
+	RiskState           string               `json:"riskState"` // safe | drifted | at-risk | blocked
+	DriftPercent        float64              `json:"driftPercent"`
+	LastRecycledAt      string               `json:"lastRecycledAt,omitempty"`
+	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
+	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
 }
 
 type paginatedAllWorkloads struct {
@@ -488,7 +535,7 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	automatedFilter := r.URL.Query().Get("automated")
 	search := strings.ToLower(r.URL.Query().Get("search"))
 	riskFilter := r.URL.Query().Get("risk")
-	hpaFilter := r.URL.Query().Get("hpa")
+	autoscalerFilter := r.URL.Query().Get("autoscaler")
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
 	if page < 1 {
@@ -582,28 +629,39 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 		workloads = []allWorkloadSummary{}
 	}
 
-	// Decorate workloads with Prometheus-derived risk/drift/HPA signals.
-	oomByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain:workload_oom_24h", "owner_name")
-	driftByName, _ := s.PromClient.QueryByLabel(ctx, "max by (owner_name) (abs(1 - k8s_sustain_workload_drift_ratio))", "owner_name")
-	blockedByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_workload_retry_state == 1", "owner_name")
-	hpaByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_hpa_present", "owner_name")
+	// Decorate workloads with Prometheus-derived risk/drift/autoscaler signals.
+	// Keyed by (namespace, owner_kind, owner_name) so identically-named workloads
+	// in different namespaces don't cross-contaminate.
+	oomByWL, _ := s.PromClient.QueryByLabels(ctx, "k8s_sustain:workload_oom_24h", "namespace", "owner_kind", "owner_name")
+	driftByWL, _ := s.PromClient.QueryByLabels(ctx, "max by (namespace, owner_kind, owner_name) (abs(1 - k8s_sustain_workload_drift_ratio))", "namespace", "owner_kind", "owner_name")
+	blockedByWL, _ := s.PromClient.QueryByLabels(ctx, "k8s_sustain_workload_retry_state == 1", "namespace", "owner_kind", "owner_name")
+	autoByWL, _ := s.PromClient.QueryByLabels(ctx, "k8s_sustain_autoscaler_present", "namespace", "owner_kind", "owner_name")
 
 	for i := range workloads {
 		wl := &workloads[i]
-		wl.HPAPresent = hpaByName[wl.Name] > 0
-		if drift, ok := driftByName[wl.Name]; ok {
+		key := wl.Namespace + "|" + wl.Kind + "|" + wl.Name
+		wl.AutoscalerPresent = autoByWL[key] > 0
+		if drift, ok := driftByWL[key]; ok {
 			wl.DriftPercent = drift * 100
 		}
 		switch {
-		case oomByName[wl.Name] > 0:
+		case oomByWL[key] > 0:
 			wl.RiskState = "at-risk"
-		case blockedByName[wl.Name] > 0:
+		case blockedByWL[key] > 0:
 			wl.RiskState = "blocked"
 		case wl.DriftPercent > 10:
 			wl.RiskState = "drifted"
 		default:
 			wl.RiskState = "safe"
 		}
+	}
+
+	for i := range workloads {
+		wl := &workloads[i]
+		if !wl.AutoscalerPresent {
+			continue
+		}
+		wl.CoordinationFactors = s.fetchCoordinationFactors(ctx, wl.Namespace, wl.Kind, wl.Name)
 	}
 
 	// Collect unique namespaces and kinds before filtering
@@ -656,12 +714,12 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 		workloads = filtered
 	}
 
-	// Apply HPA filter
-	if hpaFilter == "has-hpa" || hpaFilter == "no-hpa" {
-		wantHPA := hpaFilter == "has-hpa"
+	// Apply autoscaler filter
+	if autoscalerFilter == "has-autoscaler" || autoscalerFilter == "no-autoscaler" {
+		wantAutoscaler := autoscalerFilter == "has-autoscaler"
 		filtered := workloads[:0]
 		for _, w := range workloads {
-			if w.HPAPresent == wantHPA {
+			if w.AutoscalerPresent == wantAutoscaler {
 				filtered = append(filtered, w)
 			}
 		}
@@ -1005,11 +1063,6 @@ type simulateResourceConfig struct {
 	Window     string  `json:"window,omitempty"`
 }
 
-type simulateContainerResult struct {
-	CPURequest    string `json:"cpuRequest"`
-	MemoryRequest string `json:"memoryRequest"`
-}
-
 func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1056,13 +1109,13 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 // ---- Workload detail snapshot ----
 
 type workloadDetailResponse struct {
-	UpdateMode     string                 `json:"updateMode,omitempty"`
-	LastRecycledAt string                 `json:"lastRecycledAt,omitempty"`
-	DriftPercent   float64                `json:"driftPercent"`
-	OOM24h         int                    `json:"oom24h"`
-	HPAMode        string                 `json:"hpaMode,omitempty"`
-	Blocked        *workloadDetailBlocked `json:"blocked,omitempty"`
-	RecentEvents   []activityItem         `json:"recentEvents"`
+	UpdateMode          string                 `json:"updateMode,omitempty"`
+	LastRecycledAt      string                 `json:"lastRecycledAt,omitempty"`
+	DriftPercent        float64                `json:"driftPercent"`
+	OOM24h              int                    `json:"oom24h"`
+	Blocked             *workloadDetailBlocked `json:"blocked,omitempty"`
+	RecentEvents        []activityItem         `json:"recentEvents"`
+	CoordinationFactors *coordinationFactors   `json:"coordinationFactors,omitempty"`
 }
 
 type workloadDetailBlocked struct {
@@ -1088,19 +1141,16 @@ func (s *Server) handleWorkloadDetail(w http.ResponseWriter, r *http.Request, na
 			var modePtr *sustainv1alpha1.UpdateMode
 			switch kind {
 			case "Deployment":
-				modePtr = policy.Spec.Update.Types.Deployment
+				modePtr = policy.Spec.RightSizing.Update.Types.Deployment
 			case "StatefulSet":
-				modePtr = policy.Spec.Update.Types.StatefulSet
+				modePtr = policy.Spec.RightSizing.Update.Types.StatefulSet
 			case "DaemonSet":
-				modePtr = policy.Spec.Update.Types.DaemonSet
+				modePtr = policy.Spec.RightSizing.Update.Types.DaemonSet
 			case "CronJob":
-				modePtr = policy.Spec.Update.Types.CronJob
+				modePtr = policy.Spec.RightSizing.Update.Types.CronJob
 			}
 			if modePtr != nil {
 				resp.UpdateMode = string(*modePtr)
-			}
-			if policy.Spec.RightSizing.UpdatePolicy.Hpa != nil {
-				resp.HPAMode = string(policy.Spec.RightSizing.UpdatePolicy.Hpa.Mode)
 			}
 		}
 	}
@@ -1149,6 +1199,10 @@ func (s *Server) handleWorkloadDetail(w http.ResponseWriter, r *http.Request, na
 	}
 	if resp.RecentEvents == nil {
 		resp.RecentEvents = []activityItem{}
+	}
+
+	if cf := s.fetchCoordinationFactors(ctx, namespace, kind, name); cf != nil {
+		resp.CoordinationFactors = cf
 	}
 
 	writeJSON(w, http.StatusOK, resp)

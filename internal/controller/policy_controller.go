@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/autoscaler"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -36,8 +37,8 @@ import (
 // +kubebuilder:rbac:groups="",resources=pods/resize,verbs=patch
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
 // +kubebuilder:rbac:groups=argoproj.io,resources=rollouts,verbs=get;list;watch
-// +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;patch
-// +kubebuilder:rbac:groups=keda.sh,resources=scaledobjects,verbs=get;list;patch
+// +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch
+// +kubebuilder:rbac:groups=keda.sh,resources=scaledobjects,verbs=get;list;watch
 
 // PolicyReconciler reconciles a Policy object.
 type PolicyReconciler struct {
@@ -178,7 +179,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // collectTargets lists workloads of all enabled kinds and returns matching targets.
 func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1alpha1.Policy) ([]workloadTarget, error) {
 	logger := log.FromContext(ctx).WithValues("policy", policy.Name)
-	types := policy.Spec.Update.Types
+	types := policy.Spec.RightSizing.Update.Types
 	namespaces := policy.Spec.Selector.Namespaces
 	var targets []workloadTarget
 
@@ -347,52 +348,22 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 	logger.V(1).Info("reconciling workload", "containers", len(t.Containers))
 
-	// HPA-aware adjustment: detect HPA before building recommendations
-	// so limits are derived from adjusted requests.
-	var hpaDet *hpaDetection
-	hpaPresentForWorkload := false
-	hpaMode := resolveHpaMode(policy)
-	logger.V(1).Info("resolved HPA mode", "mode", hpaMode)
-	if hpaMode == sustainv1alpha1.HpaModeHpaAware || hpaMode == sustainv1alpha1.HpaModeUpdateTargetValue {
-		det, hpaErr := detectHpa(ctx, r.Client, t.Namespace, t.Kind, t.Name, policy.Spec.RightSizing.UpdatePolicy.Hpa)
-		if hpaErr != nil {
-			logger.Error(hpaErr, "HPA detection failed, proceeding without adjustment")
-		} else if det != nil {
-			hpaPresentForWorkload = true
-			r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "HpaDetected",
-				"HPA %s detected targeting %s/%s", det.hpa.Name, t.Kind, t.Name)
-			if hpaMode == sustainv1alpha1.HpaModeHpaAware {
-				hpaDet = det
-			} else if hpaMode == sustainv1alpha1.HpaModeUpdateTargetValue {
-				// Check if the HPA is owned by a KEDA ScaledObject.
-				kedaOwned := false
-				for _, ref := range det.hpa.OwnerReferences {
-					if ref.Kind == "ScaledObject" {
-						kedaOwned = true
-						break
-					}
-				}
-				if kedaOwned {
-					logger.Info("HPA is owned by KEDA ScaledObject, skipping UpdateTargetValue (not yet supported)")
-					r.recorder.Eventf(t.Object, corev1.EventTypeWarning, "HpaKedaOwned",
-						"HPA %s is managed by KEDA — UpdateTargetValue mode does not yet support ScaledObject patching. Use HpaAware mode instead.", det.hpa.Name)
-				} else {
-					currentRequests := extractCurrentRequests(t.Containers)
-					if patchErr := patchHpaToAverageValue(ctx, r.Client, det.hpa, currentRequests); patchErr != nil {
-						logger.Error(patchErr, "failed to patch HPA to AverageValue")
-						r.recorder.Eventf(t.Object, corev1.EventTypeWarning, "HpaPatchFailed",
-							"Failed to convert HPA %s to AverageValue: %v", det.hpa.Name, patchErr)
-					} else {
-						r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "HpaTargetUpdated",
-							"Converted HPA %s metrics to AverageValue", det.hpa.Name)
-					}
-				}
-			}
-		}
+	// Detect HPA / KEDA ScaledObject (read-only). Used as a replica-count
+	// fallback for workload-level recommendations and for observability.
+	autoInfo, autoErr := autoscaler.Detect(ctx, r.Client, t.Namespace, t.Kind, t.Name)
+	if autoErr != nil {
+		logger.Error(autoErr, "autoscaler detection failed, proceeding without it")
+		autoInfo = autoscaler.Info{Kind: autoscaler.KindNone}
 	}
-	EmitHPAPresent(t.Namespace, t.Kind, t.Name, string(hpaMode), hpaPresentForWorkload)
+	if autoInfo.Kind != autoscaler.KindNone {
+		r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "AutoscalerDetected",
+			"%s %s detected targeting %s/%s (replicas %d–%d)",
+			autoInfo.Kind, autoInfo.Name, t.Kind, t.Name, autoInfo.MinReplicas, autoInfo.MaxReplicas)
+	}
+	EmitAutoscalerPresent(t.Namespace, t.Kind, t.Name, string(autoInfo.Kind))
+	EmitAutoscalerTargetsConfigured(t.Namespace, t.Kind, t.Name, string(autoInfo.Kind), autoInfo.ConfiguredTargets)
 
-	recs, err := r.buildRecommendations(ctx, policy, t.Namespace, t.Kind, t.Name, t.Containers, hpaDet)
+	recs, err := r.buildRecommendations(ctx, policy, t.Namespace, t.Kind, t.Name, t.Containers, autoInfo)
 	if err != nil {
 		if !isTransientError(err) {
 			r.retries.remove(t.key())
@@ -529,16 +500,17 @@ func limitEqual(rec *resource.Quantity, remove bool, current *resource.Quantity)
 	return quantityEqual(rec, current)
 }
 
-// buildRecommendations queries Prometheus and computes per-container recommendations
-// for the given workload. Returns an empty map when no data is available yet.
-// When hpaDet is non-nil, requests are adjusted for HPA utilization targets before
-// limits are derived, ensuring request/limit consistency.
+// buildRecommendations queries Prometheus for the workload-level CPU/memory totals
+// and replica count, then derives per-container per-pod recommendations.
+// A per-pod p95 floor is applied to protect against load imbalance.
+// autoInfo provides the autoscaler MinReplicas fallback used when Prometheus has
+// no replica data (KEDA scale-to-zero, missing samples).
 func (r *PolicyReconciler) buildRecommendations(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
 	ns, ownerKind, ownerName string,
 	containers []corev1.Container,
-	hpaDet *hpaDetection,
+	autoInfo autoscaler.Info,
 ) (map[string]workload.ContainerRecommendation, error) {
 	rsCfg := policy.Spec.RightSizing.ResourcesConfigs
 
@@ -548,79 +520,137 @@ func (r *PolicyReconciler) buildRecommendations(
 	memWindow := recommender.ResourceWindow(rsCfg.Memory.Window)
 
 	logger := log.FromContext(ctx).WithValues("kind", ownerKind, "name", ownerName, "namespace", ns)
-	logger.V(1).Info("querying Prometheus",
+	logger.V(1).Info("querying Prometheus (workload-level)",
 		"cpuQuantile", cpuQuantile, "cpuWindow", cpuWindow,
 		"memQuantile", memQuantile, "memWindow", memWindow)
 
-	cpuValues, err := r.PrometheusClient.QueryCPUByContainer(ctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
+	cpuTotals, err := r.PrometheusClient.QueryWorkloadCPUByContainer(ctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
 	if err != nil {
-		return nil, fmt.Errorf("cpu query: %w", err)
+		return nil, fmt.Errorf("workload cpu query: %w", err)
 	}
-	logger.V(1).Info("cpu query returned", "containers", len(cpuValues))
-
-	memValues, err := r.PrometheusClient.QueryMemoryByContainer(ctx, ns, ownerKind, ownerName, memQuantile, memWindow)
+	memTotals, err := r.PrometheusClient.QueryWorkloadMemoryByContainer(ctx, ns, ownerKind, ownerName, memQuantile, memWindow)
 	if err != nil {
-		return nil, fmt.Errorf("memory query: %w", err)
+		return nil, fmt.Errorf("workload memory query: %w", err)
 	}
-	logger.V(1).Info("memory query returned", "containers", len(memValues))
 
+	// Per-pod p95 floors used for hot-replica protection. A failure here is
+	// non-fatal: we still produce recommendations from the workload-level data.
+	cpuFloors, err := r.PrometheusClient.QueryCPUByContainer(ctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
+	if err != nil {
+		logger.V(1).Info("per-pod cpu floor query failed; proceeding without floor", "err", err)
+		cpuFloors = nil
+	}
+	memFloors, err := r.PrometheusClient.QueryMemoryByContainer(ctx, ns, ownerKind, ownerName, memQuantile, memWindow)
+	if err != nil {
+		logger.V(1).Info("per-pod memory floor query failed; proceeding without floor", "err", err)
+		memFloors = nil
+	}
+
+	medianReplicas, err := r.PrometheusClient.QueryReplicaCountMedian(ctx, ns, ownerKind, ownerName, cpuWindow)
+	if err != nil {
+		return nil, fmt.Errorf("replica count query: %w", err)
+	}
+	replicas := recommender.EffectiveReplicas(medianReplicas, autoInfo.MinReplicas)
+	logger.V(1).Info("effective replica divisor",
+		"medianReplicas", medianReplicas, "autoMinReplicas", autoInfo.MinReplicas, "effective", replicas)
+
+	coordCfg := policy.Spec.RightSizing.AutoscalerCoordination
 	recs := make(map[string]workload.ContainerRecommendation)
 	for _, c := range containers {
 		var rec workload.ContainerRecommendation
 		hasData := false
 
-		if cores, ok := cpuValues[c.Name]; ok {
-			rec.CPURequest = recommender.ComputeCPURequest(cores, rsCfg.CPU.Requests)
-			if hpaDet != nil && hpaDet.cpuUtilization != nil {
-				before := rec.CPURequest.String()
-				rec.CPURequest = recommender.AdjustForHpa(rec.CPURequest, *hpaDet.cpuUtilization)
-				logger.V(1).Info("adjusted CPU request for HPA",
-					"container", c.Name, "before", before, "after", rec.CPURequest.String(),
-					"targetUtilization", *hpaDet.cpuUtilization)
-			}
+		if total, ok := cpuTotals[c.Name]; ok {
+			perPod := recommender.PerPodFromTotal(total, replicas)
+			perPod = recommender.ApplyFloor(perPod, cpuFloors[c.Name])
+			rec.CPURequest = recommender.ComputeCPURequest(perPod, rsCfg.CPU.Requests)
+			logger.V(1).Info("computed CPU recommendation",
+				"container", c.Name, "totalCores", total, "replicas", replicas,
+				"perPodCores", perPod, "request", quantityString(rec.CPURequest))
+			hasData = true
+		}
+
+		if total, ok := memTotals[c.Name]; ok {
+			perPod := recommender.PerPodFromTotal(total, replicas)
+			perPod = recommender.ApplyFloor(perPod, memFloors[c.Name])
+			rec.MemoryRequest = recommender.ComputeMemoryRequest(perPod, rsCfg.Memory.Requests)
+			logger.V(1).Info("computed memory recommendation",
+				"container", c.Name, "totalBytes", total, "replicas", replicas,
+				"perPodBytes", perPod, "request", quantityString(rec.MemoryRequest))
+			hasData = true
+		}
+
+		if !hasData {
+			continue
+		}
+
+		// Apply autoscaler coordination (overhead + replica budget) before
+		// limits are derived, so limits track the adjusted requests.
+		base := rec
+		rec = recommender.ApplyCoordination(rec, coordCfg, autoInfo, rsCfg)
+		emitCoordinationFactors(ns, ownerKind, ownerName, coordCfg, autoInfo, base, rec)
+
+		// Re-derive limits from the (possibly) adjusted requests.
+		if rec.CPURequest != nil {
 			lr := recommender.ComputeLimit(rec.CPURequest, c.Resources.Requests.Cpu(), c.Resources.Limits.Cpu(), rsCfg.CPU.Limits)
 			rec.CPULimit = lr.Quantity
 			rec.RemoveCPULimit = lr.Remove
-			logger.V(1).Info("computed CPU recommendation",
-				"container", c.Name,
-				"rawCores", cores,
-				"request", rec.CPURequest.String(),
-				"limit", quantityString(rec.CPULimit),
-				"removeLimit", rec.RemoveCPULimit)
-			hasData = true
-		} else {
-			logger.V(1).Info("no CPU data from Prometheus", "container", c.Name)
 		}
-
-		if bytes, ok := memValues[c.Name]; ok {
-			rec.MemoryRequest = recommender.ComputeMemoryRequest(bytes, rsCfg.Memory.Requests)
-			if hpaDet != nil && hpaDet.memoryUtilization != nil {
-				before := rec.MemoryRequest.String()
-				rec.MemoryRequest = recommender.AdjustForHpa(rec.MemoryRequest, *hpaDet.memoryUtilization)
-				logger.V(1).Info("adjusted memory request for HPA",
-					"container", c.Name, "before", before, "after", rec.MemoryRequest.String(),
-					"targetUtilization", *hpaDet.memoryUtilization)
-			}
+		if rec.MemoryRequest != nil {
 			lr := recommender.ComputeLimit(rec.MemoryRequest, c.Resources.Requests.Memory(), c.Resources.Limits.Memory(), rsCfg.Memory.Limits)
 			rec.MemoryLimit = lr.Quantity
 			rec.RemoveMemoryLimit = lr.Remove
-			logger.V(1).Info("computed memory recommendation",
-				"container", c.Name,
-				"rawBytes", bytes,
-				"request", rec.MemoryRequest.String(),
-				"limit", quantityString(rec.MemoryLimit),
-				"removeLimit", rec.RemoveMemoryLimit)
-			hasData = true
-		} else {
-			logger.V(1).Info("no memory data from Prometheus", "container", c.Name)
 		}
 
-		if hasData {
-			recs[c.Name] = rec
+		recs[c.Name] = rec
+	}
+	return recs, nil
+}
+
+// factorRatio returns adjusted/baseline as a float64. Returns 1.0 (no-op
+// signal) when either side is nil or the baseline is zero, so the metric
+// never emits NaN/Inf.
+func factorRatio(adjusted, baseline *resource.Quantity) float64 {
+	if adjusted == nil || baseline == nil || baseline.IsZero() {
+		return 1.0
+	}
+	return float64(adjusted.MilliValue()) / float64(baseline.MilliValue())
+}
+
+// emitCoordinationFactors records overhead and (CPU only) replica multipliers
+// applied by ApplyCoordination, decomposed for dashboard rendering. No-op when
+// coordination is disabled or no autoscaler targets the workload.
+func emitCoordinationFactors(
+	namespace, ownerKind, ownerName string,
+	cfg sustainv1alpha1.AutoscalerCoordination,
+	info autoscaler.Info,
+	base, adjusted workload.ContainerRecommendation,
+) {
+	if !cfg.Enabled || info.Kind == autoscaler.KindNone {
+		return
+	}
+
+	// CPU: overhead-only ratio computed independently so we can split it from
+	// the replica correction in the same metric family. Total = overhead × replica.
+	if base.CPURequest != nil {
+		cpuOverhead := recommender.ApplyOverhead(base.CPURequest, info.ConfiguredTargets[autoscaler.ResourceCPU])
+		overheadFactor := factorRatio(cpuOverhead, base.CPURequest)
+		EmitCoordinationFactor(namespace, ownerKind, ownerName, autoscaler.ResourceCPU, "overhead", overheadFactor)
+		if cfg.ReplicaBudgetAnchor != nil {
+			totalFactor := factorRatio(adjusted.CPURequest, base.CPURequest)
+			replicaFactor := 1.0
+			if overheadFactor != 0 {
+				replicaFactor = totalFactor / overheadFactor
+			}
+			EmitCoordinationFactor(namespace, ownerKind, ownerName, autoscaler.ResourceCPU, "replica", replicaFactor)
 		}
 	}
 
-	return recs, nil
+	// Memory: overhead only.
+	if base.MemoryRequest != nil {
+		EmitCoordinationFactor(namespace, ownerKind, ownerName, autoscaler.ResourceMemory, "overhead",
+			factorRatio(adjusted.MemoryRequest, base.MemoryRequest))
+	}
 }
 
 func quantityString(q *resource.Quantity) string {

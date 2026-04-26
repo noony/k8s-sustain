@@ -47,6 +47,11 @@ func EmitWorkloadMetrics(w WorkloadMetrics) {
 			recommendedCPUCores.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy)
 			workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "cpu")
 		}
+		if c.CurrentCPUCores > 0 {
+			templateCPUCores.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy).Set(c.CurrentCPUCores)
+		} else {
+			templateCPUCores.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy)
+		}
 		if c.HasMemory {
 			recommendedMemoryBytes.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy).Set(c.RecommendedMemoryBytes)
 			if c.CurrentMemoryBytes > 0 && !c.MemoryAtFloor {
@@ -57,6 +62,11 @@ func EmitWorkloadMetrics(w WorkloadMetrics) {
 		} else {
 			recommendedMemoryBytes.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy)
 			workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "memory")
+		}
+		if c.CurrentMemoryBytes > 0 {
+			templateMemoryBytes.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy).Set(c.CurrentMemoryBytes)
+		} else {
+			templateMemoryBytes.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy)
 		}
 	}
 }
@@ -79,22 +89,19 @@ func IncrementRetryAttempt(namespace, kind, name string) {
 	workloadRetryAttempts.WithLabelValues(namespace, kind, name).Inc()
 }
 
-// EmitHPAPresent marks whether an HPA targets the workload, with the active
-// sustain mode. mode is one of "HpaAware", "UpdateTargetValue", "Ignore".
-// When the mode changes between reconciles, prior mode variants for the
-// workload are cleared so only one series remains.
-func EmitHPAPresent(namespace, kind, name, mode string, present bool) {
-	if !present {
-		hpaPresent.DeletePartialMatch(prometheus.Labels{
-			"namespace": namespace, "owner_kind": kind, "owner_name": name,
-		})
+// EmitAutoscalerPresent records the autoscaler kind targeting the workload.
+// kind is one of "None", "HPA", "KEDA". When the kind changes between reconciles,
+// prior label values for the workload are cleared so only one series remains.
+func EmitAutoscalerPresent(namespace, ownerKind, ownerName, autoscalerKind string) {
+	autoscalerPresent.DeletePartialMatch(prometheus.Labels{
+		"namespace":  namespace,
+		"owner_kind": ownerKind,
+		"owner_name": ownerName,
+	})
+	if autoscalerKind == "" || autoscalerKind == "None" {
 		return
 	}
-	// Remove any prior mode entries for this workload, then set the current mode.
-	hpaPresent.DeletePartialMatch(prometheus.Labels{
-		"namespace": namespace, "owner_kind": kind, "owner_name": name,
-	})
-	hpaPresent.WithLabelValues(namespace, kind, name, mode).Set(1)
+	autoscalerPresent.WithLabelValues(namespace, ownerKind, ownerName, autoscalerKind).Set(1)
 }
 
 // EmitPolicyRollup sets per-policy workload and at-risk counts after a reconcile.
@@ -145,6 +152,35 @@ func emitWorkloadFromRecs(t *workloadTarget, policyName string, recs map[string]
 		return
 	}
 	EmitWorkloadMetrics(m)
+}
+
+// EmitAutoscalerTargetsConfigured records configured autoscaler averageUtilization
+// targets for a workload. Per-workload series are cleared first so that resource
+// removal (e.g. a memory trigger dropped) or kind changes never leave stale
+// series behind. Pass autoscalerKind="" or "None" to clear-only.
+func EmitAutoscalerTargetsConfigured(namespace, ownerKind, ownerName, autoscalerKind string, configured map[string]int32) {
+	wl := prometheus.Labels{
+		"namespace":  namespace,
+		"owner_kind": ownerKind,
+		"owner_name": ownerName,
+	}
+	autoscalerTargetConfigured.DeletePartialMatch(wl)
+
+	if autoscalerKind == "" || autoscalerKind == "None" {
+		return
+	}
+	for res, v := range configured {
+		autoscalerTargetConfigured.WithLabelValues(namespace, ownerKind, ownerName, autoscalerKind, res).Set(float64(v))
+	}
+}
+
+// EmitCoordinationFactor records the multiplier applied for one resource and
+// factor kind. Pass 1.0 to clear (matches "no effect").
+func EmitCoordinationFactor(namespace, ownerKind, ownerName, resourceKey, factorKind string, factor float64) {
+	coordinationFactor.With(prometheus.Labels{
+		"namespace": namespace, "owner_kind": ownerKind, "owner_name": ownerName,
+		"resource": resourceKey, "kind": factorKind,
+	}).Set(factor)
 }
 
 // containerRequestCPUCores returns the CPU request in cores, or 0 if unset.

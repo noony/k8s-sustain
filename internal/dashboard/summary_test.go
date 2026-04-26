@@ -26,6 +26,7 @@ func testLogger(t *testing.T) logr.Logger { return testr.New(t) }
 type fakePromClient struct {
 	instant    map[string]float64
 	byLabel    map[string]map[string]float64
+	byLabels   map[string]map[string]float64
 	instantErr map[string]error
 	byLabelErr map[string]error
 }
@@ -42,6 +43,13 @@ func (f *fakePromClient) QueryByLabel(_ context.Context, expr, _ string) (map[st
 		return nil, err
 	}
 	if v, ok := f.byLabel[expr]; ok {
+		return v, nil
+	}
+	return map[string]float64{}, nil
+}
+
+func (f *fakePromClient) QueryByLabels(_ context.Context, expr string, _ ...string) (map[string]float64, error) {
+	if v, ok := f.byLabels[expr]; ok {
 		return v, nil
 	}
 	return map[string]float64{}, nil

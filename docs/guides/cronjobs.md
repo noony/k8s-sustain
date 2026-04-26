@@ -22,10 +22,10 @@ kind: Policy
 metadata:
   name: batch-rightsizing
 spec:
-  update:
-    types:
-      cronJob: OnCreate
   rightSizing:
+    update:
+      types:
+        cronJob: OnCreate
     resourcesConfigs:
       cpu:
         window: 336h          # 14 days — more history for irregular jobs
@@ -76,9 +76,10 @@ This is useful when you want the controller to keep the template current without
 
 ```yaml
 spec:
-  update:
-    types:
-      cronJob: Ongoing
+  rightSizing:
+    update:
+      types:
+        cronJob: Ongoing
 ```
 
 ## Collecting enough history

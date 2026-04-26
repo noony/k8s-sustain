@@ -10,10 +10,10 @@ kind: Policy
 metadata:
   name: monitoring-rightsizing
 spec:
-  update:
-    types:
-      daemonSet: Ongoing
   rightSizing:
+    update:
+      types:
+        daemonSet: Ongoing
     resourcesConfigs:
       cpu:
         window: 168h

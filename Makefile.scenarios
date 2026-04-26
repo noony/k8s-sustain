@@ -1,0 +1,142 @@
+# Makefile.scenarios — local kind-based testing harness for k8s-sustain.
+# Included from the top-level Makefile.
+
+CLUSTER_NAME       ?= k8s-sustain
+WINDOW             ?= 10m
+RECONCILE          ?= 30s
+WAIT               ?= 0
+TEST_IMG           ?= k8s-sustain:dev
+SCENARIO_DIR       := hack/scenarios
+SCENARIOS          := steady overprovisioned underprovisioned stepped hpa hpa-coordinated hpa-replica-anchor
+EXPECTED_CONTEXT   := kind-$(CLUSTER_NAME)
+CERT_MANAGER_VERSION ?= v1.16.2
+METRICS_SERVER_URL ?= https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+# Guard: refuse to run scenario operations against the wrong cluster.
+# Bypass with SKIP_CONTEXT_CHECK=1.
+define check_context
+	@if [ "$(SKIP_CONTEXT_CHECK)" != "1" ]; then \
+		ctx=$$(kubectl config current-context 2>/dev/null || true); \
+		if [ "$$ctx" != "$(EXPECTED_CONTEXT)" ]; then \
+			echo "ERROR: current kubectl context is '$$ctx', expected '$(EXPECTED_CONTEXT)'."; \
+			echo "       Switch with: kubectl config use-context $(EXPECTED_CONTEXT)"; \
+			echo "       Or override with: SKIP_CONTEXT_CHECK=1 make ..."; \
+			exit 1; \
+		fi; \
+	fi
+endef
+
+.PHONY: test-help
+test-help: ## Show local test harness targets
+	@grep -hE '^test-[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+
+.PHONY: test-kind-up
+test-kind-up: ## Bring up kind cluster with cert-manager + metrics-server, build & load image, helm-install k8s-sustain
+	@if ! kind get clusters 2>/dev/null | grep -qx '$(CLUSTER_NAME)'; then \
+		echo "==> creating kind cluster $(CLUSTER_NAME)"; \
+		kind create cluster --name $(CLUSTER_NAME); \
+	else \
+		echo "==> kind cluster $(CLUSTER_NAME) already exists, reusing"; \
+	fi
+	@echo "==> ensuring kubectl context is $(EXPECTED_CONTEXT)"
+	kubectl config use-context $(EXPECTED_CONTEXT)
+	@echo "==> installing cert-manager $(CERT_MANAGER_VERSION) (required for the webhook)"
+	helm repo add jetstack https://charts.jetstack.io --force-update >/dev/null
+	helm repo update jetstack >/dev/null
+	helm upgrade --install cert-manager jetstack/cert-manager \
+		--namespace cert-manager --create-namespace \
+		--version $(CERT_MANAGER_VERSION) \
+		--set crds.enabled=true \
+		--wait --timeout 5m
+	@echo "==> installing metrics-server (required for HPA scenario)"
+	kubectl apply -f $(METRICS_SERVER_URL)
+	@if ! kubectl -n kube-system get deploy metrics-server -o jsonpath='{.spec.template.spec.containers[0].args}' | grep -q -- '--kubelet-insecure-tls'; then \
+		echo "==> patching metrics-server with --kubelet-insecure-tls (kind kubelet certs are self-signed)"; \
+		kubectl -n kube-system patch deploy metrics-server --type=json \
+			-p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'; \
+	fi
+	kubectl -n kube-system rollout status deploy/metrics-server --timeout=5m
+	@echo "==> building image $(TEST_IMG)"
+	$(MAKE) docker-build IMG=$(TEST_IMG)
+	@echo "==> loading image into kind"
+	kind load docker-image $(TEST_IMG) --name $(CLUSTER_NAME)
+	@echo "==> helm upgrade --install k8s-sustain (namespace: k8s-sustain)"
+	helm dependency build charts/k8s-sustain
+	helm upgrade --install k8s-sustain ./charts/k8s-sustain \
+		--namespace k8s-sustain --create-namespace \
+		--set image.repository=$(firstword $(subst :, ,$(TEST_IMG))) \
+		--set image.tag=$(lastword $(subst :, ,$(TEST_IMG))) \
+		--set image.pullPolicy=Never \
+		--set webhook.certManager.enabled=true \
+		--set dashboard.enabled=true \
+		--set controller.reconcileInterval=$(RECONCILE) \
+		--wait --timeout 5m
+	@echo
+	@echo "Cluster ready. Open the dashboard with:"
+	@echo "  kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090"
+	@echo
+
+.PHONY: test-kind-down
+test-kind-down: ## Delete the kind cluster
+	-pkill -f 'kubectl port-forward.*k8s-sustain-dashboard' || true
+	kind delete cluster --name $(CLUSTER_NAME)
+
+# Generate one explicit phony target per scenario. macOS ships GNU Make 3.81,
+# which does not honour .PHONY on pattern rules reliably, so we emit each rule
+# explicitly via foreach/eval.
+define scenario_rule
+.PHONY: test-scenario-$(1)
+test-scenario-$(1): ## Apply scenario $(1)
+	$$(call check_context)
+	@echo "==> rendering $(SCENARIO_DIR)/$(1).yaml with WINDOW=$$(WINDOW)"
+	sed 's/__WINDOW__/$$(WINDOW)/g' $(SCENARIO_DIR)/$(1).yaml | kubectl apply -f -
+	@echo
+	@echo "Watch pods:    kubectl get pods -n scenario-$(1) -w"
+	@echo "Dashboard:     kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090"
+	@echo "Status table:  make test-scenario-status"
+	@echo
+endef
+$(foreach s,$(SCENARIOS),$(eval $(call scenario_rule,$(s))))
+
+.PHONY: test-scenario-clean
+test-scenario-clean: ## Delete every scenario-* namespace and its policy
+	$(call check_context)
+	@for s in $(SCENARIOS); do \
+		echo "==> deleting scenario $$s"; \
+		kubectl delete namespace scenario-$$s --ignore-not-found --wait=false; \
+		kubectl delete policy.k8s.sustain.io scenario-$$s --ignore-not-found; \
+	done
+
+.PHONY: test-scenario-logs
+test-scenario-logs: ## Tail controller + webhook logs
+	$(call check_context)
+	kubectl logs -n k8s-sustain -l app.kubernetes.io/name=k8s-sustain --tail=200 -f --max-log-requests=10
+
+.PHONY: test-scenario-watch
+test-scenario-watch: ## Watch pods across all scenario namespaces
+	$(call check_context)
+	@nss=$$(kubectl get ns -l 'k8s-sustain.io/scenario' -o jsonpath='{.items[*].metadata.name}'); \
+	if [ -z "$$nss" ]; then echo "no scenario namespaces present"; exit 0; fi; \
+	echo "watching namespaces: $$nss"; \
+	for ns in $$nss; do echo "--- $$ns ---"; kubectl get pods -n $$ns; done; \
+	echo; echo "Use 'kubectl get pods -A -w' to follow live changes."
+
+.PHONY: test-scenario-status
+test-scenario-status: ## Print current vs. recommended resources for active scenarios
+	$(call check_context)
+	@bash $(SCENARIO_DIR)/status.sh
+
+.PHONY: test-scenario-all
+test-scenario-all: ## Apply every scenario back-to-back (scenarios are isolated by namespace, so no wait is needed; override with WAIT=...)
+	$(call check_context)
+	@for s in $(SCENARIOS); do \
+		echo "==> applying scenario $$s"; \
+		$(MAKE) test-scenario-$$s WINDOW=$(WINDOW) SKIP_CONTEXT_CHECK=1; \
+		if [ "$(WAIT)" != "0" ]; then \
+			echo "==> sleeping $(WAIT) before the next scenario"; \
+			sleep $(WAIT); \
+		fi; \
+	done
+	@echo
+	@echo "All scenarios applied. Inspect with: make test-scenario-status"

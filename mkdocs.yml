@@ -65,6 +65,7 @@ nav:
       - Architecture: concepts/architecture.md
       - Update Modes: concepts/update-modes.md
       - In-Place Updates: concepts/in-place-updates.md
+      - Autoscaler Coordination: concepts/autoscaler-coordination.md
   - Reference:
       - Policy CRD: reference/policy.md
       - Annotation: reference/annotation.md
@@ -78,5 +79,6 @@ nav:
       - Dashboard: guides/dashboard.md
       - Argo CD: guides/argocd.md
       - KEDA: guides/keda.md
+      - Local testing: guides/local-testing.md
       - TLS with cert-manager: guides/cert-manager.md
   - Development: development.md

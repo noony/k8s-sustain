@@ -62,7 +62,6 @@ export interface PolicySpec {
         memory?: ResourceConfig
       }
     }
-    hpa?: { mode?: string }
     update?: Record<string, string>
   }
   conditions?: Condition[]
@@ -286,14 +285,21 @@ export interface ActivityItem {
   message: string
 }
 
+export interface CoordinationFactors {
+  enabled: boolean
+  cpuOverhead?: number
+  memoryOverhead?: number
+  cpuReplica?: number
+}
+
 export interface WorkloadDetailSnapshot {
   updateMode?: string
   lastRecycledAt?: string
   driftPercent: number
   oom24h: number
-  hpaMode?: string
   blocked?: { reason: string; attempts: number; nextRetryAt?: string; lastError?: string }
   recentEvents: ActivityItem[]
+  coordinationFactors?: CoordinationFactors
 }
 
 // Extend WorkloadItem with the new fields exposed by /api/workloads:
@@ -301,5 +307,6 @@ export interface WorkloadItemV2 extends WorkloadItem {
   riskState: 'safe' | 'drifted' | 'at-risk' | 'blocked'
   driftPercent: number
   lastRecycledAt?: string
-  hpaPresent: boolean
+  autoscalerPresent: boolean
+  coordinationFactors?: CoordinationFactors
 }

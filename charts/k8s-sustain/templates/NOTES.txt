@@ -35,9 +35,13 @@ k8s-sustain has been installed.
            requests:
              percentile: 95
              headroom: 15
-     update:
-       types:
-         deployment: Ongoing
+       update:
+         types:
+           deployment: Ongoing
+       # Optional — coordinate request shaping with HPA / KEDA ScaledObject:
+       # autoscalerCoordination:
+       #   enabled: true
+       #   replicaBudgetAnchor: 0.10
    EOF
 
    kubectl annotate deployment/<name> k8s.sustain.io/policy=default --overwrite

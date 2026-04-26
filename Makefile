@@ -2,6 +2,8 @@ BINARY ?= k8s-sustain
 CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@latest
 IMG ?= ghcr.io/noony/k8s-sustain:dev
 
+include Makefile.scenarios
+
 .PHONY: help build test lint generate manifests sync-crds verify-crds tidy fmt vet coverage docker-build docker-push helm-deps helm-lint helm-template
 
 .DEFAULT_GOAL := help

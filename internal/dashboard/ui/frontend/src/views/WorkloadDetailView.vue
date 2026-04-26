@@ -8,6 +8,7 @@ import {
   type MetricsData,
   type RecommendationsData,
   type WorkloadDetailSnapshot,
+  type CoordinationFactors,
 } from '../lib/api'
 import {
   parseCPUQuantity,
@@ -224,6 +225,17 @@ function copyRecommendationYaml() {
   const yaml = buildRecommendationYaml(props.namespace, props.kind, props.name, containers)
   downloadFile(`${props.name}-recommendation.yaml`, yaml, 'text/yaml')
 }
+
+function isMeaningful(v: number | undefined): v is number {
+  return typeof v === 'number' && Math.abs(v - 1) > 1e-6
+}
+
+function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
+  if (!cf?.enabled) return false
+  return (
+    isMeaningful(cf.cpuOverhead) || isMeaningful(cf.memoryOverhead) || isMeaningful(cf.cpuReplica)
+  )
+}
 </script>
 
 <template>
@@ -265,10 +277,28 @@ function copyRecommendationYaml() {
           <span v-else class="badge badge-dim">Manual</span>
         </p>
         <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
-          <span v-if="snapshot.data.value?.hpaMode" class="badge badge-blue"
-            >HPA · {{ snapshot.data.value.hpaMode }}</span
-          >
           <RiskBadge v-if="snapshotRiskState()" :state="snapshotRiskState() as any" />
+          <span v-if="snapshot.data.value?.coordinationFactors?.enabled" class="badge badge-blue"
+            >Coordinated<template
+              v-if="hasCoordinationFactors(snapshot.data.value.coordinationFactors)"
+            >
+              <span v-if="isMeaningful(snapshot.data.value.coordinationFactors.cpuOverhead)">
+                &times;{{
+                  snapshot.data.value.coordinationFactors.cpuOverhead!.toFixed(2)
+                }}
+                CPU</span
+              ><span v-if="isMeaningful(snapshot.data.value.coordinationFactors.memoryOverhead)">
+                &times;{{
+                  snapshot.data.value.coordinationFactors.memoryOverhead!.toFixed(2)
+                }}
+                mem</span
+              ><span v-if="isMeaningful(snapshot.data.value.coordinationFactors.cpuReplica)">
+                &middot; replica &times;{{
+                  snapshot.data.value.coordinationFactors.cpuReplica!.toFixed(2)
+                }}</span
+              >
+            </template></span
+          >
         </div>
       </div>
       <div class="time-range-bar">

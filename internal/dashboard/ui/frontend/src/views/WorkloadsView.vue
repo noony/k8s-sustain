@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, type WorkloadListData } from '../lib/api'
+import { api, type WorkloadListData, type CoordinationFactors } from '../lib/api'
 import { useApi } from '../composables/useApi'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useSorting } from '../composables/useSorting'
@@ -15,7 +15,7 @@ const nsFilter = ref('')
 const kindFilter = ref('')
 const automatedFilter = ref('')
 const riskFilter = ref(String(route.query.risk || ''))
-const hpaFilter = ref(String(route.query.hpa || ''))
+const autoscalerFilter = ref(String(route.query.autoscaler || ''))
 const search = ref('')
 const page = ref(1)
 let searchTimer: ReturnType<typeof setTimeout> | null = null
@@ -28,7 +28,7 @@ function buildQs() {
   if (kindFilter.value) qs.set('kind', kindFilter.value)
   if (automatedFilter.value) qs.set('automated', automatedFilter.value)
   if (riskFilter.value) qs.set('risk', riskFilter.value)
-  if (hpaFilter.value) qs.set('hpa', hpaFilter.value)
+  if (autoscalerFilter.value) qs.set('autoscaler', autoscalerFilter.value)
   if (search.value) qs.set('search', search.value)
   return qs
 }
@@ -46,12 +46,12 @@ const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh(load)
 onMounted(load)
 watch([nsFilter, kindFilter, automatedFilter, page], load)
 
-watch([riskFilter, hpaFilter], () => {
+watch([riskFilter, autoscalerFilter], () => {
   router.replace({
     query: {
       ...route.query,
       risk: riskFilter.value || undefined,
-      hpa: hpaFilter.value || undefined,
+      autoscaler: autoscalerFilter.value || undefined,
     },
   })
   page.value = 1
@@ -72,6 +72,17 @@ const totalPages = computed(() => {
   if (!list.data.value) return 1
   return Math.ceil(list.data.value.total / (list.data.value.pageSize || 50))
 })
+
+function isMeaningful(v: number | undefined): v is number {
+  return typeof v === 'number' && Math.abs(v - 1) > 1e-6
+}
+
+function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
+  if (!cf?.enabled) return false
+  return (
+    isMeaningful(cf.cpuOverhead) || isMeaningful(cf.memoryOverhead) || isMeaningful(cf.cpuReplica)
+  )
+}
 </script>
 
 <template>
@@ -148,10 +159,10 @@ const totalPages = computed(() => {
             <option value="at-risk">At risk</option>
             <option value="blocked">Blocked</option>
           </select>
-          <select v-model="hpaFilter">
-            <option value="">Any HPA</option>
-            <option value="has-hpa">Has HPA</option>
-            <option value="no-hpa">No HPA</option>
+          <select v-model="autoscalerFilter">
+            <option value="">Any autoscaler</option>
+            <option value="has-autoscaler">Has autoscaler</option>
+            <option value="no-autoscaler">No autoscaler</option>
           </select>
           <input
             type="text"
@@ -204,8 +215,26 @@ const totalPages = computed(() => {
                 </td>
                 <td style="font-weight: 600">
                   {{ w.name
-                  }}<span v-if="w.hpaPresent" class="badge badge-blue" style="margin-left: 8px"
-                    >HPA</span
+                  }}<span
+                    v-if="w.autoscalerPresent"
+                    class="badge badge-blue"
+                    style="margin-left: 8px"
+                    >Autoscaler</span
+                  ><span
+                    v-if="w.coordinationFactors?.enabled"
+                    class="badge badge-blue"
+                    style="margin-left: 8px"
+                    >Coordinated<template v-if="hasCoordinationFactors(w.coordinationFactors)">
+                      <span v-if="isMeaningful(w.coordinationFactors.cpuOverhead)">
+                        &times;{{ w.coordinationFactors.cpuOverhead!.toFixed(2) }} CPU</span
+                      ><span v-if="isMeaningful(w.coordinationFactors.memoryOverhead)">
+                        &times;{{ w.coordinationFactors.memoryOverhead!.toFixed(2) }} mem</span
+                      ><span v-if="isMeaningful(w.coordinationFactors.cpuReplica)">
+                        &middot; replica &times;{{
+                          w.coordinationFactors.cpuReplica!.toFixed(2)
+                        }}</span
+                      >
+                    </template></span
                   >
                 </td>
                 <td><RiskBadge :state="w.riskState" /></td>

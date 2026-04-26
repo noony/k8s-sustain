@@ -17,18 +17,19 @@ kind: Policy
 metadata:
   name: production-rightsizing
 spec:
-  update:
-    types:
-      deployment: Ongoing
-      statefulSet: Ongoing
-      daemonSet: Ongoing
-      argoRollout: Ongoing
-      cronJob: OnCreate
   rightSizing:
-    updatePolicy:
-      ignoreAutoscalerSafeToEvictAnnotations: false
-      hpa:
-        mode: HpaAware
+    update:
+      types:
+        deployment: Ongoing
+        statefulSet: Ongoing
+        daemonSet: Ongoing
+        argoRollout: Ongoing
+        cronJob: OnCreate
+      eviction:
+        ignoreAutoscalerSafeToEvictAnnotations: false
+    autoscalerCoordination:
+      enabled: true
+      replicaBudgetAnchor: 0.10
     resourcesConfigs:
       cpu:
         window: 168h
@@ -86,9 +87,11 @@ spec:
 
 ---
 
-## `spec.update`
+## `spec.rightSizing`
 
-### `spec.update.types`
+### `spec.rightSizing.update`
+
+#### `spec.rightSizing.update.types`
 
 Defines which workload kinds are managed and in what mode. Omitting a kind means that kind is unmanaged by this policy.
 
@@ -103,40 +106,23 @@ Defines which workload kinds are managed and in what mode. Omitting a kind means
 
 See [Update Modes](../concepts/update-modes.md) for the difference between `OnCreate` and `Ongoing`.
 
----
-
-## `spec.rightSizing`
-
-### `spec.rightSizing.updatePolicy`
+#### `spec.rightSizing.update.eviction`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `ignoreAutoscalerSafeToEvictAnnotations` | bool | `false` | Skip the cluster-autoscaler `safe-to-evict` annotation check when restarting pods |
-| `hpa` | object | — | Configure interaction with Horizontal Pod Autoscalers (see below) |
 
-### `spec.rightSizing.updatePolicy.hpa`
+### `spec.rightSizing.autoscalerCoordination`
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `mode` | string | `HpaAware` | HPA interaction strategy: `HpaAware`, `UpdateTargetValue`, or `Ignore` |
-| `cpu` | object | — | CPU-specific HPA overrides |
-| `memory` | object | — | Memory-specific HPA overrides |
-
-**Modes:**
-
-| Mode | Description |
-|------|-------------|
-| `HpaAware` | Auto-detect HPAs and adjust requests so HPA utilization math remains correct. Formula: `request = base_recommendation / (target_utilization / 100)` |
-| `UpdateTargetValue` | Convert HPA metrics from `Utilization` to `AverageValue` (absolute), then apply recommendations normally. For KEDA workloads, patches the ScaledObject instead |
-| `Ignore` | No HPA awareness. Current behavior — use at your own risk with HPA |
-
-The dashboard surfaces the active HPA mode in two places: the **Policy Detail** page header shows the configured mode for each policy, and the **Workload Detail** page renders an `HPA: <mode>` badge in the header for any matched workload paired with an HPA.
-
-### `spec.rightSizing.updatePolicy.hpa.cpu` / `hpa.memory`
+Shapes per-pod requests when an HPA or KEDA `ScaledObject` targets the
+workload, so the autoscaler's utilization signal stays meaningful. See
+[Autoscaler Coordination](../concepts/autoscaler-coordination.md) for the
+formulas and detection rules.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `targetUtilizationOverride` | int32 | — | Override the auto-detected HPA target utilization (1-100). When set, the controller uses this value instead of reading the HPA spec |
+| `enabled` | bool | `false` | Enables the overhead formula `(100 / hpa_target_pct) × 1.10` for CPU/memory resources targeted on `averageUtilization`. |
+| `replicaBudgetAnchor` | float (0.0–1.0) | unset | Optional. Enables CPU replica-budget correction. The fraction into `[minReplicas, maxReplicas]` at which the workload should sit at steady state (typical: `0.10`). When unset, replica correction is disabled. |
 
 ### `spec.rightSizing.resourcesConfigs`
 
@@ -146,7 +132,7 @@ Configures recommendations for CPU and memory independently.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `window` | string | `168h` | Historical lookback window for the percentile query (e.g. `96h`, `14d`) |
+| `window` | string | `168h` | Historical lookback window for the percentile query (e.g. `96h`, `14d`). Must be a Prometheus duration: `^([0-9]+(ms|s|m|h|d|w|y))+$`. |
 
 #### `cpu.requests` / `memory.requests`
 
@@ -155,12 +141,12 @@ Configures recommendations for CPU and memory independently.
 | `percentile` | int32 | `95` | Percentile of usage to use as the recommendation (50–99) |
 | `headroom` | int32 | `0` | Safety buffer added on top of the observed percentile value |
 | `keepRequest` | bool | `false` | When `true`, the request is not changed |
-| `minAllowed` | Quantity | — | Floor value for the computed request |
-| `maxAllowed` | Quantity | — | Cap value for the computed request |
+| `minAllowed` | Quantity | — | Floor value for the computed request. Must be `<= maxAllowed` if both are set. |
+| `maxAllowed` | Quantity | — | Cap value for the computed request. Must be `>= minAllowed` if both are set. |
 
 #### `cpu.limits` / `memory.limits`
 
-Exactly one of the following fields should be set. If none is set, the existing limit is kept unchanged.
+At most one of the following fields may be set (enforced by CRD validation). If none is set, the existing limit is kept unchanged.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -168,7 +154,7 @@ Exactly one of the following fields should be set. If none is set, the existing 
 | `keepLimitRequestRatio` | bool | Preserve the current limit-to-request ratio (e.g. if limit was 2× request, it stays 2× the new request) |
 | `equalsToRequest` | bool | Set the limit equal to the new request (Guaranteed QoS) |
 | `noLimit` | bool | Remove the limit entirely |
-| `requestsLimitsRatio` | float64 | Set limit = request × ratio (e.g. `1.5` sets limit to 150% of request) |
+| `requestsLimitsRatio` | float64 | Set limit = request × ratio (e.g. `1.5` sets limit to 150% of request). Must be `>= 1`. |
 
 ---
 

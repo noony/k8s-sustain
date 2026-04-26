@@ -1,14 +1,27 @@
 # Version control
 .git
 .gitignore
+.gitattributes
 
 # Go
 vendor/
+bin/
+coverage.out
+*.test
+*.prof
+*.out
 
 # Development tools and config
 .github/
+.golangci.yml
+.pre-commit-config.yaml
+.editorconfig
 Makefile
+Makefile.scenarios
 hack/
+
+# Generated manifests (the helm chart bundles its own copies)
+config/
 
 # Documentation
 docs/
@@ -20,14 +33,24 @@ requirements-docs.txt
 # Helm charts (not needed in the image)
 charts/
 
+# Examples
+example*.yaml
+
 # Tests
 **/*_test.go
+**/testdata/
 
 # Frontend build artifacts (built in Docker)
 internal/dashboard/ui/frontend/node_modules/
 internal/dashboard/ui/dist/
 
+# Local Claude config / overrides
+.claude/
+CLAUDE.local.md
+
 # IDE / OS
 .idea/
 .vscode/
 *.DS_Store
+*.swp
+*~

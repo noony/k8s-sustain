@@ -24,7 +24,7 @@ controller:
   healthProbeBindAddress: ":8081"
   leaderElect: true
   concurrencyLimit: 5
-  logLevel: error
+  logLevel: debug
   service:
     type: ClusterIP
     port: 8080
@@ -35,9 +35,9 @@ controller:
   resources:
     requests:
       cpu: 10m
-      memory: 64Mi
-    limits:
       memory: 128Mi
+    limits:
+      memory: 256Mi
   # ServiceMonitor for the controller metrics endpoint.
   # Only useful when running the Prometheus Operator (e.g. kube-prometheus-stack).
   # Not needed when using the bundled prometheus subchart.
@@ -65,7 +65,7 @@ webhook:
   # Number of webhook server replicas. ≥2 recommended for production HA.
   replicaCount: 1
   port: 9443
-  logLevel: error
+  logLevel: debug
   # failurePolicy controls what happens when the webhook is unreachable.
   # "Ignore" (default) lets pods through; "Fail" blocks them.
   failurePolicy: Ignore
@@ -91,10 +91,10 @@ webhook:
       kind: Issuer
   resources:
     requests:
-      cpu: 10m
-      memory: 32Mi
+      cpu: 100m
+      memory: 128Mi
     limits:
-      memory: 64Mi
+      memory: 256Mi
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -105,7 +105,7 @@ dashboard:
   replicaCount: 1
   port: 8090
   bindAddress: ":8090"
-  logLevel: error
+  logLevel: debug
   # Allowed CORS origins. Use ["*"] to allow all origins (default).
   corsAllowedOrigins:
     - "*"
@@ -115,9 +115,9 @@ dashboard:
   resources:
     requests:
       cpu: 10m
-      memory: 32Mi
+      memory: 128Mi
     limits:
-      memory: 64Mi
+      memory: 256Mi
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -353,21 +353,23 @@ prometheus:
         - name: k8s_sustain.savings_aggregates
           interval: 1m
           rules:
-            # Cluster-total CPU savings: sum over pods of (per-pod request - workload recommendation),
-            # broadcasting the per-workload recommendation across pods via group_left().
+            # Cluster-total CPU savings: sum over workloads of (template request - recommendation).
+            # Uses k8s_sustain_workload_template_cpu_cores (the original pod-template request,
+            # stable across webhook injection) so savings reflect the gap from the user's
+            # original spec to the recommendation, not the injected pod's already-rightsized value.
             - record: k8s_sustain:cluster_cpu_savings_cores
               expr: |
                 sum(
-                  k8s_sustain:pod_container_cpu_request:cores
-                  - on(namespace, owner_kind, owner_name, container) group_left()
+                  k8s_sustain_workload_template_cpu_cores
+                  - on(namespace, owner_kind, owner_name, container, policy)
                   k8s_sustain_recommended_cpu_cores
                 )
 
             - record: k8s_sustain:cluster_memory_savings_bytes
               expr: |
                 sum(
-                  k8s_sustain:pod_container_memory_request:bytes
-                  - on(namespace, owner_kind, owner_name, container) group_left()
+                  k8s_sustain_workload_template_memory_bytes
+                  - on(namespace, owner_kind, owner_name, container, policy)
                   k8s_sustain_recommended_memory_bytes
                 )
 
@@ -375,23 +377,22 @@ prometheus:
               expr: |
                 k8s_sustain:cluster_cpu_savings_cores
                 / on()
-                sum(k8s_sustain:pod_container_cpu_request:cores)
+                sum(k8s_sustain_workload_template_cpu_cores)
 
             - record: k8s_sustain:cluster_memory_savings_ratio
               expr: |
                 k8s_sustain:cluster_memory_savings_bytes
                 / on()
-                sum(k8s_sustain:pod_container_memory_request:bytes)
+                sum(k8s_sustain_workload_template_memory_bytes)
 
-            # Per-policy savings: broadcast policy label from recommendation to each pod-container,
-            # then sum (per-pod request - recommendation) by policy.
+            # Per-policy savings: same delta, grouped by the policy label which both metrics carry.
             - record: k8s_sustain:policy_cpu_savings_cores
               labels:
                 resource: cpu
               expr: |
                 sum by (policy) (
-                  k8s_sustain:pod_container_cpu_request:cores
-                  - on(namespace, owner_kind, owner_name, container) group_left(policy)
+                  k8s_sustain_workload_template_cpu_cores
+                  - on(namespace, owner_kind, owner_name, container, policy)
                   k8s_sustain_recommended_cpu_cores
                 )
 
@@ -400,8 +401,8 @@ prometheus:
                 resource: memory
               expr: |
                 sum by (policy) (
-                  k8s_sustain:pod_container_memory_request:bytes
-                  - on(namespace, owner_kind, owner_name, container) group_left(policy)
+                  k8s_sustain_workload_template_memory_bytes
+                  - on(namespace, owner_kind, owner_name, container, policy)
                   k8s_sustain_recommended_memory_bytes
                 )
 
@@ -456,3 +457,29 @@ prometheus:
                     abs(1 - k8s_sustain_workload_drift_ratio)
                   ) > 0.10
                 ) * 1
+
+        - name: k8s_sustain.workload_signal
+          interval: 1m
+          rules:
+            # Total CPU usage across all replicas, per container, per workload.
+            - record: k8s_sustain:workload_cpu_usage:cores
+              expr: |
+                sum by (namespace, owner_kind, owner_name, container) (
+                  k8s_sustain:container_cpu_usage_by_workload:rate5m
+                )
+            # Total memory working set across all replicas, per container, per workload.
+            - record: k8s_sustain:workload_memory_usage:bytes
+              expr: |
+                sum by (namespace, owner_kind, owner_name, container) (
+                  k8s_sustain:container_memory_by_workload:bytes
+                )
+            # Replica count for a workload, derived from distinct pods reporting metrics.
+            # Counted at workload level (not per-container) so multi-container pods
+            # don't inflate the count.
+            - record: k8s_sustain:workload_replicas:count
+              expr: |
+                count by (namespace, owner_kind, owner_name) (
+                  count by (namespace, owner_kind, owner_name, pod) (
+                    k8s_sustain:container_cpu_usage_by_workload:rate5m
+                  )
+                )

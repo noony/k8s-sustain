@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/autoscaler"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -107,7 +108,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	// Act on both OnCreate and Ongoing policies so that pods always start
 	// with the latest recommendation. Without this, Ongoing pods would start
 	// with whatever the template currently has and only be resized later.
-	mode := modeForKind(policy.Spec.Update.Types, ownerKind)
+	mode := modeForKind(policy.Spec.RightSizing.Update.Types, ownerKind)
 	if mode == nil {
 		logger.V(1).Info("policy does not configure this workload kind, skipping")
 		return allow
@@ -220,59 +221,97 @@ func modeForKind(ut sustainv1alpha1.UpdateTypes, kind string) *sustainv1alpha1.U
 	return nil
 }
 
-// buildRecommendations queries Prometheus and returns per-container resource
-// recommendations for the given workload. Mirrors the controller's equivalent.
+// buildRecommendations queries Prometheus for workload-level CPU/memory totals
+// and replica count, then derives per-container per-pod recommendations.
+// A per-pod floor is applied to protect against load imbalance.
+// Autoscaler detection provides the MinReplicas fallback when Prometheus has
+// no replica data (KEDA scale-to-zero, missing samples).
 func (h *Handler) buildRecommendations(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
 	ns, ownerKind, ownerName string,
 	containers []corev1.Container,
 ) (map[string]workload.ContainerRecommendation, error) {
-	logger := log.FromContext(ctx).WithValues("kind", ownerKind, "name", ownerName, "namespace", ns)
 	rsCfg := policy.Spec.RightSizing.ResourcesConfigs
 
 	cpuQuantile := recommender.PercentileQuantile(rsCfg.CPU.Requests.Percentile)
 	cpuWindow := recommender.ResourceWindow(rsCfg.CPU.Window)
 	memQuantile := recommender.PercentileQuantile(rsCfg.Memory.Requests.Percentile)
 	memWindow := recommender.ResourceWindow(rsCfg.Memory.Window)
-	logger.V(1).Info("querying Prometheus from webhook",
-		"cpuQuantile", cpuQuantile, "cpuWindow", cpuWindow,
-		"memQuantile", memQuantile, "memWindow", memWindow)
+	logger := log.FromContext(ctx).WithValues("kind", ownerKind, "name", ownerName, "namespace", ns)
 
-	cpuValues, err := h.PrometheusClient.QueryCPUByContainer(ctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
+	cpuTotals, err := h.PrometheusClient.QueryWorkloadCPUByContainer(ctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
 	if err != nil {
-		return nil, fmt.Errorf("cpu query: %w", err)
+		return nil, fmt.Errorf("workload cpu query: %w", err)
 	}
-	logger.V(1).Info("cpu query returned", "containers", len(cpuValues))
+	memTotals, err := h.PrometheusClient.QueryWorkloadMemoryByContainer(ctx, ns, ownerKind, ownerName, memQuantile, memWindow)
+	if err != nil {
+		return nil, fmt.Errorf("workload memory query: %w", err)
+	}
 
-	memValues, err := h.PrometheusClient.QueryMemoryByContainer(ctx, ns, ownerKind, ownerName, memQuantile, memWindow)
+	cpuFloors, err := h.PrometheusClient.QueryCPUByContainer(ctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
 	if err != nil {
-		return nil, fmt.Errorf("memory query: %w", err)
+		logger.V(1).Info("per-pod cpu floor query failed; proceeding without floor", "err", err)
+		cpuFloors = nil
 	}
-	logger.V(1).Info("memory query returned", "containers", len(memValues))
+	memFloors, err := h.PrometheusClient.QueryMemoryByContainer(ctx, ns, ownerKind, ownerName, memQuantile, memWindow)
+	if err != nil {
+		logger.V(1).Info("per-pod memory floor query failed; proceeding without floor", "err", err)
+		memFloors = nil
+	}
+
+	autoInfo, autoErr := autoscaler.Detect(ctx, h.Client, ns, ownerKind, ownerName)
+	if autoErr != nil {
+		logger.V(1).Info("autoscaler detection failed; using empty info", "err", autoErr)
+		autoInfo = autoscaler.Info{Kind: autoscaler.KindNone}
+	}
+	medianReplicas, err := h.PrometheusClient.QueryReplicaCountMedian(ctx, ns, ownerKind, ownerName, cpuWindow)
+	if err != nil {
+		return nil, fmt.Errorf("replica count query: %w", err)
+	}
+	replicas := recommender.EffectiveReplicas(medianReplicas, autoInfo.MinReplicas)
+
+	coordCfg := policy.Spec.RightSizing.AutoscalerCoordination
 
 	recs := make(map[string]workload.ContainerRecommendation)
 	for _, c := range containers {
 		var rec workload.ContainerRecommendation
 		hasData := false
 
-		if cores, ok := cpuValues[c.Name]; ok {
-			rec.CPURequest = recommender.ComputeCPURequest(cores, rsCfg.CPU.Requests)
+		if total, ok := cpuTotals[c.Name]; ok {
+			perPod := recommender.PerPodFromTotal(total, replicas)
+			perPod = recommender.ApplyFloor(perPod, cpuFloors[c.Name])
+			rec.CPURequest = recommender.ComputeCPURequest(perPod, rsCfg.CPU.Requests)
+			hasData = true
+		}
+		if total, ok := memTotals[c.Name]; ok {
+			perPod := recommender.PerPodFromTotal(total, replicas)
+			perPod = recommender.ApplyFloor(perPod, memFloors[c.Name])
+			rec.MemoryRequest = recommender.ComputeMemoryRequest(perPod, rsCfg.Memory.Requests)
+			hasData = true
+		}
+
+		if !hasData {
+			continue
+		}
+
+		// Apply autoscaler coordination (overhead + replica budget) before
+		// limits are derived, so limits track the adjusted requests.
+		rec = recommender.ApplyCoordination(rec, coordCfg, autoInfo, rsCfg)
+
+		// Re-derive limits from the (possibly) adjusted requests.
+		if rec.CPURequest != nil {
 			lr := recommender.ComputeLimit(rec.CPURequest, c.Resources.Requests.Cpu(), c.Resources.Limits.Cpu(), rsCfg.CPU.Limits)
 			rec.CPULimit = lr.Quantity
 			rec.RemoveCPULimit = lr.Remove
-			hasData = true
 		}
-		if bytes, ok := memValues[c.Name]; ok {
-			rec.MemoryRequest = recommender.ComputeMemoryRequest(bytes, rsCfg.Memory.Requests)
+		if rec.MemoryRequest != nil {
 			lr := recommender.ComputeLimit(rec.MemoryRequest, c.Resources.Requests.Memory(), c.Resources.Limits.Memory(), rsCfg.Memory.Limits)
 			rec.MemoryLimit = lr.Quantity
 			rec.RemoveMemoryLimit = lr.Remove
-			hasData = true
 		}
-		if hasData {
-			recs[c.Name] = rec
-		}
+
+		recs[c.Name] = rec
 	}
 	return recs, nil
 }

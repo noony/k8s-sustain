@@ -72,6 +72,30 @@ go run main.go start \
 
 The webhook must be reachable from the API server, which makes local development more involved. Use [telepresence](https://www.telepresence.io) or develop against a local kind cluster with a self-signed cert.
 
+## Local end-to-end testing
+
+The repository ships a `Makefile.scenarios` harness that brings up a kind
+cluster, installs cert-manager and metrics-server, builds & loads the
+image, helm-installs k8s-sustain, and runs a small library of synthetic
+workload scenarios designed to exercise `Ongoing`-mode recycling
+end-to-end. The scenario targets refuse to run unless the current kubectl
+context is `kind-k8s-sustain`; bypass with `SKIP_CONTEXT_CHECK=1`.
+
+```bash
+make test-kind-up                       # one-shot cluster + helm install
+make test-scenario-steady               # apply a scenario
+make test-scenario-status               # current vs. recommended table
+make test-scenario-clean                # delete every scenario namespace
+make test-kind-down                     # delete the kind cluster
+```
+
+See [`docs/guides/local-testing.md`](guides/local-testing.md) for the
+scenario catalog and the expected outcomes.
+
+The remainder of this section ("Deploying on kind") describes the
+manual equivalent, which is useful when you want to understand exactly
+what the harness does or deviate from it.
+
 ## Deploying on kind
 
 A full local deployment with Prometheus, the controller, webhook, and dashboard:
@@ -126,10 +150,10 @@ metadata:
 spec:
   selector:
     namespaces: [default]
-  update:
-    types:
-      deployment: Ongoing
   rightSizing:
+    update:
+      types:
+        deployment: Ongoing
     resourcesConfigs:
       cpu:
         window: 168h

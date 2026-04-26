@@ -24,6 +24,7 @@ const (
 )
 
 // ResourceRequestsConfig configures how resource requests are computed.
+// +kubebuilder:validation:XValidation:rule="!has(self.minAllowed) || !has(self.maxAllowed) || quantity(self.minAllowed).compareTo(quantity(self.maxAllowed)) <= 0",message="minAllowed must be less than or equal to maxAllowed"
 type ResourceRequestsConfig struct {
 	// Headroom adds a safety buffer on top of the computed recommendation (percentage, 0-100).
 	// +optional
@@ -47,6 +48,7 @@ type ResourceRequestsConfig struct {
 }
 
 // ResourceLimitsConfig configures how resource limits are set relative to requests.
+// +kubebuilder:validation:XValidation:rule="((has(self.equalsToRequest) && self.equalsToRequest) ? 1 : 0) + ((has(self.keepLimit) && self.keepLimit) ? 1 : 0) + ((has(self.keepLimitRequestRatio) && self.keepLimitRequestRatio) ? 1 : 0) + ((has(self.noLimit) && self.noLimit) ? 1 : 0) + (has(self.requestsLimitsRatio) ? 1 : 0) <= 1",message="at most one of equalsToRequest, keepLimit, keepLimitRequestRatio, noLimit, requestsLimitsRatio may be set"
 type ResourceLimitsConfig struct {
 	// EqualsToRequest sets the limit equal to the computed request.
 	// +optional
@@ -61,14 +63,19 @@ type ResourceLimitsConfig struct {
 	// +optional
 	NoLimit bool `json:"noLimit,omitempty"`
 	// RequestsLimitsRatio explicitly sets the limit as a multiple of the request.
+	// Must be >= 1 so the derived limit is never below the request.
 	// +optional
+	// +kubebuilder:validation:Minimum=1
 	RequestsLimitsRatio *float64 `json:"requestsLimitsRatio,omitempty"`
 }
 
 // ResourceConfig holds the recommendation configuration for one resource dimension (CPU or memory).
 type ResourceConfig struct {
 	// Window is the historical observation window used for recommendation (e.g. "96h").
+	// Must be a Prometheus duration: integer followed by one of ms, s, m, h, d, w, y
+	// (compounds like "1h30m" are also allowed).
 	// +optional
+	// +kubebuilder:validation:Pattern=`^([0-9]+(ms|s|m|h|d|w|y))+$`
 	Window string `json:"window,omitempty"`
 	// Requests configures how resource requests are computed.
 	// +optional
@@ -88,64 +95,41 @@ type ResourcesConfigs struct {
 	Memory ResourceConfig `json:"memory,omitempty"`
 }
 
-// HpaMode defines how the controller interacts with Horizontal Pod Autoscalers.
-// +kubebuilder:validation:Enum=HpaAware;UpdateTargetValue;Ignore
-type HpaMode string
-
-const (
-	HpaModeHpaAware          HpaMode = "HpaAware"
-	HpaModeUpdateTargetValue HpaMode = "UpdateTargetValue"
-	HpaModeIgnore            HpaMode = "Ignore"
-)
-
-// HpaResourceConfig allows overriding the auto-detected HPA target utilization
-// for a specific resource dimension.
-type HpaResourceConfig struct {
-	// TargetUtilizationOverride overrides the auto-detected HPA target utilization
-	// for this resource. When set, the controller uses this value instead of reading
-	// the HPA spec. Value is a percentage (1-100).
-	// +optional
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=100
-	TargetUtilizationOverride *int32 `json:"targetUtilizationOverride,omitempty"`
-}
-
-// HpaConfig configures how the controller interacts with HPAs targeting
-// the same workloads.
-type HpaConfig struct {
-	// Mode determines the HPA interaction strategy.
-	// Default: HpaAware.
-	// +optional
-	// +kubebuilder:default=HpaAware
-	Mode HpaMode `json:"mode,omitempty"`
-	// CPU holds optional overrides for CPU-related HPA settings.
-	// +optional
-	CPU *HpaResourceConfig `json:"cpu,omitempty"`
-	// Memory holds optional overrides for memory-related HPA settings.
-	// +optional
-	Memory *HpaResourceConfig `json:"memory,omitempty"`
-}
-
-// RightSizingUpdatePolicy controls eviction-related behaviour during right-sizing.
-type RightSizingUpdatePolicy struct {
+// EvictionPolicy controls eviction-related behaviour during right-sizing.
+type EvictionPolicy struct {
 	// IgnoreAutoscalerSafeToEvictAnnotations skips the cluster-autoscaler safe-to-evict
 	// annotation check when restarting pods for right-sizing.
 	// +optional
 	IgnoreAutoscalerSafeToEvictAnnotations bool `json:"ignoreAutoscalerSafeToEvictAnnotations,omitempty"`
-	// Hpa configures interaction with Horizontal Pod Autoscalers.
-	// When nil, defaults to HpaAware mode with no overrides (auto-detect and adjust).
+}
+
+// AutoscalerCoordination configures HPA/ScaledObject-aware request shaping.
+type AutoscalerCoordination struct {
+	// Enabled turns on the overhead formula for any resource the autoscaler
+	// targets on averageUtilization (HPA Resource metric or KEDA cpu/memory trigger).
 	// +optional
-	Hpa *HpaConfig `json:"hpa,omitempty"`
+	Enabled bool `json:"enabled,omitempty"`
+
+	// ReplicaBudgetAnchor enables CPU replica-budget correction. Value is the
+	// fraction into [minReplicas, maxReplicas] at which the workload should sit
+	// at steady state. Typical value: 0.10. Nil disables replica correction.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=1
+	ReplicaBudgetAnchor *float64 `json:"replicaBudgetAnchor,omitempty"`
 }
 
 // RightSizingSpec defines how resource recommendations are computed and applied.
 type RightSizingSpec struct {
-	// UpdatePolicy controls eviction behaviour.
+	// Update configures which workload types are reconciled and how.
 	// +optional
-	UpdatePolicy RightSizingUpdatePolicy `json:"updatePolicy,omitempty"`
+	Update UpdateSpec `json:"update,omitempty"`
 	// ResourcesConfigs holds per-resource-dimension recommendation configs.
 	// +optional
 	ResourcesConfigs ResourcesConfigs `json:"resourcesConfigs,omitempty"`
+	// AutoscalerCoordination configures HPA/ScaledObject-aware request shaping.
+	// +optional
+	AutoscalerCoordination AutoscalerCoordination `json:"autoscalerCoordination,omitempty"`
 }
 
 // UpdateTypes defines the update mode for each supported workload kind.
@@ -178,11 +162,14 @@ type UpdateTypes struct {
 	ArgoRollout *UpdateMode `json:"argoRollout,omitempty"`
 }
 
-// UpdateSpec defines which workload types are managed and how.
+// UpdateSpec defines which workload types are managed and how, plus eviction behaviour.
 type UpdateSpec struct {
 	// Types lists the workload types and their update modes.
 	// +optional
 	Types UpdateTypes `json:"types,omitempty"`
+	// Eviction controls eviction behaviour during right-sizing.
+	// +optional
+	Eviction EvictionPolicy `json:"eviction,omitempty"`
 }
 
 // PolicySelector defines which namespaces and workloads a Policy applies to.
@@ -205,9 +192,6 @@ type PolicySpec struct {
 	// RightSizing configures resource recommendation and application.
 	// +optional
 	RightSizing RightSizingSpec `json:"rightSizing,omitempty"`
-	// Update configures which workload types are reconciled and how.
-	// +optional
-	Update UpdateSpec `json:"update,omitempty"`
 }
 
 // PolicyStatus defines the observed state of a Policy.

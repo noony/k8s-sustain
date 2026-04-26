@@ -20,7 +20,7 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 | `k8s_sustain_recommended_cpu_cores`     | gauge | `namespace`, `kind`, `name`, `container`, `policy` |
 | `k8s_sustain_recommended_memory_bytes`  | gauge | `namespace`, `kind`, `name`, `container`, `policy` |
 
-### Drift, retry, HPA
+### Drift, retry, autoscaler
 
 | Name | Type | Labels |
 |------|------|--------|
@@ -29,7 +29,23 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 | `k8s_sustain_workload_retry_attempts`   | counter | `namespace`, `kind`, `name` |
 | `k8s_sustain_policy_workload_count`     | gauge   | `policy` |
 | `k8s_sustain_policy_at_risk_count`      | gauge   | `policy` |
-| `k8s_sustain_hpa_present`               | gauge   | `namespace`, `kind`, `name`, `mode` |
+| `k8s_sustain_autoscaler_present`        | gauge   | `namespace`, `kind`, `name`, `autoscaler_kind` |
+| `k8s_sustain_autoscaler_target_configured` | gauge | `namespace`, `owner_kind`, `owner_name`, `kind`, `resource` |
+| `k8s_sustain_coordination_factor`       | gauge   | `namespace`, `owner_kind`, `owner_name`, `resource`, `kind` |
+
+#### `k8s_sustain_autoscaler_target_configured`
+
+Configured autoscaler `averageUtilization` (%) for a workload's resource trigger.
+`kind` is `HPA` or `KEDA`; `resource` is `cpu` or `memory`.
+
+#### `k8s_sustain_coordination_factor`
+
+Multiplier applied by autoscaler coordination to the per-pod request.
+`resource` is `cpu` or `memory`; `kind` is `overhead` (the always-on
+`(100 / hpa_target_pct) × 1.10` adjustment) or `replica` (the optional
+CPU-only replica-budget correction). The value is `1.0` when no effect
+was applied. See [Autoscaler Coordination](../concepts/autoscaler-coordination.md)
+for the formulas.
 
 ### Dashboard server
 

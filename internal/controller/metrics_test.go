@@ -19,7 +19,7 @@ func TestNewMetricsRegistered(t *testing.T) {
 		{"k8s_sustain_workload_retry_attempts", []string{"namespace", "owner_kind", "owner_name"}},
 		{"k8s_sustain_policy_workload_count", []string{"policy"}},
 		{"k8s_sustain_policy_at_risk_count", []string{"policy"}},
-		{"k8s_sustain_hpa_present", []string{"namespace", "owner_kind", "owner_name", "mode"}},
+		{"k8s_sustain_autoscaler_present", []string{"namespace", "owner_kind", "owner_name", "kind"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -90,6 +90,6 @@ func init() {
 	workloadRetryAttempts.WithLabelValues("ns", "Deployment", "n").Add(0)
 	policyWorkloadCount.WithLabelValues("p").Set(0)
 	policyAtRiskCount.WithLabelValues("p").Set(0)
-	hpaPresent.WithLabelValues("ns", "Deployment", "n", "HpaAware").Set(0)
+	autoscalerPresent.WithLabelValues("ns", "Deployment", "n", "HPA").Set(0)
 	_ = strings.Builder{}
 }

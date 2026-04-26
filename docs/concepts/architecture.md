@@ -55,13 +55,13 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
    - Skip workloads with `OnCreate` mode (handled by the webhook)
    - Skip workloads in retry backoff from a previous transient failure
 3. Process matching workloads in parallel (bounded by `--concurrency-limit`, default 5):
-   - Query Prometheus for the p`N` of CPU and memory over the configured window
-   - Compute per-container recommendations (request + limit)
+   - Query Prometheus for workload-level CPU and memory signals (sum across all replicas) at the configured percentile and window
+   - Detect autoscalers (HPA / KEDA ScaledObject) targeting the workload — read-only, no patches
+   - Divide the workload-total by the median replica count to derive a per-pod recommendation; KEDA scale-to-zero falls back to `max(1, ScaledObject.minReplicaCount)`
+   - Apply a per-pod p95 floor to protect against load imbalance across replicas
+   - Apply headroom and `min/maxAllowed` clamps; derive limits from the computed request
    - If `--recommend-only` is set, log the recommendation and skip patching
    - Recycle stale running pods: on k8s >= 1.31 via in-place resource patching (using the `/resize` subresource on k8s >= 1.33); on k8s < 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time
-   - Detect if an HPA targets the workload (by matching `scaleTargetRef`)
-   - If HPA found and mode is `HpaAware`: adjust recommendations to factor in HPA's target utilization
-   - If HPA found and mode is `UpdateTargetValue`: patch the HPA (or KEDA ScaledObject) to use absolute `AverageValue` metrics
    - Emit a `ResourcesUpdated` event on the workload object on success
    - On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a `ReconciliationRetryScheduled` warning event on the workload
 
@@ -109,6 +109,27 @@ This is useful for:
 - Validating that the operator produces sensible recommendations before enabling active mode
 - Auditing what changes would be made without risk
 - Running the operator in a staging environment alongside existing resource settings
+
+## Recommendation pipeline
+
+1. **Workload-level signal.** Recording rules sum container CPU/memory across all replicas of a workload, grouped by `(namespace, owner_kind, owner_name, container)`. A separate rule counts replicas per workload.
+2. **Per-pod conversion.** The recommender divides the workload-total at percentile *p* by the median replica count over the recommendation window. KEDA scale-to-zero falls back to `max(1, ScaledObject.minReplicaCount)`.
+3. **Per-pod floor.** A per-pod p95 query is used as a `max()` floor on the workload-derived value. This protects against load imbalance: if one replica runs hotter than the average, its p95 sets the floor.
+4. **Headroom + clamping.** Standard request-headroom percentage and `min/maxAllowed` clamps are applied as before.
+5. **Limits.** Derived from the computed request via the existing limit configuration (`equalsToRequest`, `requestsLimitsRatio`, etc.).
+
+The signal is replica-invariant by construction. HPA scaling does not perturb the recommendation, so no autoscaler object is ever modified.
+
+### Autoscaler coordination
+
+When `spec.rightSizing.autoscalerCoordination.enabled` is `true` and the
+workload is targeted by an HPA or KEDA `ScaledObject` on `averageUtilization`,
+the recommender shapes the per-pod request so the autoscaler's signal stays
+meaningful — multiplying CPU/memory by `(100 / hpa_target_pct) × 1.10` and,
+optionally, applying a CPU-only replica-budget correction. The applied
+multiplier is exposed via `k8s_sustain_coordination_factor`. See
+[Autoscaler Coordination](autoscaler-coordination.md) for the formulas and
+detection rules.
 
 ## Prometheus recording rules
 

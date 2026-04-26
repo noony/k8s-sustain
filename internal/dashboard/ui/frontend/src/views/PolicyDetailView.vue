@@ -224,10 +224,6 @@ function renderYaml(p: typeof policy.value): string {
           <span class="label">Update mode</span>
           <span class="value">{{ modeBadges() }}</span>
         </div>
-        <div class="rec-row">
-          <span class="label">HPA mode</span>
-          <span class="value">{{ policy.spec?.hpa?.mode || '-' }}</span>
-        </div>
       </div>
     </div>
 

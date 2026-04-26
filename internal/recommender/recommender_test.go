@@ -226,64 +226,6 @@ func TestComputeLimit(t *testing.T) {
 	}
 }
 
-// --- AdjustForHpa ---
-
-func TestAdjustForHpa_CPU(t *testing.T) {
-	tests := []struct {
-		name              string
-		request           string
-		targetUtilization int32
-		want              string
-	}{
-		{
-			name:              "80% target: 480m -> 600m",
-			request:           "480m",
-			targetUtilization: 80,
-			want:              "600m",
-		},
-		{
-			name:              "50% target: 480m -> 960m",
-			request:           "480m",
-			targetUtilization: 50,
-			want:              "960m",
-		},
-		{
-			name:              "100% target: no change",
-			request:           "480m",
-			targetUtilization: 100,
-			want:              "480m",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			req := qtyp(tc.request)
-			got := AdjustForHpa(req, tc.targetUtilization)
-			want := qty(tc.want)
-			if got.Cmp(want) != 0 {
-				t.Errorf("got %s, want %s", got, want.String())
-			}
-		})
-	}
-}
-
-func TestAdjustForHpa_NilRequest(t *testing.T) {
-	got := AdjustForHpa(nil, 80)
-	if got != nil {
-		t.Errorf("expected nil, got %s", got)
-	}
-}
-
-func TestAdjustForHpa_Memory(t *testing.T) {
-	req := qtyp("100Mi")
-	got := AdjustForHpa(req, 80)
-	// 100Mi / 0.8 = 125Mi
-	want := qty("125Mi")
-	if got.Cmp(want) != 0 {
-		t.Errorf("got %s, want %s", got, want.String())
-	}
-}
-
 // --- helpers ---
 
 func TestPercentileQuantile(t *testing.T) {

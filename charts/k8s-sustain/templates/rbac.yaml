@@ -47,14 +47,14 @@ rules:
   - apiGroups: [""]
     resources: [pods/eviction]
     verbs: [create]
-  # HPA detection and patching (HPA-aware right-sizing)
+  # HPA detection (read-only; autoscaler.Detect queries only)
   - apiGroups: [autoscaling]
     resources: [horizontalpodautoscalers]
-    verbs: [get, list, watch, patch]
-  # KEDA ScaledObjects (UpdateTargetValue mode)
+    verbs: [get, list, watch]
+  # KEDA ScaledObjects (read-only; autoscaler.Detect queries only)
   - apiGroups: [keda.sh]
     resources: [scaledobjects]
-    verbs: [get, list, patch]
+    verbs: [get, list, watch]
   # Events
   - apiGroups: [""]
     resources: [events]

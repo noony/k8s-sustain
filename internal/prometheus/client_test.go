@@ -96,3 +96,118 @@ func TestQueryRangeReturnsTimeValues(t *testing.T) {
 		t.Fatalf("unexpected values: %+v", out)
 	}
 }
+
+func TestQueryWorkloadCPUByContainer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		q := r.Form.Get("query")
+		if !strings.Contains(q, "workload_cpu_usage") {
+			t.Errorf("expected workload_cpu_usage in query, got %q", q)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status":"success",
+			"data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"0.5"]},
+				{"metric":{"container":"sidecar"},"value":[0,"0.1"]}
+			]}
+		}`))
+	}))
+	defer server.Close()
+
+	c, err := New(server.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got, err := c.QueryWorkloadCPUByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h")
+	if err != nil {
+		t.Fatalf("QueryWorkloadCPUByContainer: %v", err)
+	}
+	if got["app"] != 0.5 || got["sidecar"] != 0.1 {
+		t.Errorf("unexpected values: %v", got)
+	}
+}
+
+func TestQueryWorkloadMemoryByContainer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		q := r.Form.Get("query")
+		if !strings.Contains(q, "workload_memory_usage") {
+			t.Errorf("expected workload_memory_usage in query, got %q", q)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status":"success",
+			"data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"104857600"]}
+			]}
+		}`))
+	}))
+	defer server.Close()
+
+	c, err := New(server.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got, err := c.QueryWorkloadMemoryByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h")
+	if err != nil {
+		t.Fatalf("QueryWorkloadMemoryByContainer: %v", err)
+	}
+	if got["app"] != 104857600 {
+		t.Errorf("expected 104857600 got %v", got["app"])
+	}
+}
+
+func TestQueryReplicaCountMedian(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		q := r.Form.Get("query")
+		if !strings.Contains(q, "workload_replicas") {
+			t.Errorf("expected workload_replicas in query, got %q", q)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status":"success",
+			"data":{"resultType":"vector","result":[{"metric":{},"value":[0,"4"]}]}
+		}`))
+	}))
+	defer server.Close()
+
+	c, err := New(server.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got, err := c.QueryReplicaCountMedian(context.Background(), "ns", "Deployment", "web", "168h")
+	if err != nil {
+		t.Fatalf("QueryReplicaCountMedian: %v", err)
+	}
+	if got != 4 {
+		t.Errorf("expected 4 got %v", got)
+	}
+}
+
+func TestQueryReplicaCountMedian_Empty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer server.Close()
+
+	c, err := New(server.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got, err := c.QueryReplicaCountMedian(context.Background(), "ns", "Deployment", "web", "168h")
+	if err != nil {
+		t.Fatalf("QueryReplicaCountMedian empty: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("expected 0 for empty result, got %v", got)
+	}
+}

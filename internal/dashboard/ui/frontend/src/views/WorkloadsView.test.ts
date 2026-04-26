@@ -22,7 +22,7 @@ describe('WorkloadsView', () => {
           automated: true,
           riskState: 'at-risk',
           driftPercent: 18.4,
-          hpaPresent: true,
+          autoscalerPresent: true,
         },
       ],
       total: 1,
