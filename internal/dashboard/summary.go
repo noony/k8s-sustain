@@ -148,9 +148,9 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	recordErr(err)
 
 	var sparkErr error
-	resp.KPI.CPUSpark7d, sparkErr = sparklinePoints(ctx, s.PromClient, "k8s_sustain:cluster_cpu_savings_cores", "168h", "6h")
+	resp.KPI.CPUSpark7d, sparkErr = sparklinePoints(ctx, s.PromClient, "k8s_sustain:cluster_cpu_savings_cores", "168h", "30m")
 	recordErr(sparkErr)
-	resp.KPI.MemSpark7d, sparkErr = sparklinePoints(ctx, s.PromClient, "k8s_sustain:cluster_memory_savings_bytes", "168h", "6h")
+	resp.KPI.MemSpark7d, sparkErr = sparklinePoints(ctx, s.PromClient, "k8s_sustain:cluster_memory_savings_bytes", "168h", "30m")
 	recordErr(sparkErr)
 
 	atRiskByPolicy, err := s.PromClient.QueryByLabel(ctx, "k8s_sustain_policy_at_risk_count", "policy")

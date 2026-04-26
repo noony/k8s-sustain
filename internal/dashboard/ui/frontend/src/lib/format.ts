@@ -30,6 +30,15 @@ export function timeAgo(dateStr?: string): string {
   return d.toLocaleDateString()
 }
 
+import { format as formatDate } from 'date-fns'
+
+export function formatDateTime(dateStr?: string): string {
+  if (!dateStr) return '-'
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return '-'
+  return formatDate(d, 'yyyy-MM-dd HH:mm:ss')
+}
+
 export function deltaClass(pct: number | null | undefined): string {
   if (pct == null || isNaN(pct) || pct === 0) return ''
   return pct < -5 ? 'saving' : pct > 5 ? 'increase' : 'neutral'

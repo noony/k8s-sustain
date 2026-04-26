@@ -44,10 +44,14 @@ type policyDetail struct {
 }
 
 type workloadSummary struct {
-	Namespace  string            `json:"namespace"`
-	Kind       string            `json:"kind"`
-	Name       string            `json:"name"`
-	Containers []containerStatus `json:"containers"`
+	Namespace      string            `json:"namespace"`
+	Kind           string            `json:"kind"`
+	Name           string            `json:"name"`
+	Containers     []containerStatus `json:"containers"`
+	RiskState      string            `json:"riskState"` // safe | drifted | at-risk | blocked
+	DriftPercent   float64           `json:"driftPercent"`
+	LastRecycledAt string            `json:"lastRecycledAt,omitempty"`
+	HPAPresent     bool              `json:"hpaPresent"`
 }
 
 type containerStatus struct {
@@ -266,6 +270,30 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 
 	if workloads == nil {
 		workloads = []workloadSummary{}
+	}
+
+	// Decorate workloads with Prometheus-derived risk/drift/HPA signals.
+	oomByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain:workload_oom_24h", "owner_name")
+	driftByName, _ := s.PromClient.QueryByLabel(ctx, "max by (owner_name) (abs(1 - k8s_sustain_workload_drift_ratio))", "owner_name")
+	blockedByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_workload_retry_state == 1", "owner_name")
+	hpaByName, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_hpa_present", "owner_name")
+
+	for i := range workloads {
+		wl := &workloads[i]
+		wl.HPAPresent = hpaByName[wl.Name] > 0
+		if drift, ok := driftByName[wl.Name]; ok {
+			wl.DriftPercent = drift * 100
+		}
+		switch {
+		case oomByName[wl.Name] > 0:
+			wl.RiskState = "at-risk"
+		case blockedByName[wl.Name] > 0:
+			wl.RiskState = "blocked"
+		case wl.DriftPercent > 10:
+			wl.RiskState = "drifted"
+		default:
+			wl.RiskState = "safe"
+		}
 	}
 
 	// Collect unique namespaces before filtering
@@ -972,9 +1000,9 @@ type simulateRequest struct {
 type simulateResourceConfig struct {
 	Percentile *int32  `json:"percentile,omitempty"`
 	Headroom   *int32  `json:"headroom,omitempty"`
-	MinAllowed           *string `json:"minAllowed,omitempty"`
-	MaxAllowed           *string `json:"maxAllowed,omitempty"`
-	Window               string  `json:"window,omitempty"`
+	MinAllowed *string `json:"minAllowed,omitempty"`
+	MaxAllowed *string `json:"maxAllowed,omitempty"`
+	Window     string  `json:"window,omitempty"`
 }
 
 type simulateContainerResult struct {

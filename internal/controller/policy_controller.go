@@ -456,16 +456,62 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	r.retries.recordSuccess(t.key())
 	EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 
-	// Build a summary of the applied recommendations for the event message.
-	var containers []string
-	for name := range recs {
-		containers = append(containers, name)
+	// Only report containers whose resources actually changed vs. the current spec.
+	changed := changedContainers(t.Containers, recs)
+	if len(changed) == 0 {
+		logger.V(1).Info("recommendations match current resources, no event emitted")
+		return nil
 	}
 	r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "ResourcesUpdated",
-		"Updated resources for containers: %v", containers)
-	logger.Info("workload resources updated", "containers", containers)
+		"Updated resources for containers: %v", changed)
+	logger.Info("workload resources updated", "containers", changed)
 
 	return nil
+}
+
+// changedContainers returns the names of containers whose recommended CPU/memory
+// requests or limits differ from the current spec. A nil/zero quantity in either
+// side is treated as "unset" and matches another unset value.
+func changedContainers(current []corev1.Container, recs map[string]workload.ContainerRecommendation) []string {
+	byName := make(map[string]corev1.Container, len(current))
+	for _, c := range current {
+		byName[c.Name] = c
+	}
+	var changed []string
+	for name, rec := range recs {
+		c, ok := byName[name]
+		if !ok {
+			changed = append(changed, name)
+			continue
+		}
+		if !quantityEqual(rec.CPURequest, c.Resources.Requests.Cpu()) ||
+			!quantityEqual(rec.MemoryRequest, c.Resources.Requests.Memory()) ||
+			!limitEqual(rec.CPULimit, rec.RemoveCPULimit, c.Resources.Limits.Cpu()) ||
+			!limitEqual(rec.MemoryLimit, rec.RemoveMemoryLimit, c.Resources.Limits.Memory()) {
+			changed = append(changed, name)
+		}
+	}
+	return changed
+}
+
+func quantityEqual(a *resource.Quantity, b *resource.Quantity) bool {
+	aZero := a == nil || a.IsZero()
+	bZero := b == nil || b.IsZero()
+	if aZero && bZero {
+		return true
+	}
+	if aZero != bZero {
+		return false
+	}
+	return a.Cmp(*b) == 0
+}
+
+func limitEqual(rec *resource.Quantity, remove bool, current *resource.Quantity) bool {
+	currentZero := current == nil || current.IsZero()
+	if remove {
+		return currentZero
+	}
+	return quantityEqual(rec, current)
 }
 
 // buildRecommendations queries Prometheus and computes per-container recommendations

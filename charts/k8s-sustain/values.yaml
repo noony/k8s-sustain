@@ -28,6 +28,10 @@ controller:
   service:
     type: ClusterIP
     port: 8080
+    # Extra annotations for the metrics Service. The chart already adds
+    # prometheus.io/scrape, prometheus.io/port, and prometheus.io/path so the
+    # bundled Prometheus subchart picks up the controller's metrics endpoint.
+    annotations: {}
   resources:
     requests:
       cpu: 10m
@@ -140,7 +144,66 @@ prometheus:
       enabled: true
       size: 20Gi
 
-  # k8s-sustain recording rules — embedded directly in the Prometheus config.
+  # Lock the bundled Prometheus down to a minimal, scoped scrape set so it
+  # NEVER picks up arbitrary `prometheus.io/scrape: "true"` targets in other
+  # namespaces. The chart's default scrapeConfigs that scrape cluster-wide
+  # annotation-based targets are disabled by name; only the jobs we need stay
+  # enabled or are added.
+  scrapeConfigs:
+    prometheus: { enabled: true }
+    kubernetes-api-servers: { enabled: false }
+    kubernetes-nodes: { enabled: false }
+    # cAdvisor on each node — required for container CPU/mem metrics. Cluster
+    # scope is intrinsic to cAdvisor (it sees all containers on its node).
+    kubernetes-nodes-cadvisor: { enabled: true }
+    # Disabled — these scrape ANY pod/service in ANY namespace that carries the
+    # `prometheus.io/scrape: "true"` annotation.
+    kubernetes-service-endpoints: { enabled: false }
+    kubernetes-service-endpoints-slow: { enabled: false }
+    kubernetes-services: { enabled: false }
+    kubernetes-pods: { enabled: false }
+    kubernetes-pods-slow: { enabled: false }
+    prometheus-pushgateway: { enabled: false }
+
+  # k8s-sustain components only — restricted to Prometheus's own namespace
+  # and matched by app.kubernetes.io/name label (k8s-sustain, kube-state-metrics).
+  extraScrapeConfigs: |
+    - job_name: k8s-sustain
+      # Required so the labels exported by kube-state-metrics (namespace, pod,
+      # owner_*, etc.) survive scraping. Without this, Prometheus rewrites the
+      # `namespace` and `pod` labels to the kube-state-metrics target's identity
+      # and the kube_pod_* series collapse onto a single (namespace, pod) — which
+      # makes pod_workload match every workload in the cluster.
+      honor_labels: true
+      kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            own_namespace: true
+      relabel_configs:
+        # Only the controller's metrics service and kube-state-metrics. The
+        # webhook service shares the app.kubernetes.io/name label so we filter
+        # by service name suffix instead.
+        - action: keep
+          source_labels: [__meta_kubernetes_service_name]
+          regex: .*-metrics$|.*-kube-state-metrics$
+        # Only scrape ports actually serving metrics — drops the controller's
+        # healthz port and any non-metrics container port discovered alongside.
+        - action: keep
+          source_labels: [__meta_kubernetes_endpoint_port_name]
+          regex: metrics|http
+        - action: replace
+          source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - action: replace
+          source_labels: [__meta_kubernetes_service_name]
+          target_label: service
+        - action: replace
+          source_labels: [__meta_kubernetes_pod_node_name]
+          target_label: node
+        - action: replace
+          source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+
   serverFiles:
     recording_rules.yml:
       groups:
@@ -273,49 +336,62 @@ prometheus:
                   * on(namespace, pod) group_left(owner_kind, owner_name)
                   k8s_sustain:pod_workload
                 )
+            # Per-pod-container CPU request, enriched with workload labels.
+            # Sums over this give cluster totals (one series per pod-container).
+            - record: k8s_sustain:pod_container_cpu_request:cores
+              expr: |
+                kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}
+                * on(namespace, pod) group_left(owner_kind, owner_name)
+                k8s_sustain:pod_workload
+            # Per-pod-container memory request, enriched with workload labels.
+            - record: k8s_sustain:pod_container_memory_request:bytes
+              expr: |
+                kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}
+                * on(namespace, pod) group_left(owner_kind, owner_name)
+                k8s_sustain:pod_workload
 
         - name: k8s_sustain.savings_aggregates
           interval: 1m
           rules:
+            # Cluster-total CPU savings: sum over pods of (per-pod request - workload recommendation),
+            # broadcasting the per-workload recommendation across pods via group_left().
             - record: k8s_sustain:cluster_cpu_savings_cores
               expr: |
                 sum(
-                  k8s_sustain:container_cpu_requests_by_workload:cores
-                  - on(namespace, owner_kind, owner_name, container)
+                  k8s_sustain:pod_container_cpu_request:cores
+                  - on(namespace, owner_kind, owner_name, container) group_left()
                   k8s_sustain_recommended_cpu_cores
                 )
 
             - record: k8s_sustain:cluster_memory_savings_bytes
               expr: |
                 sum(
-                  k8s_sustain:container_memory_requests_by_workload:bytes
-                  - on(namespace, owner_kind, owner_name, container)
+                  k8s_sustain:pod_container_memory_request:bytes
+                  - on(namespace, owner_kind, owner_name, container) group_left()
                   k8s_sustain_recommended_memory_bytes
                 )
 
             - record: k8s_sustain:cluster_cpu_savings_ratio
               expr: |
                 k8s_sustain:cluster_cpu_savings_cores
-                / on() group_left()
-                sum(k8s_sustain:container_cpu_requests_by_workload:cores)
+                / on()
+                sum(k8s_sustain:pod_container_cpu_request:cores)
 
             - record: k8s_sustain:cluster_memory_savings_ratio
               expr: |
                 k8s_sustain:cluster_memory_savings_bytes
-                / on() group_left()
-                sum(k8s_sustain:container_memory_requests_by_workload:bytes)
+                / on()
+                sum(k8s_sustain:pod_container_memory_request:bytes)
 
+            # Per-policy savings: broadcast policy label from recommendation to each pod-container,
+            # then sum (per-pod request - recommendation) by policy.
             - record: k8s_sustain:policy_cpu_savings_cores
               labels:
                 resource: cpu
               expr: |
                 sum by (policy) (
-                  (
-                    k8s_sustain:container_cpu_requests_by_workload:cores
-                    - on(namespace, owner_kind, owner_name, container)
-                    k8s_sustain_recommended_cpu_cores
-                  )
-                  * on(namespace, owner_kind, owner_name, container) group_left(policy)
+                  k8s_sustain:pod_container_cpu_request:cores
+                  - on(namespace, owner_kind, owner_name, container) group_left(policy)
                   k8s_sustain_recommended_cpu_cores
                 )
 
@@ -324,12 +400,8 @@ prometheus:
                 resource: memory
               expr: |
                 sum by (policy) (
-                  (
-                    k8s_sustain:container_memory_requests_by_workload:bytes
-                    - on(namespace, owner_kind, owner_name, container)
-                    k8s_sustain_recommended_memory_bytes
-                  )
-                  * on(namespace, owner_kind, owner_name, container) group_left(policy)
+                  k8s_sustain:pod_container_memory_request:bytes
+                  - on(namespace, owner_kind, owner_name, container) group_left(policy)
                   k8s_sustain_recommended_memory_bytes
                 )
 
@@ -341,12 +413,12 @@ prometheus:
                 label_replace(sum(k8s_sustain:pod_cpu_usage:rate5m), "segment", "used", "", "")
                 or
                 label_replace(
-                  sum(k8s_sustain:container_cpu_requests_by_workload:cores) - sum(k8s_sustain:pod_cpu_usage:rate5m),
+                  sum(k8s_sustain:pod_container_cpu_request:cores) - sum(k8s_sustain:pod_cpu_usage:rate5m),
                   "segment", "idle", "", ""
                 )
                 or
                 label_replace(
-                  sum(kube_node_status_allocatable{resource="cpu"}) - sum(k8s_sustain:container_cpu_requests_by_workload:cores),
+                  sum(kube_node_status_allocatable{resource="cpu"}) - sum(k8s_sustain:pod_container_cpu_request:cores),
                   "segment", "free", "", ""
                 )
 
@@ -355,12 +427,12 @@ prometheus:
                 label_replace(sum(k8s_sustain:pod_memory_working_set:bytes), "segment", "used", "", "")
                 or
                 label_replace(
-                  sum(k8s_sustain:container_memory_requests_by_workload:bytes) - sum(k8s_sustain:pod_memory_working_set:bytes),
+                  sum(k8s_sustain:pod_container_memory_request:bytes) - sum(k8s_sustain:pod_memory_working_set:bytes),
                   "segment", "idle", "", ""
                 )
                 or
                 label_replace(
-                  sum(kube_node_status_allocatable{resource="memory"}) - sum(k8s_sustain:container_memory_requests_by_workload:bytes),
+                  sum(kube_node_status_allocatable{resource="memory"}) - sum(k8s_sustain:pod_container_memory_request:bytes),
                   "segment", "free", "", ""
                 )
 

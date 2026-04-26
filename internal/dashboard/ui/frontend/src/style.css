@@ -989,11 +989,17 @@ tbody tr:last-child td {
 }
 .event-row {
   display: grid;
-  grid-template-columns: 80px 2fr 80px 3fr;
+  grid-template-columns: 160px 2fr 3fr;
   gap: 12px;
   padding: 6px 0;
   font-size: 13px;
   border-bottom: 1px solid var(--border);
+}
+.event-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 .event-time {
   color: var(--text-dim);

@@ -130,48 +130,28 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	}, nil
 }
 
-// applyClampingToSeries applies headroom and min/max clamping to each data point.
-// For CPU (isCPU=true), values are in cores; for memory, values are in bytes.
+// applyClampingToSeries runs each raw percentile point through the real
+// recommender so the chart shows the exact value that would be applied to a
+// container's request (including ceil-to-millicore / ceil-to-MiB rounding,
+// floors, and min/max clamping).
 func applyClampingToSeries(series promclient.ContainerTimeSeries, cfg sustainv1alpha1.ResourceRequestsConfig, isCPU bool) promclient.ContainerTimeSeries {
 	if series == nil {
 		return nil
-	}
-
-	var headroom float64
-	if cfg.Headroom != nil && *cfg.Headroom > 0 {
-		headroom = float64(*cfg.Headroom) / 100.0
-	}
-
-	var minVal, maxVal float64
-	hasMin, hasMax := false, false
-	if cfg.MinAllowed != nil {
-		hasMin = true
-		if isCPU {
-			minVal = float64(cfg.MinAllowed.MilliValue()) / 1000.0
-		} else {
-			minVal = float64(cfg.MinAllowed.Value())
-		}
-	}
-	if cfg.MaxAllowed != nil {
-		hasMax = true
-		if isCPU {
-			maxVal = float64(cfg.MaxAllowed.MilliValue()) / 1000.0
-		} else {
-			maxVal = float64(cfg.MaxAllowed.Value())
-		}
 	}
 
 	result := make(promclient.ContainerTimeSeries, len(series))
 	for name, points := range series {
 		clamped := make([]promclient.TimeValue, len(points))
 		for i, p := range points {
-			v := p.Value
-			v *= 1.0 + headroom
-			if hasMin && v < minVal {
-				v = minVal
-			}
-			if hasMax && v > maxVal {
-				v = maxVal
+			var v float64
+			if isCPU {
+				if qty := recommender.ComputeCPURequest(p.Value, cfg); qty != nil {
+					v = float64(qty.MilliValue()) / 1000.0
+				}
+			} else {
+				if qty := recommender.ComputeMemoryRequest(p.Value, cfg); qty != nil {
+					v = float64(qty.Value())
+				}
 			}
 			clamped[i] = promclient.TimeValue{Timestamp: p.Timestamp, Value: v}
 		}

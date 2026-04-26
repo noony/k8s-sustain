@@ -12,7 +12,21 @@ const (
 	defaultPercentile = 95
 	defaultWindow     = "168h" // 7 days
 	mebibyte          = 1 << 20
+	// Hard floors so we never emit zero/sub-unit recommendations even when
+	// the percentile query returns ~0 (e.g. idle container, missing samples).
+	minCPUMillicores = 1
+	minMemoryMiB     = 1
 )
+
+// MinCPURequest returns the hard floor applied to CPU recommendations.
+func MinCPURequest() *resource.Quantity {
+	return resource.NewMilliQuantity(minCPUMillicores, resource.DecimalSI)
+}
+
+// MinMemoryRequest returns the hard floor applied to memory recommendations.
+func MinMemoryRequest() *resource.Quantity {
+	return resource.NewQuantity(minMemoryMiB*mebibyte, resource.BinarySI)
+}
 
 // PercentileQuantile converts a percentile pointer (e.g. 95) to a
 // Prometheus quantile float (0.95). Returns 0.95 when p is nil.
@@ -51,7 +65,8 @@ func ComputeCPURequest(rawCores float64, cfg sustainv1alpha1.ResourceRequestsCon
 		milliCores *= 1.0 + float64(*cfg.Headroom)/100.0
 	}
 
-	qty := resource.NewMilliQuantity(int64(math.Ceil(milliCores)), resource.DecimalSI)
+	m := max(int64(math.Ceil(milliCores)), int64(minCPUMillicores))
+	qty := resource.NewMilliQuantity(m, resource.DecimalSI)
 	clampQuantity(qty, cfg.MinAllowed, cfg.MaxAllowed)
 	return qty
 }
@@ -72,7 +87,7 @@ func ComputeMemoryRequest(rawBytes float64, cfg sustainv1alpha1.ResourceRequests
 	}
 
 	// Round up to the nearest MiB.
-	mib := (b + mebibyte - 1) / mebibyte
+	mib := max((b+mebibyte-1)/mebibyte, int64(minMemoryMiB))
 	qty := resource.NewQuantity(mib*mebibyte, resource.BinarySI)
 	clampQuantity(qty, cfg.MinAllowed, cfg.MaxAllowed)
 	return qty

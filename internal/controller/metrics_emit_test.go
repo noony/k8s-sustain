@@ -40,7 +40,7 @@ func TestEmitWorkloadMetricsSetsExpectedValues(t *testing.T) {
 		Name:      "web",
 		Policy:    "p",
 		Containers: []ContainerMetric{
-			{Name: "app", RecommendedCPUCores: 0.25, CurrentCPUCores: 0.5, RecommendedMemoryBytes: 200_000_000, CurrentMemoryBytes: 400_000_000},
+			{Name: "app", HasCPU: true, RecommendedCPUCores: 0.25, CurrentCPUCores: 0.5, HasMemory: true, RecommendedMemoryBytes: 200_000_000, CurrentMemoryBytes: 400_000_000},
 		},
 	}
 	EmitWorkloadMetrics(rec)

@@ -4,6 +4,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -16,10 +17,17 @@ type WorkloadMetrics struct {
 
 // ContainerMetric carries a single container's "current vs recommended" pair.
 // Current values are configured resource requests, not live usage.
+// HasCPU/HasMemory mark whether a recommendation was actually computed —
+// when false (e.g. KeepRequest, no Prometheus data), we skip emitting so we
+// don't publish 0-valued recommendations or drift=100%.
 type ContainerMetric struct {
 	Name                   string
+	HasCPU                 bool
+	CPUAtFloor             bool
 	RecommendedCPUCores    float64
 	CurrentCPUCores        float64
+	HasMemory              bool
+	MemoryAtFloor          bool
 	RecommendedMemoryBytes float64
 	CurrentMemoryBytes     float64
 }
@@ -28,13 +36,27 @@ type ContainerMetric struct {
 // reconciled workload. Idempotent: each call overwrites the previous values.
 func EmitWorkloadMetrics(w WorkloadMetrics) {
 	for _, c := range w.Containers {
-		recommendedCPUCores.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy).Set(c.RecommendedCPUCores)
-		recommendedMemoryBytes.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy).Set(c.RecommendedMemoryBytes)
-		if c.CurrentCPUCores > 0 {
-			workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "cpu").Set(c.RecommendedCPUCores / c.CurrentCPUCores)
+		if c.HasCPU {
+			recommendedCPUCores.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy).Set(c.RecommendedCPUCores)
+			if c.CurrentCPUCores > 0 && !c.CPUAtFloor {
+				workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "cpu").Set(c.RecommendedCPUCores / c.CurrentCPUCores)
+			} else {
+				workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "cpu")
+			}
+		} else {
+			recommendedCPUCores.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy)
+			workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "cpu")
 		}
-		if c.CurrentMemoryBytes > 0 {
-			workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "memory").Set(c.RecommendedMemoryBytes / c.CurrentMemoryBytes)
+		if c.HasMemory {
+			recommendedMemoryBytes.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy).Set(c.RecommendedMemoryBytes)
+			if c.CurrentMemoryBytes > 0 && !c.MemoryAtFloor {
+				workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "memory").Set(c.RecommendedMemoryBytes / c.CurrentMemoryBytes)
+			} else {
+				workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "memory")
+			}
+		} else {
+			recommendedMemoryBytes.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy)
+			workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "memory")
 		}
 	}
 }
@@ -96,11 +118,20 @@ func emitWorkloadFromRecs(t *workloadTarget, policyName string, recs map[string]
 			continue
 		}
 		cm := ContainerMetric{Name: c.Name}
+		// When the recommendation lands at the floor (1m / 1Mi) it is the
+		// "no real usage data" sentinel — emit the value but skip drift so the
+		// dashboard doesn't surface a misleading "huge over-provisioning" signal.
+		floorCPU := recommender.MinCPURequest()
+		floorMem := recommender.MinMemoryRequest()
 		if rec.CPURequest != nil {
+			cm.HasCPU = true
 			cm.RecommendedCPUCores = float64(rec.CPURequest.MilliValue()) / 1000.0
+			cm.CPUAtFloor = rec.CPURequest.Cmp(*floorCPU) <= 0
 		}
 		if rec.MemoryRequest != nil {
+			cm.HasMemory = true
 			cm.RecommendedMemoryBytes = float64(rec.MemoryRequest.Value())
+			cm.MemoryAtFloor = rec.MemoryRequest.Cmp(*floorMem) <= 0
 		}
 		if cur := containerRequestCPUCores(c); cur > 0 {
 			cm.CurrentCPUCores = cur

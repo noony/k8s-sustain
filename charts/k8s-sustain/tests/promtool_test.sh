@@ -22,6 +22,8 @@ yq '.spec' "$WORKDIR/rules.yaml" > "$WORKDIR/rules-only.yaml"
 promtool check rules "$WORKDIR/rules-only.yaml"
 
 required=(
+  "k8s_sustain:pod_container_cpu_request:cores"
+  "k8s_sustain:pod_container_memory_request:bytes"
   "k8s_sustain:cluster_cpu_savings_cores"
   "k8s_sustain:cluster_memory_savings_bytes"
   "k8s_sustain:cluster_cpu_savings_ratio"

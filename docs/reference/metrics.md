@@ -55,8 +55,13 @@ All rules are evaluated every minute. They live in
 
 ### Resource requests (existing)
 
+Per-workload (max across replicas — used for per-workload dashboard views):
 `k8s_sustain:container_cpu_requests_by_workload:cores`,
 `k8s_sustain:container_memory_requests_by_workload:bytes`.
+
+Per-pod-container (one series per pod, used by cluster-total aggregations):
+`k8s_sustain:pod_container_cpu_request:cores`,
+`k8s_sustain:pod_container_memory_request:bytes`.
 
 ### Savings aggregates (new)
 
