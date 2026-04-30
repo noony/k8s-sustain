@@ -103,8 +103,11 @@ Defines which workload kinds are managed and in what mode. Omitting a kind means
 | `argoRollout` | `OnCreate` \| `Ongoing` | Manages Argo Rollouts `Rollout` objects |
 | `cronJob` | `OnCreate` \| `Ongoing` | Manages `CronJob` objects |
 | `job` | `OnCreate` \| `Ongoing` | Manages standalone `Job` objects |
-| `deploymentConfig` | `OnCreate` \| `Ongoing` | Manages OpenShift `DeploymentConfig` objects (OpenShift-specific) |
-| `family` | `OnCreate` \| `Ongoing` | Manages OpenShift-specific Family resources (OpenShift-specific) |
+| `deploymentConfig` | `OnCreate` \| `Ongoing` | Reserved for OpenShift `DeploymentConfig` support; accepted by the CRD but not currently implemented — setting it has no effect |
+| `family` | `OnCreate` \| `Ongoing` | Reserved for OpenShift Family resource support; accepted by the CRD but not currently implemented — setting it has no effect |
+
+!!! note
+    `deploymentConfig` and `family` are present in the CRD schema for future OpenShift compatibility but have no controller implementation yet. The controller silently ignores them if set.
 
 See [Update Modes](../concepts/update-modes.md) for the difference between `OnCreate` and `Ongoing`.
 
