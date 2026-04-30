@@ -103,9 +103,9 @@ When `--recommend-only` is passed (or `recommendOnly: true` in the Helm values),
 
 This is useful for:
 
-- Validating that the operator produces sensible recommendations before enabling active mode
+- Validating that k8s-sustain produces sensible recommendations before enabling active mode
 - Auditing what changes would be made without risk
-- Running the operator in a staging environment alongside existing resource settings
+- Running k8s-sustain in a staging environment alongside existing resource settings
 
 ## Recommendation pipeline
 

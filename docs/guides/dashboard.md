@@ -137,7 +137,7 @@ The simulator lets you test "what-if" scenarios:
 2. Choose a **time range** (1h to 30 days) — controls how much history is displayed on the charts.
 3. Optionally, use the **Load from policy** dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window) from an existing policy — useful as a starting point before tweaking values.
 4. Adjust **CPU and Memory parameters** independently:
-    - Window (1h to 30 days) — the lookback period used to compute the recommendation, matching the policy CRD structure. This is independent of the chart time range.
+    - Window (1h to 30 days) — the lookback period used to compute the recommendation, matching the Policy CRD structure. This is independent of the chart time range.
     - Percentile (50th to 99th)
     - Headroom percentage (0-100%)
     - Min/Max allowed values

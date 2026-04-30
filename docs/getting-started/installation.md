@@ -9,7 +9,7 @@ helm repo update
 
 ## Install with bundled Prometheus
 
-The default installation deploys the operator, the admission webhook, and a [Prometheus](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) instance with the required recording rules pre-configured.
+The default installation deploys the controller, the admission webhook, and a [Prometheus](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) instance with the required recording rules pre-configured.
 
 ```bash
 helm install k8s-sustain k8s-sustain/k8s-sustain \
@@ -19,7 +19,7 @@ helm install k8s-sustain k8s-sustain/k8s-sustain \
 
 ## Install with an existing Prometheus
 
-If you already have Prometheus running, disable the bundled instance and point the operator at yours:
+If you already have Prometheus running, disable the bundled instance and point k8s-sustain at yours:
 
 ```bash
 helm install k8s-sustain k8s-sustain/k8s-sustain \
@@ -47,7 +47,7 @@ helm install k8s-sustain k8s-sustain/k8s-sustain \
 
 ## Install in recommend-only mode (dry-run)
 
-Run the operator without applying any changes. Recommendations are logged as structured JSON but workloads and pods are never modified.
+Run k8s-sustain without applying any changes. Recommendations are logged as structured JSON but workloads and pods are never modified.
 
 ```bash
 helm install k8s-sustain k8s-sustain/k8s-sustain \

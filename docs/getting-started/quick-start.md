@@ -81,7 +81,7 @@ spec:
 !!! info "Cold start"
     Recording rules need at least one evaluation cycle (~1 minute) before data is available.
     For meaningful percentile recommendations, allow data to accumulate for at least a few hours.
-    The operator logs `no metrics yet, skipping` for workloads with no data yet.
+    The controller logs `no metrics yet, skipping` for workloads with no data yet.
 
 ## 5. Check the Policy status
 

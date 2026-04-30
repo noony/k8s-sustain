@@ -1,6 +1,6 @@
 # Argo CD Integration
 
-k8s-sustain coexists with Argo CD GitOps without any `ignoreDifferences` configuration: the operator only mutates Pods (via the webhook) and recycles them (via the controller), and never touches the workload spec that Argo CD tracks.
+k8s-sustain coexists with Argo CD GitOps without any `ignoreDifferences` configuration: k8s-sustain only mutates Pods (via the webhook) and recycles them (via the controller), and never touches the workload spec that Argo CD tracks.
 
 ## Goal
 

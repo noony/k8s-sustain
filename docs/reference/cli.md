@@ -59,7 +59,7 @@ K8SSUSTAIN_RECONCILE_INTERVAL=30m k8s-sustain start
 
 ### Log verbosity
 
-- `info` (default) — high-signal events: reconcile cycle start/end with target counts, HPA detection, recommendations computed, in-place resize applied, pod evictions, recommendation injection by the webhook.
+- `info` (default) — high-signal events: reconcile cycle start/end with target counts, HPA detection, recommendations computed, in-place update applied, pod evictions, recommendation injection by the webhook.
 - `debug` — adds per-container traces: Prometheus query parameters and result counts, raw percentile values, per-resource recommendations, HPA-aware adjustments, retry-backoff skips, eviction skips for non-stale or non-running pods, webhook admit decisions including standalone-pod / no-policy / no-data branches.
 
 Use `debug` when investigating why a workload was or wasn't resized, or why an HPA adjustment behaved unexpectedly.

@@ -138,7 +138,7 @@ resourcesConfigs:
     window: 720h   # 30 days
 ```
 
-If fewer than ~10 data points exist in the window, the operator logs `no metrics yet, skipping` and leaves resources unchanged.
+If fewer than ~10 data points exist in the window, the controller logs `no metrics yet, skipping` and leaves resources unchanged.
 
 ### Guaranteed QoS for batch jobs
 
