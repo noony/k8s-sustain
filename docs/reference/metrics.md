@@ -17,19 +17,23 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 
 | Name | Type | Labels |
 |------|------|--------|
-| `k8s_sustain_recommended_cpu_cores`     | gauge | `namespace`, `kind`, `name`, `container`, `policy` |
-| `k8s_sustain_recommended_memory_bytes`  | gauge | `namespace`, `kind`, `name`, `container`, `policy` |
+| `k8s_sustain_recommended_cpu_cores`        | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `policy` |
+| `k8s_sustain_recommended_memory_bytes`     | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `policy` |
+| `k8s_sustain_workload_template_cpu_cores`  | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `policy` |
+| `k8s_sustain_workload_template_memory_bytes` | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `policy` |
+
+`k8s_sustain_workload_template_cpu_cores` and `k8s_sustain_workload_template_memory_bytes` record the CPU/memory request from the workload's pod-template spec (the pre-injection value). Stable across webhook injection so savings rules can compare against the template.
 
 ### Drift, retry, autoscaler
 
 | Name | Type | Labels |
 |------|------|--------|
-| `k8s_sustain_workload_drift_ratio`      | gauge   | `namespace`, `kind`, `name`, `container`, `resource` |
-| `k8s_sustain_workload_retry_state`      | gauge   | `namespace`, `kind`, `name`, `reason` |
-| `k8s_sustain_workload_retry_attempts`   | counter | `namespace`, `kind`, `name` |
+| `k8s_sustain_workload_drift_ratio`      | gauge   | `namespace`, `owner_kind`, `owner_name`, `container`, `resource` |
+| `k8s_sustain_workload_retry_state`      | gauge   | `namespace`, `owner_kind`, `owner_name`, `reason` |
+| `k8s_sustain_workload_retry_attempts`   | counter | `namespace`, `owner_kind`, `owner_name` |
 | `k8s_sustain_policy_workload_count`     | gauge   | `policy` |
 | `k8s_sustain_policy_at_risk_count`      | gauge   | `policy` |
-| `k8s_sustain_autoscaler_present`        | gauge   | `namespace`, `kind`, `name`, `autoscaler_kind` |
+| `k8s_sustain_autoscaler_present`        | gauge   | `namespace`, `owner_kind`, `owner_name`, `kind` |
 | `k8s_sustain_autoscaler_target_configured` | gauge | `namespace`, `owner_kind`, `owner_name`, `kind`, `resource` |
 | `k8s_sustain_coordination_factor`       | gauge   | `namespace`, `owner_kind`, `owner_name`, `resource`, `kind` |
 
