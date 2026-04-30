@@ -67,6 +67,19 @@ nav:
       - Update Modes: concepts/update-modes.md
       - In-Place Updates: concepts/in-place-updates.md
       - Autoscaler Coordination: concepts/autoscaler-coordination.md
+  - Guides:
+      - Workloads:
+          - Deployments & StatefulSets: guides/deployments.md
+          - DaemonSets: guides/daemonsets.md
+          - Jobs & CronJobs: guides/jobs-and-cronjobs.md
+          - Argo Rollouts: guides/argo-rollouts.md
+      - Integrations:
+          - Argo CD: guides/argocd.md
+          - KEDA: guides/keda.md
+          - cert-manager (TLS): guides/cert-manager.md
+      - Operations:
+          - Dashboard: guides/dashboard.md
+          - Local testing: guides/local-testing.md
   - Reference:
       - Policy CRD: reference/policy.md
       - Annotation: reference/annotation.md
@@ -74,14 +87,4 @@ nav:
       - Helm Values: reference/helm-values.md
       - Metrics: reference/metrics.md
       - Recording Rules: reference/recording-rules.md
-  - Guides:
-      - Deployments & StatefulSets: guides/deployments.md
-      - DaemonSets: guides/daemonsets.md
-      - Jobs & CronJobs: guides/jobs-and-cronjobs.md
-      - Dashboard: guides/dashboard.md
-      - Argo CD: guides/argocd.md
-      - Argo Rollouts: guides/argo-rollouts.md
-      - KEDA: guides/keda.md
-      - Local testing: guides/local-testing.md
-      - TLS with cert-manager: guides/cert-manager.md
   - Development: development.md
