@@ -43,7 +43,7 @@ k8s-sustain start [flags]
 | `--leader-elect` | `false` | Enable leader election for high-availability deployments |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server used for metric queries |
-| `--reconcile-interval` | `10m` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
+| `--reconcile-interval` | `5m` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces the reconciler should never touch |
 | `--concurrency-limit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
 
@@ -89,7 +89,6 @@ k8s-sustain webhook [flags]
 | `--tls-key-file` | `/tls/tls.key` | Path to the TLS private key file |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
-| `--health-probe-bind-address` | `:8082` | Address the `/healthz` endpoint binds to |
 
 ### Health endpoints
 
@@ -135,6 +134,7 @@ k8s-sustain dashboard [flags]
 | `--bind-address` | `:8090` | Address the HTTP server listens on |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `--cors-allowed-origins` | `*` | Comma-separated list of allowed CORS origins; `*` allows all |
 
 ### Health endpoints
 
