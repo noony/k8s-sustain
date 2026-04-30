@@ -1,5 +1,7 @@
 # Prerequisites
 
+Cluster, tooling, and metrics requirements before installing k8s-sustain.
+
 ## Kubernetes
 
 | Requirement | Version |

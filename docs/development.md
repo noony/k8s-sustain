@@ -1,5 +1,7 @@
 # Development
 
+Build, test, and contribute to k8s-sustain locally.
+
 ## Prerequisites
 
 | Tool | Version | Purpose |

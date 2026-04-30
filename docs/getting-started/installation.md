@@ -1,5 +1,7 @@
 # Installation
 
+Install k8s-sustain into a cluster with Helm, optionally using a bundled Prometheus or pointing at an existing one.
+
 ## Add the Helm repository
 
 ```bash
