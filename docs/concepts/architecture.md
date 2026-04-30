@@ -55,17 +55,14 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
    - Skip workloads with `OnCreate` mode (handled by the webhook)
    - Skip workloads in retry backoff from a previous transient failure
 3. Process matching workloads in parallel (bounded by `--concurrency-limit`, default 5):
-   - Query Prometheus for workload-level CPU and memory signals (sum across all replicas) at the configured percentile and window
-   - Detect autoscalers (HPA / KEDA ScaledObject) targeting the workload — read-only, no patches
-   - Divide the workload-total by the median replica count to derive a per-pod recommendation; KEDA scale-to-zero falls back to `max(1, ScaledObject.minReplicaCount)`
-   - Apply a per-pod p95 floor to protect against load imbalance across replicas
-   - Apply headroom and `min/maxAllowed` clamps; derive limits from the computed request
+   - Detect autoscalers (HPA / KEDA `ScaledObject`) targeting the workload — read-only, no patches
+   - Compute a per-container recommendation (see [Recommendation Pipeline](recommendation-pipeline.md))
    - If `--recommend-only` is set, log the recommendation and skip patching
    - Recycle stale running pods: on k8s >= 1.31 via in-place resource patching (using the `/resize` subresource on k8s >= 1.33); on k8s < 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time
    - Emit a `ResourcesUpdated` event on the workload object on success
    - On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a `ReconciliationRetryScheduled` warning event on the workload
 
-The controller requeues after `--reconcile-interval` (default `10m`).
+The controller requeues after `--reconcile-interval` (default `5m`).
 
 ## Admission Webhook (`k8s-sustain webhook`)
 
@@ -116,15 +113,7 @@ See [Recommendation Pipeline](recommendation-pipeline.md) for how recommendation
 
 ## Prometheus recording rules
 
-k8s-sustain relies on pre-computed recording rules to avoid expensive fan-out queries at reconcile time. The chart installs three rule groups:
-
-| Group | Records |
-|-------|---------|
-| `k8s_sustain.workload_mapping` | Maps pods to their workload owner (resolves RS→Deployment) |
-| `k8s_sustain.cpu_rates` | Per-container CPU rate, with and without workload labels |
-| `k8s_sustain.memory_rates` | Per-container memory working set, with and without workload labels |
-
-Percentile computation is **not** pre-recorded. At reconcile time the controller and webhook query `k8s_sustain:container_cpu_usage_by_workload:rate5m` and `k8s_sustain:container_memory_by_workload:bytes` using `quantile_over_time` with the exact quantile and window from the policy. This avoids maintaining fixed-window pre-aggregations that would not match per-policy configuration.
+k8s-sustain ships pre-computed recording rules that the controller and webhook query at reconcile time. See [Recording Rules](../reference/recording-rules.md) for the full catalogue.
 
 ## Policy selection
 
