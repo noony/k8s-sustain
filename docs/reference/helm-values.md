@@ -24,9 +24,10 @@
 | `controller.healthProbeBindAddress` | `:8081` | Health probe address |
 | `controller.leaderElect` | `true` | Enable leader election |
 | `controller.concurrencyLimit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
-| `controller.logLevel` | `info` | Log level |
+| `controller.logLevel` | `debug` | Log level |
 | `controller.service.type` | `ClusterIP` | Service type for the metrics endpoint |
 | `controller.service.port` | `8080` | Service port |
+| `controller.service.annotations` | `{}` | Extra annotations for the metrics Service (the chart already adds `prometheus.io/scrape`, `prometheus.io/port`, and `prometheus.io/path`) |
 | `controller.resources` | see below | Controller container resources |
 | `controller.nodeSelector` | `{}` | Node selector |
 | `controller.tolerations` | `[]` | Tolerations |
@@ -39,9 +40,9 @@ controller:
   resources:
     requests:
       cpu: 10m
-      memory: 64Mi
-    limits:
       memory: 128Mi
+    limits:
+      memory: 256Mi
 ```
 
 ---
@@ -53,7 +54,7 @@ controller:
 | `webhook.enabled` | `true` | Deploy the admission webhook |
 | `webhook.replicaCount` | `1` | Webhook replicas (≥2 recommended for production) |
 | `webhook.port` | `9443` | HTTPS server port |
-| `webhook.logLevel` | `info` | Log level |
+| `webhook.logLevel` | `debug` | Log level |
 | `webhook.failurePolicy` | `Ignore` | `Ignore` or `Fail` |
 | `webhook.excludedNamespaces` | `[]` | Extra namespaces to exclude from webhook interception (the release namespace, `kube-system`, and `kube-public` are always excluded) |
 | `webhook.tlsSecretName` | `k8s-sustain-webhook-tls` | TLS secret name |
@@ -73,10 +74,10 @@ controller:
 webhook:
   resources:
     requests:
-      cpu: 10m
-      memory: 32Mi
+      cpu: 100m
+      memory: 128Mi
     limits:
-      memory: 64Mi
+      memory: 256Mi
 ```
 
 ---
@@ -89,7 +90,8 @@ webhook:
 | `dashboard.replicaCount` | `1` | Dashboard replicas |
 | `dashboard.port` | `8090` | Container port |
 | `dashboard.bindAddress` | `:8090` | Server bind address |
-| `dashboard.logLevel` | `info` | Log level |
+| `dashboard.logLevel` | `debug` | Log level |
+| `dashboard.corsAllowedOrigins` | `["*"]` | Allowed CORS origins |
 | `dashboard.service.type` | `ClusterIP` | Service type |
 | `dashboard.service.port` | `8090` | Service port |
 | `dashboard.resources` | see below | Dashboard container resources |
@@ -104,9 +106,9 @@ dashboard:
   resources:
     requests:
       cpu: 10m
-      memory: 32Mi
+      memory: 128Mi
     limits:
-      memory: 64Mi
+      memory: 256Mi
 ```
 
 ---
