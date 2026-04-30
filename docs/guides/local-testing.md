@@ -117,7 +117,7 @@ the interaction between right-sizing and the HPA.
 
 `make test-scenario-status` prints a table:
 
-```
+```text
 NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
 scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
 scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes

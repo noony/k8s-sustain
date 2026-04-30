@@ -27,7 +27,7 @@ If the API server rejects an in-place pod patch (e.g. the `InPlacePodVerticalSca
 
 The controller detects the server version at startup using the discovery API:
 
-```
+```text
 major=1, minor>=31 → in-place updates enabled
 ```
 
@@ -35,7 +35,7 @@ The feature gate was alpha (disabled by default) in Kubernetes 1.27-1.30. The co
 
 You can check whether it is enabled in the controller logs:
 
-```
+```text
 INFO  InPlacePodVerticalScaling support  enabled=true
 ```
 

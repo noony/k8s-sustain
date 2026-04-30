@@ -86,7 +86,7 @@ kubectl get pods -n k8s-sustain
 
 Expected output:
 
-```
+```text
 NAME                                        READY   STATUS    RESTARTS   AGE
 k8s-sustain-<hash>                          1/1     Running   0          1m
 k8s-sustain-webhook-<hash>                  1/1     Running   0          1m

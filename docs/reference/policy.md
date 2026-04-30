@@ -4,7 +4,7 @@
 
 `Policy` is a cluster-scoped custom resource that defines how workloads should be right-sized.
 
-```
+```yaml
 apiVersion: k8s.sustain.io/v1alpha1
 kind: Policy
 ```

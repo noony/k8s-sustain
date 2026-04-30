@@ -71,7 +71,7 @@ spec:
     spec:
       containers:
         - name: app
-          image: my-app:latest
+          image: nginx:1.27
 ```
 
 1. This annotation tells k8s-sustain which policy governs this workload.

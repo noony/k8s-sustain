@@ -34,7 +34,7 @@ The value is the name of a cluster-scoped `Policy` object.
         spec:
           containers:
             - name: app
-              image: my-app:latest
+              image: nginx:1.27
     ```
 
 === "StatefulSet"
@@ -72,7 +72,7 @@ The value is the name of a cluster-scoped `Policy` object.
         spec:
           containers:
             - name: agent
-              image: my-agent:latest
+              image: busybox:1.36
     ```
 
 === "CronJob"
@@ -94,7 +94,7 @@ The value is the name of a cluster-scoped `Policy` object.
             spec:
               containers:
                 - name: worker
-                  image: my-worker:latest
+                  image: busybox:1.36
     ```
 
     1. Note: the annotation is two levels deep — inside `jobTemplate.spec.template`.

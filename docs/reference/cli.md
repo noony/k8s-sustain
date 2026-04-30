@@ -32,7 +32,7 @@ recommend-only: true
 
 Starts the controller. Watches `Policy` objects and periodically reconciles `Ongoing`-mode workloads.
 
-```
+```text
 k8s-sustain start [flags]
 ```
 
@@ -78,7 +78,7 @@ Use `debug` when investigating why a workload was or wasn't resized, or why an H
 
 Starts the mutating admission webhook server. Listens for `Pod CREATE` admission requests and injects resources from `OnCreate`-mode policies.
 
-```
+```text
 k8s-sustain webhook [flags]
 ```
 
@@ -125,7 +125,7 @@ helm upgrade k8s-sustain k8s-sustain/k8s-sustain \
 
 Starts the web dashboard server. Provides a UI for policy exploration, workload metrics visualization, and policy simulation.
 
-```
+```text
 k8s-sustain dashboard [flags]
 ```
 

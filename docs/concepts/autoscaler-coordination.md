@@ -26,7 +26,7 @@ The 1.10 safety margin is fixed in v1.
 that nudges requests up or down based on the workload's position in
 `[minReplicas, maxReplicas]`:
 
-```
+```text
 target_replicas = round(min + anchor × (max - min))
 factor          = clamp(current_replicas / target_replicas, 0.5, 2.0)
 cpu_request    *= factor

@@ -52,7 +52,7 @@ CronJobs spawn ephemeral pods on a schedule. Because each run creates a fresh po
 
 The webhook resolves the full owner chain:
 
-```
+```text
 Pod → Job → CronJob
 ```
 
@@ -109,7 +109,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: report
-              image: my-report:latest
+              image: busybox:1.36
 ```
 
 1. The annotation must be in `spec.jobTemplate.spec.template.metadata.annotations`.

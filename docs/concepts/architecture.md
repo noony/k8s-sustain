@@ -2,7 +2,7 @@
 
 k8s-sustain is split into three independent components that run as separate processes (different container args in the same image):
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Kubernetes Cluster                       │
 │                                                                 │
