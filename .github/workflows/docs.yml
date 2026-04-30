@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: lycheeverse/lychee-action@v2
         with:
-          args: --no-progress --verbose docs/
+          args: --no-progress --verbose --config lychee.toml docs/
           fail: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
