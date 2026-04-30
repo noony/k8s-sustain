@@ -90,6 +90,7 @@ kubectl get pods -n example -l app=example-app -o yaml | yq '.items[].spec.conta
 
 ## Notes
 
-- **Canary and blue-green steps.** k8s-sustain operates on the active ReplicaSet's pods. During a Rollout step, both old and new ReplicaSets exist; k8s-sustain only injects resources at admission for newly created pods (the new ReplicaSet) and recycles stale pods on the active ReplicaSet according to the Rollout's traffic split. This means a paused Rollout is not perturbed.
-- **Analysis runs.** Right-sizing changes affect only pod resources, never the Rollout spec, so analysis runs against either ReplicaSet behave the same as without k8s-sustain.
-- **RBAC.** The controller's ClusterRole includes `argoproj.io/rollouts` with `get`, `list`, `watch` verbs (read-only); the webhook handles resource injection at pod creation. If the Argo Rollouts CRD is not installed in the cluster, set `argoRollout` to `OnCreate` (or omit it) to avoid reconcile errors when listing rollouts.
+- **`Ongoing` mode only.** Right-sizing for `Rollout` workloads is currently supported only in `Ongoing` mode. The admission webhook does not walk the `Pod → ReplicaSet → Rollout` owner chain (it walks `Pod → ReplicaSet → Deployment`), so `OnCreate` does not inject resources into Rollout-owned pods. On Kubernetes 1.31+, `Ongoing` updates the running pods in place; on older versions the controller falls back to eviction and replacement pods come up with the resources defined in the Rollout's pod template (the webhook does not patch them).
+- **Canary and blue-green steps.** k8s-sustain operates on the pods currently owned by the active ReplicaSet. A paused Rollout is not perturbed: the controller recycles stale pods only when their requests drift outside the policy's clamps.
+- **Analysis runs.** Right-sizing changes affect only pod resources, never the Rollout spec, so analysis runs behave the same as without k8s-sustain.
+- **RBAC.** The controller's ClusterRole includes `argoproj.io/rollouts` with `get`, `list`, `watch` verbs (read-only).
