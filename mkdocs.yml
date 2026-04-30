@@ -72,6 +72,7 @@ nav:
       - CLI: reference/cli.md
       - Helm Values: reference/helm-values.md
       - Metrics: reference/metrics.md
+      - Recording Rules: reference/recording-rules.md
   - Guides:
       - Deployments & StatefulSets: guides/deployments.md
       - DaemonSets: guides/daemonsets.md
