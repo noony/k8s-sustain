@@ -36,7 +36,7 @@ metadata:
 | Deployment | ✅ | ✅ |
 | StatefulSet | ✅ | ✅ |
 | DaemonSet | ✅ | ✅ |
-| Argo Rollout | ✅ | ✅ |
+| Argo Rollout | — | ✅ |
 | Job | ✅ | ✅ |
 | CronJob | ✅ | ✅ |
 
