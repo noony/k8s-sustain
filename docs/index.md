@@ -36,6 +36,8 @@ metadata:
 | Deployment | ✅ | ✅ |
 | StatefulSet | ✅ | ✅ |
 | DaemonSet | ✅ | ✅ |
+| Argo Rollout | ✅ | ✅ |
+| Job | ✅ | ✅ |
 | CronJob | ✅ | ✅ |
 
 ---
@@ -49,6 +51,7 @@ metadata:
 - **Web dashboard** — explore policies, view workload metrics, and simulate parameter changes
 - **Three independent components** — controller (Ongoing), admission webhook (OnCreate), and dashboard can run separately
 - **Headroom control** — add a safety buffer on top of the observed percentile
+- **HPA-aware right-sizing** — when a workload is scaled by an HPA or KEDA `ScaledObject`, requests are shaped so the autoscaler's utilization signal stays meaningful (see [Autoscaler Coordination](concepts/autoscaler-coordination.md))
 - **Limit strategies** — keep existing ratio, set equal to request, remove limit, or use a custom multiplier
 - **Prometheus-native** — ships pre-computed recording rules; no external dependency beyond Prometheus
 
