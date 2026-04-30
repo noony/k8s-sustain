@@ -51,10 +51,12 @@ When `webhook.certManager.enabled=true`, the chart creates:
 
 1. A self-signed `Issuer` (unless `createIssuer=false`)
 2. A `Certificate` resource targeting the webhook service DNS names:
-   ```
+
+   ```text
    k8s-sustain-webhook.<namespace>.svc
    k8s-sustain-webhook.<namespace>.svc.cluster.local
    ```
+
 3. cert-manager issues the certificate and stores it in `webhook.tlsSecretName` (default: `k8s-sustain-webhook-tls`)
 4. The `MutatingWebhookConfiguration` is annotated with `cert-manager.io/inject-ca-from`, so cert-manager automatically updates the `caBundle` when the certificate is renewed
 

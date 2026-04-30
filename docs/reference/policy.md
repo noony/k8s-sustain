@@ -1,8 +1,10 @@
+<!-- Source of truth: api/v1alpha1/policy_types.go -->
+
 # Policy CRD
 
 `Policy` is a cluster-scoped custom resource that defines how workloads should be right-sized.
 
-```
+```yaml
 apiVersion: k8s.sustain.io/v1alpha1
 kind: Policy
 ```
@@ -103,6 +105,11 @@ Defines which workload kinds are managed and in what mode. Omitting a kind means
 | `argoRollout` | `OnCreate` \| `Ongoing` | Manages Argo Rollouts `Rollout` objects |
 | `cronJob` | `OnCreate` \| `Ongoing` | Manages `CronJob` objects |
 | `job` | `OnCreate` \| `Ongoing` | Manages standalone `Job` objects |
+| `deploymentConfig` | `OnCreate` \| `Ongoing` | Reserved for OpenShift `DeploymentConfig` support; accepted by the CRD but not currently implemented — setting it has no effect |
+| `family` | `OnCreate` \| `Ongoing` | Reserved for OpenShift Family resource support; accepted by the CRD but not currently implemented — setting it has no effect |
+
+!!! note
+    `deploymentConfig` and `family` are present in the CRD schema for future OpenShift compatibility but have no controller implementation yet. The controller silently ignores them if set.
 
 See [Update Modes](../concepts/update-modes.md) for the difference between `OnCreate` and `Ongoing`.
 
@@ -132,7 +139,7 @@ Configures recommendations for CPU and memory independently.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `window` | string | `168h` | Historical lookback window for the percentile query (e.g. `96h`, `14d`). Must be a Prometheus duration: `^([0-9]+(ms|s|m|h|d|w|y))+$`. |
+| `window` | string | `168h` | Historical lookback window for the percentile query (e.g. `96h`, `14d`). Must be a Prometheus duration: `^([0-9]+(ms\|s\|m\|h\|d\|w\|y))+$`. |
 
 #### `cpu.requests` / `memory.requests`
 

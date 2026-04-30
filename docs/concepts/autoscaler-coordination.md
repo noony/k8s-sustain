@@ -26,7 +26,7 @@ The 1.10 safety margin is fixed in v1.
 that nudges requests up or down based on the workload's position in
 `[minReplicas, maxReplicas]`:
 
-```
+```text
 target_replicas = round(min + anchor × (max - min))
 factor          = clamp(current_replicas / target_replicas, 0.5, 2.0)
 cpu_request    *= factor
@@ -43,8 +43,8 @@ does.
 - HPA matched by `scaleTargetRef`; `ScaledObject` by `spec.scaleTargetRef`.
 - Both objects targeting one workload → `ScaledObject` wins (KEDA owns the
   HPA).
-- Only `Resource` / `ContainerResource` metrics with `averageUtilization`
-  count. Other metric types (`AverageValue`, `External`, `Object`, `Pods`)
+- Only HPA `Resource` metrics with `averageUtilization` count. Other metric
+  types (`ContainerResource`, `AverageValue`, `External`, `Object`, `Pods`)
   are ignored for overhead, but a workload using them still receives any
   CPU/memory utilization-based adjustment if present.
 - KEDA CRD missing → `ScaledObject` lookup is skipped silently.

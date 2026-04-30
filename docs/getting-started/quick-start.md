@@ -71,17 +71,17 @@ spec:
     spec:
       containers:
         - name: app
-          image: my-app:latest
+          image: nginx:1.27
 ```
 
 1. This annotation tells k8s-sustain which policy governs this workload.
 
 ## 4. Wait for data
 
-!!! info "Cold start"
+!!! note "Cold start"
     Recording rules need at least one evaluation cycle (~1 minute) before data is available.
     For meaningful percentile recommendations, allow data to accumulate for at least a few hours.
-    The operator logs `no metrics yet, skipping` for workloads with no data yet.
+    The controller logs `no metrics yet, skipping` for workloads with no data yet.
 
 ## 5. Check the Policy status
 
@@ -113,4 +113,4 @@ The controller reconciles on a fixed `10m` interval by default. To see changes s
 
 - Use **OnCreate** mode to inject resources at pod creation without restarting existing pods → [Update Modes](../concepts/update-modes.md)
 - Enable **in-place updates** for zero-restart resource changes on k8s ≥ 1.31 → [In-Place Updates](../concepts/in-place-updates.md)
-- Right-size **CronJobs** → [CronJob guide](../guides/cronjobs.md)
+- Right-size **Jobs and CronJobs** → [Jobs & CronJobs guide](../guides/jobs-and-cronjobs.md)

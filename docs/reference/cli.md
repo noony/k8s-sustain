@@ -1,3 +1,5 @@
+<!-- Source of truth: internal/config/config.go -->
+
 # CLI Reference
 
 The `k8s-sustain` binary exposes three subcommands. All are packaged in the same container image.
@@ -30,7 +32,7 @@ recommend-only: true
 
 Starts the controller. Watches `Policy` objects and periodically reconciles `Ongoing`-mode workloads.
 
-```
+```text
 k8s-sustain start [flags]
 ```
 
@@ -43,7 +45,7 @@ k8s-sustain start [flags]
 | `--leader-elect` | `false` | Enable leader election for high-availability deployments |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server used for metric queries |
-| `--reconcile-interval` | `10m` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
+| `--reconcile-interval` | `5m` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces the reconciler should never touch |
 | `--concurrency-limit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
 
@@ -57,7 +59,7 @@ K8SSUSTAIN_RECONCILE_INTERVAL=30m k8s-sustain start
 
 ### Log verbosity
 
-- `info` (default) — high-signal events: reconcile cycle start/end with target counts, HPA detection, recommendations computed, in-place resize applied, pod evictions, recommendation injection by the webhook.
+- `info` (default) — high-signal events: reconcile cycle start/end with target counts, HPA detection, recommendations computed, in-place update applied, pod evictions, recommendation injection by the webhook.
 - `debug` — adds per-container traces: Prometheus query parameters and result counts, raw percentile values, per-resource recommendations, HPA-aware adjustments, retry-backoff skips, eviction skips for non-stale or non-running pods, webhook admit decisions including standalone-pod / no-policy / no-data branches.
 
 Use `debug` when investigating why a workload was or wasn't resized, or why an HPA adjustment behaved unexpectedly.
@@ -76,7 +78,7 @@ Use `debug` when investigating why a workload was or wasn't resized, or why an H
 
 Starts the mutating admission webhook server. Listens for `Pod CREATE` admission requests and injects resources from `OnCreate`-mode policies.
 
-```
+```text
 k8s-sustain webhook [flags]
 ```
 
@@ -89,7 +91,6 @@ k8s-sustain webhook [flags]
 | `--tls-key-file` | `/tls/tls.key` | Path to the TLS private key file |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
-| `--health-probe-bind-address` | `:8082` | Address the `/healthz` endpoint binds to |
 
 ### Health endpoints
 
@@ -124,7 +125,7 @@ helm upgrade k8s-sustain k8s-sustain/k8s-sustain \
 
 Starts the web dashboard server. Provides a UI for policy exploration, workload metrics visualization, and policy simulation.
 
-```
+```text
 k8s-sustain dashboard [flags]
 ```
 
@@ -135,6 +136,7 @@ k8s-sustain dashboard [flags]
 | `--bind-address` | `:8090` | Address the HTTP server listens on |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `--cors-allowed-origins` | `*` | Comma-separated list of allowed CORS origins; `*` allows all |
 
 ### Health endpoints
 

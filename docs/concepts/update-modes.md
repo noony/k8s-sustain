@@ -90,7 +90,7 @@ See [In-Place Updates](in-place-updates.md) for details.
 
 ## Recommend-only mode
 
-Independently of `OnCreate` or `Ongoing`, you can run the entire operator in **recommend-only** mode by passing `--recommend-only` or setting `recommendOnly: true` in the Helm values. In this mode:
+Independently of `OnCreate` or `Ongoing`, you can run k8s-sustain in **recommend-only** mode by passing `--recommend-only` or setting `recommendOnly: true` in the Helm values. In this mode:
 
 - The controller still reconciles and computes recommendations, but **never recycles pods**
 - The webhook still intercepts pod creation and computes recommendations, but **never mutates the pod**

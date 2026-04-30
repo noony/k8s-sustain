@@ -1,5 +1,7 @@
 # Development
 
+Build, test, and contribute to k8s-sustain locally.
+
 ## Prerequisites
 
 | Tool | Version | Purpose |
@@ -26,7 +28,7 @@ go test ./...
 
 ## Project structure
 
-```
+```text
 k8s-sustain/
 ├── api/v1alpha1/          # CRD Go types and deepcopy
 │   ├── policy_types.go
