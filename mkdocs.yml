@@ -77,7 +77,7 @@ nav:
   - Guides:
       - Deployments & StatefulSets: guides/deployments.md
       - DaemonSets: guides/daemonsets.md
-      - CronJobs: guides/cronjobs.md
+      - Jobs & CronJobs: guides/jobs-and-cronjobs.md
       - Dashboard: guides/dashboard.md
       - Argo CD: guides/argocd.md
       - Argo Rollouts: guides/argo-rollouts.md
