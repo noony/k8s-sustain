@@ -352,3 +352,4 @@ The chart exposes the rules via `prometheusRule.rules` in `values.yaml`. Overrid
 ## See also
 
 - [Metrics](metrics.md) — controller self-metrics (distinct from these recording rules).
+- [Recommendation Pipeline](../concepts/recommendation-pipeline.md) — how the recommender consumes these rules.

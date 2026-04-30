@@ -63,6 +63,7 @@ nav:
       - Quick Start: getting-started/quick-start.md
   - Concepts:
       - Architecture: concepts/architecture.md
+      - Recommendation Pipeline: concepts/recommendation-pipeline.md
       - Update Modes: concepts/update-modes.md
       - In-Place Updates: concepts/in-place-updates.md
       - Autoscaler Coordination: concepts/autoscaler-coordination.md

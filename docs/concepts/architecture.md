@@ -112,24 +112,7 @@ This is useful for:
 
 ## Recommendation pipeline
 
-1. **Workload-level signal.** Recording rules sum container CPU/memory across all replicas of a workload, grouped by `(namespace, owner_kind, owner_name, container)`. A separate rule counts replicas per workload.
-2. **Per-pod conversion.** The recommender divides the workload-total at percentile *p* by the median replica count over the recommendation window. KEDA scale-to-zero falls back to `max(1, ScaledObject.minReplicaCount)`.
-3. **Per-pod floor.** A per-pod p95 query is used as a `max()` floor on the workload-derived value. This protects against load imbalance: if one replica runs hotter than the average, its p95 sets the floor.
-4. **Headroom + clamping.** Standard request-headroom percentage and `min/maxAllowed` clamps are applied as before.
-5. **Limits.** Derived from the computed request via the existing limit configuration (`equalsToRequest`, `requestsLimitsRatio`, etc.).
-
-The signal is replica-invariant by construction. HPA scaling does not perturb the recommendation, so no autoscaler object is ever modified.
-
-### Autoscaler coordination
-
-When `spec.rightSizing.autoscalerCoordination.enabled` is `true` and the
-workload is targeted by an HPA or KEDA `ScaledObject` on `averageUtilization`,
-the recommender shapes the per-pod request so the autoscaler's signal stays
-meaningful — multiplying CPU/memory by `(100 / hpa_target_pct) × 1.10` and,
-optionally, applying a CPU-only replica-budget correction. The applied
-multiplier is exposed via `k8s_sustain_coordination_factor`. See
-[Autoscaler Coordination](autoscaler-coordination.md) for the formulas and
-detection rules.
+See [Recommendation Pipeline](recommendation-pipeline.md) for how recommendations are computed.
 
 ## Prometheus recording rules
 
