@@ -21,6 +21,10 @@
          <lastmod>2026-04-30</lastmod>
     </url>
     <url>
+         <loc>https://noony.github.io/k8s-sustain/concepts/recommendation-pipeline/</loc>
+         <lastmod>2026-04-30</lastmod>
+    </url>
+    <url>
          <loc>https://noony.github.io/k8s-sustain/concepts/update-modes/</loc>
          <lastmod>2026-04-30</lastmod>
     </url>
@@ -37,15 +41,15 @@
          <lastmod>2026-04-30</lastmod>
     </url>
     <url>
+         <loc>https://noony.github.io/k8s-sustain/guides/argo-rollouts/</loc>
+         <lastmod>2026-04-30</lastmod>
+    </url>
+    <url>
          <loc>https://noony.github.io/k8s-sustain/guides/argocd/</loc>
          <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/guides/cert-manager/</loc>
-         <lastmod>2026-04-30</lastmod>
-    </url>
-    <url>
-         <loc>https://noony.github.io/k8s-sustain/guides/cronjobs/</loc>
          <lastmod>2026-04-30</lastmod>
     </url>
     <url>
@@ -58,6 +62,10 @@
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/guides/deployments/</loc>
+         <lastmod>2026-04-30</lastmod>
+    </url>
+    <url>
+         <loc>https://noony.github.io/k8s-sustain/guides/jobs-and-cronjobs/</loc>
          <lastmod>2026-04-30</lastmod>
     </url>
     <url>
@@ -86,6 +94,10 @@
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/reference/policy/</loc>
+         <lastmod>2026-04-30</lastmod>
+    </url>
+    <url>
+         <loc>https://noony.github.io/k8s-sustain/reference/recording-rules/</loc>
          <lastmod>2026-04-30</lastmod>
     </url>
 </urlset>
