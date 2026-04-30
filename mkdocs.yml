@@ -80,6 +80,7 @@ nav:
       - CronJobs: guides/cronjobs.md
       - Dashboard: guides/dashboard.md
       - Argo CD: guides/argocd.md
+      - Argo Rollouts: guides/argo-rollouts.md
       - KEDA: guides/keda.md
       - Local testing: guides/local-testing.md
       - TLS with cert-manager: guides/cert-manager.md
