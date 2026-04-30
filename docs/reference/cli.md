@@ -1,3 +1,5 @@
+<!-- Source of truth: internal/config/config.go -->
+
 # CLI Reference
 
 The `k8s-sustain` binary exposes three subcommands. All are packaged in the same container image.

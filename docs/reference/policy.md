@@ -1,3 +1,5 @@
+<!-- Source of truth: api/v1alpha1/policy_types.go -->
+
 # Policy CRD
 
 `Policy` is a cluster-scoped custom resource that defines how workloads should be right-sized.

@@ -1,3 +1,5 @@
+<!-- Source of truth: charts/k8s-sustain/values.yaml -->
+
 # Helm Values Reference
 
 ## Global

@@ -1,3 +1,5 @@
+<!-- Source of truth: Prometheus metrics emitted in internal/ (grep for prometheus.New*) -->
+
 # Metrics & Recording Rules
 
 This page lists every metric exposed by k8s-sustain plus the recording rules

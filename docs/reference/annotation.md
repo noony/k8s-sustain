@@ -1,3 +1,5 @@
+<!-- Source of truth: api/v1alpha1/policy_types.go (PolicyAnnotation constant) -->
+
 # Annotation Reference
 
 ## `k8s.sustain.io/policy`
