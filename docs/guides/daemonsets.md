@@ -1,8 +1,46 @@
 # DaemonSets
 
-DaemonSets run one pod per node and are commonly used for monitoring agents, log shippers, and CNI plugins. Right-sizing them can yield significant cluster-wide savings since every node is affected.
+k8s-sustain right-sizes DaemonSets the same way it handles Deployments. Because every node runs one pod, getting their resources right yields cluster-wide savings.
 
-## Policy example
+## Goal
+
+Right-size a DaemonSet in `Ongoing` mode while respecting the DaemonSet's update strategy.
+
+## Prerequisites
+
+- A DaemonSet with a `k8s.sustain.io/policy` annotation on its pod template.
+- A k8s-sustain `Policy` matching the workload.
+- A Prometheus instance reachable from the controller.
+
+## Walkthrough
+
+### 1. Annotate the DaemonSet
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluentd
+  namespace: logging
+spec:
+  selector: { matchLabels: { app: fluentd } }
+  template:
+    metadata:
+      labels: { app: fluentd }
+      annotations:
+        k8s.sustain.io/policy: monitoring-rightsizing
+    spec:
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: fluentd
+          image: fluent/fluentd:v1.16
+          resources:
+            requests: { cpu: 100m, memory: 200Mi }
+            limits:   { memory: 400Mi }
+```
+
+### 2. Apply the Policy
 
 ```yaml
 apiVersion: k8s.sustain.io/v1alpha1
@@ -17,46 +55,26 @@ spec:
     resourcesConfigs:
       cpu:
         window: 168h
-        requests:
-          percentile: 99   # use p99 for node-critical agents
-          headroom: 15
-        limits:
-          keepLimitRequestRatio: true
+        requests: { percentile: 99, headroom: 15 }
+        limits:   { keepLimitRequestRatio: true }
       memory:
         window: 168h
-        requests:
-          percentile: 99
-          headroom: 25
-        limits:
-          keepLimitRequestRatio: true
+        requests: { percentile: 99, headroom: 25 }
+        limits:   { keepLimitRequestRatio: true }
 ```
 
-Opt in your DaemonSet:
+## Verification
 
-```yaml
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: fluentd
-  namespace: logging
-spec:
-  template:
-    metadata:
-      annotations:
-        k8s.sustain.io/policy: monitoring-rightsizing
+```bash
+kubectl get pods -n logging -l app=fluentd \
+  -o yaml | yq '.items[].spec.containers[].resources'
 ```
 
-## Behaviour with Ongoing mode
+All node pods carry the recommended values; the DaemonSet's pod template is unchanged.
 
-DaemonSet `Ongoing` mode evicts stale pods so they are replaced with the latest recommendations (injected by the webhook). On k8s >= 1.31, in-place pod patching is used instead, avoiding restarts.
+## Notes
 
-!!! warning "OnDelete strategy"
-    If your DaemonSet uses `updateStrategy.type: OnDelete`, evicted pods may not be replaced immediately. In-place updates (k8s ≥ 1.31) bypass this restriction and patch running pods directly.
-
-## Node-critical agents: use higher percentiles
-
-For agents that must not be OOM-killed, use **p99** and a generous headroom. A terminated log shipper or CNI plugin can cause node-level issues.
-
-## OnCreate mode for DaemonSets
-
-OnCreate mode for DaemonSets is less common since DaemonSet pods are typically long-running. However, it is useful during initial cluster setup to ensure new nodes get properly-sized agent pods.
+- **Higher percentile for node-critical agents.** Log shippers, CNI plugins, and node exporters cannot be OOM-killed without disturbing the node. Use p99 with generous memory headroom.
+- **`updateStrategy: OnDelete`.** When a DaemonSet uses `OnDelete`, the controller cannot create replacement pods on its own. On Kubernetes 1.31+ k8s-sustain patches running pods in place and bypasses this constraint; on older versions, plan to delete pods manually after a recommendation lands so the DaemonSet controller creates fresh ones.
+- **Tolerations.** A DaemonSet typically tolerates control-plane taints. The eviction fallback respects these tolerations so a recycle does not strand control-plane node pods.
+- **`OnCreate` mode.** Less common for DaemonSets since their pods are long-lived. Useful during cluster bootstrap to size newly-added nodes' agents before the controller reconciles.
