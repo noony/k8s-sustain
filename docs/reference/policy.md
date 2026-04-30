@@ -139,7 +139,7 @@ Configures recommendations for CPU and memory independently.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `window` | string | `168h` | Historical lookback window for the percentile query (e.g. `96h`, `14d`). Must be a Prometheus duration: `^([0-9]+(ms|s|m|h|d|w|y))+$`. |
+| `window` | string | `168h` | Historical lookback window for the percentile query (e.g. `96h`, `14d`). Must be a Prometheus duration: `^([0-9]+(ms\|s\|m\|h\|d\|w\|y))+$`. |
 
 #### `cpu.requests` / `memory.requests`
 

@@ -44,6 +44,7 @@ INFO  InPlacePodVerticalScaling support  enabled=true
 - **CPU is always resizable in-place.** Memory resize may require a container restart if the requested memory exceeds the current cgroup limit. The kubelet handles this transparently.
 - **VPA conflicts.** If you run Vertical Pod Autoscaler alongside k8s-sustain, ensure they do not target the same pods to avoid conflicting patches.
 - **Resource resize status.** You can inspect the resize status on a pod:
+
   ```bash
   kubectl get pod my-pod -o jsonpath='{.status.containerStatuses[*].resources}'
   ```
