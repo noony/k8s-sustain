@@ -16,7 +16,7 @@
         <link rel="prev" href="../argocd/">
       
       
-        <link rel="next" href="../cert-manager/">
+        <link rel="next" href="../local-testing/">
       
       
       <link rel="icon" href="../../assets/logo.svg">
@@ -604,6 +604,27 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/autoscaler-coordination/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Autoscaler Coordination
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -986,15 +1007,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#custom-metrics" class="md-nav__link">
-    <span class="md-ellipsis">
-      Custom metrics
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#requirements" class="md-nav__link">
     <span class="md-ellipsis">
       Requirements
@@ -1007,6 +1019,27 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../local-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Local testing
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -1105,15 +1138,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#custom-metrics" class="md-nav__link">
-    <span class="md-ellipsis">
-      Custom metrics
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#requirements" class="md-nav__link">
     <span class="md-ellipsis">
       Requirements
@@ -1141,33 +1165,15 @@
 
 
 <h1 id="keda-integration">KEDA Integration<a class="headerlink" href="#keda-integration" title="Permanent link">&para;</a></h1>
-<p>k8s-sustain works alongside <a href="https://keda.sh">KEDA</a> (Kubernetes Event-Driven Autoscaling). KEDA creates and manages HPA objects based on ScaledObject definitions.</p>
+<p>k8s-sustain works alongside <a href="https://keda.sh">KEDA</a> without any configuration. Workloads scaled by a KEDA ScaledObject are right-sized just like HPA-managed workloads, with no risk of the right-sizer fighting KEDA's scaling decisions.</p>
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
-<p>When k8s-sustain detects an HPA targeting a workload, it checks if the HPA is owned by a KEDA ScaledObject (via <code>ownerReferences</code>). This affects behavior in <code>UpdateTargetValue</code> mode:</p>
-<ul>
-<li><strong>Native HPA</strong> — k8s-sustain patches the HPA directly</li>
-<li><strong>KEDA-managed HPA</strong> — <code>UpdateTargetValue</code> mode is not yet supported for KEDA-managed HPAs. k8s-sustain detects the KEDA ownership and emits a warning event. Use <code>HpaAware</code> mode (default) instead, which works correctly with KEDA without modifying any objects.</li>
-</ul>
-<p>In <code>HpaAware</code> mode (default), no objects are modified regardless of whether KEDA manages the HPA — the recommendation formula is adjusted internally.</p>
+<p>The right-sizer reads workload-level Prometheus metrics — the <strong>sum</strong> of CPU/memory across all replicas of a workload — rather than per-pod averages. Because the sum is invariant to replica count, KEDA scaling out from 3 → 6 pods does not change the recommendation. The right-sizer never patches HPAs or ScaledObjects.</p>
+<p>When both an HPA and a ScaledObject target the same workload (the normal KEDA setup, since KEDA reconciles a ScaledObject into an HPA), the ScaledObject is treated as canonical. The HPA is read-only.</p>
+<p>For workloads using KEDA scale-to-zero, the right-sizer falls back to the ScaledObject's <code>minReplicaCount</code> (or 1) when computing the per-pod recommendation, so we never divide by zero during quiet windows.</p>
 <h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
-<p>No special configuration is needed. k8s-sustain auto-detects KEDA ownership.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">keda-workloads</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">updatePolicy</span><span class="p">:</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">      </span><span class="nt">hpa</span><span class="p">:</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">        </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">HpaAware</span><span class="w">  </span><span class="c1"># recommended for KEDA workloads</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">      </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
-</code></pre></div>
-<h2 id="custom-metrics">Custom metrics<a class="headerlink" href="#custom-metrics" title="Permanent link">&para;</a></h2>
-<p>If your KEDA ScaledObject uses only custom or external metrics (e.g., queue depth, Kafka lag), there is no conflict with k8s-sustain. The <code>HpaAware</code> mode detects this and applies no adjustment — right-sizing proceeds normally.</p>
+<p>None required. Detection is automatic.</p>
 <h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
-<p>KEDA ScaledObject support requires the KEDA CRD to be installed. If the CRD is not present, k8s-sustain gracefully skips ScaledObject detection and logs an informational message at startup.</p>
+<p>The KEDA <code>ScaledObject</code> CRD does not need to be installed. When absent, k8s-sustain logs an informational message at startup and falls back to HPA-only detection.</p>
 
 
 
@@ -1222,13 +1228,13 @@
         
         
           
-          <a href="../cert-manager/" class="md-footer__link md-footer__link--next" aria-label="Next: TLS with cert-manager">
+          <a href="../local-testing/" class="md-footer__link md-footer__link--next" aria-label="Next: Local testing">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                TLS with cert-manager
+                Local testing
               </div>
             </div>
             <div class="md-footer__button md-icon">

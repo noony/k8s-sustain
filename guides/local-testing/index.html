@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://noony.github.io/k8s-sustain/concepts/update-modes/">
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/guides/local-testing/">
       
       
-        <link rel="prev" href="../architecture/">
+        <link rel="prev" href="../keda/">
       
       
-        <link rel="next" href="../in-place-updates/">
+        <link rel="next" href="../cert-manager/">
       
       
       <link rel="icon" href="../../assets/logo.svg">
@@ -24,7 +24,7 @@
     
     
       
-        <title>Update Modes - k8s-sustain</title>
+        <title>Local testing - k8s-sustain</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#update-modes" class="md-skip">
+        <a href="#local-end-to-end-testing" class="md-skip">
           Skip to content
         </a>
       
@@ -111,7 +111,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Update Modes
+              Local testing
             
           </span>
         </div>
@@ -247,13 +247,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../architecture/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../concepts/architecture/" class="md-tabs__link">
           
   
   Concepts
@@ -285,11 +283,13 @@
         
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../guides/deployments/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../deployments/" class="md-tabs__link">
           
   
   Guides
@@ -503,30 +503,27 @@
       
   
   
-    
   
   
-  
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -537,7 +534,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             Concepts
@@ -551,7 +548,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../architecture/" class="md-nav__link">
+      <a href="../../concepts/architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -569,30 +566,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    Update Modes
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../concepts/update-modes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -601,71 +578,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#oncreate" class="md-nav__link">
-    <span class="md-ellipsis">
-      OnCreate
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#ongoing" class="md-nav__link">
-    <span class="md-ellipsis">
-      Ongoing
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#choosing-a-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      Choosing a mode
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recommend-only-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      Recommend-only mode
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#mixing-modes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Mixing modes
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -678,7 +590,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../in-place-updates/" class="md-nav__link">
+      <a href="../../concepts/in-place-updates/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -699,7 +611,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../autoscaler-coordination/" class="md-nav__link">
+      <a href="../../concepts/autoscaler-coordination/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -878,27 +790,30 @@
       
   
   
+    
   
   
+  
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
-        
-          
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -909,7 +824,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             Guides
@@ -923,7 +838,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/deployments/" class="md-nav__link">
+      <a href="../deployments/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -944,7 +859,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/daemonsets/" class="md-nav__link">
+      <a href="../daemonsets/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -965,7 +880,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/cronjobs/" class="md-nav__link">
+      <a href="../cronjobs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -986,7 +901,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/dashboard/" class="md-nav__link">
+      <a href="../dashboard/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1007,7 +922,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/argocd/" class="md-nav__link">
+      <a href="../argocd/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1028,7 +943,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/keda/" class="md-nav__link">
+      <a href="../keda/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1046,10 +961,30 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../guides/local-testing/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Local testing
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -1058,6 +993,149 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prerequisites
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick start
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#context-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      Context safety
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tunable-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tunable variables
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workload-generator" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workload generator
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scenario-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scenario catalog
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scenario catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#steady" class="md-nav__link">
+    <span class="md-ellipsis">
+      steady
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      overprovisioned
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#underprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      underprovisioned
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stepped" class="md-nav__link">
+    <span class="md-ellipsis">
+      stepped
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hpa" class="md-nav__link">
+    <span class="md-ellipsis">
+      hpa
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      Observability
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adding-a-new-scenario" class="md-nav__link">
+    <span class="md-ellipsis">
+      Adding a new scenario
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1070,7 +1148,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/cert-manager/" class="md-nav__link">
+      <a href="../cert-manager/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1138,45 +1216,123 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#oncreate" class="md-nav__link">
+  <a href="#prerequisites" class="md-nav__link">
     <span class="md-ellipsis">
-      OnCreate
+      Prerequisites
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#ongoing" class="md-nav__link">
+  <a href="#quick-start" class="md-nav__link">
     <span class="md-ellipsis">
-      Ongoing
+      Quick start
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#choosing-a-mode" class="md-nav__link">
+  <a href="#context-safety" class="md-nav__link">
     <span class="md-ellipsis">
-      Choosing a mode
+      Context safety
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#recommend-only-mode" class="md-nav__link">
+  <a href="#tunable-variables" class="md-nav__link">
     <span class="md-ellipsis">
-      Recommend-only mode
+      Tunable variables
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#mixing-modes" class="md-nav__link">
+  <a href="#workload-generator" class="md-nav__link">
     <span class="md-ellipsis">
-      Mixing modes
+      Workload generator
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scenario-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scenario catalog
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scenario catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#steady" class="md-nav__link">
+    <span class="md-ellipsis">
+      steady
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      overprovisioned
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#underprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      underprovisioned
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stepped" class="md-nav__link">
+    <span class="md-ellipsis">
+      stepped
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hpa" class="md-nav__link">
+    <span class="md-ellipsis">
+      hpa
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      Observability
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adding-a-new-scenario" class="md-nav__link">
+    <span class="md-ellipsis">
+      Adding a new scenario
     </span>
   </a>
   
@@ -1200,127 +1356,140 @@
   
 
 
-<h1 id="update-modes">Update Modes<a class="headerlink" href="#update-modes" title="Permanent link">&para;</a></h1>
-<p>Each workload kind in a <code>Policy</code> is configured with one of two update modes. You can mix modes across workload kinds within the same policy.</p>
-<h2 id="oncreate">OnCreate<a class="headerlink" href="#oncreate" title="Permanent link">&para;</a></h2>
-<p>Resources are injected by the <strong>admission webhook</strong> at pod creation time, before the pod is scheduled.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">        </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span>
+<h1 id="local-end-to-end-testing">Local end-to-end testing<a class="headerlink" href="#local-end-to-end-testing" title="Permanent link">&para;</a></h1>
+<p>This guide walks through the <code>Makefile.scenarios</code> harness — a one-command
+way to bring up a kind cluster, install k8s-sustain, and run synthetic
+workload scenarios that exercise <code>Ongoing</code>-mode pod recycling end-to-end.</p>
+<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Docker</li>
+<li><a href="https://kind.sigs.k8s.io/"><code>kind</code></a></li>
+<li><code>kubectl</code></li>
+<li><code>helm</code> &gt;= 3.10</li>
+</ul>
+<p><code>make test-kind-up</code> installs the in-cluster dependencies for you:</p>
+<ul>
+<li><strong>cert-manager</strong> — required by the k8s-sustain admission webhook to issue
+  its serving cert.</li>
+<li><strong>metrics-server</strong> (patched with <code>--kubelet-insecure-tls</code> so it works
+  against kind's self-signed kubelet certs) — required by the <code>hpa</code>
+  scenario.</li>
+</ul>
+<h2 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>make<span class="w"> </span>test-kind-up<span class="w">                       </span><span class="c1"># ~3-5 min the first time</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>make<span class="w"> </span>test-scenario-steady<span class="w">               </span><span class="c1"># apply the scenario</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>sleep<span class="w"> </span>11m<span class="w">                               </span><span class="c1"># wait for WINDOW + reconcile slack</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>make<span class="w"> </span>test-scenario-status<span class="w">               </span><span class="c1"># see the table</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>make<span class="w"> </span>test-kind-down<span class="w">                     </span><span class="c1"># tear it all down</span>
 </code></pre></div>
-<p><strong>Behaviour:</strong></p>
-<ul>
-<li>The webhook intercepts every <code>Pod CREATE</code> request for pods that carry the policy annotation</li>
-<li>The latest recommendation is always injected — the webhook overrides whatever the pod template currently specifies</li>
-<li>Existing running pods are <strong>not</strong> affected — only newly created pods receive the recommendation</li>
-<li>If the webhook is unavailable, the pod is admitted without resource injection (<code>failurePolicy: Ignore</code>)</li>
-</ul>
-<p><strong>Best for:</strong></p>
-<ul>
-<li>Workloads where you want a clean initial resource profile without disrupting running pods</li>
-<li>CronJob pods that are ephemeral and recreated on every run</li>
-<li>Environments where you cannot tolerate rolling restarts</li>
-</ul>
-<p><strong>Limitation:</strong> Existing pods retain their current (possibly over-provisioned) resources until they are naturally restarted (deployment update, node drain, etc.).</p>
-<hr />
-<h2 id="ongoing">Ongoing<a class="headerlink" href="#ongoing" title="Permanent link">&para;</a></h2>
-<p>Resources are updated by the <strong>controller</strong> on a recurring interval. Additionally, the <strong>admission webhook</strong> injects the latest recommendation at pod creation time so that new pods start with correct resources immediately, without waiting for the controller to reconcile.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
+<h2 id="context-safety">Context safety<a class="headerlink" href="#context-safety" title="Permanent link">&para;</a></h2>
+<p>Every <code>test-scenario-*</code> target refuses to run unless the current kubectl
+context is <code>kind-k8s-sustain</code> (i.e. the cluster <code>make test-kind-up</code> just
+created). This is a guardrail against accidentally applying scenario
+manifests to a real cluster.</p>
+<p>To override (e.g. when you renamed the cluster, or you really know what
+you're doing):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">SKIP_CONTEXT_CHECK</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>test-scenario-steady
 </code></pre></div>
-<p><strong>At pod creation (webhook):</strong></p>
-<ul>
-<li>The webhook intercepts <code>Pod CREATE</code> requests for pods that carry the policy annotation</li>
-<li>Unlike OnCreate mode, the webhook always injects the latest recommendation — even if the container already has a CPU request — ensuring new pods never start with stale resources</li>
-</ul>
-<p><strong>Ongoing reconciliation (controller) on clusters without in-place update support (k8s &lt; 1.31):</strong></p>
-<ol>
-<li>Each running pod that has stale resources is evicted via the Eviction API</li>
-<li>The workload controller (Deployment/StatefulSet/DaemonSet) creates replacement pods</li>
-<li>The webhook injects the latest recommendations into the new pods at creation time</li>
-<li>PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle</li>
-</ol>
-<p><strong>Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.31):</strong></p>
-<ol>
-<li>Controller patches each running, non-terminating pod's <code>spec.containers[*].resources</code> directly</li>
-<li>The kubelet applies the new resources without restarting the container</li>
-<li>If the kubelet reports <code>Infeasible</code> (node cannot satisfy the request), the pod is evicted as a fallback</li>
-<li>If the kubelet reports <code>Deferred</code>, the resize is pending kubelet-side conditions and no action is taken</li>
-</ol>
-<p>See <a href="../in-place-updates/">In-Place Updates</a> for details.</p>
-<p><strong>Best for:</strong></p>
-<ul>
-<li>Long-running workloads that accumulate meaningful usage history</li>
-<li>Situations where you want resources to track actual usage over time</li>
-<li>Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.31)</li>
-</ul>
-<p><strong>Note:</strong> The controller never patches workload templates (Deployment, StatefulSet, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s &lt; 1.31), pods are replaced via PDB-respecting eviction, which causes pod restarts.</p>
-<hr />
-<h2 id="choosing-a-mode">Choosing a mode<a class="headerlink" href="#choosing-a-mode" title="Permanent link">&para;</a></h2>
+<h2 id="tunable-variables">Tunable variables<a class="headerlink" href="#tunable-variables" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Scenario</th>
-<th>Recommended mode</th>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>New cluster, no baseline yet</td>
-<td><code>OnCreate</code> — sets a sensible default at creation</td>
+<td><code>WINDOW</code></td>
+<td><code>10m</code></td>
+<td>Policy <code>window</code> value, templated into each scenario YAML.</td>
 </tr>
 <tr>
-<td>Existing workloads, must avoid downtime</td>
-<td><code>OnCreate</code> — only affects future pods</td>
+<td><code>RECONCILE</code></td>
+<td><code>30s</code></td>
+<td>Controller <code>--reconcile-interval</code>, set via helm <code>--set</code>.</td>
 </tr>
 <tr>
-<td>Existing workloads, k8s ≥ 1.31</td>
-<td><code>Ongoing</code> — in-place updates, zero restarts</td>
+<td><code>TEST_IMG</code></td>
+<td><code>k8s-sustain:dev</code></td>
+<td>Image built and loaded into kind.</td>
 </tr>
 <tr>
-<td>CronJob pods (ephemeral per-run)</td>
-<td><code>OnCreate</code> — each run gets fresh recommendations</td>
+<td><code>WAIT</code></td>
+<td><code>0</code></td>
+<td>Optional pause between scenarios in <code>test-scenario-all</code>. Scenarios are isolated by namespace and don't interfere; only set this if you want staggered apply timing.</td>
 </tr>
 <tr>
-<td>StatefulSets with persistent state</td>
-<td><code>Ongoing</code> + k8s ≥ 1.31, or <code>OnCreate</code></td>
+<td><code>CLUSTER_NAME</code></td>
+<td><code>k8s-sustain</code></td>
+<td>Kind cluster name (context becomes <code>kind-&lt;name&gt;</code>).</td>
 </tr>
 <tr>
-<td>DaemonSets</td>
-<td><code>Ongoing</code> (rolling update is DaemonSet's normal behaviour)</td>
+<td><code>CERT_MANAGER_VERSION</code></td>
+<td><code>v1.16.2</code></td>
+<td>cert-manager chart version installed by <code>test-kind-up</code>.</td>
 </tr>
 <tr>
-<td>Argo Rollouts</td>
-<td><code>Ongoing</code> or <code>OnCreate</code> — works like Deployments with canary/blue-green strategies</td>
+<td><code>SKIP_CONTEXT_CHECK</code></td>
+<td>unset</td>
+<td>Set to <code>1</code> to bypass the kubectl-context guard.</td>
 </tr>
 </tbody>
 </table>
-<hr />
-<h2 id="recommend-only-mode">Recommend-only mode<a class="headerlink" href="#recommend-only-mode" title="Permanent link">&para;</a></h2>
-<p>Independently of <code>OnCreate</code> or <code>Ongoing</code>, you can run the entire operator in <strong>recommend-only</strong> mode by passing <code>--recommend-only</code> or setting <code>recommendOnly: true</code> in the Helm values. In this mode:</p>
+<h2 id="workload-generator">Workload generator<a class="headerlink" href="#workload-generator" title="Permanent link">&para;</a></h2>
+<p>Each scenario runs a small Python load generator (<code>python:3.12-alpine</code>)
+shipped as a ConfigMap. The generator allocates a fixed amount of memory
+and busy-loops a tunable fraction of one core, controlled by env vars:</p>
 <ul>
-<li>The controller still reconciles and computes recommendations, but <strong>never recycles pods</strong></li>
-<li>The webhook still intercepts pod creation and computes recommendations, but <strong>never mutates the pod</strong></li>
-<li>Computed recommendations are logged as structured JSON at <code>info</code> level</li>
+<li><code>LOAD_DUTY</code> — fraction of one core to consume (e.g. <code>0.20</code> ≈ 200 mCPU).</li>
+<li><code>LOAD_MEM_MB</code> — MiB to allocate and keep resident.</li>
+<li><code>LOAD_PHASES</code> — <code>"duty:secs,duty:secs,..."</code> schedule, used by <code>stepped</code>
+  to alternate between low and high load.</li>
 </ul>
-<p>This is useful for validating recommendations before switching to active mode. See the <a href="../../reference/cli/">CLI reference</a> for details.</p>
-<hr />
-<h2 id="mixing-modes">Mixing modes<a class="headerlink" href="#mixing-modes" title="Permanent link">&para;</a></h2>
-<p>A single policy can use different modes for different workload kinds:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">      </span><span class="c1"># controller recycles stale pods; webhook injects resources</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="nt">statefulSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span><span class="w">    </span><span class="c1"># only inject at pod creation, no disruption</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span><span class="w">        </span><span class="c1"># inject at each job pod creation</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">        </span><span class="nt">daemonSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">       </span><span class="c1"># controller recycles stale pods; webhook injects resources</span>
+<p>This replaces <code>polinux/stress</code> because Kubernetes requires
+<code>requests.cpu &lt;= limits.cpu</code>, so we cannot cgroup-throttle <code>stress</code>'s
+full-core workers below the request — the partial-load Python loop lets
+us pick any fractional CPU usage we want without violating that.</p>
+<h2 id="scenario-catalog">Scenario catalog<a class="headerlink" href="#scenario-catalog" title="Permanent link">&para;</a></h2>
+<h3 id="steady"><code>steady</code><a class="headerlink" href="#steady" title="Permanent link">&para;</a></h3>
+<p>Single Deployment producing ~200m CPU and ~100MiB memory. Initial requests
+are deliberately oversized at <code>500m / 256Mi</code>.</p>
+<p><strong>Expected:</strong> CPU request drops to ~<code>220m</code>, memory request drops to
+~<code>110Mi</code>, within <code>WINDOW + reconcile_interval</code>.</p>
+<h3 id="overprovisioned"><code>overprovisioned</code><a class="headerlink" href="#overprovisioned" title="Permanent link">&para;</a></h3>
+<p>Same shape as <code>steady</code> but with extreme oversizing: <code>1000m / 512Mi</code>
+requests for ~<code>50m / 40Mi</code> of usage.</p>
+<p><strong>Expected:</strong> Aggressive downsizing — CPU to ~<code>60m</code>, memory to ~<code>50Mi</code>.</p>
+<h3 id="underprovisioned"><code>underprovisioned</code><a class="headerlink" href="#underprovisioned" title="Permanent link">&para;</a></h3>
+<p>Initial requests <code>50m / 32Mi</code>, <em>no limits</em>, actual usage ~<code>300m / 200Mi</code>.</p>
+<p><strong>Expected:</strong> CPU request grows to ~<code>330m</code>, memory to ~<code>230Mi</code>.</p>
+<h3 id="stepped"><code>stepped</code><a class="headerlink" href="#stepped" title="Permanent link">&para;</a></h3>
+<p>Single Deployment whose load alternates between ~<code>100m</code> (5 min) and
+~<code>400m</code> (5 min), driven by <code>LOAD_PHASES=0.10:300,0.40:300</code>.</p>
+<p><strong>Expected:</strong> The recommender lands at ~<code>110m</code> during the low phase, then
+upsizes to ~<code>440m</code> once the high phase dominates the percentile window.
+The controller recycles the pod each time, exercising the second-recycle
+path that uniform-load scenarios cannot reach.</p>
+<h3 id="hpa"><code>hpa</code><a class="headerlink" href="#hpa" title="Permanent link">&para;</a></h3>
+<p>Single Deployment with <code>requests.cpu: 500m</code>, actual usage ~<code>150m</code>, plus
+an <code>autoscaling/v2</code> HPA targeting 60% CPU utilization (min 1 / max 5).</p>
+<p><strong>Expected:</strong> Recommender shrinks requests to ~<code>165m</code>. Once shrunk, HPA's
+effective utilization jumps above 60% and replicas scale up. Validates
+the interaction between right-sizing and the HPA.</p>
+<h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
+<p><code>make test-scenario-status</code> prints a table:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
 </code></pre></div>
+<p>The dashboard remains the richer source of truth — start a port-forward
+and open <code>http://localhost:8090</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+</code></pre></div>
+<h2 id="adding-a-new-scenario">Adding a new scenario<a class="headerlink" href="#adding-a-new-scenario" title="Permanent link">&para;</a></h2>
+<p>See <code>hack/scenarios/README.md</code>.</p>
 
 
 
@@ -1358,7 +1527,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../architecture/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Architecture">
+          <a href="../keda/" class="md-footer__link md-footer__link--prev" aria-label="Previous: KEDA">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1368,20 +1537,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Architecture
+                KEDA
               </div>
             </div>
           </a>
         
         
           
-          <a href="../in-place-updates/" class="md-footer__link md-footer__link--next" aria-label="Next: In-Place Updates">
+          <a href="../cert-manager/" class="md-footer__link md-footer__link--next" aria-label="Next: TLS with cert-manager">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                In-Place Updates
+                TLS with cert-manager
               </div>
             </div>
             <div class="md-footer__button md-icon">

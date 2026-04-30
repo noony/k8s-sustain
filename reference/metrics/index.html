@@ -604,6 +604,27 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/autoscaler-coordination/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Autoscaler Coordination
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -821,11 +842,35 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#drift-retry-hpa" class="md-nav__link">
+  <a href="#drift-retry-autoscaler" class="md-nav__link">
     <span class="md-ellipsis">
-      Drift, retry, HPA
+      Drift, retry, autoscaler
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Drift, retry, autoscaler">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#k8s_sustain_autoscaler_target_configured" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s_sustain_autoscaler_target_configured
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#k8s_sustain_coordination_factor" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s_sustain_coordination_factor
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -1103,6 +1148,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/local-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Local testing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/cert-manager/" class="md-nav__link">
         
   
@@ -1199,11 +1265,35 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#drift-retry-hpa" class="md-nav__link">
+  <a href="#drift-retry-autoscaler" class="md-nav__link">
     <span class="md-ellipsis">
-      Drift, retry, HPA
+      Drift, retry, autoscaler
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Drift, retry, autoscaler">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#k8s_sustain_autoscaler_target_configured" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s_sustain_autoscaler_target_configured
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#k8s_sustain_coordination_factor" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s_sustain_coordination_factor
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -1365,7 +1455,7 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 </tr>
 </tbody>
 </table>
-<h3 id="drift-retry-hpa">Drift, retry, HPA<a class="headerlink" href="#drift-retry-hpa" title="Permanent link">&para;</a></h3>
+<h3 id="drift-retry-autoscaler">Drift, retry, autoscaler<a class="headerlink" href="#drift-retry-autoscaler" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
@@ -1401,12 +1491,32 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 <td><code>policy</code></td>
 </tr>
 <tr>
-<td><code>k8s_sustain_hpa_present</code></td>
+<td><code>k8s_sustain_autoscaler_present</code></td>
 <td>gauge</td>
-<td><code>namespace</code>, <code>kind</code>, <code>name</code>, <code>mode</code></td>
+<td><code>namespace</code>, <code>kind</code>, <code>name</code>, <code>autoscaler_kind</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_autoscaler_target_configured</code></td>
+<td>gauge</td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>kind</code>, <code>resource</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_coordination_factor</code></td>
+<td>gauge</td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>resource</code>, <code>kind</code></td>
 </tr>
 </tbody>
 </table>
+<h4 id="k8s_sustain_autoscaler_target_configured"><code>k8s_sustain_autoscaler_target_configured</code><a class="headerlink" href="#k8s_sustain_autoscaler_target_configured" title="Permanent link">&para;</a></h4>
+<p>Configured autoscaler <code>averageUtilization</code> (%) for a workload's resource trigger.
+<code>kind</code> is <code>HPA</code> or <code>KEDA</code>; <code>resource</code> is <code>cpu</code> or <code>memory</code>.</p>
+<h4 id="k8s_sustain_coordination_factor"><code>k8s_sustain_coordination_factor</code><a class="headerlink" href="#k8s_sustain_coordination_factor" title="Permanent link">&para;</a></h4>
+<p>Multiplier applied by autoscaler coordination to the per-pod request.
+<code>resource</code> is <code>cpu</code> or <code>memory</code>; <code>kind</code> is <code>overhead</code> (the always-on
+<code>(100 / hpa_target_pct) × 1.10</code> adjustment) or <code>replica</code> (the optional
+CPU-only replica-budget correction). The value is <code>1.0</code> when no effect
+was applied. See <a href="../../concepts/autoscaler-coordination/">Autoscaler Coordination</a>
+for the formulas.</p>
 <h3 id="dashboard-server">Dashboard server<a class="headerlink" href="#dashboard-server" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

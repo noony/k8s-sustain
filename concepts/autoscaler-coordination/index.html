@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://noony.github.io/k8s-sustain/concepts/update-modes/">
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/concepts/autoscaler-coordination/">
       
       
-        <link rel="prev" href="../architecture/">
+        <link rel="prev" href="../in-place-updates/">
       
       
-        <link rel="next" href="../in-place-updates/">
+        <link rel="next" href="../../reference/policy/">
       
       
       <link rel="icon" href="../../assets/logo.svg">
@@ -24,7 +24,7 @@
     
     
       
-        <title>Update Modes - k8s-sustain</title>
+        <title>Autoscaler Coordination - k8s-sustain</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#update-modes" class="md-skip">
+        <a href="#autoscaler-coordination" class="md-skip">
           Skip to content
         </a>
       
@@ -111,7 +111,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Update Modes
+              Autoscaler Coordination
             
           </span>
         </div>
@@ -569,30 +569,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    Update Modes
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../update-modes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -601,71 +581,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#oncreate" class="md-nav__link">
-    <span class="md-ellipsis">
-      OnCreate
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#ongoing" class="md-nav__link">
-    <span class="md-ellipsis">
-      Ongoing
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#choosing-a-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      Choosing a mode
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recommend-only-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      Recommend-only mode
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#mixing-modes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Mixing modes
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -696,10 +611,30 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../autoscaler-coordination/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Autoscaler Coordination
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -708,6 +643,71 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overhead-formula-always-on-when-enabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overhead formula (always-on when enabled)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#replica-budget-correction-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      Replica-budget correction (opt-in)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#detection-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Detection rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      Observability
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1138,45 +1138,45 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#oncreate" class="md-nav__link">
+  <a href="#overhead-formula-always-on-when-enabled" class="md-nav__link">
     <span class="md-ellipsis">
-      OnCreate
+      Overhead formula (always-on when enabled)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#ongoing" class="md-nav__link">
+  <a href="#replica-budget-correction-opt-in" class="md-nav__link">
     <span class="md-ellipsis">
-      Ongoing
+      Replica-budget correction (opt-in)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#choosing-a-mode" class="md-nav__link">
+  <a href="#detection-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      Choosing a mode
+      Detection rules
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#recommend-only-mode" class="md-nav__link">
+  <a href="#configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Recommend-only mode
+      Configuration
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#mixing-modes" class="md-nav__link">
+  <a href="#observability" class="md-nav__link">
     <span class="md-ellipsis">
-      Mixing modes
+      Observability
     </span>
   </a>
   
@@ -1200,127 +1200,67 @@
   
 
 
-<h1 id="update-modes">Update Modes<a class="headerlink" href="#update-modes" title="Permanent link">&para;</a></h1>
-<p>Each workload kind in a <code>Policy</code> is configured with one of two update modes. You can mix modes across workload kinds within the same policy.</p>
-<h2 id="oncreate">OnCreate<a class="headerlink" href="#oncreate" title="Permanent link">&para;</a></h2>
-<p>Resources are injected by the <strong>admission webhook</strong> at pod creation time, before the pod is scheduled.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">        </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span>
+<h1 id="autoscaler-coordination">Autoscaler Coordination<a class="headerlink" href="#autoscaler-coordination" title="Permanent link">&para;</a></h1>
+<p>When a workload is driven by a Horizontal Pod Autoscaler (HPA) or a KEDA
+<code>ScaledObject</code> targeting CPU/memory <code>averageUtilization</code>, k8s-sustain's
+vertical recommendations can fight the autoscaler. Higher requests collapse
+the HPA's utilization signal, causing it to scale replicas down; the
+recommender then sees the same per-pod usage and raises requests again on
+the next cycle.</p>
+<p><code>spec.rightSizing.autoscalerCoordination</code> shapes per-pod requests so the
+HPA's signal stays meaningful.</p>
+<h2 id="overhead-formula-always-on-when-enabled">Overhead formula (always-on when enabled)<a class="headerlink" href="#overhead-formula-always-on-when-enabled" title="Permanent link">&para;</a></h2>
+<p>When <code>enabled: true</code>, the recommender multiplies each affected resource's
+request by <code>(100 / hpa_target_pct) × 1.10</code>. Example: baseline <code>100m</code> CPU,
+HPA target 70% → adjusted request = <code>100 × 110 / 70 = 158m</code>. At baseline
+load, HPA utilization sits at <code>100 / 158 ≈ 63%</code> — comfortably below 70%. A
+10% load bump pushes utilization over the target and HPA scales out.</p>
+<p>The 1.10 safety margin is fixed in v1.</p>
+<h2 id="replica-budget-correction-opt-in">Replica-budget correction (opt-in)<a class="headerlink" href="#replica-budget-correction-opt-in" title="Permanent link">&para;</a></h2>
+<p><code>replicaBudgetAnchor</code> (0.0–1.0) enables an additional CPU-only adjustment
+that nudges requests up or down based on the workload's position in
+<code>[minReplicas, maxReplicas]</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>target_replicas = round(min + anchor × (max - min))
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>factor          = clamp(current_replicas / target_replicas, 0.5, 2.0)
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>cpu_request    *= factor
 </code></pre></div>
-<p><strong>Behaviour:</strong></p>
+<p>Anchor <code>0.10</code> means "sit ~10% into the replica budget at steady state" —
+leaving room to scale out. Workloads above the target get denser pods
+(factor &gt; 1); workloads below get thinner pods (factor &lt; 1). Memory is not
+adjusted because memory consumption doesn't track requests the way CPU
+does.</p>
+<h2 id="detection-rules">Detection rules<a class="headerlink" href="#detection-rules" title="Permanent link">&para;</a></h2>
 <ul>
-<li>The webhook intercepts every <code>Pod CREATE</code> request for pods that carry the policy annotation</li>
-<li>The latest recommendation is always injected — the webhook overrides whatever the pod template currently specifies</li>
-<li>Existing running pods are <strong>not</strong> affected — only newly created pods receive the recommendation</li>
-<li>If the webhook is unavailable, the pod is admitted without resource injection (<code>failurePolicy: Ignore</code>)</li>
+<li>HPA matched by <code>scaleTargetRef</code>; <code>ScaledObject</code> by <code>spec.scaleTargetRef</code>.</li>
+<li>Both objects targeting one workload → <code>ScaledObject</code> wins (KEDA owns the
+  HPA).</li>
+<li>Only <code>Resource</code> / <code>ContainerResource</code> metrics with <code>averageUtilization</code>
+  count. Other metric types (<code>AverageValue</code>, <code>External</code>, <code>Object</code>, <code>Pods</code>)
+  are ignored for overhead, but a workload using them still receives any
+  CPU/memory utilization-based adjustment if present.</li>
+<li>KEDA CRD missing → <code>ScaledObject</code> lookup is skipped silently.</li>
 </ul>
-<p><strong>Best for:</strong></p>
-<ul>
-<li>Workloads where you want a clean initial resource profile without disrupting running pods</li>
-<li>CronJob pods that are ephemeral and recreated on every run</li>
-<li>Environments where you cannot tolerate rolling restarts</li>
-</ul>
-<p><strong>Limitation:</strong> Existing pods retain their current (possibly over-provisioned) resources until they are naturally restarted (deployment update, node drain, etc.).</p>
-<hr />
-<h2 id="ongoing">Ongoing<a class="headerlink" href="#ongoing" title="Permanent link">&para;</a></h2>
-<p>Resources are updated by the <strong>controller</strong> on a recurring interval. Additionally, the <strong>admission webhook</strong> injects the latest recommendation at pod creation time so that new pods start with correct resources immediately, without waiting for the controller to reconcile.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">autoscalerCoordination</span><span class="p">:</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">      </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">              </span><span class="c1"># overhead formula</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">      </span><span class="nt">replicaBudgetAnchor</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.10</span><span class="w">  </span><span class="c1"># optional; enables CPU replica correction</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">resourcesConfigs</span><span class="p">:</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">96h</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">          </span><span class="nt">percentile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">95</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">          </span><span class="nt">headroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
 </code></pre></div>
-<p><strong>At pod creation (webhook):</strong></p>
-<ul>
-<li>The webhook intercepts <code>Pod CREATE</code> requests for pods that carry the policy annotation</li>
-<li>Unlike OnCreate mode, the webhook always injects the latest recommendation — even if the container already has a CPU request — ensuring new pods never start with stale resources</li>
-</ul>
-<p><strong>Ongoing reconciliation (controller) on clusters without in-place update support (k8s &lt; 1.31):</strong></p>
-<ol>
-<li>Each running pod that has stale resources is evicted via the Eviction API</li>
-<li>The workload controller (Deployment/StatefulSet/DaemonSet) creates replacement pods</li>
-<li>The webhook injects the latest recommendations into the new pods at creation time</li>
-<li>PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle</li>
-</ol>
-<p><strong>Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.31):</strong></p>
-<ol>
-<li>Controller patches each running, non-terminating pod's <code>spec.containers[*].resources</code> directly</li>
-<li>The kubelet applies the new resources without restarting the container</li>
-<li>If the kubelet reports <code>Infeasible</code> (node cannot satisfy the request), the pod is evicted as a fallback</li>
-<li>If the kubelet reports <code>Deferred</code>, the resize is pending kubelet-side conditions and no action is taken</li>
-</ol>
-<p>See <a href="../in-place-updates/">In-Place Updates</a> for details.</p>
-<p><strong>Best for:</strong></p>
-<ul>
-<li>Long-running workloads that accumulate meaningful usage history</li>
-<li>Situations where you want resources to track actual usage over time</li>
-<li>Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.31)</li>
-</ul>
-<p><strong>Note:</strong> The controller never patches workload templates (Deployment, StatefulSet, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s &lt; 1.31), pods are replaced via PDB-respecting eviction, which causes pod restarts.</p>
-<hr />
-<h2 id="choosing-a-mode">Choosing a mode<a class="headerlink" href="#choosing-a-mode" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Scenario</th>
-<th>Recommended mode</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>New cluster, no baseline yet</td>
-<td><code>OnCreate</code> — sets a sensible default at creation</td>
-</tr>
-<tr>
-<td>Existing workloads, must avoid downtime</td>
-<td><code>OnCreate</code> — only affects future pods</td>
-</tr>
-<tr>
-<td>Existing workloads, k8s ≥ 1.31</td>
-<td><code>Ongoing</code> — in-place updates, zero restarts</td>
-</tr>
-<tr>
-<td>CronJob pods (ephemeral per-run)</td>
-<td><code>OnCreate</code> — each run gets fresh recommendations</td>
-</tr>
-<tr>
-<td>StatefulSets with persistent state</td>
-<td><code>Ongoing</code> + k8s ≥ 1.31, or <code>OnCreate</code></td>
-</tr>
-<tr>
-<td>DaemonSets</td>
-<td><code>Ongoing</code> (rolling update is DaemonSet's normal behaviour)</td>
-</tr>
-<tr>
-<td>Argo Rollouts</td>
-<td><code>Ongoing</code> or <code>OnCreate</code> — works like Deployments with canary/blue-green strategies</td>
-</tr>
-</tbody>
-</table>
-<hr />
-<h2 id="recommend-only-mode">Recommend-only mode<a class="headerlink" href="#recommend-only-mode" title="Permanent link">&para;</a></h2>
-<p>Independently of <code>OnCreate</code> or <code>Ongoing</code>, you can run the entire operator in <strong>recommend-only</strong> mode by passing <code>--recommend-only</code> or setting <code>recommendOnly: true</code> in the Helm values. In this mode:</p>
-<ul>
-<li>The controller still reconciles and computes recommendations, but <strong>never recycles pods</strong></li>
-<li>The webhook still intercepts pod creation and computes recommendations, but <strong>never mutates the pod</strong></li>
-<li>Computed recommendations are logged as structured JSON at <code>info</code> level</li>
-</ul>
-<p>This is useful for validating recommendations before switching to active mode. See the <a href="../../reference/cli/">CLI reference</a> for details.</p>
-<hr />
-<h2 id="mixing-modes">Mixing modes<a class="headerlink" href="#mixing-modes" title="Permanent link">&para;</a></h2>
-<p>A single policy can use different modes for different workload kinds:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">      </span><span class="c1"># controller recycles stale pods; webhook injects resources</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="nt">statefulSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span><span class="w">    </span><span class="c1"># only inject at pod creation, no disruption</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span><span class="w">        </span><span class="c1"># inject at each job pod creation</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">        </span><span class="nt">daemonSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span><span class="w">       </span><span class="c1"># controller recycles stale pods; webhook injects resources</span>
-</code></pre></div>
+<h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
+<p>The metric <code>k8s_sustain_coordination_factor{namespace, owner_kind,
+owner_name, resource, kind}</code> records the multiplier applied. <code>kind</code> is
+<code>overhead</code> or <code>replica</code>. The value is <code>1.0</code> when no effect was applied.</p>
 
 
 
@@ -1358,7 +1298,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../architecture/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Architecture">
+          <a href="../in-place-updates/" class="md-footer__link md-footer__link--prev" aria-label="Previous: In-Place Updates">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -1368,20 +1308,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Architecture
+                In-Place Updates
               </div>
             </div>
           </a>
         
         
           
-          <a href="../in-place-updates/" class="md-footer__link md-footer__link--next" aria-label="Next: In-Place Updates">
+          <a href="../../reference/policy/" class="md-footer__link md-footer__link--next" aria-label="Next: Policy CRD">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                In-Place Updates
+                Policy CRD
               </div>
             </div>
             <div class="md-footer__button md-icon">
