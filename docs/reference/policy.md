@@ -103,6 +103,8 @@ Defines which workload kinds are managed and in what mode. Omitting a kind means
 | `argoRollout` | `OnCreate` \| `Ongoing` | Manages Argo Rollouts `Rollout` objects |
 | `cronJob` | `OnCreate` \| `Ongoing` | Manages `CronJob` objects |
 | `job` | `OnCreate` \| `Ongoing` | Manages standalone `Job` objects |
+| `deploymentConfig` | `OnCreate` \| `Ongoing` | Manages OpenShift `DeploymentConfig` objects (OpenShift-specific) |
+| `family` | `OnCreate` \| `Ongoing` | Manages OpenShift-specific Family resources (OpenShift-specific) |
 
 See [Update Modes](../concepts/update-modes.md) for the difference between `OnCreate` and `Ongoing`.
 
