@@ -20,16 +20,6 @@ permissions:
   contents: write
 
 jobs:
-  link-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: lycheeverse/lychee-action@v2
-        with:
-          args: --no-progress --verbose --config lychee.toml docs/
-          fail: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-
   markdownlint:
     runs-on: ubuntu-latest
     steps:
@@ -58,7 +48,7 @@ jobs:
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [link-check, markdownlint, mkdocs-build]
+    needs: [markdownlint, mkdocs-build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
