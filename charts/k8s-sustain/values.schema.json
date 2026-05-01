@@ -1,42 +1,63 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
+  "additionalProperties": true,
   "properties": {
     "image": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "repository": { "type": "string" },
+        "repository": { "type": "string", "minLength": 1 },
         "tag": { "type": "string" },
         "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
       }
     },
-    "imagePullSecrets": { "type": "array" },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": { "name": { "type": "string" } }
+      }
+    },
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
     "recommendOnly": { "type": "boolean" },
-    "prometheusAddress": { "type": "string" },
+    "prometheusAddress": {
+      "type": "string",
+      "description": "URL of the Prometheus server. Empty string auto-detects the bundled subchart.",
+      "oneOf": [
+        { "const": "" },
+        { "format": "uri", "pattern": "^https?://.+" }
+      ]
+    },
     "controller": {
       "type": "object",
+      "additionalProperties": true,
       "properties": {
-        "replicaCount": { "type": "integer", "minimum": 1 },
+        "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10 },
         "metricsBindAddress": { "type": "string" },
         "healthProbeBindAddress": { "type": "string" },
         "leaderElect": { "type": "boolean" },
+        "concurrencyLimit": { "type": "integer", "minimum": 1, "maximum": 100 },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0, "maximum": 600 },
         "service": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "type": { "type": "string" },
-            "port": { "type": "integer" }
+            "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "annotations": { "type": "object" }
           }
         },
-        "resources": { "type": "object" },
+        "resources": { "$ref": "#/definitions/resources" },
         "serviceMonitor": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
-            "interval": { "type": "string" },
-            "scrapeTimeout": { "type": "string" }
+            "interval": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
+            "scrapeTimeout": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" }
           }
         },
         "nodeSelector": { "type": "object" },
@@ -46,6 +67,7 @@
     },
     "serviceAccount": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "create": { "type": "boolean" },
         "name": { "type": "string" },
@@ -55,29 +77,34 @@
     "installCRDs": { "type": "boolean" },
     "webhook": {
       "type": "object",
+      "additionalProperties": true,
       "properties": {
         "enabled": { "type": "boolean" },
-        "replicaCount": { "type": "integer", "minimum": 1 },
-        "port": { "type": "integer" },
+        "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0, "maximum": 600 },
         "failurePolicy": { "type": "string", "enum": ["Ignore", "Fail"] },
         "excludedNamespaces": { "type": "array", "items": { "type": "string" } },
-        "tlsSecretName": { "type": "string" },
+        "tlsSecretName": { "type": "string", "minLength": 1 },
         "caBundle": { "type": "string" },
         "certManager": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
+            "createIssuer": { "type": "boolean" },
             "issuerRef": {
               "type": "object",
+              "additionalProperties": false,
               "properties": {
                 "name": { "type": "string" },
-                "kind": { "type": "string" }
+                "kind": { "type": "string", "enum": ["Issuer", "ClusterIssuer", ""] }
               }
             }
           }
         },
-        "resources": { "type": "object" },
+        "resources": { "$ref": "#/definitions/resources" },
         "nodeSelector": { "type": "object" },
         "tolerations": { "type": "array" },
         "affinity": { "type": "object" }
@@ -85,23 +112,62 @@
     },
     "dashboard": {
       "type": "object",
+      "additionalProperties": true,
       "properties": {
         "enabled": { "type": "boolean" },
-        "replicaCount": { "type": "integer", "minimum": 1 },
-        "port": { "type": "integer" },
+        "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "bindAddress": { "type": "string" },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0, "maximum": 600 },
+        "corsAllowedOrigins": { "type": "array", "items": { "type": "string" } },
         "service": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "type": { "type": "string" },
-            "port": { "type": "integer" }
+            "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "annotations": { "type": "object" }
           }
         },
-        "resources": { "type": "object" },
+        "resources": { "$ref": "#/definitions/resources" },
         "nodeSelector": { "type": "object" },
         "tolerations": { "type": "array" },
         "affinity": { "type": "object" }
+      }
+    },
+    "prometheus": {
+      "type": "object",
+      "description": "Bundled prometheus-community/prometheus subchart values. Schema is pass-through — the subchart validates its own inputs.",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    }
+  },
+  "definitions": {
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": ["string", "number"] },
+            "memory": { "type": "string" },
+            "ephemeral-storage": { "type": "string" }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": ["string", "number"] },
+            "memory": { "type": "string" },
+            "ephemeral-storage": { "type": "string" }
+          }
+        }
       }
     }
   }
