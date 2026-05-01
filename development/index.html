@@ -1832,7 +1832,7 @@
 <a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span>--log-level<span class="o">=</span>debug
 </code></pre></div>
 <h3 id="start-the-webhook-requires-tls">Start the webhook (requires TLS)<a class="headerlink" href="#start-the-webhook-requires-tls" title="Permanent link">&para;</a></h3>
-<p>The webhook must be reachable from the API server, which makes local development more involved. Use <a href="https://www.telepresence.io">telepresence</a> or develop against a local kind cluster with a self-signed cert.</p>
+<p>The webhook must be reachable from the API server, which makes local development more involved. Use local kind cluster with a self-signed cert.</p>
 <h2 id="local-end-to-end-testing">Local end-to-end testing<a class="headerlink" href="#local-end-to-end-testing" title="Permanent link">&para;</a></h2>
 <p>The repository ships a <code>Makefile.scenarios</code> harness that brings up a kind
 cluster, installs cert-manager and metrics-server, builds &amp; loads the
