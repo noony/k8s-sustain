@@ -16,8 +16,17 @@ type ContainerValues map[string]float64
 
 // Client wraps the Prometheus HTTP API for k8s-sustain queries.
 type Client struct {
-	api prometheusv1.API
+	api     prometheusv1.API
+	breaker *breaker
 }
+
+// Default circuit-breaker tuning: trip after 5 consecutive failures,
+// stay open for 30 seconds. These values match queryTimeout so that one
+// stuck reconcile (≈ 5 queries × queryTimeout) is enough to open it.
+const (
+	defaultBreakerMaxFailures = 5
+	defaultBreakerCooldown    = 30 * time.Second
+)
 
 // New creates a Prometheus client targeting addr (e.g. "http://prometheus:9090").
 func New(addr string) (*Client, error) {
@@ -25,7 +34,10 @@ func New(addr string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating prometheus client: %w", err)
 	}
-	return &Client{api: prometheusv1.NewAPI(c)}, nil
+	return &Client{
+		api:     prometheusv1.NewAPI(c),
+		breaker: newBreaker(defaultBreakerMaxFailures, defaultBreakerCooldown),
+	}, nil
 }
 
 // QueryCPUByContainer returns per-container CPU usage (cores) at the given quantile,
@@ -174,6 +186,10 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		namespace, ownerKind, ownerName,
 	)
 
+	if !c.breaker.allow() {
+		// Non-fatal: skip OOM lookup while breaker is open.
+		return nil, nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
@@ -196,8 +212,10 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 	})
 	if err != nil {
 		// Non-fatal: OOM data may not be available (missing kube-state-metrics etc.)
+		c.breaker.failure()
 		return nil, nil //nolint:nilerr
 	}
+	c.breaker.success()
 
 	matrix, ok := result.(model.Matrix)
 	if !ok {
@@ -225,6 +243,9 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 }
 
 func (c *Client) queryRangeByContainer(ctx context.Context, expr, window, step string) (ContainerTimeSeries, error) {
+	if !c.breaker.allow() {
+		return nil, ErrCircuitOpen
+	}
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
@@ -246,8 +267,10 @@ func (c *Client) queryRangeByContainer(ctx context.Context, expr, window, step s
 		Step:  time.Duration(stepDur),
 	})
 	if err != nil {
+		c.breaker.failure()
 		return nil, fmt.Errorf("prometheus range query %q: %w", expr, err)
 	}
+	c.breaker.success()
 
 	matrix, ok := result.(model.Matrix)
 	if !ok {
@@ -277,23 +300,33 @@ const queryTimeout = 30 * time.Second
 
 // Ping checks that the Prometheus server is reachable by executing a trivial query.
 func (c *Client) Ping(ctx context.Context) error {
+	if !c.breaker.allow() {
+		return ErrCircuitOpen
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, _, err := c.api.Query(ctx, "up", time.Now())
 	if err != nil {
+		c.breaker.failure()
 		return fmt.Errorf("prometheus unreachable: %w", err)
 	}
+	c.breaker.success()
 	return nil
 }
 
 func (c *Client) queryByContainer(ctx context.Context, expr string) (ContainerValues, error) {
+	if !c.breaker.allow() {
+		return nil, ErrCircuitOpen
+	}
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
 	result, _, err := c.api.Query(ctx, expr, time.Now())
 	if err != nil {
+		c.breaker.failure()
 		return nil, fmt.Errorf("prometheus query %q: %w", expr, err)
 	}
+	c.breaker.success()
 
 	vector, ok := result.(model.Vector)
 	if !ok {
@@ -314,6 +347,9 @@ func (c *Client) queryByContainer(ctx context.Context, expr string) (ContainerVa
 // the window. Returns 0 with no error if the rule produced no samples.
 // Reads the k8s_sustain:workload_replicas:count recording rule.
 func (c *Client) QueryReplicaCountMedian(ctx context.Context, namespace, ownerKind, ownerName, window string) (float64, error) {
+	if !c.breaker.allow() {
+		return 0, ErrCircuitOpen
+	}
 	expr := fmt.Sprintf(
 		`quantile_over_time(0.50, k8s_sustain:workload_replicas:count{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m])`,
 		namespace, ownerKind, ownerName, window,
@@ -324,8 +360,10 @@ func (c *Client) QueryReplicaCountMedian(ctx context.Context, namespace, ownerKi
 
 	result, _, err := c.api.Query(ctx, expr, time.Now())
 	if err != nil {
+		c.breaker.failure()
 		return 0, fmt.Errorf("prometheus query %q: %w", expr, err)
 	}
+	c.breaker.success()
 	vector, ok := result.(model.Vector)
 	if !ok || len(vector) == 0 {
 		return 0, nil
@@ -339,12 +377,17 @@ const dashboardQueryTimeout = 10 * time.Second
 // QueryInstant runs a single instant query and returns the scalar/first-vector
 // value. Returns 0 with no error if the query produces no samples.
 func (c *Client) QueryInstant(ctx context.Context, expr string) (float64, error) {
+	if !c.breaker.allow() {
+		return 0, ErrCircuitOpen
+	}
 	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
 	defer cancel()
 	v, _, err := c.api.Query(ctx, expr, time.Now())
 	if err != nil {
+		c.breaker.failure()
 		return 0, fmt.Errorf("instant query %q: %w", expr, err)
 	}
+	c.breaker.success()
 	switch typed := v.(type) {
 	case model.Vector:
 		if len(typed) == 0 {
@@ -361,6 +404,9 @@ func (c *Client) QueryInstant(ctx context.Context, expr string) (float64, error)
 // QueryRange runs a range query for a single series and returns its time-stamped
 // values. If the query produces multiple series, only the first is returned.
 func (c *Client) QueryRange(ctx context.Context, expr, window, step string) ([]TimeValue, error) {
+	if !c.breaker.allow() {
+		return nil, ErrCircuitOpen
+	}
 	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
 	defer cancel()
 	end := time.Now()
@@ -375,8 +421,10 @@ func (c *Client) QueryRange(ctx context.Context, expr, window, step string) ([]T
 	r := prometheusv1.Range{Start: end.Add(-time.Duration(dur)), End: end, Step: time.Duration(stp)}
 	v, _, err := c.api.QueryRange(ctx, expr, r)
 	if err != nil {
+		c.breaker.failure()
 		return nil, fmt.Errorf("range query %q: %w", expr, err)
 	}
+	c.breaker.success()
 	matrix, ok := v.(model.Matrix)
 	if !ok || len(matrix) == 0 {
 		return nil, nil
@@ -391,12 +439,17 @@ func (c *Client) QueryRange(ctx context.Context, expr, window, step string) ([]T
 // QueryByLabel runs an instant query and returns a map of label-value -> sample value.
 // Used for per-policy and per-workload aggregates.
 func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error) {
+	if !c.breaker.allow() {
+		return nil, ErrCircuitOpen
+	}
 	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
 	defer cancel()
 	v, _, err := c.api.Query(ctx, expr, time.Now())
 	if err != nil {
+		c.breaker.failure()
 		return nil, fmt.Errorf("by-label query %q: %w", expr, err)
 	}
+	c.breaker.success()
 	vec, ok := v.(model.Vector)
 	if !ok {
 		return map[string]float64{}, nil
@@ -416,12 +469,17 @@ func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[stri
 // labels joined with '|'. Samples missing any of the requested labels are
 // skipped. Useful when several labels jointly identify a series.
 func (c *Client) QueryByLabels(ctx context.Context, query string, labels ...string) (map[string]float64, error) {
+	if !c.breaker.allow() {
+		return nil, ErrCircuitOpen
+	}
 	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
 	defer cancel()
 	v, _, err := c.api.Query(ctx, query, time.Now())
 	if err != nil {
+		c.breaker.failure()
 		return nil, fmt.Errorf("by-labels query %q: %w", query, err)
 	}
+	c.breaker.success()
 	vec, ok := v.(model.Vector)
 	if !ok {
 		return map[string]float64{}, nil

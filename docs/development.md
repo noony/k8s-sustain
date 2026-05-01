@@ -72,7 +72,7 @@ go run main.go start \
 
 ### Start the webhook (requires TLS)
 
-The webhook must be reachable from the API server, which makes local development more involved. Use [telepresence](https://www.telepresence.io) or develop against a local kind cluster with a self-signed cert.
+The webhook must be reachable from the API server, which makes local development more involved. Use local kind cluster with a self-signed cert.
 
 ## Local end-to-end testing
 

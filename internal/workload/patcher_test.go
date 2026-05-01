@@ -5,8 +5,14 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestRecyclePods_ExposesPublicMethod(t *testing.T) {
@@ -156,5 +162,299 @@ func TestPodIsStale_NotStaleWhenMatching(t *testing.T) {
 	}
 	if podIsStale(pod, recs) {
 		t.Error("expected pod to not be stale")
+	}
+}
+
+// runningPod is a small builder for pods used by recyclePods tests.
+func runningPod(name string, requests corev1.ResourceList) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      name,
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:      "app",
+				Resources: corev1.ResourceRequirements{Requests: requests},
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// TestRecyclePods_Eviction_HappyPath verifies that on a non-in-place cluster
+// the patcher iterates running pods and creates an Eviction subresource for
+// stale ones. Pods already at target are left alone.
+func TestRecyclePods_Eviction_HappyPath(t *testing.T) {
+	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	fresh := runningPod("fresh", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evicted []string
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale, fresh).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evicted = append(evicted, obj.GetName())
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, false /* not in-place */)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if len(evicted) != 1 || evicted[0] != "stale" {
+		t.Errorf("expected only 'stale' evicted, got %v", evicted)
+	}
+}
+
+// TestRecyclePods_SkipsTerminatingAndNonRunning verifies that pods being
+// deleted or not in the Running phase are skipped without trying to evict.
+func TestRecyclePods_SkipsTerminatingAndNonRunning(t *testing.T) {
+	terminating := runningPod("terminating", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	now := metav1.Now()
+	terminating.DeletionTimestamp = &now
+	finalizers := []string{"x"}
+	terminating.Finalizers = finalizers
+
+	pending := runningPod("pending", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	pending.Status.Phase = corev1.PodPending
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	calls := 0
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(terminating, pending).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					calls++
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, false)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if calls != 0 {
+		t.Errorf("expected zero evictions for terminating/pending pods, got %d", calls)
+	}
+}
+
+// TestEvictPod_PDBBlocked_ReturnsNil verifies that a 429 from the Eviction API
+// (PodDisruptionBudget blocking) is treated as a no-op so the next reconcile
+// can retry. The patcher must not return an error in this case.
+func TestEvictPod_PDBBlocked_ReturnsNil(t *testing.T) {
+	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					return apierrors.NewTooManyRequests("PDB blocks eviction", 0)
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, false)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Errorf("expected nil on PDB block, got %v", err)
+	}
+}
+
+// TestEvictPod_NotFound_ReturnsNil verifies that evicting a pod which no
+// longer exists is treated as a successful no-op.
+func TestEvictPod_NotFound_ReturnsNil(t *testing.T) {
+	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					return apierrors.NewNotFound(corev1.Resource("pods"), "stale")
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, false)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Errorf("expected nil on NotFound, got %v", err)
+	}
+}
+
+// TestPatchPodInPlace_HappyPath verifies the in-place path uses the /resize
+// subresource patch when available and does not fall back to eviction.
+func TestPatchPodInPlace_HappyPath(t *testing.T) {
+	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var resizeCalled, evictionCalled bool
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					resizeCalled = true
+					return nil
+				}
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evictionCalled = true
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true /* in-place */)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if !resizeCalled {
+		t.Error("expected /resize subresource patch to be called")
+	}
+	if evictionCalled {
+		t.Error("did not expect eviction in happy path")
+	}
+}
+
+// TestPatchPodInPlace_InfeasibleFallsBackToEviction verifies that when the
+// kubelet has marked the resize as infeasible, the patcher does not retry the
+// resize and instead evicts the pod.
+func TestPatchPodInPlace_InfeasibleFallsBackToEviction(t *testing.T) {
+	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	stale.Status.Resize = corev1.PodResizeStatusInfeasible
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var resizeCalled bool
+	var evicted []string
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					resizeCalled = true
+				}
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evicted = append(evicted, obj.GetName())
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if resizeCalled {
+		t.Error("did not expect /resize to be called when status is Infeasible")
+	}
+	if len(evicted) != 1 || evicted[0] != "stale" {
+		t.Errorf("expected eviction of 'stale', got %v", evicted)
+	}
+}
+
+// TestPatchPodInPlace_DeferredIsNoOp verifies that when the kubelet has
+// deferred the resize, the patcher leaves the pod alone.
+func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
+	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	stale.Status.Resize = corev1.PodResizeStatusDeferred
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var resizeCalled, evictionCalled bool
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					resizeCalled = true
+				}
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evictionCalled = true
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if resizeCalled || evictionCalled {
+		t.Errorf("expected no-op when resize Deferred (resize=%v, eviction=%v)", resizeCalled, evictionCalled)
 	}
 }

@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,12 +11,14 @@ import (
 	"strings"
 	"testing"
 
+	admissionv1 "k8s.io/api/admission/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -534,5 +537,339 @@ func TestBuildRecommendations_AppliesAutoscalerCoordination(t *testing.T) {
 	// Baseline 100m, overhead = ceil(100 * 110 / 70) = 158m.
 	if rec.CPURequest.MilliValue() != 158 {
 		t.Errorf("CPURequest = %dm, want 158m", rec.CPURequest.MilliValue())
+	}
+}
+
+// admitTestEnv bundles the boilerplate for end-to-end admit() tests:
+// scheme, fake client, mock Prometheus, and a constructed Handler.
+type admitTestEnv struct {
+	handler *Handler
+	server  *httptest.Server
+}
+
+// newAdmitEnv builds a Handler whose Prometheus mock returns one CPU and one
+// memory sample for container "app" (yielding ~100m CPU, ~64Mi memory after
+// per-pod division by replicas=1).
+func newAdmitEnv(t *testing.T, objs ...runtime.Object) *admitTestEnv {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme apps: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "workload_cpu_usage"):
+			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.1})))
+		case strings.Contains(q, "workload_memory_usage"):
+			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 64 * 1024 * 1024})))
+		case strings.Contains(q, "workload_replicas"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}`))
+		case strings.Contains(q, "container_cpu_usage_by_workload"):
+			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.1})))
+		case strings.Contains(q, "container_memory_by_workload"):
+			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 64 * 1024 * 1024})))
+		default:
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+
+	pc, err := promclient.New(server.URL)
+	if err != nil {
+		server.Close()
+		t.Fatalf("prometheus client: %v", err)
+	}
+
+	objsTyped := make([]client.Object, 0, len(objs))
+	for _, o := range objs {
+		if co, ok := o.(client.Object); ok {
+			objsTyped = append(objsTyped, co)
+		}
+	}
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objsTyped...).Build()
+
+	return &admitTestEnv{
+		handler: &Handler{Client: fc, PrometheusClient: pc},
+		server:  server,
+	}
+}
+
+func (e *admitTestEnv) close() { e.server.Close() }
+
+func basicPolicy(name string, mode sustainv1alpha1.UpdateMode) *sustainv1alpha1.Policy {
+	p95 := int32(95)
+	return &sustainv1alpha1.Policy{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: sustainv1alpha1.PolicySpec{
+			RightSizing: sustainv1alpha1.RightSizingSpec{
+				Update: sustainv1alpha1.UpdateSpec{
+					Types: sustainv1alpha1.UpdateTypes{Deployment: &mode},
+				},
+				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
+					CPU:    sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
+					Memory: sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
+				},
+			},
+		},
+	}
+}
+
+func deploymentReplicaSet(ns, rsName, deployName string) *appsv1.ReplicaSet {
+	ctrl := true
+	return &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      rsName,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       deployName,
+				Controller: &ctrl,
+			}},
+		},
+	}
+}
+
+func podWithRSOwner(ns, podName, rsName, policy string) *corev1.Pod {
+	ctrl := true
+	annotations := map[string]string{}
+	if policy != "" {
+		annotations[sustainv1alpha1.PolicyAnnotation] = policy
+	}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   ns,
+			Name:        podName,
+			Annotations: annotations,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "ReplicaSet",
+				Name:       rsName,
+				Controller: &ctrl,
+			}},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "app"}},
+		},
+	}
+}
+
+func admissionRequestFor(t *testing.T, pod *corev1.Pod) *admissionv1.AdmissionRequest {
+	t.Helper()
+	raw, err := json.Marshal(pod)
+	if err != nil {
+		t.Fatalf("marshal pod: %v", err)
+	}
+	return &admissionv1.AdmissionRequest{
+		UID:       "uid-1",
+		Namespace: pod.Namespace,
+		Name:      pod.Name,
+		Operation: admissionv1.Create,
+		Kind:      metav1.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"},
+		Object:    runtime.RawExtension{Raw: raw},
+	}
+}
+
+// TestAdmit_NoAnnotation_AllowsWithoutPatch verifies pods without the policy
+// annotation pass through untouched.
+func TestAdmit_NoAnnotation_AllowsWithoutPatch(t *testing.T) {
+	env := newAdmitEnv(t)
+	defer env.close()
+
+	pod := podWithRSOwner("default", "p", "rs", "")
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch != nil {
+		t.Errorf("expected no patch, got %d bytes", len(resp.Patch))
+	}
+}
+
+// TestAdmit_PolicyNotFound_AllowsWithoutPatch verifies fail-open behaviour
+// when the annotation references a Policy that does not exist.
+func TestAdmit_PolicyNotFound_AllowsWithoutPatch(t *testing.T) {
+	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, rs)
+	defer env.close()
+
+	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "missing-policy")
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch != nil {
+		t.Errorf("expected no patch when policy missing, got %d bytes", len(resp.Patch))
+	}
+}
+
+// TestAdmit_StandalonePod_AllowsWithoutPatch verifies pods without a controller
+// owner are skipped — the webhook can't determine workload kind.
+func TestAdmit_StandalonePod_AllowsWithoutPatch(t *testing.T) {
+	env := newAdmitEnv(t, basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate))
+	defer env.close()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   "default",
+			Name:        "standalone",
+			Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch != nil {
+		t.Error("expected no patch for standalone pod")
+	}
+}
+
+// TestAdmit_KindNotConfigured_AllowsWithoutPatch verifies that a workload kind
+// not listed in the policy's update.types is skipped.
+func TestAdmit_KindNotConfigured_AllowsWithoutPatch(t *testing.T) {
+	mode := sustainv1alpha1.UpdateModeOnCreate
+	policy := &sustainv1alpha1.Policy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p"},
+		Spec: sustainv1alpha1.PolicySpec{
+			RightSizing: sustainv1alpha1.RightSizingSpec{
+				// Only StatefulSet configured — Deployment-owned pods should be skipped.
+				Update: sustainv1alpha1.UpdateSpec{Types: sustainv1alpha1.UpdateTypes{StatefulSet: &mode}},
+			},
+		},
+	}
+	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+
+	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch != nil {
+		t.Error("expected no patch when kind not configured")
+	}
+}
+
+// TestAdmit_RecommendOnly_AllowsWithoutPatch verifies that recommend-only
+// mode returns allow=true with no patch even when injection would have applied.
+func TestAdmit_RecommendOnly_AllowsWithoutPatch(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+	env.handler.RecommendOnly = true
+
+	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch != nil {
+		t.Errorf("recommend-only must not patch, got %d bytes", len(resp.Patch))
+	}
+}
+
+// TestAdmit_DeploymentInjection_PatchesResources verifies the happy-path:
+// annotated pod owned by a Deployment-backed ReplicaSet gets a JSON Patch
+// setting CPU and memory requests for the matching container.
+func TestAdmit_DeploymentInjection_PatchesResources(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+
+	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch == nil {
+		t.Fatal("expected JSON patch for happy-path injection")
+	}
+	if resp.PatchType == nil || *resp.PatchType != admissionv1.PatchTypeJSONPatch {
+		t.Errorf("expected JSONPatch type, got %v", resp.PatchType)
+	}
+
+	var patches []jsonPatch
+	if err := json.Unmarshal(resp.Patch, &patches); err != nil {
+		t.Fatalf("unmarshal patch: %v", err)
+	}
+	if len(patches) != 1 {
+		t.Fatalf("expected 1 patch op, got %d", len(patches))
+	}
+	if patches[0].Path != "/spec/containers/0/resources" {
+		t.Errorf("patch path = %q", patches[0].Path)
+	}
+}
+
+// TestServeHTTP_RoundTripsAdmissionReview verifies the HTTP handler decodes
+// the request, runs admit, and re-encodes a valid AdmissionReview response
+// keyed by the original UID.
+func TestServeHTTP_RoundTripsAdmissionReview(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+
+	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
+	review := admissionv1.AdmissionReview{
+		TypeMeta: metav1.TypeMeta{Kind: "AdmissionReview", APIVersion: "admission.k8s.io/v1"},
+		Request:  admissionRequestFor(t, pod),
+	}
+	body, err := json.Marshal(review)
+	if err != nil {
+		t.Fatalf("marshal review: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/mutate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var out admissionv1.AdmissionReview
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if out.Response == nil {
+		t.Fatal("response missing")
+	}
+	if out.Response.UID != "uid-1" {
+		t.Errorf("UID = %q, want uid-1", out.Response.UID)
+	}
+	if !out.Response.Allowed {
+		t.Error("expected allowed=true")
+	}
+	if out.Response.Patch == nil {
+		t.Error("expected patch in response")
+	}
+}
+
+// TestServeHTTP_BadBody_Returns400 verifies the handler rejects malformed
+// AdmissionReview JSON with HTTP 400 instead of allowing through.
+func TestServeHTTP_BadBody_Returns400(t *testing.T) {
+	env := newAdmitEnv(t)
+	defer env.close()
+
+	req := httptest.NewRequest(http.MethodPost, "/mutate", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
