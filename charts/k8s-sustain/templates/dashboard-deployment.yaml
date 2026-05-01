@@ -21,7 +21,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "k8s-sustain.serviceAccountName" . }}
+      serviceAccountName: {{ include "k8s-sustain.dashboardName" . }}
       terminationGracePeriodSeconds: {{ .Values.dashboard.terminationGracePeriodSeconds | default 30 }}
       securityContext:
         runAsNonRoot: true

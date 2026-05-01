@@ -211,3 +211,267 @@ func TestQueryReplicaCountMedian_Empty(t *testing.T) {
 		t.Errorf("expected 0 for empty result, got %v", got)
 	}
 }
+
+func TestQueryByLabels_JoinsMultipleLabelsWithPipe(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+	}))
+	defer server.Close()
+	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+			{"metric":{"namespace":"ns1","owner_name":"a"},"value":[0,"1"]},
+			{"metric":{"namespace":"ns2","owner_name":"b"},"value":[0,"2"]},
+			{"metric":{"namespace":"ns3"},"value":[0,"3"]}
+		]}}`))
+	})
+
+	c, _ := New(server.URL)
+	out, err := c.QueryByLabels(context.Background(), "anything", "namespace", "owner_name")
+	if err != nil {
+		t.Fatalf("QueryByLabels: %v", err)
+	}
+	if got := out["ns1|a"]; got != 1 {
+		t.Errorf("ns1|a = %v, want 1", got)
+	}
+	if got := out["ns2|b"]; got != 2 {
+		t.Errorf("ns2|b = %v, want 2", got)
+	}
+	if _, ok := out["ns3|"]; ok {
+		t.Errorf("incomplete label series should be dropped, got entry for %q", "ns3|")
+	}
+	if len(out) != 2 {
+		t.Errorf("expected 2 entries, got %d (%v)", len(out), out)
+	}
+}
+
+func TestQueryCPUByContainer_HappyPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		if !strings.Contains(q, "container_cpu_usage_by_workload") {
+			t.Errorf("expected per-pod CPU rule in query, got %q", q)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+			{"metric":{"container":"app"},"value":[0,"0.42"]}
+		]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	got, err := c.QueryCPUByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h")
+	if err != nil {
+		t.Fatalf("QueryCPUByContainer: %v", err)
+	}
+	if got["app"] != 0.42 {
+		t.Errorf("got %v want 0.42", got["app"])
+	}
+}
+
+func TestQueryMemoryByContainer_HappyPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		if !strings.Contains(q, "container_memory_by_workload") {
+			t.Errorf("expected per-pod memory rule in query, got %q", q)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+			{"metric":{"container":"app"},"value":[0,"67108864"]}
+		]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	got, err := c.QueryMemoryByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h")
+	if err != nil {
+		t.Fatalf("QueryMemoryByContainer: %v", err)
+	}
+	if got["app"] != 67108864 {
+		t.Errorf("got %v want 67108864", got["app"])
+	}
+}
+
+func TestQueryCPURangeByContainer_ReturnsTimeSeries(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
+			{"metric":{"container":"app"},"values":[[1700000000,"0.1"],[1700000060,"0.2"]]},
+			{"metric":{"container":""},"values":[[1700000000,"99"]]}
+		]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	got, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", "5m", "1m")
+	if err != nil {
+		t.Fatalf("QueryCPURangeByContainer: %v", err)
+	}
+	if _, ok := got[""]; ok {
+		t.Error("series with empty container label must be dropped")
+	}
+	if len(got["app"]) != 2 {
+		t.Fatalf("expected 2 points for 'app', got %d", len(got["app"]))
+	}
+	if got["app"][0].Value != 0.1 || got["app"][1].Value != 0.2 {
+		t.Errorf("unexpected values: %+v", got["app"])
+	}
+}
+
+func TestQueryCPURangeByContainer_BadWindow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	if _, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", "not-a-duration", "1m"); err == nil {
+		t.Fatal("expected error for malformed window")
+	}
+	if _, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", "5m", "nope"); err == nil {
+		t.Fatal("expected error for malformed step")
+	}
+}
+
+func TestQueryMemoryRangeByContainer_HappyPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		if !strings.Contains(q, "container_memory_by_workload") {
+			t.Errorf("expected memory rule in query, got %q", q)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
+			{"metric":{"container":"app"},"values":[[1700000000,"1024"]]}
+		]}}`))
+	}))
+	defer server.Close()
+	c, _ := New(server.URL)
+	got, err := c.QueryMemoryRangeByContainer(context.Background(), "ns", "Deployment", "web", "5m", "1m")
+	if err != nil {
+		t.Fatalf("QueryMemoryRangeByContainer: %v", err)
+	}
+	if got["app"][0].Value != 1024 {
+		t.Errorf("got %v want 1024", got["app"][0].Value)
+	}
+}
+
+func TestQueryRequestRange_UsesMaxByContainer(t *testing.T) {
+	for _, fn := range []func(server string) error{
+		func(addr string) error {
+			c, _ := New(addr)
+			_, err := c.QueryCPURequestRangeByContainer(context.Background(), "ns", "Deployment", "web", "5m", "1m")
+			return err
+		},
+		func(addr string) error {
+			c, _ := New(addr)
+			_, err := c.QueryMemoryRequestRangeByContainer(context.Background(), "ns", "Deployment", "web", "5m", "1m")
+			return err
+		},
+	} {
+		var query string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			query = r.Form.Get("query")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
+		}))
+		if err := fn(server.URL); err != nil {
+			t.Errorf("query: %v", err)
+		}
+		if !strings.Contains(query, "max by (container)") {
+			t.Errorf("expected 'max by (container)' aggregator in query, got %q", query)
+		}
+		server.Close()
+	}
+}
+
+func TestQueryRecommendationRange_AppliesQuantileOverWindow(t *testing.T) {
+	var query string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		query = r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	if _, err := c.QueryCPURecommendationRangeByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h", "24h", "1h"); err != nil {
+		t.Fatalf("QueryCPURecommendationRangeByContainer: %v", err)
+	}
+	if !strings.Contains(query, "quantile_over_time(0.95") {
+		t.Errorf("expected quantile_over_time(0.95) in query, got %q", query)
+	}
+	if !strings.Contains(query, "[168h:1m]") {
+		t.Errorf("expected window [168h:1m] in query, got %q", query)
+	}
+}
+
+func TestQueryOOMKillEvents_FiltersZeroSamplesAndEmptyContainer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
+			{"metric":{"container":"app","pod":"pod-1"},"values":[[1700000000,"1"],[1700000060,"0"]]},
+			{"metric":{"container":"","pod":"pod-x"},"values":[[1700000000,"5"]]}
+		]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	if err != nil {
+		t.Fatalf("QueryOOMKillEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (only the >0 sample with non-empty container), got %d: %+v", len(events), events)
+	}
+	if events[0].Container != "app" || events[0].Pod != "pod-1" {
+		t.Errorf("unexpected event: %+v", events[0])
+	}
+}
+
+func TestQueryOOMKillEvents_ServerErrorIsNonFatal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	// Documented contract: this method returns (nil, nil) on error so a missing
+	// kube-state-metrics doesn't break dashboard rendering.
+	if err != nil {
+		t.Errorf("expected nil error on backend failure, got %v", err)
+	}
+	if events != nil {
+		t.Errorf("expected nil events, got %v", events)
+	}
+}
+
+func TestPing_OK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	if err := c.Ping(context.Background()); err != nil {
+		t.Errorf("Ping: %v", err)
+	}
+}
+
+func TestPing_Error(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	if err := c.Ping(context.Background()); err == nil {
+		t.Error("expected error on 500")
+	}
+}

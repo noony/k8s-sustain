@@ -37,6 +37,9 @@ spec:
             - --metrics-bind-address={{ .Values.controller.metricsBindAddress }}
             - --health-probe-bind-address={{ .Values.controller.healthProbeBindAddress }}
             - --leader-elect={{ .Values.controller.leaderElect }}
+            {{- if .Values.controller.leaderElectionID }}
+            - --leader-election-id={{ .Values.controller.leaderElectionID }}
+            {{- end }}
             - --prometheus-address={{ include "k8s-sustain.prometheusAddress" . }}
             - --log-level={{ .Values.controller.logLevel }}
             - --excluded-namespaces={{ concat (list .Release.Namespace "kube-system" "kube-public") .Values.webhook.excludedNamespaces | join "," }}

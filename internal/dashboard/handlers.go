@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -1044,67 +1043,7 @@ func (s *Server) getWorkloadContainers(ctx context.Context, namespace, kind, nam
 
 // ---- Simulate ----
 
-type simulateRequest struct {
-	Namespace string `json:"namespace"`
-	OwnerKind string `json:"ownerKind"`
-	OwnerName string `json:"ownerName"`
-	Window    string `json:"window"`
-	Step      string `json:"step"`
-
-	CPU    simulateResourceConfig `json:"cpu"`
-	Memory simulateResourceConfig `json:"memory"`
-}
-
-type simulateResourceConfig struct {
-	Percentile *int32  `json:"percentile,omitempty"`
-	Headroom   *int32  `json:"headroom,omitempty"`
-	MinAllowed *string `json:"minAllowed,omitempty"`
-	MaxAllowed *string `json:"maxAllowed,omitempty"`
-	Window     string  `json:"window,omitempty"`
-}
-
-func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	var req simulateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
-
-	// Input validation
-	if req.Namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace is required")
-		return
-	}
-	if req.OwnerName == "" {
-		writeError(w, http.StatusBadRequest, "ownerName is required")
-		return
-	}
-	validKinds := map[string]bool{"Deployment": true, "StatefulSet": true, "DaemonSet": true, "CronJob": true}
-	if !validKinds[req.OwnerKind] {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid ownerKind %q: must be one of Deployment, StatefulSet, DaemonSet, CronJob", req.OwnerKind))
-		return
-	}
-
-	if req.Window == "" {
-		req.Window = "168h"
-	}
-	if req.Step == "" {
-		req.Step = "5m"
-	}
-
-	result, err := s.runSimulation(r.Context(), req)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("simulation failed: %v", err))
-		return
-	}
-
-	writeJSON(w, http.StatusOK, result)
-}
+// simulateRequest, simulateResourceConfig, handleSimulate moved to handlers_simulate.go.
 
 // ---- Workload detail snapshot ----
 

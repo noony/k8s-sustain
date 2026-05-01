@@ -38,6 +38,7 @@
         "metricsBindAddress": { "type": "string" },
         "healthProbeBindAddress": { "type": "string" },
         "leaderElect": { "type": "boolean" },
+        "leaderElectionID": { "type": "string" },
         "concurrencyLimit": { "type": "integer", "minimum": 1, "maximum": 100 },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
         "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0, "maximum": 600 },

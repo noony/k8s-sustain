@@ -74,3 +74,54 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "k8s-sustain.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- if .Values.dashboard.enabled }}
+---
+# Dedicated read-only ClusterRole for the dashboard. Strictly narrower than the
+# controller role: no patch/eviction, no pods/resize, no policies/finalizers,
+# no policy mutation, no events. The dashboard only reads.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "k8s-sustain.dashboardName" . }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+rules:
+  - apiGroups: [k8s.sustain.io]
+    resources: [policies]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [namespaces, pods]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: [keda.sh]
+    resources: [scaledobjects]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "k8s-sustain.dashboardName" . }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "k8s-sustain.dashboardName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "k8s-sustain.dashboardName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

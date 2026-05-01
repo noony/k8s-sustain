@@ -72,6 +72,7 @@ func BindControllerFlags(cmd *cobra.Command) {
 	cmd.Flags().String("metrics-bind-address", ":8080", "Address the metrics endpoint binds to")
 	cmd.Flags().String("health-probe-bind-address", ":8081", "Address the health probe endpoint binds to")
 	cmd.Flags().Bool("leader-elect", false, "Enable leader election for high availability")
+	cmd.Flags().String("leader-election-id", "k8s-sustain-leader-election", "Lease name for leader election. Override when running multiple operator installs in the same cluster.")
 	cmd.Flags().String("log-level", "info", "Log level (debug, info, warn, error)")
 	cmd.Flags().String("prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
 	cmd.Flags().Duration("reconcile-interval", 5*time.Minute, "How often policies are re-evaluated")
@@ -81,6 +82,7 @@ func BindControllerFlags(cmd *cobra.Command) {
 	_ = viper.BindPFlag("metrics-bind-address", cmd.Flags().Lookup("metrics-bind-address"))
 	_ = viper.BindPFlag("health-probe-bind-address", cmd.Flags().Lookup("health-probe-bind-address"))
 	_ = viper.BindPFlag("leader-elect", cmd.Flags().Lookup("leader-elect"))
+	_ = viper.BindPFlag("leader-election-id", cmd.Flags().Lookup("leader-election-id"))
 	_ = viper.BindPFlag("log-level", cmd.Flags().Lookup("log-level"))
 	_ = viper.BindPFlag("prometheus-address", cmd.Flags().Lookup("prometheus-address"))
 	_ = viper.BindPFlag("reconcile-interval", cmd.Flags().Lookup("reconcile-interval"))
@@ -93,6 +95,7 @@ type ControllerConfig struct {
 	MetricsBindAddress     string
 	HealthProbeBindAddress string
 	LeaderElect            bool
+	LeaderElectionID       string
 	LogLevel               string
 	PrometheusAddress      string
 	ReconcileInterval      time.Duration
@@ -107,6 +110,7 @@ func LoadControllerConfig() ControllerConfig {
 		MetricsBindAddress:     viper.GetString("metrics-bind-address"),
 		HealthProbeBindAddress: viper.GetString("health-probe-bind-address"),
 		LeaderElect:            viper.GetBool("leader-elect"),
+		LeaderElectionID:       viper.GetString("leader-election-id"),
 		LogLevel:               viper.GetString("log-level"),
 		PrometheusAddress:      viper.GetString("prometheus-address"),
 		ReconcileInterval:      viper.GetDuration("reconcile-interval"),

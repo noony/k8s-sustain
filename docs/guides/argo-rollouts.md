@@ -88,6 +88,22 @@ Expected: the values in the Rollout's pod template are **unchanged** (k8s-sustai
 kubectl get pods -n example -l app=example-app -o yaml | yq '.items[].spec.containers[].resources'
 ```
 
+## How OnCreate works for Rollouts
+
+Argo Rollouts pods inherit the same indirect ownership chain as Deployment pods, just with a different top-level owner:
+
+```text
+Pod  ─owned by→  ReplicaSet  ─owned by→  Rollout (apiVersion: argoproj.io/v1alpha1)
+```
+
+When the mutating admission webhook receives a Pod CREATE, it walks the `ownerReferences`:
+
+1. If the controller owner is a `ReplicaSet`, it fetches the ReplicaSet and inspects *its* controller owner.
+2. The ReplicaSet's owner can be either a `Deployment` (apps/v1) **or** a `Rollout` (argoproj.io/v1alpha1). The walker matches on `Kind` and returns the top-level workload.
+3. The webhook then looks up the Policy via the pod's `k8s.sustain.io/policy` annotation, decides whether the resolved kind (`Rollout`) is configured, and patches the pod's container resources before admission.
+
+This walker is what makes `OnCreate` mode work for Rollouts without any extra configuration — you only need the Policy to enable `argoRollout: OnCreate` (or `Ongoing`) and to annotate the Rollout's pod template with the policy name.
+
 ## Notes
 
 - **`OnCreate` and `Ongoing` modes.** Right-sizing for `Rollout` workloads is supported in both modes. The admission webhook walks the `Pod → ReplicaSet → Rollout` owner chain and injects requests at pod creation; in `Ongoing` mode the controller additionally recycles stale pods (in-place on Kubernetes 1.31+, otherwise via eviction). The Rollout pod template is never patched — replacement pods are mutated by the webhook on the way in.

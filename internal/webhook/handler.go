@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apivalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -20,6 +21,19 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
+
+// maxPolicyNameLen mirrors the Kubernetes resource-name limit (DNS subdomain).
+// Anything longer cannot be a real Policy object.
+const maxPolicyNameLen = 253
+
+// isValidPolicyName guards against malformed annotation values flowing into
+// Prometheus query selectors. Accepts only DNS-1123 subdomains up to 253 chars.
+func isValidPolicyName(name string) bool {
+	if name == "" || len(name) > maxPolicyNameLen {
+		return false
+	}
+	return len(apivalidation.IsDNS1123Subdomain(name)) == 0
+}
 
 // Handler is the HTTP handler for the mutating admission webhook.
 // It intercepts Pod CREATE requests and injects resource requests/limits
@@ -79,6 +93,13 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	if policyName == "" {
 		logger.V(1).Info("pod has no policy annotation, allowing without injection")
 		return allow // no annotation — pod is not managed by any policy
+	}
+	if !isValidPolicyName(policyName) {
+		// A malformed annotation value would flow into Prometheus selector
+		// strings (owner_name=%q etc.) — reject early to avoid wasted queries
+		// and to refuse to act on a name we couldn't safely look up.
+		logger.Info("pod has invalid policy annotation, allowing without injection", "policy", policyName)
+		return allow
 	}
 	logger = logger.WithValues("policy", policyName)
 	logger.V(1).Info("pod is annotated with policy")

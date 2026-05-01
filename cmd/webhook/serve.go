@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -70,8 +72,19 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 		RecommendOnly:    cfg.RecommendOnly,
 	}
 
+	registry := prometheus.NewRegistry()
+	certWatcher, err := whhandler.NewCertExpiry(cfg.TLSCertFile, log, registry)
+	if err != nil {
+		log.Error(err, "Unable to register cert expiry gauge; continuing without it")
+	} else {
+		if err := certWatcher.Refresh(); err != nil {
+			log.Error(err, "Initial cert expiry read failed")
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/mutate", handler)
+	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -95,14 +108,21 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 		}
 	}()
 
+	doneCh := make(chan struct{})
+	if certWatcher != nil {
+		go certWatcher.Run(doneCh, time.Hour)
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
 	select {
 	case err := <-errCh:
+		close(doneCh)
 		return err
 	case <-sigCh:
 		log.Info("Shutting down webhook server")
+		close(doneCh)
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return srv.Shutdown(shutCtx)

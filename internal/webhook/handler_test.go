@@ -873,3 +873,45 @@ func TestServeHTTP_BadBody_Returns400(t *testing.T) {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
+
+func TestIsValidPolicyName(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"good", true},
+		{"good-name-123", true},
+		{"", false},
+		{"UPPER", false},                          // DNS-1123 is lowercase
+		{"a/b", false},                            // slash
+		{strings.Repeat("a", 254), false},         // > 253 chars
+		{"-leading-dash", false},
+		{"trailing-dash-", false},
+		{"a..b", false},                           // empty label
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := isValidPolicyName(c.name)
+			if got != c.want {
+				t.Errorf("isValidPolicyName(%q) = %v, want %v", c.name, got, c.want)
+			}
+		})
+	}
+}
+
+// TestAdmit_InvalidPolicyAnnotation_AllowsWithoutPatch verifies that a
+// malformed annotation value (uppercase, oversized, etc.) is rejected early
+// without flowing into Prometheus selector strings.
+func TestAdmit_InvalidPolicyAnnotation_AllowsWithoutPatch(t *testing.T) {
+	env := newAdmitEnv(t, basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate))
+	defer env.close()
+
+	pod := podWithRSOwner("default", "p", "rs", strings.Repeat("a", 300))
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow for invalid annotation")
+	}
+	if resp.Patch != nil {
+		t.Errorf("expected no patch for invalid policy name, got %d bytes", len(resp.Patch))
+	}
+}

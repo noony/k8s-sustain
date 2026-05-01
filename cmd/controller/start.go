@@ -37,6 +37,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		"metricsAddr", cfg.MetricsBindAddress,
 		"healthAddr", cfg.HealthProbeBindAddress,
 		"leaderElect", cfg.LeaderElect,
+		"leaderElectionID", cfg.LeaderElectionID,
 		"prometheusAddr", cfg.PrometheusAddress,
 		"reconcileInterval", cfg.ReconcileInterval,
 		"concurrencyLimit", cfg.ConcurrencyLimit,
@@ -60,7 +61,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		},
 		HealthProbeBindAddress: cfg.HealthProbeBindAddress,
 		LeaderElection:         cfg.LeaderElect,
-		LeaderElectionID:       "k8s-sustain-leader-election",
+		LeaderElectionID:       cfg.LeaderElectionID,
 	})
 	if err != nil {
 		log.Error(err, "Unable to create manager")

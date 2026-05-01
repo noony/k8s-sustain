@@ -23,6 +23,9 @@ controller:
   metricsBindAddress: ":8080"
   healthProbeBindAddress: ":8081"
   leaderElect: true
+  # Lease name for leader election. Override when running multiple operator
+  # installs side-by-side in the same cluster.
+  leaderElectionID: ""
   concurrencyLimit: 5
   logLevel: debug
   service:
