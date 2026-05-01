@@ -90,7 +90,7 @@ kubectl get pods -n example -l app=example-app -o yaml | yq '.items[].spec.conta
 
 ## Notes
 
-- **`Ongoing` mode only.** Right-sizing for `Rollout` workloads is currently supported only in `Ongoing` mode. The admission webhook does not walk the `Pod → ReplicaSet → Rollout` owner chain (it walks `Pod → ReplicaSet → Deployment`), so `OnCreate` does not inject resources into Rollout-owned pods. On Kubernetes 1.31+, `Ongoing` updates the running pods in place; on older versions the controller falls back to eviction and replacement pods come up with the resources defined in the Rollout's pod template (the webhook does not patch them).
+- **`OnCreate` and `Ongoing` modes.** Right-sizing for `Rollout` workloads is supported in both modes. The admission webhook walks the `Pod → ReplicaSet → Rollout` owner chain and injects requests at pod creation; in `Ongoing` mode the controller additionally recycles stale pods (in-place on Kubernetes 1.31+, otherwise via eviction). The Rollout pod template is never patched — replacement pods are mutated by the webhook on the way in.
 - **Canary and blue-green steps.** k8s-sustain operates on the pods currently owned by the active ReplicaSet. A paused Rollout is not perturbed: the controller recycles stale pods only when their requests drift outside the policy's clamps.
 - **Analysis runs.** Right-sizing changes affect only pod resources, never the Rollout spec, so analysis runs behave the same as without k8s-sustain.
 - **RBAC.** The controller's ClusterRole includes `argoproj.io/rollouts` with `get`, `list`, `watch` verbs (read-only).

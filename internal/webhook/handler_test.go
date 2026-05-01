@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -49,6 +50,7 @@ func TestModeForKind(t *testing.T) {
 		Deployment:  &ongoing,
 		StatefulSet: &onCreate,
 		CronJob:     &ongoing,
+		ArgoRollout: &onCreate,
 	}
 
 	tests := []struct {
@@ -58,6 +60,7 @@ func TestModeForKind(t *testing.T) {
 		{"Deployment", &ongoing},
 		{"StatefulSet", &onCreate},
 		{"CronJob", &ongoing},
+		{"Rollout", &onCreate},
 		{"DaemonSet", nil},
 		{"Unknown", nil},
 	}
@@ -73,6 +76,106 @@ func TestModeForKind(t *testing.T) {
 		if got == nil || *got != *tt.want {
 			t.Errorf("modeForKind(%q) = %v, want %v", tt.kind, got, *tt.want)
 		}
+	}
+}
+
+// TestResolveOwner_RolloutChain verifies the webhook walks
+// Pod → ReplicaSet → Rollout (Argo Rollouts) and reports the Rollout as the
+// top-level workload kind. This is what makes OnCreate injection work for
+// Rollout-owned pods.
+func TestResolveOwner_RolloutChain(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+
+	ctrl := true
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "my-rollout-abc123",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "argoproj.io/v1alpha1",
+				Kind:       "Rollout",
+				Name:       "my-rollout",
+				Controller: &ctrl,
+			}},
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rs).Build()
+	h := &Handler{Client: fakeClient}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "my-rollout-abc123-xyz",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "ReplicaSet",
+				Name:       "my-rollout-abc123",
+				Controller: &ctrl,
+			}},
+		},
+	}
+
+	kind, name, err := h.resolveOwner(context.Background(), pod)
+	if err != nil {
+		t.Fatalf("resolveOwner: %v", err)
+	}
+	if kind != "Rollout" {
+		t.Errorf("kind = %q, want %q", kind, "Rollout")
+	}
+	if name != "my-rollout" {
+		t.Errorf("name = %q, want %q", name, "my-rollout")
+	}
+}
+
+// TestResolveOwner_DeploymentChain verifies the existing
+// Pod → ReplicaSet → Deployment walk still works alongside the Rollout case.
+func TestResolveOwner_DeploymentChain(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+
+	ctrl := true
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "my-deploy-abc123",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "my-deploy",
+				Controller: &ctrl,
+			}},
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rs).Build()
+	h := &Handler{Client: fakeClient}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "my-deploy-abc123-xyz",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "ReplicaSet",
+				Name:       "my-deploy-abc123",
+				Controller: &ctrl,
+			}},
+		},
+	}
+
+	kind, name, err := h.resolveOwner(context.Background(), pod)
+	if err != nil {
+		t.Fatalf("resolveOwner: %v", err)
+	}
+	if kind != "Deployment" {
+		t.Errorf("kind = %q, want %q", kind, "Deployment")
+	}
+	if name != "my-deploy" {
+		t.Errorf("name = %q, want %q", name, "my-deploy")
 	}
 }
 

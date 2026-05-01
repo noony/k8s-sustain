@@ -163,8 +163,9 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 }
 
 // resolveOwner walks a pod's ownerReferences to determine the top-level
-// workload kind and name. Handles two indirect chains:
+// workload kind and name. Handles three indirect chains:
 //   - Pod → ReplicaSet → Deployment
+//   - Pod → ReplicaSet → Rollout (Argo Rollouts)
 //   - Pod → Job → CronJob
 //
 // Returns ("", "", nil) for standalone pods.
@@ -180,8 +181,14 @@ func (h *Handler) resolveOwner(ctx context.Context, pod *corev1.Pod) (kind, name
 				return "", "", fmt.Errorf("getting replicaset %s: %w", ref.Name, err)
 			}
 			for _, rsRef := range rs.OwnerReferences {
-				if rsRef.Controller != nil && *rsRef.Controller && rsRef.Kind == "Deployment" {
+				if rsRef.Controller == nil || !*rsRef.Controller {
+					continue
+				}
+				switch rsRef.Kind {
+				case "Deployment":
 					return "Deployment", rsRef.Name, nil
+				case "Rollout":
+					return "Rollout", rsRef.Name, nil
 				}
 			}
 			return "ReplicaSet", ref.Name, nil
