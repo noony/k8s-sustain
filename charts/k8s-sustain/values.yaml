@@ -102,6 +102,39 @@ webhook:
   tolerations: []
   affinity: {}
 
+# -- Expose the dahboard service via ingress
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: dashboard.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+
+# -- Expose the dahboard service via gateway-api HTTPRoute
+httpRoute:
+  # HTTPRoute enabled.
+  enabled: false
+  # HTTPRoute annotations.
+  annotations: {}
+  # Which Gateways this Route is attached to.
+  parentRefs:
+  - name: gateway
+    sectionName: http
+    # namespace: default
+  # Hostnames matching HTTP header.
+  hostnames:
+  - dashboard.local
+  # List of rules and filters applied.
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+
 # Dashboard — web UI for policy exploration, workload metrics, and simulation.
 dashboard:
   enabled: false
