@@ -174,6 +174,8 @@ func TestComputeMemoryRequestWithOOM(t *testing.T) {
 			wantQty:  "100Mi",
 		},
 		{
+			// Floor = peak. Headroom is applied once to peak; current_request
+			// is NOT a floor (would otherwise compound across reconciles).
 			name:     "recent oom raises floor to peak",
 			rawBytes: 50 * float64(mib),
 			signal:   OOMSignal{Recent: true, PeakBytes: 200 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
@@ -181,11 +183,15 @@ func TestComputeMemoryRequestWithOOM(t *testing.T) {
 			wantQty:  "200Mi",
 		},
 		{
-			name:     "recent oom uses current request when peak is lower",
+			// current_request is intentionally NOT a floor: the previous reco's
+			// already-headroomed value would otherwise multiply on each
+			// reconcile, causing runaway growth even after the workload fits.
+			// MinAllowed is the proper way to enforce "never shrink below X".
+			name:     "current_request is not a floor (no runaway)",
 			rawBytes: 50 * float64(mib),
 			signal:   OOMSignal{Recent: true, PeakBytes: 80 * float64(mib), CurrentRequestBytes: 150 * float64(mib)},
 			cfg:      sustainv1alpha1.ResourceRequestsConfig{},
-			wantQty:  "150Mi",
+			wantQty:  "80Mi",
 		},
 		{
 			name:     "recent oom raw above floor wins",
@@ -195,11 +201,13 @@ func TestComputeMemoryRequestWithOOM(t *testing.T) {
 			wantQty:  "300Mi",
 		},
 		{
-			name:     "recent oom headroom applied to floor",
+			// Headroom is applied to the peak ONCE, never compounded with raw.
+			// raw=50Mi → 60Mi; peak=100Mi → 120Mi; max(60, 120) = 120Mi.
+			name:     "recent oom headroom applied to peak",
 			rawBytes: 50 * float64(mib),
 			signal:   OOMSignal{Recent: true, PeakBytes: 100 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
 			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: int32p(20)},
-			wantQty:  "120Mi", // 100Mi * 1.2
+			wantQty:  "120Mi",
 		},
 		{
 			name:     "max allowed wins over oom floor",
