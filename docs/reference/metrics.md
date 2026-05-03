@@ -19,10 +19,12 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 
 | Name | Type | Labels |
 |------|------|--------|
-| `k8s_sustain_recommended_cpu_cores`        | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `policy` |
-| `k8s_sustain_recommended_memory_bytes`     | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `policy` |
-| `k8s_sustain_workload_template_cpu_cores`  | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `policy` |
-| `k8s_sustain_workload_template_memory_bytes` | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `policy` |
+| `k8s_sustain_recommended_cpu_cores`        | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `container_kind`, `policy` |
+| `k8s_sustain_recommended_memory_bytes`     | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `container_kind`, `policy` |
+| `k8s_sustain_workload_template_cpu_cores`  | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `container_kind`, `policy` |
+| `k8s_sustain_workload_template_memory_bytes` | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `container_kind`, `policy` |
+
+`container_kind` is `regular` or `init`, identifying whether the container originated as a regular pod container or an init container (including restartable sidecars). Use it to slice dashboards by container kind.
 
 `k8s_sustain_workload_template_cpu_cores` and `k8s_sustain_workload_template_memory_bytes` record the CPU/memory request from the workload's pod-template spec (the pre-injection value). Stable across webhook injection so savings rules can compare against the template.
 
@@ -30,7 +32,7 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 
 | Name | Type | Labels |
 |------|------|--------|
-| `k8s_sustain_workload_drift_ratio`      | gauge   | `namespace`, `owner_kind`, `owner_name`, `container`, `resource` |
+| `k8s_sustain_workload_drift_ratio`      | gauge   | `namespace`, `owner_kind`, `owner_name`, `container`, `container_kind`, `resource` |
 | `k8s_sustain_workload_retry_state`      | gauge   | `namespace`, `owner_kind`, `owner_name`, `reason` |
 | `k8s_sustain_workload_retry_attempts`   | counter | `namespace`, `owner_kind`, `owner_name` |
 | `k8s_sustain_policy_workload_count`     | gauge   | `policy` |

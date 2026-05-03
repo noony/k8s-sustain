@@ -12,14 +12,15 @@ import (
 )
 
 type simulationResult struct {
-	Containers           map[string]simulationContainerResult `json:"containers"`
-	CPUSeries            promclient.ContainerTimeSeries       `json:"cpuSeries"`
-	MemSeries            promclient.ContainerTimeSeries       `json:"memorySeries"`
-	Resources            map[string]containerResources        `json:"resources,omitempty"`
-	CPURequests          promclient.ContainerTimeSeries       `json:"cpuRequests,omitempty"`
-	MemoryRequests       promclient.ContainerTimeSeries       `json:"memoryRequests,omitempty"`
-	CPURecommendations   promclient.ContainerTimeSeries       `json:"cpuRecommendations,omitempty"`
-	MemRecommendations   promclient.ContainerTimeSeries       `json:"memoryRecommendations,omitempty"`
+	Containers         map[string]simulationContainerResult `json:"containers"`
+	InitContainers     []string                             `json:"initContainers,omitempty"`
+	CPUSeries          promclient.ContainerTimeSeries       `json:"cpuSeries"`
+	MemSeries          promclient.ContainerTimeSeries       `json:"memorySeries"`
+	Resources          map[string]containerResources        `json:"resources,omitempty"`
+	CPURequests        promclient.ContainerTimeSeries       `json:"cpuRequests,omitempty"`
+	MemoryRequests     promclient.ContainerTimeSeries       `json:"memoryRequests,omitempty"`
+	CPURecommendations promclient.ContainerTimeSeries       `json:"cpuRecommendations,omitempty"`
+	MemRecommendations promclient.ContainerTimeSeries       `json:"memoryRecommendations,omitempty"`
 }
 
 type simulationContainerResult struct {
@@ -118,8 +119,11 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	cpuRecSeries = applyClampingToSeries(cpuRecSeries, cpuCfg, true)
 	memRecSeries = applyClampingToSeries(memRecSeries, memCfg, false)
 
+	initContainers := s.getInitContainerNames(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
+
 	return &simulationResult{
 		Containers:         containers,
+		InitContainers:     initContainers,
 		CPUSeries:          cpuSeries,
 		MemSeries:          memSeries,
 		Resources:          resources,

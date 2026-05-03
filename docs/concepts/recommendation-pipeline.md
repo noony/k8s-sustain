@@ -2,6 +2,19 @@
 
 This page describes how k8s-sustain produces a per-container recommendation, from raw Prometheus metrics to the final request and limit values applied to a pod.
 
+## Containers covered
+
+Both regular containers and init containers are recommended by default.
+Sidecar (restartable) and classic (one-shot) init containers are treated
+uniformly: each gets a per-container recommendation derived from its own
+Prometheus series. Set `spec.rightSizing.excludeInitContainers: true` on a
+policy to skip init containers for the workloads it targets.
+
+The controller recycles a running pod when a regular container or a
+restartable sidecar drifts from the recommendation. Drift in classic init
+containers does not trigger recycle — they have already exited; the new
+requests apply on next pod creation via webhook injection.
+
 ## Stages
 
 The recommender runs each container through the following stages, in order:

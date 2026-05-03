@@ -160,6 +160,7 @@ export interface MetricsData {
   cpuRequests?: Record<string, TimeValue[]>
   memoryRequests?: Record<string, TimeValue[]>
   oomEvents?: OOMEvent[]
+  initContainers?: string[]
 }
 
 export interface RecommendationContainer {
@@ -171,6 +172,7 @@ export interface RecommendationsData {
   automated: boolean
   policyName?: string
   containers?: Record<string, RecommendationContainer>
+  initContainers?: string[]
   cpuRecommendations?: Record<string, TimeValue[]>
   memoryRecommendations?: Record<string, TimeValue[]>
 }
@@ -195,6 +197,7 @@ export interface SimulateResourceConfig {
 
 export interface SimulationResult {
   containers: Record<string, RecommendationContainer>
+  initContainers?: string[]
   cpuSeries: Record<string, TimeValue[]>
   memorySeries: Record<string, TimeValue[]>
   resources?: Record<string, ContainerResources>

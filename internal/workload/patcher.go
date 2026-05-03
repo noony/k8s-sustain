@@ -129,12 +129,14 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	}
 
 	base := pod.DeepCopy()
-	containers, changed := applyRecommendations(pod.Spec.Containers, recs)
-	if !changed {
+	containers, regChanged := applyRecommendations(pod.Spec.Containers, recs)
+	initContainers, initChanged := applyRecommendationsToSidecars(pod.Spec.InitContainers, recs)
+	if !regChanged && !initChanged {
 		logger.V(1).Info("pod already at target resources, no in-place patch needed")
 		return nil
 	}
 	pod.Spec.Containers = containers
+	pod.Spec.InitContainers = initContainers
 
 	// K8s 1.33+ requires the /resize subresource for in-place pod resource
 	// changes. Try that first; fall back to a regular pod patch for 1.31-1.32
@@ -153,6 +155,7 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 		logger.Info("in-place pod resource patch rejected, feature gate likely disabled; falling back to eviction")
 		p.inPlace = false
 		pod.Spec.Containers = base.Spec.Containers
+		pod.Spec.InitContainers = base.Spec.InitContainers
 		return p.evictPod(ctx, pod, recs)
 	}
 	if err == nil {
@@ -202,8 +205,29 @@ func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string
 // podIsStale returns true if any container in the pod has different CPU or
 // memory requests than the recommendation, meaning the pod was created from
 // an outdated template and should be replaced.
+//
+// Init containers contribute to staleness only when they are restartable
+// sidecars (restartPolicy=Always). Classic init containers have already
+// exited by the time a pod is Running, so drift in their requests cannot be
+// addressed by recycling — the new requests will land via webhook injection
+// on the next pod creation.
 func podIsStale(pod *corev1.Pod, recs map[string]ContainerRecommendation) bool {
-	for _, c := range pod.Spec.Containers {
+	if anyContainerStale(pod.Spec.Containers, recs) {
+		return true
+	}
+	for _, c := range pod.Spec.InitContainers {
+		if !isRestartableInitContainer(c) {
+			continue
+		}
+		if anyContainerStale([]corev1.Container{c}, recs) {
+			return true
+		}
+	}
+	return false
+}
+
+func anyContainerStale(cs []corev1.Container, recs map[string]ContainerRecommendation) bool {
+	for _, c := range cs {
 		rec, ok := recs[c.Name]
 		if !ok {
 			continue
@@ -222,6 +246,77 @@ func podIsStale(pod *corev1.Pod, recs map[string]ContainerRecommendation) bool {
 		}
 	}
 	return false
+}
+
+// isRestartableInitContainer reports whether an init container is a sidecar
+// (restartPolicy=Always per KEP-753), meaning it runs for the pod's lifetime
+// and is eligible for in-place resize on supported clusters.
+func isRestartableInitContainer(c corev1.Container) bool {
+	return c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways
+}
+
+// applyRecommendationsToSidecars mirrors applyRecommendations but only mutates
+// restartable init containers (sidecars). Classic init containers have already
+// exited in a Running pod, so patching their resources in-place would be a
+// no-op at best and an API error on some versions.
+func applyRecommendationsToSidecars(in []corev1.Container, recs map[string]ContainerRecommendation) ([]corev1.Container, bool) {
+	if len(in) == 0 {
+		return in, false
+	}
+	out := make([]corev1.Container, len(in))
+	copy(out, in)
+	changed := false
+	for i, c := range out {
+		if !isRestartableInitContainer(c) {
+			continue
+		}
+		if applyRecToContainer(&out[i], recs[c.Name]) {
+			changed = true
+		}
+	}
+	return out, changed
+}
+
+// applyRecToContainer applies a single recommendation to one container in
+// place, returning whether anything changed. A nil/zero rec is a no-op.
+func applyRecToContainer(c *corev1.Container, rec ContainerRecommendation) bool {
+	if rec.CPURequest == nil && rec.MemoryRequest == nil &&
+		rec.CPULimit == nil && rec.MemoryLimit == nil &&
+		!rec.RemoveCPULimit && !rec.RemoveMemoryLimit {
+		return false
+	}
+	if c.Resources.Requests == nil {
+		c.Resources.Requests = corev1.ResourceList{}
+	}
+	if c.Resources.Limits == nil {
+		c.Resources.Limits = corev1.ResourceList{}
+	}
+	changed := false
+	if rec.CPURequest != nil {
+		c.Resources.Requests[corev1.ResourceCPU] = *rec.CPURequest
+		changed = true
+	}
+	switch {
+	case rec.RemoveCPULimit:
+		delete(c.Resources.Limits, corev1.ResourceCPU)
+		changed = true
+	case rec.CPULimit != nil:
+		c.Resources.Limits[corev1.ResourceCPU] = *rec.CPULimit
+		changed = true
+	}
+	if rec.MemoryRequest != nil {
+		c.Resources.Requests[corev1.ResourceMemory] = *rec.MemoryRequest
+		changed = true
+	}
+	switch {
+	case rec.RemoveMemoryLimit:
+		delete(c.Resources.Limits, corev1.ResourceMemory)
+		changed = true
+	case rec.MemoryLimit != nil:
+		c.Resources.Limits[corev1.ResourceMemory] = *rec.MemoryLimit
+		changed = true
+	}
+	return changed
 }
 
 // applyRecommendations modifies container resources and returns

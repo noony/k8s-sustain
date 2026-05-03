@@ -8,6 +8,7 @@ import {
   type PolicySpec,
   type SimulationResult,
   type SimulateRequest,
+  type RecommendationContainer,
 } from '../lib/api'
 import { parseCPUQuantity, parseMemoryQuantity, downloadFile, formatBytes } from '../lib/format'
 import {
@@ -53,6 +54,30 @@ const simError = ref('')
 const firstRun = ref(true)
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let requestId = 0
+
+function simInitContainerSet(): Set<string> {
+  return new Set(simData.value?.initContainers || [])
+}
+
+function simRegularContainers(): [string, RecommendationContainer][] {
+  if (!simData.value) return []
+  const inits = simInitContainerSet()
+  return Object.entries(simData.value.containers).filter(([name]) => !inits.has(name))
+}
+
+function simInitContainers(): [string, RecommendationContainer][] {
+  if (!simData.value) return []
+  const inits = simInitContainerSet()
+  return Object.entries(simData.value.containers).filter(([name]) => inits.has(name))
+}
+
+function simRegularContainerNames(): string[] {
+  return simRegularContainers().map(([name]) => name)
+}
+
+function simInitContainerNames(): string[] {
+  return simInitContainers().map(([name]) => name)
+}
 
 async function loadPolicies() {
   try {
@@ -593,13 +618,13 @@ onUnmounted(() => {
             </button>
           </div>
         </div>
-        <div class="rec-grid">
-          <div v-for="(rec, cname) in simData.containers" :key="cname" class="rec-card">
+        <div v-if="simRegularContainers().length > 0" class="rec-grid">
+          <div v-for="[cname, rec] in simRegularContainers()" :key="cname" class="rec-card">
             <h4>{{ cname }}</h4>
             <div class="rec-row">
               <span class="label">CPU Request</span>
               <ResourceDiff
-                :current="(simData.resources || {})[cname as string]?.cpuRequest"
+                :current="(simData.resources || {})[cname]?.cpuRequest"
                 :recommended="rec.cpuRequest"
                 resource-type="cpu"
               />
@@ -607,16 +632,50 @@ onUnmounted(() => {
             <div class="rec-row">
               <span class="label">Memory Request</span>
               <ResourceDiff
-                :current="(simData.resources || {})[cname as string]?.memoryRequest"
+                :current="(simData.resources || {})[cname]?.memoryRequest"
                 :recommended="rec.memoryRequest"
                 resource-type="memory"
               />
             </div>
           </div>
         </div>
+
+        <template v-if="simInitContainers().length > 0">
+          <div class="card-header" style="margin-top: 16px">
+            <h3>Init containers</h3>
+            <span class="badge">init</span>
+          </div>
+          <div class="rec-grid">
+            <div v-for="[cname, rec] in simInitContainers()" :key="cname" class="rec-card">
+              <h4>{{ cname }}</h4>
+              <div class="rec-row">
+                <span class="label">CPU Request</span>
+                <ResourceDiff
+                  :current="(simData.resources || {})[cname]?.cpuRequest"
+                  :recommended="rec.cpuRequest"
+                  resource-type="cpu"
+                />
+              </div>
+              <div class="rec-row">
+                <span class="label">Memory Request</span>
+                <ResourceDiff
+                  :current="(simData.resources || {})[cname]?.memoryRequest"
+                  :recommended="rec.memoryRequest"
+                  resource-type="memory"
+                />
+              </div>
+            </div>
+          </div>
+        </template>
       </div>
 
-      <div v-for="cname in Object.keys(simData.containers)" :key="cname" class="card">
+      <h2
+        v-if="simInitContainerNames().length > 0 && simRegularContainerNames().length > 0"
+        style="margin-top: 16px"
+      >
+        Containers
+      </h2>
+      <div v-for="cname in simRegularContainerNames()" :key="cname" class="card">
         <div class="card-header">
           <h2>
             Container: <code>{{ cname }}</code>
@@ -655,6 +714,50 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+
+      <template v-if="simInitContainerNames().length > 0">
+        <h2 style="margin-top: 16px">Init containers</h2>
+        <div v-for="cname in simInitContainerNames()" :key="cname" class="card">
+          <div class="card-header">
+            <h2>
+              Init container: <code>{{ cname }}</code>
+            </h2>
+            <span class="badge">init</span>
+          </div>
+          <div class="chart-grid">
+            <div>
+              <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
+                CPU Usage + Recommendation
+              </h3>
+              <div class="chart-wrapper">
+                <button
+                  class="reset-zoom-btn"
+                  :id="'rz-simcpu-' + cname"
+                  @click="resetZoom('simcpu-' + cname)"
+                >
+                  Reset zoom
+                </button>
+                <div class="chart-container"><canvas :id="'simcpu-' + cname"></canvas></div>
+              </div>
+            </div>
+            <div>
+              <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
+                Memory Usage + Recommendation
+              </h3>
+              <div class="chart-wrapper">
+                <button
+                  class="reset-zoom-btn"
+                  :id="'rz-simmem-' + cname"
+                  @click="resetZoom('simmem-' + cname)"
+                >
+                  Reset zoom
+                </button>
+                <div class="chart-container"><canvas :id="'simmem-' + cname"></canvas></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
     </template>
   </template>
 </template>

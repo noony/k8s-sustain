@@ -165,6 +165,91 @@ func TestPodIsStale_NotStaleWhenMatching(t *testing.T) {
 	}
 }
 
+// TestPodIsStale_RestartableInitContainerDriftCountsAsStale verifies that
+// drift in a sidecar (restartable init) container's resources triggers a
+// pod recycle, since sidecars run for the pod's lifetime.
+func TestPodIsStale_RestartableInitContainerDriftCountsAsStale(t *testing.T) {
+	always := corev1.ContainerRestartPolicyAlways
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:      "app",
+				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}},
+			}},
+			InitContainers: []corev1.Container{{
+				Name:          "sidecar",
+				RestartPolicy: &always,
+				Resources:     corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}},
+			}},
+		},
+	}
+	recs := map[string]ContainerRecommendation{
+		"app":     {CPURequest: qtyp("200m")},
+		"sidecar": {CPURequest: qtyp("100m")},
+	}
+	if !podIsStale(pod, recs) {
+		t.Error("expected pod to be stale due to sidecar drift")
+	}
+}
+
+// TestPodIsStale_ClassicInitContainerDriftIsIgnored verifies that drift in a
+// classic (non-restartable) init container does NOT trigger a pod recycle —
+// the init container has already exited by the time the pod is Running, and
+// the new requests will land via webhook injection on the next pod creation.
+func TestPodIsStale_ClassicInitContainerDriftIsIgnored(t *testing.T) {
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:      "app",
+				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}},
+			}},
+			InitContainers: []corev1.Container{{
+				Name:      "migrate",
+				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}},
+			}},
+		},
+	}
+	recs := map[string]ContainerRecommendation{
+		"app":     {CPURequest: qtyp("200m")},
+		"migrate": {CPURequest: qtyp("100m")},
+	}
+	if podIsStale(pod, recs) {
+		t.Error("expected pod to NOT be stale: classic init container drift should not trigger recycle")
+	}
+}
+
+// TestApplyRecommendationsToSidecars_OnlyMutatesRestartableContainers verifies
+// the sidecar-only path skips classic init containers (which have already exited)
+// while updating restartable ones.
+func TestApplyRecommendationsToSidecars_OnlyMutatesRestartableContainers(t *testing.T) {
+	always := corev1.ContainerRestartPolicyAlways
+	in := []corev1.Container{
+		{
+			Name:          "sidecar",
+			RestartPolicy: &always,
+			Resources:     corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}},
+		},
+		{
+			Name:      "migrate",
+			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}},
+		},
+	}
+	recs := map[string]ContainerRecommendation{
+		"sidecar": {CPURequest: qtyp("100m")},
+		"migrate": {CPURequest: qtyp("100m")},
+	}
+	out, changed := applyRecommendationsToSidecars(in, recs)
+	if !changed {
+		t.Fatal("expected change for sidecar")
+	}
+	if got := out[0].Resources.Requests.Cpu().String(); got != "100m" {
+		t.Errorf("sidecar CPU: got %s, want 100m", got)
+	}
+	if got := out[1].Resources.Requests.Cpu().String(); got != "50m" {
+		t.Errorf("classic init CPU: got %s, want unchanged 50m", got)
+	}
+}
+
 // runningPod is a small builder for pods used by recyclePods tests.
 func runningPod(name string, requests corev1.ResourceList) *corev1.Pod {
 	return &corev1.Pod{

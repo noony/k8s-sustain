@@ -1,0 +1,146 @@
+# scenario: init-containers
+# expected:
+#   - regular container `app` CPU request drops from 500m to ~220m and memory
+#     request from 256Mi to ~110Mi.
+#   - sidecar init container `log-shipper` (restartPolicy: Always) gets
+#     CPU/memory recommendations from its own usage and is resized in-place on
+#     k8s >= 1.32 (or recycled along with the pod on older versions).
+#   - classic init container `migrate` is recommended too: the webhook injects
+#     resources for it on next pod creation. Drift in `migrate` does NOT
+#     trigger a pod recycle since it has already exited when the pod is
+#     Running.
+#
+# Verify recommendations include all three containers:
+#   kubectl get wlrec -n scenario-init-containers -o yaml
+# Verify metrics carry container_kind:
+#   kubectl --raw /api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics \
+#     | grep 'k8s_sustain_recommended_cpu_cores{.*container_kind="init"'
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scenario-init-containers
+  labels:
+    k8s-sustain.io/scenario: init-containers
+---
+apiVersion: k8s.sustain.io/v1alpha1
+kind: Policy
+metadata:
+  name: scenario-init-containers
+spec:
+  selector:
+    namespaces: [scenario-init-containers]
+  rightSizing:
+    update:
+      types:
+        deployment: Ongoing
+    resourcesConfigs:
+      cpu:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 10
+        limits:
+          noLimit: true
+      memory:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 15
+        limits:
+          requestsLimitsRatio: 1.5
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen
+  namespace: scenario-init-containers
+data:
+  loadgen.py: |
+    import os, time
+    duty = float(os.environ.get('LOAD_DUTY', '0.2'))
+    mem_mb = int(os.environ.get('LOAD_MEM_MB', '50'))
+    buf = bytearray(mem_mb * 1024 * 1024)
+    for i in range(0, len(buf), 4096):
+        buf[i] = 1
+    period = 0.1
+    on = period * duty
+    off = period - on
+    while True:
+        s = time.monotonic()
+        while time.monotonic() - s < on:
+            pass
+        if off > 0:
+            time.sleep(off)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stress
+  namespace: scenario-init-containers
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stress
+  template:
+    metadata:
+      labels:
+        app: stress
+      annotations:
+        k8s.sustain.io/policy: scenario-init-containers
+    spec:
+      initContainers:
+      # classic init container — exits before regular containers start.
+      # Recommendations land via webhook injection at next pod creation.
+      - name: migrate
+        image: busybox:1.36
+        command: ["sh", "-c", "echo migrating...; sleep 5; echo done"]
+        resources:
+          requests:
+            cpu: 200m
+            memory: 64Mi
+          limits:
+            memory: 64Mi
+      # sidecar init container — runs for the pod's lifetime and is treated
+      # like a regular container by the recommender / patcher.
+      - name: log-shipper
+        image: python:3.12-alpine
+        restartPolicy: Always
+        command: ["python3", "/loadgen/loadgen.py"]
+        env:
+          - name: LOAD_DUTY
+            value: "0.05"   # ~50m of one core
+          - name: LOAD_MEM_MB
+            value: "20"
+        volumeMounts:
+          - name: loadgen
+            mountPath: /loadgen
+        resources:
+          requests:
+            cpu: 200m
+            memory: 128Mi
+          limits:
+            memory: 128Mi
+      containers:
+      - name: app
+        image: python:3.12-alpine
+        command: ["python3", "/loadgen/loadgen.py"]
+        env:
+          - name: LOAD_DUTY
+            value: "0.20"   # ~200m of one core
+          - name: LOAD_MEM_MB
+            value: "100"
+        volumeMounts:
+          - name: loadgen
+            mountPath: /loadgen
+        resources:
+          requests:
+            cpu: 500m
+            memory: 256Mi
+          limits:
+            memory: 256Mi
+      volumes:
+        - name: loadgen
+          configMap:
+            name: loadgen

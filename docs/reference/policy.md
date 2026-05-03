@@ -131,6 +131,20 @@ formulas and detection rules.
 | `enabled` | bool | `false` | Enables the overhead formula `(100 / hpa_target_pct) × 1.10` for CPU/memory resources targeted on `averageUtilization`. |
 | `replicaBudgetAnchor` | float (0.0–1.0) | unset | Optional. Enables CPU replica-budget correction. The fraction into `[minReplicas, maxReplicas]` at which the workload should sit at steady state (typical: `0.10`). When unset, replica correction is disabled. |
 
+### `spec.rightSizing.excludeInitContainers`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `excludeInitContainers` | bool | `false` | When `true`, init containers (including restartable sidecar init containers) are skipped for any workload this policy targets. By default, init containers are recommended and resized like regular containers. |
+
+Init containers are treated uniformly with regular containers by default —
+both classic (one-shot) and sidecar (`restartPolicy: Always`) init containers
+get a recommendation, and webhook injection updates their requests/limits at
+pod creation. The controller recycles pods only when a regular container or
+sidecar init container drifts from the recommendation; classic init containers
+have already exited when the pod is `Running`, so their drift is picked up on
+next pod creation rather than triggering an immediate recycle.
+
 ### `spec.rightSizing.resourcesConfigs`
 
 Configures recommendations for CPU and memory independently.

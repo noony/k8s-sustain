@@ -15,13 +15,14 @@ import (
 // workloadTarget is the unit of work for reconciliation. It represents a single
 // workload (Deployment, StatefulSet, DaemonSet, Rollout) that matches a Policy.
 type workloadTarget struct {
-	Kind       string
-	Name       string
-	Namespace  string
-	PolicyName string
-	Containers []corev1.Container
-	Selector   *metav1.LabelSelector
-	Object     client.Object
+	Kind           string
+	Name           string
+	Namespace      string
+	PolicyName     string
+	Containers     []corev1.Container
+	InitContainers []corev1.Container
+	Selector       *metav1.LabelSelector
+	Object         client.Object
 }
 
 // key returns a unique identifier for this workload target, used as the retry map key.
@@ -29,51 +30,73 @@ func (w *workloadTarget) key() string { //nolint:unused // used in Task 5 reconc
 	return w.Kind + "/" + w.Namespace + "/" + w.Name
 }
 
+// recommendableContainers returns the containers to feed into the recommendation
+// pipeline plus a set of container names that originate from InitContainers.
+// When excludeInit is true (or the workload has no init containers), the init
+// list is dropped and the returned set is empty.
+func (w *workloadTarget) recommendableContainers(excludeInit bool) ([]corev1.Container, map[string]struct{}) {
+	if excludeInit || len(w.InitContainers) == 0 {
+		return w.Containers, nil
+	}
+	merged := make([]corev1.Container, 0, len(w.Containers)+len(w.InitContainers))
+	merged = append(merged, w.Containers...)
+	merged = append(merged, w.InitContainers...)
+	initNames := make(map[string]struct{}, len(w.InitContainers))
+	for _, c := range w.InitContainers {
+		initNames[c.Name] = struct{}{}
+	}
+	return merged, initNames
+}
+
 func deploymentToTarget(d *appsv1.Deployment) workloadTarget {
 	return workloadTarget{
-		Kind:       "Deployment",
-		Name:       d.Name,
-		Namespace:  d.Namespace,
-		PolicyName: d.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
-		Containers: d.Spec.Template.Spec.Containers,
-		Selector:   d.Spec.Selector,
-		Object:     d,
+		Kind:           "Deployment",
+		Name:           d.Name,
+		Namespace:      d.Namespace,
+		PolicyName:     d.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
+		Containers:     d.Spec.Template.Spec.Containers,
+		InitContainers: d.Spec.Template.Spec.InitContainers,
+		Selector:       d.Spec.Selector,
+		Object:         d,
 	}
 }
 
 func statefulSetToTarget(s *appsv1.StatefulSet) workloadTarget {
 	return workloadTarget{
-		Kind:       "StatefulSet",
-		Name:       s.Name,
-		Namespace:  s.Namespace,
-		PolicyName: s.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
-		Containers: s.Spec.Template.Spec.Containers,
-		Selector:   s.Spec.Selector,
-		Object:     s,
+		Kind:           "StatefulSet",
+		Name:           s.Name,
+		Namespace:      s.Namespace,
+		PolicyName:     s.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
+		Containers:     s.Spec.Template.Spec.Containers,
+		InitContainers: s.Spec.Template.Spec.InitContainers,
+		Selector:       s.Spec.Selector,
+		Object:         s,
 	}
 }
 
 func daemonSetToTarget(ds *appsv1.DaemonSet) workloadTarget {
 	return workloadTarget{
-		Kind:       "DaemonSet",
-		Name:       ds.Name,
-		Namespace:  ds.Namespace,
-		PolicyName: ds.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
-		Containers: ds.Spec.Template.Spec.Containers,
-		Selector:   ds.Spec.Selector,
-		Object:     ds,
+		Kind:           "DaemonSet",
+		Name:           ds.Name,
+		Namespace:      ds.Namespace,
+		PolicyName:     ds.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
+		Containers:     ds.Spec.Template.Spec.Containers,
+		InitContainers: ds.Spec.Template.Spec.InitContainers,
+		Selector:       ds.Spec.Selector,
+		Object:         ds,
 	}
 }
 
 func rolloutToTarget(r *rolloutsv1alpha1.Rollout) workloadTarget {
 	return workloadTarget{
-		Kind:       "Rollout",
-		Name:       r.Name,
-		Namespace:  r.Namespace,
-		PolicyName: r.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
-		Containers: r.Spec.Template.Spec.Containers,
-		Selector:   r.Spec.Selector,
-		Object:     r,
+		Kind:           "Rollout",
+		Name:           r.Name,
+		Namespace:      r.Namespace,
+		PolicyName:     r.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
+		Containers:     r.Spec.Template.Spec.Containers,
+		InitContainers: r.Spec.Template.Spec.InitContainers,
+		Selector:       r.Spec.Selector,
+		Object:         r,
 	}
 }
 

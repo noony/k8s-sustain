@@ -56,6 +56,7 @@ type workloadSummary struct {
 
 type containerStatus struct {
 	Name          string `json:"name"`
+	Init          bool   `json:"init,omitempty"`
 	CPURequest    string `json:"cpuRequest"`
 	CPULimit      string `json:"cpuLimit"`
 	MemoryRequest string `json:"memoryRequest"`
@@ -370,7 +371,7 @@ func (s *Server) listDeploymentWorkloads(ctx context.Context, policyName string)
 			Namespace:  d.Namespace,
 			Kind:       "Deployment",
 			Name:       d.Name,
-			Containers: containerStatuses(d.Spec.Template.Spec.Containers),
+			Containers: containerStatuses(d.Spec.Template.Spec.Containers, d.Spec.Template.Spec.InitContainers),
 		})
 	}
 	return out, nil
@@ -390,7 +391,7 @@ func (s *Server) listStatefulSetWorkloads(ctx context.Context, policyName string
 			Namespace:  st.Namespace,
 			Kind:       "StatefulSet",
 			Name:       st.Name,
-			Containers: containerStatuses(st.Spec.Template.Spec.Containers),
+			Containers: containerStatuses(st.Spec.Template.Spec.Containers, st.Spec.Template.Spec.InitContainers),
 		})
 	}
 	return out, nil
@@ -410,7 +411,7 @@ func (s *Server) listDaemonSetWorkloads(ctx context.Context, policyName string) 
 			Namespace:  ds.Namespace,
 			Kind:       "DaemonSet",
 			Name:       ds.Name,
-			Containers: containerStatuses(ds.Spec.Template.Spec.Containers),
+			Containers: containerStatuses(ds.Spec.Template.Spec.Containers, ds.Spec.Template.Spec.InitContainers),
 		})
 	}
 	return out, nil
@@ -430,7 +431,7 @@ func (s *Server) listCronJobWorkloads(ctx context.Context, policyName string) ([
 			Namespace:  cj.Namespace,
 			Kind:       "CronJob",
 			Name:       cj.Name,
-			Containers: containerStatuses(cj.Spec.JobTemplate.Spec.Template.Spec.Containers),
+			Containers: containerStatuses(cj.Spec.JobTemplate.Spec.Template.Spec.Containers, cj.Spec.JobTemplate.Spec.Template.Spec.InitContainers),
 		})
 	}
 	return out, nil
@@ -463,29 +464,36 @@ func (s *Server) fetchCoordinationFactors(ctx context.Context, namespace, kind, 
 	return out
 }
 
-func containerStatuses(containers []corev1.Container) []containerStatus {
-	out := make([]containerStatus, 0, len(containers))
+func containerStatuses(containers, initContainers []corev1.Container) []containerStatus {
+	out := make([]containerStatus, 0, len(containers)+len(initContainers))
 	for _, c := range containers {
-		cs := containerStatus{Name: c.Name}
-		if req := c.Resources.Requests; req != nil {
-			if cpu := req.Cpu(); cpu != nil && !cpu.IsZero() {
-				cs.CPURequest = cpu.String()
-			}
-			if mem := req.Memory(); mem != nil && !mem.IsZero() {
-				cs.MemoryRequest = mem.String()
-			}
-		}
-		if lim := c.Resources.Limits; lim != nil {
-			if cpu := lim.Cpu(); cpu != nil && !cpu.IsZero() {
-				cs.CPULimit = cpu.String()
-			}
-			if mem := lim.Memory(); mem != nil && !mem.IsZero() {
-				cs.MemoryLimit = mem.String()
-			}
-		}
-		out = append(out, cs)
+		out = append(out, containerStatusFor(c, false))
+	}
+	for _, c := range initContainers {
+		out = append(out, containerStatusFor(c, true))
 	}
 	return out
+}
+
+func containerStatusFor(c corev1.Container, isInit bool) containerStatus {
+	cs := containerStatus{Name: c.Name, Init: isInit}
+	if req := c.Resources.Requests; req != nil {
+		if cpu := req.Cpu(); cpu != nil && !cpu.IsZero() {
+			cs.CPURequest = cpu.String()
+		}
+		if mem := req.Memory(); mem != nil && !mem.IsZero() {
+			cs.MemoryRequest = mem.String()
+		}
+	}
+	if lim := c.Resources.Limits; lim != nil {
+		if cpu := lim.Cpu(); cpu != nil && !cpu.IsZero() {
+			cs.CPULimit = cpu.String()
+		}
+		if mem := lim.Memory(); mem != nil && !mem.IsZero() {
+			cs.MemoryLimit = mem.String()
+		}
+	}
+	return cs
 }
 
 // ---- All workloads (cluster-wide) ----
@@ -562,7 +570,7 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 					Namespace:  d.Namespace,
 					Kind:       "Deployment",
 					Name:       d.Name,
-					Containers: containerStatuses(d.Spec.Template.Spec.Containers),
+					Containers: containerStatuses(d.Spec.Template.Spec.Containers, d.Spec.Template.Spec.InitContainers),
 					Automated:  policyName != "",
 					PolicyName: policyName,
 				})
@@ -580,7 +588,7 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 					Namespace:  st.Namespace,
 					Kind:       "StatefulSet",
 					Name:       st.Name,
-					Containers: containerStatuses(st.Spec.Template.Spec.Containers),
+					Containers: containerStatuses(st.Spec.Template.Spec.Containers, st.Spec.Template.Spec.InitContainers),
 					Automated:  policyName != "",
 					PolicyName: policyName,
 				})
@@ -598,7 +606,7 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 					Namespace:  ds.Namespace,
 					Kind:       "DaemonSet",
 					Name:       ds.Name,
-					Containers: containerStatuses(ds.Spec.Template.Spec.Containers),
+					Containers: containerStatuses(ds.Spec.Template.Spec.Containers, ds.Spec.Template.Spec.InitContainers),
 					Automated:  policyName != "",
 					PolicyName: policyName,
 				})
@@ -616,7 +624,7 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 					Namespace:  cj.Namespace,
 					Kind:       "CronJob",
 					Name:       cj.Name,
-					Containers: containerStatuses(cj.Spec.JobTemplate.Spec.Template.Spec.Containers),
+					Containers: containerStatuses(cj.Spec.JobTemplate.Spec.Template.Spec.Containers, cj.Spec.JobTemplate.Spec.Template.Spec.InitContainers),
 					Automated:  policyName != "",
 					PolicyName: policyName,
 				})
@@ -762,6 +770,7 @@ type recommendationResult struct {
 	Automated          bool                                 `json:"automated"`
 	PolicyName         string                               `json:"policyName,omitempty"`
 	Containers         map[string]simulationContainerResult `json:"containers,omitempty"`
+	InitContainers     []string                             `json:"initContainers,omitempty"`
 	CPURecommendations promclient.ContainerTimeSeries       `json:"cpuRecommendations,omitempty"`
 	MemRecommendations promclient.ContainerTimeSeries       `json:"memoryRecommendations,omitempty"`
 }
@@ -857,6 +866,7 @@ func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Re
 		Automated:          true,
 		PolicyName:         policyName,
 		Containers:         result.Containers,
+		InitContainers:     result.InitContainers,
 		CPURecommendations: result.CPURecommendations,
 		MemRecommendations: result.MemRecommendations,
 	})
@@ -960,6 +970,8 @@ func (s *Server) handleWorkloadRoutes(w http.ResponseWriter, r *http.Request) {
 	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(r.Context(), namespace, kind, name, window, step)
 	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(r.Context(), namespace, kind, name, window, step)
 
+	initContainers := s.getInitContainerNames(r.Context(), namespace, kind, name)
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cpu":            cpuSeries,
 		"memory":         memSeries,
@@ -967,6 +979,7 @@ func (s *Server) handleWorkloadRoutes(w http.ResponseWriter, r *http.Request) {
 		"cpuRequests":    cpuRequests,
 		"memoryRequests": memRequests,
 		"oomEvents":      oomEvents,
+		"initContainers": initContainers,
 	})
 }
 
@@ -1017,28 +1030,84 @@ func (s *Server) getWorkloadContainers(ctx context.Context, namespace, kind, nam
 		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
 			return nil, err
 		}
-		return obj.Spec.Template.Spec.Containers, nil
+		return mergedContainers(obj.Spec.Template.Spec.Containers, obj.Spec.Template.Spec.InitContainers), nil
 	case "StatefulSet":
 		obj := &appsv1.StatefulSet{}
 		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
 			return nil, err
 		}
-		return obj.Spec.Template.Spec.Containers, nil
+		return mergedContainers(obj.Spec.Template.Spec.Containers, obj.Spec.Template.Spec.InitContainers), nil
 	case "DaemonSet":
 		obj := &appsv1.DaemonSet{}
 		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
 			return nil, err
 		}
-		return obj.Spec.Template.Spec.Containers, nil
+		return mergedContainers(obj.Spec.Template.Spec.Containers, obj.Spec.Template.Spec.InitContainers), nil
 	case "CronJob":
 		obj := &batchv1.CronJob{}
 		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
 			return nil, err
 		}
-		return obj.Spec.JobTemplate.Spec.Template.Spec.Containers, nil
+		return mergedContainers(obj.Spec.JobTemplate.Spec.Template.Spec.Containers, obj.Spec.JobTemplate.Spec.Template.Spec.InitContainers), nil
 	default:
 		return nil, fmt.Errorf("unsupported kind %q", kind)
 	}
+}
+
+// mergedContainers concatenates regular and init containers. Container names
+// are unique across both lists in Kubernetes so callers can safely key by name.
+func mergedContainers(containers, initContainers []corev1.Container) []corev1.Container {
+	if len(initContainers) == 0 {
+		return containers
+	}
+	out := make([]corev1.Container, 0, len(containers)+len(initContainers))
+	out = append(out, containers...)
+	out = append(out, initContainers...)
+	return out
+}
+
+// getInitContainerNames returns the names of the init containers (if any) on
+// the given workload's pod template. Used by dashboard responses to let the UI
+// render init containers in their own section, separated from regular ones.
+func (s *Server) getInitContainerNames(ctx context.Context, namespace, kind, name string) []string {
+	key := client.ObjectKey{Namespace: namespace, Name: name}
+	var list []corev1.Container
+	switch kind {
+	case "Deployment":
+		obj := &appsv1.Deployment{}
+		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
+			return nil
+		}
+		list = obj.Spec.Template.Spec.InitContainers
+	case "StatefulSet":
+		obj := &appsv1.StatefulSet{}
+		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
+			return nil
+		}
+		list = obj.Spec.Template.Spec.InitContainers
+	case "DaemonSet":
+		obj := &appsv1.DaemonSet{}
+		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
+			return nil
+		}
+		list = obj.Spec.Template.Spec.InitContainers
+	case "CronJob":
+		obj := &batchv1.CronJob{}
+		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
+			return nil
+		}
+		list = obj.Spec.JobTemplate.Spec.Template.Spec.InitContainers
+	default:
+		return nil
+	}
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]string, len(list))
+	for i, c := range list {
+		out[i] = c.Name
+	}
+	return out
 }
 
 // ---- Simulate ----

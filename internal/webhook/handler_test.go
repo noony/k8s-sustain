@@ -292,6 +292,48 @@ func TestBuildPatches_SkipsUnmatchedContainer(t *testing.T) {
 	}
 }
 
+// TestBuildPatches_PatchesInitContainers verifies that recommendations whose
+// names match init containers produce JSON patches at /spec/initContainers/N/resources.
+func TestBuildPatches_PatchesInitContainers(t *testing.T) {
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers:     []corev1.Container{{Name: "app"}},
+			InitContainers: []corev1.Container{{Name: "migrate"}, {Name: "warm-cache"}},
+		},
+	}
+	recs := map[string]workload.ContainerRecommendation{
+		"app":        {CPURequest: qtyp("100m")},
+		"migrate":    {CPURequest: qtyp("250m")},
+		"warm-cache": {CPURequest: qtyp("50m")},
+	}
+
+	result, err := buildPatches(pod, recs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var patches []jsonPatch
+	if err := json.Unmarshal(result, &patches); err != nil {
+		t.Fatalf("unmarshal patches: %v", err)
+	}
+	if len(patches) != 3 {
+		t.Fatalf("expected 3 patches, got %d", len(patches))
+	}
+	paths := map[string]bool{}
+	for _, p := range patches {
+		paths[p.Path] = true
+	}
+	want := []string{
+		"/spec/containers/0/resources",
+		"/spec/initContainers/0/resources",
+		"/spec/initContainers/1/resources",
+	}
+	for _, p := range want {
+		if !paths[p] {
+			t.Errorf("missing patch path %q (got %v)", p, paths)
+		}
+	}
+}
+
 // TestBuildRecommendations_WorkloadLevelSignal verifies that buildRecommendations
 // uses workload-level totals divided by replica count to derive per-pod values.
 // With replicas=3, total CPU=1.2 cores → per-pod=0.4 cores → request=400m

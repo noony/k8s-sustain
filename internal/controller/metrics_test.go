@@ -12,9 +12,9 @@ func TestNewMetricsRegistered(t *testing.T) {
 		name   string
 		labels []string
 	}{
-		{"k8s_sustain_recommended_cpu_cores", []string{"namespace", "owner_kind", "owner_name", "container", "policy"}},
-		{"k8s_sustain_recommended_memory_bytes", []string{"namespace", "owner_kind", "owner_name", "container", "policy"}},
-		{"k8s_sustain_workload_drift_ratio", []string{"namespace", "owner_kind", "owner_name", "container", "resource"}},
+		{"k8s_sustain_recommended_cpu_cores", []string{"namespace", "owner_kind", "owner_name", "container", "container_kind", "policy"}},
+		{"k8s_sustain_recommended_memory_bytes", []string{"namespace", "owner_kind", "owner_name", "container", "container_kind", "policy"}},
+		{"k8s_sustain_workload_drift_ratio", []string{"namespace", "owner_kind", "owner_name", "container", "container_kind", "resource"}},
 		{"k8s_sustain_workload_retry_state", []string{"namespace", "owner_kind", "owner_name", "reason"}},
 		{"k8s_sustain_workload_retry_attempts", []string{"namespace", "owner_kind", "owner_name"}},
 		{"k8s_sustain_policy_workload_count", []string{"policy"}},
@@ -83,9 +83,9 @@ func metricsRegistry() interface {
 }
 
 func init() {
-	recommendedCPUCores.WithLabelValues("ns", "Deployment", "n", "c", "p").Set(0)
-	recommendedMemoryBytes.WithLabelValues("ns", "Deployment", "n", "c", "p").Set(0)
-	workloadDriftRatio.WithLabelValues("ns", "Deployment", "n", "c", "cpu").Set(1)
+	recommendedCPUCores.WithLabelValues("ns", "Deployment", "n", "c", "regular", "p").Set(0)
+	recommendedMemoryBytes.WithLabelValues("ns", "Deployment", "n", "c", "regular", "p").Set(0)
+	workloadDriftRatio.WithLabelValues("ns", "Deployment", "n", "c", "regular", "cpu").Set(1)
 	workloadRetryState.WithLabelValues("ns", "Deployment", "n", "test").Set(0)
 	workloadRetryAttempts.WithLabelValues("ns", "Deployment", "n").Add(0)
 	policyWorkloadCount.WithLabelValues("p").Set(0)

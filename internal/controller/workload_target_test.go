@@ -105,6 +105,75 @@ func TestRolloutToTarget(t *testing.T) {
 	}
 }
 
+func TestDeploymentToTargetCapturesInitContainers(t *testing.T) {
+	d := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod"},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers:     []corev1.Container{{Name: "app"}},
+					InitContainers: []corev1.Container{{Name: "migrate"}, {Name: "warm-cache"}},
+				},
+			},
+		},
+	}
+
+	target := deploymentToTarget(d)
+	if got, want := len(target.InitContainers), 2; got != want {
+		t.Fatalf("init containers: got %d, want %d", got, want)
+	}
+	if target.InitContainers[0].Name != "migrate" || target.InitContainers[1].Name != "warm-cache" {
+		t.Errorf("unexpected init container names: %+v", target.InitContainers)
+	}
+}
+
+func TestRecommendableContainers(t *testing.T) {
+	t.Run("no init containers returns regular slice unchanged", func(t *testing.T) {
+		w := &workloadTarget{
+			Containers: []corev1.Container{{Name: "app"}},
+		}
+		got, initNames := w.recommendableContainers(false)
+		if len(got) != 1 || got[0].Name != "app" {
+			t.Fatalf("unexpected containers: %+v", got)
+		}
+		if initNames != nil {
+			t.Fatalf("expected nil initNames, got %v", initNames)
+		}
+	})
+
+	t.Run("merges regular + init when not excluded", func(t *testing.T) {
+		w := &workloadTarget{
+			Containers:     []corev1.Container{{Name: "app"}},
+			InitContainers: []corev1.Container{{Name: "migrate"}},
+		}
+		got, initNames := w.recommendableContainers(false)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 containers, got %d", len(got))
+		}
+		if _, ok := initNames["migrate"]; !ok {
+			t.Errorf("expected migrate in init names, got %v", initNames)
+		}
+		if _, ok := initNames["app"]; ok {
+			t.Errorf("regular container should not be in init names, got %v", initNames)
+		}
+	})
+
+	t.Run("excludes init when ExcludeInitContainers=true", func(t *testing.T) {
+		w := &workloadTarget{
+			Containers:     []corev1.Container{{Name: "app"}},
+			InitContainers: []corev1.Container{{Name: "migrate"}},
+		}
+		got, initNames := w.recommendableContainers(true)
+		if len(got) != 1 || got[0].Name != "app" {
+			t.Fatalf("expected only regular container, got %+v", got)
+		}
+		if initNames != nil {
+			t.Errorf("expected nil initNames when excluded, got %v", initNames)
+		}
+	})
+}
+
 func TestFilterTargets(t *testing.T) {
 	targets := []workloadTarget{
 		{Kind: "Deployment", Name: "web", Namespace: "prod", PolicyName: "my-policy"},

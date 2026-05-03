@@ -52,13 +52,13 @@ func TestEmitWorkloadMetricsSetsExpectedValues(t *testing.T) {
 	EmitWorkloadMetrics(rec)
 
 	cpu := gaugeValue(t, "k8s_sustain_recommended_cpu_cores", map[string]string{
-		"namespace": "default", "owner_kind": "Deployment", "owner_name": "web", "container": "app", "policy": "p",
+		"namespace": "default", "owner_kind": "Deployment", "owner_name": "web", "container": "app", "container_kind": "regular", "policy": "p",
 	})
 	if cpu != 0.25 {
 		t.Errorf("cpu rec: got %v want 0.25", cpu)
 	}
 	driftCPU := gaugeValue(t, "k8s_sustain_workload_drift_ratio", map[string]string{
-		"namespace": "default", "owner_kind": "Deployment", "owner_name": "web", "container": "app", "resource": "cpu",
+		"namespace": "default", "owner_kind": "Deployment", "owner_name": "web", "container": "app", "container_kind": "regular", "resource": "cpu",
 	})
 	if driftCPU != 0.5 {
 		t.Errorf("cpu drift: got %v want 0.5 (rec/current)", driftCPU)
@@ -294,17 +294,17 @@ func TestEmitWorkloadFromRecs_HappyPath(t *testing.T) {
 	recs := map[string]workload.ContainerRecommendation{
 		container: {CPURequest: &cpu, MemoryRequest: &mem},
 	}
-	emitWorkloadFromRecs(t1, "p", recs)
+	emitWorkloadFromRecs(t1, "p", recs, nil)
 
 	// recommended cpu should be 0.25
 	if got := gaugeValue(t, "k8s_sustain_recommended_cpu_cores", map[string]string{
-		"namespace": ns, "owner_kind": kind, "owner_name": name, "container": container, "policy": "p",
+		"namespace": ns, "owner_kind": kind, "owner_name": name, "container": container, "container_kind": "regular", "policy": "p",
 	}); got != 0.25 {
 		t.Errorf("recommended cpu = %v, want 0.25", got)
 	}
 	// drift ratio cpu = 0.25 / 0.5 = 0.5
 	if got := gaugeValue(t, "k8s_sustain_workload_drift_ratio", map[string]string{
-		"namespace": ns, "owner_kind": kind, "owner_name": name, "container": container, "resource": "cpu",
+		"namespace": ns, "owner_kind": kind, "owner_name": name, "container": container, "container_kind": "regular", "resource": "cpu",
 	}); got != 0.5 {
 		t.Errorf("cpu drift = %v, want 0.5", got)
 	}
@@ -318,7 +318,7 @@ func TestEmitWorkloadFromRecs_EmptyRecsIsNoOp(t *testing.T) {
 		Namespace: "ns", Kind: "Deployment", Name: "no-recs",
 		Containers: []corev1.Container{{Name: "app"}},
 	}
-	emitWorkloadFromRecs(t1, "p", map[string]workload.ContainerRecommendation{})
+	emitWorkloadFromRecs(t1, "p", map[string]workload.ContainerRecommendation{}, nil)
 	if got := len(seriesForWorkload(t, "k8s_sustain_recommended_cpu_cores", "ns", "Deployment", "no-recs")); got != 0 {
 		t.Errorf("expected no series emitted for empty recs, got %d", got)
 	}

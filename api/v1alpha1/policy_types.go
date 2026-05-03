@@ -130,6 +130,11 @@ type RightSizingSpec struct {
 	// AutoscalerCoordination configures HPA/ScaledObject-aware request shaping.
 	// +optional
 	AutoscalerCoordination AutoscalerCoordination `json:"autoscalerCoordination,omitempty"`
+	// ExcludeInitContainers skips init containers (including restartable
+	// sidecar init containers) for any workload this policy targets. Defaults
+	// to false: init containers are recommended and resized like regular ones.
+	// +optional
+	ExcludeInitContainers bool `json:"excludeInitContainers,omitempty"`
 }
 
 // UpdateTypes defines the update mode for each supported workload kind.

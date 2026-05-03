@@ -143,7 +143,14 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 	logger.V(1).Info("policy configured for workload kind", "mode", *mode)
 
-	recs, err := h.buildRecommendations(ctx, &policy, req.Namespace, ownerKind, ownerName, pod.Spec.Containers)
+	containers := pod.Spec.Containers
+	if !policy.Spec.RightSizing.ExcludeInitContainers && len(pod.Spec.InitContainers) > 0 {
+		merged := make([]corev1.Container, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
+		merged = append(merged, pod.Spec.Containers...)
+		merged = append(merged, pod.Spec.InitContainers...)
+		containers = merged
+	}
+	recs, err := h.buildRecommendations(ctx, &policy, req.Namespace, ownerKind, ownerName, containers)
 	if err != nil {
 		// Prometheus failed (timeout, network, or circuit breaker open).
 		// Try the cached WorkloadRecommendation that the controller writes
@@ -175,15 +182,20 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	// The workload is annotated with a policy — the intent is to apply it.
 	filtered := make(map[string]workload.ContainerRecommendation)
 	for _, c := range pod.Spec.Containers {
-		rec, ok := recs[c.Name]
-		if !ok {
-			continue
+		if rec, ok := recs[c.Name]; ok {
+			filtered[c.Name] = rec
 		}
-		filtered[c.Name] = rec
+	}
+	if !policy.Spec.RightSizing.ExcludeInitContainers {
+		for _, c := range pod.Spec.InitContainers {
+			if rec, ok := recs[c.Name]; ok {
+				filtered[c.Name] = rec
+			}
+		}
 	}
 	if len(filtered) == 0 {
 		logger.V(1).Info("no recommendations match pod containers, allowing without injection",
-			"podContainers", len(pod.Spec.Containers), "recommendations", len(recs))
+			"podContainers", len(pod.Spec.Containers), "podInitContainers", len(pod.Spec.InitContainers), "recommendations", len(recs))
 		return allow
 	}
 
@@ -374,11 +386,32 @@ func (h *Handler) buildRecommendations(
 }
 
 // buildPatches generates an RFC 6902 JSON Patch that sets resources on the
-// containers listed in recs. Uses "add" which replaces any existing value.
+// containers (and init containers) listed in recs. Uses "add" which replaces
+// any existing value at the path.
 func buildPatches(pod *corev1.Pod, recs map[string]workload.ContainerRecommendation) ([]byte, error) {
 	var patches []jsonPatch
 
-	for i, c := range pod.Spec.Containers {
+	addPatches, err := patchesForContainers(pod.Spec.Containers, recs, "/spec/containers")
+	if err != nil {
+		return nil, err
+	}
+	patches = append(patches, addPatches...)
+
+	addPatches, err = patchesForContainers(pod.Spec.InitContainers, recs, "/spec/initContainers")
+	if err != nil {
+		return nil, err
+	}
+	patches = append(patches, addPatches...)
+
+	if len(patches) == 0 {
+		return nil, nil
+	}
+	return json.Marshal(patches)
+}
+
+func patchesForContainers(cs []corev1.Container, recs map[string]workload.ContainerRecommendation, basePath string) ([]jsonPatch, error) {
+	var patches []jsonPatch
+	for i, c := range cs {
 		rec, ok := recs[c.Name]
 		if !ok {
 			continue
@@ -421,13 +454,9 @@ func buildPatches(pod *corev1.Pod, recs map[string]workload.ContainerRecommendat
 		}
 		patches = append(patches, jsonPatch{
 			Op:    "add", // "add" replaces if path already exists
-			Path:  fmt.Sprintf("/spec/containers/%d/resources", i),
+			Path:  fmt.Sprintf("%s/%d/resources", basePath, i),
 			Value: resJSON,
 		})
 	}
-
-	if len(patches) == 0 {
-		return nil, nil
-	}
-	return json.Marshal(patches)
+	return patches, nil
 }

@@ -25,27 +25,27 @@ var (
 	recommendedCPUCores = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_recommended_cpu_cores",
 		Help: "Current CPU recommendation in cores for a workload's container, by policy.",
-	}, []string{"namespace", "owner_kind", "owner_name", "container", "policy"})
+	}, []string{"namespace", "owner_kind", "owner_name", "container", "container_kind", "policy"})
 
 	recommendedMemoryBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_recommended_memory_bytes",
 		Help: "Current memory recommendation in bytes for a workload's container, by policy.",
-	}, []string{"namespace", "owner_kind", "owner_name", "container", "policy"})
+	}, []string{"namespace", "owner_kind", "owner_name", "container", "container_kind", "policy"})
 
 	templateCPUCores = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_template_cpu_cores",
 		Help: "CPU request from the workload's pod-template spec (the 'original' value) in cores. Stable across webhook injection so savings rules can compare against it.",
-	}, []string{"namespace", "owner_kind", "owner_name", "container", "policy"})
+	}, []string{"namespace", "owner_kind", "owner_name", "container", "container_kind", "policy"})
 
 	templateMemoryBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_template_memory_bytes",
 		Help: "Memory request from the workload's pod-template spec (the 'original' value) in bytes.",
-	}, []string{"namespace", "owner_kind", "owner_name", "container", "policy"})
+	}, []string{"namespace", "owner_kind", "owner_name", "container", "container_kind", "policy"})
 
 	workloadDriftRatio = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_drift_ratio",
 		Help: "Ratio of recommended request to current request (1.0 = no drift).",
-	}, []string{"namespace", "owner_kind", "owner_name", "container", "resource"})
+	}, []string{"namespace", "owner_kind", "owner_name", "container", "container_kind", "resource"})
 
 	workloadRetryState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_retry_state",

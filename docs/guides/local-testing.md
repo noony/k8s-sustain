@@ -113,6 +113,29 @@ an `autoscaling/v2` HPA targeting 60% CPU utilization (min 1 / max 5).
 effective utilization jumps above 60% and replicas scale up. Validates
 the interaction between right-sizing and the HPA.
 
+### `init-containers`
+
+Single Deployment whose pod template includes:
+
+- a regular container `app` (CPU `500m`, ~`200m` actual usage),
+- a classic init container `migrate` that exits in ~5 seconds,
+- a sidecar init container `log-shipper` (`restartPolicy: Always`,
+  ~`50m` actual usage).
+
+**Expected:** All three containers receive recommendations
+(`kubectl get wlrec -n scenario-init-containers -o yaml`). Drift in `app` or
+`log-shipper` triggers a pod recycle (in-place on k8s ≥ 1.32, eviction
+otherwise). Drift in `migrate` does **not** trigger recycle — it has already
+exited; the new requests land via webhook injection on the next pod creation.
+
+Inspect the `container_kind` label on emitted gauges:
+
+```bash
+kubectl --raw \
+  /api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics \
+  | grep 'k8s_sustain_recommended_cpu_cores{.*container_kind="init"'
+```
+
 ## Observability
 
 `make test-scenario-status` prints a table:

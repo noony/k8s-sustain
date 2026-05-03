@@ -405,7 +405,13 @@ func (r *PolicyReconciler) listRolloutTargets(ctx context.Context, namespaces []
 // computes recommendations, recycles pods, emits events, and tracks retries.
 func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustainv1alpha1.Policy, t *workloadTarget) error {
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
-	logger.V(1).Info("reconciling workload", "containers", len(t.Containers))
+	excludeInit := policy.Spec.RightSizing.ExcludeInitContainers
+	containers, initNames := t.recommendableContainers(excludeInit)
+	logger.V(1).Info("reconciling workload",
+		"containers", len(t.Containers),
+		"initContainers", len(t.InitContainers),
+		"excludeInitContainers", excludeInit,
+		"recommending", len(containers))
 
 	// Detect HPA / KEDA ScaledObject (read-only). Used as a replica-count
 	// fallback for workload-level recommendations and for observability.
@@ -422,7 +428,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	EmitAutoscalerPresent(t.Namespace, t.Kind, t.Name, string(autoInfo.Kind))
 	EmitAutoscalerTargetsConfigured(t.Namespace, t.Kind, t.Name, string(autoInfo.Kind), autoInfo.ConfiguredTargets)
 
-	recs, err := r.buildRecommendations(ctx, policy, t.Namespace, t.Kind, t.Name, t.Containers, autoInfo)
+	recs, err := r.buildRecommendations(ctx, policy, t.Namespace, t.Kind, t.Name, containers, autoInfo)
 	if err != nil {
 		if !isTransientError(err) {
 			r.retries.remove(t.key())
@@ -450,7 +456,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	logger.V(1).Info("recommendation details", "recommendations", recs)
 
 	// Emit per-container recommendation/drift metrics before recycling pods.
-	emitWorkloadFromRecs(t, policy.Name, recs)
+	emitWorkloadFromRecs(t, policy.Name, recs, initNames)
 
 	// Persist last-known-good recommendation as a WorkloadRecommendation.
 	// Lets the webhook serve cached values during a Prometheus outage and
@@ -494,7 +500,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 
 	// Only report containers whose resources actually changed vs. the current spec.
-	changed := changedContainers(t.Containers, recs)
+	changed := changedContainers(containers, recs)
 	if len(changed) == 0 {
 		logger.V(1).Info("recommendations match current resources, no event emitted")
 		return nil

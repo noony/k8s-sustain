@@ -7,6 +7,7 @@ import {
   getTimeRangeStep,
   type MetricsData,
   type RecommendationsData,
+  type RecommendationContainer,
   type WorkloadDetailSnapshot,
   type CoordinationFactors,
 } from '../lib/api'
@@ -90,6 +91,33 @@ function containers(): string[] {
   if (metrics.value?.cpu) Object.keys(metrics.value.cpu).forEach((k) => s.add(k))
   if (metrics.value?.memory) Object.keys(metrics.value.memory).forEach((k) => s.add(k))
   return Array.from(s)
+}
+
+function initContainerSet(): Set<string> {
+  const names = metrics.value?.initContainers ?? recs.value?.initContainers ?? []
+  return new Set(names)
+}
+
+function regularContainers(): string[] {
+  const inits = initContainerSet()
+  return containers().filter((c) => !inits.has(c))
+}
+
+function initContainers(): string[] {
+  const inits = initContainerSet()
+  return containers().filter((c) => inits.has(c))
+}
+
+function regularRecContainers(): [string, RecommendationContainer][] {
+  const inits = initContainerSet()
+  const all = recs.value?.containers || {}
+  return Object.entries(all).filter(([name]) => !inits.has(name))
+}
+
+function initRecContainers(): [string, RecommendationContainer][] {
+  const inits = initContainerSet()
+  const all = recs.value?.containers || {}
+  return Object.entries(all).filter(([name]) => inits.has(name))
 }
 
 function oomByContainer() {
@@ -353,18 +381,15 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
     </div>
 
     <!-- Recommendations -->
-    <div
-      v-if="recs.automated && recs.containers && Object.keys(recs.containers).length > 0"
-      class="card"
-    >
+    <div v-if="recs.automated && regularRecContainers().length > 0" class="card">
       <div class="card-header"><h2>Recommendations</h2></div>
       <div class="container-grid">
-        <div v-for="(rec, cname) in recs.containers" :key="cname" class="container-card">
+        <div v-for="[cname, rec] in regularRecContainers()" :key="cname" class="container-card">
           <h4>{{ cname }}</h4>
           <div class="resource-row">
             <span class="label">CPU Request</span>
             <ResourceDiff
-              :current="(metrics.resources || {})[cname as string]?.cpuRequest"
+              :current="(metrics.resources || {})[cname]?.cpuRequest"
               :recommended="rec.cpuRequest"
               resource-type="cpu"
             />
@@ -372,7 +397,36 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
           <div class="resource-row">
             <span class="label">Memory Request</span>
             <ResourceDiff
-              :current="(metrics.resources || {})[cname as string]?.memoryRequest"
+              :current="(metrics.resources || {})[cname]?.memoryRequest"
+              :recommended="rec.memoryRequest"
+              resource-type="memory"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Init container recommendations -->
+    <div v-if="recs.automated && initRecContainers().length > 0" class="card">
+      <div class="card-header">
+        <h2>Init container recommendations</h2>
+        <span class="badge">init</span>
+      </div>
+      <div class="container-grid">
+        <div v-for="[cname, rec] in initRecContainers()" :key="cname" class="container-card">
+          <h4>{{ cname }}</h4>
+          <div class="resource-row">
+            <span class="label">CPU Request</span>
+            <ResourceDiff
+              :current="(metrics.resources || {})[cname]?.cpuRequest"
+              :recommended="rec.cpuRequest"
+              resource-type="cpu"
+            />
+          </div>
+          <div class="resource-row">
+            <span class="label">Memory Request</span>
+            <ResourceDiff
+              :current="(metrics.resources || {})[cname]?.memoryRequest"
               :recommended="rec.memoryRequest"
               resource-type="memory"
             />
@@ -382,7 +436,10 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
     </div>
 
     <!-- Charts per container -->
-    <div v-for="cname in containers()" :key="cname" class="card">
+    <template v-if="regularContainers().length > 0">
+      <h2 v-if="initContainers().length > 0" style="margin-top: 16px">Containers</h2>
+    </template>
+    <div v-for="cname in regularContainers()" :key="cname" class="card">
       <div class="card-header">
         <h2>
           Container: <code>{{ cname }}</code>
@@ -427,6 +484,57 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         </div>
       </div>
     </div>
+
+    <!-- Init container charts -->
+    <template v-if="initContainers().length > 0">
+      <h2 style="margin-top: 16px">Init containers</h2>
+      <div v-for="cname in initContainers()" :key="cname" class="card">
+        <div class="card-header">
+          <h2>
+            Init container: <code>{{ cname }}</code>
+          </h2>
+          <span class="badge">init</span>
+        </div>
+        <div class="chart-grid">
+          <div>
+            <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
+              CPU Usage (cores)
+            </h3>
+            <div class="chart-wrapper">
+              <button
+                class="reset-zoom-btn"
+                :id="'rz-cpu-' + cname"
+                @click="resetZoom('cpu-' + cname)"
+              >
+                Reset zoom
+              </button>
+              <div class="chart-container"><canvas :id="'cpu-' + cname"></canvas></div>
+            </div>
+          </div>
+          <div>
+            <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
+              Memory Usage (MiB)
+              <span v-if="(oomByContainer()[cname] || []).length > 0" class="oom-legend">
+                <span class="oom-marker"></span>
+                {{ oomByContainer()[cname].length }} OOM kill{{
+                  oomByContainer()[cname].length > 1 ? 's' : ''
+                }}
+              </span>
+            </h3>
+            <div class="chart-wrapper">
+              <button
+                class="reset-zoom-btn"
+                :id="'rz-mem-' + cname"
+                @click="resetZoom('mem-' + cname)"
+              >
+                Reset zoom
+              </button>
+              <div class="chart-container"><canvas :id="'mem-' + cname"></canvas></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
 
     <div v-if="containers().length === 0" class="card">
       <div class="empty-state"><p>No metrics data available.</p></div>

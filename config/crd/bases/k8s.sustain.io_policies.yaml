@@ -64,6 +64,12 @@ spec:
                         minimum: 0
                         type: number
                     type: object
+                  excludeInitContainers:
+                    description: |-
+                      ExcludeInitContainers skips init containers (including restartable
+                      sidecar init containers) for any workload this policy targets. Defaults
+                      to false: init containers are recommended and resized like regular ones.
+                    type: boolean
                   resourcesConfigs:
                     description: ResourcesConfigs holds per-resource-dimension recommendation
                       configs.

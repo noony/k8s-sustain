@@ -22,6 +22,7 @@ type WorkloadMetrics struct {
 // don't publish 0-valued recommendations or drift=100%.
 type ContainerMetric struct {
 	Name                   string
+	Kind                   string // "regular" or "init"
 	HasCPU                 bool
 	CPUAtFloor             bool
 	RecommendedCPUCores    float64
@@ -32,41 +33,51 @@ type ContainerMetric struct {
 	CurrentMemoryBytes     float64
 }
 
+// Container kind label values for the container_kind metric label.
+const (
+	ContainerKindRegular = "regular"
+	ContainerKindInit    = "init"
+)
+
 // EmitWorkloadMetrics writes recommendation gauges and drift ratios for one
 // reconciled workload. Idempotent: each call overwrites the previous values.
 func EmitWorkloadMetrics(w WorkloadMetrics) {
 	for _, c := range w.Containers {
+		kind := c.Kind
+		if kind == "" {
+			kind = ContainerKindRegular
+		}
 		if c.HasCPU {
-			recommendedCPUCores.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy).Set(c.RecommendedCPUCores)
+			recommendedCPUCores.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy).Set(c.RecommendedCPUCores)
 			if c.CurrentCPUCores > 0 && !c.CPUAtFloor {
-				workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "cpu").Set(c.RecommendedCPUCores / c.CurrentCPUCores)
+				workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "cpu").Set(c.RecommendedCPUCores / c.CurrentCPUCores)
 			} else {
-				workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "cpu")
+				workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "cpu")
 			}
 		} else {
-			recommendedCPUCores.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy)
-			workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "cpu")
+			recommendedCPUCores.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy)
+			workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "cpu")
 		}
 		if c.CurrentCPUCores > 0 {
-			templateCPUCores.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy).Set(c.CurrentCPUCores)
+			templateCPUCores.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy).Set(c.CurrentCPUCores)
 		} else {
-			templateCPUCores.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy)
+			templateCPUCores.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy)
 		}
 		if c.HasMemory {
-			recommendedMemoryBytes.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy).Set(c.RecommendedMemoryBytes)
+			recommendedMemoryBytes.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy).Set(c.RecommendedMemoryBytes)
 			if c.CurrentMemoryBytes > 0 && !c.MemoryAtFloor {
-				workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "memory").Set(c.RecommendedMemoryBytes / c.CurrentMemoryBytes)
+				workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "memory").Set(c.RecommendedMemoryBytes / c.CurrentMemoryBytes)
 			} else {
-				workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "memory")
+				workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "memory")
 			}
 		} else {
-			recommendedMemoryBytes.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy)
-			workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, "memory")
+			recommendedMemoryBytes.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy)
+			workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "memory")
 		}
 		if c.CurrentMemoryBytes > 0 {
-			templateMemoryBytes.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy).Set(c.CurrentMemoryBytes)
+			templateMemoryBytes.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy).Set(c.CurrentMemoryBytes)
 		} else {
-			templateMemoryBytes.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, w.Policy)
+			templateMemoryBytes.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy)
 		}
 	}
 }
@@ -112,19 +123,28 @@ func EmitPolicyRollup(policy string, workloadCount, atRiskCount int) {
 
 // emitWorkloadFromRecs builds and emits WorkloadMetrics from the workload's
 // container specs (current requests) and the per-container recommendations.
-func emitWorkloadFromRecs(t *workloadTarget, policyName string, recs map[string]workload.ContainerRecommendation) {
+// initNames identifies which container names originated as InitContainers so
+// their emitted samples carry container_kind="init".
+func emitWorkloadFromRecs(t *workloadTarget, policyName string, recs map[string]workload.ContainerRecommendation, initNames map[string]struct{}) {
 	m := WorkloadMetrics{
 		Namespace: t.Namespace,
 		Kind:      t.Kind,
 		Name:      t.Name,
 		Policy:    policyName,
 	}
-	for _, c := range t.Containers {
+	all := make([]corev1.Container, 0, len(t.Containers)+len(t.InitContainers))
+	all = append(all, t.Containers...)
+	all = append(all, t.InitContainers...)
+	for _, c := range all {
 		rec, ok := recs[c.Name]
 		if !ok {
 			continue
 		}
-		cm := ContainerMetric{Name: c.Name}
+		kind := ContainerKindRegular
+		if _, isInit := initNames[c.Name]; isInit {
+			kind = ContainerKindInit
+		}
+		cm := ContainerMetric{Name: c.Name, Kind: kind}
 		// When the recommendation lands at the floor (1m / 1Mi) it is the
 		// "no real usage data" sentinel — emit the value but skip drift so the
 		// dashboard doesn't surface a misleading "huge over-provisioning" signal.
