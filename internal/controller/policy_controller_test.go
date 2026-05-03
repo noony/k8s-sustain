@@ -829,6 +829,63 @@ func TestBuildRecommendations_InsufficientHistory_SkipsAndEmitsCounter(t *testin
 	}
 }
 
+// TestBuildRecommendations_RecentOOMBypassesHistoryGate verifies that a
+// crash-looping workload (insufficient rate5m samples) still produces a memory
+// recommendation when a recent OOM is observed — the OOM floor must override
+// the history gate, otherwise the workload is permanently locked at its
+// (broken) current request.
+func TestBuildRecommendations_RecentOOMBypassesHistoryGate(t *testing.T) {
+	const peakBytes = 80 * 1024 * 1024 // 80Mi
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "count_over_time"):
+			// 3 samples — below the 12-sample floor (CrashLoop reality).
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"3"]}]}}`))
+		case strings.Contains(q, "workload_oom_24h"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"5"]}]}}`))
+		case strings.Contains(q, "container_peak_memory_24h:bytes"):
+			// Peak working-set witness from the OOM signal: 80Mi.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"83886080"]}
+			]}}`))
+		default:
+			// Empty for everything else — usage / replica queries return nothing.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	policy := policyForReconcileWorkload(t, "p")
+	containers := []corev1.Container{{
+		Name: "app",
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},
+		},
+	}}
+
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{})
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	rec, ok := recs["app"]
+	if !ok {
+		t.Fatalf("expected recommendation despite insufficient history (recent OOM should bypass gate); got recs=%v", recs)
+	}
+	if rec.MemoryRequest == nil {
+		t.Fatal("expected MemoryRequest from OOM floor (no usage data, but recent OOM)")
+	}
+	// Floor is max(peak=80Mi, current=64Mi) = 80Mi. Policy default headroom is
+	// zero in the test helper.
+	if rec.MemoryRequest.Cmp(resource.MustParse("80Mi")) < 0 {
+		t.Errorf("expected memory ≥ 80Mi (peak floor), got %s", rec.MemoryRequest)
+	}
+	_ = peakBytes
+}
+
 // TestBuildRecommendations_RecentOOMRaisesMemoryFloor verifies that when
 // k8s_sustain:workload_oom_24h reports a recent OOM, the memory recommendation
 // is floored at max(peak_working_set_24h, current_request) instead of using the
@@ -848,7 +905,7 @@ func TestBuildRecommendations_RecentOOMRaisesMemoryFloor(t *testing.T) {
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"168"]}]}}`))
 		case strings.Contains(q, "workload_oom_24h"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"2"]}]}}`))
-		case strings.Contains(q, "max_over_time"):
+		case strings.Contains(q, "container_peak_memory_24h:bytes"):
 			// Peak working-set witness for the OOM signal: 800Mi.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
 				{"metric":{"container":"app"},"value":[0,"838860800"]}

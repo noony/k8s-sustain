@@ -433,6 +433,54 @@ func TestQueryOOMKillEvents_FiltersZeroSamplesAndEmptyContainer(t *testing.T) {
 	}
 }
 
+func TestQueryOOMKillEvents_DedupsConsecutiveEventsPerContainer(t *testing.T) {
+	// Five consecutive positive samples 60s apart (CrashLoopBackOff smear).
+	// With step=1m the gap is 2m → only the 1st, 3rd, and 5th should survive.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
+			{"metric":{"container":"app","pod":"pod-1"},"values":[
+				[1700000000,"1"],
+				[1700000060,"1"],
+				[1700000120,"1"],
+				[1700000180,"1"],
+				[1700000240,"1"]
+			]}
+		]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	if err != nil {
+		t.Fatalf("QueryOOMKillEvents: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 deduped events (gap=2m), got %d: %+v", len(events), events)
+	}
+}
+
+func TestQueryOOMKillEvents_DistinctPodsNotDeduped(t *testing.T) {
+	// Two different pods OOM'ing at the same instant must both surface.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
+			{"metric":{"container":"app","pod":"pod-1"},"values":[[1700000000,"1"]]},
+			{"metric":{"container":"app","pod":"pod-2"},"values":[[1700000000,"1"]]}
+		]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	if err != nil {
+		t.Fatalf("QueryOOMKillEvents: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events (one per pod), got %d: %+v", len(events), events)
+	}
+}
+
 func TestQueryOOMKillEvents_ServerErrorIsNonFatal(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -525,7 +573,7 @@ func TestQueryWorkloadOOMSignal_ReturnsCountAndPeak(t *testing.T) {
 		switch {
 		case strings.Contains(q, "workload_oom_24h"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"3"]}]}}`))
-		case strings.Contains(q, "container_memory_by_workload:bytes"):
+		case strings.Contains(q, "container_peak_memory_24h:bytes"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"209715200"]}]}}`))
 		default:
 			t.Errorf("unexpected query: %q", q)

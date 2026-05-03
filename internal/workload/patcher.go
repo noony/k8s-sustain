@@ -135,8 +135,48 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 		logger.V(1).Info("pod already at target resources, no in-place patch needed")
 		return nil
 	}
-	pod.Spec.Containers = containers
-	pod.Spec.InitContainers = initContainers
+
+	// Patch regular containers and sidecar init containers in two separate
+	// /resize calls. Sidecar in-place resize requires k8s 1.33+ with the right
+	// feature gates and may be rejected on older clusters; isolating it from
+	// the regular-container patch ensures a sidecar rejection cannot block the
+	// regular containers' resize.
+	if regChanged {
+		pod.Spec.Containers = containers
+		if err := p.applyInPlaceResize(ctx, pod, base, recs); err != nil {
+			return err
+		}
+	}
+
+	if initChanged {
+		// Build a baseline that reflects the (possibly already applied)
+		// regular-container changes so the sidecar diff is the only remaining
+		// delta. The base in-place resize call above mutated `pod` in place.
+		sidecarBase := pod.DeepCopy()
+		sidecarBase.Spec.InitContainers = base.Spec.InitContainers
+		pod.Spec.InitContainers = initContainers
+
+		err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(sidecarBase))
+		if err != nil {
+			// Sidecar resize is best-effort: kubelet rejects it on older
+			// clusters. The new requests will land at next pod creation via
+			// webhook injection — don't fail the reconcile.
+			logger.Info("sidecar in-place resize not accepted, will apply at next pod creation",
+				"err", err.Error())
+			pod.Spec.InitContainers = base.Spec.InitContainers
+		} else {
+			logger.Info("sidecar in-place resize applied")
+		}
+	}
+	return nil
+}
+
+// applyInPlaceResize submits an in-place /resize patch (with fallbacks for
+// older clusters) for the regular-container changes already staged on `pod`.
+// Returns an error only when the pod could not be brought to its target state
+// at all; eviction-fallback errors propagate to the caller as well.
+func (p *Patcher) applyInPlaceResize(ctx context.Context, pod, base *corev1.Pod, recs map[string]ContainerRecommendation) error {
+	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
 	// K8s 1.33+ requires the /resize subresource for in-place pod resource
 	// changes. Try that first; fall back to a regular pod patch for 1.31-1.32
@@ -145,7 +185,6 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(base))
 	if apierrors.IsNotFound(err) {
 		logger.V(1).Info("/resize subresource not available, falling back to direct pod patch", "err", err.Error())
-		// /resize subresource not available (k8s < 1.33) — try direct pod patch.
 		err = p.client.Patch(ctx, pod, client.MergeFrom(base))
 	}
 	if apierrors.IsInvalid(err) {

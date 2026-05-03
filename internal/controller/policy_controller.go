@@ -596,15 +596,30 @@ func (r *PolicyReconciler) buildRecommendations(
 		"cpuQuantile", cpuQuantile, "cpuWindow", cpuWindow,
 		"memQuantile", memQuantile, "memWindow", memWindow)
 
+	// OOM signal — fetched first so the history gate can bypass for
+	// crash-looping workloads that can't accumulate usage samples.
+	// Fail-open: missing data must not break the recommendation path.
+	oomSignal, err := r.PrometheusClient.QueryWorkloadOOMSignal(ctx, ns, ownerKind, ownerName)
+	if err != nil {
+		logger.V(1).Info("oom signal query failed; proceeding without OOM floor", "err", err)
+		oomSignal = promclient.OOMSignal{}
+	}
+	recentOOM := oomSignal.OOMCount > 0
+
 	// Skip recommendation when the workload has too little history. Without
 	// this, young containers produce ~0 percentile values that get floored to
 	// the hard minimum and trigger an immediate recycle on the next reconcile.
-	if hasHistory, herr := r.PrometheusClient.HasSufficientHistory(ctx, ns, ownerKind, ownerName, cpuWindow); herr != nil {
-		logger.V(1).Info("history probe failed; proceeding", "err", herr)
-	} else if !hasHistory {
-		recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "insufficient_history").Inc()
-		logger.Info("skipping recommendation: insufficient history", "window", cpuWindow)
-		return map[string]workload.ContainerRecommendation{}, nil
+	// EXCEPTION: when a recent OOM is observed, bypass the gate — a
+	// crash-looping container will never accumulate enough samples, but the
+	// OOM floor below can still produce a correct memory recommendation.
+	if !recentOOM {
+		if hasHistory, herr := r.PrometheusClient.HasSufficientHistory(ctx, ns, ownerKind, ownerName, cpuWindow); herr != nil {
+			logger.V(1).Info("history probe failed; proceeding", "err", herr)
+		} else if !hasHistory {
+			recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "insufficient_history").Inc()
+			logger.Info("skipping recommendation: insufficient history", "window", cpuWindow)
+			return map[string]workload.ContainerRecommendation{}, nil
+		}
 	}
 
 	cpuTotals, err := r.PrometheusClient.QueryWorkloadCPUByContainer(ctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
@@ -627,13 +642,6 @@ func (r *PolicyReconciler) buildRecommendations(
 	if err != nil {
 		logger.V(1).Info("per-pod memory floor query failed; proceeding without floor", "err", err)
 		memFloors = nil
-	}
-
-	// OOM signal — fail-open: missing data must not break the recommendation path.
-	oomSignal, err := r.PrometheusClient.QueryWorkloadOOMSignal(ctx, ns, ownerKind, ownerName)
-	if err != nil {
-		logger.V(1).Info("oom signal query failed; proceeding without OOM floor", "err", err)
-		oomSignal = promclient.OOMSignal{}
 	}
 
 	medianReplicas, err := r.PrometheusClient.QueryReplicaCountMedian(ctx, ns, ownerKind, ownerName, cpuWindow)
@@ -660,11 +668,18 @@ func (r *PolicyReconciler) buildRecommendations(
 			hasData = true
 		}
 
-		if total, ok := memTotals[c.Name]; ok {
-			perPod := recommender.PerPodFromTotal(total, replicas)
-			perPod = recommender.ApplyFloor(perPod, memFloors[c.Name])
+		// Memory: emit a recommendation when EITHER usage samples are present,
+		// OR a recent OOM gives us a peak/current floor to anchor on.
+		total, hasUsage := memTotals[c.Name]
+		_, hasPeak := oomSignal.PeakMemoryBytes[c.Name]
+		if hasUsage || (recentOOM && hasPeak) {
+			var perPod float64
+			if hasUsage {
+				perPod = recommender.PerPodFromTotal(total, replicas)
+				perPod = recommender.ApplyFloor(perPod, memFloors[c.Name])
+			}
 			oom := recommender.OOMSignal{
-				Recent:    oomSignal.OOMCount > 0,
+				Recent:    recentOOM,
 				PeakBytes: oomSignal.PeakMemoryBytes[c.Name],
 			}
 			if cur := c.Resources.Requests.Memory(); cur != nil && !cur.IsZero() {
@@ -676,7 +691,7 @@ func (r *PolicyReconciler) buildRecommendations(
 				oomFloorApplied.WithLabelValues(ns, ownerKind, ownerName, c.Name).Inc()
 			}
 			logger.V(1).Info("computed memory recommendation",
-				"container", c.Name, "totalBytes", total, "replicas", replicas,
+				"container", c.Name, "hasUsage", hasUsage, "totalBytes", total, "replicas", replicas,
 				"perPodBytes", perPod, "oomRecent", oom.Recent, "oomPeak", oom.PeakBytes,
 				"request", quantityString(rec.MemoryRequest))
 			hasData = true

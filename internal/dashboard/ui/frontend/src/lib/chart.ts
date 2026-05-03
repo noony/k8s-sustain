@@ -64,6 +64,7 @@ const crosshairPlugin: Plugin = {
 Chart.register(crosshairPlugin)
 
 // OOM event plugin
+const OOM_MARKER_LIMIT = 50
 const oomEventPlugin: Plugin = {
   id: 'oomEvents',
   afterDraw(chart) {
@@ -75,9 +76,14 @@ const oomEventPlugin: Plugin = {
     const top = yScale.top
     const bottom = yScale.bottom
 
-    events.forEach((ev: { x: Date }) => {
+    // Defensive cap: if dedup at the API layer fails for some reason, stop
+    // drawing markers past the limit to keep the chart legible. The badge in
+    // the UI shows the true count.
+    const limited = events.length > OOM_MARKER_LIMIT ? events.slice(0, OOM_MARKER_LIMIT) : events
+
+    limited.forEach((ev: { x: Date }) => {
       const x = xScale.getPixelForValue(ev.x as any)
-      if (x < xScale.left || x > xScale.right) return
+      if (!Number.isFinite(x) || x < xScale.left || x > xScale.right) return
 
       ctx.save()
       ctx.beginPath()

@@ -476,11 +476,58 @@ prometheus:
         - name: k8s_sustain.workload_signals
           interval: 1m
           rules:
+            # True peak memory observed per (namespace, pod, container) over 24h.
+            # max_over_time on container_memory_working_set_bytes alone misses
+            # sub-scrape spikes (a container can OOM in <1s after touching the
+            # limit). The kernel's high-water mark (cgroup v1: max_usage_bytes,
+            # cgroup v2: peak_working_set_bytes) survives across scrape gaps. As
+            # a safety net, when a container OOM'd we floor at the cgroup limit —
+            # working-set was at least the limit at that instant, even if cAdvisor
+            # never sampled it.
+            # Each candidate signal is tagged with a distinct `_src` label so they
+            # all survive the `or`, then max-by drops `_src` to take the overall
+            # high-water value.
+            - record: k8s_sustain:container_peak_memory_24h:bytes
+              expr: |
+                max by (namespace, owner_kind, owner_name, container) (
+                  (
+                    label_replace(
+                      max by (namespace, pod, container) (max_over_time(container_memory_max_usage_bytes{container!="", container!="POD", image!=""}[24h])),
+                      "_src", "max_usage", "", ""
+                    )
+                    or
+                    label_replace(
+                      max by (namespace, pod, container) (max_over_time(container_memory_peak_working_set_bytes{container!="", container!="POD", image!=""}[24h])),
+                      "_src", "peak_ws", "", ""
+                    )
+                    or
+                    label_replace(
+                      max by (namespace, pod, container) (max_over_time(container_memory_working_set_bytes{container!="", container!="POD", image!=""}[24h:1m])),
+                      "_src", "working_set", "", ""
+                    )
+                    or
+                    label_replace(
+                      max by (namespace, pod, container) (max_over_time(kube_pod_container_resource_limits{resource="memory", container!="", container!="POD"}[24h]))
+                      * on(namespace, pod, container) group_left()
+                      max by (namespace, pod, container) (kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}),
+                      "_src", "oom_limit", "", ""
+                    )
+                  )
+                  * on(namespace, pod) group_left(owner_kind, owner_name)
+                  k8s_sustain:pod_workload
+                )
+
             - record: k8s_sustain:workload_oom_24h
               expr: |
                 sum by (namespace, owner_kind, owner_name) (
-                  increase(
-                    kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[24h]
+                  max by (namespace, pod, container) (
+                    increase(
+                      kube_pod_container_status_restarts_total{container!="", container!="POD"}[24h]
+                    )
+                  )
+                  * on(namespace, pod, container) group_left()
+                  max by (namespace, pod, container) (
+                    kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}
                   )
                   * on(namespace, pod) group_left(owner_kind, owner_name)
                   k8s_sustain:pod_workload

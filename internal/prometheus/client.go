@@ -224,8 +224,12 @@ func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKin
 		oomCount = float64(vec[0].Value)
 	}
 
+	// Use the dedicated peak rule (kernel high-water + OOM-scoped limit fallback).
+	// Working-set sampled at scrape interval misses sub-second spikes that
+	// trigger the kill — `container_memory_max_usage_bytes` (cgroup v1) and
+	// `container_memory_peak_working_set_bytes` (cgroup v2) survive across scrape gaps.
 	peakExpr := fmt.Sprintf(
-		`max by (container) (max_over_time(k8s_sustain:container_memory_by_workload:bytes{namespace=%q,owner_kind=%q,owner_name=%q}[24h:1m]))`,
+		`max by (container) (k8s_sustain:container_peak_memory_24h:bytes{namespace=%q,owner_kind=%q,owner_name=%q})`,
 		namespace, ownerKind, ownerName,
 	)
 	if !c.breaker.allow() {
@@ -310,6 +314,15 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		return nil, nil
 	}
 
+	// Dedup consecutive positive samples per (pod, container). `increase()` over
+	// a counter that keeps growing during CrashLoopBackOff produces a positive
+	// sample at every step until the loop ends, which would otherwise spam the
+	// chart with one marker per step. Collapse anything within a `2 × step`
+	// gap (floor 30s) to a single event.
+	dedupGap := 2 * time.Duration(stepDur)
+	if dedupGap < 30*time.Second {
+		dedupGap = 30 * time.Second
+	}
 	var events []OOMEvent
 	for _, stream := range matrix {
 		container := string(stream.Metric["container"])
@@ -317,14 +330,21 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		if container == "" {
 			continue
 		}
+		var lastTs time.Time
 		for _, v := range stream.Values {
-			if float64(v.Value) > 0 {
-				events = append(events, OOMEvent{
-					Timestamp: v.Timestamp.Time(),
-					Container: container,
-					Pod:       pod,
-				})
+			if float64(v.Value) <= 0 {
+				continue
 			}
+			ts := v.Timestamp.Time()
+			if !lastTs.IsZero() && ts.Sub(lastTs) < dedupGap {
+				continue
+			}
+			lastTs = ts
+			events = append(events, OOMEvent{
+				Timestamp: ts,
+				Container: container,
+				Pod:       pod,
+			})
 		}
 	}
 	return events, nil
