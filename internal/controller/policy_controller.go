@@ -31,6 +31,8 @@ import (
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=policies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=policies/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=policies/finalizers,verbs=update
+// +kubebuilder:rbac:groups=k8s.sustain.io,resources=workloadrecommendations,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=k8s.sustain.io,resources=workloadrecommendations/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets;daemonsets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
@@ -50,9 +52,15 @@ type PolicyReconciler struct {
 	ExcludedNamespaces []string
 	RecommendOnly      bool
 	ConcurrencyLimit   int
-	recorder           record.EventRecorder
-	patcher            *workload.Patcher
-	retries            *retryTracker
+
+	// OrphanReapInterval bounds how often the manager scans for
+	// WorkloadRecommendation objects whose owning Policy no longer exists
+	// (strategy 2 cleanup). Zero falls back to 10 minutes.
+	OrphanReapInterval time.Duration
+
+	recorder record.EventRecorder
+	patcher  *workload.Patcher
+	retries  *retryTracker
 }
 
 // SetupWithManager registers the PolicyReconciler with the given manager.
@@ -63,10 +71,48 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.ConcurrencyLimit <= 0 {
 		r.ConcurrencyLimit = 5
 	}
+	if err := mgr.Add(&orphanReaper{reconciler: r, interval: r.OrphanReapInterval}); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sustainv1alpha1.Policy{}).
 		Complete(r)
 }
+
+// orphanReaper is a manager Runnable that periodically deletes
+// WorkloadRecommendation objects whose owning Policy no longer exists.
+// Strategy 2 cleanup — covers force-deleted policies, controller crashes
+// mid-delete, and any other path that bypasses the per-policy finalizer.
+type orphanReaper struct {
+	reconciler *PolicyReconciler
+	interval   time.Duration
+}
+
+func (o *orphanReaper) Start(ctx context.Context) error {
+	interval := o.interval
+	if interval <= 0 {
+		interval = 10 * time.Minute
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+
+	// Run once at startup so a controller restart catches anything left over
+	// while it was down.
+	_ = o.reconciler.reapOrphanedRecommendations(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-t.C:
+			_ = o.reconciler.reapOrphanedRecommendations(ctx)
+		}
+	}
+}
+
+// NeedLeaderElection ensures only the leader runs the orphan reaper, so
+// multi-replica controllers don't double-delete or race.
+func (o *orphanReaper) NeedLeaderElection() bool { return true }
 
 // Reconcile is the main reconciliation loop for Policy objects.
 func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -82,10 +128,18 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	logger.V(1).Info("policy fetched", "generation", policy.Generation, "resourceVersion", policy.ResourceVersion)
 
-	// Handle deletion: remove finalizer and let garbage collection clean up.
+	// Handle deletion: clean up cached recommendations, remove finalizer, and
+	// let garbage collection take care of the policy itself. Cache cleanup
+	// happens before the finalizer is dropped so a transient list/delete
+	// failure leaves the policy in place — orphaned WLRs are then collected
+	// by the periodic orphan reaper if the policy is force-deleted.
 	const finalizerName = "k8s.sustain.io/cleanup"
 	if !policy.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(policy, finalizerName) {
+			if err := r.deleteAllRecommendationsForPolicy(ctx, policy.Name); err != nil {
+				logger.Error(err, "failed to delete WorkloadRecommendations for policy; will retry")
+				return ctrl.Result{}, err
+			}
 			r.recorder.Event(policy, corev1.EventTypeNormal, "Cleanup", "Policy deleted, removing finalizer.")
 			controllerutil.RemoveFinalizer(policy, finalizerName)
 			if err := r.Update(ctx, policy); err != nil {
@@ -153,6 +207,11 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	atRisk := r.retries.blockedCountAmong(keys)
 	EmitPolicyRollup(policy.Name, len(targets), atRisk)
+
+	// Sweep stale WorkloadRecommendations for this policy: any cached entry
+	// whose target workload no longer exists (or is no longer matched by the
+	// policy) is removed. Keeps etcd from accumulating dead cache entries.
+	r.sweepWorkloadRecommendations(ctx, policy.Name, targets)
 
 	failed := int(failCount.Load())
 	if failed > 0 {
@@ -392,6 +451,13 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 
 	// Emit per-container recommendation/drift metrics before recycling pods.
 	emitWorkloadFromRecs(t, policy.Name, recs)
+
+	// Persist last-known-good recommendation as a WorkloadRecommendation.
+	// Lets the webhook serve cached values during a Prometheus outage and
+	// gives operators a `kubectl get wlrec` audit surface. Best-effort: the
+	// upsert never propagates errors so a failed cache write can't block the
+	// recycle path.
+	r.upsertWorkloadRecommendation(ctx, t, policy.Name, recs, metav1.Now())
 
 	if r.RecommendOnly {
 		logger.Info("recommend-only: computed recommendations", "recommendations", recs)

@@ -1,31 +1,41 @@
 #!/usr/bin/env bash
-# Wraps the controller-gen CRD with Helm template directives and writes it into
-# the chart.  Run via "make manifests".
+# Wraps the controller-gen CRDs with Helm template directives and writes them
+# into the chart. Run via "make manifests".
 set -euo pipefail
 
-SRC="config/crd/bases/k8s.sustain.io_policies.yaml"
-DST="charts/k8s-sustain/templates/crd-policy.yaml"
+sync_one() {
+  local src="$1"
+  local dst="$2"
+  local crd_name="$3"
 
-if [ ! -f "$SRC" ]; then
-  echo "ERROR: $SRC not found — run controller-gen first" >&2
-  exit 1
-fi
+  if [ ! -f "$src" ]; then
+    echo "ERROR: $src not found — run controller-gen first" >&2
+    exit 1
+  fi
 
-cat > "$DST" <<'HELM_HEADER'
+  cat > "$dst" <<HELM_HEADER
 {{- if .Values.installCRDs }}
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: policies.k8s.sustain.io
+  name: ${crd_name}
   labels:
     {{- include "k8s-sustain.labels" . | nindent 4 }}
   annotations:
     helm.sh/resource-policy: keep
 HELM_HEADER
 
-# Append everything after the "metadata:" block from the generated CRD (i.e. from "spec:" onward).
-sed -n '/^spec:/,$ p' "$SRC" >> "$DST"
+  # Append everything from "spec:" onward in the generated CRD.
+  sed -n '/^spec:/,$ p' "$src" >> "$dst"
+  echo '{{- end }}' >> "$dst"
 
-echo '{{- end }}' >> "$DST"
+  echo "Synced $src -> $dst"
+}
 
-echo "Synced $SRC -> $DST"
+sync_one "config/crd/bases/k8s.sustain.io_policies.yaml" \
+         "charts/k8s-sustain/templates/crd-policy.yaml" \
+         "policies.k8s.sustain.io"
+
+sync_one "config/crd/bases/k8s.sustain.io_workloadrecommendations.yaml" \
+         "charts/k8s-sustain/templates/crd-workloadrecommendation.yaml" \
+         "workloadrecommendations.k8s.sustain.io"

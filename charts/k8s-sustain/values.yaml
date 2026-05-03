@@ -37,7 +37,7 @@ controller:
     annotations: {}
   resources:
     requests:
-      cpu: 10m
+      cpu: 100m
       memory: 128Mi
     limits:
       memory: 256Mi
@@ -150,7 +150,7 @@ dashboard:
     port: 8090
   resources:
     requests:
-      cpu: 10m
+      cpu: 100m
       memory: 128Mi
     limits:
       memory: 256Mi

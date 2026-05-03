@@ -15,6 +15,14 @@ rules:
   - apiGroups: [k8s.sustain.io]
     resources: [policies/finalizers]
     verbs: [update]
+  # WorkloadRecommendation CRD — controller writes the cache after each reconcile
+  # and sweeps stale entries. Webhook (read-only access) reuses this role's get/list/watch.
+  - apiGroups: [k8s.sustain.io]
+    resources: [workloadrecommendations]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [k8s.sustain.io]
+    resources: [workloadrecommendations/status]
+    verbs: [get, update, patch]
   # Leader election
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
@@ -88,7 +96,7 @@ metadata:
     app.kubernetes.io/component: dashboard
 rules:
   - apiGroups: [k8s.sustain.io]
-    resources: [policies]
+    resources: [policies, workloadrecommendations]
     verbs: [get, list, watch]
   - apiGroups: [apps]
     resources: [deployments, statefulsets, daemonsets, replicasets]

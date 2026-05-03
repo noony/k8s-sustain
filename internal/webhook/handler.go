@@ -3,8 +3,10 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -45,6 +47,11 @@ type Handler struct {
 	Client           client.Client
 	PrometheusClient *promclient.Client
 	RecommendOnly    bool
+
+	// CacheStaleness bounds how old a WorkloadRecommendation can be before
+	// the webhook refuses to use it as a fallback. Zero falls back to
+	// DefaultCacheStaleness.
+	CacheStaleness time.Duration
 }
 
 type jsonPatch struct {
@@ -138,8 +145,30 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 
 	recs, err := h.buildRecommendations(ctx, &policy, req.Namespace, ownerKind, ownerName, pod.Spec.Containers)
 	if err != nil {
-		logger.Error(err, "failed to build recommendations")
-		return allow
+		// Prometheus failed (timeout, network, or circuit breaker open).
+		// Try the cached WorkloadRecommendation that the controller writes
+		// after every successful reconcile. If it's fresh enough, inject
+		// from cache; otherwise fall open with the original template.
+		staleness := h.CacheStaleness
+		if staleness == 0 {
+			staleness = DefaultCacheStaleness
+		}
+		cached, cacheErr := h.fetchCachedRecommendations(ctx, ownerKind, req.Namespace, ownerName, time.Now(), staleness)
+		if cacheErr != nil {
+			logger.Error(cacheErr, "failed to read cached WorkloadRecommendation; falling open")
+			return allow
+		}
+		if cached == nil {
+			if errors.Is(err, promclient.ErrCircuitOpen) {
+				logger.Info("prometheus circuit open and no fresh cache; allowing pod with template resources")
+			} else {
+				logger.Error(err, "failed to build recommendations and no fresh cache; allowing pod with template resources")
+			}
+			return allow
+		}
+		logger.Info("prometheus unavailable; serving cached recommendation",
+			"containers", len(cached), "promErr", err.Error())
+		recs = cached
 	}
 
 	// Always inject the latest recommendation regardless of mode.

@@ -67,6 +67,7 @@ nav:
       - Update Modes: concepts/update-modes.md
       - In-Place Updates: concepts/in-place-updates.md
       - Autoscaler Coordination: concepts/autoscaler-coordination.md
+      - Workload Recommendations: concepts/workload-recommendations.md
   - Guides:
       - Workloads:
           - Deployments & StatefulSets: guides/deployments.md
