@@ -1712,6 +1712,29 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 </table>
 <p><code>container_kind</code> is <code>regular</code> or <code>init</code>, identifying whether the container originated as a regular pod container or an init container (including restartable sidecars). Use it to slice dashboards by container kind.</p>
 <p><code>k8s_sustain_workload_template_cpu_cores</code> and <code>k8s_sustain_workload_template_memory_bytes</code> record the CPU/memory request from the workload's pod-template spec (the pre-injection value). Stable across webhook injection so savings rules can compare against the template.</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Labels</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>k8s_sustain_recommendation_skipped_total</code></td>
+<td>counter</td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>reason</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_oom_floor_applied_total</code></td>
+<td>counter</td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>k8s_sustain_recommendation_skipped_total</code> increments when the recommender bypasses a workload without emitting a recommendation. <code>reason="insufficient_history"</code> means the workload had fewer than 12 <code>rate5m</code> samples in the configured window — typical of containers younger than ~12 minutes — so percentile queries would otherwise floor to ~0 and trigger an immediate recycle.</p>
+<p><code>k8s_sustain_oom_floor_applied_total</code> increments when the OOM-aware floor raises a memory recommendation above the percentile value. This means the workload OOM'd in the last 24h and the recommendation was floored at <code>max(peak_working_set, current_request)</code> plus headroom, instead of the (lower) percentile value.</p>
 <h3 id="drift-retry-autoscaler">Drift, retry, autoscaler<a class="headerlink" href="#drift-retry-autoscaler" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

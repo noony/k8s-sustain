@@ -1458,21 +1458,25 @@ requests apply on next pod creation via webhook injection.</p>
 <h2 id="stages">Stages<a class="headerlink" href="#stages" title="Permanent link">&para;</a></h2>
 <p>The recommender runs each container through the following stages, in order:</p>
 <ol>
+<li><strong>History gate.</strong> Probe <code>count_over_time(k8s_sustain:container_cpu_usage_by_workload:rate5m[window:1m])</code>. If fewer than 12 samples are available, the workload is skipped with <code>k8s_sustain_recommendation_skipped_total{reason="insufficient_history"}</code>. This avoids producing a near-zero percentile that would floor to the hard minimum and trigger a recycle on the next reconcile.</li>
 <li><strong>Query.</strong> Read the percentile-of-usage from a recording rule over the configured window (<code>spec.rightSizing.resourcesConfigs.&lt;cpu|memory&gt;.window</code>). The signal is workload-level (sum across replicas) divided by the median replica count over the window, with a per-pod percentile floor to absorb load imbalance.</li>
+<li><strong>OOM floor (memory only).</strong> When the workload OOM'd in the last 24 h (<code>k8s_sustain:workload_oom_24h &gt; 0</code>), the memory recommendation is floored at <code>max(peak_working_set_24h, current_request)</code> before headroom. This prevents the recommendation from shrinking memory while the workload is unhealthy. The metric <code>k8s_sustain_oom_floor_applied_total{container}</code> increments when this floor wins.</li>
 <li><strong>Headroom.</strong> Multiply by <code>(1 + headroom/100)</code> to add a safety buffer.</li>
-<li><strong>Clamp.</strong> Floor to <code>minAllowed</code>, cap at <code>maxAllowed</code> (when set).</li>
-<li><strong>HPA overhead.</strong> When <code>autoscalerCoordination.enabled</code> and the workload is targeted by an HPA or KEDA <code>ScaledObject</code> on <code>averageUtilization</code>, multiply by <code>(100 / hpa_target_pct) × 1.10</code>. The clamps from step 3 are re-applied so explicit policy caps survive coordination.</li>
+<li><strong>Clamp.</strong> Floor to <code>minAllowed</code>, cap at <code>maxAllowed</code> (when set). <code>maxAllowed</code> always wins, including over the OOM floor.</li>
+<li><strong>HPA overhead.</strong> When <code>autoscalerCoordination.enabled</code> and the workload is targeted by an HPA or KEDA <code>ScaledObject</code> on <code>averageUtilization</code>, multiply by <code>(100 / hpa_target_pct) × 1.10</code>. The clamps from step 5 are re-applied so explicit policy caps survive coordination.</li>
 <li><strong>Replica-budget correction (CPU only).</strong> When <code>autoscalerCoordination.replicaBudgetAnchor</code> is set, multiply CPU request by <code>clamp(current_replicas / target_replicas, 0.5, 2.0)</code>, where <code>target_replicas = round(min + anchor × (max - min))</code>.</li>
 <li><strong>Limits derivation.</strong> Apply the <code>limits</code> strategy (<code>keepLimit</code> / <code>keepLimitRequestRatio</code> / <code>equalsToRequest</code> / <code>noLimit</code> / <code>requestsLimitsRatio</code>).</li>
 </ol>
 <h2 id="diagram">Diagram<a class="headerlink" href="#diagram" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>flowchart LR
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    Q[Prometheus query&lt;br/&gt;percentile over window] --&gt; H[+ headroom]
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    H --&gt; C[clamp min/max]
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    C --&gt; O[HPA overhead]
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    O --&gt; R[replica anchor&lt;br/&gt;CPU only]
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    R --&gt; L[derive limits]
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    L --&gt; OUT[ContainerRecommendation]
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    G[history gate&lt;br/&gt;≥12 rate5m samples] --&gt; Q[Prometheus query&lt;br/&gt;percentile over window]
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    Q --&gt; F[OOM floor&lt;br/&gt;memory only]
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    F --&gt; H[+ headroom]
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    H --&gt; C[clamp min/max]
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    C --&gt; O[HPA overhead]
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    O --&gt; R[replica anchor&lt;br/&gt;CPU only]
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    R --&gt; L[derive limits]
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    L --&gt; OUT[ContainerRecommendation]
 </code></pre></div>
 <h2 id="worked-example">Worked example<a class="headerlink" href="#worked-example" title="Permanent link">&para;</a></h2>
 <p>Configuration:</p>

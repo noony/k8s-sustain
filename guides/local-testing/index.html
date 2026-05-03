@@ -1210,6 +1210,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#oom-kill" class="md-nav__link">
+    <span class="md-ellipsis">
+      oom-kill
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1587,6 +1596,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#oom-kill" class="md-nav__link">
+    <span class="md-ellipsis">
+      oom-kill
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1768,15 +1786,35 @@ exited; the new requests land via webhook injection on the next pod creation.</p
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>/api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">&#39;k8s_sustain_recommended_cpu_cores{.*container_kind=&quot;init&quot;&#39;</span>
 </code></pre></div>
+<h3 id="oom-kill"><code>oom-kill</code><a class="headerlink" href="#oom-kill" title="Permanent link">&para;</a></h3>
+<p>Single-container Deployment that quietly holds ~30Mi for 60 s, then attempts
+to allocate 120Mi against a 96Mi cgroup memory limit — the kernel kills the
+container, Kubernetes restarts it, and the cycle repeats.</p>
+<p><strong>Expected:</strong></p>
+<ul>
+<li><code>kubectl get pods -n scenario-oom-kill</code> shows <code>OOMKilled</code> in the last
+  termination reason and a growing restart count.</li>
+<li><code>k8s_sustain:workload_oom_24h{owner_name="stress"}</code> becomes positive.</li>
+<li>Memory recommendation <strong>does not shrink</strong> despite most samples being
+  quiet (~30Mi). The OOM-aware floor pulls the reco to
+  <code>max(peak_working_set_24h, current_request)</code> plus headroom — i.e. ≥ 96Mi.</li>
+<li><code>k8s_sustain_oom_floor_applied_total{owner_name="stress"}</code> increments on
+  each reconcile while the OOM is within the 24 h window.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-oom-kill<span class="w"> </span>stress<span class="w"> </span>-o<span class="w"> </span>yaml
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>kubectl<span class="w"> </span>--raw<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>/api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">&#39;k8s_sustain_oom_floor_applied_total&#39;</span>
+</code></pre></div>
 <h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
 <p><code>make test-scenario-status</code> prints a table:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
 </code></pre></div>
 <p>The dashboard remains the richer source of truth — start a port-forward
 and open <code>http://localhost:8090</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
 </code></pre></div>
 <h2 id="adding-a-new-scenario">Adding a new scenario<a class="headerlink" href="#adding-a-new-scenario" title="Permanent link">&para;</a></h2>
 <p>See <code>hack/scenarios/README.md</code>.</p>
