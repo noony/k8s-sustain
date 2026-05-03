@@ -1,0 +1,124 @@
+# scenario: oom-kill
+# expected: container OOMs repeatedly because the loadgen periodically allocates
+# above its 96Mi limit. The percentile-based memory reco would otherwise sit
+# around ~30-40Mi (most samples are quiet), but the OOM-aware floor
+# (k8s_sustain:workload_oom_24h > 0) pulls the recommendation up to
+# max(peak_working_set_24h, current_request) + headroom — i.e. ≥ current 96Mi.
+# Verification:
+#   kubectl get pods -n scenario-oom-kill -o wide  # reason=OOMKilled visible
+#   kubectl get workloadrecommendation -n scenario-oom-kill stress -o yaml
+#   # → memory recommendation should be ≥ ~96Mi (well above the percentile)
+#   kubectl -n k8s-sustain logs deploy/k8s-sustain | grep oomRecent
+#   # → "oomRecent=true" in the controller log
+#   curl -s localhost:9090/api/v1/query?query='sum(k8s_sustain_oom_floor_applied_total{owner_name="stress"})'
+#   # → > 0
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scenario-oom-kill
+  labels:
+    k8s-sustain.io/scenario: oom-kill
+---
+apiVersion: k8s.sustain.io/v1alpha1
+kind: Policy
+metadata:
+  name: scenario-oom-kill
+spec:
+  selector:
+    namespaces: [scenario-oom-kill]
+  rightSizing:
+    update:
+      types:
+        deployment: Ongoing
+    resourcesConfigs:
+      cpu:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 10
+        limits:
+          noLimit: true
+      memory:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 15
+        # No requestsLimitsRatio — we want the recommendation -> request
+        # transition to be observable independent of limit derivation.
+        limits:
+          equalsToRequest: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen
+  namespace: scenario-oom-kill
+data:
+  # Quiet/burst loadgen. The container holds a small steady allocation, then
+  # every BURST_PERIOD_S seconds attempts a burst allocation that exceeds the
+  # 96Mi cgroup limit, forcing an OOMKill. After being killed Kubernetes
+  # restarts the pod (Always restartPolicy), repeating the cycle.
+  loadgen.py: |
+    import os, time
+    quiet_mb = int(os.environ.get('LOAD_QUIET_MB', '30'))
+    burst_mb = int(os.environ.get('LOAD_BURST_MB', '120'))
+    quiet_s = float(os.environ.get('LOAD_QUIET_S', '60'))
+    # Hold a quiet baseline.
+    quiet = bytearray(quiet_mb * 1024 * 1024)
+    for i in range(0, len(quiet), 4096):
+        quiet[i] = 1
+    print(f"quiet baseline {quiet_mb}MiB, sleeping {quiet_s}s before burst", flush=True)
+    time.sleep(quiet_s)
+    print(f"burst allocate {burst_mb}MiB (> limit) -> expect OOMKill", flush=True)
+    burst = bytearray(burst_mb * 1024 * 1024)
+    for i in range(0, len(burst), 4096):
+        burst[i] = 1
+    # If the kernel does not OOM (e.g. large limit override), idle so the
+    # restart cycle is not driven by exit-success.
+    while True:
+        time.sleep(60)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stress
+  namespace: scenario-oom-kill
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stress
+  template:
+    metadata:
+      labels:
+        app: stress
+      annotations:
+        k8s.sustain.io/policy: scenario-oom-kill
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: stress
+        image: python:3.12-alpine
+        command: ["python3", "-u", "/loadgen/loadgen.py"]
+        env:
+          - name: LOAD_QUIET_MB
+            value: "30"
+          - name: LOAD_BURST_MB
+            value: "120"   # > limits.memory below; triggers OOMKill
+          - name: LOAD_QUIET_S
+            value: "60"
+        volumeMounts:
+          - name: loadgen
+            mountPath: /loadgen
+        resources:
+          requests:
+            cpu: 50m
+            memory: 96Mi
+          limits:
+            # Tight memory limit so the burst allocation OOMs reliably.
+            memory: 96Mi
+      volumes:
+        - name: loadgen
+          configMap:
+            name: loadgen

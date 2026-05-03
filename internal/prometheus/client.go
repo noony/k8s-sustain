@@ -161,6 +161,94 @@ func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, 
 	return c.queryRangeByContainer(ctx, expr, timeRange, step)
 }
 
+// minHistorySamples is the minimum count of rate5m samples required in the
+// recommendation window before we'll emit a recommendation. Containers younger
+// than this produce noisy/zero rates that would otherwise floor the recommendation
+// and trigger an immediate recycle on the next reconcile.
+const minHistorySamples = 12
+
+// HasSufficientHistory reports whether the workload has enough rate5m samples
+// over the window to make a meaningful recommendation. Probes
+// k8s_sustain:container_cpu_usage_by_workload:rate5m via count_over_time.
+func (c *Client) HasSufficientHistory(ctx context.Context, namespace, ownerKind, ownerName, window string) (bool, error) {
+	if !c.breaker.allow() {
+		return false, ErrCircuitOpen
+	}
+	expr := fmt.Sprintf(
+		`max(count_over_time(k8s_sustain:container_cpu_usage_by_workload:rate5m{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
+		namespace, ownerKind, ownerName, window,
+	)
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+	result, _, err := c.api.Query(ctx, expr, time.Now())
+	if err != nil {
+		c.breaker.failure()
+		return false, fmt.Errorf("prometheus history probe %q: %w", expr, err)
+	}
+	c.breaker.success()
+	vector, ok := result.(model.Vector)
+	if !ok || len(vector) == 0 {
+		return false, nil
+	}
+	return float64(vector[0].Value) >= float64(minHistorySamples), nil
+}
+
+// OOMSignal carries the OOM context for a single workload over the past 24h.
+type OOMSignal struct {
+	OOMCount        float64
+	PeakMemoryBytes ContainerValues
+}
+
+// QueryWorkloadOOMSignal returns the recent OOM count (24h) and the peak
+// per-container memory working-set bytes observed alongside it. Used as a floor
+// signal: if a workload OOM'd, never recommend memory below max(peak, current).
+func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKind, ownerName string) (OOMSignal, error) {
+	if !c.breaker.allow() {
+		return OOMSignal{}, ErrCircuitOpen
+	}
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
+
+	oomExpr := fmt.Sprintf(
+		`sum(k8s_sustain:workload_oom_24h{namespace=%q,owner_kind=%q,owner_name=%q})`,
+		namespace, ownerKind, ownerName,
+	)
+	oomRes, _, err := c.api.Query(ctx, oomExpr, time.Now())
+	if err != nil {
+		c.breaker.failure()
+		return OOMSignal{}, fmt.Errorf("prometheus oom probe %q: %w", oomExpr, err)
+	}
+	c.breaker.success()
+	var oomCount float64
+	if vec, ok := oomRes.(model.Vector); ok && len(vec) > 0 {
+		oomCount = float64(vec[0].Value)
+	}
+
+	peakExpr := fmt.Sprintf(
+		`max by (container) (max_over_time(k8s_sustain:container_memory_by_workload:bytes{namespace=%q,owner_kind=%q,owner_name=%q}[24h:1m]))`,
+		namespace, ownerKind, ownerName,
+	)
+	if !c.breaker.allow() {
+		return OOMSignal{OOMCount: oomCount}, nil
+	}
+	peakRes, _, err := c.api.Query(ctx, peakExpr, time.Now())
+	if err != nil {
+		c.breaker.failure()
+		return OOMSignal{OOMCount: oomCount}, fmt.Errorf("prometheus peak probe %q: %w", peakExpr, err)
+	}
+	c.breaker.success()
+	peaks := ContainerValues{}
+	if vec, ok := peakRes.(model.Vector); ok {
+		for _, s := range vec {
+			name := string(s.Metric["container"])
+			if name != "" {
+				peaks[name] = float64(s.Value)
+			}
+		}
+	}
+	return OOMSignal{OOMCount: oomCount, PeakMemoryBytes: peaks}, nil
+}
+
 // OOMEvent represents a single OOM kill event for a container.
 type OOMEvent struct {
 	Timestamp time.Time `json:"timestamp"`

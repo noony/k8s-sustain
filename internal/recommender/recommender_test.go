@@ -154,6 +154,121 @@ func TestComputeMemoryRequest(t *testing.T) {
 	}
 }
 
+// --- ComputeMemoryRequestWithOOM ---
+
+func TestComputeMemoryRequestWithOOM(t *testing.T) {
+	mib := int64(1024 * 1024)
+	tests := []struct {
+		name     string
+		rawBytes float64
+		signal   OOMSignal
+		cfg      sustainv1alpha1.ResourceRequestsConfig
+		wantNil  bool
+		wantQty  string
+	}{
+		{
+			name:     "no recent oom keeps default behavior",
+			rawBytes: 100 * float64(mib),
+			signal:   OOMSignal{Recent: false},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{},
+			wantQty:  "100Mi",
+		},
+		{
+			name:     "recent oom raises floor to peak",
+			rawBytes: 50 * float64(mib),
+			signal:   OOMSignal{Recent: true, PeakBytes: 200 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{},
+			wantQty:  "200Mi",
+		},
+		{
+			name:     "recent oom uses current request when peak is lower",
+			rawBytes: 50 * float64(mib),
+			signal:   OOMSignal{Recent: true, PeakBytes: 80 * float64(mib), CurrentRequestBytes: 150 * float64(mib)},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{},
+			wantQty:  "150Mi",
+		},
+		{
+			name:     "recent oom raw above floor wins",
+			rawBytes: 300 * float64(mib),
+			signal:   OOMSignal{Recent: true, PeakBytes: 100 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{},
+			wantQty:  "300Mi",
+		},
+		{
+			name:     "recent oom headroom applied to floor",
+			rawBytes: 50 * float64(mib),
+			signal:   OOMSignal{Recent: true, PeakBytes: 100 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: int32p(20)},
+			wantQty:  "120Mi", // 100Mi * 1.2
+		},
+		{
+			name:     "max allowed wins over oom floor",
+			rawBytes: 50 * float64(mib),
+			signal:   OOMSignal{Recent: true, PeakBytes: 500 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("256Mi")},
+			wantQty:  "256Mi",
+		},
+		{
+			name:     "keep request returns nil even with recent oom",
+			rawBytes: 50 * float64(mib),
+			signal:   OOMSignal{Recent: true, PeakBytes: 200 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true},
+			wantNil:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ComputeMemoryRequestWithOOM(tc.rawBytes, tc.signal, tc.cfg)
+			if tc.wantNil {
+				if got != nil {
+					t.Errorf("expected nil, got %s", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("expected non-nil quantity")
+			}
+			want := qty(tc.wantQty)
+			if got.Cmp(want) != 0 {
+				t.Errorf("got %s, want %s", got, want.String())
+			}
+		})
+	}
+}
+
+// FloorApplied indicates the OOM floor produced the final value, used by metrics.
+func TestComputeMemoryRequestWithOOM_FloorAppliedFlag(t *testing.T) {
+	mib := int64(1024 * 1024)
+	// Floor wins
+	q, applied := ComputeMemoryRequestWithOOMFloorReport(
+		50*float64(mib),
+		OOMSignal{Recent: true, PeakBytes: 200 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+		sustainv1alpha1.ResourceRequestsConfig{},
+	)
+	if !applied {
+		t.Errorf("expected floor applied, got false (q=%s)", q)
+	}
+	// Raw wins
+	_, applied = ComputeMemoryRequestWithOOMFloorReport(
+		400*float64(mib),
+		OOMSignal{Recent: true, PeakBytes: 200 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+		sustainv1alpha1.ResourceRequestsConfig{},
+	)
+	if applied {
+		t.Errorf("expected floor NOT applied when raw exceeds it")
+	}
+	// No recent OOM
+	_, applied = ComputeMemoryRequestWithOOMFloorReport(
+		50*float64(mib),
+		OOMSignal{Recent: false},
+		sustainv1alpha1.ResourceRequestsConfig{},
+	)
+	if applied {
+		t.Errorf("expected floor NOT applied when no recent OOM")
+	}
+}
+
 // --- ComputeLimit ---
 
 func TestComputeLimit(t *testing.T) {

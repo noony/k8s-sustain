@@ -451,6 +451,125 @@ func TestQueryOOMKillEvents_ServerErrorIsNonFatal(t *testing.T) {
 	}
 }
 
+func TestHasSufficientHistory_AboveThresholdReturnsTrue(t *testing.T) {
+	var query string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		query = r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+			{"metric":{},"value":[0,"42"]}
+		]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	ok, err := c.HasSufficientHistory(context.Background(), "ns", "Deployment", "web", "168h")
+	if err != nil {
+		t.Fatalf("HasSufficientHistory: %v", err)
+	}
+	if !ok {
+		t.Errorf("expected true for 42 samples, got false")
+	}
+	if !strings.Contains(query, "count_over_time") {
+		t.Errorf("expected count_over_time in query, got %q", query)
+	}
+	if !strings.Contains(query, "container_cpu_usage_by_workload:rate5m") {
+		t.Errorf("expected rate5m rule in query, got %q", query)
+	}
+}
+
+func TestHasSufficientHistory_BelowThresholdReturnsFalse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+			{"metric":{},"value":[0,"5"]}
+		]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	ok, err := c.HasSufficientHistory(context.Background(), "ns", "Deployment", "web", "168h")
+	if err != nil {
+		t.Fatalf("HasSufficientHistory: %v", err)
+	}
+	if ok {
+		t.Errorf("expected false for 5 samples (< 12), got true")
+	}
+}
+
+func TestHasSufficientHistory_EmptyResultReturnsFalse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	ok, err := c.HasSufficientHistory(context.Background(), "ns", "Deployment", "web", "168h")
+	if err != nil {
+		t.Fatalf("HasSufficientHistory: %v", err)
+	}
+	if ok {
+		t.Errorf("expected false for empty result, got true")
+	}
+}
+
+func TestQueryWorkloadOOMSignal_ReturnsCountAndPeak(t *testing.T) {
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		queries = append(queries, q)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "workload_oom_24h"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"3"]}]}}`))
+		case strings.Contains(q, "container_memory_by_workload:bytes"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"209715200"]}]}}`))
+		default:
+			t.Errorf("unexpected query: %q", q)
+		}
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	sig, err := c.QueryWorkloadOOMSignal(context.Background(), "ns", "Deployment", "web")
+	if err != nil {
+		t.Fatalf("QueryWorkloadOOMSignal: %v", err)
+	}
+	if sig.OOMCount != 3 {
+		t.Errorf("OOMCount: got %v want 3", sig.OOMCount)
+	}
+	if sig.PeakMemoryBytes["app"] != 209715200 {
+		t.Errorf("peak[app]: got %v want 209715200", sig.PeakMemoryBytes["app"])
+	}
+	if len(queries) != 2 {
+		t.Errorf("expected 2 queries (oom + peak), got %d", len(queries))
+	}
+}
+
+func TestQueryWorkloadOOMSignal_NoOOMReturnsZeroCount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	sig, err := c.QueryWorkloadOOMSignal(context.Background(), "ns", "Deployment", "web")
+	if err != nil {
+		t.Fatalf("QueryWorkloadOOMSignal: %v", err)
+	}
+	if sig.OOMCount != 0 {
+		t.Errorf("expected 0 OOM count, got %v", sig.OOMCount)
+	}
+	if len(sig.PeakMemoryBytes) != 0 {
+		t.Errorf("expected empty peak map, got %v", sig.PeakMemoryBytes)
+	}
+}
+
 func TestPing_OK(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

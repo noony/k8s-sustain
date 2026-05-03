@@ -93,6 +93,46 @@ func ComputeMemoryRequest(rawBytes float64, cfg sustainv1alpha1.ResourceRequests
 	return qty
 }
 
+// OOMSignal carries an OOM-aware floor for memory recommendations. Recent=true
+// means the workload OOM'd within the lookback window (24h), in which case the
+// recommendation is floored at max(PeakBytes, CurrentRequestBytes) plus headroom.
+type OOMSignal struct {
+	Recent              bool
+	PeakBytes           float64
+	CurrentRequestBytes float64
+}
+
+// ComputeMemoryRequestWithOOM is ComputeMemoryRequest with an OOM-aware floor.
+// When signal.Recent is true, the result is floored at
+// max(signal.PeakBytes, signal.CurrentRequestBytes) * (1 + headroom).
+// MinAllowed/MaxAllowed clamps still apply last so user overrides win.
+func ComputeMemoryRequestWithOOM(rawBytes float64, signal OOMSignal, cfg sustainv1alpha1.ResourceRequestsConfig) *resource.Quantity {
+	q, _ := ComputeMemoryRequestWithOOMFloorReport(rawBytes, signal, cfg)
+	return q
+}
+
+// ComputeMemoryRequestWithOOMFloorReport is the same as ComputeMemoryRequestWithOOM
+// but also reports whether the OOM floor produced the final value. Used by the
+// controller to emit a metric when the floor is applied.
+func ComputeMemoryRequestWithOOMFloorReport(rawBytes float64, signal OOMSignal, cfg sustainv1alpha1.ResourceRequestsConfig) (*resource.Quantity, bool) {
+	if cfg.KeepRequest {
+		return nil, false
+	}
+	effective := rawBytes
+	floorApplied := false
+	if signal.Recent {
+		floor := signal.PeakBytes
+		if signal.CurrentRequestBytes > floor {
+			floor = signal.CurrentRequestBytes
+		}
+		if floor > effective {
+			effective = floor
+			floorApplied = true
+		}
+	}
+	return ComputeMemoryRequest(effective, cfg), floorApplied
+}
+
 // ComputeLimit derives a resource limit from the computed request and the limit
 // config. Returns LimitResult{} (keep existing) when no change is required.
 func ComputeLimit(request *resource.Quantity, currentRequest, currentLimit *resource.Quantity, cfg sustainv1alpha1.ResourceLimitsConfig) LimitResult {

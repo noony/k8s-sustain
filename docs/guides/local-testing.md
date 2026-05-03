@@ -136,6 +136,30 @@ kubectl --raw \
   | grep 'k8s_sustain_recommended_cpu_cores{.*container_kind="init"'
 ```
 
+### `oom-kill`
+
+Single-container Deployment that quietly holds ~30Mi for 60 s, then attempts
+to allocate 120Mi against a 96Mi cgroup memory limit — the kernel kills the
+container, Kubernetes restarts it, and the cycle repeats.
+
+**Expected:**
+
+- `kubectl get pods -n scenario-oom-kill` shows `OOMKilled` in the last
+  termination reason and a growing restart count.
+- `k8s_sustain:workload_oom_24h{owner_name="stress"}` becomes positive.
+- Memory recommendation **does not shrink** despite most samples being
+  quiet (~30Mi). The OOM-aware floor pulls the reco to
+  `max(peak_working_set_24h, current_request)` plus headroom — i.e. ≥ 96Mi.
+- `k8s_sustain_oom_floor_applied_total{owner_name="stress"}` increments on
+  each reconcile while the OOM is within the 24 h window.
+
+```bash
+kubectl get wlrec -n scenario-oom-kill stress -o yaml
+kubectl --raw \
+  /api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics \
+  | grep 'k8s_sustain_oom_floor_applied_total'
+```
+
 ## Observability
 
 `make test-scenario-status` prints a table:

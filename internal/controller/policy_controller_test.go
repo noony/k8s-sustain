@@ -9,6 +9,8 @@ import (
 	"time"
 
 	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
+	prom "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -20,11 +22,19 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/autoscaler"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 func qty(s string) *resource.Quantity { q := resource.MustParse(s); return &q }
+
+func testutilCounterValue(t *testing.T, vec *prom.CounterVec, ns, kind, name, container string) float64 {
+	t.Helper()
+	return testutil.ToFloat64(vec.With(prom.Labels{
+		"namespace": ns, "owner_kind": kind, "owner_name": name, "container": container,
+	}))
+}
 
 func TestQuantityEqual(t *testing.T) {
 	cases := []struct {
@@ -696,6 +706,12 @@ func promServerForReconcile(t *testing.T) *httptest.Server {
 		q := r.Form.Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case strings.Contains(q, "count_over_time"):
+			// History probe: report enough samples so the recommender doesn't skip.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"168"]}]}}`))
+		case strings.Contains(q, "workload_oom_24h"):
+			// No recent OOMs in tests by default.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 		case strings.Contains(q, "workload_cpu_usage"):
 			// 100m × 1 replica.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.1"]}]}}`))
@@ -779,6 +795,166 @@ func deploymentTarget(ns, name string) *workloadTarget {
 			},
 		}},
 		Object: &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}},
+	}
+}
+
+// TestBuildRecommendations_InsufficientHistory_SkipsAndEmitsCounter feeds the
+// recommender a count_over_time probe below the minimum threshold and verifies
+// buildRecommendations returns an empty map without error.
+func TestBuildRecommendations_InsufficientHistory_SkipsAndEmitsCounter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "count_over_time"):
+			// 5 samples — below the 12-sample floor.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"5"]}]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	policy := policyForReconcileWorkload(t, "p")
+	containers := []corev1.Container{{Name: "app"}}
+
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{})
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	if len(recs) != 0 {
+		t.Errorf("expected empty recommendations on insufficient history, got %d entries: %v", len(recs), recs)
+	}
+}
+
+// TestBuildRecommendations_RecentOOMRaisesMemoryFloor verifies that when
+// k8s_sustain:workload_oom_24h reports a recent OOM, the memory recommendation
+// is floored at max(peak_working_set_24h, current_request) instead of using the
+// (lower) percentile value, and that the oom-floor counter increments.
+func TestBuildRecommendations_RecentOOMRaisesMemoryFloor(t *testing.T) {
+	const (
+		oomCount     = 2.0
+		peakBytes    = 800 * 1024 * 1024 // 800Mi — far above percentile
+		percentileMB = 100               // percentile would yield 100Mi
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "count_over_time"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"168"]}]}}`))
+		case strings.Contains(q, "workload_oom_24h"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"2"]}]}}`))
+		case strings.Contains(q, "max_over_time"):
+			// Peak working-set witness for the OOM signal: 800Mi.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"838860800"]}
+			]}}`))
+		case strings.Contains(q, "workload_cpu_usage"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.1"]}]}}`))
+		case strings.Contains(q, "workload_memory_usage"):
+			// Percentile says 100Mi — but recent OOM should override.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"104857600"]}]}}`))
+		case strings.Contains(q, "workload_replicas"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}`))
+		case strings.Contains(q, "container_cpu_usage_by_workload"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.1"]}]}}`))
+		case strings.Contains(q, "container_memory_by_workload"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"104857600"]}]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	policy := policyForReconcileWorkload(t, "p")
+	// Container with current request below the peak — floor should pull
+	// the recommendation up to peak, not down to the percentile.
+	containers := []corev1.Container{{
+		Name: "app",
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceMemory: resource.MustParse("256Mi"),
+			},
+		},
+	}}
+
+	before := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "app")
+
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{})
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+
+	rec, ok := recs["app"]
+	if !ok {
+		t.Fatalf("expected recommendation for 'app', got %v", recs)
+	}
+	if rec.MemoryRequest == nil {
+		t.Fatal("expected non-nil MemoryRequest")
+	}
+
+	// Floor must be at least the peak (800Mi). Sanity-check it's not the
+	// percentile value (~100Mi) — the OOM signal must have lifted it.
+	wantAtLeast := resource.MustParse("800Mi")
+	if rec.MemoryRequest.Cmp(wantAtLeast) < 0 {
+		t.Errorf("expected memory ≥ 800Mi (peak floor), got %s — percentile (%dMi) likely won when OOM should have lifted it", rec.MemoryRequest, percentileMB)
+	}
+	// And it must not exceed the peak by more than headroom-default-of-zero
+	// (the policy in the helper sets no headroom). Allow exact 800Mi.
+	wantAtMost := resource.MustParse("800Mi")
+	if rec.MemoryRequest.Cmp(wantAtMost) > 0 {
+		t.Errorf("expected memory == 800Mi (no headroom configured), got %s", rec.MemoryRequest)
+	}
+
+	after := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "app")
+	if after-before != 1 {
+		t.Errorf("expected oom_floor_applied counter to increment by 1, got delta=%v (oomCount=%v, peak=%v)", after-before, oomCount, peakBytes)
+	}
+}
+
+// TestBuildRecommendations_OOMSignalEmpty_DoesNotApplyFloor verifies that when
+// no OOM is reported, the percentile value flows through unchanged and the
+// floor counter is not incremented.
+func TestBuildRecommendations_OOMSignalEmpty_DoesNotApplyFloor(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	policy := policyForReconcileWorkload(t, "p")
+	containers := []corev1.Container{{
+		Name: "app",
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+			},
+		},
+	}}
+
+	before := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "app")
+
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{})
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	rec := recs["app"]
+	if rec.MemoryRequest == nil {
+		t.Fatal("expected non-nil MemoryRequest")
+	}
+	// promServerForReconcile reports 64Mi for memory; with no headroom & no
+	// OOM, the recommendation should be 64Mi — well below the 1Gi current
+	// request, proving the floor did NOT lift it.
+	if rec.MemoryRequest.Cmp(resource.MustParse("128Mi")) >= 0 {
+		t.Errorf("expected percentile-driven memory < 128Mi (no OOM floor), got %s", rec.MemoryRequest)
+	}
+
+	after := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "app")
+	if after != before {
+		t.Errorf("expected oom_floor_applied counter unchanged, delta=%v", after-before)
 	}
 }
 

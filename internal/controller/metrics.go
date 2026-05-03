@@ -83,6 +83,16 @@ var (
 		[]string{"namespace", "owner_kind", "owner_name", "kind", "resource"},
 	)
 
+	recommendationSkipped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "k8s_sustain_recommendation_skipped_total",
+		Help: "Recommendations skipped without emitting, by reason (e.g. insufficient_history).",
+	}, []string{"namespace", "owner_kind", "owner_name", "reason"})
+
+	oomFloorApplied = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "k8s_sustain_oom_floor_applied_total",
+		Help: "Memory recommendations where the recent-OOM floor raised the value above the percentile.",
+	}, []string{"namespace", "owner_kind", "owner_name", "container"})
+
 	coordinationFactor = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "k8s_sustain_coordination_factor",
@@ -109,5 +119,7 @@ func init() {
 		autoscalerPresent,
 		autoscalerTargetConfigured,
 		coordinationFactor,
+		recommendationSkipped,
+		oomFloorApplied,
 	)
 }
