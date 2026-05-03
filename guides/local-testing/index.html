@@ -1201,6 +1201,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#init-containers" class="md-nav__link">
+    <span class="md-ellipsis">
+      init-containers
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1569,6 +1578,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#init-containers" class="md-nav__link">
+    <span class="md-ellipsis">
+      init-containers
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1732,15 +1750,33 @@ an <code>autoscaling/v2</code> HPA targeting 60% CPU utilization (min 1 / max 5)
 <p><strong>Expected:</strong> Recommender shrinks requests to ~<code>165m</code>. Once shrunk, HPA's
 effective utilization jumps above 60% and replicas scale up. Validates
 the interaction between right-sizing and the HPA.</p>
+<h3 id="init-containers"><code>init-containers</code><a class="headerlink" href="#init-containers" title="Permanent link">&para;</a></h3>
+<p>Single Deployment whose pod template includes:</p>
+<ul>
+<li>a regular container <code>app</code> (CPU <code>500m</code>, ~<code>200m</code> actual usage),</li>
+<li>a classic init container <code>migrate</code> that exits in ~5 seconds,</li>
+<li>a sidecar init container <code>log-shipper</code> (<code>restartPolicy: Always</code>,
+  ~<code>50m</code> actual usage).</li>
+</ul>
+<p><strong>Expected:</strong> All three containers receive recommendations
+(<code>kubectl get wlrec -n scenario-init-containers -o yaml</code>). Drift in <code>app</code> or
+<code>log-shipper</code> triggers a pod recycle (in-place on k8s ≥ 1.32, eviction
+otherwise). Drift in <code>migrate</code> does <strong>not</strong> trigger recycle — it has already
+exited; the new requests land via webhook injection on the next pod creation.</p>
+<p>Inspect the <code>container_kind</code> label on emitted gauges:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>--raw<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>/api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">&#39;k8s_sustain_recommended_cpu_cores{.*container_kind=&quot;init&quot;&#39;</span>
+</code></pre></div>
 <h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
 <p><code>make test-scenario-status</code> prints a table:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
 </code></pre></div>
 <p>The dashboard remains the richer source of truth — start a port-forward
 and open <code>http://localhost:8090</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
 </code></pre></div>
 <h2 id="adding-a-new-scenario">Adding a new scenario<a class="headerlink" href="#adding-a-new-scenario" title="Permanent link">&para;</a></h2>
 <p>See <code>hack/scenarios/README.md</code>.</p>

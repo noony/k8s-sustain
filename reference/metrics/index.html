@@ -1691,25 +1691,26 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 <tr>
 <td><code>k8s_sustain_recommended_cpu_cores</code></td>
 <td>gauge</td>
-<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code>, <code>policy</code></td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code>, <code>container_kind</code>, <code>policy</code></td>
 </tr>
 <tr>
 <td><code>k8s_sustain_recommended_memory_bytes</code></td>
 <td>gauge</td>
-<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code>, <code>policy</code></td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code>, <code>container_kind</code>, <code>policy</code></td>
 </tr>
 <tr>
 <td><code>k8s_sustain_workload_template_cpu_cores</code></td>
 <td>gauge</td>
-<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code>, <code>policy</code></td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code>, <code>container_kind</code>, <code>policy</code></td>
 </tr>
 <tr>
 <td><code>k8s_sustain_workload_template_memory_bytes</code></td>
 <td>gauge</td>
-<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code>, <code>policy</code></td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code>, <code>container_kind</code>, <code>policy</code></td>
 </tr>
 </tbody>
 </table>
+<p><code>container_kind</code> is <code>regular</code> or <code>init</code>, identifying whether the container originated as a regular pod container or an init container (including restartable sidecars). Use it to slice dashboards by container kind.</p>
 <p><code>k8s_sustain_workload_template_cpu_cores</code> and <code>k8s_sustain_workload_template_memory_bytes</code> record the CPU/memory request from the workload's pod-template spec (the pre-injection value). Stable across webhook injection so savings rules can compare against the template.</p>
 <h3 id="drift-retry-autoscaler">Drift, retry, autoscaler<a class="headerlink" href="#drift-retry-autoscaler" title="Permanent link">&para;</a></h3>
 <table>
@@ -1724,7 +1725,7 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 <tr>
 <td><code>k8s_sustain_workload_drift_ratio</code></td>
 <td>gauge</td>
-<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code>, <code>resource</code></td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code>, <code>container_kind</code>, <code>resource</code></td>
 </tr>
 <tr>
 <td><code>k8s_sustain_workload_retry_state</code></td>

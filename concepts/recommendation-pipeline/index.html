@@ -627,6 +627,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#containers-covered" class="md-nav__link">
+    <span class="md-ellipsis">
+      Containers covered
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#stages" class="md-nav__link">
     <span class="md-ellipsis">
       Stages
@@ -1372,6 +1381,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#containers-covered" class="md-nav__link">
+    <span class="md-ellipsis">
+      Containers covered
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#stages" class="md-nav__link">
     <span class="md-ellipsis">
       Stages
@@ -1427,6 +1445,16 @@
 
 <h1 id="recommendation-pipeline">Recommendation Pipeline<a class="headerlink" href="#recommendation-pipeline" title="Permanent link">&para;</a></h1>
 <p>This page describes how k8s-sustain produces a per-container recommendation, from raw Prometheus metrics to the final request and limit values applied to a pod.</p>
+<h2 id="containers-covered">Containers covered<a class="headerlink" href="#containers-covered" title="Permanent link">&para;</a></h2>
+<p>Both regular containers and init containers are recommended by default.
+Sidecar (restartable) and classic (one-shot) init containers are treated
+uniformly: each gets a per-container recommendation derived from its own
+Prometheus series. Set <code>spec.rightSizing.excludeInitContainers: true</code> on a
+policy to skip init containers for the workloads it targets.</p>
+<p>The controller recycles a running pod when a regular container or a
+restartable sidecar drifts from the recommendation. Drift in classic init
+containers does not trigger recycle — they have already exited; the new
+requests apply on next pod creation via webhook injection.</p>
 <h2 id="stages">Stages<a class="headerlink" href="#stages" title="Permanent link">&para;</a></h2>
 <p>The recommender runs each container through the following stages, in order:</p>
 <ol>

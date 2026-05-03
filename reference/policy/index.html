@@ -1263,6 +1263,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#specrightsizingexcludeinitcontainers" class="md-nav__link">
+    <span class="md-ellipsis">
+      spec.rightSizing.excludeInitContainers
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#specrightsizingresourcesconfigs" class="md-nav__link">
     <span class="md-ellipsis">
       spec.rightSizing.resourcesConfigs
@@ -1589,6 +1598,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#specrightsizingexcludeinitcontainers" class="md-nav__link">
+    <span class="md-ellipsis">
+      spec.rightSizing.excludeInitContainers
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#specrightsizingresourcesconfigs" class="md-nav__link">
     <span class="md-ellipsis">
       spec.rightSizing.resourcesConfigs
@@ -1850,6 +1868,32 @@ formulas and detection rules.</p>
 </tr>
 </tbody>
 </table>
+<h3 id="specrightsizingexcludeinitcontainers"><code>spec.rightSizing.excludeInitContainers</code><a class="headerlink" href="#specrightsizingexcludeinitcontainers" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>excludeInitContainers</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>When <code>true</code>, init containers (including restartable sidecar init containers) are skipped for any workload this policy targets. By default, init containers are recommended and resized like regular containers.</td>
+</tr>
+</tbody>
+</table>
+<p>Init containers are treated uniformly with regular containers by default —
+both classic (one-shot) and sidecar (<code>restartPolicy: Always</code>) init containers
+get a recommendation, and webhook injection updates their requests/limits at
+pod creation. The controller recycles pods only when a regular container or
+sidecar init container drifts from the recommendation; classic init containers
+have already exited when the pod is <code>Running</code>, so their drift is picked up on
+next pod creation rather than triggering an immediate recycle.</p>
 <h3 id="specrightsizingresourcesconfigs"><code>spec.rightSizing.resourcesConfigs</code><a class="headerlink" href="#specrightsizingresourcesconfigs" title="Permanent link">&para;</a></h3>
 <p>Configures recommendations for CPU and memory independently.</p>
 <h4 id="cpu-memory"><code>cpu</code> / <code>memory</code><a class="headerlink" href="#cpu-memory" title="Permanent link">&para;</a></h4>
