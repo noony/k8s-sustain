@@ -10,22 +10,28 @@
       
       
       
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/concepts/workload-recommendations/">
       
       
+        <link rel="prev" href="../autoscaler-coordination/">
       
-      <link rel="icon" href="/k8s-sustain/assets/logo.svg">
+      
+        <link rel="next" href="../../guides/deployments/">
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.27">
     
     
       
-        <title>k8s-sustain</title>
+        <title>Workload Recommendations - k8s-sustain</title>
       
     
     
-      <link rel="stylesheet" href="/k8s-sustain/assets/stylesheets/main.6543a935.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.6543a935.min.css">
       
         
-        <link rel="stylesheet" href="/k8s-sustain/assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -44,7 +50,7 @@
       
     
     
-    <script>__md_scope=new URL("/k8s-sustain/",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -69,6 +75,11 @@
     <label class="md-overlay" for="__drawer"></label>
     <div data-md-component="skip">
       
+        
+        <a href="#workload-recommendations-cache-crd" class="md-skip">
+          Skip to content
+        </a>
+      
     </div>
     <div data-md-component="announce">
       
@@ -81,9 +92,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="/k8s-sustain/." title="k8s-sustain" class="md-header__button md-logo" aria-label="k8s-sustain" data-md-component="logo">
+    <a href="../.." title="k8s-sustain" class="md-header__button md-logo" aria-label="k8s-sustain" data-md-component="logo">
       
-  <img src="/k8s-sustain/assets/logo.svg" alt="logo">
+  <img src="../../assets/logo.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -100,7 +111,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              
+              Workload Recommendations
             
           </span>
         </div>
@@ -203,7 +214,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="/k8s-sustain/." class="md-tabs__link">
+      <a href="../.." class="md-tabs__link">
         
   
     
@@ -222,7 +233,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="/k8s-sustain/getting-started/prerequisites/" class="md-tabs__link">
+        <a href="../../getting-started/prerequisites/" class="md-tabs__link">
           
   
   Getting Started
@@ -236,11 +247,13 @@
         
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="/k8s-sustain/concepts/architecture/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../architecture/" class="md-tabs__link">
           
   
   Concepts
@@ -264,7 +277,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="/k8s-sustain/guides/deployments/" class="md-tabs__link">
+        <a href="../../guides/deployments/" class="md-tabs__link">
           
   
   Guides
@@ -285,7 +298,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="/k8s-sustain/reference/policy/" class="md-tabs__link">
+        <a href="../../reference/policy/" class="md-tabs__link">
           
   
   Reference
@@ -301,7 +314,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="/k8s-sustain/development/" class="md-tabs__link">
+      <a href="../../development/" class="md-tabs__link">
         
   
     
@@ -341,9 +354,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="/k8s-sustain/." title="k8s-sustain" class="md-nav__button md-logo" aria-label="k8s-sustain" data-md-component="logo">
+    <a href="../.." title="k8s-sustain" class="md-nav__button md-logo" aria-label="k8s-sustain" data-md-component="logo">
       
-  <img src="/k8s-sustain/assets/logo.svg" alt="logo">
+  <img src="../../assets/logo.svg" alt="logo">
 
     </a>
     k8s-sustain
@@ -370,7 +383,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -432,7 +445,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/getting-started/prerequisites/" class="md-nav__link">
+      <a href="../../getting-started/prerequisites/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -453,7 +466,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/getting-started/installation/" class="md-nav__link">
+      <a href="../../getting-started/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -474,7 +487,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/getting-started/quick-start/" class="md-nav__link">
+      <a href="../../getting-started/quick-start/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -499,27 +512,30 @@
       
   
   
+    
   
   
+  
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
-        
-          
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -530,7 +546,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             Concepts
@@ -544,7 +560,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/concepts/architecture/" class="md-nav__link">
+      <a href="../architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -565,7 +581,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/concepts/recommendation-pipeline/" class="md-nav__link">
+      <a href="../recommendation-pipeline/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -586,7 +602,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/concepts/update-modes/" class="md-nav__link">
+      <a href="../update-modes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -607,7 +623,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/concepts/in-place-updates/" class="md-nav__link">
+      <a href="../in-place-updates/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -628,7 +644,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/concepts/autoscaler-coordination/" class="md-nav__link">
+      <a href="../autoscaler-coordination/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -646,10 +662,30 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="/k8s-sustain/concepts/workload-recommendations/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Workload Recommendations
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -658,6 +694,89 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-it-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why it exists
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      How it works
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      Schema
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#outage-behaviour" class="md-nav__link">
+    <span class="md-ellipsis">
+      Outage behaviour
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      Observability
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tuning
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rbac" class="md-nav__link">
+    <span class="md-ellipsis">
+      RBAC
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -761,7 +880,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/guides/deployments/" class="md-nav__link">
+      <a href="../../guides/deployments/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -782,7 +901,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/guides/daemonsets/" class="md-nav__link">
+      <a href="../../guides/daemonsets/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -803,7 +922,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/guides/jobs-and-cronjobs/" class="md-nav__link">
+      <a href="../../guides/jobs-and-cronjobs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -824,7 +943,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/guides/argo-rollouts/" class="md-nav__link">
+      <a href="../../guides/argo-rollouts/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -895,7 +1014,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/guides/argocd/" class="md-nav__link">
+      <a href="../../guides/argocd/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -916,7 +1035,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/guides/keda/" class="md-nav__link">
+      <a href="../../guides/keda/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -937,7 +1056,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/guides/cert-manager/" class="md-nav__link">
+      <a href="../../guides/cert-manager/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1008,7 +1127,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/guides/dashboard/" class="md-nav__link">
+      <a href="../../guides/dashboard/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1029,7 +1148,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/guides/local-testing/" class="md-nav__link">
+      <a href="../../guides/local-testing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1107,7 +1226,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/reference/policy/" class="md-nav__link">
+      <a href="../../reference/policy/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1128,7 +1247,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/reference/annotation/" class="md-nav__link">
+      <a href="../../reference/annotation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1149,7 +1268,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/reference/cli/" class="md-nav__link">
+      <a href="../../reference/cli/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1170,7 +1289,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/reference/helm-values/" class="md-nav__link">
+      <a href="../../reference/helm-values/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1191,7 +1310,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/reference/metrics/" class="md-nav__link">
+      <a href="../../reference/metrics/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1212,7 +1331,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/reference/recording-rules/" class="md-nav__link">
+      <a href="../../reference/recording-rules/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1240,7 +1359,7 @@
   
   
     <li class="md-nav__item">
-      <a href="/k8s-sustain/development/" class="md-nav__link">
+      <a href="../../development/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1270,6 +1389,79 @@
   
   
   
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-it-exists" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why it exists
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      How it works
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      Schema
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#outage-behaviour" class="md-nav__link">
+    <span class="md-ellipsis">
+      Outage behaviour
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      Observability
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tuning
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rbac" class="md-nav__link">
+    <span class="md-ellipsis">
+      RBAC
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
   
 </nav>
                   </div>
@@ -1281,8 +1473,87 @@
             <div class="md-content" data-md-component="content">
               <article class="md-content__inner md-typeset">
                 
-  <h1>404 - Not found</h1>
+                  
 
+  
+  
+
+
+<h1 id="workload-recommendations-cache-crd">Workload Recommendations (cache CRD)<a class="headerlink" href="#workload-recommendations-cache-crd" title="Permanent link">&para;</a></h1>
+<p><code>WorkloadRecommendation</code> is a namespaced custom resource that caches the most recent recommendation the controller computed for a single workload. It exists to keep the admission webhook serving useful resource hints when Prometheus is briefly unavailable.</p>
+<h2 id="why-it-exists">Why it exists<a class="headerlink" href="#why-it-exists" title="Permanent link">&para;</a></h2>
+<p>The webhook needs five Prometheus queries to compute an injection on every pod CREATE. If Prometheus is unreachable — restart, network partition, OOM, etc. — the circuit breaker (<code>internal/prometheus/breaker.go</code>) opens and <code>buildRecommendations</code> returns <code>ErrCircuitOpen</code>. Without a cache, the webhook would fail open and admit pods with whatever requests the workload's pod template specifies, undoing any rightsizing for new pods until Prometheus recovers.</p>
+<p><code>WorkloadRecommendation</code> provides a last-known-good fallback that lives in the cluster API, so:</p>
+<ul>
+<li>All webhook replicas see the same fallback value (no per-replica drift).</li>
+<li>Webhook restarts during the outage don't lose the cache.</li>
+<li>Operators can inspect what the webhook would inject with <code>kubectl get wlrec</code>.</li>
+</ul>
+<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
+<ol>
+<li>
+<p><strong>Write path (controller).</strong> After every successful <code>reconcileWorkload</code>, the controller upserts a <code>WorkloadRecommendation</code> whose name is <code>&lt;lowercase-kind&gt;-&lt;workload-name&gt;</code> in the workload's namespace. The <code>status.containers</code> map carries the same per-container CPU/memory request and limit values that the recycle path applied. Writes are skipped when the new recommendation is byte-identical to the previous one, so etcd write amplification scales with <em>change</em>, not workload count.</p>
+</li>
+<li>
+<p><strong>Read path (webhook).</strong> When <code>buildRecommendations</code> returns <em>any</em> error — circuit-open, timeout, malformed Prometheus response — the webhook calls <code>fetchCachedRecommendations</code>. If a <code>WorkloadRecommendation</code> exists and its <code>status.observedAt</code> is within the staleness window (default <strong>30 minutes</strong>), the webhook injects from the cache instead of failing open.</p>
+</li>
+<li>
+<p><strong>GC path (controller).</strong> At the end of every reconcile cycle, the controller lists all <code>WorkloadRecommendation</code> objects produced by the policy and deletes any whose target workload is no longer in the matched set (workload deleted, namespace excluded, annotation removed, kind disabled). Foreign-policy entries are never touched.</p>
+</li>
+</ol>
+<h2 id="schema">Schema<a class="headerlink" href="#schema" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WorkloadRecommendation</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">deployment-web</span><span class="w">              </span><span class="c1"># &lt;kind&gt;-&lt;name&gt;</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production-rightsizing</span><span class="w">    </span><span class="c1"># owning policy</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nt">workloadRef</span><span class="p">:</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="nt">status</span><span class="p">:</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span><span class="nt">observedAt</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2026-05-01T12:34:56Z</span><span class="w">  </span><span class="c1"># webhook trusts ≤30m old</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span><span class="nt">source</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus</span><span class="w">                </span><span class="c1"># &quot;prometheus&quot; or &quot;fallback&quot;</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">    </span><span class="nt">app</span><span class="p">:</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">      </span><span class="nt">cpuRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">250m</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">      </span><span class="nt">memoryRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">      </span><span class="nt">cpuLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">500m</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">      </span><span class="nt">memoryLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512Mi</span>
+</code></pre></div>
+<p>The resource is namespaced and inherits namespace deletion semantics: removing the namespace removes every recommendation in it.</p>
+<h2 id="outage-behaviour">Outage behaviour<a class="headerlink" href="#outage-behaviour" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Prometheus down, controller cache fresh (≤30m).</strong> Webhook serves cached recommendations on every admission. Steady-state injection latency drops because no Prometheus call is made; admission stays fully functional.</li>
+<li><strong>Prometheus down, controller cache stale (&gt;30m).</strong> Webhook treats the entry as missing, falls open with the workload's template requests, and logs <code>prometheus circuit open and no fresh cache</code>. Admission still succeeds.</li>
+<li><strong>Prometheus down, no entry yet (brand-new workload).</strong> Same as above — webhook fails open with template requests. The first reconcile after Prometheus recovers populates the cache.</li>
+<li><strong>Prometheus up.</strong> Webhook always prefers the live query; the cache is only consulted on Prometheus failure.</li>
+</ul>
+<h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>kubectl get wlrec -A</code> lists every cached recommendation.</li>
+<li><code>kubectl describe wlrec deployment-web -n example</code> shows the full status for one workload.</li>
+<li>The status <code>observedAt</code> field tells operators the freshness of the data the webhook would serve right now.</li>
+</ul>
+<h2 id="tuning">Tuning<a class="headerlink" href="#tuning" title="Permanent link">&para;</a></h2>
+<p>The staleness window is set at <code>webhook.Handler.CacheStaleness</code> (default <code>DefaultCacheStaleness = 30m</code>). Future versions may expose this via Helm; today it requires a binary build.</p>
+<h2 id="rbac">RBAC<a class="headerlink" href="#rbac" title="Permanent link">&para;</a></h2>
+<p>The controller's ClusterRole grants <code>get;list;watch;create;update;patch;delete</code> on <code>workloadrecommendations</code> (and its <code>/status</code> subresource). The webhook reuses the controller ServiceAccount today, so the same rules cover read access. The dashboard ClusterRole (when enabled) has read-only access on the resource so operators can browse it from the UI.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
               </article>
             </div>
           
@@ -1302,6 +1573,44 @@
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../autoscaler-coordination/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Autoscaler Coordination">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Autoscaler Coordination
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../../guides/deployments/" class="md-footer__link md-footer__link--next" aria-label="Next: Deployments &amp; StatefulSets">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Deployments & StatefulSets
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11H4Z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
     
   
   <div class="md-footer-meta md-typeset">
@@ -1326,10 +1635,10 @@
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "/k8s-sustain/", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "/k8s-sustain/assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="/k8s-sustain/assets/javascripts/bundle.ad660dcc.min.js"></script>
+      <script src="../../assets/javascripts/bundle.ad660dcc.min.js"></script>
       
     
   </body>
