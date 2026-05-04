@@ -1522,7 +1522,10 @@
 <a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">      </span><span class="nt">memoryRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
 <a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">      </span><span class="nt">cpuLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">500m</span>
 <a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">      </span><span class="nt">memoryLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512Mi</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">      </span><span class="nt">removeCpuLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">      </span><span class="c1"># true when the policy says NoLimit</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">      </span><span class="nt">removeMemoryLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
 </code></pre></div>
+<p>The <code>removeCpuLimit</code> / <code>removeMemoryLimit</code> flags carry the explicit "strip the limit" intent (Policy <code>NoLimit</code>). They are needed because nil <code>cpuLimit</code>/<code>memoryLimit</code> alone cannot distinguish "leave alone" (<code>KeepLimit</code> / no strategy) from "remove". On Prometheus outage the webhook reads these from cache so <code>NoLimit</code> policies keep stripping limits during the outage.</p>
 <p>The resource is namespaced and inherits namespace deletion semantics: removing the namespace removes every recommendation in it.</p>
 <h2 id="outage-behaviour">Outage behaviour<a class="headerlink" href="#outage-behaviour" title="Permanent link">&para;</a></h2>
 <ul>
