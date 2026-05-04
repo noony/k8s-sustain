@@ -10,7 +10,7 @@ k8s-sustain is split into three independent components that run as separate proc
 │  │  k8s-sustain     │        │  k8s-sustain-webhook         │   │
 │  │  (controller)    │        │  (admission server)          │   │
 │  │                  │        │                              │   │
-│  │  Watches Policy  │        │  Intercepts Pod CREATE        │   │
+│  │  Watches Policy  │        │  Intercepts Pod CREATE       │   │
 │  │  objects and     │        │  requests, injects           │   │
 │  │  reconciles      │        │  resources from OnCreate     │   │
 │  │  Ongoing-mode    │        │  policies                    │   │
