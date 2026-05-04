@@ -96,6 +96,42 @@ func TestUpsertWorkloadRecommendation_CreatesObjectOnFirstCall(t *testing.T) {
 	}
 }
 
+// TestUpsertWorkloadRecommendation_PersistsRemoveFlags verifies that the
+// NoLimit intent (RemoveCPULimit / RemoveMemoryLimit) is persisted on the
+// status. The webhook reads these on Prometheus outage — losing them silently
+// reverts NoLimit policies to "leave template alone" during outages.
+func TestUpsertWorkloadRecommendation_PersistsRemoveFlags(t *testing.T) {
+	r := reconcilerForCache(t)
+	cpu := resource.MustParse("250m")
+	mem := resource.MustParse("128Mi")
+
+	r.upsertWorkloadRecommendation(context.Background(),
+		&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web"},
+		"p",
+		map[string]workload.ContainerRecommendation{
+			"app": {
+				CPURequest:        &cpu,
+				MemoryRequest:     &mem,
+				RemoveCPULimit:    true,
+				RemoveMemoryLimit: true,
+			},
+		},
+		metav1.Now(),
+	)
+
+	var got sustainv1alpha1.WorkloadRecommendation
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &got); err != nil {
+		t.Fatalf("expected WLR to exist after upsert: %v", err)
+	}
+	c := got.Status.Containers["app"]
+	if !c.RemoveCPULimit {
+		t.Error("RemoveCPULimit not persisted on WorkloadRecommendation status")
+	}
+	if !c.RemoveMemoryLimit {
+		t.Error("RemoveMemoryLimit not persisted on WorkloadRecommendation status")
+	}
+}
+
 // TestUpsertWorkloadRecommendation_NoOpWhenUnchanged verifies that calling
 // upsert twice with the same recommendation does NOT bump the resourceVersion
 // — the compare-before-write guard skips the etcd round-trip.

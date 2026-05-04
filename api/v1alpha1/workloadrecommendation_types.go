@@ -54,6 +54,10 @@ type WorkloadRecommendationStatus struct {
 // ContainerRecommendation is the per-container recommended resource set.
 // All four quantities are optional: an unset value means "leave the
 // corresponding spec entry alone" rather than "remove it".
+//
+// RemoveCPULimit / RemoveMemoryLimit encode the explicit "strip the limit"
+// intent (Policy NoLimit). They are needed because nil Quantity alone cannot
+// distinguish "leave alone" (KeepLimit / no strategy) from "remove".
 type ContainerRecommendation struct {
 	// +optional
 	CPURequest *resource.Quantity `json:"cpuRequest,omitempty"`
@@ -63,6 +67,10 @@ type ContainerRecommendation struct {
 	CPULimit *resource.Quantity `json:"cpuLimit,omitempty"`
 	// +optional
 	MemoryLimit *resource.Quantity `json:"memoryLimit,omitempty"`
+	// +optional
+	RemoveCPULimit bool `json:"removeCpuLimit,omitempty"`
+	// +optional
+	RemoveMemoryLimit bool `json:"removeMemoryLimit,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -43,7 +43,11 @@ status:
       memoryRequest: 256Mi
       cpuLimit: 500m
       memoryLimit: 512Mi
+      removeCpuLimit: false      # true when the policy says NoLimit
+      removeMemoryLimit: false
 ```
+
+The `removeCpuLimit` / `removeMemoryLimit` flags carry the explicit "strip the limit" intent (Policy `NoLimit`). They are needed because nil `cpuLimit`/`memoryLimit` alone cannot distinguish "leave alone" (`KeepLimit` / no strategy) from "remove". On Prometheus outage the webhook reads these from cache so `NoLimit` policies keep stripping limits during the outage.
 
 The resource is namespaced and inherits namespace deletion semantics: removing the namespace removes every recommendation in it.
 

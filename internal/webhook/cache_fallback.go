@@ -53,10 +53,12 @@ func (h *Handler) fetchCachedRecommendations(
 	out := make(map[string]workload.ContainerRecommendation, len(wlr.Status.Containers))
 	for cname, c := range wlr.Status.Containers {
 		out[cname] = workload.ContainerRecommendation{
-			CPURequest:    c.CPURequest,
-			MemoryRequest: c.MemoryRequest,
-			CPULimit:      c.CPULimit,
-			MemoryLimit:   c.MemoryLimit,
+			CPURequest:        c.CPURequest,
+			MemoryRequest:     c.MemoryRequest,
+			CPULimit:          c.CPULimit,
+			MemoryLimit:       c.MemoryLimit,
+			RemoveCPULimit:    c.RemoveCPULimit,
+			RemoveMemoryLimit: c.RemoveMemoryLimit,
 		}
 	}
 	return out, nil

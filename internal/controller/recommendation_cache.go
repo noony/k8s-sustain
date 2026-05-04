@@ -125,10 +125,12 @@ func buildWLRStatus(recs map[string]workload.ContainerRecommendation, now metav1
 	}
 	for name, rec := range recs {
 		out.Containers[name] = sustainv1alpha1.ContainerRecommendation{
-			CPURequest:    rec.CPURequest,
-			MemoryRequest: rec.MemoryRequest,
-			CPULimit:      rec.CPULimit,
-			MemoryLimit:   rec.MemoryLimit,
+			CPURequest:        rec.CPURequest,
+			MemoryRequest:     rec.MemoryRequest,
+			CPULimit:          rec.CPULimit,
+			MemoryLimit:       rec.MemoryLimit,
+			RemoveCPULimit:    rec.RemoveCPULimit,
+			RemoveMemoryLimit: rec.RemoveMemoryLimit,
 		}
 	}
 	return out
@@ -279,7 +281,9 @@ func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
 		if !quantityPtrEqual(av.CPURequest, bv.CPURequest) ||
 			!quantityPtrEqual(av.MemoryRequest, bv.MemoryRequest) ||
 			!quantityPtrEqual(av.CPULimit, bv.CPULimit) ||
-			!quantityPtrEqual(av.MemoryLimit, bv.MemoryLimit) {
+			!quantityPtrEqual(av.MemoryLimit, bv.MemoryLimit) ||
+			av.RemoveCPULimit != bv.RemoveCPULimit ||
+			av.RemoveMemoryLimit != bv.RemoveMemoryLimit {
 			return false
 		}
 	}

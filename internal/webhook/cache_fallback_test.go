@@ -101,6 +101,43 @@ func TestFetchCachedRecommendations_MissingReturnsNilNoError(t *testing.T) {
 	}
 }
 
+// TestFetchCachedRecommendations_PropagatesRemoveFlags verifies that the
+// NoLimit intent persisted on the WorkloadRecommendation status round-trips
+// through the cache fallback. Without this, a Prometheus outage would cause
+// the webhook to leave the template's existing limit in place even when the
+// policy says to strip it.
+func TestFetchCachedRecommendations_PropagatesRemoveFlags(t *testing.T) {
+	now := time.Now()
+	wlr := &sustainv1alpha1.WorkloadRecommendation{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-web"},
+		Status: sustainv1alpha1.WorkloadRecommendationStatus{
+			ObservedAt: metav1.NewTime(now),
+			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
+				"app": {
+					CPURequest:        cachedQty("200m"),
+					MemoryRequest:     cachedQty("256Mi"),
+					RemoveCPULimit:    true,
+					RemoveMemoryLimit: true,
+				},
+			},
+		},
+	}
+	h := newFallbackHandler(t, wlr)
+	got, err := h.fetchCachedRecommendations(context.Background(), "Deployment", "default", "web", now, 30*time.Minute)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected cached recommendation, got nil")
+	}
+	if !got["app"].RemoveCPULimit {
+		t.Error("RemoveCPULimit not propagated through cache fallback")
+	}
+	if !got["app"].RemoveMemoryLimit {
+		t.Error("RemoveMemoryLimit not propagated through cache fallback")
+	}
+}
+
 // TestFetchCachedRecommendations_EmptyContainersReturnsNil verifies a WLR
 // with no container map is treated as no fallback (controller writes the
 // status only when it has at least one container's recommendation).

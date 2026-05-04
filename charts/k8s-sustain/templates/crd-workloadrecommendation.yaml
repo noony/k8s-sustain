@@ -112,6 +112,10 @@ spec:
                     ContainerRecommendation is the per-container recommended resource set.
                     All four quantities are optional: an unset value means "leave the
                     corresponding spec entry alone" rather than "remove it".
+
+                    RemoveCPULimit / RemoveMemoryLimit encode the explicit "strip the limit"
+                    intent (Policy NoLimit). They are needed because nil Quantity alone cannot
+                    distinguish "leave alone" (KeepLimit / no strategy) from "remove".
                   properties:
                     cpuLimit:
                       anyOf:
@@ -137,6 +141,10 @@ spec:
                       - type: string
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       x-kubernetes-int-or-string: true
+                    removeCpuLimit:
+                      type: boolean
+                    removeMemoryLimit:
+                      type: boolean
                   type: object
                 description: Containers maps container name → recommended resources.
                 type: object
