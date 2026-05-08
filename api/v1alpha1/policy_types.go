@@ -25,6 +25,7 @@ const (
 
 // ResourceRequestsConfig configures how resource requests are computed.
 // +kubebuilder:validation:XValidation:rule="!has(self.minAllowed) || !has(self.maxAllowed) || quantity(self.minAllowed).compareTo(quantity(self.maxAllowed)) <= 0",message="minAllowed must be less than or equal to maxAllowed"
+// +kubebuilder:validation:XValidation:rule="!(has(self.keepRequest) && self.keepRequest) || (!has(self.headroom) && !has(self.percentile) && !has(self.minAllowed) && !has(self.maxAllowed))",message="keepRequest cannot be combined with headroom, percentile, minAllowed, or maxAllowed (they have no effect when the request is kept)"
 type ResourceRequestsConfig struct {
 	// Headroom adds a safety buffer on top of the computed recommendation (percentage, 0-100).
 	// +optional
@@ -41,6 +42,8 @@ type ResourceRequestsConfig struct {
 	// +optional
 	MinAllowed *resource.Quantity `json:"minAllowed,omitempty"`
 	// Percentile is the histogram percentile used for the recommendation (e.g. 95).
+	// p100 is allowed and resolves to the maximum sample over the window —
+	// useful for memory on workloads where you never want to undershoot peak.
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100

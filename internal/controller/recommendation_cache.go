@@ -36,6 +36,11 @@ func wlrName(kind, name string) string {
 	return fmt.Sprintf("%s-%s", strings.ToLower(kind), name)
 }
 
+// wlrPolicyLabel labels each WorkloadRecommendation with the Policy that
+// produced it. Used to scope sweep/cleanup list calls server-side instead of
+// pulling every WLR in the cluster and post-filtering by spec.policy.
+const wlrPolicyLabel = "k8s.sustain.io/policy"
+
 // upsertWorkloadRecommendation writes (or updates) a WorkloadRecommendation
 // for the given target. Idempotent: if the existing status matches the new
 // recommendations, no API call is made. This keeps etcd write amplification
@@ -64,7 +69,11 @@ func (r *PolicyReconciler) upsertWorkloadRecommendation(
 	err := r.Get(ctx, key, &existing)
 	if apierrors.IsNotFound(err) {
 		obj := &sustainv1alpha1.WorkloadRecommendation{
-			ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name},
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: key.Namespace,
+				Name:      key.Name,
+				Labels:    map[string]string{wlrPolicyLabel: policyName},
+			},
 			Spec: sustainv1alpha1.WorkloadRecommendationSpec{
 				WorkloadRef: sustainv1alpha1.WorkloadReference{
 					Kind: t.Kind, Namespace: t.Namespace, Name: t.Name,
@@ -86,17 +95,23 @@ func (r *PolicyReconciler) upsertWorkloadRecommendation(
 		return
 	}
 
-	// Sync spec.workloadRef + policy if drifted. Cheap path: only patch when needed.
+	// Sync spec.workloadRef + policy + sweep label if drifted. Also backfills
+	// the label on WLRs created before label-based sweeping was introduced.
 	specChanged := existing.Spec.WorkloadRef.Kind != t.Kind ||
 		existing.Spec.WorkloadRef.Namespace != t.Namespace ||
 		existing.Spec.WorkloadRef.Name != t.Name ||
 		existing.Spec.Policy != policyName
-	if specChanged {
+	labelChanged := existing.Labels[wlrPolicyLabel] != policyName
+	if specChanged || labelChanged {
 		patched := existing.DeepCopy()
 		patched.Spec.WorkloadRef = sustainv1alpha1.WorkloadReference{
 			Kind: t.Kind, Namespace: t.Namespace, Name: t.Name,
 		}
 		patched.Spec.Policy = policyName
+		if patched.Labels == nil {
+			patched.Labels = map[string]string{}
+		}
+		patched.Labels[wlrPolicyLabel] = policyName
 		if err := r.Patch(ctx, patched, client.MergeFrom(&existing)); err != nil {
 			logger.V(1).Info("failed to patch WorkloadRecommendation spec", "err", err)
 			return
@@ -152,7 +167,7 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 	}
 
 	var list sustainv1alpha1.WorkloadRecommendationList
-	if err := r.List(ctx, &list); err != nil {
+	if err := r.List(ctx, &list, client.MatchingLabels{wlrPolicyLabel: policyName}); err != nil {
 		logger.V(1).Info("failed to list WorkloadRecommendations for sweep", "err", err)
 		return
 	}
@@ -160,6 +175,8 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 	deleted := 0
 	for i := range list.Items {
 		wlr := &list.Items[i]
+		// Defensive: if the label is stale relative to spec.policy (e.g. on
+		// WLRs migrated mid-rename), keep filtering by spec.policy too.
 		if wlr.Spec.Policy != policyName {
 			continue
 		}
@@ -189,7 +206,7 @@ func (r *PolicyReconciler) deleteAllRecommendationsForPolicy(ctx context.Context
 	logger := log.FromContext(ctx).WithValues("policy", policyName)
 
 	var list sustainv1alpha1.WorkloadRecommendationList
-	if err := r.List(ctx, &list); err != nil {
+	if err := r.List(ctx, &list, client.MatchingLabels{wlrPolicyLabel: policyName}); err != nil {
 		return fmt.Errorf("listing WorkloadRecommendations for policy delete: %w", err)
 	}
 
@@ -197,6 +214,7 @@ func (r *PolicyReconciler) deleteAllRecommendationsForPolicy(ctx context.Context
 	deleted := 0
 	for i := range list.Items {
 		wlr := &list.Items[i]
+		// Defensive: belt-and-braces against label drift on legacy WLRs.
 		if wlr.Spec.Policy != policyName {
 			continue
 		}

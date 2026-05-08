@@ -5,6 +5,7 @@ package webhook
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -73,12 +74,14 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 	}
 
 	registry := prometheus.NewRegistry()
-	certWatcher, err := whhandler.NewCertExpiry(cfg.TLSCertFile, log, registry)
+	certWatcher, err := whhandler.NewCertExpiry(cfg.TLSCertFile, cfg.TLSKeyFile, log, registry)
 	if err != nil {
 		log.Error(err, "Unable to register cert expiry gauge; continuing without it")
 	} else {
 		if err := certWatcher.Refresh(); err != nil {
-			log.Error(err, "Initial cert expiry read failed")
+			// Refresh failed: we have no keypair loaded, so the server cannot
+			// serve TLS. Bail out rather than starting a broken listener.
+			return fmt.Errorf("initial TLS cert load: %w", err)
 		}
 	}
 
@@ -98,12 +101,28 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	if certWatcher != nil {
+		// Hot-reload path: GetCertificate is consulted on every TLS handshake,
+		// so cert-manager rotations are picked up at the next Refresh tick
+		// without a process restart.
+		srv.TLSConfig = &tls.Config{
+			GetCertificate: certWatcher.GetCertificate,
+			MinVersion:     tls.VersionTLS12,
+		}
+	}
 
 	log.Info("Starting webhook server", "addr", addr, "certFile", cfg.TLSCertFile)
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile); err != nil && err != http.ErrServerClosed {
+		// Empty cert/key paths: the keypair comes from TLSConfig.GetCertificate.
+		// Falls back to disk-loading paths when GetCertificate isn't wired
+		// (e.g. cert watcher init failed).
+		certPath, keyPath := "", ""
+		if certWatcher == nil {
+			certPath, keyPath = cfg.TLSCertFile, cfg.TLSKeyFile
+		}
+		if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 	}()

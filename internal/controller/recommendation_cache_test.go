@@ -188,21 +188,30 @@ func TestUpsertWorkloadRecommendation_UpdatesOnChange(t *testing.T) {
 // WLRs whose target workload is no longer in the policy's matched set.
 func TestSweepWorkloadRecommendations_RemovesOrphans(t *testing.T) {
 	live := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-live"},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "deployment-live",
+			Labels: map[string]string{wlrPolicyLabel: "p"},
+		},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
 			Policy:      "p",
 			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: "default", Name: "live"},
 		},
 	}
 	orphan := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-orphan"},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "deployment-orphan",
+			Labels: map[string]string{wlrPolicyLabel: "p"},
+		},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
 			Policy:      "p",
 			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: "default", Name: "orphan"},
 		},
 	}
 	otherPolicy := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-foreign"},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "deployment-foreign",
+			Labels: map[string]string{wlrPolicyLabel: "other"},
+		},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
 			Policy:      "other",
 			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: "default", Name: "foreign"},
@@ -262,17 +271,26 @@ func TestStatusEquivalent_DistinguishesSameValuesFromDifferentSources(t *testing
 func TestDeleteAllRecommendationsForPolicy_DeletesAllForPolicy(t *testing.T) {
 	mine := []*sustainv1alpha1.WorkloadRecommendation{
 		{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-a"},
-			Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "default", Name: "deployment-a",
+				Labels: map[string]string{wlrPolicyLabel: "p"},
+			},
+			Spec: sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-b"},
-			Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "default", Name: "deployment-b",
+				Labels: map[string]string{wlrPolicyLabel: "p"},
+			},
+			Spec: sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
 		},
 	}
 	other := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-c"},
-		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "other"},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "deployment-c",
+			Labels: map[string]string{wlrPolicyLabel: "other"},
+		},
+		Spec: sustainv1alpha1.WorkloadRecommendationSpec{Policy: "other"},
 	}
 	objs := []runtime.Object{mine[0], mine[1], other}
 	r := reconcilerForCache(t, objs...)
@@ -340,12 +358,18 @@ func TestReconcile_PolicyDeletion_RemovesItsRecommendations(t *testing.T) {
 		},
 	}
 	mine := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-a"},
-		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "deployment-a",
+			Labels: map[string]string{wlrPolicyLabel: "p"},
+		},
+		Spec: sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
 	}
 	other := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-c"},
-		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "other"},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "deployment-c",
+			Labels: map[string]string{wlrPolicyLabel: "other"},
+		},
+		Spec: sustainv1alpha1.WorkloadRecommendationSpec{Policy: "other"},
 	}
 
 	r, server := reconcilerForPolicy(t, policy, mine, other)

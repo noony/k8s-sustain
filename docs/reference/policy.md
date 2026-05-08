@@ -159,9 +159,9 @@ Configures recommendations for CPU and memory independently.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `percentile` | int32 | `95` | Percentile of usage to use as the recommendation (50–99) |
+| `percentile` | int32 | `95` | Percentile of usage to use as the recommendation. Range `1`–`100`. `100` resolves to the maximum sample over the window — useful for memory when you never want to undershoot the observed peak. |
 | `headroom` | int32 | `0` | Safety buffer added on top of the observed percentile value |
-| `keepRequest` | bool | `false` | When `true`, the request is not changed |
+| `keepRequest` | bool | `false` | When `true`, the request is not changed. Cannot be combined with `headroom`, `percentile`, `minAllowed`, or `maxAllowed` (those have no effect when the request is kept; rejected by CRD validation). |
 | `minAllowed` | Quantity | — | Floor value for the computed request. Must be `<= maxAllowed` if both are set. |
 | `maxAllowed` | Quantity | — | Cap value for the computed request. Must be `>= minAllowed` if both are set. |
 

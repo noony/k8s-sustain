@@ -196,13 +196,15 @@ func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKin
 	// Working-set sampled at scrape interval misses sub-second spikes that
 	// trigger the kill — `container_memory_max_usage_bytes` (cgroup v1) and
 	// `container_memory_peak_working_set_bytes` (cgroup v2) survive across scrape gaps.
+	//
+	// No second breaker.allow() check here: the first query just succeeded, the
+	// shared 30s context still bounds runtime, and a transient race that flips
+	// the breaker between the two calls would silently drop peak data — better
+	// to let the second query attempt and fail fast through the normal path.
 	peakExpr := fmt.Sprintf(
 		`max by (container) (k8s_sustain:container_peak_memory_24h:bytes{namespace=%q,owner_kind=%q,owner_name=%q})`,
 		namespace, ownerKind, ownerName,
 	)
-	if !c.breaker.allow() {
-		return OOMSignal{OOMCount: oomCount}, nil
-	}
 	peakRes, _, err := c.api.Query(ctx, peakExpr, time.Now())
 	if err != nil {
 		c.breaker.failure()

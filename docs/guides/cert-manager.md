@@ -86,3 +86,6 @@ helm install k8s-sustain k8s-sustain/k8s-sustain \
 
 !!! warning "Certificate rotation"
     Without cert-manager, you are responsible for rotating the certificate before it expires and updating `webhook.caBundle` via `helm upgrade`.
+
+!!! note "Hot reload"
+    The webhook reloads its TLS keypair on a 1h tick via `tls.Config.GetCertificate`, so cert-manager rotations take effect on the next handshake — no pod restart required. The `k8s_sustain_webhook_cert_expiry_seconds` gauge tracks the active leaf's expiry; alert when `(gauge - time())` drops below your renewal SLA.
