@@ -165,7 +165,7 @@ func BindDashboardFlags(cmd *cobra.Command) {
 	cmd.Flags().String("bind-address", ":8090", "Address the dashboard server listens on")
 	cmd.Flags().String("prometheus-address", "http://localhost:9090", "Prometheus server address")
 	cmd.Flags().String("log-level", "info", "Log level (debug, info, warn, error)")
-	cmd.Flags().StringSlice("cors-allowed-origins", []string{"*"}, "Allowed CORS origins (e.g. http://localhost:3000). Use * to allow all.")
+	cmd.Flags().StringSlice("cors-allowed-origins", nil, "Allowed CORS origins (e.g. http://localhost:3000). Empty (default) means same-origin only. Use * to allow all.")
 
 	_ = viper.BindPFlag("dashboard.bind-address", cmd.Flags().Lookup("bind-address"))
 	_ = viper.BindPFlag("dashboard.prometheus-address", cmd.Flags().Lookup("prometheus-address"))

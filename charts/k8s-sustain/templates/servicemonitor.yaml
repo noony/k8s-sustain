@@ -15,3 +15,30 @@ spec:
       interval: {{ .Values.controller.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.controller.serviceMonitor.scrapeTimeout }}
 {{- end }}
+{{- if and .Values.webhook.enabled .Values.webhook.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "k8s-sustain.webhookName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  selector:
+    matchLabels:
+      {{- include "k8s-sustain.webhookSelectorLabels" . | nindent 6 }}
+  endpoints:
+    # Webhook serves /metrics on the same TLS port as /mutate (cert-expiry
+    # gauge among others). Skip verify because the cert is signed for the
+    # webhook DNS name expected by the apiserver, not the in-cluster Service
+    # name Prometheus uses to reach it.
+    - port: https
+      scheme: https
+      path: /metrics
+      interval: {{ .Values.webhook.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.webhook.serviceMonitor.scrapeTimeout }}
+      tlsConfig:
+        insecureSkipVerify: true
+{{- end }}

@@ -70,7 +70,13 @@ type Server struct {
 	K8sClient   client.Client
 	PromClient  PromQuerier
 	Logger      logr.Logger
-	CORSOrigins []string // Allowed CORS origins. Empty or ["*"] means allow all.
+	// CORSOrigins is the allowed CORS origin allowlist.
+	//
+	//   - nil / empty: no Access-Control-Allow-Origin header is set
+	//     (same-origin requests only — the safe default).
+	//   - ["*"]: explicit wildcard, every origin allowed.
+	//   - other: the request's Origin must match one of the listed values.
+	CORSOrigins []string
 
 	cacheInit    sync.Once
 	summaryCache *Cache
@@ -145,10 +151,17 @@ func (s *Server) ListenAndServe(addr string) error {
 
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := "*"
-		if len(s.CORSOrigins) > 0 && s.CORSOrigins[0] != "*" {
+		// Default: no CORS headers — same-origin only. Operators must opt
+		// into cross-origin access by listing trusted origins (or "*"
+		// explicitly) in --cors-allowed-origins.
+		origin := ""
+		switch {
+		case len(s.CORSOrigins) == 0:
+			// same-origin only
+		case len(s.CORSOrigins) == 1 && s.CORSOrigins[0] == "*":
+			origin = "*"
+		default:
 			reqOrigin := r.Header.Get("Origin")
-			origin = ""
 			for _, o := range s.CORSOrigins {
 				if o == reqOrigin {
 					origin = o

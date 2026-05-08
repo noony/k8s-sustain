@@ -40,7 +40,7 @@ At startup, the dashboard validates Prometheus connectivity and logs a warning i
 | `--bind-address`          | `:8090`                    | Address the dashboard server listens on  |
 | `--prometheus-address`    | `http://localhost:9090`    | Prometheus server URL                    |
 | `--log-level`             | `info`                     | Log level (debug, info, warn, error)     |
-| `--cors-allowed-origins`  | `*`                        | Allowed CORS origins (comma-separated)   |
+| `--cors-allowed-origins`  | _(empty — same-origin only)_ | Allowed CORS origins (comma-separated). Use `*` to allow all (not recommended). |
 
 ### Helm Chart
 
@@ -200,7 +200,7 @@ This message appears when Prometheus returns no time-series data for the workloa
 | `dashboard.port`                 | `8090`                     | Container port                           |
 | `dashboard.bindAddress`          | `:8090`                    | Server bind address                      |
 | `dashboard.logLevel`             | `info`                     | Log level                                |
-| `dashboard.corsAllowedOrigins`   | `["*"]`                    | Allowed CORS origins                     |
+| `dashboard.corsAllowedOrigins`   | `[]`                       | Allowed CORS origins. Empty = same-origin only. |
 | `dashboard.service.type`         | `ClusterIP`                | Service type                             |
 | `dashboard.service.port`         | `8090`                     | Service port                             |
 | `dashboard.resources`            | 10m CPU / 32-64Mi memory   | Pod resource requests/limits             |

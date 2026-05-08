@@ -98,6 +98,14 @@ webhook:
       memory: 128Mi
     limits:
       memory: 256Mi
+  # ServiceMonitor for the webhook /metrics endpoint (cert expiry gauge etc.).
+  # Only useful when running the Prometheus Operator (e.g. kube-prometheus-stack).
+  # Not needed when using the bundled prometheus subchart, which scrapes the
+  # webhook via its own scrape config.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -142,9 +150,10 @@ dashboard:
   port: 8090
   bindAddress: ":8090"
   logLevel: debug
-  # Allowed CORS origins. Use ["*"] to allow all origins (default).
-  corsAllowedOrigins:
-    - "*"
+  # Allowed CORS origins. Empty (default) is same-origin only — the safe choice.
+  # Add a list of trusted origins (e.g. ["https://grafana.example.com"]) to embed
+  # the dashboard in another tool. Use ["*"] to allow all origins (not recommended).
+  corsAllowedOrigins: []
   service:
     type: ClusterIP
     port: 8090

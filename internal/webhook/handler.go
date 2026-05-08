@@ -28,6 +28,17 @@ import (
 // Anything longer cannot be a real Policy object.
 const maxPolicyNameLen = 253
 
+// apiCallTimeout bounds each individual Kubernetes API Get inside the
+// admission path. The webhook's HTTP WriteTimeout (10s) is the outer ceiling;
+// without per-call deadlines, one slow apiserver round-trip could eat the
+// whole budget and leave Prometheus / cache fallback paths no time to run.
+//
+// 2s is a generous bound for cached etcd reads through the controller-runtime
+// client (which uses an informer cache by default). Set high enough to absorb
+// a brief apiserver hiccup, low enough to leave room for the Prometheus path
+// and the AdmissionReview encode/decode on either side.
+const apiCallTimeout = 2 * time.Second
+
 // isValidPolicyName guards against malformed annotation values flowing into
 // Prometheus query selectors. Accepts only DNS-1123 subdomains up to 253 chars.
 func isValidPolicyName(name string) bool {
@@ -112,12 +123,15 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	logger.V(1).Info("pod is annotated with policy")
 
 	var policy sustainv1alpha1.Policy
-	if err := h.Client.Get(ctx, types.NamespacedName{Name: policyName}, &policy); err != nil {
-		if client.IgnoreNotFound(err) == nil {
+	policyCtx, policyCancel := context.WithTimeout(ctx, apiCallTimeout)
+	policyErr := h.Client.Get(policyCtx, types.NamespacedName{Name: policyName}, &policy)
+	policyCancel()
+	if policyErr != nil {
+		if client.IgnoreNotFound(policyErr) == nil {
 			logger.V(1).Info("policy not found, allowing pod")
 			return allow // policy deleted — let pod through
 		}
-		logger.Error(err, "failed to fetch policy")
+		logger.Error(policyErr, "failed to fetch policy")
 		return allow
 	}
 
@@ -160,7 +174,9 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		if staleness == 0 {
 			staleness = DefaultCacheStaleness
 		}
-		cached, cacheErr := h.fetchCachedRecommendations(ctx, ownerKind, req.Namespace, ownerName, time.Now(), staleness)
+		cacheCtx, cacheCancel := context.WithTimeout(ctx, apiCallTimeout)
+		cached, cacheErr := h.fetchCachedRecommendations(cacheCtx, ownerKind, req.Namespace, ownerName, time.Now(), staleness)
+		cacheCancel()
 		if cacheErr != nil {
 			logger.Error(cacheErr, "failed to read cached WorkloadRecommendation; falling open")
 			return allow
@@ -239,8 +255,11 @@ func (h *Handler) resolveOwner(ctx context.Context, pod *corev1.Pod) (kind, name
 		switch ref.Kind {
 		case "ReplicaSet":
 			var rs appsv1.ReplicaSet
-			if err := h.Client.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}, &rs); err != nil {
-				return "", "", fmt.Errorf("getting replicaset %s: %w", ref.Name, err)
+			rsCtx, rsCancel := context.WithTimeout(ctx, apiCallTimeout)
+			rsErr := h.Client.Get(rsCtx, types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}, &rs)
+			rsCancel()
+			if rsErr != nil {
+				return "", "", fmt.Errorf("getting replicaset %s: %w", ref.Name, rsErr)
 			}
 			for _, rsRef := range rs.OwnerReferences {
 				if rsRef.Controller == nil || !*rsRef.Controller {
@@ -256,8 +275,11 @@ func (h *Handler) resolveOwner(ctx context.Context, pod *corev1.Pod) (kind, name
 			return "ReplicaSet", ref.Name, nil
 		case "Job":
 			var job batchv1.Job
-			if err := h.Client.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}, &job); err != nil {
-				return "", "", fmt.Errorf("getting job %s: %w", ref.Name, err)
+			jobCtx, jobCancel := context.WithTimeout(ctx, apiCallTimeout)
+			jobErr := h.Client.Get(jobCtx, types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}, &job)
+			jobCancel()
+			if jobErr != nil {
+				return "", "", fmt.Errorf("getting job %s: %w", ref.Name, jobErr)
 			}
 			for _, jobRef := range job.OwnerReferences {
 				if jobRef.Controller != nil && *jobRef.Controller && jobRef.Kind == "CronJob" {

@@ -136,7 +136,7 @@ k8s-sustain dashboard [flags]
 | `--bind-address` | `:8090` | Address the HTTP server listens on |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
-| `--cors-allowed-origins` | `*` | Comma-separated list of allowed CORS origins; `*` allows all |
+| `--cors-allowed-origins` | _(empty)_ | Comma-separated list of allowed CORS origins. Empty (default) = same-origin only. Use `*` to allow all (not recommended). |
 
 ### Health endpoints
 

@@ -93,7 +93,7 @@ webhook:
 | `dashboard.port` | `8090` | Container port |
 | `dashboard.bindAddress` | `:8090` | Server bind address |
 | `dashboard.logLevel` | `debug` | Log level |
-| `dashboard.corsAllowedOrigins` | `["*"]` | Allowed CORS origins |
+| `dashboard.corsAllowedOrigins` | `[]` | Allowed CORS origins. Empty = same-origin only (the safe default). Set to `["https://your-grafana"]` to embed the dashboard cross-origin, or `["*"]` to allow all (not recommended). |
 | `dashboard.service.type` | `ClusterIP` | Service type |
 | `dashboard.service.port` | `8090` | Service port |
 | `dashboard.resources` | see below | Dashboard container resources |
@@ -131,9 +131,12 @@ Only needed when running the Prometheus Operator externally (not the bundled sub
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `controller.serviceMonitor.enabled` | `false` | Create a Prometheus Operator `ServiceMonitor` and `PrometheusRule` |
-| `controller.serviceMonitor.interval` | `30s` | Scrape interval |
-| `controller.serviceMonitor.scrapeTimeout` | `10s` | Scrape timeout |
+| `controller.serviceMonitor.enabled` | `false` | Create a Prometheus Operator `ServiceMonitor` and `PrometheusRule` for the controller |
+| `controller.serviceMonitor.interval` | `30s` | Scrape interval (controller) |
+| `controller.serviceMonitor.scrapeTimeout` | `10s` | Scrape timeout (controller) |
+| `webhook.serviceMonitor.enabled` | `false` | Create a Prometheus Operator `ServiceMonitor` for the webhook (cert-expiry gauge etc.) |
+| `webhook.serviceMonitor.interval` | `30s` | Scrape interval (webhook) |
+| `webhook.serviceMonitor.scrapeTimeout` | `10s` | Scrape timeout (webhook) |
 
 ---
 
