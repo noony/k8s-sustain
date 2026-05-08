@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -115,7 +116,34 @@ func (s *Server) Handler() http.Handler {
 	// Serve embedded UI
 	mux.HandleFunc("/", s.handleUI)
 
-	return s.withTelemetry(s.withCORS(mux))
+	return s.withTelemetry(s.withRecovery(s.withCORS(mux)))
+}
+
+// withRecovery turns a handler panic into a 500 response and a structured
+// log entry instead of crashing the dashboard process. Sits inside
+// withTelemetry so the recovered request still gets observed with its
+// final 500 status.
+func (s *Server) withRecovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			rec := recover()
+			if rec == nil {
+				return
+			}
+			if rec == http.ErrAbortHandler {
+				panic(rec)
+			}
+			s.Logger.Error(nil, "dashboard handler panic",
+				"panic", fmt.Sprint(rec),
+				"path", r.URL.Path,
+				"method", r.Method,
+				"stack", string(debug.Stack()),
+			)
+			panicTotal.WithLabelValues(r.URL.Path).Inc()
+			writeError(w, http.StatusInternalServerError, "internal error")
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {

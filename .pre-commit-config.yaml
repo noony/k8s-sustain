@@ -16,8 +16,41 @@ repos:
     hooks:
     - id: gitleaks
 
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.14.0
+    hooks:
+      - id: hadolint-docker
+
   - repo: local
     hooks:
+      - id: verify-crds
+        name: verify CRDs in sync
+        entry: make verify-crds
+        language: system
+        pass_filenames: false
+        files: ^(api/|charts/k8s-sustain/templates/crd-)
+      - id: verify-rules
+        name: verify recording rules in sync
+        entry: make verify-rules
+        language: system
+        pass_filenames: false
+        files: ^charts/k8s-sustain/(values\.yaml|templates/prometheusrules\.yaml|files/recording-rules\.yaml)
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: bash -c 'go mod tidy && git diff --exit-code go.mod go.sum'
+        language: system
+        pass_filenames: false
+        files: '\.(go|mod|sum)$'
       - id: frontend-lint
         name: frontend lint
         entry: bash -c 'cd internal/dashboard/ui/frontend && npx eslint src/'

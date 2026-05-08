@@ -1,8 +1,8 @@
-<!-- Source of truth: charts/k8s-sustain/values.yaml and charts/k8s-sustain/templates/prometheusrules.yaml -->
+<!-- Source of truth: charts/k8s-sustain/files/recording-rules.yaml -->
 
 # Recording Rules
 
-k8s-sustain ships a set of Prometheus recording rules used to compute right-sizing recommendations and to power the dashboard. The rules are duplicated in `charts/k8s-sustain/values.yaml` (default values) and `charts/k8s-sustain/templates/prometheusrules.yaml` (PrometheusRule template). Both must stay in sync.
+k8s-sustain ships a set of Prometheus recording rules used to compute right-sizing recommendations and to power the dashboard. The rules are defined once in `charts/k8s-sustain/files/recording-rules.yaml`. `templates/prometheusrules.yaml` reads that file directly at render time; `charts/k8s-sustain/values.yaml`'s `prometheus.serverFiles."recording_rules.yml".groups` block (consumed by the bundled Prometheus subchart) is regenerated from the same file by `make sync-rules`. CI runs `make verify-rules` to detect drift.
 
 ## Why recording rules?
 

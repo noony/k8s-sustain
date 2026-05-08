@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -40,15 +41,26 @@ type ContainerRecommendation struct {
 //     PodDisruptionBudgets are respected; pods blocked by a PDB are
 //     skipped and retried on the next reconcile cycle.
 type Patcher struct {
-	client  client.Client
-	inPlace bool
+	client client.Client
+	// inPlace is read on every recycle and may be flipped to false from
+	// any goroutine when the API server rejects an in-place patch. Using
+	// an atomic avoids a data race when reconciles for different
+	// workloads share this Patcher.
+	inPlace atomic.Bool
 }
 
 // New returns a Patcher. Set inPlace=true when the cluster supports
 // InPlacePodVerticalScaling (k8s ≥ 1.31).
 func New(c client.Client, inPlace bool) *Patcher {
-	return &Patcher{client: c, inPlace: inPlace}
+	p := &Patcher{client: c}
+	p.inPlace.Store(inPlace)
+	return p
 }
+
+// InPlace reports whether the patcher is currently using in-place pod
+// resource updates. It can flip to false at runtime if the API server
+// rejects an in-place patch (feature gate disabled).
+func (p *Patcher) InPlace() bool { return p.inPlace.Load() }
 
 // RecyclePods drives running pods matching the given selector toward the
 // recommended resources. This is the only public entry point for pod recycling.
@@ -72,7 +84,7 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 		return fmt.Errorf("listing pods: %w", err)
 	}
 	strategy := "eviction"
-	if p.inPlace {
+	if p.inPlace.Load() {
 		strategy = "inPlace"
 	}
 	logger.V(1).Info("listed pods for recycle", "count", len(podList.Items), "strategy", strategy)
@@ -90,7 +102,7 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 			continue
 		}
 		var err error
-		if p.inPlace {
+		if p.inPlace.Load() {
 			err = p.patchPodInPlace(ctx, pod, recs)
 		} else {
 			err = p.evictPod(ctx, pod, recs)
@@ -192,7 +204,7 @@ func (p *Patcher) applyInPlaceResize(ctx context.Context, pod, base *corev1.Pod,
 		// feature gate is not enabled on this cluster. Disable in-place for the rest
 		// of this reconcile cycle and fall back to eviction.
 		logger.Info("in-place pod resource patch rejected, feature gate likely disabled; falling back to eviction")
-		p.inPlace = false
+		p.inPlace.Store(false)
 		pod.Spec.Containers = base.Spec.Containers
 		pod.Spec.InitContainers = base.Spec.InitContainers
 		return p.evictPod(ctx, pod, recs)

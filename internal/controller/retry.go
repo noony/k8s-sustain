@@ -13,6 +13,18 @@ import (
 const (
 	baseRetryDelay = 30 * time.Second
 	maxRetryDelay  = 5 * time.Minute
+
+	// retryStateMaxIdle is how long after nextRetry has elapsed we keep an
+	// entry around. A workload that fails, then is deleted, never calls
+	// recordSuccess; without this floor the tracker would leak one entry
+	// per deleted-while-failing workload across the controller's lifetime.
+	// Set well above maxRetryDelay so legitimate backoff windows finish.
+	retryStateMaxIdle = time.Hour
+
+	// retryPruneInterval throttles how often we walk the map to drop
+	// long-stale entries. Pruning is lazy — triggered by recordFailure —
+	// to keep the package free of background goroutines.
+	retryPruneInterval = 10 * time.Minute
 )
 
 type retryState struct {
@@ -21,8 +33,9 @@ type retryState struct {
 }
 
 type retryTracker struct {
-	mu     sync.Mutex
-	states map[string]*retryState
+	mu        sync.Mutex
+	states    map[string]*retryState
+	lastPrune time.Time
 }
 
 func newRetryTracker() *retryTracker {
@@ -45,6 +58,7 @@ func (rt *retryTracker) shouldSkip(key string) bool {
 func (rt *retryTracker) recordFailure(key string) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	now := time.Now()
 	s, ok := rt.states[key]
 	if !ok {
 		s = &retryState{}
@@ -55,7 +69,24 @@ func (rt *retryTracker) recordFailure(key string) {
 	if delay > maxRetryDelay {
 		delay = maxRetryDelay
 	}
-	s.nextRetry = time.Now().Add(delay)
+	s.nextRetry = now.Add(delay)
+	rt.pruneLocked(now)
+}
+
+// pruneLocked drops entries whose nextRetry is more than retryStateMaxIdle
+// in the past. Caller must hold rt.mu. Throttled by retryPruneInterval so
+// the walk cost is bounded even under high failure churn.
+func (rt *retryTracker) pruneLocked(now time.Time) {
+	if now.Sub(rt.lastPrune) < retryPruneInterval {
+		return
+	}
+	rt.lastPrune = now
+	cutoff := now.Add(-retryStateMaxIdle)
+	for k, s := range rt.states {
+		if s.nextRetry.Before(cutoff) {
+			delete(rt.states, k)
+		}
+	}
 }
 
 // recordSuccess removes the retry state for the workload.

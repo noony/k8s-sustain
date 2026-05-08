@@ -612,7 +612,7 @@ func TestPatchPodInPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
 	if resizeCalls != 1 {
 		t.Errorf("expected exactly 1 /resize call (then gate detection disables in-place), got %d", resizeCalls)
 	}
-	if p.inPlace {
+	if p.InPlace() {
 		t.Error("expected p.inPlace to be flipped off after IsInvalid")
 	}
 }

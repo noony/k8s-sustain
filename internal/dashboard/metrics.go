@@ -17,8 +17,13 @@ var (
 		Help:    "Time spent running a Prometheus query from the dashboard.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"rule"})
+
+	panicTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "k8s_sustain_dashboard_panic_total",
+		Help: "Number of panics recovered by the dashboard middleware, by request path.",
+	}, []string{"path"})
 )
 
 func init() {
-	metrics.Registry.MustRegister(requestDuration, promQueryDuration)
+	metrics.Registry.MustRegister(requestDuration, promQueryDuration, panicTotal)
 }

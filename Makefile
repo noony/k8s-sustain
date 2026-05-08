@@ -4,7 +4,7 @@ IMG ?= ghcr.io/noony/k8s-sustain:dev
 
 include Makefile.scenarios
 
-.PHONY: help build test lint generate manifests sync-crds verify-crds verify-rules tidy fmt vet coverage docker-build docker-push helm-deps helm-lint helm-template
+.PHONY: help build test lint generate manifests sync-crds verify-crds sync-rules verify-rules tidy fmt vet coverage docker-build docker-push helm-deps helm-lint helm-template
 
 .DEFAULT_GOAL := help
 
@@ -45,7 +45,12 @@ verify-crds: sync-crds ## Verify Helm chart CRD is in sync with generated one
 	@git diff --exit-code charts/k8s-sustain/templates/crd-policy.yaml || \
 		(echo "ERROR: CRD in Helm chart is out of sync. Run 'make manifests' and commit." && exit 1)
 
-verify-rules: helm-deps ## Verify recording rules are identical in values.yaml and prometheusrules.yaml
+sync-rules: ## Regenerate values.yaml's recording rules block from charts/k8s-sustain/files/recording-rules.yaml
+	@./hack/sync-recording-rules.sh
+
+verify-rules: sync-rules helm-deps ## Verify values.yaml is in sync with the canonical rules file and matches the rendered PrometheusRule
+	@git diff --exit-code charts/k8s-sustain/values.yaml || \
+		(echo "ERROR: values.yaml drifted from charts/k8s-sustain/files/recording-rules.yaml. Run 'make sync-rules' and commit." && exit 1)
 	@./hack/diff-recording-rules.sh
 
 docker-build: ## Build Docker image

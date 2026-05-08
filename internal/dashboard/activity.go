@@ -6,7 +6,14 @@ import (
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// activityListLimit caps the per-page Event fetch from the API server.
+// k8s-sustain emits events sparsely; a single page is enough to backfill
+// the dashboard's activity feed without ever pulling the entire cluster's
+// Event history into memory.
+const activityListLimit = 500
 
 type activityItem struct {
 	Timestamp string `json:"timestamp"`
@@ -29,7 +36,7 @@ func (s *Server) handleSummaryActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var list corev1.EventList
-	if err := s.K8sClient.List(r.Context(), &list); err != nil {
+	if err := s.K8sClient.List(r.Context(), &list, client.Limit(activityListLimit)); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
