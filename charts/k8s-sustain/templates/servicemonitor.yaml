@@ -6,6 +6,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "k8s-sustain.labels" . | nindent 4 }}
+    {{- with .Values.controller.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   selector:
     matchLabels:
@@ -25,6 +28,9 @@ metadata:
   labels:
     {{- include "k8s-sustain.labels" . | nindent 4 }}
     app.kubernetes.io/component: webhook
+    {{- with .Values.webhook.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   selector:
     matchLabels:

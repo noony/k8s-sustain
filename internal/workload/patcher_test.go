@@ -502,6 +502,206 @@ func TestPatchPodInPlace_InfeasibleFallsBackToEviction(t *testing.T) {
 	}
 }
 
+// TestPatchPodInPlace_ResizeNotFoundFallsBackToDirectPatch verifies the
+// k8s 1.31–1.32 fallback: when the /resize subresource doesn't exist yet
+// (NotFound), the patcher patches the pod directly instead. Eviction must
+// not be triggered — direct patch is itself the in-place path on those
+// versions.
+func TestPatchPodInPlace_ResizeNotFoundFallsBackToDirectPatch(t *testing.T) {
+	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var resizeCalled, podPatchCalled, evictionCalled bool
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					resizeCalled = true
+					return apierrors.NewNotFound(corev1.Resource("pods"), "resize")
+				}
+				return nil
+			},
+			Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+				podPatchCalled = true
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evictionCalled = true
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if !resizeCalled {
+		t.Error("expected /resize attempt before fallback")
+	}
+	if !podPatchCalled {
+		t.Error("expected direct pod patch fallback when /resize returns NotFound")
+	}
+	if evictionCalled {
+		t.Error("did not expect eviction on NotFound — direct patch is the fallback")
+	}
+}
+
+// TestPatchPodInPlace_ResizeInvalidFallsBackToEviction verifies the
+// feature-gate-disabled fallback: when the API server rejects the resource
+// patch as Invalid (InPlacePodVerticalScaling gate off), the patcher gives
+// up on in-place for this reconcile and falls back to eviction. The
+// inPlace flag should be flipped off so subsequent pods in the same batch
+// skip /resize entirely.
+func TestPatchPodInPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
+	stale1 := runningPod("stale1", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	stale2 := runningPod("stale2", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var resizeCalls int
+	var evicted []string
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale1, stale2).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					resizeCalls++
+					return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), "stale", nil)
+				}
+				return nil
+			},
+			Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+				// Direct pod patch should NOT be tried for IsInvalid (only IsNotFound).
+				return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), "stale", nil)
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evicted = append(evicted, obj.GetName())
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if len(evicted) != 2 {
+		t.Errorf("expected both pods to be evicted after IsInvalid; got %v", evicted)
+	}
+	// Once the patcher learns the gate is off, p.inPlace flips to false so
+	// the SECOND pod's /resize is never tried again. Only one /resize call.
+	if resizeCalls != 1 {
+		t.Errorf("expected exactly 1 /resize call (then gate detection disables in-place), got %d", resizeCalls)
+	}
+	if p.inPlace {
+		t.Error("expected p.inPlace to be flipped off after IsInvalid")
+	}
+}
+
+// TestPatchPodInPlace_SidecarResizeRejected_BestEffort verifies that a
+// sidecar resize failure (older clusters / disabled gate for sidecars) does
+// NOT fail the reconcile. Regular containers must still be patched in place.
+func TestPatchPodInPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
+	always := corev1.ContainerRestartPolicyAlways
+	stale := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "stale-with-sidecar",
+			Labels:    map[string]string{"app": "test"},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name: "app",
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")},
+				},
+			}},
+			InitContainers: []corev1.Container{{
+				Name:          "sidecar",
+				RestartPolicy: &always,
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")},
+				},
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var regularResizeOK, sidecarResizeAttempted, evicted bool
+	resizeCalls := 0
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub != "resize" {
+					return nil
+				}
+				resizeCalls++
+				switch resizeCalls {
+				case 1:
+					// First call = regular containers. Succeed.
+					regularResizeOK = true
+					return nil
+				default:
+					// Second call = sidecars. Older clusters reject this.
+					sidecarResizeAttempted = true
+					return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), stale.Name, nil)
+				}
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evicted = true
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{
+		"app":     {CPURequest: qtyp("200m")},
+		"sidecar": {CPURequest: qtyp("100m")},
+	}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Fatalf("sidecar rejection should be best-effort, got: %v", err)
+	}
+	if !regularResizeOK {
+		t.Error("regular-container /resize should have succeeded")
+	}
+	if !sidecarResizeAttempted {
+		t.Error("sidecar /resize should have been attempted")
+	}
+	if evicted {
+		t.Error("sidecar rejection should NOT cascade to eviction of the whole pod")
+	}
+}
+
 // TestPatchPodInPlace_DeferredIsNoOp verifies that when the kubelet has
 // deferred the resize, the patcher leaves the pod alone.
 func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {

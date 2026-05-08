@@ -445,6 +445,14 @@ func (r *PolicyReconciler) listCronJobTargets(ctx context.Context, namespaces []
 // reconcileWorkload processes a single workload target: queries Prometheus,
 // computes recommendations, recycles pods, emits events, and tracks retries.
 func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustainv1alpha1.Policy, t *workloadTarget) error {
+	// Early bail-out if the parent reconcile context has already been cancelled
+	// (typically a manager shutdown mid-batch). Without this, queued workers
+	// still kick off autoscaler detection + Prometheus queries that will
+	// each fail through their own timeout path, slowing graceful shutdown.
+	if err := ctx.Err(); err != nil {
+		return nil
+	}
+
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 	excludeInit := policy.Spec.RightSizing.ExcludeInitContainers
 	containers, initNames := t.recommendableContainers(excludeInit)

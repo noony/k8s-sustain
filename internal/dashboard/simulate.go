@@ -169,13 +169,20 @@ func buildRequestsConfig(cfg simulateResourceConfig) sustainv1alpha1.ResourceReq
 		Percentile: cfg.Percentile,
 		Headroom:   cfg.Headroom,
 	}
+	// Quantity parsing tolerated to fail silently here — handleSimulate
+	// pre-validates with ParseQuantity, so reaching this code with an
+	// unparseable value is impossible. Use ParseQuantity instead of
+	// MustParse so a future caller that skips the handler can't trigger a
+	// panic and surface as an HTTP 500.
 	if cfg.MinAllowed != nil {
-		q := resource.MustParse(*cfg.MinAllowed)
-		rc.MinAllowed = &q
+		if q, err := resource.ParseQuantity(*cfg.MinAllowed); err == nil {
+			rc.MinAllowed = &q
+		}
 	}
 	if cfg.MaxAllowed != nil {
-		q := resource.MustParse(*cfg.MaxAllowed)
-		rc.MaxAllowed = &q
+		if q, err := resource.ParseQuantity(*cfg.MaxAllowed); err == nil {
+			rc.MaxAllowed = &q
+		}
 	}
 	return rc
 }

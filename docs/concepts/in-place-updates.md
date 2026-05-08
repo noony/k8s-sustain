@@ -2,53 +2,61 @@
 
 Kubernetes 1.27 introduced the `InPlacePodVerticalScaling` feature gate (alpha), which became beta (on by default) in Kubernetes 1.31 and GA in Kubernetes 1.33. It allows changing a pod's resource requests and limits **without restarting the container**.
 
-k8s-sustain automatically detects whether the cluster supports this feature and enables it when available.
+k8s-sustain auto-detects whether the cluster supports the feature and chooses the appropriate code path. There is **no minimum k8s version for k8s-sustain itself** — clusters too old for in-place resize fall back transparently to PDB-respecting eviction.
 
-## How it works
+## Version matrix
 
-When `Ongoing` mode is active and the cluster supports in-place updates:
+| k8s version            | Feature gate                              | Resize API used                              | k8s-sustain behaviour                                                                                              |
+|------------------------|-------------------------------------------|----------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
+| **≤ 1.26**             | _none_ (feature didn't exist)             | _n/a_                                        | Eviction-only. Stale pods evicted via the Eviction API; webhook re-injects on replacement.                         |
+| **1.27 – 1.30 (alpha)** | `--feature-gates=InPlacePodVerticalScaling=true` required on apiserver + kubelet | Direct pod patch (`PATCH /api/v1/.../pods/<name>`) | Detected at startup as `inPlace=false` (the controller treats < 1.31 as not-supported) → eviction path.            |
+| **1.31 – 1.32 (beta)** | On by default                             | Direct pod patch (no `/resize` subresource yet) | `inPlace=true`. `/resize` subresource returns 404 → patcher falls back to direct pod patch within the same call.   |
+| **1.33+ (GA)**         | Always on                                 | `/resize` subresource (`PATCH /api/v1/.../pods/<name>/resize`) | `inPlace=true`. `/resize` is the primary path; sidecar (restartable init) resize attempted as a separate /resize call. |
 
-1. The controller lists all running, non-terminating pods matched by the workload's selector
-2. For each pod, it checks the pod's `status.resize` field:
-   - **`Infeasible`**: the node cannot satisfy the request — the pod is evicted so the scheduler can place the replacement elsewhere (the webhook injects the latest resources into the new pod)
-   - **`Deferred`**: the kubelet accepted the request but is waiting on conditions (e.g. a memory decrease that requires container restart) — skipped; the kubelet will apply it without further action
-   - **`InProgress` / not set**: proceeds to patch `spec.containers[*].resources` via the pod's `/resize` subresource
-3. The kubelet applies the new resources without restarting the container
+## How the runtime path is chosen
 
-On Kubernetes 1.33+, pod resource changes go through the `/resize` subresource. On Kubernetes 1.31-1.32, the controller falls back to a direct pod patch.
-
-Pods that are terminating or not in `Running` phase are skipped.
-
-## Automatic fallback
-
-If the API server rejects an in-place pod patch (e.g. the `InPlacePodVerticalScaling` feature gate is disabled), the controller automatically falls back to PDB-respecting eviction-based updates for the rest of the reconcile cycle. No manual intervention is needed.
-
-## Cluster version detection
-
-The controller detects the server version at startup using the discovery API:
+At controller startup the discovery API is queried and `major.minor` is compared against `1.31`. The result lives on `Patcher.inPlace`:
 
 ```text
-major=1, minor>=31 → in-place updates enabled
+INFO  InPlacePodVerticalScaling support  enabled=true   server=v1.33.2
+INFO  InPlacePodVerticalScaling support  enabled=false  server=v1.30.5
 ```
 
-The feature gate was alpha (disabled by default) in Kubernetes 1.27-1.30. The controller requires >= 1.31 where it is beta and enabled by default.
+When `Ongoing` mode is active and `inPlace=true`, the patcher walks each running pod and:
 
-You can check whether it is enabled in the controller logs:
+1. Reads `pod.status.resize` (kubelet's report on the previous resize attempt):
+   - **`Infeasible`** — the node cannot satisfy the request. The pod is evicted so the scheduler can place the replacement elsewhere; the webhook injects the new resources into the replacement.
+   - **`Deferred`** — the kubelet accepted the request but is waiting on conditions (e.g. memory decrease that requires container restart). Skipped; the kubelet will apply it without further intervention.
+   - **`InProgress` / unset** — proceeds with the patch.
+2. Issues `PATCH /api/v1/.../pods/<name>/resize` (k8s 1.33+).
+3. If the API server returns `NotFound` for the subresource (k8s 1.31–1.32), the same call is retried as a direct pod patch.
+4. If the API server returns `Invalid` (the feature gate is off — possible on a 1.31+ cluster with custom flags), the patcher flips `inPlace=false` for the rest of the reconcile cycle and falls back to eviction. The flip is per-process, so the next reconcile re-attempts in-place if the gate has been re-enabled meanwhile.
 
-```text
-INFO  InPlacePodVerticalScaling support  enabled=true
-```
+Sidecar (restartable init) containers are resized in a **separate** `/resize` call so a sidecar rejection on older clusters cannot block the regular-container resize. Failures on the sidecar call are logged and ignored — new requests will land at next pod creation via webhook injection.
+
+## Eviction fallback
+
+On any cluster where `inPlace=false` (auto-detected as < 1.31, or runtime-flipped on Invalid):
+
+- Stale pods are evicted one at a time via the Eviction API.
+- 429 responses (PodDisruptionBudget blocking eviction) are logged and skipped — the next reconcile cycle will retry.
+- The workload controller (Deployment / StatefulSet / etc.) replaces the evicted pod from the updated template; the webhook injects the latest recommendation into the replacement at admission time.
+
+CronJobs are special-cased: their pods are short-lived job runs that are never recycled. The controller patches the `JobTemplate` so future runs use the updated resources.
 
 ## Caveats
 
-- **CPU is always resizable in-place.** Memory resize may require a container restart if the requested memory exceeds the current cgroup limit. The kubelet handles this transparently.
-- **VPA conflicts.** If you run Vertical Pod Autoscaler alongside k8s-sustain, ensure they do not target the same pods to avoid conflicting patches.
-- **Resource resize status.** You can inspect the resize status on a pod:
+- **Memory shrink may force restart.** When a memory request is **lowered**, some kubelet versions return `Deferred` until the next container start because the cgroup cannot shrink while the workload is using more than the new limit. k8s-sustain accepts this — the new value lands on the next pod restart, no recycling needed.
+- **Memory grow is always live.** Increasing memory requests/limits is applied without restart on supported kernels.
+- **CPU is always resizable in-place.** No restart, no kubelet deferral.
+- **VPA conflicts.** Running Vertical Pod Autoscaler alongside k8s-sustain on the same pods produces conflicting patches. Use the `k8s.sustain.io/policy` annotation to opt workloads in selectively, and exclude those workloads from VPA targets.
+- **Resize status inspection:**
 
   ```bash
+  kubectl get pod my-pod -o jsonpath='{.status.resize}'
   kubectl get pod my-pod -o jsonpath='{.status.containerStatuses[*].resources}'
   ```
 
 ## Disabling in-place updates
 
-To force eviction-based behavior even on supported clusters, you can disable the feature by overriding the detection at deploy time. This is not exposed as a Helm value today — file a GitHub issue if you need it.
+To force eviction-based behaviour even on supported clusters (e.g. while validating a new k8s version), the feature can be disabled at runtime via the `Invalid`-rejection fallback path: scale the controller to zero, ensure the cluster's `InPlacePodVerticalScaling` feature gate is off, and restart. This is not yet exposed as a Helm value — file an issue if you need a clean toggle.

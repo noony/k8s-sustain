@@ -12,6 +12,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "k8s-sustain.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   groups:
     - name: k8s_sustain.workload_mapping

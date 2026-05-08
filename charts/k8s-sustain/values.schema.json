@@ -58,7 +58,8 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "interval": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
-            "scrapeTimeout": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" }
+            "scrapeTimeout": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
+            "additionalLabels": { "type": "object", "additionalProperties": { "type": "string" } }
           }
         },
         "nodeSelector": { "type": "object" },
@@ -106,9 +107,26 @@
           }
         },
         "resources": { "$ref": "#/definitions/resources" },
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "interval": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
+            "scrapeTimeout": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
+            "additionalLabels": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
         "nodeSelector": { "type": "object" },
         "tolerations": { "type": "array" },
         "affinity": { "type": "object" }
+      }
+    },
+    "prometheusRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "additionalLabels": { "type": "object", "additionalProperties": { "type": "string" } }
       }
     },
     "dashboard": {

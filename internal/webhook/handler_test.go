@@ -292,6 +292,49 @@ func TestBuildPatches_SkipsUnmatchedContainer(t *testing.T) {
 	}
 }
 
+// TestBuildPatches_NameCollisionInitAndRegular verifies the corner case where
+// the same container name appears in both pod.Spec.Containers and
+// pod.Spec.InitContainers. Kubernetes permits this; our model identifies
+// recommendations by name, so the single recommendation must be patched onto
+// BOTH locations. Locking in this behaviour: changes that silently drop one
+// of the two patches would otherwise leave the init copy un-rightsized.
+func TestBuildPatches_NameCollisionInitAndRegular(t *testing.T) {
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers:     []corev1.Container{{Name: "shared"}},
+			InitContainers: []corev1.Container{{Name: "shared"}},
+		},
+	}
+	recs := map[string]workload.ContainerRecommendation{
+		"shared": {CPURequest: qtyp("123m"), MemoryRequest: qtyp("64Mi")},
+	}
+
+	result, err := buildPatches(pod, recs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var patches []jsonPatch
+	if err := json.Unmarshal(result, &patches); err != nil {
+		t.Fatalf("unmarshal patches: %v", err)
+	}
+	if len(patches) != 2 {
+		t.Fatalf("expected 2 patches (one per location), got %d: %s", len(patches), string(result))
+	}
+	paths := map[string]bool{}
+	for _, p := range patches {
+		paths[p.Path] = true
+	}
+	want := []string{
+		"/spec/containers/0/resources",
+		"/spec/initContainers/0/resources",
+	}
+	for _, p := range want {
+		if !paths[p] {
+			t.Errorf("missing patch path %q for name collision (got %v)", p, paths)
+		}
+	}
+}
+
 // TestBuildPatches_PatchesInitContainers verifies that recommendations whose
 // names match init containers produce JSON patches at /spec/initContainers/N/resources.
 func TestBuildPatches_PatchesInitContainers(t *testing.T) {

@@ -134,9 +134,12 @@ Only needed when running the Prometheus Operator externally (not the bundled sub
 | `controller.serviceMonitor.enabled` | `false` | Create a Prometheus Operator `ServiceMonitor` and `PrometheusRule` for the controller |
 | `controller.serviceMonitor.interval` | `30s` | Scrape interval (controller) |
 | `controller.serviceMonitor.scrapeTimeout` | `10s` | Scrape timeout (controller) |
+| `controller.serviceMonitor.additionalLabels` | `{}` | Extra labels added to the controller `ServiceMonitor`. Use to match a specific Prometheus operator's `serviceMonitorSelector` (e.g. `{release: kube-prometheus-stack}`). |
 | `webhook.serviceMonitor.enabled` | `false` | Create a Prometheus Operator `ServiceMonitor` for the webhook (cert-expiry gauge etc.) |
 | `webhook.serviceMonitor.interval` | `30s` | Scrape interval (webhook) |
 | `webhook.serviceMonitor.scrapeTimeout` | `10s` | Scrape timeout (webhook) |
+| `webhook.serviceMonitor.additionalLabels` | `{}` | Extra labels added to the webhook `ServiceMonitor`. Same purpose as the controller variant. |
+| `prometheusRule.additionalLabels` | `{}` | Extra labels added to the `PrometheusRule`. Use to match a specific Prometheus operator's `ruleSelector` in clusters with multiple Prometheus instances. |
 
 ---
 

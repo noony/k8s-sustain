@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -102,14 +103,14 @@ func (c *CertExpiry) Refresh() error {
 	return nil
 }
 
-// Run blocks until ctxDone fires, refreshing the gauge every interval.
-// Intended to be invoked in its own goroutine.
-func (c *CertExpiry) Run(ctxDone <-chan struct{}, interval time.Duration) {
+// Run blocks until ctx is cancelled, refreshing the gauge and reloading the
+// cached keypair every interval. Intended to be invoked in its own goroutine.
+func (c *CertExpiry) Run(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
-		case <-ctxDone:
+		case <-ctx.Done():
 			return
 		case <-t.C:
 			_ = c.Refresh()

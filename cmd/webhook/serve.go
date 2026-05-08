@@ -127,9 +127,10 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 		}
 	}()
 
-	doneCh := make(chan struct{})
+	watcherCtx, stopWatcher := context.WithCancel(context.Background())
+	defer stopWatcher()
 	if certWatcher != nil {
-		go certWatcher.Run(doneCh, time.Hour)
+		go certWatcher.Run(watcherCtx, time.Hour)
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -137,11 +138,11 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 
 	select {
 	case err := <-errCh:
-		close(doneCh)
+		stopWatcher()
 		return err
 	case <-sigCh:
 		log.Info("Shutting down webhook server")
-		close(doneCh)
+		stopWatcher()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return srv.Shutdown(shutCtx)

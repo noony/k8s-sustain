@@ -18,7 +18,13 @@ The webhook needs five Prometheus queries to compute an injection on every pod C
 
 2. **Read path (webhook).** When `buildRecommendations` returns *any* error — circuit-open, timeout, malformed Prometheus response — the webhook calls `fetchCachedRecommendations`. If a `WorkloadRecommendation` exists and its `status.observedAt` is within the staleness window (default **30 minutes**), the webhook injects from the cache instead of failing open.
 
-3. **GC path (controller).** At the end of every reconcile cycle, the controller lists all `WorkloadRecommendation` objects produced by the policy and deletes any whose target workload is no longer in the matched set (workload deleted, namespace excluded, annotation removed, kind disabled). Foreign-policy entries are never touched.
+3. **GC path (controller).** Cleanup runs through three independent strategies so a `WorkloadRecommendation` cannot outlive its reason for existing:
+
+   - **Per-cycle sweep.** At the end of every reconcile, the controller lists `WorkloadRecommendation`s carrying the `k8s.sustain.io/policy: <policy>` label and deletes any whose target workload is no longer in the matched set (workload deleted, namespace excluded, annotation removed, kind disabled). Cluster-wide list with no server-side filter would scale O(WLR-count) with cluster size — the label scopes the list server-side and keeps the sweep cheap.
+   - **Policy-deletion finalizer.** The controller adds the `k8s.sustain.io/cleanup` finalizer to every `Policy`. On `kubectl delete policy`, the finalizer blocks Policy removal until every owned `WorkloadRecommendation` is deleted. This is the only path that GUARANTEES cleanup because it runs synchronously with the user's delete operation.
+   - **Orphan reaper.** A background goroutine scans every `WorkloadRecommendation` in the cluster on a tick (default 10 min) and deletes any whose `spec.policy` references a Policy that no longer exists. Catches WLRs orphaned by `kubectl delete policy --grace-period=0 --force` (which skips finalizers entirely), controller crashes mid-delete, and Policies renamed before the per-cycle sweep ran.
+
+   Foreign-policy entries — those carrying a different policy label — are never touched by any of these strategies.
 
 ## Schema
 
@@ -71,3 +77,20 @@ The staleness window is set at `webhook.Handler.CacheStaleness` (default `Defaul
 ## RBAC
 
 The controller's ClusterRole grants `get;list;watch;create;update;patch;delete` on `workloadrecommendations` (and its `/status` subresource). The webhook reuses the controller ServiceAccount today, so the same rules cover read access. The dashboard ClusterRole (when enabled) has read-only access on the resource so operators can browse it from the UI.
+
+### Why the grant is cluster-wide
+
+`WorkloadRecommendation` is a namespaced resource and a Policy can target every namespace in the cluster (`spec.selector.namespaces: []` matches all). The controller therefore needs cluster-wide write access to create/update/delete WLRs anywhere a matched workload lives. The webhook needs cluster-wide reads to look up a cached entry for any pod that lands at admission, regardless of namespace.
+
+Kubernetes RBAC has no native concept of "label-scoped reads" — a `Role` is bound to a single namespace, and a `ClusterRole` cannot be filtered by labels at evaluation time. So even though every WLR carries the `k8s.sustain.io/policy: <name>` label (used to scope the controller's *list* calls server-side), the **RBAC grant itself** must remain unconstrained.
+
+### Hardening options
+
+The grant is unavoidable, but you can layer additional controls:
+
+- **Restrict the namespaces a Policy can target.** Operators provision the Policy CRDs; users don't. Treat Policy authorship as an admin operation in your manifests pipeline rather than letting any namespace owner author one.
+- **NetworkPolicy on the webhook.** Limit ingress to the apiserver Service IP only — prevents anyone in the cluster from invoking `/mutate` directly.
+- **Audit policy.** Log every k8s API access from the controller / webhook ServiceAccount for an audit trail of WLR mutations. Useful when investigating whether a stale recommendation came from a legitimate reconcile or out-of-band tampering.
+- **Disable the dashboard** in production deployments where its read-only WLR access isn't needed (`dashboard.enabled: false`). The dashboard runs under its own narrower ClusterRole, but removing it eliminates a class of attack surface entirely.
+
+If your environment requires cell-level isolation between namespaces, the cleanest answer today is **one Helm release per cell** with `selector.namespaces` set so each release manages only its own slice, and `installCRDs=false` on all but one. The CRD is shared cluster-wide, but each controller's WLR mutations stay within its declared namespaces.

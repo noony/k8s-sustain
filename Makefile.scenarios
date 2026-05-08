@@ -82,6 +82,15 @@ test-kind-down: ## Delete the kind cluster
 	-pkill -f 'kubectl port-forward.*k8s-sustain-dashboard' || true
 	kind delete cluster --name $(CLUSTER_NAME)
 
+.PHONY: test-reboot
+test-reboot: ## delete all screnarios, recommendations, prom ... etc and reinstall all stack
+	$(call check_context)
+	$(MAKE) test-scenario-clean
+	kubectl get policies.k8s.sustain.io --no-headers | awk '{print $$1}' | xargs kubectl delete policies.k8s.sustain.io
+	helm delete k8s-sustain --namespace k8s-sustain
+	sleep 10
+	$(MAKE) test-kind-up
+
 # Generate one explicit phony target per scenario. macOS ships GNU Make 3.81,
 # which does not honour .PHONY on pattern rules reliably, so we emit each rule
 # explicitly via foreach/eval.

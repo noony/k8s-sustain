@@ -48,9 +48,19 @@ controller:
     enabled: false
     interval: 30s
     scrapeTimeout: 10s
+    # Extra labels added to the ServiceMonitor. Use this to match a specific
+    # Prometheus operator's `serviceMonitorSelector` in clusters with multiple
+    # Prometheus instances (e.g. {release: kube-prometheus-stack}).
+    additionalLabels: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+# Extra labels added to the PrometheusRule. Use this to match a specific
+# Prometheus operator's `ruleSelector` in clusters with multiple Prometheus
+# instances. Same pattern as serviceMonitor.additionalLabels.
+prometheusRule:
+  additionalLabels: {}
 
 serviceAccount:
   create: true
@@ -106,6 +116,9 @@ webhook:
     enabled: false
     interval: 30s
     scrapeTimeout: 10s
+    # Same as controller.serviceMonitor.additionalLabels — use to match a
+    # specific Prometheus operator's serviceMonitorSelector.
+    additionalLabels: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
