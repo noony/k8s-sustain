@@ -61,20 +61,27 @@ data:
     import os, time
     duty = float(os.environ.get('LOAD_DUTY', '0.2'))
     mem_mb = int(os.environ.get('LOAD_MEM_MB', '50'))
-    runtime_s = float(os.environ.get('RUN_SECONDS', '30'))
+    phases = os.environ.get('LOAD_PHASES', '').strip()
     buf = bytearray(mem_mb * 1024 * 1024)
     for i in range(0, len(buf), 4096):
         buf[i] = 1
-    deadline = time.monotonic() + runtime_s
-    period = 0.1
-    on = period * duty
-    off = period - on
-    while time.monotonic() < deadline:
-        s = time.monotonic()
-        while time.monotonic() - s < on:
-            pass
-        if off > 0:
-            time.sleep(off)
+    def burn(d, deadline):
+        period = 0.1
+        on = period * d
+        off = period - on
+        while time.monotonic() < deadline:
+            s = time.monotonic()
+            while time.monotonic() - s < on:
+                pass
+            if off > 0:
+                time.sleep(off)
+    if phases:
+        schedule = [(float(p.split(':')[0]), float(p.split(':')[1])) for p in phases.split(',')]
+        while True:
+            for d, secs in schedule:
+                burn(d, time.monotonic() + secs)
+    else:
+        burn(duty, float('inf'))
 ---
 apiVersion: batch/v1
 kind: CronJob

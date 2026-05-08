@@ -41,7 +41,50 @@ const (
 
 // EmitWorkloadMetrics writes recommendation gauges and drift ratios for one
 // reconciled workload. Idempotent: each call overwrites the previous values.
+//
+// Drift is emitted at workload granularity (not per-container) — its consumers
+// (the workload-drifted recording rule and the dashboard summaries) always
+// take max(abs(1 - ratio)) across containers anyway, so collapsing here
+// eliminates a 3–5× cardinality multiplier on this gauge.
 func EmitWorkloadMetrics(w WorkloadMetrics) {
+	// Collect the most-drifted ratio per resource across all containers in
+	// this workload. "Most drifted" = largest abs(1 - ratio); we keep the
+	// signed ratio so consumers can still tell over- from under-provisioning.
+	var (
+		haveCPUDrift, haveMemDrift bool
+		cpuDrift, memDrift         float64
+	)
+	for _, c := range w.Containers {
+		if c.HasCPU && c.CurrentCPUCores > 0 && !c.CPUAtFloor {
+			r := c.RecommendedCPUCores / c.CurrentCPUCores
+			if !haveCPUDrift || absF(1-r) > absF(1-cpuDrift) {
+				cpuDrift = r
+				haveCPUDrift = true
+			}
+		}
+		if c.HasMemory && c.CurrentMemoryBytes > 0 && !c.MemoryAtFloor {
+			r := c.RecommendedMemoryBytes / c.CurrentMemoryBytes
+			if !haveMemDrift || absF(1-r) > absF(1-memDrift) {
+				memDrift = r
+				haveMemDrift = true
+			}
+		}
+	}
+	if haveCPUDrift {
+		workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, "cpu").Set(cpuDrift)
+	} else {
+		workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, "cpu")
+	}
+	if haveMemDrift {
+		workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, "memory").Set(memDrift)
+	} else {
+		workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, "memory")
+	}
+
+	// Per-container recommendation + template gauges still carry container
+	// labels: the savings recording rules join the two metrics on `container`,
+	// and operators rely on container_kind="init" to verify init-container
+	// recommendations during local testing.
 	for _, c := range w.Containers {
 		kind := c.Kind
 		if kind == "" {
@@ -49,14 +92,8 @@ func EmitWorkloadMetrics(w WorkloadMetrics) {
 		}
 		if c.HasCPU {
 			recommendedCPUCores.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy).Set(c.RecommendedCPUCores)
-			if c.CurrentCPUCores > 0 && !c.CPUAtFloor {
-				workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "cpu").Set(c.RecommendedCPUCores / c.CurrentCPUCores)
-			} else {
-				workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "cpu")
-			}
 		} else {
 			recommendedCPUCores.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy)
-			workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "cpu")
 		}
 		if c.CurrentCPUCores > 0 {
 			templateCPUCores.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy).Set(c.CurrentCPUCores)
@@ -65,14 +102,8 @@ func EmitWorkloadMetrics(w WorkloadMetrics) {
 		}
 		if c.HasMemory {
 			recommendedMemoryBytes.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy).Set(c.RecommendedMemoryBytes)
-			if c.CurrentMemoryBytes > 0 && !c.MemoryAtFloor {
-				workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "memory").Set(c.RecommendedMemoryBytes / c.CurrentMemoryBytes)
-			} else {
-				workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "memory")
-			}
 		} else {
 			recommendedMemoryBytes.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy)
-			workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, "memory")
 		}
 		if c.CurrentMemoryBytes > 0 {
 			templateMemoryBytes.WithLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy).Set(c.CurrentMemoryBytes)
@@ -80,6 +111,13 @@ func EmitWorkloadMetrics(w WorkloadMetrics) {
 			templateMemoryBytes.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy)
 		}
 	}
+}
+
+func absF(f float64) float64 {
+	if f < 0 {
+		return -f
+	}
+	return f
 }
 
 // EmitRetryState marks a workload as blocked (state=1) for the given reason.

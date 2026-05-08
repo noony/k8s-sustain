@@ -41,7 +41,7 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 
 | Name | Type | Labels |
 |------|------|--------|
-| `k8s_sustain_workload_drift_ratio`      | gauge   | `namespace`, `owner_kind`, `owner_name`, `container`, `container_kind`, `resource` |
+| `k8s_sustain_workload_drift_ratio`      | gauge   | `namespace`, `owner_kind`, `owner_name`, `resource` |
 | `k8s_sustain_workload_retry_state`      | gauge   | `namespace`, `owner_kind`, `owner_name`, `reason` |
 | `k8s_sustain_workload_retry_attempts`   | counter | `namespace`, `owner_kind`, `owner_name` |
 | `k8s_sustain_policy_workload_count`     | gauge   | `policy` |
@@ -49,6 +49,10 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 | `k8s_sustain_autoscaler_present`        | gauge   | `namespace`, `owner_kind`, `owner_name`, `kind` |
 | `k8s_sustain_autoscaler_target_configured` | gauge | `namespace`, `owner_kind`, `owner_name`, `kind`, `resource` |
 | `k8s_sustain_coordination_factor`       | gauge   | `namespace`, `owner_kind`, `owner_name`, `resource`, `kind` |
+
+#### `k8s_sustain_workload_drift_ratio`
+
+Largest drift ratio (recommended / current) across the workload's containers, per resource. `1.0` means no drift; `> 1.0` means under-provisioned (recommendation higher than current); `< 1.0` means over-provisioned. The controller pre-aggregates with `max(abs(1 - ratio))` across containers at emit time so this gauge stays one series per (workload, resource) — i.e. constant cardinality regardless of how many containers a pod has. The signed ratio is preserved (not the absolute value) so consumers can still distinguish over- from under-provisioning.
 
 #### `k8s_sustain_autoscaler_target_configured`
 

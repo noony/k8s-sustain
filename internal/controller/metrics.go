@@ -44,8 +44,8 @@ var (
 
 	workloadDriftRatio = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_drift_ratio",
-		Help: "Ratio of recommended request to current request (1.0 = no drift).",
-	}, []string{"namespace", "owner_kind", "owner_name", "container", "container_kind", "resource"})
+		Help: "Largest absolute drift ratio (recommended / current) across the workload's containers, per resource. 1.0 means no container has drifted. Aggregated at emit time so this metric stays O(workload), not O(workload × container).",
+	}, []string{"namespace", "owner_kind", "owner_name", "resource"})
 
 	workloadRetryState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_retry_state",
