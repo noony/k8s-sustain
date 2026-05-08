@@ -1524,6 +1524,10 @@
 <p class="admonition-title">Certificate rotation</p>
 <p>Without cert-manager, you are responsible for rotating the certificate before it expires and updating <code>webhook.caBundle</code> via <code>helm upgrade</code>.</p>
 </div>
+<div class="admonition note">
+<p class="admonition-title">Hot reload</p>
+<p>The webhook reloads its TLS keypair on a 1h tick via <code>tls.Config.GetCertificate</code>, so cert-manager rotations take effect on the next handshake — no pod restart required. The <code>k8s_sustain_webhook_cert_expiry_seconds</code> gauge tracks the active leaf's expiry; alert when <code>(gauge - time())</code> drops below your renewal SLA.</p>
+</div>
 
 
 

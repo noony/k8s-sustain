@@ -1911,7 +1911,7 @@ next pod creation rather than triggering an immediate recycle.</p>
 <td><code>window</code></td>
 <td>string</td>
 <td><code>168h</code></td>
-<td>Historical lookback window for the percentile query (e.g. <code>96h</code>, <code>14d</code>). Must be a Prometheus duration: <code>^([0-9]+(ms\|s\|m\|h\|d\|w\|y))+$</code>.</td>
+<td>Historical lookback window for the percentile query (e.g. <code>96h</code>, <code>14d</code>). Must be a Prometheus duration: <code>^([0-9]+(m\|h\|d\|w\|y))+$</code>.</td>
 </tr>
 </tbody>
 </table>
@@ -1930,7 +1930,7 @@ next pod creation rather than triggering an immediate recycle.</p>
 <td><code>percentile</code></td>
 <td>int32</td>
 <td><code>95</code></td>
-<td>Percentile of usage to use as the recommendation (50–99)</td>
+<td>Percentile of usage to use as the recommendation. Range <code>1</code>–<code>100</code>. <code>100</code> resolves to the maximum sample over the window — useful for memory when you never want to undershoot the observed peak.</td>
 </tr>
 <tr>
 <td><code>headroom</code></td>
@@ -1942,7 +1942,7 @@ next pod creation rather than triggering an immediate recycle.</p>
 <td><code>keepRequest</code></td>
 <td>bool</td>
 <td><code>false</code></td>
-<td>When <code>true</code>, the request is not changed</td>
+<td>When <code>true</code>, the request is not changed. Cannot be combined with <code>headroom</code>, <code>percentile</code>, <code>minAllowed</code>, or <code>maxAllowed</code> (those have no effect when the request is kept; rejected by CRD validation).</td>
 </tr>
 <tr>
 <td><code>minAllowed</code></td>

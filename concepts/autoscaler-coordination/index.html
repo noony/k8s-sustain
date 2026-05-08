@@ -690,11 +690,35 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#why-a-vertical-recommender-needs-to-know-about-hpa" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why a vertical recommender needs to know about HPA
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#overhead-formula-always-on-when-enabled" class="md-nav__link">
     <span class="md-ellipsis">
       Overhead formula (always-on when enabled)
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Overhead formula (always-on when enabled)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#caveats" class="md-nav__link">
+    <span class="md-ellipsis">
+      Caveats
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1381,11 +1405,35 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#why-a-vertical-recommender-needs-to-know-about-hpa" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why a vertical recommender needs to know about HPA
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#overhead-formula-always-on-when-enabled" class="md-nav__link">
     <span class="md-ellipsis">
       Overhead formula (always-on when enabled)
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Overhead formula (always-on when enabled)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#caveats" class="md-nav__link">
+    <span class="md-ellipsis">
+      Caveats
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1452,13 +1500,60 @@ recommender then sees the same per-pod usage and raises requests again on
 the next cycle.</p>
 <p><code>spec.rightSizing.autoscalerCoordination</code> shapes per-pod requests so the
 HPA's signal stays meaningful.</p>
+<h2 id="why-a-vertical-recommender-needs-to-know-about-hpa">Why a vertical recommender needs to know about HPA<a class="headerlink" href="#why-a-vertical-recommender-needs-to-know-about-hpa" title="Permanent link">&para;</a></h2>
+<p>The naïve recommendation is "look at p95 CPU usage and set the request to
+that, plus headroom." For an HPA-managed workload that's a feedback trap:</p>
+<ol>
+<li>Workload runs at p95 = 100m. Recommender sets request = 100m + headroom.</li>
+<li>HPA targets 70% utilization on CPU. With request = 100m and usage = 100m,
+   utilization = 100% → HPA scales out.</li>
+<li>New replicas land. Per-pod usage drops to (say) 60m.</li>
+<li>Next reconcile: recommender sees p95 = 60m, lowers request to 60m.</li>
+<li>Utilization climbs again, HPA scales out <em>again</em>.</li>
+<li>Loop forever. Replicas drift up; per-pod usage drifts down; nothing
+   stabilises.</li>
+</ol>
+<p>The fix: pad the request enough that steady-state utilisation lands a
+notch below the HPA target, leaving room for actual load increases to be
+the only thing that triggers scale-out.</p>
 <h2 id="overhead-formula-always-on-when-enabled">Overhead formula (always-on when enabled)<a class="headerlink" href="#overhead-formula-always-on-when-enabled" title="Permanent link">&para;</a></h2>
 <p>When <code>enabled: true</code>, the recommender multiplies each affected resource's
-request by <code>(100 / hpa_target_pct) × 1.10</code>. Example: baseline <code>100m</code> CPU,
-HPA target 70% → adjusted request = <code>100 × 110 / 70 = 158m</code>. At baseline
-load, HPA utilization sits at <code>100 / 158 ≈ 63%</code> — comfortably below 70%. A
-10% load bump pushes utilization over the target and HPA scales out.</p>
-<p>The 1.10 safety margin is fixed in v1.</p>
+request by <code>safetyMargin / hpa_target_pct</code>, where <code>safetyMargin = 110</code>.</p>
+<p>Worked through:</p>
+<ul>
+<li>Workload p95 usage = 100m, HPA <code>averageUtilization</code> target = 70%.</li>
+<li>Adjusted request = <code>100 × 110 / 70 ≈ 158m</code>.</li>
+<li>Steady-state utilisation = <code>usage / request = 100 / 158 ≈ 63%</code> — about
+  <strong>7 percentage points below the 70% HPA target</strong> (≈ 9% relative).</li>
+<li>A 10% load bump pushes per-pod usage to 110m → utilisation <code>110 / 158 ≈
+  70%</code> → HPA scales out.</li>
+</ul>
+<p>That 7-percentage-point cushion is what stops the feedback loop in the
+section above: real load growth — not request inflation — is what
+crosses the threshold.</p>
+<p>The 1.10 safety margin is hard-coded in v1. Knobs to expose it are not on
+the roadmap; the math gets fragile when users start tuning it for "less
+overhead" without modelling their actual traffic shape.</p>
+<h3 id="caveats">Caveats<a class="headerlink" href="#caveats" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>HPA stabilization windows are not modelled.</strong> During a scale-out
+  event, replica count is in flux and per-pod usage swings. The
+  recommender uses the <em>median</em> replica count over the recommendation
+  window (<code>spec.rightSizing.resourcesConfigs.&lt;cpu|memory&gt;.window</code>), so
+  brief replica spikes don't dominate. A workload that scales 3↔30
+  multiple times a day will see noisier recommendations than one that
+  rarely scales — pick a longer window if your traffic has daily cycles.</li>
+<li><strong>HPA target changes propagate next cycle.</strong> If you change the HPA's
+  <code>averageUtilization</code> from 70% to 50%, the next k8s-sustain reconcile
+  picks up the new target and re-shapes requests. The HPA's own scaling
+  reaction is faster (seconds), so you'll briefly see scale-out before
+  the new requests land. Acceptable for routine target tuning; consider
+  draining traffic if you're making a big change.</li>
+<li><strong><code>Resource</code> + <code>averageUtilization</code> only.</strong> <code>ContainerResource</code>,
+  <code>Pods</code>, <code>Object</code>, and <code>External</code> metrics don't drive overhead. KEDA
+  triggers on Kafka lag, queue depth, etc. are ignored too — only the
+  CPU/memory triggers KEDA materialises into the underlying HPA count.</li>
+</ul>
 <h2 id="replica-budget-correction-opt-in">Replica-budget correction (opt-in)<a class="headerlink" href="#replica-budget-correction-opt-in" title="Permanent link">&para;</a></h2>
 <p><code>replicaBudgetAnchor</code> (0.0–1.0) enables an additional CPU-only adjustment
 that nudges requests up or down based on the workload's position in
@@ -1472,6 +1567,15 @@ leaving room to scale out. Workloads above the target get denser pods
 (factor &gt; 1); workloads below get thinner pods (factor &lt; 1). Memory is not
 adjusted because memory consumption doesn't track requests the way CPU
 does.</p>
+<p><strong>Worked example.</strong> A workload with <code>minReplicas=3, maxReplicas=30,
+anchor=0.10</code>:</p>
+<ul>
+<li><code>target_replicas = round(3 + 0.10 × 27) = round(5.7) = 6</code>.</li>
+<li>Workload currently at 12 replicas (above target): <code>factor = clamp(12/6, 0.5, 2.0) = 2.0</code>. CPU request doubles → bigger pods, fewer of them as the HPA scales in toward 6.</li>
+<li>Workload currently at 3 replicas (at min, below target): <code>factor = clamp(3/6, 0.5, 2.0) = 0.5</code>. CPU request halves → thinner pods, the HPA scales out toward 6 to keep utilisation at target.</li>
+<li>Workload currently at 6 replicas (on target): <code>factor = 1.0</code>, no change.</li>
+</ul>
+<p>The clamp <code>[0.5, 2.0]</code> exists so a single reconcile can't catastrophically up- or down-size a pod. Steady-state convergence takes a few reconcile cycles, which is fine for a knob that's optimising for monthly cost rather than real-time response.</p>
 <h2 id="detection-rules">Detection rules<a class="headerlink" href="#detection-rules" title="Permanent link">&para;</a></h2>
 <ul>
 <li>HPA matched by <code>scaleTargetRef</code>; <code>ScaledObject</code> by <code>spec.scaleTargetRef</code>.</li>

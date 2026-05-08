@@ -1291,6 +1291,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#k8s_sustain_workload_drift_ratio" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s_sustain_workload_drift_ratio
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#k8s_sustain_autoscaler_target_configured" class="md-nav__link">
     <span class="md-ellipsis">
       k8s_sustain_autoscaler_target_configured
@@ -1518,6 +1527,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#k8s_sustain_workload_drift_ratio" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s_sustain_workload_drift_ratio
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#k8s_sustain_autoscaler_target_configured" class="md-nav__link">
     <span class="md-ellipsis">
       k8s_sustain_autoscaler_target_configured
@@ -1733,7 +1751,7 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 </tr>
 </tbody>
 </table>
-<p><code>k8s_sustain_recommendation_skipped_total</code> increments when the recommender bypasses a workload without emitting a recommendation. <code>reason="insufficient_history"</code> means the workload had fewer than 12 <code>rate5m</code> samples in the configured window — typical of containers younger than ~12 minutes — so percentile queries would otherwise floor to ~0 and trigger an immediate recycle.</p>
+<p><code>k8s_sustain_recommendation_skipped_total</code> increments when the recommender bypasses a workload without emitting a recommendation. <code>reason="insufficient_history"</code> means the workload had fewer than 12 CPU rate samples in the configured window — typical of containers younger than ~12 minutes — so percentile queries would otherwise floor to ~0 and trigger an immediate recycle.</p>
 <p><code>k8s_sustain_oom_floor_applied_total</code> increments when the OOM-aware floor raises a memory recommendation above the percentile value. This means the workload OOM'd in the last 24h and the recommendation was floored at <code>max(peak_working_set, current_request)</code> plus headroom, instead of the (lower) percentile value.</p>
 <h3 id="drift-retry-autoscaler">Drift, retry, autoscaler<a class="headerlink" href="#drift-retry-autoscaler" title="Permanent link">&para;</a></h3>
 <table>
@@ -1748,7 +1766,7 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 <tr>
 <td><code>k8s_sustain_workload_drift_ratio</code></td>
 <td>gauge</td>
-<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code>, <code>container_kind</code>, <code>resource</code></td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>resource</code></td>
 </tr>
 <tr>
 <td><code>k8s_sustain_workload_retry_state</code></td>
@@ -1787,6 +1805,8 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 </tr>
 </tbody>
 </table>
+<h4 id="k8s_sustain_workload_drift_ratio"><code>k8s_sustain_workload_drift_ratio</code><a class="headerlink" href="#k8s_sustain_workload_drift_ratio" title="Permanent link">&para;</a></h4>
+<p>Largest drift ratio (recommended / current) across the workload's containers, per resource. <code>1.0</code> means no drift; <code>&gt; 1.0</code> means under-provisioned (recommendation higher than current); <code>&lt; 1.0</code> means over-provisioned. The controller pre-aggregates with <code>max(abs(1 - ratio))</code> across containers at emit time so this gauge stays one series per (workload, resource) — i.e. constant cardinality regardless of how many containers a pod has. The signed ratio is preserved (not the absolute value) so consumers can still distinguish over- from under-provisioning.</p>
 <h4 id="k8s_sustain_autoscaler_target_configured"><code>k8s_sustain_autoscaler_target_configured</code><a class="headerlink" href="#k8s_sustain_autoscaler_target_configured" title="Permanent link">&para;</a></h4>
 <p>Configured autoscaler <code>averageUtilization</code> (%) for a workload's resource trigger.
 <code>kind</code> is <code>HPA</code> or <code>KEDA</code>; <code>resource</code> is <code>cpu</code> or <code>memory</code>.</p>
@@ -1825,9 +1845,9 @@ for the formulas.</p>
 <h3 id="workload-mapping-existing">Workload mapping (existing)<a class="headerlink" href="#workload-mapping-existing" title="Permanent link">&para;</a></h3>
 <p><code>k8s_sustain:pod_workload</code> resolves Pod → owner workload via kube-state-metrics.</p>
 <h3 id="usage-rates-existing">Usage rates (existing)<a class="headerlink" href="#usage-rates-existing" title="Permanent link">&para;</a></h3>
-<p><code>k8s_sustain:container_cpu_usage:rate5m</code>, <code>k8s_sustain:container_cpu_usage_by_workload:rate5m</code>,
+<p><code>k8s_sustain:container_cpu_usage:rate1m</code>, <code>k8s_sustain:container_cpu_usage_by_workload:rate1m</code>,
 <code>k8s_sustain:container_memory_working_set:bytes</code>, <code>k8s_sustain:container_memory_by_workload:bytes</code>,
-<code>k8s_sustain:pod_cpu_usage:rate5m</code>, <code>k8s_sustain:pod_memory_working_set:bytes</code>.</p>
+<code>k8s_sustain:pod_cpu_usage:rate1m</code>, <code>k8s_sustain:pod_memory_working_set:bytes</code>.</p>
 <h3 id="resource-requests-existing">Resource requests (existing)<a class="headerlink" href="#resource-requests-existing" title="Permanent link">&para;</a></h3>
 <p>Per-workload (max across replicas — used for per-workload dashboard views):
 <code>k8s_sustain:container_cpu_requests_by_workload:cores</code>,

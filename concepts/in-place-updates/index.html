@@ -669,27 +669,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
+  <a href="#version-matrix" class="md-nav__link">
     <span class="md-ellipsis">
-      How it works
+      Version matrix
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#automatic-fallback" class="md-nav__link">
+  <a href="#how-the-runtime-path-is-chosen" class="md-nav__link">
     <span class="md-ellipsis">
-      Automatic fallback
+      How the runtime path is chosen
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#cluster-version-detection" class="md-nav__link">
+  <a href="#eviction-fallback" class="md-nav__link">
     <span class="md-ellipsis">
-      Cluster version detection
+      Eviction fallback
     </span>
   </a>
   
@@ -1381,27 +1381,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#how-it-works" class="md-nav__link">
+  <a href="#version-matrix" class="md-nav__link">
     <span class="md-ellipsis">
-      How it works
+      Version matrix
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#automatic-fallback" class="md-nav__link">
+  <a href="#how-the-runtime-path-is-chosen" class="md-nav__link">
     <span class="md-ellipsis">
-      Automatic fallback
+      How the runtime path is chosen
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#cluster-version-detection" class="md-nav__link">
+  <a href="#eviction-fallback" class="md-nav__link">
     <span class="md-ellipsis">
-      Cluster version detection
+      Eviction fallback
     </span>
   </a>
   
@@ -1445,39 +1445,81 @@
 
 <h1 id="in-place-updates">In-Place Updates<a class="headerlink" href="#in-place-updates" title="Permanent link">&para;</a></h1>
 <p>Kubernetes 1.27 introduced the <code>InPlacePodVerticalScaling</code> feature gate (alpha), which became beta (on by default) in Kubernetes 1.31 and GA in Kubernetes 1.33. It allows changing a pod's resource requests and limits <strong>without restarting the container</strong>.</p>
-<p>k8s-sustain automatically detects whether the cluster supports this feature and enables it when available.</p>
-<h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
-<p>When <code>Ongoing</code> mode is active and the cluster supports in-place updates:</p>
+<p>k8s-sustain auto-detects whether the cluster supports the feature and chooses the appropriate code path. There is <strong>no minimum k8s version for k8s-sustain itself</strong> — clusters too old for in-place resize fall back transparently to PDB-respecting eviction.</p>
+<h2 id="version-matrix">Version matrix<a class="headerlink" href="#version-matrix" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>k8s version</th>
+<th>Feature gate</th>
+<th>Resize API used</th>
+<th>k8s-sustain behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>≤ 1.26</strong></td>
+<td><em>none</em> (feature didn't exist)</td>
+<td><em>n/a</em></td>
+<td>Eviction-only. Stale pods evicted via the Eviction API; webhook re-injects on replacement.</td>
+</tr>
+<tr>
+<td><strong>1.27 – 1.30 (alpha)</strong></td>
+<td><code>--feature-gates=InPlacePodVerticalScaling=true</code> required on apiserver + kubelet</td>
+<td>Direct pod patch (<code>PATCH /api/v1/.../pods/&lt;name&gt;</code>)</td>
+<td>Detected at startup as <code>inPlace=false</code> (the controller treats &lt; 1.31 as not-supported) → eviction path.</td>
+</tr>
+<tr>
+<td><strong>1.31 – 1.32 (beta)</strong></td>
+<td>On by default</td>
+<td>Direct pod patch (no <code>/resize</code> subresource yet)</td>
+<td><code>inPlace=true</code>. <code>/resize</code> subresource returns 404 → patcher falls back to direct pod patch within the same call.</td>
+</tr>
+<tr>
+<td><strong>1.33+ (GA)</strong></td>
+<td>Always on</td>
+<td><code>/resize</code> subresource (<code>PATCH /api/v1/.../pods/&lt;name&gt;/resize</code>)</td>
+<td><code>inPlace=true</code>. <code>/resize</code> is the primary path; sidecar (restartable init) resize attempted as a separate /resize call.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="how-the-runtime-path-is-chosen">How the runtime path is chosen<a class="headerlink" href="#how-the-runtime-path-is-chosen" title="Permanent link">&para;</a></h2>
+<p>At controller startup the discovery API is queried and <code>major.minor</code> is compared against <code>1.31</code>. The result lives on <code>Patcher.inPlace</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>INFO  InPlacePodVerticalScaling support  enabled=true   server=v1.33.2
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>INFO  InPlacePodVerticalScaling support  enabled=false  server=v1.30.5
+</code></pre></div>
+<p>When <code>Ongoing</code> mode is active and <code>inPlace=true</code>, the patcher walks each running pod and:</p>
 <ol>
-<li>The controller lists all running, non-terminating pods matched by the workload's selector</li>
-<li>For each pod, it checks the pod's <code>status.resize</code> field:</li>
-<li><strong><code>Infeasible</code></strong>: the node cannot satisfy the request — the pod is evicted so the scheduler can place the replacement elsewhere (the webhook injects the latest resources into the new pod)</li>
-<li><strong><code>Deferred</code></strong>: the kubelet accepted the request but is waiting on conditions (e.g. a memory decrease that requires container restart) — skipped; the kubelet will apply it without further action</li>
-<li><strong><code>InProgress</code> / not set</strong>: proceeds to patch <code>spec.containers[*].resources</code> via the pod's <code>/resize</code> subresource</li>
-<li>The kubelet applies the new resources without restarting the container</li>
+<li>Reads <code>pod.status.resize</code> (kubelet's report on the previous resize attempt):</li>
+<li><strong><code>Infeasible</code></strong> — the node cannot satisfy the request. The pod is evicted so the scheduler can place the replacement elsewhere; the webhook injects the new resources into the replacement.</li>
+<li><strong><code>Deferred</code></strong> — the kubelet accepted the request but is waiting on conditions (e.g. memory decrease that requires container restart). Skipped; the kubelet will apply it without further intervention.</li>
+<li><strong><code>InProgress</code> / unset</strong> — proceeds with the patch.</li>
+<li>Issues <code>PATCH /api/v1/.../pods/&lt;name&gt;/resize</code> (k8s 1.33+).</li>
+<li>If the API server returns <code>NotFound</code> for the subresource (k8s 1.31–1.32), the same call is retried as a direct pod patch.</li>
+<li>If the API server returns <code>Invalid</code> (the feature gate is off — possible on a 1.31+ cluster with custom flags), the patcher flips <code>inPlace=false</code> for the rest of the reconcile cycle and falls back to eviction. The flip is per-process, so the next reconcile re-attempts in-place if the gate has been re-enabled meanwhile.</li>
 </ol>
-<p>On Kubernetes 1.33+, pod resource changes go through the <code>/resize</code> subresource. On Kubernetes 1.31-1.32, the controller falls back to a direct pod patch.</p>
-<p>Pods that are terminating or not in <code>Running</code> phase are skipped.</p>
-<h2 id="automatic-fallback">Automatic fallback<a class="headerlink" href="#automatic-fallback" title="Permanent link">&para;</a></h2>
-<p>If the API server rejects an in-place pod patch (e.g. the <code>InPlacePodVerticalScaling</code> feature gate is disabled), the controller automatically falls back to PDB-respecting eviction-based updates for the rest of the reconcile cycle. No manual intervention is needed.</p>
-<h2 id="cluster-version-detection">Cluster version detection<a class="headerlink" href="#cluster-version-detection" title="Permanent link">&para;</a></h2>
-<p>The controller detects the server version at startup using the discovery API:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>major=1, minor&gt;=31 → in-place updates enabled
-</code></pre></div>
-<p>The feature gate was alpha (disabled by default) in Kubernetes 1.27-1.30. The controller requires &gt;= 1.31 where it is beta and enabled by default.</p>
-<p>You can check whether it is enabled in the controller logs:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>INFO  InPlacePodVerticalScaling support  enabled=true
-</code></pre></div>
+<p>Sidecar (restartable init) containers are resized in a <strong>separate</strong> <code>/resize</code> call so a sidecar rejection on older clusters cannot block the regular-container resize. Failures on the sidecar call are logged and ignored — new requests will land at next pod creation via webhook injection.</p>
+<h2 id="eviction-fallback">Eviction fallback<a class="headerlink" href="#eviction-fallback" title="Permanent link">&para;</a></h2>
+<p>On any cluster where <code>inPlace=false</code> (auto-detected as &lt; 1.31, or runtime-flipped on Invalid):</p>
+<ul>
+<li>Stale pods are evicted one at a time via the Eviction API.</li>
+<li>429 responses (PodDisruptionBudget blocking eviction) are logged and skipped — the next reconcile cycle will retry.</li>
+<li>The workload controller (Deployment / StatefulSet / etc.) replaces the evicted pod from the updated template; the webhook injects the latest recommendation into the replacement at admission time.</li>
+</ul>
+<p>CronJobs are special-cased: their pods are short-lived job runs that are never recycled. The controller patches the <code>JobTemplate</code> so future runs use the updated resources.</p>
 <h2 id="caveats">Caveats<a class="headerlink" href="#caveats" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>CPU is always resizable in-place.</strong> Memory resize may require a container restart if the requested memory exceeds the current cgroup limit. The kubelet handles this transparently.</li>
-<li><strong>VPA conflicts.</strong> If you run Vertical Pod Autoscaler alongside k8s-sustain, ensure they do not target the same pods to avoid conflicting patches.</li>
-<li><strong>Resource resize status.</strong> You can inspect the resize status on a pod:</li>
+<li><strong>Memory shrink may force restart.</strong> When a memory request is <strong>lowered</strong>, some kubelet versions return <code>Deferred</code> until the next container start because the cgroup cannot shrink while the workload is using more than the new limit. k8s-sustain accepts this — the new value lands on the next pod restart, no recycling needed.</li>
+<li><strong>Memory grow is always live.</strong> Increasing memory requests/limits is applied without restart on supported kernels.</li>
+<li><strong>CPU is always resizable in-place.</strong> No restart, no kubelet deferral.</li>
+<li><strong>VPA conflicts.</strong> Running Vertical Pod Autoscaler alongside k8s-sustain on the same pods produces conflicting patches. Use the <code>k8s.sustain.io/policy</code> annotation to opt workloads in selectively, and exclude those workloads from VPA targets.</li>
+<li><strong>Resize status inspection:</strong></li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.containerStatuses[*].resources}&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.resize}&#39;</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.containerStatuses[*].resources}&#39;</span>
 </code></pre></div>
 <h2 id="disabling-in-place-updates">Disabling in-place updates<a class="headerlink" href="#disabling-in-place-updates" title="Permanent link">&para;</a></h2>
-<p>To force eviction-based behavior even on supported clusters, you can disable the feature by overriding the detection at deploy time. This is not exposed as a Helm value today — file a GitHub issue if you need it.</p>
+<p>To force eviction-based behaviour even on supported clusters (e.g. while validating a new k8s version), the feature can be disabled at runtime via the <code>Invalid</code>-rejection fallback path: scale the controller to zero, ensure the cluster's <code>InPlacePodVerticalScaling</code> feature gate is off, and restart. This is not yet exposed as a Helm value — file an issue if you need a clean toggle.</p>
 
 
 

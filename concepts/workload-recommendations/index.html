@@ -771,6 +771,30 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="RBAC">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-the-grant-is-cluster-wide" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why the grant is cluster-wide
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardening-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hardening options
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -1459,6 +1483,30 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="RBAC">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-the-grant-is-cluster-wide" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why the grant is cluster-wide
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardening-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hardening options
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -1498,9 +1546,15 @@
 <p><strong>Read path (webhook).</strong> When <code>buildRecommendations</code> returns <em>any</em> error — circuit-open, timeout, malformed Prometheus response — the webhook calls <code>fetchCachedRecommendations</code>. If a <code>WorkloadRecommendation</code> exists and its <code>status.observedAt</code> is within the staleness window (default <strong>30 minutes</strong>), the webhook injects from the cache instead of failing open.</p>
 </li>
 <li>
-<p><strong>GC path (controller).</strong> At the end of every reconcile cycle, the controller lists all <code>WorkloadRecommendation</code> objects produced by the policy and deletes any whose target workload is no longer in the matched set (workload deleted, namespace excluded, annotation removed, kind disabled). Foreign-policy entries are never touched.</p>
+<p><strong>GC path (controller).</strong> Cleanup runs through three independent strategies so a <code>WorkloadRecommendation</code> cannot outlive its reason for existing:</p>
 </li>
+<li>
+<p><strong>Per-cycle sweep.</strong> At the end of every reconcile, the controller lists <code>WorkloadRecommendation</code>s carrying the <code>k8s.sustain.io/policy: &lt;policy&gt;</code> label and deletes any whose target workload is no longer in the matched set (workload deleted, namespace excluded, annotation removed, kind disabled). Cluster-wide list with no server-side filter would scale O(WLR-count) with cluster size — the label scopes the list server-side and keeps the sweep cheap.</p>
+</li>
+<li><strong>Policy-deletion finalizer.</strong> The controller adds the <code>k8s.sustain.io/cleanup</code> finalizer to every <code>Policy</code>. On <code>kubectl delete policy</code>, the finalizer blocks Policy removal until every owned <code>WorkloadRecommendation</code> is deleted. This is the only path that GUARANTEES cleanup because it runs synchronously with the user's delete operation.</li>
+<li><strong>Orphan reaper.</strong> A background goroutine scans every <code>WorkloadRecommendation</code> in the cluster on a tick (default 10 min) and deletes any whose <code>spec.policy</code> references a Policy that no longer exists. Catches WLRs orphaned by <code>kubectl delete policy --grace-period=0 --force</code> (which skips finalizers entirely), controller crashes mid-delete, and Policies renamed before the per-cycle sweep ran.</li>
 </ol>
+<p>Foreign-policy entries — those carrying a different policy label — are never touched by any of these strategies.</p>
 <h2 id="schema">Schema<a class="headerlink" href="#schema" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WorkloadRecommendation</span>
@@ -1544,6 +1598,18 @@
 <p>The staleness window is set at <code>webhook.Handler.CacheStaleness</code> (default <code>DefaultCacheStaleness = 30m</code>). Future versions may expose this via Helm; today it requires a binary build.</p>
 <h2 id="rbac">RBAC<a class="headerlink" href="#rbac" title="Permanent link">&para;</a></h2>
 <p>The controller's ClusterRole grants <code>get;list;watch;create;update;patch;delete</code> on <code>workloadrecommendations</code> (and its <code>/status</code> subresource). The webhook reuses the controller ServiceAccount today, so the same rules cover read access. The dashboard ClusterRole (when enabled) has read-only access on the resource so operators can browse it from the UI.</p>
+<h3 id="why-the-grant-is-cluster-wide">Why the grant is cluster-wide<a class="headerlink" href="#why-the-grant-is-cluster-wide" title="Permanent link">&para;</a></h3>
+<p><code>WorkloadRecommendation</code> is a namespaced resource and a Policy can target every namespace in the cluster (<code>spec.selector.namespaces: []</code> matches all). The controller therefore needs cluster-wide write access to create/update/delete WLRs anywhere a matched workload lives. The webhook needs cluster-wide reads to look up a cached entry for any pod that lands at admission, regardless of namespace.</p>
+<p>Kubernetes RBAC has no native concept of "label-scoped reads" — a <code>Role</code> is bound to a single namespace, and a <code>ClusterRole</code> cannot be filtered by labels at evaluation time. So even though every WLR carries the <code>k8s.sustain.io/policy: &lt;name&gt;</code> label (used to scope the controller's <em>list</em> calls server-side), the <strong>RBAC grant itself</strong> must remain unconstrained.</p>
+<h3 id="hardening-options">Hardening options<a class="headerlink" href="#hardening-options" title="Permanent link">&para;</a></h3>
+<p>The grant is unavoidable, but you can layer additional controls:</p>
+<ul>
+<li><strong>Restrict the namespaces a Policy can target.</strong> Operators provision the Policy CRDs; users don't. Treat Policy authorship as an admin operation in your manifests pipeline rather than letting any namespace owner author one.</li>
+<li><strong>NetworkPolicy on the webhook.</strong> Limit ingress to the apiserver Service IP only — prevents anyone in the cluster from invoking <code>/mutate</code> directly.</li>
+<li><strong>Audit policy.</strong> Log every k8s API access from the controller / webhook ServiceAccount for an audit trail of WLR mutations. Useful when investigating whether a stale recommendation came from a legitimate reconcile or out-of-band tampering.</li>
+<li><strong>Disable the dashboard</strong> in production deployments where its read-only WLR access isn't needed (<code>dashboard.enabled: false</code>). The dashboard runs under its own narrower ClusterRole, but removing it eliminates a class of attack surface entirely.</li>
+</ul>
+<p>If your environment requires cell-level isolation between namespaces, the cleanest answer today is <strong>one Helm release per cell</strong> with <code>selector.namespaces</code> set so each release manages only its own slice, and <code>installCRDs=false</code> on all but one. The CRD is shared cluster-wide, but each controller's WLR mutations stay within its declared namespaces.</p>
 
 
 

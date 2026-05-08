@@ -663,6 +663,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#choosing-a-percentile" class="md-nav__link">
+    <span class="md-ellipsis">
+      Choosing a percentile
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#where-each-knob-lives" class="md-nav__link">
     <span class="md-ellipsis">
       Where each knob lives
@@ -1417,6 +1426,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#choosing-a-percentile" class="md-nav__link">
+    <span class="md-ellipsis">
+      Choosing a percentile
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#where-each-knob-lives" class="md-nav__link">
     <span class="md-ellipsis">
       Where each knob lives
@@ -1458,7 +1476,7 @@ requests apply on next pod creation via webhook injection.</p>
 <h2 id="stages">Stages<a class="headerlink" href="#stages" title="Permanent link">&para;</a></h2>
 <p>The recommender runs each container through the following stages, in order:</p>
 <ol>
-<li><strong>History gate.</strong> Probe <code>count_over_time(k8s_sustain:container_cpu_usage_by_workload:rate5m[window:1m])</code>. If fewer than 12 samples are available, the workload is skipped with <code>k8s_sustain_recommendation_skipped_total{reason="insufficient_history"}</code>. This avoids producing a near-zero percentile that would floor to the hard minimum and trigger a recycle on the next reconcile.</li>
+<li><strong>History gate.</strong> Probe <code>count_over_time(k8s_sustain:container_cpu_usage_by_workload:rate1m[window:1m])</code>. If fewer than 12 samples are available, the workload is skipped with <code>k8s_sustain_recommendation_skipped_total{reason="insufficient_history"}</code>. This avoids producing a near-zero percentile that would floor to the hard minimum and trigger a recycle on the next reconcile.</li>
 <li><strong>Query.</strong> Read the percentile-of-usage from a recording rule over the configured window (<code>spec.rightSizing.resourcesConfigs.&lt;cpu|memory&gt;.window</code>). The signal is workload-level (sum across replicas) divided by the median replica count over the window, with a per-pod percentile floor to absorb load imbalance.</li>
 <li><strong>OOM floor (memory only).</strong> When the workload OOM'd in the last 24 h (<code>k8s_sustain:workload_oom_24h &gt; 0</code>), the memory recommendation is floored at <code>max(peak_working_set_24h, current_request)</code> before headroom. This prevents the recommendation from shrinking memory while the workload is unhealthy. The metric <code>k8s_sustain_oom_floor_applied_total{container}</code> increments when this floor wins.</li>
 <li><strong>Headroom.</strong> Multiply by <code>(1 + headroom/100)</code> to add a safety buffer.</li>
@@ -1469,7 +1487,7 @@ requests apply on next pod creation via webhook injection.</p>
 </ol>
 <h2 id="diagram">Diagram<a class="headerlink" href="#diagram" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>flowchart LR
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    G[history gate&lt;br/&gt;≥12 rate5m samples] --&gt; Q[Prometheus query&lt;br/&gt;percentile over window]
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    G[history gate&lt;br/&gt;≥12 rate samples] --&gt; Q[Prometheus query&lt;br/&gt;percentile over window]
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    Q --&gt; F[OOM floor&lt;br/&gt;memory only]
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    F --&gt; H[+ headroom]
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    H --&gt; C[clamp min/max]
@@ -1500,6 +1518,50 @@ requests apply on next pod creation via webhook injection.</p>
 <a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">          </span><span class="nt">keepLimitRequestRatio</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 </code></pre></div>
 <p>Per-pod CPU p95 over 168h: <code>100m</code>. Headroom 10% → <code>110m</code>. Within clamp <code>[50m, 4000m]</code> → <code>110m</code>. HPA targets CPU at 70% utilization → overhead factor <code>(100 / 70) × 1.10 ≈ 1.57</code> → <code>173m</code>. No <code>replicaBudgetAnchor</code> → unchanged. Existing limit was 2× request → new limit <code>346m</code>.</p>
+<h2 id="choosing-a-percentile">Choosing a percentile<a class="headerlink" href="#choosing-a-percentile" title="Permanent link">&para;</a></h2>
+<p>The percentile knob (<code>spec.rightSizing.resourcesConfigs.&lt;cpu|memory&gt;.requests.percentile</code>) maps directly to a <code>quantile_over_time(p, …)</code> against the recording rule. Pick by intent, not by gut feel:</p>
+<table>
+<thead>
+<tr>
+<th>Percentile</th>
+<th>Use when…</th>
+<th>Risk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>p50</strong></td>
+<td>Cost-optimised batch workloads where short-lived saturation is acceptable.</td>
+<td>Half of all samples exceed the request → frequent CPU throttling, OOMs.</td>
+</tr>
+<tr>
+<td><strong>p90</strong></td>
+<td>Stable services with a known traffic profile and a small tail.</td>
+<td>The top 10% of samples sit above the request — fine if your SLO allows it.</td>
+</tr>
+<tr>
+<td><strong>p95</strong></td>
+<td>Default for most online services. Trades the long tail for ~5% of moments above request.</td>
+<td>Tail-heavy workloads (cron-driven spikes) still get throttled at peak.</td>
+</tr>
+<tr>
+<td><strong>p99</strong></td>
+<td>Latency-sensitive services where throttling is a customer-visible regression.</td>
+<td>Provisions for the rare bad minute — usually still 20–40% under p100.</td>
+</tr>
+<tr>
+<td><strong>p100</strong></td>
+<td>Memory on workloads that cannot tolerate even a single OOM (databases, queue brokers).</td>
+<td>Pays for the worst observed sample over the window — most expensive choice.</td>
+</tr>
+</tbody>
+</table>
+<p>Two practical patterns:</p>
+<ul>
+<li><strong>CPU p95 + Memory p100</strong> — sane default for production services. CPU is throttle-able, so the tail is acceptable; memory isn't, so you pay for the peak.</li>
+<li><strong>Lower percentile + higher headroom</strong> — <code>percentile: 90, headroom: 30</code> produces a smoother request than <code>percentile: 99, headroom: 0</code> even though both target the same effective request, because the headroom gives the kernel room to absorb spikes that no quantile sees. Prefer this when your usage pattern has rare large spikes that aren't representative of steady-state load.</li>
+</ul>
+<p>Window length matters too: a 7-day window dampens daily peaks; a 24h window catches them. The OOM floor (step 3) protects you regardless of percentile when memory pressure becomes terminal.</p>
 <h2 id="where-each-knob-lives">Where each knob lives<a class="headerlink" href="#where-each-knob-lives" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Percentile, headroom, clamps: <a href="../../reference/policy/#cpurequests-memoryrequests"><code>spec.rightSizing.resourcesConfigs</code></a>.</li>

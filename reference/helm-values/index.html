@@ -1779,8 +1779,8 @@
 </tr>
 <tr>
 <td><code>dashboard.corsAllowedOrigins</code></td>
-<td><code>["*"]</code></td>
-<td>Allowed CORS origins</td>
+<td><code>[]</code></td>
+<td>Allowed CORS origins. Empty = same-origin only (the safe default). Set to <code>["https://your-grafana"]</code> to embed the dashboard cross-origin, or <code>["*"]</code> to allow all (not recommended).</td>
 </tr>
 <tr>
 <td><code>dashboard.service.type</code></td>
@@ -1866,17 +1866,47 @@
 <tr>
 <td><code>controller.serviceMonitor.enabled</code></td>
 <td><code>false</code></td>
-<td>Create a Prometheus Operator <code>ServiceMonitor</code> and <code>PrometheusRule</code></td>
+<td>Create a Prometheus Operator <code>ServiceMonitor</code> and <code>PrometheusRule</code> for the controller</td>
 </tr>
 <tr>
 <td><code>controller.serviceMonitor.interval</code></td>
 <td><code>30s</code></td>
-<td>Scrape interval</td>
+<td>Scrape interval (controller)</td>
 </tr>
 <tr>
 <td><code>controller.serviceMonitor.scrapeTimeout</code></td>
 <td><code>10s</code></td>
-<td>Scrape timeout</td>
+<td>Scrape timeout (controller)</td>
+</tr>
+<tr>
+<td><code>controller.serviceMonitor.additionalLabels</code></td>
+<td><code>{}</code></td>
+<td>Extra labels added to the controller <code>ServiceMonitor</code>. Use to match a specific Prometheus operator's <code>serviceMonitorSelector</code> (e.g. <code>{release: kube-prometheus-stack}</code>).</td>
+</tr>
+<tr>
+<td><code>webhook.serviceMonitor.enabled</code></td>
+<td><code>false</code></td>
+<td>Create a Prometheus Operator <code>ServiceMonitor</code> for the webhook (cert-expiry gauge etc.)</td>
+</tr>
+<tr>
+<td><code>webhook.serviceMonitor.interval</code></td>
+<td><code>30s</code></td>
+<td>Scrape interval (webhook)</td>
+</tr>
+<tr>
+<td><code>webhook.serviceMonitor.scrapeTimeout</code></td>
+<td><code>10s</code></td>
+<td>Scrape timeout (webhook)</td>
+</tr>
+<tr>
+<td><code>webhook.serviceMonitor.additionalLabels</code></td>
+<td><code>{}</code></td>
+<td>Extra labels added to the webhook <code>ServiceMonitor</code>. Same purpose as the controller variant.</td>
+</tr>
+<tr>
+<td><code>prometheusRule.additionalLabels</code></td>
+<td><code>{}</code></td>
+<td>Extra labels added to the <code>PrometheusRule</code>. Use to match a specific Prometheus operator's <code>ruleSelector</code> in clusters with multiple Prometheus instances.</td>
 </tr>
 </tbody>
 </table>
