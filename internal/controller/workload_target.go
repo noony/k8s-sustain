@@ -5,6 +5,7 @@ import (
 
 	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -13,7 +14,8 @@ import (
 )
 
 // workloadTarget is the unit of work for reconciliation. It represents a single
-// workload (Deployment, StatefulSet, DaemonSet, Rollout) that matches a Policy.
+// workload (Deployment, StatefulSet, DaemonSet, Rollout, CronJob) that matches
+// a Policy.
 type workloadTarget struct {
 	Kind           string
 	Name           string
@@ -97,6 +99,23 @@ func rolloutToTarget(r *rolloutsv1alpha1.Rollout) workloadTarget {
 		InitContainers: r.Spec.Template.Spec.InitContainers,
 		Selector:       r.Spec.Selector,
 		Object:         r,
+	}
+}
+
+// cronJobToTarget builds a workloadTarget from a CronJob. The opt-in policy
+// annotation lives on the JobTemplate's pod template, matching the convention
+// used for other kinds. Selector is left nil — CronJob reconciliation patches
+// the JobTemplate directly and never lists/recycles pods.
+func cronJobToTarget(c *batchv1.CronJob) workloadTarget {
+	return workloadTarget{
+		Kind:           "CronJob",
+		Name:           c.Name,
+		Namespace:      c.Namespace,
+		PolicyName:     c.Spec.JobTemplate.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
+		Containers:     c.Spec.JobTemplate.Spec.Template.Spec.Containers,
+		InitContainers: c.Spec.JobTemplate.Spec.Template.Spec.InitContainers,
+		Selector:       nil,
+		Object:         c,
 	}
 }
 

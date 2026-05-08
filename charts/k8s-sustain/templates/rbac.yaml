@@ -38,10 +38,14 @@ rules:
   - apiGroups: [argoproj.io]
     resources: [rollouts]
     verbs: [get, list, watch]
-  # Workloads — batch (webhook handles CronJob pods at creation time)
+  # Workloads — batch. Read all; patch CronJobs in Ongoing mode (jobTemplate
+  # right-sizing); webhook also resolves CronJob owners from Job pods.
   - apiGroups: [batch]
-    resources: [jobs, cronjobs]
+    resources: [jobs]
     verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [get, list, watch, patch]
   # Namespaces and Pods (in-place updates)
   - apiGroups: [""]
     resources: [namespaces]

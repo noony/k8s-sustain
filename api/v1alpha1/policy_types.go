@@ -72,10 +72,10 @@ type ResourceLimitsConfig struct {
 // ResourceConfig holds the recommendation configuration for one resource dimension (CPU or memory).
 type ResourceConfig struct {
 	// Window is the historical observation window used for recommendation (e.g. "96h").
-	// Must be a Prometheus duration: integer followed by one of ms, s, m, h, d, w, y
+	// Must be a Prometheus duration: integer followed by one of m, h, d, w, y
 	// (compounds like "1h30m" are also allowed).
 	// +optional
-	// +kubebuilder:validation:Pattern=`^([0-9]+(ms|s|m|h|d|w|y))+$`
+	// +kubebuilder:validation:Pattern=`^([0-9]+(m|h|d|w|y))+$`
 	Window string `json:"window,omitempty"`
 	// Requests configures how resource requests are computed.
 	// +optional

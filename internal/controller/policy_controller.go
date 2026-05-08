@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +35,7 @@ import (
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=workloadrecommendations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=workloadrecommendations/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets;daemonsets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=pods/resize,verbs=patch
@@ -247,7 +249,8 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		"deployment", types.Deployment,
 		"statefulset", types.StatefulSet,
 		"daemonset", types.DaemonSet,
-		"argoRollout", types.ArgoRollout)
+		"argoRollout", types.ArgoRollout,
+		"cronjob", types.CronJob)
 
 	if types.Deployment != nil && *types.Deployment == sustainv1alpha1.UpdateModeOngoing {
 		t, err := r.listDeploymentTargets(ctx, namespaces)
@@ -282,6 +285,15 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 			return nil, fmt.Errorf("listing rollouts: %w", err)
 		}
 		logger.V(1).Info("listed argo rollouts", "count", len(t))
+		targets = append(targets, t...)
+	}
+
+	if types.CronJob != nil && *types.CronJob == sustainv1alpha1.UpdateModeOngoing {
+		t, err := r.listCronJobTargets(ctx, namespaces)
+		if err != nil {
+			return nil, fmt.Errorf("listing cronjobs: %w", err)
+		}
+		logger.V(1).Info("listed cronjobs", "count", len(t))
 		targets = append(targets, t...)
 	}
 
@@ -401,6 +413,35 @@ func (r *PolicyReconciler) listRolloutTargets(ctx context.Context, namespaces []
 	return targets, nil
 }
 
+// listCronJobTargets lists CronJobs, scoped to namespaces if provided.
+// CronJob targets carry the JobTemplate's pod spec; reconcile patches the
+// JobTemplate in place rather than recycling pods (jobs run to completion).
+func (r *PolicyReconciler) listCronJobTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+	var targets []workloadTarget
+
+	if len(namespaces) > 0 {
+		for _, ns := range namespaces {
+			var list batchv1.CronJobList
+			if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
+				return nil, err
+			}
+			for i := range list.Items {
+				targets = append(targets, cronJobToTarget(&list.Items[i]))
+			}
+		}
+		return targets, nil
+	}
+
+	var list batchv1.CronJobList
+	if err := r.List(ctx, &list); err != nil {
+		return nil, err
+	}
+	for i := range list.Items {
+		targets = append(targets, cronJobToTarget(&list.Items[i]))
+	}
+	return targets, nil
+}
+
 // reconcileWorkload processes a single workload target: queries Prometheus,
 // computes recommendations, recycles pods, emits events, and tracks retries.
 func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustainv1alpha1.Policy, t *workloadTarget) error {
@@ -428,7 +469,11 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	EmitAutoscalerPresent(t.Namespace, t.Kind, t.Name, string(autoInfo.Kind))
 	EmitAutoscalerTargetsConfigured(t.Namespace, t.Kind, t.Name, string(autoInfo.Kind), autoInfo.ConfiguredTargets)
 
-	recs, err := r.buildRecommendations(ctx, policy, t.Namespace, t.Kind, t.Name, containers, autoInfo)
+	workloadCreated := time.Time{}
+	if t.Object != nil {
+		workloadCreated = t.Object.GetCreationTimestamp().Time
+	}
+	recs, err := r.buildRecommendations(ctx, policy, t.Namespace, t.Kind, t.Name, containers, autoInfo, workloadCreated)
 	if err != nil {
 		if !isTransientError(err) {
 			r.retries.remove(t.key())
@@ -469,6 +514,35 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		logger.Info("recommend-only: computed recommendations", "recommendations", recs)
 		r.retries.recordSuccess(t.key())
 		EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
+		return nil
+	}
+
+	// CronJob: patch JobTemplate in place, never recycle pods. Pods are
+	// short-lived job runs that should complete on their existing resources;
+	// new runs spawn from the patched template.
+	if t.Kind == "CronJob" {
+		if err := r.patchCronJobTemplate(ctx, t, recs); err != nil {
+			if !isTransientError(err) {
+				r.retries.remove(t.key())
+				EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
+				return nil
+			}
+			r.retries.recordFailure(t.key())
+			state := r.retries.getState(t.key())
+			r.recorder.Eventf(t.Object, corev1.EventTypeWarning, "ReconciliationRetryScheduled",
+				"CronJob template patch failed: %v. Retry attempt %d at %s", err, state.attempts, state.nextRetry.Format(time.RFC3339))
+			logger.Error(err, "cronjob template patch failed, retry scheduled", "attempt", state.attempts)
+			EmitRetryState(t.Namespace, t.Kind, t.Name, "patch", true)
+			IncrementRetryAttempt(t.Namespace, t.Kind, t.Name)
+			return err
+		}
+		r.retries.recordSuccess(t.key())
+		EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
+		changed := changedContainers(containers, recs)
+		if len(changed) > 0 {
+			r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "JobTemplatePatched",
+				"updated resources for containers: %v", changed)
+		}
 		return nil
 	}
 
@@ -577,12 +651,21 @@ func limitEqual(rec *resource.Quantity, remove bool, current *resource.Quantity)
 // A per-pod p95 floor is applied to protect against load imbalance.
 // autoInfo provides the autoscaler MinReplicas fallback used when Prometheus has
 // no replica data (KEDA scale-to-zero, missing samples).
+// minWorkloadAge gates the first recommendation on a workload's age. The CPU
+// rate rule needs a few minutes after container start to stabilize;
+// recommending before that produces near-zero percentile values that get
+// floored to the hard minimum and trigger an immediate recycle on the next
+// reconcile. 10 minutes leaves headroom past the longest fallback window
+// (5m) used by k8s_sustain:container_cpu_usage:rate1m.
+const minWorkloadAge = 10 * time.Minute
+
 func (r *PolicyReconciler) buildRecommendations(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
 	ns, ownerKind, ownerName string,
 	containers []corev1.Container,
 	autoInfo autoscaler.Info,
+	workloadCreated time.Time,
 ) (map[string]workload.ContainerRecommendation, error) {
 	rsCfg := policy.Spec.RightSizing.ResourcesConfigs
 
@@ -606,18 +689,18 @@ func (r *PolicyReconciler) buildRecommendations(
 	}
 	recentOOM := oomSignal.OOMCount > 0
 
-	// Skip recommendation when the workload has too little history. Without
-	// this, young containers produce ~0 percentile values that get floored to
-	// the hard minimum and trigger an immediate recycle on the next reconcile.
-	// EXCEPTION: when a recent OOM is observed, bypass the gate — a
-	// crash-looping container will never accumulate enough samples, but the
-	// OOM floor below can still produce a correct memory recommendation.
-	if !recentOOM {
-		if hasHistory, herr := r.PrometheusClient.HasSufficientHistory(ctx, ns, ownerKind, ownerName, cpuWindow); herr != nil {
-			logger.V(1).Info("history probe failed; proceeding", "err", herr)
-		} else if !hasHistory {
-			recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "insufficient_history").Inc()
-			logger.Info("skipping recommendation: insufficient history", "window", cpuWindow)
+	// Skip recommendation when the workload itself is too young to have
+	// produced stable rate samples. This is a workload-age question, not a
+	// sample-count question — the latter punishes workloads with intrinsically
+	// sparse signal (e.g. a daily CronJob), since percentile queries handle
+	// absent samples correctly but a count-based gate sees the same sparsity
+	// as "no history". EXCEPTION: a recent OOM bypasses the gate so a
+	// crash-looping container can still get a memory recommendation from the
+	// OOM peak below.
+	if !recentOOM && !workloadCreated.IsZero() {
+		if age := time.Since(workloadCreated); age < minWorkloadAge {
+			recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "workload_too_young").Inc()
+			logger.Info("skipping recommendation: workload too young", "age", age, "minAge", minWorkloadAge)
 			return map[string]workload.ContainerRecommendation{}, nil
 		}
 	}

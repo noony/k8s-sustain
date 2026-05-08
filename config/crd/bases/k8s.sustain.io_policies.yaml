@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.20.1
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: policies.k8s.sustain.io
 spec:
   group: k8s.sustain.io
@@ -159,9 +159,9 @@ spec:
                           window:
                             description: |-
                               Window is the historical observation window used for recommendation (e.g. "96h").
-                              Must be a Prometheus duration: integer followed by one of ms, s, m, h, d, w, y
+                              Must be a Prometheus duration: integer followed by one of m, h, d, w, y
                               (compounds like "1h30m" are also allowed).
-                            pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                            pattern: ^([0-9]+(m|h|d|w|y))+$
                             type: string
                         type: object
                       memory:
@@ -250,9 +250,9 @@ spec:
                           window:
                             description: |-
                               Window is the historical observation window used for recommendation (e.g. "96h").
-                              Must be a Prometheus duration: integer followed by one of ms, s, m, h, d, w, y
+                              Must be a Prometheus duration: integer followed by one of m, h, d, w, y
                               (compounds like "1h30m" are also allowed).
-                            pattern: ^([0-9]+(ms|s|m|h|d|w|y))+$
+                            pattern: ^([0-9]+(m|h|d|w|y))+$
                             type: string
                         type: object
                     type: object
@@ -274,93 +274,61 @@ spec:
                           modes.
                         properties:
                           argoRollout:
-                            allOf:
-                            - enum:
-                              - OnCreate
-                              - Ongoing
-                            - enum:
-                              - OnCreate
-                              - Ongoing
                             description: UpdateMode defines how resources are updated
                               on a given workload type.
+                            enum:
+                            - OnCreate
+                            - Ongoing
                             type: string
                           cronJob:
-                            allOf:
-                            - enum:
-                              - OnCreate
-                              - Ongoing
-                            - enum:
-                              - OnCreate
-                              - Ongoing
                             description: |-
                               CronJob patches the job template so future runs use updated resources.
                               OnCreate injects resources at pod admission for each spawned job pod.
+                            enum:
+                            - OnCreate
+                            - Ongoing
                             type: string
                           daemonSet:
-                            allOf:
-                            - enum:
-                              - OnCreate
-                              - Ongoing
-                            - enum:
-                              - OnCreate
-                              - Ongoing
                             description: UpdateMode defines how resources are updated
                               on a given workload type.
+                            enum:
+                            - OnCreate
+                            - Ongoing
                             type: string
                           deployment:
-                            allOf:
-                            - enum:
-                              - OnCreate
-                              - Ongoing
-                            - enum:
-                              - OnCreate
-                              - Ongoing
                             description: UpdateMode defines how resources are updated
                               on a given workload type.
+                            enum:
+                            - OnCreate
+                            - Ongoing
                             type: string
                           deploymentConfig:
-                            allOf:
-                            - enum:
-                              - OnCreate
-                              - Ongoing
-                            - enum:
-                              - OnCreate
-                              - Ongoing
                             description: UpdateMode defines how resources are updated
                               on a given workload type.
+                            enum:
+                            - OnCreate
+                            - Ongoing
                             type: string
                           family:
-                            allOf:
-                            - enum:
-                              - OnCreate
-                              - Ongoing
-                            - enum:
-                              - OnCreate
-                              - Ongoing
                             description: UpdateMode defines how resources are updated
                               on a given workload type.
+                            enum:
+                            - OnCreate
+                            - Ongoing
                             type: string
                           job:
-                            allOf:
-                            - enum:
-                              - OnCreate
-                              - Ongoing
-                            - enum:
-                              - OnCreate
-                              - Ongoing
                             description: UpdateMode defines how resources are updated
                               on a given workload type.
+                            enum:
+                            - OnCreate
+                            - Ongoing
                             type: string
                           statefulSet:
-                            allOf:
-                            - enum:
-                              - OnCreate
-                              - Ongoing
-                            - enum:
-                              - OnCreate
-                              - Ongoing
                             description: UpdateMode defines how resources are updated
                               on a given workload type.
+                            enum:
+                            - OnCreate
+                            - Ongoing
                             type: string
                         type: object
                     type: object

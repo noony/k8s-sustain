@@ -28,6 +28,8 @@ If you bring your own Prometheus, make sure **kube-state-metrics** and **cAdviso
 - `container_cpu_usage_seconds_total` — CPU usage per container
 - `container_memory_working_set_bytes` — memory usage per container
 
+The recording rules filter cAdvisor series by `node!=""`, so your scrape config must inject a `node` label onto cAdvisor metrics (e.g. `relabel_configs: source_labels: [__meta_kubernetes_node_name], target_label: node`). kube-prometheus-stack does this by default; the bundled Prometheus subchart is configured to do it as well.
+
 ## TLS certificate (webhook only)
 
 The admission webhook requires a valid TLS certificate trusted by the Kubernetes API server. Two options are supported:

@@ -187,7 +187,7 @@ The Docker build automatically handles the frontend build in a separate stage.
 
 This message appears when Prometheus returns no time-series data for the workload. Common causes:
 
-- **Recording rules not loaded** — k8s-sustain requires recording rules (`k8s_sustain:pod_workload`, `k8s_sustain:container_cpu_usage_by_workload:rate5m`, etc.). Verify they exist by querying `k8s_sustain:pod_workload` in Prometheus. If using the bundled Prometheus subchart, they are embedded automatically. If using an external Prometheus with the Prometheus Operator, set `controller.serviceMonitor.enabled=true` to deploy `PrometheusRule` resources.
+- **Recording rules not loaded** — k8s-sustain requires recording rules (`k8s_sustain:pod_workload`, `k8s_sustain:container_cpu_usage_by_workload:rate1m`, etc.). Verify they exist by querying `k8s_sustain:pod_workload` in Prometheus. If using the bundled Prometheus subchart, they are embedded automatically. If using an external Prometheus with the Prometheus Operator, set `controller.serviceMonitor.enabled=true` to deploy `PrometheusRule` resources.
 - **Duplicate kube-state-metrics instances** — If multiple kube-state-metrics are scraped, the workload mapping rules can fail with "many-to-many matching not allowed". Either remove the duplicate kube-state-metrics or upgrade the chart (the recording rules deduplicate series automatically since v0.3).
 - **Missing upstream metrics** — The recording rules depend on `kube_pod_owner`, `kube_replicaset_owner`, `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`, and `kube_pod_container_resource_requests` (for historical request lines). Ensure kube-state-metrics and cAdvisor metrics are scraped.
 

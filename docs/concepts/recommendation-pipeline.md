@@ -19,7 +19,7 @@ requests apply on next pod creation via webhook injection.
 
 The recommender runs each container through the following stages, in order:
 
-1. **History gate.** Probe `count_over_time(k8s_sustain:container_cpu_usage_by_workload:rate5m[window:1m])`. If fewer than 12 samples are available, the workload is skipped with `k8s_sustain_recommendation_skipped_total{reason="insufficient_history"}`. This avoids producing a near-zero percentile that would floor to the hard minimum and trigger a recycle on the next reconcile.
+1. **History gate.** Probe `count_over_time(k8s_sustain:container_cpu_usage_by_workload:rate1m[window:1m])`. If fewer than 12 samples are available, the workload is skipped with `k8s_sustain_recommendation_skipped_total{reason="insufficient_history"}`. This avoids producing a near-zero percentile that would floor to the hard minimum and trigger a recycle on the next reconcile.
 2. **Query.** Read the percentile-of-usage from a recording rule over the configured window (`spec.rightSizing.resourcesConfigs.<cpu|memory>.window`). The signal is workload-level (sum across replicas) divided by the median replica count over the window, with a per-pod percentile floor to absorb load imbalance.
 3. **OOM floor (memory only).** When the workload OOM'd in the last 24 h (`k8s_sustain:workload_oom_24h > 0`), the memory recommendation is floored at `max(peak_working_set_24h, current_request)` before headroom. This prevents the recommendation from shrinking memory while the workload is unhealthy. The metric `k8s_sustain_oom_floor_applied_total{container}` increments when this floor wins.
 4. **Headroom.** Multiply by `(1 + headroom/100)` to add a safety buffer.
@@ -32,7 +32,7 @@ The recommender runs each container through the following stages, in order:
 
 ```mermaid
 flowchart LR
-    G[history gate<br/>≥12 rate5m samples] --> Q[Prometheus query<br/>percentile over window]
+    G[history gate<br/>≥12 rate samples] --> Q[Prometheus query<br/>percentile over window]
     Q --> F[OOM floor<br/>memory only]
     F --> H[+ headroom]
     H --> C[clamp min/max]

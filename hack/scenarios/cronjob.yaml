@@ -1,0 +1,125 @@
+# scenario: cronjob
+# expected: A CronJob that runs every minute is right-sized via the Ongoing path.
+# The controller queries Prometheus for owner_kind=CronJob, computes a
+# recommendation, and patches the CronJob's jobTemplate.spec.template.spec.containers
+# in place. In-flight job pods finish on their existing spec; new runs (next
+# minute) spawn with the updated requests. No pod recycling.
+#
+# Initial requests: 500m / 256Mi. Per-run usage is ~200m / 100Mi for ~90s.
+# After WINDOW + reconcile, jobTemplate cpu drops to ~220m, memory to ~110Mi.
+#
+# Note: runtime is 90s (not 30s) so cAdvisor — which scrapes every ~30s —
+# always captures at least 2-3 samples per run. With shorter runtimes
+# rate(counter[5m]) can return empty for some runs. Real production cronjobs
+# typically run minutes/hours, so this is only an issue for tiny test loads.
+#
+# Verification:
+#   kubectl get cronjob -n scenario-cronjob job -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources}' | jq
+#   kubectl get wlrec -n scenario-cronjob cronjob-job -o yaml
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scenario-cronjob
+  labels:
+    k8s-sustain.io/scenario: cronjob
+---
+apiVersion: k8s.sustain.io/v1alpha1
+kind: Policy
+metadata:
+  name: scenario-cronjob
+spec:
+  selector:
+    namespaces: [scenario-cronjob]
+  rightSizing:
+    update:
+      types:
+        cronJob: Ongoing
+    resourcesConfigs:
+      cpu:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 10
+        limits:
+          noLimit: true
+      memory:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 15
+        limits:
+          requestsLimitsRatio: 1.5
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen
+  namespace: scenario-cronjob
+data:
+  loadgen.py: |
+    import os, time
+    duty = float(os.environ.get('LOAD_DUTY', '0.2'))
+    mem_mb = int(os.environ.get('LOAD_MEM_MB', '50'))
+    runtime_s = float(os.environ.get('RUN_SECONDS', '30'))
+    buf = bytearray(mem_mb * 1024 * 1024)
+    for i in range(0, len(buf), 4096):
+        buf[i] = 1
+    deadline = time.monotonic() + runtime_s
+    period = 0.1
+    on = period * duty
+    off = period - on
+    while time.monotonic() < deadline:
+        s = time.monotonic()
+        while time.monotonic() - s < on:
+            pass
+        if off > 0:
+            time.sleep(off)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: job
+  namespace: scenario-cronjob
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          # Annotation lives on the JobTemplate's pod template — same
+          # convention as Deployment/StatefulSet/etc.
+          annotations:
+            k8s.sustain.io/policy: scenario-cronjob
+          labels:
+            app: stress
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: stress
+              image: python:3.12-alpine
+              command: ["python3", "/loadgen/loadgen.py"]
+              env:
+                - name: LOAD_DUTY
+                  value: "0.20"   # ~200m of one core
+                - name: LOAD_MEM_MB
+                  value: "100"
+                - name: RUN_SECONDS
+                  value: "30"
+              volumeMounts:
+                - name: loadgen
+                  mountPath: /loadgen
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 256Mi
+                limits:
+                  memory: 256Mi
+          volumes:
+            - name: loadgen
+              configMap:
+                name: loadgen

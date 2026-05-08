@@ -10,7 +10,7 @@
 #                         already been changed by the controller).
 set -euo pipefail
 
-SCENARIOS=(steady overprovisioned underprovisioned stepped hpa hpa-coordinated hpa-replica-anchor)
+SCENARIOS=(steady overprovisioned underprovisioned stepped hpa hpa-coordinated hpa-replica-anchor cronjob)
 DASHBOARD_SVC=k8s-sustain-dashboard
 DASHBOARD_NS=k8s-sustain
 DASHBOARD_PORT=8090
@@ -37,6 +37,29 @@ printf '%-28s %-22s %-9s %-9s %-9s %-9s %-8s\n' \
 for name in "${SCENARIOS[@]}"; do
   ns="scenario-${name}"
   if ! kubectl get ns "${ns}" >/dev/null 2>&1; then continue; fi
+
+  # CronJob scenario reads from the CronJob's jobTemplate (the controller patches
+  # spec, not running pods); other scenarios read from a Deployment/stress pod.
+  if [ "${name}" = "cronjob" ]; then
+    cj=job
+    cpu_req=$(kubectl get cronjob -n "${ns}" "${cj}" \
+      -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || echo '?')
+    mem_req=$(kubectl get cronjob -n "${ns}" "${cj}" \
+      -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.memory}' 2>/dev/null || echo '?')
+    rec_json=$(curl -fsS "${BASE}/api/workloads/${ns}/CronJob/${cj}/recommendations" 2>/dev/null || echo '{}')
+    cpu_rec=$(echo "${rec_json}" | grep -o '"cpuRequest":"[^"]*"' | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
+    mem_rec=$(echo "${rec_json}" | grep -o '"memoryRequest":"[^"]*"' | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
+    cpu_rec=${cpu_rec:-?}
+    mem_rec=${mem_rec:-?}
+    orig=$(grep -A2 'requests:' "$(dirname "$0")/${name}.yaml" | awk '/cpu:/ {print $2; exit}')
+    patched=no
+    if [ "${cpu_req}" != "${orig}" ] && [ -n "${cpu_req}" ]; then
+      patched=yes
+    fi
+    printf '%-28s %-22s %-9s %-9s %-9s %-9s %-8s\n' \
+      "${ns}" "${cj} (cronjob)" "${cpu_req:-?}" "${cpu_rec}" "${mem_req:-?}" "${mem_rec}" "${patched}"
+    continue
+  fi
 
   pods=$(kubectl get pod -n "${ns}" -l app=stress \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)

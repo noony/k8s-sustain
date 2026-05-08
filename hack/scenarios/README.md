@@ -20,6 +20,7 @@ for the operator-facing walkthrough.
 | `hpa-replica-anchor` | Pre-scaled to 6 replicas with `replicaBudgetAnchor: 0.10` — replica-budget correction adds an extra CPU bump (factor clamped at 2.0) to encourage consolidation. |
 | `init-containers`    | Pod with a regular container, a classic init container, and a sidecar (restartable) init container. Validates that all three get recommendations, the sidecar drives recycle on drift, and the classic init container does not. |
 | `oom-kill`           | Container quietly holds 30Mi for 60s, then bursts to 120Mi against a 96Mi limit → repeats `OOMKilled`. Validates the OOM-aware memory floor: recommendation stays ≥ current request even though the percentile alone would suggest shrinking. Inspect `k8s_sustain_oom_floor_applied_total{owner_name="stress"}` — it should increment. |
+| `cronjob`            | CronJob runs every minute (`* * * * *`) for ~30s with steady ~200m / 100Mi load. Validates the `Ongoing` path for CronJob: controller patches `spec.jobTemplate.spec.template.spec.containers[*].resources` directly — no pod recycling. After WINDOW + reconcile, requests drop from 500m / 256Mi toward ~220m / ~110Mi. Verify with `kubectl get cronjob -n scenario-cronjob job -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources}'`. |
 
 ## Running a scenario
 

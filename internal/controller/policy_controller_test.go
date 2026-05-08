@@ -12,6 +12,7 @@ import (
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -185,6 +186,9 @@ func makeReconciler(t *testing.T, objs ...runtime.Object) *PolicyReconciler {
 	if err := appsv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme apps: %v", err)
 	}
+	if err := batchv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme batch: %v", err)
+	}
 	if err := rolloutsv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme rollouts: %v", err)
 	}
@@ -218,6 +222,25 @@ func annotatedDeployment(ns, name, policy string) *appsv1.Deployment {
 					Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: policy},
 				},
 				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+			},
+		},
+	}
+}
+
+func annotatedCronJob(ns, name, policy string) *batchv1.CronJob {
+	return &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Spec: batchv1.CronJobSpec{
+			Schedule: "* * * * *",
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: policy},
+						},
+						Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+					},
+				},
 			},
 		},
 	}
@@ -302,6 +325,24 @@ func TestListStatefulSetTargets(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Kind != "StatefulSet" {
 		t.Errorf("unexpected: %+v", got)
+	}
+}
+
+func TestListCronJobTargets(t *testing.T) {
+	cj := annotatedCronJob("default", "nightly", "p")
+	r := makeReconciler(t, cj)
+	got, err := r.listCronJobTargets(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != "CronJob" || got[0].Name != "nightly" {
+		t.Errorf("unexpected: %+v", got)
+	}
+	if got[0].PolicyName != "p" {
+		t.Errorf("policy annotation not propagated from JobTemplate: %q", got[0].PolicyName)
+	}
+	if got[0].Selector != nil {
+		t.Errorf("CronJob target should have nil Selector (no pod recycling): %+v", got[0].Selector)
 	}
 }
 
@@ -432,6 +473,9 @@ func reconcilerForPolicy(t *testing.T, policy *sustainv1alpha1.Policy, extra ...
 	scheme := runtime.NewScheme()
 	if err := appsv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme apps: %v", err)
+	}
+	if err := batchv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme batch: %v", err)
 	}
 	if err := rolloutsv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme rollouts: %v", err)
@@ -706,9 +750,6 @@ func promServerForReconcile(t *testing.T) *httptest.Server {
 		q := r.Form.Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "count_over_time"):
-			// History probe: report enough samples so the recommender doesn't skip.
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"168"]}]}}`))
 		case strings.Contains(q, "workload_oom_24h"):
 			// No recent OOMs in tests by default.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
@@ -798,39 +839,56 @@ func deploymentTarget(ns, name string) *workloadTarget {
 	}
 }
 
-// TestBuildRecommendations_InsufficientHistory_SkipsAndEmitsCounter feeds the
-// recommender a count_over_time probe below the minimum threshold and verifies
-// buildRecommendations returns an empty map without error.
-func TestBuildRecommendations_InsufficientHistory_SkipsAndEmitsCounter(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(q, "count_over_time"):
-			// 5 samples — below the 12-sample floor.
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"5"]}]}}`))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
+// TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter verifies that a
+// workload created less than minWorkloadAge ago is skipped — the CPU rate
+// hasn't stabilized yet, so the percentile would floor to ~0 and trigger an
+// immediate recycle on the next reconcile.
+func TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter(t *testing.T) {
+	server := promServerForReconcile(t)
 	defer server.Close()
 
 	r := reconcilerWithProm(t, server, true /* in-place */)
 	policy := policyForReconcileWorkload(t, "p")
 	containers := []corev1.Container{{Name: "app"}}
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{})
+	// 1 minute old — well under the 10-minute gate.
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Minute))
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
 	if len(recs) != 0 {
-		t.Errorf("expected empty recommendations on insufficient history, got %d entries: %v", len(recs), recs)
+		t.Errorf("expected empty recommendations for young workload, got %d entries: %v", len(recs), recs)
+	}
+}
+
+// TestBuildRecommendations_SparseSignal_StillProducesRecommendation verifies
+// that a workload with only a few samples in the policy window (e.g. a daily
+// CronJob with a 2d window) still gets a recommendation as long as it's old
+// enough — the percentile queries handle sparseness, the gate must not.
+func TestBuildRecommendations_SparseSignal_StillProducesRecommendation(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	policy := policyForReconcileWorkload(t, "p")
+	containers := []corev1.Container{{Name: "app"}}
+
+	// 2 hours old — clears the age gate; the mock returns sparse but non-empty
+	// CPU/memory totals, mimicking a cronjob that just finished a run.
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-2*time.Hour))
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	if len(recs) == 0 {
+		t.Fatal("expected non-empty recommendations for old workload with usage data")
+	}
+	if rec := recs["app"]; rec.CPURequest == nil {
+		t.Error("expected CPU recommendation, got nil")
 	}
 }
 
 // TestBuildRecommendations_RecentOOMBypassesHistoryGate verifies that a
-// crash-looping workload (insufficient rate5m samples) still produces a memory
+// crash-looping workload (insufficient CPU rate samples) still produces a memory
 // recommendation when a recent OOM is observed — the OOM floor must override
 // the history gate, otherwise the workload is permanently locked at its
 // (broken) current request.
@@ -867,7 +925,7 @@ func TestBuildRecommendations_RecentOOMBypassesHistoryGate(t *testing.T) {
 		},
 	}}
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{})
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -942,7 +1000,7 @@ func TestBuildRecommendations_RecentOOMRaisesMemoryFloor(t *testing.T) {
 
 	before := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "app")
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{})
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -994,7 +1052,7 @@ func TestBuildRecommendations_OOMSignalEmpty_DoesNotApplyFloor(t *testing.T) {
 
 	before := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "app")
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{})
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}

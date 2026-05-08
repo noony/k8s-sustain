@@ -31,7 +31,7 @@ k8s-sustain is split into three independent components that run as separate proc
 │                                                                 │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                        Prometheus                        │   │
-│  │  k8s_sustain:container_cpu_usage_by_workload:rate5m      │   │
+│  │  k8s_sustain:container_cpu_usage_by_workload:rate1m      │   │
 │  │  k8s_sustain:container_memory_by_workload:bytes          │   │
 │  └────────────────────────────┬─────────────────────────────┘   │
 │                               │                                 │

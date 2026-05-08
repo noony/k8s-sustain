@@ -13,9 +13,9 @@ Computing percentiles over multi-day windows from raw `container_cpu_usage_secon
 | Rule | Purpose |
 |---|---|
 | `pod_workload` | Pod → workload mapping (foundational) |
-| `container_cpu_usage:rate5m`, `container_memory_working_set:bytes` | Per-container usage (foundational) |
-| `container_cpu_usage_by_workload:rate5m`, `container_memory_by_workload:bytes` | Per-container usage with workload labels (recommender) |
-| `pod_cpu_usage:rate5m`, `pod_memory_working_set:bytes` | Per-pod usage (dashboard headroom) |
+| `container_cpu_usage:rate1m`, `container_memory_working_set:bytes` | Per-container usage (foundational) |
+| `container_cpu_usage_by_workload:rate1m`, `container_memory_by_workload:bytes` | Per-container usage with workload labels (recommender) |
+| `pod_cpu_usage:rate1m`, `pod_memory_working_set:bytes` | Per-pod usage (dashboard headroom) |
 | `container_*_requests_by_workload:*`, `pod_container_*_request:*` | Configured requests (recommender + dashboard) |
 | `cluster_*_savings_*`, `policy_*_savings_*` | Savings aggregates (dashboard) |
 | `cluster_*_headroom_breakdown` | Used/idle/free split (dashboard) |
@@ -32,38 +32,66 @@ max by (namespace, pod, owner_kind, owner_name) (
     owner_kind=~"StatefulSet|DaemonSet|Job",
     owner_is_controller="true"
   }
+  unless on(namespace, pod) (
+    label_replace(kube_pod_owner{owner_kind="Job", owner_is_controller="true"},
+                  "job_name", "$1", "owner_name", "(.*)")
+    * on(namespace, job_name) group_left
+    max by (namespace, job_name) (
+      kube_job_owner{owner_kind="CronJob", owner_is_controller="true"}
+    )
+  )
 )
 ```
 
-Three rules share this name (direct owners; Deployment via ReplicaSet; Argo Rollouts via ReplicaSet). Maps every pod to its top-level workload.
+Four rules share this name (direct owners excluding CronJob-owned Jobs; Pod → Job → CronJob via `kube_job_owner`; Deployment via ReplicaSet; Argo Rollouts via ReplicaSet). Maps every pod to its top-level workload. The `unless` clause on the direct-owner rule prevents pods from carrying both `owner_kind=Job` and `owner_kind=CronJob`, which would break downstream `group_left` joins.
 
-### `k8s_sustain:container_cpu_usage:rate5m`
+### `k8s_sustain:container_cpu_usage:rate1m`
 
 ```promql
-rate(container_cpu_usage_seconds_total{
-  container!="",
-  container!="POD",
-  image!=""
-}[5m])
+max by (namespace, pod, container) (
+  rate(container_cpu_usage_seconds_total{
+    container!="",
+    container!="POD",
+    image!="",
+    node!=""
+  }[1m])
+)
+or
+max by (namespace, pod, container) (
+  rate(container_cpu_usage_seconds_total{
+    container!="",
+    container!="POD",
+    image!="",
+    node!=""
+  }[5m])
+)
 ```
 
-Per-container CPU usage rate, no workload labels.
+Per-container CPU usage rate, no workload labels. Primary 1m window
+preserves sub-5m bursts that a longer window would smooth away (matters
+for percentile-based rightsizing). Falls back to a 5m window for
+short-running pods (CronJobs, Jobs) whose lifetime is too brief to
+accumulate ≥2 samples in 1m. `max by (namespace, pod, container)`
+deduplicates cAdvisor's occasional double-emission (cgroup v1+v2
+hierarchies, scrape transitions) so downstream `*` joins don't break
+with many-to-many. `node!=""` drops cAdvisor series that briefly lose
+the node label during scrape transitions.
 
-### `k8s_sustain:container_cpu_usage_by_workload:rate5m`
+### `k8s_sustain:container_cpu_usage_by_workload:rate1m`
 
 ```promql
-k8s_sustain:container_cpu_usage:rate5m
+k8s_sustain:container_cpu_usage:rate1m
 * on(namespace, pod) group_left(owner_kind, owner_name)
 k8s_sustain:pod_workload
 ```
 
 Per-container CPU rate enriched with workload labels. Queried by `internal/prometheus/client.go` for percentile-based CPU requests.
 
-### `k8s_sustain:pod_cpu_usage:rate5m`
+### `k8s_sustain:pod_cpu_usage:rate1m`
 
 ```promql
 sum by (namespace, pod, owner_kind, owner_name) (
-  k8s_sustain:container_cpu_usage:rate5m
+  k8s_sustain:container_cpu_usage:rate1m
   * on(namespace, pod) group_left(owner_kind, owner_name)
   k8s_sustain:pod_workload
 )
@@ -74,14 +102,22 @@ Per-pod CPU usage (containers summed within the pod), with workload labels.
 ### `k8s_sustain:container_memory_working_set:bytes`
 
 ```promql
-container_memory_working_set_bytes{
-  container!="",
-  container!="POD",
-  image!=""
-}
+max by (namespace, pod, container) (
+  container_memory_working_set_bytes{
+    container!="",
+    container!="POD",
+    image!="",
+    node!=""
+  }
+)
 ```
 
 Per-container memory working set (excludes reclaimable page cache).
+The outer `max by (namespace, pod, container)` deduplicates series that
+cAdvisor can briefly emit twice for the same container (cgroup v1+v2
+hierarchies, scrape transitions); without it, downstream `or` and `*`
+joins would inflate values or fail with many-to-many. `node!=""` drops
+cAdvisor series that briefly lose the node label.
 
 ### `k8s_sustain:container_memory_by_workload:bytes`
 
@@ -220,38 +256,38 @@ Per-policy memory savings.
 ### `k8s_sustain:cluster_cpu_headroom_breakdown`
 
 ```promql
-label_replace(sum(k8s_sustain:pod_cpu_usage:rate5m), "segment", "used", "", "")
+label_replace(sum(k8s_sustain:container_cpu_usage:rate1m), "segment", "used", "", "")
 or
 label_replace(
-  sum(k8s_sustain:pod_container_cpu_request:cores) - sum(k8s_sustain:pod_cpu_usage:rate5m),
+  sum(kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}) - sum(k8s_sustain:container_cpu_usage:rate1m),
   "segment", "idle", "", ""
 )
 or
 label_replace(
-  sum(kube_node_status_allocatable{resource="cpu"}) - sum(k8s_sustain:pod_container_cpu_request:cores),
+  sum(kube_node_status_allocatable{resource="cpu"}) - sum(kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}),
   "segment", "free", "", ""
 )
 ```
 
-Splits cluster CPU into `segment` values: `used` (actual usage), `idle` (requested but unused), `free` (allocatable but not requested).
+Splits cluster CPU into `segment` values: `used` (actual usage), `idle` (requested but unused), `free` (allocatable but not requested). Inputs are raw kube-state-metrics / cAdvisor (not the `*_by_workload` rules) so static pods, mirror pods, and bare pods without an owner mapping still count toward usage and idle — otherwise `free` would be overstated by their un-subtracted requests.
 
 ### `k8s_sustain:cluster_memory_headroom_breakdown`
 
 ```promql
-label_replace(sum(k8s_sustain:pod_memory_working_set:bytes), "segment", "used", "", "")
+label_replace(sum(k8s_sustain:container_memory_working_set:bytes), "segment", "used", "", "")
 or
 label_replace(
-  sum(k8s_sustain:pod_container_memory_request:bytes) - sum(k8s_sustain:pod_memory_working_set:bytes),
+  sum(kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}) - sum(k8s_sustain:container_memory_working_set:bytes),
   "segment", "idle", "", ""
 )
 or
 label_replace(
-  sum(kube_node_status_allocatable{resource="memory"}) - sum(k8s_sustain:pod_container_memory_request:bytes),
+  sum(kube_node_status_allocatable{resource="memory"}) - sum(kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}),
   "segment", "free", "", ""
 )
 ```
 
-Same `used`/`idle`/`free` split, for memory.
+Same `used`/`idle`/`free` split, for memory. Same rationale as CPU: raw inputs so unmapped pods are counted.
 
 ### `k8s_sustain:workload_oom_24h`
 
@@ -283,7 +319,7 @@ Boolean (0/1) per workload indicating drift > 10% between current spec and recom
 
 ```promql
 sum by (namespace, owner_kind, owner_name, container) (
-  k8s_sustain:container_cpu_usage_by_workload:rate5m
+  k8s_sustain:container_cpu_usage_by_workload:rate1m
 )
 ```
 
@@ -303,11 +339,11 @@ Total memory working set across all replicas, per container, per workload.
 
 ```promql
 count by (namespace, owner_kind, owner_name) (
-  count by (namespace, owner_kind, owner_name, pod) (
-    k8s_sustain:container_cpu_usage_by_workload:rate5m
-  )
+  k8s_sustain:pod_workload
 )
 ```
+
+Driven off `pod_workload` (not CPU rate) so idle workloads with zero recent CPU activity, or short-running pods missing rate samples, still report their replica count correctly.
 
 Replica count, derived from distinct pods reporting metrics. Counted at workload level so multi-container pods don't inflate the count.
 

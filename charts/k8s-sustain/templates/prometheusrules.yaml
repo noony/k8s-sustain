@@ -18,6 +18,10 @@ spec:
       interval: 1m
       rules:
         # Map pod → workload for direct owners (StatefulSet, DaemonSet, Job).
+        # Jobs that are themselves owned by a CronJob are excluded here so
+        # those pods only appear with owner_kind=CronJob (see CronJob rule
+        # below). Without this exclusion the same pod would carry two
+        # pod_workload series, breaking group_left joins downstream.
         - record: k8s_sustain:pod_workload
           expr: |
             max by (namespace, pod, owner_kind, owner_name) (
@@ -25,6 +29,40 @@ spec:
                 owner_kind=~"StatefulSet|DaemonSet|Job",
                 owner_is_controller="true"
               }
+              unless on(namespace, pod)
+              (
+                label_replace(
+                  kube_pod_owner{owner_kind="Job", owner_is_controller="true"},
+                  "job_name", "$1", "owner_name", "(.*)"
+                )
+                * on(namespace, job_name) group_left
+                max by (namespace, job_name) (
+                  kube_job_owner{owner_kind="CronJob", owner_is_controller="true"}
+                )
+              )
+            )
+        # Map pod → CronJob by resolving Job → CronJob via kube_job_owner.
+        # Mirrors the ReplicaSet → Deployment pattern: rename owner_name (Job)
+        # to job_name, clear owner labels, then group_left from kube_job_owner.
+        - record: k8s_sustain:pod_workload
+          expr: |
+            max by (namespace, pod, owner_kind, owner_name) (
+              label_replace(
+                label_replace(
+                  label_replace(
+                    max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
+                      kube_pod_owner{owner_kind="Job", owner_is_controller="true"}
+                    ),
+                    "job_name", "$1", "owner_name", "(.*)"
+                  ),
+                  "owner_kind", "", "owner_kind", ".*"
+                ),
+                "owner_name", "", "owner_name", ".*"
+              )
+              * on(namespace, job_name) group_left(owner_kind, owner_name)
+              max by (namespace, job_name, owner_kind, owner_name) (
+                kube_job_owner{owner_kind="CronJob", owner_is_controller="true"}
+              )
             )
         # Map pod → Deployment by resolving ReplicaSet → Deployment.
         # Renames owner_name (RS name) → replicaset and clears conflicting labels
@@ -76,25 +114,43 @@ spec:
       interval: 1m
       rules:
         # Per-container CPU usage rate.
-        - record: k8s_sustain:container_cpu_usage:rate5m
+        # Primary rate uses a 1m window so percentile-based rightsizing
+        # captures sub-5m bursts that a longer window would smooth away.
+        # Falls back to a 5m window for short-running pods (CronJobs, Jobs)
+        # whose lifetime is too brief to accumulate ≥2 samples in 1m.
+        # node!="" drops cAdvisor series that briefly lose the node label
+        # during scrape transitions.
+        - record: k8s_sustain:container_cpu_usage:rate1m
           expr: |
-            rate(container_cpu_usage_seconds_total{
-              container!="",
-              container!="POD",
-              image!=""
-            }[5m])
+            max by (namespace, pod, container) (
+              rate(container_cpu_usage_seconds_total{
+                container!="",
+                container!="POD",
+                image!="",
+                node!=""
+              }[1m])
+            )
+            or
+            max by (namespace, pod, container) (
+              rate(container_cpu_usage_seconds_total{
+                container!="",
+                container!="POD",
+                image!="",
+                node!=""
+              }[5m])
+            )
         # Per-container CPU rate WITH workload labels — used by the operator.
-        - record: k8s_sustain:container_cpu_usage_by_workload:rate5m
+        - record: k8s_sustain:container_cpu_usage_by_workload:rate1m
           expr: |
-            k8s_sustain:container_cpu_usage:rate5m
+            k8s_sustain:container_cpu_usage:rate1m
             * on(namespace, pod) group_left(owner_kind, owner_name)
             k8s_sustain:pod_workload
         # Per-pod CPU rate, enriched with workload labels.
         # Containers within the same pod are summed.
-        - record: k8s_sustain:pod_cpu_usage:rate5m
+        - record: k8s_sustain:pod_cpu_usage:rate1m
           expr: |
             sum by (namespace, pod, owner_kind, owner_name) (
-              k8s_sustain:container_cpu_usage:rate5m
+              k8s_sustain:container_cpu_usage:rate1m
               * on(namespace, pod) group_left(owner_kind, owner_name)
               k8s_sustain:pod_workload
             )
@@ -102,13 +158,21 @@ spec:
       interval: 1m
       rules:
         # Per-container memory working set (excludes reclaimable page cache).
+        # max by (namespace, pod, container) deduplicates series that cAdvisor
+        # can briefly emit twice for the same container (e.g. cgroup v1+v2
+        # hierarchies, scrape transitions). Without it, downstream `or` and
+        # `*` joins inflate or fail with many-to-many.
+        # node!="" drops cAdvisor series that briefly lose the node label.
         - record: k8s_sustain:container_memory_working_set:bytes
           expr: |
-            container_memory_working_set_bytes{
-              container!="",
-              container!="POD",
-              image!=""
-            }
+            max by (namespace, pod, container) (
+              container_memory_working_set_bytes{
+                container!="",
+                container!="POD",
+                image!="",
+                node!=""
+              }
+            )
         # Per-container memory WITH workload labels — used by the operator.
         - record: k8s_sustain:container_memory_by_workload:bytes
           expr: |
@@ -216,31 +280,36 @@ spec:
     - name: k8s_sustain.headroom
       interval: 1m
       rules:
+        # Cluster-level breakdown. We deliberately use raw kube-state-metrics
+        # / cAdvisor inputs (not the *_by_workload rules) so static pods,
+        # mirror pods, and bare pods without an owner mapping still count
+        # toward usage and idle — otherwise `free` is overstated by their
+        # un-subtracted requests.
         - record: k8s_sustain:cluster_cpu_headroom_breakdown
           expr: |
-            label_replace(sum(k8s_sustain:pod_cpu_usage:rate5m), "segment", "used", "", "")
+            label_replace(sum(k8s_sustain:container_cpu_usage:rate1m), "segment", "used", "", "")
             or
             label_replace(
-              sum(k8s_sustain:pod_container_cpu_request:cores) - sum(k8s_sustain:pod_cpu_usage:rate5m),
+              sum(kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}) - sum(k8s_sustain:container_cpu_usage:rate1m),
               "segment", "idle", "", ""
             )
             or
             label_replace(
-              sum(kube_node_status_allocatable{resource="cpu"}) - sum(k8s_sustain:pod_container_cpu_request:cores),
+              sum(kube_node_status_allocatable{resource="cpu"}) - sum(kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}),
               "segment", "free", "", ""
             )
 
         - record: k8s_sustain:cluster_memory_headroom_breakdown
           expr: |
-            label_replace(sum(k8s_sustain:pod_memory_working_set:bytes), "segment", "used", "", "")
+            label_replace(sum(k8s_sustain:container_memory_working_set:bytes), "segment", "used", "", "")
             or
             label_replace(
-              sum(k8s_sustain:pod_container_memory_request:bytes) - sum(k8s_sustain:pod_memory_working_set:bytes),
+              sum(kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}) - sum(k8s_sustain:container_memory_working_set:bytes),
               "segment", "idle", "", ""
             )
             or
             label_replace(
-              sum(kube_node_status_allocatable{resource="memory"}) - sum(k8s_sustain:pod_container_memory_request:bytes),
+              sum(kube_node_status_allocatable{resource="memory"}) - sum(kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}),
               "segment", "free", "", ""
             )
 
@@ -267,17 +336,17 @@ spec:
             max by (namespace, owner_kind, owner_name, container) (
               (
                 label_replace(
-                  max by (namespace, pod, container) (max_over_time(container_memory_max_usage_bytes{container!="", container!="POD", image!=""}[24h])),
+                  max by (namespace, pod, container) (max_over_time(container_memory_max_usage_bytes{container!="", container!="POD", image!="", node!=""}[24h])),
                   "_src", "max_usage", "", ""
                 )
                 or
                 label_replace(
-                  max by (namespace, pod, container) (max_over_time(container_memory_peak_working_set_bytes{container!="", container!="POD", image!=""}[24h])),
+                  max by (namespace, pod, container) (max_over_time(container_memory_peak_working_set_bytes{container!="", container!="POD", image!="", node!=""}[24h])),
                   "_src", "peak_ws", "", ""
                 )
                 or
                 label_replace(
-                  max by (namespace, pod, container) (max_over_time(container_memory_working_set_bytes{container!="", container!="POD", image!=""}[24h:1m])),
+                  max by (namespace, pod, container) (max_over_time(container_memory_working_set_bytes{container!="", container!="POD", image!="", node!=""}[24h:1m])),
                   "_src", "working_set", "", ""
                 )
               )
@@ -316,7 +385,7 @@ spec:
         - record: k8s_sustain:workload_cpu_usage:cores
           expr: |
             sum by (namespace, owner_kind, owner_name, container) (
-              k8s_sustain:container_cpu_usage_by_workload:rate5m
+              k8s_sustain:container_cpu_usage_by_workload:rate1m
             )
         # Total memory working set across all replicas, per container, per workload.
         - record: k8s_sustain:workload_memory_usage:bytes
@@ -324,15 +393,15 @@ spec:
             sum by (namespace, owner_kind, owner_name, container) (
               k8s_sustain:container_memory_by_workload:bytes
             )
-        # Replica count for a workload, derived from distinct pods reporting metrics.
-        # Counted at workload level (not per-container) so multi-container pods
-        # don't inflate the count.
+        # Replica count for a workload, derived from the pod_workload mapping.
+        # Driving this off pod_workload (not CPU rate) means idle workloads
+        # — pods with zero recent CPU activity that still get rate=0 series,
+        # or short-running pods missing rate samples — keep their replica
+        # count.
         - record: k8s_sustain:workload_replicas:count
           expr: |
             count by (namespace, owner_kind, owner_name) (
-              count by (namespace, owner_kind, owner_name, pod) (
-                k8s_sustain:container_cpu_usage_by_workload:rate5m
-              )
+              k8s_sustain:pod_workload
             )
 
 {{- end }}

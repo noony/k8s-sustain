@@ -33,7 +33,7 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 | `k8s_sustain_recommendation_skipped_total` | counter | `namespace`, `owner_kind`, `owner_name`, `reason` |
 | `k8s_sustain_oom_floor_applied_total`       | counter | `namespace`, `owner_kind`, `owner_name`, `container` |
 
-`k8s_sustain_recommendation_skipped_total` increments when the recommender bypasses a workload without emitting a recommendation. `reason="insufficient_history"` means the workload had fewer than 12 `rate5m` samples in the configured window — typical of containers younger than ~12 minutes — so percentile queries would otherwise floor to ~0 and trigger an immediate recycle.
+`k8s_sustain_recommendation_skipped_total` increments when the recommender bypasses a workload without emitting a recommendation. `reason="insufficient_history"` means the workload had fewer than 12 CPU rate samples in the configured window — typical of containers younger than ~12 minutes — so percentile queries would otherwise floor to ~0 and trigger an immediate recycle.
 
 `k8s_sustain_oom_floor_applied_total` increments when the OOM-aware floor raises a memory recommendation above the percentile value. This means the workload OOM'd in the last 24h and the recommendation was floored at `max(peak_working_set, current_request)` plus headroom, instead of the (lower) percentile value.
 
@@ -82,9 +82,9 @@ All rules are evaluated every minute. They live in
 
 ### Usage rates (existing)
 
-`k8s_sustain:container_cpu_usage:rate5m`, `k8s_sustain:container_cpu_usage_by_workload:rate5m`,
+`k8s_sustain:container_cpu_usage:rate1m`, `k8s_sustain:container_cpu_usage_by_workload:rate1m`,
 `k8s_sustain:container_memory_working_set:bytes`, `k8s_sustain:container_memory_by_workload:bytes`,
-`k8s_sustain:pod_cpu_usage:rate5m`, `k8s_sustain:pod_memory_working_set:bytes`.
+`k8s_sustain:pod_cpu_usage:rate1m`, `k8s_sustain:pod_memory_working_set:bytes`.
 
 ### Resource requests (existing)
 

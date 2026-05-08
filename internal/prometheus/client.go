@@ -42,10 +42,10 @@ func New(addr string) (*Client, error) {
 
 // QueryCPUByContainer returns per-container CPU usage (cores) at the given quantile,
 // averaged across pods of the workload, over the specified window.
-// Relies on the k8s_sustain:container_cpu_usage_by_workload:rate5m recording rule.
+// Relies on the k8s_sustain:container_cpu_usage_by_workload:rate1m recording rule.
 func (c *Client) QueryCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
 	expr := fmt.Sprintf(
-		`avg by (container) (quantile_over_time(%.2f, k8s_sustain:container_cpu_usage_by_workload:rate5m{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
+		`avg by (container) (quantile_over_time(%.2f, k8s_sustain:container_cpu_usage_by_workload:rate1m{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
 		quantile, namespace, ownerKind, ownerName, window,
 	)
 	return c.queryByContainer(ctx, expr)
@@ -103,7 +103,7 @@ type ContainerTimeSeries map[string][]TimeValue
 // over the specified window with the given step resolution.
 func (c *Client) QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
 	expr := fmt.Sprintf(
-		`avg by (container) (k8s_sustain:container_cpu_usage_by_workload:rate5m{namespace=%q,owner_kind=%q,owner_name=%q})`,
+		`avg by (container) (k8s_sustain:container_cpu_usage_by_workload:rate1m{namespace=%q,owner_kind=%q,owner_name=%q})`,
 		namespace, ownerKind, ownerName,
 	)
 	return c.queryRangeByContainer(ctx, expr, window, step)
@@ -145,7 +145,7 @@ func (c *Client) QueryMemoryRequestRangeByContainer(ctx context.Context, namespa
 // time-series (cores) — at each step, the quantile is computed over the trailing window.
 func (c *Client) QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (ContainerTimeSeries, error) {
 	expr := fmt.Sprintf(
-		`avg by (container) (quantile_over_time(%.2f, k8s_sustain:container_cpu_usage_by_workload:rate5m{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
+		`avg by (container) (quantile_over_time(%.2f, k8s_sustain:container_cpu_usage_by_workload:rate1m{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
 		quantile, namespace, ownerKind, ownerName, recWindow,
 	)
 	return c.queryRangeByContainer(ctx, expr, timeRange, step)
@@ -159,38 +159,6 @@ func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, 
 		quantile, namespace, ownerKind, ownerName, recWindow,
 	)
 	return c.queryRangeByContainer(ctx, expr, timeRange, step)
-}
-
-// minHistorySamples is the minimum count of rate5m samples required in the
-// recommendation window before we'll emit a recommendation. Containers younger
-// than this produce noisy/zero rates that would otherwise floor the recommendation
-// and trigger an immediate recycle on the next reconcile.
-const minHistorySamples = 12
-
-// HasSufficientHistory reports whether the workload has enough rate5m samples
-// over the window to make a meaningful recommendation. Probes
-// k8s_sustain:container_cpu_usage_by_workload:rate5m via count_over_time.
-func (c *Client) HasSufficientHistory(ctx context.Context, namespace, ownerKind, ownerName, window string) (bool, error) {
-	if !c.breaker.allow() {
-		return false, ErrCircuitOpen
-	}
-	expr := fmt.Sprintf(
-		`max(count_over_time(k8s_sustain:container_cpu_usage_by_workload:rate5m{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
-		namespace, ownerKind, ownerName, window,
-	)
-	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
-	defer cancel()
-	result, _, err := c.api.Query(ctx, expr, time.Now())
-	if err != nil {
-		c.breaker.failure()
-		return false, fmt.Errorf("prometheus history probe %q: %w", expr, err)
-	}
-	c.breaker.success()
-	vector, ok := result.(model.Vector)
-	if !ok || len(vector) == 0 {
-		return false, nil
-	}
-	return float64(vector[0].Value) >= float64(minHistorySamples), nil
 }
 
 // OOMSignal carries the OOM context for a single workload over the past 24h.

@@ -294,6 +294,25 @@ func isRestartableInitContainer(c corev1.Container) bool {
 	return c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways
 }
 
+// ApplyRecommendationsToPodSpec mutates the regular and init containers in a
+// PodSpec to match the given recommendations, returning whether anything
+// changed. Use this for template mutation (e.g. CronJob.JobTemplate) where
+// every container is fair game; for live-pod patching go through Patcher.
+func ApplyRecommendationsToPodSpec(spec *corev1.PodSpec, recs map[string]ContainerRecommendation) bool {
+	changed := false
+	for i := range spec.Containers {
+		if applyRecToContainer(&spec.Containers[i], recs[spec.Containers[i].Name]) {
+			changed = true
+		}
+	}
+	for i := range spec.InitContainers {
+		if applyRecToContainer(&spec.InitContainers[i], recs[spec.InitContainers[i].Name]) {
+			changed = true
+		}
+	}
+	return changed
+}
+
 // applyRecommendationsToSidecars mirrors applyRecommendations but only mutates
 // restartable init containers (sidecars). Classic init containers have already
 // exited in a Running pod, so patching their resources in-place would be a

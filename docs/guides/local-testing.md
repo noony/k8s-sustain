@@ -136,6 +136,30 @@ kubectl --raw \
   | grep 'k8s_sustain_recommended_cpu_cores{.*container_kind="init"'
 ```
 
+### `cronjob`
+
+Single CronJob (`schedule: "* * * * *"`) running for ~30s per invocation
+with steady ~200m CPU / ~100MiB memory load. Initial requests are
+deliberately oversized at `500m / 256Mi`. `Ongoing` mode is enabled for
+CronJobs.
+
+**Expected:** the controller patches the CronJob's
+`spec.jobTemplate.spec.template.spec.containers[*].resources` directly —
+**no** pod recycling. Currently-running job pods finish on their existing
+spec; new runs (next minute boundary) spawn with the updated requests.
+After `WINDOW + reconcile_interval` the CPU request drops to ~`220m` and
+memory to ~`110Mi`.
+
+```bash
+kubectl get cronjob -n scenario-cronjob job \
+  -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources}'
+kubectl get wlrec -n scenario-cronjob cronjob-job -o yaml
+```
+
+This scenario also exercises the Pod → Job → CronJob recording-rule
+chain — without it, `owner_kind="CronJob"` would have no metrics and the
+recommendation would never compute.
+
 ### `oom-kill`
 
 Single-container Deployment that quietly holds ~30Mi for 60 s, then attempts
