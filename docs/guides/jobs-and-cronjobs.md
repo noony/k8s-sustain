@@ -143,3 +143,9 @@ If fewer than ~10 data points exist in the window, the controller logs `no metri
 ### Guaranteed QoS for batch jobs
 
 Setting `equalsToRequest: true` for both CPU and memory limits makes the pod a [Guaranteed QoS class](https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/#guaranteed), which prevents throttling and OOM eviction under memory pressure. This is often desirable for batch workloads.
+
+### OOM detection for one-shot pods
+
+CronJob/Job pods typically run with `restartPolicy: Never` (or `backoffLimit: 0`), so the kubelet does not restart them after an OOM kill — `kube_pod_container_status_restarts_total` stays at 0. The `k8s_sustain:workload_oom_24h` rule combines two paths so OOMs are still detected: a "kill" path uses `max_over_time(kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[24h])` to flag any (pod, container) that OOMed, regardless of whether it was restarted.
+
+This means the OOM-driven memory floor (in `policy_controller.go`) and dashboard "OOM 24h" badge work for CronJobs too — provided the failed pod survives long enough for kube-state-metrics to scrape it. Pods garbage-collected by `failedJobsHistoryLimit` within ~30s of failing can still slip through; raising `failedJobsHistoryLimit` above 0 helps.

@@ -1,9 +1,9 @@
 # scenario: cronjob
-# expected: A CronJob that runs every minute is right-sized via the Ongoing path.
+# expected: A CronJob that runs every 2 minutes is right-sized via the Ongoing path.
 # The controller queries Prometheus for owner_kind=CronJob, computes a
 # recommendation, and patches the CronJob's jobTemplate.spec.template.spec.containers
-# in place. In-flight job pods finish on their existing spec; new runs (next
-# minute) spawn with the updated requests. No pod recycling.
+# in place. In-flight job pods finish on their existing spec; subsequent runs
+# spawn with the updated requests. No pod recycling.
 #
 # Initial requests: 500m / 256Mi. Per-run usage is ~200m / 100Mi for ~90s.
 # After WINDOW + reconcile, jobTemplate cpu drops to ~220m, memory to ~110Mi.
@@ -61,7 +61,7 @@ data:
     import os, time
     duty = float(os.environ.get('LOAD_DUTY', '0.2'))
     mem_mb = int(os.environ.get('LOAD_MEM_MB', '50'))
-    phases = os.environ.get('LOAD_PHASES', '').strip()
+    runtime_s = float(os.environ.get('RUN_SECONDS', '30'))
     buf = bytearray(mem_mb * 1024 * 1024)
     for i in range(0, len(buf), 4096):
         buf[i] = 1
@@ -75,13 +75,8 @@ data:
                 pass
             if off > 0:
                 time.sleep(off)
-    if phases:
-        schedule = [(float(p.split(':')[0]), float(p.split(':')[1])) for p in phases.split(',')]
-        while True:
-            for d, secs in schedule:
-                burn(d, time.monotonic() + secs)
-    else:
-        burn(duty, float('inf'))
+    stop = time.monotonic() + runtime_s
+    burn(duty, stop)
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -116,7 +111,7 @@ spec:
                 - name: LOAD_MEM_MB
                   value: "100"
                 - name: RUN_SECONDS
-                  value: "30"
+                  value: "90"
               volumeMounts:
                 - name: loadgen
                   mountPath: /loadgen

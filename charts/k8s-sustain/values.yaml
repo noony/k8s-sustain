@@ -625,17 +625,47 @@ prometheus:
                   k8s_sustain:pod_workload
                 )
 
+            # OOM detection combines two paths so it works for both restartable
+            # workloads (Deployment/StatefulSet/DaemonSet/Rollout) AND one-shot Job
+            # pods (Job/CronJob).
+            #
+            # - "restarts" path: counts OOM events as restarts where the prior
+            #   termination reason was OOMKilled. Accurate event count for pods that
+            #   the kubelet restarts in place.
+            # - "kill" path: 0/1 indicator that the (pod, container) was OOMKilled at
+            #   any point in the 24h window. Catches Job pods that fail once and are
+            #   never restarted, where `restarts_total` stays at 0.
+            #
+            # Each path is tagged with a distinct `_src` label so both survive the
+            # `or` union; `max by (namespace, pod, container)` then drops `_src` and
+            # takes the larger value. For a Deployment pod that OOMed N times the
+            # restart path dominates (N > 1); for a Job pod the kill path provides
+            # the 1 that the restart path can't see.
             - record: k8s_sustain:workload_oom_24h
               expr: |
                 sum by (namespace, owner_kind, owner_name) (
                   max by (namespace, pod, container) (
-                    increase(
-                      kube_pod_container_status_restarts_total{container!="", container!="POD"}[24h]
+                    label_replace(
+                      max by (namespace, pod, container) (
+                        increase(
+                          kube_pod_container_status_restarts_total{container!="", container!="POD"}[24h]
+                        )
+                      )
+                      * on(namespace, pod, container) group_left()
+                      max by (namespace, pod, container) (
+                        kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}
+                      ),
+                      "_src", "restarts", "", ""
                     )
-                  )
-                  * on(namespace, pod, container) group_left()
-                  max by (namespace, pod, container) (
-                    kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}
+                    or
+                    label_replace(
+                      max by (namespace, pod, container) (
+                        max_over_time(
+                          kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}[24h]
+                        )
+                      ),
+                      "_src", "kill", "", ""
+                    )
                   )
                   * on(namespace, pod) group_left(owner_kind, owner_name)
                   k8s_sustain:pod_workload

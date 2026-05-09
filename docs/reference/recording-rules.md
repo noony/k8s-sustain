@@ -293,15 +293,43 @@ Same `used`/`idle`/`free` split, for memory. Same rationale as CPU: raw inputs s
 
 ```promql
 sum by (namespace, owner_kind, owner_name) (
-  increase(
-    kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[24h]
+  max by (namespace, pod, container) (
+    label_replace(
+      max by (namespace, pod, container) (
+        increase(kube_pod_container_status_restarts_total{container!="", container!="POD"}[24h])
+      )
+      * on(namespace, pod, container) group_left()
+      max by (namespace, pod, container) (
+        kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}
+      ),
+      "_src", "restarts", "", ""
+    )
+    or
+    label_replace(
+      max by (namespace, pod, container) (
+        max_over_time(
+          kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}[24h]
+        )
+      ),
+      "_src", "kill", "", ""
+    )
   )
   * on(namespace, pod) group_left(owner_kind, owner_name)
   k8s_sustain:pod_workload
 )
 ```
 
-OOMKilled events in the last 24h, aggregated to the workload.
+OOMKilled events in the last 24h, aggregated to the workload. Two paths combined per (pod, container):
+
+- **`restarts` path** — counts OOMs as restart events (`increase(restarts_total)` filtered by last-terminated-reason). Accurate event count for restartable workloads (Deployment, StatefulSet, DaemonSet, Rollout) where the kubelet restarts the same container in place.
+- **`kill` path** — 0/1 indicator that the (pod, container) was OOMKilled at any point in the window. Catches one-shot Job/CronJob pods that fail once with `restartPolicy: Never` (or `backoffLimit: 0`) and never increment `restarts_total`.
+
+Both paths are tagged with a distinct `_src` label so they survive the `or` union; `max by (namespace, pod, container)` then drops `_src` and keeps the larger value. For a Deployment pod that OOMed N times the restart path dominates (N ≥ 1); for a one-shot Job pod the kill path provides the 1 the restart path can't see.
+
+**Caveats:**
+
+- For Job pods, semantics shift from "number of OOM events" to "1 if the pod ever OOMed in the window" (each Job pod OOMs at most once anyway).
+- A Job pod that creates → OOMs → gets garbage-collected by `failedJobsHistoryLimit` inside one kube-state-metrics scrape interval (~30s) is invisible to both paths. Realistic production cronjobs run for minutes and aren't affected; very short test pods can slip through.
 
 ### `k8s_sustain:workload_drifted`
 
