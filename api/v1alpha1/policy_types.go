@@ -153,8 +153,11 @@ type UpdateTypes struct {
 	DaemonSet *UpdateMode `json:"daemonSet,omitempty"`
 	// +optional
 	// +kubebuilder:validation:Enum=OnCreate;Ongoing
-	// CronJob patches the job template so future runs use updated resources.
-	// OnCreate injects resources at pod admission for each spawned job pod.
+	// CronJob never mutates the CronJob spec (no GitOps drift). OnCreate
+	// injects resources at pod admission for each spawned job pod. Ongoing
+	// additionally resizes currently-running job pods in place via
+	// pods/resize when the cluster supports it; new runs are always handled
+	// by the webhook at admission.
 	CronJob *UpdateMode `json:"cronJob,omitempty"`
 	// +optional
 	// +kubebuilder:validation:Enum=OnCreate;Ongoing

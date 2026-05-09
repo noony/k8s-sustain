@@ -42,7 +42,7 @@ On any cluster where `inPlace=false` (auto-detected as < 1.31, or runtime-flippe
 - 429 responses (PodDisruptionBudget blocking eviction) are logged and skipped — the next reconcile cycle will retry.
 - The workload controller (Deployment / StatefulSet / etc.) replaces the evicted pod from the updated template; the webhook injects the latest recommendation into the replacement at admission time.
 
-CronJobs are special-cased: their pods are short-lived job runs that are never recycled. The controller patches the `JobTemplate` so future runs use the updated resources.
+CronJobs are special-cased: the controller never mutates the CronJob spec (which would cause GitOps drift) and never evicts a job pod (which would kill the run). On clusters that support in-place resize, currently-running job pods are resized via the `pods/resize` subresource using the same machinery as Deployments — including for `restartPolicy: Never`/`OnFailure` pods on k8s ≥ 1.35. If the cluster does not support in-place resize, the running pod is left untouched and the next scheduled run picks up the new resources from the webhook.
 
 ## Caveats
 

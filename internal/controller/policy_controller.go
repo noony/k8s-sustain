@@ -35,7 +35,8 @@ import (
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=workloadrecommendations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=workloadrecommendations/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets;daemonsets,verbs=get;list;watch
-// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=pods/resize,verbs=patch
@@ -525,11 +526,13 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		return nil
 	}
 
-	// CronJob: patch JobTemplate in place, never recycle pods. Pods are
-	// short-lived job runs that should complete on their existing resources;
-	// new runs spawn from the patched template.
+	// CronJob: never mutate the CronJob spec (would cause GitOps drift) and
+	// never evict job pods (would kill in-flight runs). On clusters that
+	// support InPlacePodVerticalScaling we resize the currently-running job
+	// pods directly; new scheduled runs always pick up the latest resources
+	// from the webhook at admission time.
 	if t.Kind == "CronJob" {
-		if err := r.patchCronJobTemplate(ctx, t, recs); err != nil {
+		if err := r.resizeCronJobPods(ctx, t, recs); err != nil {
 			if !isTransientError(err) {
 				r.retries.remove(t.key())
 				EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
@@ -538,9 +541,9 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 			r.retries.recordFailure(t.key())
 			state := r.retries.getState(t.key())
 			r.recorder.Eventf(t.Object, corev1.EventTypeWarning, "ReconciliationRetryScheduled",
-				"CronJob template patch failed: %v. Retry attempt %d at %s", err, state.attempts, state.nextRetry.Format(time.RFC3339))
-			logger.Error(err, "cronjob template patch failed, retry scheduled", "attempt", state.attempts)
-			EmitRetryState(t.Namespace, t.Kind, t.Name, "patch", true)
+				"CronJob pod resize failed: %v. Retry attempt %d at %s", err, state.attempts, state.nextRetry.Format(time.RFC3339))
+			logger.Error(err, "cronjob pod resize failed, retry scheduled", "attempt", state.attempts)
+			EmitRetryState(t.Namespace, t.Kind, t.Name, "resize", true)
 			IncrementRetryAttempt(t.Namespace, t.Kind, t.Name)
 			return err
 		}
@@ -548,8 +551,8 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 		changed := changedContainers(containers, recs)
 		if len(changed) > 0 {
-			r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "JobTemplatePatched",
-				"updated resources for containers: %v", changed)
+			r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "ResourcesUpdated",
+				"in-place resized cronjob pods for containers: %v", changed)
 		}
 		return nil
 	}

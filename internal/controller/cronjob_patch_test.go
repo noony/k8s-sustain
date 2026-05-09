@@ -9,17 +9,143 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// TestPatchCronJobTemplate_UpdatesContainersAndPersists verifies that a
-// CronJob target's JobTemplate is mutated in place and the change is
-// persisted back through the client.
-func TestPatchCronJobTemplate_UpdatesContainersAndPersists(t *testing.T) {
+func boolPtr(b bool) *bool { return &b }
+
+// TestIsOwnedBy_ControllerRefMatch verifies that the ownerRef walk only
+// accepts a controller=true reference matching the given UID.
+func TestIsOwnedBy_ControllerRefMatch(t *testing.T) {
+	uid := types.UID("cj-uid")
+	tests := []struct {
+		name string
+		refs []metav1.OwnerReference
+		want bool
+	}{
+		{"empty", nil, false},
+		{"different uid", []metav1.OwnerReference{{Controller: boolPtr(true), UID: "other"}}, false},
+		{"matching uid but not controller", []metav1.OwnerReference{{Controller: boolPtr(false), UID: uid}}, false},
+		{"matching uid with controller", []metav1.OwnerReference{{Controller: boolPtr(true), UID: uid}}, true},
+		{"controller nil", []metav1.OwnerReference{{UID: uid}}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isOwnedBy(tc.refs, uid); got != tc.want {
+				t.Errorf("isOwnedBy = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestJobIsTerminal_TrueOnCompleteOrFailed verifies that a Job is treated
+// as terminal once it reports a Complete or Failed condition with status=True.
+func TestJobIsTerminal_TrueOnCompleteOrFailed(t *testing.T) {
+	tests := []struct {
+		name       string
+		conditions []batchv1.JobCondition
+		want       bool
+	}{
+		{"none", nil, false},
+		{"complete-true", []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}, true},
+		{"failed-true", []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}, true},
+		{"complete-false", []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionFalse}}, false},
+		{"suspended", []batchv1.JobCondition{{Type: batchv1.JobSuspended, Status: corev1.ConditionTrue}}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			job := &batchv1.Job{Status: batchv1.JobStatus{Conditions: tc.conditions}}
+			if got := jobIsTerminal(job); got != tc.want {
+				t.Errorf("jobIsTerminal = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestListActiveJobsForCronJob_FiltersOwnerAndState verifies the listing
+// helper only returns Jobs that (a) are controller-owned by the CronJob and
+// (b) are not in a terminal state.
+func TestListActiveJobsForCronJob_FiltersOwnerAndState(t *testing.T) {
 	cj := &batchv1.CronJob{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nightly"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nightly", UID: "cj-uid"},
+	}
+	owned := func(name string, terminal bool) *batchv1.Job {
+		j := &batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:       "default",
+				Name:            name,
+				OwnerReferences: []metav1.OwnerReference{{Controller: boolPtr(true), UID: "cj-uid", Kind: "CronJob", Name: "nightly"}},
+			},
+		}
+		if terminal {
+			j.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+		}
+		return j
+	}
+	other := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:       "default",
+			Name:            "unrelated",
+			OwnerReferences: []metav1.OwnerReference{{Controller: boolPtr(true), UID: "other-uid", Kind: "CronJob"}},
+		},
+	}
+	r := makeReconciler(t, cj, owned("active", false), owned("done", true), other)
+
+	got, err := r.listActiveJobsForCronJob(context.Background(), cj)
+	if err != nil {
+		t.Fatalf("listActiveJobsForCronJob: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "active" {
+		names := make([]string, len(got))
+		for i, j := range got {
+			names[i] = j.Name
+		}
+		t.Errorf("expected only [active], got %v", names)
+	}
+}
+
+// TestListPodsForJob_LabelSelector verifies the canonical
+// batch.kubernetes.io/job-name label is used to enumerate a Job's pods.
+func TestListPodsForJob_LabelSelector(t *testing.T) {
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "j1"}}
+	matching := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "p1",
+			Labels:    map[string]string{jobPodNameLabel: "j1"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	wrongJob := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "p2",
+			Labels:    map[string]string{jobPodNameLabel: "different"},
+		},
+	}
+	r := makeReconciler(t, job, matching, wrongJob)
+
+	got, err := r.listPodsForJob(context.Background(), job)
+	if err != nil {
+		t.Fatalf("listPodsForJob: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "p1" {
+		t.Errorf("expected only p1, got %v", got)
+	}
+}
+
+// TestResizeCronJobPods_NeverPatchesCronJob verifies that the reconcile path
+// for CronJob targets does not mutate the CronJob spec — the CPU/memory
+// requests on the JobTemplate must be untouched after the reconcile call.
+// In-place pod resize handles the running pods; the webhook handles new runs.
+func TestResizeCronJobPods_NeverPatchesCronJob(t *testing.T) {
+	cj := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nightly", UID: "cj-uid"},
 		Spec: batchv1.CronJobSpec{
 			Schedule: "* * * * *",
 			JobTemplate: batchv1.JobTemplateSpec{
@@ -28,87 +154,88 @@ func TestPatchCronJobTemplate_UpdatesContainersAndPersists(t *testing.T) {
 						ObjectMeta: metav1.ObjectMeta{
 							Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
 						},
-						Spec: corev1.PodSpec{
-							Containers: []corev1.Container{{
-								Name: "app",
-								Resources: corev1.ResourceRequirements{
-									Requests: corev1.ResourceList{
-										corev1.ResourceCPU:    resource.MustParse("100m"),
-										corev1.ResourceMemory: resource.MustParse("64Mi"),
-									},
+						Spec: corev1.PodSpec{Containers: []corev1.Container{{
+							Name: "app",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("100m"),
+									corev1.ResourceMemory: resource.MustParse("64Mi"),
 								},
-							}},
-						},
+							},
+						}}},
 					},
 				},
 			},
 		},
 	}
-	r := makeReconciler(t, cj)
-	target := cronJobToTarget(cj)
-	recs := map[string]workload.ContainerRecommendation{
-		"app": {
-			CPURequest:    qty("250m"),
-			MemoryRequest: qty("128Mi"),
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:       "default",
+			Name:            "nightly-1",
+			OwnerReferences: []metav1.OwnerReference{{Controller: boolPtr(true), UID: "cj-uid", Kind: "CronJob"}},
 		},
 	}
-
-	if err := r.patchCronJobTemplate(context.Background(), &target, recs); err != nil {
-		t.Fatalf("patch: %v", err)
-	}
-
-	var got batchv1.CronJob
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "nightly"}, &got); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	c := got.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
-	if cpu := c.Resources.Requests[corev1.ResourceCPU]; cpu.MilliValue() != 250 {
-		t.Errorf("cpu request not patched: %v", &cpu)
-	}
-	if mem := c.Resources.Requests[corev1.ResourceMemory]; mem.Value() != 128*1024*1024 {
-		t.Errorf("memory request not patched: %v", &mem)
-	}
-}
-
-// TestPatchCronJobTemplate_PreservesUnrelatedFields verifies the patch
-// targets only the JobTemplate containers and leaves the schedule, history
-// limits, and other fields intact.
-func TestPatchCronJobTemplate_PreservesUnrelatedFields(t *testing.T) {
-	successLimit := int32(7)
-	cj := &batchv1.CronJob{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nightly"},
-		Spec: batchv1.CronJobSpec{
-			Schedule:                   "0 3 * * *",
-			SuccessfulJobsHistoryLimit: &successLimit,
-			JobTemplate: batchv1.JobTemplateSpec{
-				Spec: batchv1.JobSpec{
-					Template: corev1.PodTemplateSpec{
-						Spec: corev1.PodSpec{
-							Containers: []corev1.Container{{Name: "app"}},
-						},
-					},
-				},
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "nightly-1-abc",
+			Labels:    map[string]string{jobPodNameLabel: "nightly-1"},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
 			},
-		},
+		}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
-	r := makeReconciler(t, cj)
+
+	var cronjobPatched, podResized, evicted bool
+	r := makeReconciler(t, cj, job, pod)
+	// Wrap the existing client with interceptor to observe Patch calls.
+	r.Client = fake.NewClientBuilder().
+		WithScheme(r.Scheme).
+		WithObjects(cj, job, pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if _, ok := obj.(*batchv1.CronJob); ok {
+					cronjobPatched = true
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+			SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					if _, ok := obj.(*corev1.Pod); ok {
+						podResized = true
+					}
+				}
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evicted = true
+				}
+				return nil
+			},
+		}).
+		Build()
+	r.patcher = workload.New(r.Client, true /* in-place */)
+
 	target := cronJobToTarget(cj)
 	recs := map[string]workload.ContainerRecommendation{
-		"app": {CPURequest: qty("250m")},
+		"app": {CPURequest: qty("250m"), MemoryRequest: qty("128Mi")},
+	}
+	if err := r.resizeCronJobPods(context.Background(), &target, recs); err != nil {
+		t.Fatalf("resizeCronJobPods: %v", err)
 	}
 
-	if err := r.patchCronJobTemplate(context.Background(), &target, recs); err != nil {
-		t.Fatalf("patch: %v", err)
+	if cronjobPatched {
+		t.Error("controller must not patch the CronJob spec")
 	}
-
-	var got batchv1.CronJob
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "nightly"}, &got); err != nil {
-		t.Fatalf("get: %v", err)
+	if !podResized {
+		t.Error("expected /resize subresource patch on the running cronjob pod")
 	}
-	if got.Spec.Schedule != "0 3 * * *" {
-		t.Errorf("schedule clobbered: %q", got.Spec.Schedule)
-	}
-	if got.Spec.SuccessfulJobsHistoryLimit == nil || *got.Spec.SuccessfulJobsHistoryLimit != 7 {
-		t.Errorf("successfulJobsHistoryLimit clobbered: %v", got.Spec.SuccessfulJobsHistoryLimit)
+	if evicted {
+		t.Error("controller must never evict cronjob pods")
 	}
 }

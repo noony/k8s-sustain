@@ -116,9 +116,7 @@ spec:
 
 ### Ongoing mode for CronJobs
 
-`Ongoing` mode updates the CronJob's job template so **future runs** use updated resources. It does not affect currently running job pods (those are ephemeral and will finish normally).
-
-This is useful when you want the controller to keep the template current without relying on the webhook:
+`Ongoing` mode resizes **currently running** job pods in place using the Kubernetes `pods/resize` subresource (requires `InPlacePodVerticalScaling` — GA on k8s ≥ 1.33; works for `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35). The CronJob spec itself is **never modified**, so GitOps tools (Argo CD, Flux) see no drift. Future runs continue to pick up the latest resources from the webhook at admission.
 
 ```yaml
 spec:
@@ -127,6 +125,13 @@ spec:
       types:
         cronJob: Ongoing
 ```
+
+Practical implications:
+
+- For CronJobs whose pods finish within seconds (e.g. `* * * * *` health pings), `Ongoing` is essentially equivalent to `OnCreate` — pods complete before any reconcile pass would touch them. The cost of running `Ongoing` is one extra Job/Pod list per reconcile.
+- For long-running runs (daily ETL, batch training, hour-long backfills), `Ongoing` can correct an under- or over-provisioned pod mid-run without restarting the container.
+- On clusters where `InPlacePodVerticalScaling` is unavailable or the kubelet reports the resize as `Infeasible`, the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook.
+- The controller never patches the `CronJob` or `Job` object, so RBAC for `batch/cronjobs` and `batch/jobs` is read-only.
 
 ### Collecting enough history
 

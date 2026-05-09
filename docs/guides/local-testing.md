@@ -143,17 +143,23 @@ with steady ~200m CPU / ~100MiB memory load. Initial requests are
 deliberately oversized at `500m / 256Mi`. `Ongoing` mode is enabled for
 CronJobs.
 
-**Expected:** the controller patches the CronJob's
-`spec.jobTemplate.spec.template.spec.containers[*].resources` directly —
-**no** pod recycling. Currently-running job pods finish on their existing
-spec; new runs (next minute boundary) spawn with the updated requests.
-After `WINDOW + reconcile_interval` the CPU request drops to ~`220m` and
+**Expected:** the CronJob spec is **never modified** (no GitOps drift).
+Currently-running job pods are resized in place via the `pods/resize`
+subresource when the cluster supports it; otherwise they finish on their
+existing resources. New runs (next minute boundary) spawn with updated
+requests injected by the webhook at admission. After
+`WINDOW + reconcile_interval` the CPU request drops to ~`220m` and
 memory to ~`110Mi`.
 
 ```bash
+# CronJob spec is unchanged across reconciles (no controller patches)
 kubectl get cronjob -n scenario-cronjob job \
   -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources}'
+# The current recommendation is exposed via WorkloadRecommendation
 kubectl get wlrec -n scenario-cronjob cronjob-job -o yaml
+# Inspect a running job pod — its container resources reflect the latest reco
+kubectl get pod -n scenario-cronjob -l batch.kubernetes.io/job-name -o yaml \
+  | grep -A4 'resources:'
 ```
 
 This scenario also exercises the Pod → Job → CronJob recording-rule

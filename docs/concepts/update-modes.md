@@ -70,7 +70,9 @@ See [In-Place Updates](in-place-updates.md) for details.
 - Situations where you want resources to track actual usage over time
 - Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.31)
 
-**Note:** The controller never patches workload templates (Deployment, StatefulSet, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s < 1.31), pods are replaced via PDB-respecting eviction, which causes pod restarts.
+**Note:** The controller never patches workload templates (Deployment, StatefulSet, CronJob, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s < 1.31), pods are replaced via PDB-respecting eviction, which causes pod restarts.
+
+**CronJob exception:** for `cronJob: Ongoing`, eviction is *never* used — evicting a Job pod would kill the run. Currently-running job pods are resized in place when the cluster supports it (k8s ≥ 1.31, with full coverage of `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35); otherwise they are left to finish on their original resources and the next scheduled run picks up the new values from the webhook. The CronJob spec itself is never modified, so GitOps tools see no drift.
 
 ---
 

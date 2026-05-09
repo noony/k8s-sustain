@@ -49,7 +49,7 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
 **Reconcile loop:**
 
 1. A `Policy` event is received (create / update / periodic requeue)
-2. For each workload kind enabled in the policy (`deployment`, `statefulSet`, `daemonSet`, `argoRollout`):
+2. For each workload kind enabled in the policy (`deployment`, `statefulSet`, `daemonSet`, `argoRollout`, `cronJob`):
    - List all objects of that kind — scoped to the namespaces in `selector.namespaces` when specified, or cluster-wide otherwise
    - Filter by the `k8s.sustain.io/policy` annotation in the pod template
    - Skip workloads with `OnCreate` mode (handled by the webhook)
@@ -59,6 +59,7 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
    - Compute a per-container recommendation (see [Recommendation Pipeline](recommendation-pipeline.md))
    - If `--recommend-only` is set, log the recommendation and skip patching
    - Recycle stale running pods: on k8s >= 1.31 via in-place resource patching (using the `/resize` subresource on k8s >= 1.33); on k8s < 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time
+   - **CronJob exception:** the controller never mutates the CronJob spec and never evicts a job pod. On clusters that support in-place resize, currently-running job pods are resized via `pods/resize`; otherwise they finish on their existing resources and the next scheduled run picks up the new values from the webhook
    - Emit a `ResourcesUpdated` event on the workload object on success
    - On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a `ReconciliationRetryScheduled` warning event on the workload
 

@@ -38,14 +38,12 @@ rules:
   - apiGroups: [argoproj.io]
     resources: [rollouts]
     verbs: [get, list, watch]
-  # Workloads — batch. Read all; patch CronJobs in Ongoing mode (jobTemplate
-  # right-sizing); webhook also resolves CronJob owners from Job pods.
+  # Workloads — batch. Read-only: Ongoing mode resizes job pods in place via
+  # pods/resize rather than mutating the CronJob/Job specs. The webhook also
+  # resolves CronJob owners from Job pods.
   - apiGroups: [batch]
-    resources: [jobs]
+    resources: [jobs, cronjobs]
     verbs: [get, list, watch]
-  - apiGroups: [batch]
-    resources: [cronjobs]
-    verbs: [get, list, watch, patch]
   # Namespaces and Pods (in-place updates)
   - apiGroups: [""]
     resources: [namespaces]

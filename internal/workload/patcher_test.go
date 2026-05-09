@@ -743,3 +743,221 @@ func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
 		t.Errorf("expected no-op when resize Deferred (resize=%v, eviction=%v)", resizeCalled, evictionCalled)
 	}
 }
+
+// TestResizePodsInPlace_HappyPath verifies that ResizePodsInPlace patches
+// the /resize subresource for each Running, non-terminating pod and never
+// triggers eviction.
+func TestResizePodsInPlace_HappyPath(t *testing.T) {
+	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var resizeCalled, evictionCalled bool
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					resizeCalled = true
+				}
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evictionCalled = true
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true)
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{stale}, recs); err != nil {
+		t.Fatalf("ResizePodsInPlace: %v", err)
+	}
+	if !resizeCalled {
+		t.Error("expected /resize subresource patch to be called")
+	}
+	if evictionCalled {
+		t.Error("ResizePodsInPlace must never evict")
+	}
+}
+
+// TestResizePodsInPlace_NoOpWhenInPlaceDisabled verifies that when the
+// patcher was constructed with inPlace=false (older cluster), ResizePodsInPlace
+// silently no-ops instead of falling back to eviction. Job pods must finish
+// on their existing resources; the next run inherits new resources via the
+// webhook.
+func TestResizePodsInPlace_NoOpWhenInPlaceDisabled(t *testing.T) {
+	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var anyCall bool
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, _ string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				anyCall = true
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, _ string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				anyCall = true
+				return nil
+			},
+			Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+				anyCall = true
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, false /* inPlace disabled */)
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{stale}, recs); err != nil {
+		t.Fatalf("ResizePodsInPlace: %v", err)
+	}
+	if anyCall {
+		t.Error("ResizePodsInPlace must no-op (no API calls) when inPlace is disabled")
+	}
+}
+
+// TestResizePodsInPlace_SkipsTerminatingAndNonRunning verifies that pods
+// with a deletion timestamp or non-Running phase are skipped without any
+// API call.
+func TestResizePodsInPlace_SkipsTerminatingAndNonRunning(t *testing.T) {
+	deletionTime := metav1.Now()
+	terminating := runningPod("terminating", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	terminating.DeletionTimestamp = &deletionTime
+	terminating.Finalizers = []string{"k8s-sustain.io/test"}
+
+	pending := runningPod("pending", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	pending.Status.Phase = corev1.PodPending
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var resizeCalled bool
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(terminating, pending).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					resizeCalled = true
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true)
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{terminating, pending}, recs); err != nil {
+		t.Fatalf("ResizePodsInPlace: %v", err)
+	}
+	if resizeCalled {
+		t.Error("expected no /resize call for terminating or non-Running pods")
+	}
+}
+
+// TestResizePodsInPlace_InfeasibleSkipsNoEviction verifies that a pod
+// with status.resize=Infeasible is left alone — Job pods must not be evicted.
+// The next scheduled run will inherit the new resources via the webhook.
+func TestResizePodsInPlace_InfeasibleSkipsNoEviction(t *testing.T) {
+	pod := runningPod("infeasible", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	pod.Status.Resize = corev1.PodResizeStatusInfeasible
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evictionCalled, resizeCalled bool
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					resizeCalled = true
+				}
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evictionCalled = true
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true)
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{pod}, recs); err != nil {
+		t.Fatalf("ResizePodsInPlace: %v", err)
+	}
+	if resizeCalled {
+		t.Error("did not expect /resize for Infeasible status")
+	}
+	if evictionCalled {
+		t.Error("ResizePodsInPlace must never evict, even on Infeasible")
+	}
+}
+
+// TestResizePodsInPlace_FeatureGateRejectionDoesNotEvict verifies that when
+// the API server rejects the resize because the feature gate is disabled
+// (Invalid error), the patcher disables in-place mode for subsequent calls
+// but does not evict the current pod.
+func TestResizePodsInPlace_FeatureGateRejectionDoesNotEvict(t *testing.T) {
+	pod := runningPod("rejected", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evictionCalled bool
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), pod.Name, nil)
+				}
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evictionCalled = true
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true)
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{pod}, recs); err != nil {
+		t.Fatalf("ResizePodsInPlace: %v", err)
+	}
+	if evictionCalled {
+		t.Error("ResizePodsInPlace must never evict, even on feature-gate rejection")
+	}
+	if p.InPlace() {
+		t.Error("expected in-place mode disabled after Invalid response")
+	}
+}

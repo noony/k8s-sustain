@@ -68,6 +68,100 @@ func (p *Patcher) RecyclePods(ctx context.Context, namespace string, selector kl
 	return p.recyclePods(ctx, namespace, selector, recs)
 }
 
+// ResizePodsInPlace resizes the given pods in place, never falling back to
+// eviction. It is the entry point for short-lived pods (Job, CronJob runs)
+// where eviction would kill the work in progress: if the cluster doesn't
+// support InPlacePodVerticalScaling, the resize is silently skipped and the
+// new resources land on the next pod creation via the webhook.
+//
+// The caller is responsible for filtering out pods that should not be touched
+// (e.g. pods owned by Completed/Failed Jobs).
+func (p *Patcher) ResizePodsInPlace(ctx context.Context, pods []*corev1.Pod, recs map[string]ContainerRecommendation) error {
+	logger := log.FromContext(ctx)
+	if !p.inPlace.Load() {
+		logger.V(1).Info("in-place resize disabled on this cluster; deferring to next pod creation via webhook")
+		return nil
+	}
+
+	var errs []error
+	processed, skipped := 0, 0
+	for _, pod := range pods {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
+			logger.V(1).Info("skipping pod", "pod", pod.Name, "phase", pod.Status.Phase, "deleting", pod.DeletionTimestamp != nil)
+			skipped++
+			continue
+		}
+		if err := p.resizePodInPlaceNoEvict(ctx, pod, recs); err != nil {
+			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
+		}
+		processed++
+	}
+	logger.Info("in-place resize pass complete", "processed", processed, "skipped", skipped, "errors", len(errs))
+	return errors.Join(errs...)
+}
+
+// resizePodInPlaceNoEvict mirrors patchPodInPlace but never evicts. Infeasible
+// resizes and feature-gate rejections are logged and skipped — the next pod
+// creation will pick up the new resources via the webhook.
+func (p *Patcher) resizePodInPlaceNoEvict(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) error {
+	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
+
+	switch pod.Status.Resize {
+	case corev1.PodResizeStatusInfeasible:
+		logger.Info("in-place resize infeasible for short-lived pod, skipping (next run will pick up new resources)")
+		return nil
+	case corev1.PodResizeStatusDeferred:
+		logger.Info("in-place resize deferred by kubelet, will apply when conditions allow")
+		return nil
+	}
+
+	base := pod.DeepCopy()
+	containers, regChanged := applyRecommendations(pod.Spec.Containers, recs)
+	initContainers, initChanged := applyRecommendationsToSidecars(pod.Spec.InitContainers, recs)
+	if !regChanged && !initChanged {
+		logger.V(1).Info("pod already at target resources, no in-place patch needed")
+		return nil
+	}
+
+	if regChanged {
+		pod.Spec.Containers = containers
+		err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(base))
+		if apierrors.IsNotFound(err) {
+			logger.V(1).Info("/resize subresource not available, falling back to direct pod patch")
+			err = p.client.Patch(ctx, pod, client.MergeFrom(base))
+		}
+		if apierrors.IsInvalid(err) {
+			logger.Info("in-place pod resource patch rejected, feature gate likely disabled; skipping (next run via webhook)")
+			p.inPlace.Store(false)
+			pod.Spec.Containers = base.Spec.Containers
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		logger.Info("in-place resize applied")
+	}
+
+	if initChanged {
+		sidecarBase := pod.DeepCopy()
+		sidecarBase.Spec.InitContainers = base.Spec.InitContainers
+		pod.Spec.InitContainers = initContainers
+
+		err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(sidecarBase))
+		if err != nil {
+			logger.Info("sidecar in-place resize not accepted, will apply at next pod creation",
+				"err", err.Error())
+			pod.Spec.InitContainers = base.Spec.InitContainers
+		} else {
+			logger.Info("sidecar in-place resize applied")
+		}
+	}
+	return nil
+}
+
 // recyclePods drives running pods toward the updated resource spec.
 // On clusters that support InPlacePodVerticalScaling the pod's resources are
 // patched directly (zero restart). On older clusters each stale pod is evicted
