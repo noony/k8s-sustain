@@ -44,6 +44,8 @@ spec:
 
 Right-sizing a standalone Job is only meaningful when the same job type runs repeatedly enough to build a percentile history.
 
+Standalone Jobs appear on the dashboard's Workloads page as kind `Job`. Jobs owned by a CronJob are intentionally excluded — they appear under their owning CronJob row.
+
 ## CronJobs
 
 CronJobs spawn ephemeral pods on a schedule. Because each run creates a fresh pod, `OnCreate` mode is a natural fit — the webhook injects recommendations at the start of every run.

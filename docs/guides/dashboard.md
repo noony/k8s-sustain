@@ -79,7 +79,7 @@ The overview is organised as a vertical "Story Flow" with six bands, each answer
 
 ### Workloads Page
 
-Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs) across the cluster, regardless of whether it is governed by a policy.
+Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, standalone Jobs) across the cluster, regardless of whether it is governed by a policy. Jobs spawned by a CronJob are folded under their owning CronJob row to avoid double-counting.
 
 - **Filters** — Filter by namespace, kind, **risk state** (healthy, drifted, at risk, blocked), and **autoscaler presence** (with autoscaler / without autoscaler). The free-text name search remains.
 - **Columns** — A **Risk** badge summarises the workload's state at a glance, a **Drift %** column shows the gap between current request and recommendation, and an **Autoscaler** column indicates whether the workload is paired with an HPA or KEDA ScaledObject. The previous CPU/Memory request columns have been removed because the workload detail view now displays them in context.

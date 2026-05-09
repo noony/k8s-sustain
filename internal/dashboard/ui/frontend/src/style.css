@@ -286,6 +286,10 @@ tbody tr:last-child td {
   background: rgba(59, 130, 246, 0.15);
   color: var(--blue);
 }
+.kind-Job {
+  background: rgba(168, 85, 247, 0.15);
+  color: var(--purple, #a855f7);
+}
 
 /* Charts */
 .chart-grid {

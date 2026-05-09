@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -275,6 +276,14 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 			workloads = append(workloads, wl...)
 		}
 	}
+	if policy.Spec.RightSizing.Update.Types.Job != nil {
+		wl, err := s.listJobWorkloads(ctx, policyName)
+		if err != nil {
+			s.Logger.Error(err, "failed to list jobs", "policy", policyName)
+		} else {
+			workloads = append(workloads, wl...)
+		}
+	}
 
 	if workloads == nil {
 		workloads = []workloadSummary{}
@@ -435,6 +444,41 @@ func (s *Server) listCronJobWorkloads(ctx context.Context, policyName string) ([
 		})
 	}
 	return out, nil
+}
+
+// listJobWorkloads returns workloads for standalone Jobs only. Jobs spawned by
+// a CronJob are skipped — they appear under their owning CronJob row, and the
+// webhook attributes their pods to owner_kind=CronJob in metrics.
+func (s *Server) listJobWorkloads(ctx context.Context, policyName string) ([]workloadSummary, error) {
+	var list batchv1.JobList
+	if err := s.K8sClient.List(ctx, &list); err != nil {
+		return nil, err
+	}
+	var out []workloadSummary
+	for _, j := range list.Items {
+		if j.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation] != policyName {
+			continue
+		}
+		if isOwnedByCronJob(j.OwnerReferences) {
+			continue
+		}
+		out = append(out, workloadSummary{
+			Namespace:  j.Namespace,
+			Kind:       "Job",
+			Name:       j.Name,
+			Containers: containerStatuses(j.Spec.Template.Spec.Containers, j.Spec.Template.Spec.InitContainers),
+		})
+	}
+	return out, nil
+}
+
+func isOwnedByCronJob(refs []metav1.OwnerReference) bool {
+	for _, ref := range refs {
+		if ref.Controller != nil && *ref.Controller && ref.Kind == "CronJob" {
+			return true
+		}
+	}
+	return false
 }
 
 // fetchCoordinationFactors queries `k8s_sustain_coordination_factor` for one
@@ -625,6 +669,27 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 					Kind:       "CronJob",
 					Name:       cj.Name,
 					Containers: containerStatuses(cj.Spec.JobTemplate.Spec.Template.Spec.Containers, cj.Spec.JobTemplate.Spec.Template.Spec.InitContainers),
+					Automated:  policyName != "",
+					PolicyName: policyName,
+				})
+			}
+		}
+	}
+	if kindFilter == "" || kindFilter == "Job" {
+		var list batchv1.JobList
+		if err := s.K8sClient.List(ctx, &list, listOpts...); err != nil {
+			s.Logger.Error(err, "failed to list jobs")
+		} else {
+			for _, j := range list.Items {
+				if isOwnedByCronJob(j.OwnerReferences) {
+					continue
+				}
+				policyName := j.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation]
+				workloads = append(workloads, allWorkloadSummary{
+					Namespace:  j.Namespace,
+					Kind:       "Job",
+					Name:       j.Name,
+					Containers: containerStatuses(j.Spec.Template.Spec.Containers, j.Spec.Template.Spec.InitContainers),
 					Automated:  policyName != "",
 					PolicyName: policyName,
 				})
@@ -899,6 +964,12 @@ func (s *Server) getWorkloadPolicyAnnotation(ctx context.Context, namespace, kin
 			return "", err
 		}
 		return obj.Spec.JobTemplate.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation], nil
+	case "Job":
+		obj := &batchv1.Job{}
+		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
+			return "", err
+		}
+		return obj.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation], nil
 	default:
 		return "", fmt.Errorf("unsupported kind %q", kind)
 	}
@@ -1049,6 +1120,12 @@ func (s *Server) getWorkloadContainers(ctx context.Context, namespace, kind, nam
 			return nil, err
 		}
 		return mergedContainers(obj.Spec.JobTemplate.Spec.Template.Spec.Containers, obj.Spec.JobTemplate.Spec.Template.Spec.InitContainers), nil
+	case "Job":
+		obj := &batchv1.Job{}
+		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
+			return nil, err
+		}
+		return mergedContainers(obj.Spec.Template.Spec.Containers, obj.Spec.Template.Spec.InitContainers), nil
 	default:
 		return nil, fmt.Errorf("unsupported kind %q", kind)
 	}
@@ -1097,6 +1174,12 @@ func (s *Server) getInitContainerNames(ctx context.Context, namespace, kind, nam
 			return nil
 		}
 		list = obj.Spec.JobTemplate.Spec.Template.Spec.InitContainers
+	case "Job":
+		obj := &batchv1.Job{}
+		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
+			return nil
+		}
+		list = obj.Spec.Template.Spec.InitContainers
 	default:
 		return nil
 	}
@@ -1156,6 +1239,8 @@ func (s *Server) handleWorkloadDetail(w http.ResponseWriter, r *http.Request, na
 				modePtr = policy.Spec.RightSizing.Update.Types.DaemonSet
 			case "CronJob":
 				modePtr = policy.Spec.RightSizing.Update.Types.CronJob
+			case "Job":
+				modePtr = policy.Spec.RightSizing.Update.Types.Job
 			}
 			if modePtr != nil {
 				resp.UpdateMode = string(*modePtr)
