@@ -1220,6 +1220,33 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cronjob-long-running" class="md-nav__link">
+    <span class="md-ellipsis">
+      cronjob-long-running
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cronjob-overprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      cronjob-overprovisioned
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#job" class="md-nav__link">
+    <span class="md-ellipsis">
+      job
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#oom-kill" class="md-nav__link">
     <span class="md-ellipsis">
       oom-kill
@@ -1615,6 +1642,33 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cronjob-long-running" class="md-nav__link">
+    <span class="md-ellipsis">
+      cronjob-long-running
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cronjob-overprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      cronjob-overprovisioned
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#job" class="md-nav__link">
+    <span class="md-ellipsis">
+      job
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#oom-kill" class="md-nav__link">
     <span class="md-ellipsis">
       oom-kill
@@ -1809,19 +1863,69 @@ exited; the new requests land via webhook injection on the next pod creation.</p
 with steady ~200m CPU / ~100MiB memory load. Initial requests are
 deliberately oversized at <code>500m / 256Mi</code>. <code>Ongoing</code> mode is enabled for
 CronJobs.</p>
-<p><strong>Expected:</strong> the controller patches the CronJob's
-<code>spec.jobTemplate.spec.template.spec.containers[*].resources</code> directly —
-<strong>no</strong> pod recycling. Currently-running job pods finish on their existing
-spec; new runs (next minute boundary) spawn with the updated requests.
-After <code>WINDOW + reconcile_interval</code> the CPU request drops to ~<code>220m</code> and
+<p><strong>Expected:</strong> the CronJob spec is <strong>never modified</strong> (no GitOps drift).
+Currently-running job pods are resized in place via the <code>pods/resize</code>
+subresource when the cluster supports it; otherwise they finish on their
+existing resources. New runs (next minute boundary) spawn with updated
+requests injected by the webhook at admission. After
+<code>WINDOW + reconcile_interval</code> the CPU request drops to ~<code>220m</code> and
 memory to ~<code>110Mi</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>cronjob<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob<span class="w"> </span>job<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.jobTemplate.spec.template.spec.containers[0].resources}&#39;</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob<span class="w"> </span>cronjob-job<span class="w"> </span>-o<span class="w"> </span>yaml
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># CronJob spec is unchanged across reconciles (no controller patches)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>cronjob<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob<span class="w"> </span>job<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.jobTemplate.spec.template.spec.containers[0].resources}&#39;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># The current recommendation is exposed via WorkloadRecommendation</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob<span class="w"> </span>cronjob-job<span class="w"> </span>-o<span class="w"> </span>yaml
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1"># Inspect a running job pod — its container resources reflect the latest reco</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob<span class="w"> </span>-l<span class="w"> </span>batch.kubernetes.io/job-name<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-A4<span class="w"> </span><span class="s1">&#39;resources:&#39;</span>
 </code></pre></div>
 <p>This scenario also exercises the Pod → Job → CronJob recording-rule
 chain — without it, <code>owner_kind="CronJob"</code> would have no metrics and the
 recommendation would never compute.</p>
+<h3 id="cronjob-long-running"><code>cronjob-long-running</code><a class="headerlink" href="#cronjob-long-running" title="Permanent link">&para;</a></h3>
+<p>CronJob with a 12-minute pod runtime (every 15 minutes,
+<code>concurrencyPolicy: Forbid</code>). Initial requests are oversized at
+<code>500m / 256Mi</code>. Run with <code>WINDOW=2m RECONCILE=30s</code> so the controller has
+time to land at least one recommendation while a single run is still
+alive.</p>
+<p><strong>Expected:</strong> the <strong>same pod</strong> is resized in place via the <code>pods/resize</code>
+subresource as the controller reconciles. The container's
+<code>spec.containers[0].resources</code> change without a restart — verify
+<code>status.containerStatuses[0].restartCount</code> stays at <code>0</code>. This is the
+scenario that exercises the new in-place resize path on a <code>restartPolicy:
+Never</code> Job pod (k8s ≥ 1.35).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">POD</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--field-selector<span class="w"> </span>status.phase<span class="o">=</span>Running<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span><span class="nv">$POD</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.containers[0].resources}{&quot;\n&quot;}&#39;</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>sleep<span class="w"> </span><span class="m">60</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span><span class="nv">$POD</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.containers[0].resources}{&quot;\n&quot;}&#39;</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span><span class="nv">$POD</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.containerStatuses[0].restartCount}{&quot;\n&quot;}&#39;</span>
+</code></pre></div>
+<h3 id="cronjob-overprovisioned"><code>cronjob-overprovisioned</code><a class="headerlink" href="#cronjob-overprovisioned" title="Permanent link">&para;</a></h3>
+<p>CronJob analogue of the <code>overprovisioned</code> Deployment scenario. Initial
+requests <code>1000m / 512Mi</code>, actual per-run usage ~<code>50m / 40Mi</code> for ~90s.</p>
+<p><strong>Expected:</strong> Aggressive downsizing — CPU to ~<code>60m</code>, memory to ~<code>50Mi</code>,
+observed on each new run's pod (webhook-injected). The CronJob spec
+itself is intentionally unchanged. Confirms the new pod-level path
+handles large recommendation deltas just as well as the old spec-patching
+path did.</p>
+<h3 id="job"><code>job</code><a class="headerlink" href="#job" title="Permanent link">&para;</a></h3>
+<p>A standalone <code>batch/v1</code> Job (no CronJob owner) with one ~5-minute run.
+The controller does not reconcile standalone Jobs, so this scenario
+exercises only the webhook's <code>Pod → Job</code> resolution branch.</p>
+<p><strong>Expected:</strong> First run starts with the original <code>500m / 256Mi</code> requests
+(no history yet). Re-apply the Job after <code>WINDOW</code> elapses — the second
+run's pod is webhook-injected with the percentile-based recommendation
+(~<code>60m / 35Mi</code>).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>hack/scenarios/job.yaml
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>make<span class="w"> </span>test-scenario-job
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-job<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].spec.containers[0].resources}{&quot;\n&quot;}&#39;</span>
+</code></pre></div>
 <h3 id="oom-kill"><code>oom-kill</code><a class="headerlink" href="#oom-kill" title="Permanent link">&para;</a></h3>
 <p>Single-container Deployment that quietly holds ~30Mi for 60 s, then attempts
 to allocate 120Mi against a 96Mi cgroup memory limit — the kernel kills the
@@ -1837,20 +1941,20 @@ container, Kubernetes restarts it, and the cycle repeats.</p>
 <li><code>k8s_sustain_oom_floor_applied_total{owner_name="stress"}</code> increments on
   each reconcile while the OOM is within the 24 h window.</li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-oom-kill<span class="w"> </span>stress<span class="w"> </span>-o<span class="w"> </span>yaml
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>kubectl<span class="w"> </span>--raw<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>/api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">&#39;k8s_sustain_oom_floor_applied_total&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-oom-kill<span class="w"> </span>stress<span class="w"> </span>-o<span class="w"> </span>yaml
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>kubectl<span class="w"> </span>--raw<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>/api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">&#39;k8s_sustain_oom_floor_applied_total&#39;</span>
 </code></pre></div>
 <h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
 <p><code>make test-scenario-status</code> prints a table:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
 </code></pre></div>
 <p>The dashboard remains the richer source of truth — start a port-forward
 and open <code>http://localhost:8090</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
 </code></pre></div>
 <h2 id="adding-a-new-scenario">Adding a new scenario<a class="headerlink" href="#adding-a-new-scenario" title="Permanent link">&para;</a></h2>
 <p>See <code>hack/scenarios/README.md</code>.</p>

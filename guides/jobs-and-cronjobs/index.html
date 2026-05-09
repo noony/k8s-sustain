@@ -933,6 +933,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#oom-detection-for-one-shot-pods" class="md-nav__link">
+    <span class="md-ellipsis">
+      OOM detection for one-shot pods
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1479,6 +1488,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#oom-detection-for-one-shot-pods" class="md-nav__link">
+    <span class="md-ellipsis">
+      OOM detection for one-shot pods
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1596,14 +1614,20 @@
 <li>The annotation must be in <code>spec.jobTemplate.spec.template.metadata.annotations</code>.</li>
 </ol>
 <h3 id="ongoing-mode-for-cronjobs">Ongoing mode for CronJobs<a class="headerlink" href="#ongoing-mode-for-cronjobs" title="Permanent link">&para;</a></h3>
-<p><code>Ongoing</code> mode updates the CronJob's job template so <strong>future runs</strong> use updated resources. It does not affect currently running job pods (those are ephemeral and will finish normally).</p>
-<p>This is useful when you want the controller to keep the template current without relying on the webhook:</p>
+<p><code>Ongoing</code> mode resizes <strong>currently running</strong> job pods in place using the Kubernetes <code>pods/resize</code> subresource (requires <code>InPlacePodVerticalScaling</code> — GA on k8s ≥ 1.33; works for <code>restartPolicy: Never</code>/<code>OnFailure</code> on k8s ≥ 1.35). The CronJob spec itself is <strong>never modified</strong>, so GitOps tools (Argo CD, Flux) see no drift. Future runs continue to pick up the latest resources from the webhook at admission.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">spec</span><span class="p">:</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
 <a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
 <a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">        </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
 </code></pre></div>
+<p>Practical implications:</p>
+<ul>
+<li>For CronJobs whose pods finish within seconds (e.g. <code>* * * * *</code> health pings), <code>Ongoing</code> is essentially equivalent to <code>OnCreate</code> — pods complete before any reconcile pass would touch them. The cost of running <code>Ongoing</code> is one extra Job/Pod list per reconcile.</li>
+<li>For long-running runs (daily ETL, batch training, hour-long backfills), <code>Ongoing</code> can correct an under- or over-provisioned pod mid-run without restarting the container.</li>
+<li>On clusters where <code>InPlacePodVerticalScaling</code> is unavailable or the kubelet reports the resize as <code>Infeasible</code>, the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook.</li>
+<li>The controller never patches the <code>CronJob</code> or <code>Job</code> object, so RBAC for <code>batch/cronjobs</code> and <code>batch/jobs</code> is read-only.</li>
+</ul>
 <h3 id="collecting-enough-history">Collecting enough history<a class="headerlink" href="#collecting-enough-history" title="Permanent link">&para;</a></h3>
 <p>CronJobs that run infrequently (e.g. weekly) may not have enough data for a meaningful percentile. Use a longer window:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">resourcesConfigs</span><span class="p">:</span>
@@ -1613,6 +1637,9 @@
 <p>If fewer than ~10 data points exist in the window, the controller logs <code>no metrics yet, skipping</code> and leaves resources unchanged.</p>
 <h3 id="guaranteed-qos-for-batch-jobs">Guaranteed QoS for batch jobs<a class="headerlink" href="#guaranteed-qos-for-batch-jobs" title="Permanent link">&para;</a></h3>
 <p>Setting <code>equalsToRequest: true</code> for both CPU and memory limits makes the pod a <a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/#guaranteed">Guaranteed QoS class</a>, which prevents throttling and OOM eviction under memory pressure. This is often desirable for batch workloads.</p>
+<h3 id="oom-detection-for-one-shot-pods">OOM detection for one-shot pods<a class="headerlink" href="#oom-detection-for-one-shot-pods" title="Permanent link">&para;</a></h3>
+<p>CronJob/Job pods typically run with <code>restartPolicy: Never</code> (or <code>backoffLimit: 0</code>), so the kubelet does not restart them after an OOM kill — <code>kube_pod_container_status_restarts_total</code> stays at 0. The <code>k8s_sustain:workload_oom_24h</code> rule combines two paths so OOMs are still detected: a "kill" path uses <code>max_over_time(kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[24h])</code> to flag any (pod, container) that OOMed, regardless of whether it was restarted.</p>
+<p>This means the OOM-driven memory floor (in <code>policy_controller.go</code>) and dashboard "OOM 24h" badge work for CronJobs too — provided the failed pod survives long enough for kube-state-metrics to scrape it. Pods garbage-collected by <code>failedJobsHistoryLimit</code> within ~30s of failing can still slip through; raising <code>failedJobsHistoryLimit</code> above 0 helps.</p>
 
 
 

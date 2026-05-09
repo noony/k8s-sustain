@@ -1524,7 +1524,7 @@
 <p><strong>Reconcile loop:</strong></p>
 <ol>
 <li>A <code>Policy</code> event is received (create / update / periodic requeue)</li>
-<li>For each workload kind enabled in the policy (<code>deployment</code>, <code>statefulSet</code>, <code>daemonSet</code>, <code>argoRollout</code>):</li>
+<li>For each workload kind enabled in the policy (<code>deployment</code>, <code>statefulSet</code>, <code>daemonSet</code>, <code>argoRollout</code>, <code>cronJob</code>):</li>
 <li>List all objects of that kind — scoped to the namespaces in <code>selector.namespaces</code> when specified, or cluster-wide otherwise</li>
 <li>Filter by the <code>k8s.sustain.io/policy</code> annotation in the pod template</li>
 <li>Skip workloads with <code>OnCreate</code> mode (handled by the webhook)</li>
@@ -1534,6 +1534,7 @@
 <li>Compute a per-container recommendation (see <a href="../recommendation-pipeline/">Recommendation Pipeline</a>)</li>
 <li>If <code>--recommend-only</code> is set, log the recommendation and skip patching</li>
 <li>Recycle stale running pods: on k8s &gt;= 1.31 via in-place resource patching (using the <code>/resize</code> subresource on k8s &gt;= 1.33); on k8s &lt; 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time</li>
+<li><strong>CronJob exception:</strong> the controller never mutates the CronJob spec and never evicts a job pod. On clusters that support in-place resize, currently-running job pods are resized via <code>pods/resize</code>; otherwise they finish on their existing resources and the next scheduled run picks up the new values from the webhook</li>
 <li>Emit a <code>ResourcesUpdated</code> event on the workload object on success</li>
 <li>On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a <code>ReconciliationRetryScheduled</code> warning event on the workload</li>
 </ol>
