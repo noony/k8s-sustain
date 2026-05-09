@@ -1,0 +1,128 @@
+# scenario: job
+# expected: A standalone batch/v1 Job (NOT created by a CronJob) whose pod
+# receives webhook-injected resources at admission. Validates the Pod -> Job
+# webhook resolution branch in isolation: the controller does not reconcile
+# standalone Jobs, so any resource adjustment observed on the pod is purely
+# the webhook's doing.
+#
+# Because there is only one run, mode `OnCreate` is the natural fit — the
+# pod is right-sized at admission with whatever recommendation Prometheus has
+# accumulated so far for owner_kind=Job (or for the workload family fallback
+# if no Job-specific history exists).
+#
+# Initial requests are deliberately oversized at 500m / 256Mi; per-run usage
+# is ~50m / ~30Mi for ~5 min. A second `Job` (re-applied after WINDOW) is
+# expected to spawn with much lower requests once history has accumulated.
+#
+# Verification:
+#
+#   kubectl get pod -n scenario-job -l app=stress \
+#     -o jsonpath='{.items[0].spec.containers[0].resources}{"\n"}'
+#   # First run: webhook has no history, requests stay near the original.
+#   # Re-apply the Job after WINDOW elapses to see the recommendation kick in:
+#   kubectl delete -f hack/scenarios/job.yaml
+#   make test-scenario-job
+#   kubectl get pod -n scenario-job -l app=stress \
+#     -o jsonpath='{.items[0].spec.containers[0].resources}{"\n"}'
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scenario-job
+  labels:
+    k8s-sustain.io/scenario: job
+---
+apiVersion: k8s.sustain.io/v1alpha1
+kind: Policy
+metadata:
+  name: scenario-job
+spec:
+  selector:
+    namespaces: [scenario-job]
+  rightSizing:
+    update:
+      types:
+        job: OnCreate
+    resourcesConfigs:
+      cpu:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 10
+        limits:
+          noLimit: true
+      memory:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 15
+        limits:
+          requestsLimitsRatio: 1.5
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen
+  namespace: scenario-job
+data:
+  loadgen.py: |
+    import os, time
+    duty = float(os.environ.get('LOAD_DUTY', '0.05'))
+    mem_mb = int(os.environ.get('LOAD_MEM_MB', '30'))
+    runtime_s = float(os.environ.get('RUN_SECONDS', '300'))
+    buf = bytearray(mem_mb * 1024 * 1024)
+    for i in range(0, len(buf), 4096):
+        buf[i] = 1
+    def burn(d, deadline):
+        period = 0.1
+        on = period * d
+        off = period - on
+        while time.monotonic() < deadline:
+            s = time.monotonic()
+            while time.monotonic() - s < on:
+                pass
+            if off > 0:
+                time.sleep(off)
+    stop = time.monotonic() + runtime_s
+    burn(duty, stop)
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oneshot
+  namespace: scenario-job
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      annotations:
+        k8s.sustain.io/policy: scenario-job
+      labels:
+        app: stress
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: stress
+          image: python:3.12-alpine
+          command: ["python3", "/loadgen/loadgen.py"]
+          env:
+            - name: LOAD_DUTY
+              value: "0.05"
+            - name: LOAD_MEM_MB
+              value: "30"
+            - name: RUN_SECONDS
+              value: "300"
+          volumeMounts:
+            - name: loadgen
+              mountPath: /loadgen
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: loadgen
+          configMap:
+            name: loadgen

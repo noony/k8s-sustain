@@ -10,7 +10,7 @@
 #                         already been changed by the controller).
 set -euo pipefail
 
-SCENARIOS=(steady overprovisioned underprovisioned stepped hpa hpa-coordinated hpa-replica-anchor cronjob)
+SCENARIOS=(steady overprovisioned underprovisioned stepped hpa hpa-coordinated hpa-replica-anchor cronjob cronjob-long-running cronjob-overprovisioned job)
 DASHBOARD_SVC=k8s-sustain-dashboard
 DASHBOARD_NS=k8s-sustain
 DASHBOARD_PORT=8090
@@ -38,26 +38,42 @@ for name in "${SCENARIOS[@]}"; do
   ns="scenario-${name}"
   if ! kubectl get ns "${ns}" >/dev/null 2>&1; then continue; fi
 
-  # CronJob scenario reads from the CronJob's jobTemplate (the controller patches
-  # spec, not running pods); other scenarios read from a Deployment/stress pod.
-  if [ "${name}" = "cronjob" ]; then
-    cj=job
-    cpu_req=$(kubectl get cronjob -n "${ns}" "${cj}" \
-      -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.cpu}' 2>/dev/null || echo '?')
-    mem_req=$(kubectl get cronjob -n "${ns}" "${cj}" \
-      -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources.requests.memory}' 2>/dev/null || echo '?')
-    rec_json=$(curl -fsS "${BASE}/api/workloads/${ns}/CronJob/${cj}/recommendations" 2>/dev/null || echo '{}')
+  # CronJob and standalone Job scenarios: read from the latest run's pod.
+  # The CronJob/Job spec is intentionally never modified — the "applied"
+  # column tells you whether the webhook (and, for cronjob-long-running, the
+  # in-place resize path) has already moved the pod off its template defaults.
+  case "${name}" in
+    cronjob)                  wlkind=CronJob; wlname=job ;;
+    cronjob-long-running)     wlkind=CronJob; wlname=long-job ;;
+    cronjob-overprovisioned)  wlkind=CronJob; wlname=overprovisioned ;;
+    job)                      wlkind=Job;     wlname=oneshot ;;
+    *)                        wlkind=""; wlname="" ;;
+  esac
+  if [ -n "${wlkind}" ]; then
+    pod=$(kubectl get pod -n "${ns}" -l app=stress \
+      --sort-by=.metadata.creationTimestamp \
+      -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || true)
+    if [ -z "${pod}" ]; then
+      printf '%-28s %-22s %-9s %-9s %-9s %-9s %-8s\n' \
+        "${ns}" "${wlname} (${wlkind} — no pod yet)" "?" "?" "?" "?" "no"
+      continue
+    fi
+    cpu_req=$(kubectl get pod -n "${ns}" "${pod}" \
+      -o jsonpath='{.spec.containers[0].resources.requests.cpu}' 2>/dev/null || echo '?')
+    mem_req=$(kubectl get pod -n "${ns}" "${pod}" \
+      -o jsonpath='{.spec.containers[0].resources.requests.memory}' 2>/dev/null || echo '?')
+    rec_json=$(curl -fsS "${BASE}/api/workloads/${ns}/${wlkind}/${wlname}/recommendations" 2>/dev/null || echo '{}')
     cpu_rec=$(echo "${rec_json}" | grep -o '"cpuRequest":"[^"]*"' | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
     mem_rec=$(echo "${rec_json}" | grep -o '"memoryRequest":"[^"]*"' | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
     cpu_rec=${cpu_rec:-?}
     mem_rec=${mem_rec:-?}
     orig=$(grep -A2 'requests:' "$(dirname "$0")/${name}.yaml" | awk '/cpu:/ {print $2; exit}')
-    patched=no
+    applied=no
     if [ "${cpu_req}" != "${orig}" ] && [ -n "${cpu_req}" ]; then
-      patched=yes
+      applied=yes
     fi
     printf '%-28s %-22s %-9s %-9s %-9s %-9s %-8s\n' \
-      "${ns}" "${cj} (cronjob)" "${cpu_req:-?}" "${cpu_rec}" "${mem_req:-?}" "${mem_rec}" "${patched}"
+      "${ns}" "${pod} (${wlkind})" "${cpu_req:-?}" "${cpu_rec}" "${mem_req:-?}" "${mem_rec}" "${applied}"
     continue
   fi
 

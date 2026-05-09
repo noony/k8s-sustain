@@ -1,12 +1,16 @@
 # scenario: cronjob
 # expected: A CronJob that runs every 2 minutes is right-sized via the Ongoing path.
-# The controller queries Prometheus for owner_kind=CronJob, computes a
-# recommendation, and patches the CronJob's jobTemplate.spec.template.spec.containers
-# in place. In-flight job pods finish on their existing spec; subsequent runs
-# spawn with the updated requests. No pod recycling.
+# The CronJob spec is NEVER mutated (no GitOps drift). The webhook injects the
+# latest recommendation into each new run at admission time; if the controller
+# happens to reconcile while a run is still alive, it resizes the pod in place
+# via the pods/resize subresource (k8s ≥ 1.31; restartPolicy: Never coverage on
+# k8s ≥ 1.35). RBAC is read-only on batch/cronjobs and batch/jobs.
 #
 # Initial requests: 500m / 256Mi. Per-run usage is ~200m / 100Mi for ~90s.
-# After WINDOW + reconcile, jobTemplate cpu drops to ~220m, memory to ~110Mi.
+# After WINDOW + reconcile, the next run's pod starts with cpu ~220m / mem ~110Mi
+# (webhook-injected). Most runs of this scenario are too short for the controller
+# to catch a live pod, so the mechanism observed here is the webhook; for the
+# in-place resize path see the `cronjob-long-running` scenario.
 #
 # Note: runtime is 90s (not 30s) so cAdvisor — which scrapes every ~30s —
 # always captures at least 2-3 samples per run. With shorter runtimes
@@ -14,8 +18,15 @@
 # typically run minutes/hours, so this is only an issue for tiny test loads.
 #
 # Verification:
-#   kubectl get cronjob -n scenario-cronjob job -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources}' | jq
+#   # CronJob spec stays at the original 500m / 256Mi forever — that is the point.
+#   kubectl get cronjob -n scenario-cronjob job \
+#     -o jsonpath='{.spec.jobTemplate.spec.template.spec.containers[0].resources}' | jq
+#   # The current recommendation is exposed via WorkloadRecommendation.
 #   kubectl get wlrec -n scenario-cronjob cronjob-job -o yaml
+#   # The latest run's pod reflects the recommendation (webhook-injected).
+#   kubectl get pod -n scenario-cronjob -l app=stress \
+#     --sort-by=.metadata.creationTimestamp \
+#     -o jsonpath='{.items[-1].spec.containers[0].resources}'
 
 apiVersion: v1
 kind: Namespace

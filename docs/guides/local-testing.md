@@ -166,6 +166,63 @@ This scenario also exercises the Pod → Job → CronJob recording-rule
 chain — without it, `owner_kind="CronJob"` would have no metrics and the
 recommendation would never compute.
 
+### `cronjob-long-running`
+
+CronJob with a 12-minute pod runtime (every 15 minutes,
+`concurrencyPolicy: Forbid`). Initial requests are oversized at
+`500m / 256Mi`. Run with `WINDOW=2m RECONCILE=30s` so the controller has
+time to land at least one recommendation while a single run is still
+alive.
+
+**Expected:** the **same pod** is resized in place via the `pods/resize`
+subresource as the controller reconciles. The container's
+`spec.containers[0].resources` change without a restart — verify
+`status.containerStatuses[0].restartCount` stays at `0`. This is the
+scenario that exercises the new in-place resize path on a `restartPolicy:
+Never` Job pod (k8s ≥ 1.35).
+
+```bash
+POD=$(kubectl get pod -n scenario-cronjob-long-running -l app=stress \
+  --field-selector status.phase=Running \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl get pod -n scenario-cronjob-long-running $POD \
+  -o jsonpath='{.spec.containers[0].resources}{"\n"}'
+sleep 60
+kubectl get pod -n scenario-cronjob-long-running $POD \
+  -o jsonpath='{.spec.containers[0].resources}{"\n"}'
+kubectl get pod -n scenario-cronjob-long-running $POD \
+  -o jsonpath='{.status.containerStatuses[0].restartCount}{"\n"}'
+```
+
+### `cronjob-overprovisioned`
+
+CronJob analogue of the `overprovisioned` Deployment scenario. Initial
+requests `1000m / 512Mi`, actual per-run usage ~`50m / 40Mi` for ~90s.
+
+**Expected:** Aggressive downsizing — CPU to ~`60m`, memory to ~`50Mi`,
+observed on each new run's pod (webhook-injected). The CronJob spec
+itself is intentionally unchanged. Confirms the new pod-level path
+handles large recommendation deltas just as well as the old spec-patching
+path did.
+
+### `job`
+
+A standalone `batch/v1` Job (no CronJob owner) with one ~5-minute run.
+The controller does not reconcile standalone Jobs, so this scenario
+exercises only the webhook's `Pod → Job` resolution branch.
+
+**Expected:** First run starts with the original `500m / 256Mi` requests
+(no history yet). Re-apply the Job after `WINDOW` elapses — the second
+run's pod is webhook-injected with the percentile-based recommendation
+(~`60m / 35Mi`).
+
+```bash
+kubectl delete -f hack/scenarios/job.yaml
+make test-scenario-job
+kubectl get pod -n scenario-job -l app=stress \
+  -o jsonpath='{.items[0].spec.containers[0].resources}{"\n"}'
+```
+
 ### `oom-kill`
 
 Single-container Deployment that quietly holds ~30Mi for 60 s, then attempts
