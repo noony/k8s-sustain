@@ -99,7 +99,7 @@ spec:
             mountPath: /loadgen
         resources:
           requests:
-            cpu: 1000m
+            cpu: 300m
             memory: 512Mi
           limits:
             memory: 512Mi
