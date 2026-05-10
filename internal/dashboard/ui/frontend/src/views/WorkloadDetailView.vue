@@ -11,13 +11,7 @@ import {
   type WorkloadDetailSnapshot,
   type CoordinationFactors,
 } from '../lib/api'
-import {
-  parseCPUQuantity,
-  parseMemoryQuantity,
-  timeAgo,
-  buildRecommendationYaml,
-  downloadFile,
-} from '../lib/format'
+import { parseCPUQuantity, parseMemoryQuantity, timeAgo } from '../lib/format'
 import {
   createTimeSeriesChart,
   destroyAllCharts,
@@ -241,17 +235,6 @@ function snapshotRiskState(): 'safe' | 'drifted' | 'at-risk' | 'blocked' | '' {
   if (s.oom24h > 0) return 'at-risk'
   if (s.driftPercent > 10) return 'drifted'
   return 'safe'
-}
-
-function copyRecommendationYaml() {
-  if (!recs.value?.containers) return
-  const containers = Object.entries(recs.value.containers).map(([name, rec]) => ({
-    name,
-    cpuRequest: rec.cpuRequest,
-    memoryRequest: rec.memoryRequest,
-  }))
-  const yaml = buildRecommendationYaml(props.namespace, props.kind, props.name, containers)
-  downloadFile(`${props.name}-recommendation.yaml`, yaml, 'text/yaml')
 }
 
 function isMeaningful(v: number | undefined): v is number {
@@ -559,7 +542,6 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         </svg>
         Open in Simulator
       </button>
-      <button class="btn btn-secondary" @click="copyRecommendationYaml">Copy as YAML</button>
     </div>
   </template>
 </template>

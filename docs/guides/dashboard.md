@@ -95,7 +95,6 @@ Shows a comprehensive view of a single workload:
 - **Header badges** — A **Risk** badge mirrors the value shown in the Workloads list. When the workload has a paired autoscaler (HPA or KEDA ScaledObject), an **Autoscaler** badge is shown.
 - **Blocked card** — Visible only when the controller has a retry record for this workload; surfaces the failure **reason**, the number of **attempts**, the **next retry** time, and the **last error** message. Hidden once retries clear.
 - **Recommendations** — If automated, shows the computed CPU and memory recommendations per container.
-- **Copy as YAML** — Builds a runnable manifest fragment (the `resources:` block keyed by container) that you can paste straight into a Helm values file or a workload spec.
 - **CPU and Memory charts** — Interactive time-series with a sliding-window recommendation line overlaid (for automated workloads). The recommendation evolves over time, showing how it would have been computed at each point using the policy's configured window and parameters, rather than a flat line.
 - **Open in Simulator** — Jump to the simulator with the workload pre-filled.
 
