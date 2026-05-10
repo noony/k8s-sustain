@@ -53,19 +53,73 @@ export interface PolicySummary {
   lastAppliedAt?: string
 }
 
+export interface LabelSelector {
+  matchLabels?: Record<string, string>
+  matchExpressions?: {
+    key: string
+    operator: string
+    values?: string[]
+  }[]
+}
+
+export interface PolicySelector {
+  namespaces?: string[]
+  labelSelector?: LabelSelector
+}
+
+export interface UpdateTypes {
+  deployment?: string
+  statefulSet?: string
+  daemonSet?: string
+  cronJob?: string
+  job?: string
+  family?: string
+  deploymentConfig?: string
+  argoRollout?: string
+}
+
+export interface EvictionPolicy {
+  ignoreAutoscalerSafeToEvictAnnotations?: boolean
+}
+
+export interface AutoscalerCoordination {
+  enabled?: boolean
+  replicaBudgetAnchor?: number
+}
+
 export interface PolicySpec {
   name?: string
   spec?: {
+    selector?: PolicySelector
     rightSizing?: {
       resourcesConfigs?: {
         cpu?: ResourceConfig
         memory?: ResourceConfig
       }
+      update?: {
+        types?: UpdateTypes
+        eviction?: EvictionPolicy
+      }
+      autoscalerCoordination?: AutoscalerCoordination
+      excludeInitContainers?: boolean
     }
-    update?: Record<string, string>
   }
+  // top-level update map is also exposed by the backend (flat snapshot of spec.rightSizing.update.types)
+  update?: UpdateTypes
   conditions?: Condition[]
+  workloadCount?: number
+  cpuSavingsCores?: number
+  memSavingsBytes?: number
+  atRiskCount?: number
   effectivenessSeries?: { cpu: TimeValue[]; memory: TimeValue[] }
+}
+
+export interface ResourceLimitsConfig {
+  equalsToRequest?: boolean
+  keepLimit?: boolean
+  keepLimitRequestRatio?: boolean
+  noLimit?: boolean
+  requestsLimitsRatio?: number
 }
 
 export interface ResourceConfig {
@@ -75,7 +129,9 @@ export interface ResourceConfig {
     headroom?: number
     minAllowed?: string
     maxAllowed?: string
+    keepRequest?: boolean
   }
+  limits?: ResourceLimitsConfig
 }
 
 export interface ContainerInfo {

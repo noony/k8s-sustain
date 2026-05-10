@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { api, type PolicySpec, type PolicyWorkloadsData, type BatchSimulateData } from '../lib/api'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useSorting } from '../composables/useSorting'
+import { formatBytes } from '../lib/format'
 import StatusBadge from '../components/StatusBadge.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
 import RiskBadge from '../components/RiskBadge.vue'
@@ -54,6 +55,45 @@ function rs() {
   return policy.value?.spec?.rightSizing?.resourcesConfigs || {}
 }
 
+function selector() {
+  return policy.value?.spec?.selector || {}
+}
+
+function autoscalerCoord() {
+  return policy.value?.spec?.rightSizing?.autoscalerCoordination || {}
+}
+
+function eviction() {
+  return policy.value?.spec?.rightSizing?.update?.eviction || {}
+}
+
+function excludeInit(): boolean {
+  return policy.value?.spec?.rightSizing?.excludeInitContainers === true
+}
+
+function updateTypes() {
+  return policy.value?.spec?.rightSizing?.update?.types || policy.value?.update || {}
+}
+
+function limitsLabel(l?: { [k: string]: any }): string {
+  if (!l) return 'default'
+  if (l.equalsToRequest) return 'equalsToRequest'
+  if (l.keepLimit) return 'keepLimit'
+  if (l.keepLimitRequestRatio) return 'keepLimitRequestRatio'
+  if (l.noLimit) return 'noLimit'
+  if (typeof l.requestsLimitsRatio === 'number')
+    return `requestsLimitsRatio: ${l.requestsLimitsRatio}`
+  return 'default'
+}
+
+function matchExprs(): string[] {
+  const ls = selector().labelSelector
+  if (!ls?.matchExpressions) return []
+  return ls.matchExpressions.map(
+    (e) => `${e.key} ${e.operator}${e.values?.length ? ' [' + e.values.join(',') + ']' : ''}`,
+  )
+}
+
 function sortedWorkloads() {
   return applySorting(workloadData.value?.items || [])
 }
@@ -92,13 +132,16 @@ function effectivenessSeries() {
 }
 
 function modeBadges(): string {
-  const u = policy.value?.spec?.update
-  if (!u) return '-'
+  const u = updateTypes()
   const parts: string[] = []
   if (u.deployment) parts.push(`Deploy:${u.deployment}`)
   if (u.statefulSet) parts.push(`STS:${u.statefulSet}`)
   if (u.daemonSet) parts.push(`DS:${u.daemonSet}`)
   if (u.cronJob) parts.push(`CJ:${u.cronJob}`)
+  if (u.job) parts.push(`Job:${u.job}`)
+  if (u.family) parts.push(`Family:${u.family}`)
+  if (u.deploymentConfig) parts.push(`DC:${u.deploymentConfig}`)
+  if (u.argoRollout) parts.push(`Rollout:${u.argoRollout}`)
   return parts.join(', ') || '-'
 }
 
@@ -153,12 +196,16 @@ function renderYaml(p: typeof policy.value): string {
         <div class="stat-value">{{ workloadData.total }}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">CPU Percentile</div>
-        <div class="stat-value">{{ rs().cpu?.requests?.percentile || 95 }}th</div>
+        <div class="stat-label">CPU saved</div>
+        <div class="stat-value" style="color: var(--green)">
+          {{ (policy.cpuSavingsCores || 0).toFixed(2) }}c
+        </div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Memory Percentile</div>
-        <div class="stat-value">{{ rs().memory?.requests?.percentile || 95 }}th</div>
+        <div class="stat-label">Memory saved</div>
+        <div class="stat-value" style="color: var(--green)">
+          {{ formatBytes(policy.memSavingsBytes || 0) }}
+        </div>
       </div>
     </div>
 
@@ -191,6 +238,14 @@ function renderYaml(p: typeof policy.value): string {
               <span class="label">Max</span
               ><span class="value">{{ rs().cpu?.requests?.maxAllowed || '-' }}</span>
             </div>
+            <div class="rec-row">
+              <span class="label">Keep request</span
+              ><span class="value">{{ rs().cpu?.requests?.keepRequest ? 'yes' : 'no' }}</span>
+            </div>
+            <div class="rec-row">
+              <span class="label">Limits</span
+              ><span class="value">{{ limitsLabel(rs().cpu?.limits) }}</span>
+            </div>
           </div>
         </div>
         <div>
@@ -216,6 +271,14 @@ function renderYaml(p: typeof policy.value): string {
               <span class="label">Max</span
               ><span class="value">{{ rs().memory?.requests?.maxAllowed || '-' }}</span>
             </div>
+            <div class="rec-row">
+              <span class="label">Keep request</span
+              ><span class="value">{{ rs().memory?.requests?.keepRequest ? 'yes' : 'no' }}</span>
+            </div>
+            <div class="rec-row">
+              <span class="label">Limits</span
+              ><span class="value">{{ limitsLabel(rs().memory?.limits) }}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -224,6 +287,74 @@ function renderYaml(p: typeof policy.value): string {
           <span class="label">Update mode</span>
           <span class="value">{{ modeBadges() }}</span>
         </div>
+        <div class="rec-row">
+          <span class="label">Ignore safe-to-evict annotations</span>
+          <span class="value">{{
+            eviction().ignoreAutoscalerSafeToEvictAnnotations ? 'yes' : 'no'
+          }}</span>
+        </div>
+        <div class="rec-row">
+          <span class="label">Exclude init containers</span>
+          <span class="value">{{ excludeInit() ? 'yes' : 'no' }}</span>
+        </div>
+        <div class="rec-row">
+          <span class="label">Autoscaler coordination</span>
+          <span class="value">
+            {{ autoscalerCoord().enabled ? 'enabled' : 'disabled' }}
+            <template v-if="autoscalerCoord().replicaBudgetAnchor !== undefined">
+              · replicaBudgetAnchor: {{ autoscalerCoord().replicaBudgetAnchor }}
+            </template>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Selector</h2>
+      </div>
+      <div class="rec-row">
+        <span class="label">Namespaces</span>
+        <span class="value">
+          <template v-if="(selector().namespaces || []).length">
+            <span
+              v-for="ns in selector().namespaces"
+              :key="ns"
+              class="badge badge-blue"
+              style="margin-right: 4px"
+              >{{ ns }}</span
+            >
+          </template>
+          <template v-else>all namespaces</template>
+        </span>
+      </div>
+      <div class="rec-row">
+        <span class="label">matchLabels</span>
+        <span class="value">
+          <template
+            v-if="
+              selector().labelSelector?.matchLabels &&
+              Object.keys(selector().labelSelector!.matchLabels!).length
+            "
+          >
+            <code
+              v-for="(v, k) in selector().labelSelector!.matchLabels"
+              :key="k"
+              style="margin-right: 6px"
+              >{{ k }}={{ v }}</code
+            >
+          </template>
+          <template v-else>-</template>
+        </span>
+      </div>
+      <div class="rec-row">
+        <span class="label">matchExpressions</span>
+        <span class="value">
+          <template v-if="matchExprs().length">
+            <code v-for="e in matchExprs()" :key="e" style="margin-right: 6px">{{ e }}</code>
+          </template>
+          <template v-else>-</template>
+        </span>
       </div>
     </div>
 
