@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { api, type PolicySpec, type PolicyWorkloadsData, type BatchSimulateData } from '../lib/api'
+import {
+  api,
+  getTimeRangeStep,
+  type PolicySpec,
+  type PolicyWorkloadsData,
+  type BatchSimulateData,
+} from '../lib/api'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useSorting } from '../composables/useSorting'
 import { formatBytes } from '../lib/format'
@@ -30,8 +36,9 @@ const { sort, sortArrow, applySorting } = useSorting('policyWorkloads')
 
 async function load() {
   try {
+    const step = getTimeRangeStep(timeWindow.value)
     const [p, w] = await Promise.all([
-      api<PolicySpec>(`/api/policies/${props.name}`),
+      api<PolicySpec>(`/api/policies/${props.name}?window=${timeWindow.value}&step=${step}`),
       api<PolicyWorkloadsData>(
         `/api/policies/${props.name}/workloads?page=${page.value}&pageSize=50${nsFilter.value ? '&namespace=' + encodeURIComponent(nsFilter.value) : ''}`,
       ),
@@ -49,7 +56,7 @@ async function load() {
 const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh(load)
 
 onMounted(load)
-watch([nsFilter, page], load)
+watch([nsFilter, page, timeWindow], load)
 
 function rs() {
   return policy.value?.spec?.rightSizing?.resourcesConfigs || {}

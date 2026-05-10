@@ -39,7 +39,11 @@ describe('OverviewView', () => {
             },
           ],
         })
-      if (path.startsWith('/api/summary/trend')) return Promise.resolve({ cpu: [], memory: [] })
+      if (path.startsWith('/api/summary/trend'))
+        return Promise.resolve({
+          cpu: { usage: [], request: [], originalRequest: [] },
+          memory: { usage: [], request: [], originalRequest: [] },
+        })
       if (path.startsWith('/api/summary/activity')) return Promise.resolve({ items: [] })
       return Promise.resolve({})
     })
@@ -49,5 +53,11 @@ describe('OverviewView', () => {
     expect(w.findComponent({ name: 'HeadroomBar' }).exists()).toBe(true)
     expect(w.findComponent({ name: 'AttentionQueue' }).exists()).toBe(true)
     expect(w.text()).toContain('p') // policy row
+    // Single "Savings" card splits CPU and Memory trends side-by-side
+    expect(w.text()).not.toContain('Cluster savings')
+    const headers = w.findAll('.card-header h2').map((h) => h.text())
+    expect(headers).toContain('Savings')
+    expect(w.text()).toContain('CPU')
+    expect(w.text()).toContain('Memory')
   })
 })

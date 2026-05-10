@@ -330,9 +330,15 @@ export interface PolicyRollup {
   lastAppliedAt?: string
 }
 
+export interface TrendSeries {
+  usage: TimeValue[]
+  request: TimeValue[]
+  originalRequest: TimeValue[]
+}
+
 export interface TrendData {
-  cpu: TimeValue[]
-  memory: TimeValue[]
+  cpu: TrendSeries
+  memory: TrendSeries
 }
 
 export interface ActivityItem {

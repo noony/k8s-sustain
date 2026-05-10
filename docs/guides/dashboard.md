@@ -4,7 +4,7 @@ k8s-sustain includes a built-in web dashboard for exploring policies, viewing wo
 
 ## Features
 
-- **Overview Story Flow** — Six-band cluster summary covering savings KPIs, 7-day trend, headroom breakdown, attention queue (at risk / drifted / blocked), policy effectiveness, and recent activity.
+- **Overview Story Flow** — Cluster summary covering savings KPIs, CPU and memory usage-vs-request trends, headroom breakdown, attention queue (at risk / drifted / blocked), policy effectiveness, and recent activity.
 - **Workloads** — Cluster-wide list with risk/drift/autoscaler columns, plus filters for namespace, kind, risk state, and autoscaler presence.
 - **Workload Detail** — Status snapshot (mode, last recycle, drift, OOM 24h), risk and HPA badges, blocked-state diagnostics, copy-as-YAML, and interactive CPU/memory charts with sliding-window recommendation, historical requests/limits, and OOM markers.
 - **Policies** — 4-card stat strip (total policies, active workloads, CPU & memory savings) plus per-policy effectiveness columns.
@@ -71,7 +71,12 @@ kubectl port-forward svc/<release>-k8s-sustain-dashboard 8090:8090
 The overview is organised as a vertical "Story Flow" with six bands, each answering a specific operator question — from "what am I saving?" down to "what just happened?".
 
 1. **KPI strip** — Headline savings cards for CPU (cores) and memory (bytes), each showing the absolute saving, the savings ratio versus current requests, and a sparkline of the last 24h. Two complementary cards count workloads currently **at risk** (drift exceeds the policy threshold) and **drifted** (request differs from the latest recommendation).
-2. **Trend** — A 7-day cluster-wide chart of CPU and memory consumption, so you can correlate savings against real load.
+2. **Savings** — A single card splits CPU and memory side-by-side, each plotting three lines over the selected window so you can see the savings story directly:
+    - **Usage** — actual measured working set (memory) or CPU rate, summed across containers in policy-managed workloads.
+    - **Current request** — the request currently set on running pods, post-injection.
+    - **Original request** — the user's pod-template request before k8s-sustain rewrote it (`k8s_sustain_workload_template_*`).
+
+    All three lines are scoped to managed workloads (those covered by a Policy) so they are directly comparable — usage and current-request queries are filtered with `and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*` so unmanaged pods don't inflate them. The card has its own time-range selector. The gap between *original* and *current request* is the realised saving; the gap between *current request* and *usage* is the remaining headroom.
 3. **Headroom breakdown** — A stacked horizontal bar for CPU and memory split into `used`, `idle`, and `free` segments, sourced from the `k8s_sustain:cluster_cpu_headroom_breakdown` and `..._memory_headroom_breakdown` recording rules.
 4. **Attention queue** — Three grouped lists: **At risk** (workloads exceeding the drift threshold), **Drifted** (request out-of-date with respect to the recommendation), and **Blocked** (workloads where the controller is in an exponential-backoff retry state). Each row links to the workload detail page.
 5. **Policy effectiveness** — Per-policy rollup with the matched workload count, projected CPU/memory savings, and the count of at-risk workloads, so you can spot policies that need tuning.

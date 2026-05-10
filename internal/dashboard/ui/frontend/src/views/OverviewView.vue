@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, computed } from 'vue'
+import { onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   api,
+  getTimeRangeStep,
   type SummaryV2,
   type TrendData,
   type AttentionRow,
@@ -17,6 +18,7 @@ import KpiCard from '../components/KpiCard.vue'
 import HeadroomBar from '../components/HeadroomBar.vue'
 import AttentionQueue from '../components/AttentionQueue.vue'
 import TrendChart from '../components/TrendChart.vue'
+import TimeRangeSelector from '../components/TimeRangeSelector.vue'
 import EventList from '../components/EventList.vue'
 import { formatBytes } from '../lib/format'
 
@@ -25,7 +27,9 @@ const { window: timeWindow } = usePrometheusTime('168h')
 
 const summary = useApi<SummaryV2>(() => api<SummaryV2>('/api/summary'))
 const trend = useApi<TrendData>(() =>
-  api<TrendData>(`/api/summary/trend?window=${timeWindow.value}`),
+  api<TrendData>(
+    `/api/summary/trend?window=${timeWindow.value}&step=${getTimeRangeStep(timeWindow.value)}`,
+  ),
 )
 const activity = useApi<{ items: ActivityItem[] }>(() =>
   api<{ items: ActivityItem[] }>('/api/summary/activity?limit=20'),
@@ -47,6 +51,10 @@ const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh(loadA
 
 onMounted(loadAll)
 
+watch(timeWindow, () => {
+  trend.run()
+})
+
 function gotoFiltered(state: string) {
   router.push(`/workloads?risk=${state}`)
 }
@@ -54,11 +62,23 @@ function selectAttention(row: AttentionRow) {
   router.push(`/workloads/${row.namespace}/${row.kind}/${row.name}`)
 }
 
-function trendSeries() {
-  if (!trend.data.value) return []
+function cpuTrendSeries() {
+  const t = trend.data.value
+  if (!t) return []
   return [
-    { label: 'CPU saved', color: '#6366f1', points: trend.data.value.cpu },
-    { label: 'Mem saved', color: '#06b6d4', points: trend.data.value.memory },
+    { label: 'Original request', color: '#9ca3af', points: t.cpu.originalRequest },
+    { label: 'Current request', color: '#6366f1', points: t.cpu.request },
+    { label: 'Usage', color: '#3fb950', points: t.cpu.usage },
+  ]
+}
+
+function memTrendSeries() {
+  const t = trend.data.value
+  if (!t) return []
+  return [
+    { label: 'Original request', color: '#9ca3af', points: t.memory.originalRequest },
+    { label: 'Current request', color: '#6366f1', points: t.memory.request },
+    { label: 'Usage', color: '#3fb950', points: t.memory.usage },
   ]
 }
 </script>
@@ -132,10 +152,22 @@ function trendSeries() {
       />
     </div>
 
-    <!-- Band 2: Trend -->
+    <!-- Band 2: Savings (CPU + Memory side by side) -->
     <div class="card">
-      <div class="card-header"><h2>Cluster savings</h2></div>
-      <TrendChart :series="trendSeries()" unit="" :height="240" />
+      <div class="card-header">
+        <h2>Savings</h2>
+        <TimeRangeSelector v-model="timeWindow" />
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px">
+        <div>
+          <h3 style="margin: 0 0 8px; font-size: 13px; color: var(--text-muted)">CPU</h3>
+          <TrendChart :series="cpuTrendSeries()" unit=" cores" :height="240" />
+        </div>
+        <div>
+          <h3 style="margin: 0 0 8px; font-size: 13px; color: var(--text-muted)">Memory</h3>
+          <TrendChart :series="memTrendSeries()" unit="" :height="240" :y-format="formatBytes" />
+        </div>
+      </div>
     </div>
 
     <!-- Band 3: Headroom -->

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, watch } from 'vue'
-import { createTimeSeriesChart, destroyAllCharts, type ExtraSeries } from '../lib/chart'
+import { createTimeSeriesChart, destroyChart, type ExtraSeries } from '../lib/chart'
 import type { TimeValue } from '../lib/api'
 
 const props = defineProps<{
@@ -37,11 +37,11 @@ function render() {
 }
 
 onMounted(render)
-onBeforeUnmount(destroyAllCharts)
+onBeforeUnmount(() => destroyChart(id))
 watch(
   () => props.series,
   () => {
-    destroyAllCharts()
+    destroyChart(id)
     render()
   },
   { deep: true },

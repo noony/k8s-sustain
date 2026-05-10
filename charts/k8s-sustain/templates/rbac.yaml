@@ -65,10 +65,13 @@ rules:
   - apiGroups: [keda.sh]
     resources: [scaledobjects]
     verbs: [get, list, watch]
-  # Events
+  # Events — controller emits reconcile/recycle events via EventRecorder.
+  # Patch is required by client-go's EventBroadcaster for server-side
+  # event aggregation/deduplication. The dashboard reads events via its
+  # own narrower role.
   - apiGroups: [""]
     resources: [events]
-    verbs: [list, create, patch]
+    verbs: [create, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -88,7 +91,8 @@ subjects:
 ---
 # Dedicated read-only ClusterRole for the dashboard. Strictly narrower than the
 # controller role: no patch/eviction, no pods/resize, no policies/finalizers,
-# no policy mutation, no events. The dashboard only reads.
+# no policy mutation. Events are read-only (used by the Overview activity
+# feed to surface k8s-sustain reconcile/recycle events).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -111,6 +115,9 @@ rules:
     verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [namespaces, pods]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [events]
     verbs: [get, list, watch]
   - apiGroups: [autoscaling]
     resources: [horizontalpodautoscalers]
