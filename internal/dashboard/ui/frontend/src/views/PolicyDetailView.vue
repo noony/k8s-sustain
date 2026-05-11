@@ -17,6 +17,10 @@ import RiskBadge from '../components/RiskBadge.vue'
 import TrendChart from '../components/TrendChart.vue'
 import TimeRangeSelector from '../components/TimeRangeSelector.vue'
 import YamlPreviewModal from '../components/YamlPreviewModal.vue'
+import PageHeader from '../components/PageHeader.vue'
+import LoadingState from '../components/LoadingState.vue'
+import ErrorState from '../components/ErrorState.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 const props = defineProps<{ name: string }>()
 const router = useRouter()
@@ -133,8 +137,8 @@ function effectivenessSeries() {
   const mem = e.memory || []
   if (cpu.length === 0 && mem.length === 0) return []
   return [
-    { label: 'CPU saved', color: '#6366f1', points: cpu },
-    { label: 'Mem saved', color: '#06b6d4', points: mem },
+    { label: 'CPU saved', color: 'rgb(124, 58, 237)', points: cpu },
+    { label: 'Mem saved', color: 'rgb(6, 182, 212)', points: mem },
   ]
 }
 
@@ -159,28 +163,16 @@ function renderYaml(p: typeof policy.value): string {
 </script>
 
 <template>
-  <div v-if="loading" class="loading">
-    <div class="spinner"></div>
-    Loading policy...
-  </div>
-  <div v-else-if="error" class="card">
-    <p style="color: var(--red)">Error: {{ error }}</p>
-  </div>
+  <LoadingState v-if="loading" variant="kpi" message="Loading policy…" />
+  <ErrorState v-else-if="error" :message="error" @retry="load" />
   <template v-else-if="policy && workloadData">
     <div class="breadcrumb">
       <a href="#" @click.prevent="router.push('/policies')">Policies</a><span>/</span
       ><span>{{ name }}</span>
     </div>
 
-    <div
-      class="page-header"
-      style="display: flex; align-items: flex-start; justify-content: space-between"
-    >
-      <div>
-        <h1>{{ name }}</h1>
-        <p>Policy configuration and matched workloads</p>
-      </div>
-      <div class="time-range-bar">
+    <PageHeader :title="name" subtitle="Policy configuration and matched workloads">
+      <template #actions>
         <TimeRangeSelector v-model="timeWindow" />
         <label class="auto-refresh">
           <input
@@ -190,8 +182,8 @@ function renderYaml(p: typeof policy.value): string {
           />
           Auto-refresh (30s)
         </label>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
     <div class="stats-row">
       <div class="stat-card">
@@ -204,13 +196,11 @@ function renderYaml(p: typeof policy.value): string {
       </div>
       <div class="stat-card">
         <div class="stat-label">CPU saved</div>
-        <div class="stat-value" style="color: var(--green)">
-          {{ (policy.cpuSavingsCores || 0).toFixed(2) }}c
-        </div>
+        <div class="stat-value text-success">{{ (policy.cpuSavingsCores || 0).toFixed(2) }}c</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Memory saved</div>
-        <div class="stat-value" style="color: var(--green)">
+        <div class="stat-value text-success">
           {{ formatBytes(policy.memSavingsBytes || 0) }}
         </div>
       </div>
@@ -223,7 +213,7 @@ function renderYaml(p: typeof policy.value): string {
       </div>
       <div class="sim-grid">
         <div>
-          <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">CPU</h3>
+          <div class="section-label">CPU</div>
           <div class="rec-card">
             <div class="rec-row">
               <span class="label">Window</span
@@ -256,7 +246,7 @@ function renderYaml(p: typeof policy.value): string {
           </div>
         </div>
         <div>
-          <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">Memory</h3>
+          <div class="section-label">Memory</div>
           <div class="rec-card">
             <div class="rec-row">
               <span class="label">Window</span
@@ -289,7 +279,7 @@ function renderYaml(p: typeof policy.value): string {
           </div>
         </div>
       </div>
-      <div style="margin-top: 16px">
+      <div class="mt-3">
         <div class="rec-row">
           <span class="label">Update mode</span>
           <span class="value">{{ modeBadges() }}</span>
@@ -376,7 +366,7 @@ function renderYaml(p: typeof policy.value): string {
         unit=""
         :height="220"
       />
-      <div v-else class="empty-state"><p>Insufficient data — check back in 24h.</p></div>
+      <EmptyState v-else compact icon="chart" message="Insufficient data — check back in 24h." />
     </div>
 
     <div class="card">
@@ -394,19 +384,15 @@ function renderYaml(p: typeof policy.value): string {
             </option>
           </select>
           <span class="badge badge-blue">{{ workloadData.total }} workloads</span>
-          <button
-            class="btn btn-primary"
-            style="padding: 6px 14px; font-size: 13px"
-            @click="runBatchSimulate"
-          >
-            Simulate All
-          </button>
+          <button class="btn btn-primary btn-sm" @click="runBatchSimulate">Simulate All</button>
         </div>
       </div>
 
-      <div v-if="sortedWorkloads().length === 0" class="empty-state">
-        <p>No workloads matched by this policy yet.</p>
-      </div>
+      <EmptyState
+        v-if="sortedWorkloads().length === 0"
+        compact
+        message="No workloads matched by this policy yet."
+      />
       <template v-else>
         <div class="table-wrap">
           <table>
@@ -468,13 +454,8 @@ function renderYaml(p: typeof policy.value): string {
     </div>
 
     <!-- Batch simulation results -->
-    <div v-if="batchLoading" class="loading">
-      <div class="spinner"></div>
-      Simulating all workloads...
-    </div>
-    <div v-else-if="batchError" class="card">
-      <p style="color: var(--red)">Error: {{ batchError }}</p>
-    </div>
+    <LoadingState v-if="batchLoading" message="Simulating all workloads…" />
+    <ErrorState v-else-if="batchError" :message="batchError" @retry="runBatchSimulate" />
     <div v-else-if="batchData" class="card">
       <div class="card-header"><h2>Batch Simulation Results</h2></div>
       <div class="stats-row" style="margin-bottom: 16px">

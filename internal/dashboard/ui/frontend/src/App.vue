@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import ThemeToggle from './components/ThemeToggle.vue'
 
 const route = useRoute()
+const mobileNavOpen = ref(false)
 
 function isActive(page: string): boolean {
   const path = route.path
@@ -11,13 +14,45 @@ function isActive(page: string): boolean {
   if (page === 'simulator') return path.startsWith('/simulator')
   return false
 }
+
+watch(
+  () => route.path,
+  () => {
+    mobileNavOpen.value = false
+  },
+)
 </script>
 
 <template>
   <div class="app">
-    <nav class="sidebar">
+    <header class="mobile-topbar">
+      <button
+        class="menu-btn"
+        type="button"
+        aria-label="Open navigation"
+        :aria-expanded="mobileNavOpen"
+        @click="mobileNavOpen = !mobileNavOpen"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 6h18M3 12h18M3 18h18" stroke-linecap="round" />
+        </svg>
+      </button>
+      <h1><span class="logo">S</span> k8s-sustain</h1>
+      <div class="spacer"></div>
+      <ThemeToggle />
+    </header>
+    <div
+      class="nav-backdrop"
+      :class="{ open: mobileNavOpen }"
+      @click="mobileNavOpen = false"
+      aria-hidden="true"
+    ></div>
+    <nav class="sidebar" :class="{ open: mobileNavOpen }" aria-label="Primary">
       <div class="sidebar-header">
-        <h1><span class="logo">S</span> k8s-sustain</h1>
+        <div class="row-between">
+          <h1><span class="logo">S</span> k8s-sustain</h1>
+          <ThemeToggle />
+        </div>
         <div class="subtitle">Resource Right-Sizing Dashboard</div>
       </div>
       <div class="nav-section">Overview</div>

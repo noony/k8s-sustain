@@ -202,10 +202,21 @@ go install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
 ## Building the container image
 
 ```bash
-docker build -t ghcr.io/noony/k8s-sustain:dev .
+make docker-build IMG=ghcr.io/noony/k8s-sustain:dev
 ```
 
-The Dockerfile uses a two-stage build: `golang:1.26-alpine` → `gcr.io/distroless/static:nonroot`.
+This builds a single-arch image for the host's native platform (e.g. `linux/arm64` on Apple Silicon, `linux/amd64` on Intel) using `docker buildx --load`. The Dockerfile is multi-arch aware: it honors `TARGETOS`/`TARGETARCH` and runs the Go and Node build stages on `$BUILDPLATFORM` so cross-compilation is native, not emulated.
+
+**Note for Apple Silicon + colima users:** running an emulated `linux/amd64` binary inside colima has produced random stdlib panics (memory-model mismatches under x86-on-ARM translation). Always build natively — the default `make docker-build` does this.
+
+### Multi-arch publish
+
+```bash
+docker buildx create --use --name k8s-sustain-builder   # one-time
+make docker-buildx IMG=ghcr.io/noony/k8s-sustain:dev    # builds + pushes linux/amd64 + linux/arm64
+```
+
+Override `PLATFORMS` to change the matrix, e.g. `PLATFORMS=linux/arm64 make docker-buildx`. CI (`.github/workflows/release.yml`) publishes both `linux/amd64` and `linux/arm64` automatically on tag pushes.
 
 ## Makefile targets
 
@@ -214,7 +225,8 @@ The Dockerfile uses a two-stage build: `golang:1.26-alpine` → `gcr.io/distrole
 | `make build` | Build the binary |
 | `make test` | Run unit tests |
 | `make generate` | Regenerate deepcopy code |
-| `make docker-build` | Build the container image |
+| `make docker-build` | Build a native-arch container image and load it into the local daemon |
+| `make docker-buildx` | Build and push a multi-arch image (`PLATFORMS` env, default `linux/amd64,linux/arm64`) |
 | `make helm-lint` | Lint the Helm chart |
 | `make helm-template` | Render templates to stdout |
 

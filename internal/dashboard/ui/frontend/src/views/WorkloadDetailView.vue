@@ -27,6 +27,10 @@ import TimeRangeSelector from '../components/TimeRangeSelector.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
 import KpiCard from '../components/KpiCard.vue'
 import RiskBadge from '../components/RiskBadge.vue'
+import PageHeader from '../components/PageHeader.vue'
+import LoadingState from '../components/LoadingState.vue'
+import ErrorState from '../components/ErrorState.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 const props = defineProps<{
   namespace: string
@@ -169,7 +173,7 @@ function renderCharts() {
       }
       createTimeSeriesChart('cpu-' + cname, metrics.value!.cpu[cname], {
         label: 'CPU Usage',
-        color: '#6366f1',
+        color: 'rgb(124, 58, 237)',
         unit: 'cores',
         yFormat: (v) => v.toFixed(3),
         annotations: cpuAnnotations,
@@ -250,69 +254,56 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
 </script>
 
 <template>
-  <div v-if="loading" class="loading">
-    <div class="spinner"></div>
-    Loading workload...
-  </div>
-  <div v-else-if="error" class="card">
-    <p style="color: var(--red)">Error: {{ error }}</p>
-  </div>
+  <LoadingState v-if="loading" variant="kpi" message="Loading workload…" />
+  <ErrorState v-else-if="error" :message="error" @retry="load" />
   <template v-else-if="metrics && recs">
     <div class="breadcrumb">
       <a href="#" @click.prevent="router.push('/workloads')">Workloads</a><span>/</span
       ><span>{{ name }}</span>
     </div>
 
-    <div
-      class="page-header"
-      style="display: flex; align-items: flex-start; justify-content: space-between"
-    >
-      <div>
-        <h1>
-          <span
-            class="kind-badge"
-            :class="'kind-' + kind"
-            style="font-size: 14px; margin-right: 4px"
-            >{{ kind }}</span
+    <PageHeader :title="name">
+      <template #title>
+        <span
+          class="kind-badge"
+          :class="'kind-' + kind"
+          style="font-size: 14px; margin-right: 4px"
+          >{{ kind }}</span
+        >
+        {{ name }}
+      </template>
+      <template #subtitle>
+        {{ namespace }} &mdash; {{ containers().length }} container(s) &mdash;
+        <template v-if="recs.automated">
+          <span class="badge badge-green">Automated</span>
+          <a href="#" @click.prevent="router.push(`/policies/${recs.policyName}`)">{{
+            recs.policyName
+          }}</a>
+        </template>
+        <span v-else class="badge badge-dim">Manual</span>
+      </template>
+      <template #meta>
+        <RiskBadge v-if="snapshotRiskState()" :state="snapshotRiskState() as any" />
+        <span v-if="snapshot.data.value?.coordinationFactors?.enabled" class="badge badge-blue"
+          >Coordinated<template
+            v-if="hasCoordinationFactors(snapshot.data.value.coordinationFactors)"
           >
-          {{ name }}
-        </h1>
-        <p>
-          {{ namespace }} &mdash; {{ containers().length }} container(s) &mdash;
-          <template v-if="recs.automated">
-            <span class="badge badge-green">Automated</span>
-            <a href="#" @click.prevent="router.push(`/policies/${recs.policyName}`)">{{
-              recs.policyName
-            }}</a>
-          </template>
-          <span v-else class="badge badge-dim">Manual</span>
-        </p>
-        <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap">
-          <RiskBadge v-if="snapshotRiskState()" :state="snapshotRiskState() as any" />
-          <span v-if="snapshot.data.value?.coordinationFactors?.enabled" class="badge badge-blue"
-            >Coordinated<template
-              v-if="hasCoordinationFactors(snapshot.data.value.coordinationFactors)"
+            <span v-if="isMeaningful(snapshot.data.value.coordinationFactors.cpuOverhead)">
+              &times;{{ snapshot.data.value.coordinationFactors.cpuOverhead!.toFixed(2) }} CPU</span
+            ><span v-if="isMeaningful(snapshot.data.value.coordinationFactors.memoryOverhead)">
+              &times;{{
+                snapshot.data.value.coordinationFactors.memoryOverhead!.toFixed(2)
+              }}
+              mem</span
+            ><span v-if="isMeaningful(snapshot.data.value.coordinationFactors.cpuReplica)">
+              &middot; replica &times;{{
+                snapshot.data.value.coordinationFactors.cpuReplica!.toFixed(2)
+              }}</span
             >
-              <span v-if="isMeaningful(snapshot.data.value.coordinationFactors.cpuOverhead)">
-                &times;{{
-                  snapshot.data.value.coordinationFactors.cpuOverhead!.toFixed(2)
-                }}
-                CPU</span
-              ><span v-if="isMeaningful(snapshot.data.value.coordinationFactors.memoryOverhead)">
-                &times;{{
-                  snapshot.data.value.coordinationFactors.memoryOverhead!.toFixed(2)
-                }}
-                mem</span
-              ><span v-if="isMeaningful(snapshot.data.value.coordinationFactors.cpuReplica)">
-                &middot; replica &times;{{
-                  snapshot.data.value.coordinationFactors.cpuReplica!.toFixed(2)
-                }}</span
-              >
-            </template></span
-          >
-        </div>
-      </div>
-      <div class="time-range-bar">
+          </template></span
+        >
+      </template>
+      <template #actions>
         <TimeRangeSelector v-model="timeRange" />
         <label class="auto-refresh">
           <input
@@ -322,8 +313,8 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
           />
           Auto-refresh (30s)
         </label>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
     <!-- Status snapshot -->
     <div class="card">
@@ -352,13 +343,13 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
     </div>
 
     <!-- Blocked band -->
-    <div v-if="snapshot.data.value?.blocked" class="card" style="border-color: var(--red)">
-      <div class="card-header"><h2 style="color: var(--red)">Currently blocked</h2></div>
+    <div v-if="snapshot.data.value?.blocked" class="card card-danger">
+      <div class="card-header"><h2 class="text-error">Currently blocked</h2></div>
       <p>
         Reason: <code>{{ snapshot.data.value.blocked.reason }}</code> ·
         {{ snapshot.data.value.blocked.attempts }} attempts
       </p>
-      <p v-if="snapshot.data.value.blocked.lastError" style="color: var(--text-dim)">
+      <p v-if="snapshot.data.value.blocked.lastError" class="text-dim">
         Last error: {{ snapshot.data.value.blocked.lastError }}
       </p>
     </div>
@@ -420,7 +411,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
 
     <!-- Charts per container -->
     <template v-if="regularContainers().length > 0">
-      <h2 v-if="initContainers().length > 0" style="margin-top: 16px">Containers</h2>
+      <h2 v-if="initContainers().length > 0" class="mt-3">Containers</h2>
     </template>
     <div v-for="cname in regularContainers()" :key="cname" class="card">
       <div class="card-header">
@@ -430,9 +421,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       </div>
       <div class="chart-grid">
         <div>
-          <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
-            CPU Usage (cores)
-          </h3>
+          <div class="section-label">CPU Usage (cores)</div>
           <div class="chart-wrapper">
             <button
               class="reset-zoom-btn"
@@ -445,7 +434,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
           </div>
         </div>
         <div>
-          <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
+          <div class="section-label" style="display: inline-flex; align-items: center">
             Memory Usage (MiB)
             <span v-if="(oomByContainer()[cname] || []).length > 0" class="oom-legend">
               <span class="oom-marker"></span>
@@ -453,7 +442,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
                 oomByContainer()[cname].length > 1 ? 's' : ''
               }}
             </span>
-          </h3>
+          </div>
           <div class="chart-wrapper">
             <button
               class="reset-zoom-btn"
@@ -470,7 +459,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
 
     <!-- Init container charts -->
     <template v-if="initContainers().length > 0">
-      <h2 style="margin-top: 16px">Init containers</h2>
+      <h2 class="mt-3">Init containers</h2>
       <div v-for="cname in initContainers()" :key="cname" class="card">
         <div class="card-header">
           <h2>
@@ -480,9 +469,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         </div>
         <div class="chart-grid">
           <div>
-            <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
-              CPU Usage (cores)
-            </h3>
+            <div class="section-label">CPU Usage (cores)</div>
             <div class="chart-wrapper">
               <button
                 class="reset-zoom-btn"
@@ -495,7 +482,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
             </div>
           </div>
           <div>
-            <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
+            <div class="section-label" style="display: inline-flex; align-items: center">
               Memory Usage (MiB)
               <span v-if="(oomByContainer()[cname] || []).length > 0" class="oom-legend">
                 <span class="oom-marker"></span>
@@ -503,7 +490,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
                   oomByContainer()[cname].length > 1 ? 's' : ''
                 }}
               </span>
-            </h3>
+            </div>
             <div class="chart-wrapper">
               <button
                 class="reset-zoom-btn"
@@ -519,11 +506,14 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       </div>
     </template>
 
-    <div v-if="containers().length === 0" class="card">
-      <div class="empty-state"><p>No metrics data available.</p></div>
-    </div>
+    <EmptyState
+      v-if="containers().length === 0"
+      icon="chart"
+      title="No metrics yet"
+      message="No metrics data available for this workload. Check that Prometheus is scraping and try again in a few minutes."
+    />
 
-    <div style="margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap">
+    <div class="row mt-3">
       <button
         class="btn btn-secondary"
         @click="router.push(`/simulator/${namespace}/${kind}/${name}`)"

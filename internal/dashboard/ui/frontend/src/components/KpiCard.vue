@@ -19,7 +19,7 @@ defineProps<{
       <Sparkline
         v-if="sparkPoints && sparkPoints.length"
         :points="sparkPoints"
-        :color="sparkColor || '#6366f1'"
+        :color="sparkColor || 'rgb(124, 58, 237)'"
       />
     </div>
     <div v-if="detail" class="kpi-detail">{{ detail }}</div>

@@ -53,7 +53,7 @@ const crosshairPlugin: Plugin = {
     ctx.save()
     ctx.beginPath()
     ctx.setLineDash([3, 3])
-    ctx.strokeStyle = 'rgba(228,230,237,0.35)'
+    ctx.strokeStyle = themeVar('--chart-crosshair', 'rgba(228,230,237,0.35)')
     ctx.lineWidth = 1
     ctx.moveTo(x, yScale.top)
     ctx.lineTo(x, yScale.bottom)
@@ -62,6 +62,56 @@ const crosshairPlugin: Plugin = {
   },
 }
 Chart.register(crosshairPlugin)
+
+function themeVar(name: string, fallback: string): string {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return fallback
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+    return v || fallback
+  } catch {
+    return fallback
+  }
+}
+
+// Produce a soft fill color from any chart line color (hex, rgb, hsl).
+// Falls back to a low-alpha overlay of the source color.
+function softFill(color: string, alpha = 0.12): string {
+  const c = color.trim()
+  // #RGB / #RRGGBB → rgba()
+  const hex = c.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
+  if (hex) {
+    let h = hex[1]
+    if (h.length === 3)
+      h = h
+        .split('')
+        .map((x) => x + x)
+        .join('')
+    const r = parseInt(h.slice(0, 2), 16)
+    const g = parseInt(h.slice(2, 4), 16)
+    const b = parseInt(h.slice(4, 6), 16)
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`
+  }
+  // rgb(r, g, b) → rgba(r, g, b, a)
+  const rgb = c.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i)
+  if (rgb) return `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, ${alpha})`
+  // rgba(...) → keep components, override alpha
+  const rgba = c.match(/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*[^)]+\)$/i)
+  if (rgba) return `rgba(${rgba[1]}, ${rgba[2]}, ${rgba[3]}, ${alpha})`
+  // Unknown format — return transparent so it doesn't render as black.
+  return 'rgba(0, 0, 0, 0)'
+}
+
+function themeColors() {
+  return {
+    grid: themeVar('--chart-grid', 'rgba(255,255,255,0.06)'),
+    tick: themeVar('--chart-tick', '#8b8fa3'),
+    tooltipBg: themeVar('--chart-tooltip-bg', '#161c27'),
+    tooltipBorder: themeVar('--chart-tooltip-border', '#2a2e3f'),
+    text: themeVar('--text', '#e6edf3'),
+    accent: themeVar('--accent', '#7c3aed'),
+    accentSoft: themeVar('--accent-soft', 'rgba(124,58,237,0.25)'),
+  }
+}
 
 // OOM event plugin
 const OOM_MARKER_LIMIT = 50
@@ -99,7 +149,7 @@ const oomEventPlugin: Plugin = {
       ctx.arc(x, top + 10, 5, 0, 2 * Math.PI)
       ctx.fillStyle = '#ef4444'
       ctx.fill()
-      ctx.strokeStyle = '#1a1d27'
+      ctx.strokeStyle = themeVar('--bg-card', '#1a1d27')
       ctx.lineWidth = 1.5
       ctx.stroke()
 
@@ -179,7 +229,7 @@ export function createTimeSeriesChart(
       label: opts.label,
       data: chartData,
       borderColor: opts.color,
-      backgroundColor: opts.color + '18',
+      backgroundColor: softFill(opts.color, 0.1),
       fill: true,
       borderWidth: 1.5,
       pointRadius: 0,
@@ -230,6 +280,7 @@ export function createTimeSeriesChart(
     pod: ev.pod || '',
   }))
 
+  const colors = themeColors()
   const config: ChartConfiguration = {
     type: 'line',
     data: { datasets },
@@ -240,14 +291,16 @@ export function createTimeSeriesChart(
       plugins: {
         legend: {
           display: datasets.length > 1,
-          labels: { color: '#8b8fa3', font: { size: 11 } },
+          labels: { color: colors.tick, font: { size: 11 } },
         },
         tooltip: {
-          backgroundColor: '#1a1d27',
-          borderColor: '#2a2e3f',
+          backgroundColor: colors.tooltipBg,
+          borderColor: colors.tooltipBorder,
           borderWidth: 1,
-          titleColor: '#e4e6ed',
-          bodyColor: '#e4e6ed',
+          titleColor: colors.text,
+          bodyColor: colors.text,
+          padding: 10,
+          cornerRadius: 6,
           callbacks: {
             label: (ctx: any) =>
               ctx.dataset.label + ': ' + opts.yFormat(ctx.parsed.y) + ' ' + opts.unit,
@@ -257,8 +310,8 @@ export function createTimeSeriesChart(
           zoom: {
             drag: {
               enabled: true,
-              backgroundColor: 'rgba(99,102,241,0.25)',
-              borderColor: 'rgba(99,102,241,0.6)',
+              backgroundColor: colors.accentSoft,
+              borderColor: colors.accent,
               borderWidth: 1,
               threshold: 5,
             },
@@ -273,13 +326,13 @@ export function createTimeSeriesChart(
       scales: {
         x: {
           type: 'time',
-          grid: { color: '#2a2e3f' },
-          ticks: { color: '#8b8fa3', font: { size: 11 }, maxTicksLimit: 8 },
+          grid: { color: colors.grid },
+          ticks: { color: colors.tick, font: { size: 11 }, maxTicksLimit: 8 },
         },
         y: {
-          grid: { color: '#2a2e3f' },
+          grid: { color: colors.grid },
           ticks: {
-            color: '#8b8fa3',
+            color: colors.tick,
             font: { size: 11 },
             callback: (v: any) => opts.yFormat(v),
           },

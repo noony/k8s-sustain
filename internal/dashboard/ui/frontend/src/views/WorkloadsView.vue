@@ -6,6 +6,10 @@ import { useApi } from '../composables/useApi'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useSorting } from '../composables/useSorting'
 import RiskBadge from '../components/RiskBadge.vue'
+import PageHeader from '../components/PageHeader.vue'
+import LoadingState from '../components/LoadingState.vue'
+import ErrorState from '../components/ErrorState.vue'
+import EmptyState from '../components/EmptyState.vue'
 import { timeAgo } from '../lib/format'
 
 const route = useRoute()
@@ -83,34 +87,49 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
     isMeaningful(cf.cpuOverhead) || isMeaningful(cf.memoryOverhead) || isMeaningful(cf.cpuReplica)
   )
 }
+
+function clearFilters() {
+  nsFilter.value = ''
+  kindFilter.value = ''
+  automatedFilter.value = ''
+  riskFilter.value = ''
+  autoscalerFilter.value = ''
+  search.value = ''
+  page.value = 1
+  load()
+}
+
+const hasFilters = computed(
+  () =>
+    nsFilter.value ||
+    kindFilter.value ||
+    automatedFilter.value ||
+    riskFilter.value ||
+    autoscalerFilter.value ||
+    search.value,
+)
 </script>
 
 <template>
-  <div v-if="list.loading.value && !list.data.value" class="loading">
-    <div class="spinner"></div>
-    Loading workloads...
-  </div>
-  <div v-else-if="list.error.value" class="card">
-    <p style="color: var(--red)">Error: {{ list.error.value }}</p>
-  </div>
+  <LoadingState
+    v-if="list.loading.value && !list.data.value"
+    variant="kpi"
+    message="Loading workloads…"
+  />
+  <ErrorState v-else-if="list.error.value" :message="list.error.value" @retry="load" />
   <template v-else-if="list.data.value">
-    <div
-      class="page-header"
-      style="display: flex; align-items: flex-start; justify-content: space-between"
-    >
-      <div>
-        <h1>Workloads</h1>
-        <p>All workloads across the cluster</p>
-      </div>
-      <label class="auto-refresh">
-        <input
-          type="checkbox"
-          :checked="autoRefresh"
-          @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
-        />
-        Auto-refresh (30s)
-      </label>
-    </div>
+    <PageHeader title="Workloads" subtitle="All workloads across the cluster">
+      <template #actions>
+        <label class="auto-refresh">
+          <input
+            type="checkbox"
+            :checked="autoRefresh"
+            @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
+          />
+          Auto-refresh (30s)
+        </label>
+      </template>
+    </PageHeader>
 
     <div class="stats-row">
       <div class="stat-card">
@@ -119,15 +138,11 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       </div>
       <div class="stat-card">
         <div class="stat-label">Automated</div>
-        <div class="stat-value" style="color: var(--green)">
-          {{ list.data.value.counts.automated }}
-        </div>
+        <div class="stat-value text-success">{{ list.data.value.counts.automated }}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Manual</div>
-        <div class="stat-value" style="color: var(--text-dim)">
-          {{ list.data.value.counts.manual }}
-        </div>
+        <div class="stat-value text-dim">{{ list.data.value.counts.manual }}</div>
       </div>
     </div>
 
@@ -173,12 +188,25 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         </div>
       </div>
 
-      <div v-if="sorted.length === 0" class="empty-state">
-        <p>No workloads found matching the filters.</p>
-      </div>
+      <EmptyState
+        v-if="sorted.length === 0"
+        :icon="hasFilters ? 'search' : 'workload'"
+        :title="hasFilters ? 'No matches' : 'No workloads yet'"
+        :message="
+          hasFilters
+            ? 'No workloads match the current filters. Try widening your search.'
+            : 'Workloads will appear here once discovered in this cluster.'
+        "
+      >
+        <template v-if="hasFilters" #actions>
+          <button class="btn btn-secondary btn-sm" type="button" @click="clearFilters">
+            Clear filters
+          </button>
+        </template>
+      </EmptyState>
       <template v-else>
         <div class="table-wrap">
-          <table>
+          <table class="responsive">
             <thead>
               <tr>
                 <th class="sort-header" @click="sort('namespace')">
@@ -209,21 +237,14 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
                 :key="w.namespace + '/' + w.kind + '/' + w.name"
                 @click="router.push(`/workloads/${w.namespace}/${w.kind}/${w.name}`)"
               >
-                <td style="color: var(--text-dim)">{{ w.namespace }}</td>
-                <td>
+                <td data-label="Namespace" class="text-dim">{{ w.namespace }}</td>
+                <td data-label="Kind">
                   <span class="kind-badge" :class="'kind-' + w.kind">{{ w.kind }}</span>
                 </td>
-                <td style="font-weight: 600">
-                  {{ w.name
-                  }}<span
-                    v-if="w.autoscalerPresent"
-                    class="badge badge-blue"
-                    style="margin-left: 8px"
-                    >Autoscaler</span
-                  ><span
-                    v-if="w.coordinationFactors?.enabled"
-                    class="badge badge-blue"
-                    style="margin-left: 8px"
+                <td data-label="Name" class="font-semibold">
+                  {{ w.name }}
+                  <span v-if="w.autoscalerPresent" class="badge badge-blue gap-2">Autoscaler</span>
+                  <span v-if="w.coordinationFactors?.enabled" class="badge badge-blue gap-2"
                     >Coordinated<template v-if="hasCoordinationFactors(w.coordinationFactors)">
                       <span v-if="isMeaningful(w.coordinationFactors.cpuOverhead)">
                         &times;{{ w.coordinationFactors.cpuOverhead!.toFixed(2) }} CPU</span
@@ -237,12 +258,12 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
                     </template></span
                   >
                 </td>
-                <td><RiskBadge :state="w.riskState" /></td>
-                <td>
-                  <code v-if="w.driftPercent">{{ w.driftPercent.toFixed(1) }}%</code
-                  ><span v-else style="color: var(--text-dim)">-</span>
+                <td data-label="Risk"><RiskBadge :state="w.riskState" /></td>
+                <td data-label="Drift">
+                  <code v-if="w.driftPercent">{{ w.driftPercent.toFixed(1) }}%</code>
+                  <span v-else class="text-dim">-</span>
                 </td>
-                <td>
+                <td data-label="Policy">
                   <a
                     v-if="w.policyName"
                     href="#"
@@ -250,8 +271,8 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
                     >{{ w.policyName }}</a
                   ><span v-else>-</span>
                 </td>
-                <td style="color: var(--text-dim)">{{ w.containers.length }}</td>
-                <td style="color: var(--text-dim)">
+                <td data-label="Containers" class="text-dim">{{ w.containers.length }}</td>
+                <td data-label="Last recycled" class="text-dim">
                   {{ w.lastRecycledAt ? timeAgo(w.lastRecycledAt) : '-' }}
                 </td>
               </tr>

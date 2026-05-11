@@ -1,10 +1,11 @@
 BINARY ?= k8s-sustain
 CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@latest
 IMG ?= ghcr.io/noony/k8s-sustain:dev
+PLATFORMS ?= linux/amd64,linux/arm64
 
 include Makefile.scenarios
 
-.PHONY: help build test lint generate manifests sync-crds verify-crds sync-rules verify-rules tidy fmt vet coverage docker-build docker-push helm-deps helm-lint helm-template
+.PHONY: help build test lint generate manifests sync-crds verify-crds sync-rules verify-rules tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template
 
 .DEFAULT_GOAL := help
 
@@ -53,8 +54,11 @@ verify-rules: sync-rules helm-deps ## Verify values.yaml is in sync with the can
 		(echo "ERROR: values.yaml drifted from charts/k8s-sustain/files/recording-rules.yaml. Run 'make sync-rules' and commit." && exit 1)
 	@./hack/diff-recording-rules.sh
 
-docker-build: ## Build Docker image
-	docker build -t $(IMG) .
+docker-build: ## Build Docker image for the host's native platform
+	DOCKER_BUILDKIT=1 docker build -t $(IMG) .
+
+docker-buildx: ## Build and push a multi-arch image for $(PLATFORMS) (requires buildx)
+	docker buildx build --platform $(PLATFORMS) -t $(IMG) .
 
 docker-push: ## Push Docker image
 	docker push $(IMG)

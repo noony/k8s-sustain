@@ -20,6 +20,10 @@ import AttentionQueue from '../components/AttentionQueue.vue'
 import TrendChart from '../components/TrendChart.vue'
 import TimeRangeSelector from '../components/TimeRangeSelector.vue'
 import EventList from '../components/EventList.vue'
+import PageHeader from '../components/PageHeader.vue'
+import LoadingState from '../components/LoadingState.vue'
+import ErrorState from '../components/ErrorState.vue'
+import EmptyState from '../components/EmptyState.vue'
 import { formatBytes } from '../lib/format'
 
 const router = useRouter()
@@ -62,13 +66,17 @@ function selectAttention(row: AttentionRow) {
   router.push(`/workloads/${row.namespace}/${row.kind}/${row.name}`)
 }
 
+const accentColor = 'rgb(124, 58, 237)'
+const dimColor = 'rgb(156, 163, 175)'
+const successColor = 'rgb(63, 185, 80)'
+
 function cpuTrendSeries() {
   const t = trend.data.value
   if (!t) return []
   return [
-    { label: 'Original request', color: '#9ca3af', points: t.cpu.originalRequest },
-    { label: 'Current request', color: '#6366f1', points: t.cpu.request },
-    { label: 'Usage', color: '#3fb950', points: t.cpu.usage },
+    { label: 'Original request', color: dimColor, points: t.cpu.originalRequest },
+    { label: 'Current request', color: accentColor, points: t.cpu.request },
+    { label: 'Usage', color: successColor, points: t.cpu.usage },
   ]
 }
 
@@ -76,39 +84,33 @@ function memTrendSeries() {
   const t = trend.data.value
   if (!t) return []
   return [
-    { label: 'Original request', color: '#9ca3af', points: t.memory.originalRequest },
-    { label: 'Current request', color: '#6366f1', points: t.memory.request },
-    { label: 'Usage', color: '#3fb950', points: t.memory.usage },
+    { label: 'Original request', color: dimColor, points: t.memory.originalRequest },
+    { label: 'Current request', color: accentColor, points: t.memory.request },
+    { label: 'Usage', color: successColor, points: t.memory.usage },
   ]
 }
 </script>
 
 <template>
-  <div v-if="summary.loading.value && !summary.data.value" class="loading">
-    <div class="spinner"></div>
-    Loading overview...
-  </div>
-  <div v-else-if="summary.error.value" class="card">
-    <p style="color: var(--red)">Error: {{ summary.error.value }}</p>
-  </div>
+  <LoadingState
+    v-if="summary.loading.value && !summary.data.value"
+    variant="kpi"
+    message="Loading overview…"
+  />
+  <ErrorState v-else-if="summary.error.value" :message="summary.error.value" @retry="loadAll" />
   <template v-else-if="summary.data.value">
-    <div
-      class="page-header"
-      style="display: flex; align-items: flex-start; justify-content: space-between"
-    >
-      <div>
-        <h1>Overview</h1>
-        <p>Cluster-wide right-sizing impact and attention queue</p>
-      </div>
-      <label class="auto-refresh">
-        <input
-          type="checkbox"
-          :checked="autoRefresh"
-          @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
-        />
-        Auto-refresh (30s)
-      </label>
-    </div>
+    <PageHeader title="Overview" subtitle="Cluster-wide right-sizing impact and attention queue">
+      <template #actions>
+        <label class="auto-refresh">
+          <input
+            type="checkbox"
+            :checked="autoRefresh"
+            @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
+          />
+          Auto-refresh (30s)
+        </label>
+      </template>
+    </PageHeader>
 
     <!-- Band 1: KPI strip -->
     <div class="stats-row">
@@ -117,16 +119,16 @@ function memTrendSeries() {
         :value="summary.data.value.kpi.cpuSavedCores.toFixed(2) + ' c'"
         :detail="(summary.data.value.kpi.cpuSavedRatio * 100).toFixed(0) + '% of cluster'"
         tone="positive"
-        :sparkPoints="summary.data.value.kpi.cpuSpark7d"
-        sparkColor="#3fb950"
+        :spark-points="summary.data.value.kpi.cpuSpark7d"
+        spark-color="#3fb950"
       />
       <KpiCard
         label="Memory saved"
         :value="formatBytes(summary.data.value.kpi.memSavedBytes)"
         :detail="(summary.data.value.kpi.memSavedRatio * 100).toFixed(0) + '% of cluster'"
         tone="positive"
-        :sparkPoints="summary.data.value.kpi.memSpark7d"
-        sparkColor="#3fb950"
+        :spark-points="summary.data.value.kpi.memSpark7d"
+        spark-color="#3fb950"
       />
       <KpiCard
         label="At risk"
@@ -158,13 +160,13 @@ function memTrendSeries() {
         <h2>Savings</h2>
         <TimeRangeSelector v-model="timeWindow" />
       </div>
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px">
+      <div class="chart-grid">
         <div>
-          <h3 style="margin: 0 0 8px; font-size: 13px; color: var(--text-muted)">CPU</h3>
+          <div class="section-label">CPU</div>
           <TrendChart :series="cpuTrendSeries()" unit=" cores" :height="240" />
         </div>
         <div>
-          <h3 style="margin: 0 0 8px; font-size: 13px; color: var(--text-muted)">Memory</h3>
+          <div class="section-label">Memory</div>
           <TrendChart :series="memTrendSeries()" unit="" :height="240" :y-format="formatBytes" />
         </div>
       </div>
@@ -173,7 +175,7 @@ function memTrendSeries() {
     <!-- Band 3: Headroom -->
     <div class="card">
       <div class="card-header"><h2>Cluster headroom</h2></div>
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px">
+      <div class="chart-grid">
         <HeadroomBar
           label="CPU"
           :used="summary.data.value.headroom.cpu.used"
@@ -198,8 +200,13 @@ function memTrendSeries() {
     <!-- Band 5: Policy effectiveness -->
     <div class="card">
       <div class="card-header"><h2>Policy effectiveness</h2></div>
-      <div class="table-wrap">
-        <table>
+      <EmptyState
+        v-if="summary.data.value.policies.length === 0"
+        compact
+        message="No policies have produced savings data yet."
+      />
+      <div v-else class="table-wrap">
+        <table class="responsive">
           <thead>
             <tr>
               <th>Policy</th>
@@ -215,15 +222,15 @@ function memTrendSeries() {
               :key="p.name"
               @click="router.push(`/policies/${p.name}`)"
             >
-              <td style="font-weight: 600">{{ p.name }}</td>
-              <td>{{ p.workloadCount }}</td>
-              <td>
+              <td data-label="Policy" class="font-semibold">{{ p.name }}</td>
+              <td data-label="Workloads">{{ p.workloadCount }}</td>
+              <td data-label="CPU saved">
                 <code>{{ p.cpuSavingsCores.toFixed(2) }}c</code>
               </td>
-              <td>
+              <td data-label="Mem saved">
                 <code>{{ formatBytes(p.memSavingsBytes) }}</code>
               </td>
-              <td>
+              <td data-label="At risk">
                 <span v-if="p.atRiskCount > 0" class="badge badge-red">{{ p.atRiskCount }}</span
                 ><span v-else>-</span>
               </td>
@@ -236,7 +243,12 @@ function memTrendSeries() {
     <!-- Band 6: Activity -->
     <div class="card">
       <div class="card-header"><h2>Recent activity</h2></div>
-      <EventList :items="activity.data.value?.items || []" />
+      <EmptyState
+        v-if="!activity.data.value?.items?.length"
+        compact
+        message="No recent activity in this cluster yet."
+      />
+      <EventList v-else :items="activity.data.value.items" />
     </div>
   </template>
 </template>

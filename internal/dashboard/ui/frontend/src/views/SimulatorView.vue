@@ -22,6 +22,7 @@ import {
 import TimeRangeSelector from '../components/TimeRangeSelector.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
 import KpiCard from '../components/KpiCard.vue'
+import ErrorState from '../components/ErrorState.vue'
 import { type WorkloadListData } from '../lib/api'
 
 const props = defineProps<{
@@ -210,7 +211,7 @@ function renderCharts(data: SimulationResult) {
       }
       createTimeSeriesChart('simcpu-' + cname, data.cpuSeries[cname], {
         label: 'CPU Usage',
-        color: '#6366f1',
+        color: 'rgb(124, 58, 237)',
         unit: 'cores',
         yFormat: (v) => v.toFixed(3),
         annotations: cpuAnnotations,
@@ -549,9 +550,7 @@ onUnmounted(() => {
 
   <!-- Results -->
   <div v-if="firstRun && !simData && !simError"></div>
-  <div v-else-if="simError" class="card">
-    <p style="color: var(--red)">Error: {{ simError }}</p>
-  </div>
+  <ErrorState v-else-if="simError" :message="simError" @retry="runSimulation" />
   <template v-else-if="simData">
     <div v-if="Object.keys(simData.containers).length === 0" class="card">
       <div class="empty-state">

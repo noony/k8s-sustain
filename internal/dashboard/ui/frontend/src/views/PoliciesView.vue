@@ -6,6 +6,10 @@ import { timeAgo, formatBytes } from '../lib/format'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useSorting } from '../composables/useSorting'
 import StatusBadge from '../components/StatusBadge.vue'
+import PageHeader from '../components/PageHeader.vue'
+import LoadingState from '../components/LoadingState.vue'
+import ErrorState from '../components/ErrorState.vue'
+import EmptyState from '../components/EmptyState.vue'
 
 const router = useRouter()
 const loading = ref(true)
@@ -49,40 +53,28 @@ function updateTypeBadges(update?: Record<string, string>): string {
 </script>
 
 <template>
-  <div v-if="loading" class="loading">
-    <div class="spinner"></div>
-    Loading policies...
-  </div>
-  <div v-else-if="error" class="card">
-    <p style="color: var(--red)">Error: {{ error }}</p>
-  </div>
+  <LoadingState v-if="loading" variant="kpi" message="Loading policies…" />
+  <ErrorState v-else-if="error" :message="error" @retry="load" />
   <template v-else>
-    <div
-      class="page-header"
-      style="display: flex; align-items: flex-start; justify-content: space-between"
-    >
-      <div>
-        <h1>Policies</h1>
-        <p>All right-sizing policies in your cluster</p>
-      </div>
-      <label class="auto-refresh">
-        <input
-          type="checkbox"
-          :checked="autoRefresh"
-          @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
-        />
-        Auto-refresh (30s)
-      </label>
-    </div>
+    <PageHeader title="Policies" subtitle="All right-sizing policies in your cluster">
+      <template #actions>
+        <label class="auto-refresh">
+          <input
+            type="checkbox"
+            :checked="autoRefresh"
+            @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
+          />
+          Auto-refresh (30s)
+        </label>
+      </template>
+    </PageHeader>
 
-    <div v-if="policies.length === 0" class="empty-state">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <path
-          d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-        />
-      </svg>
-      <p>No policies found. Create a Policy resource to get started.</p>
-    </div>
+    <EmptyState
+      v-if="policies.length === 0"
+      icon="policy"
+      title="No policies yet"
+      message="Create a Policy resource to start right-sizing workloads in this cluster."
+    />
 
     <template v-else>
       <div class="stats-row">
@@ -96,17 +88,17 @@ function updateTypeBadges(update?: Record<string, string>): string {
         </div>
         <div class="stat-card">
           <div class="stat-label">Cluster CPU saved</div>
-          <div class="stat-value" style="color: var(--green)">{{ totalCpu.toFixed(2) }}c</div>
+          <div class="stat-value text-success">{{ totalCpu.toFixed(2) }}c</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Cluster Mem saved</div>
-          <div class="stat-value" style="color: var(--green)">{{ formatBytes(totalMem) }}</div>
+          <div class="stat-value text-success">{{ formatBytes(totalMem) }}</div>
         </div>
       </div>
 
       <div class="card">
         <div class="table-wrap">
-          <table>
+          <table class="responsive">
             <thead>
               <tr>
                 <th class="sort-header" @click="sort('name')">
@@ -131,21 +123,21 @@ function updateTypeBadges(update?: Record<string, string>): string {
             </thead>
             <tbody>
               <tr v-for="p in sorted" :key="p.name" @click="router.push(`/policies/${p.name}`)">
-                <td style="font-weight: 600">{{ p.name }}</td>
-                <td><StatusBadge :conditions="p.conditions" /></td>
-                <td>{{ updateTypeBadges(p.update) }}</td>
-                <td>{{ p.workloadCount || 0 }}</td>
-                <td>
+                <td data-label="Name" class="font-semibold">{{ p.name }}</td>
+                <td data-label="Status"><StatusBadge :conditions="p.conditions" /></td>
+                <td data-label="Mode">{{ updateTypeBadges(p.update) }}</td>
+                <td data-label="Workloads">{{ p.workloadCount || 0 }}</td>
+                <td data-label="CPU saved">
                   <code>{{ (p.cpuSavingsCores || 0).toFixed(2) }}c</code>
                 </td>
-                <td>
+                <td data-label="Mem saved">
                   <code>{{ formatBytes(p.memSavingsBytes || 0) }}</code>
                 </td>
-                <td>
+                <td data-label="At risk">
                   <span v-if="p.atRiskCount" class="badge badge-red">{{ p.atRiskCount }}</span
                   ><span v-else>-</span>
                 </td>
-                <td style="color: var(--text-dim)">
+                <td data-label="Last applied" class="text-dim">
                   {{ p.lastAppliedAt ? timeAgo(p.lastAppliedAt) : '-' }}
                 </td>
               </tr>
