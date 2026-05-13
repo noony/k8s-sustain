@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"embed"
+	"io"
 	"io/fs"
 	"net/http"
 	"path"
@@ -32,10 +33,32 @@ func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		r2 := r.Clone(r.Context())
-		r2.URL.Path = "/index.html"
-		http.FileServer(http.FS(sub)).ServeHTTP(w, r2)
+		// Serve index.html bytes directly. Using http.FileServer here would
+		// canonicalize /index.html to ./, which redirects the browser back
+		// to the original deep-link path's parent and hides the SPA route.
+		s.serveIndex(w, r, sub)
 		return
 	}
 	http.FileServer(http.FS(sub)).ServeHTTP(w, r)
+}
+
+func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request, sub fs.FS) {
+	f, err := sub.Open("index.html")
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = f.Close() }()
+	rs, ok := f.(io.ReadSeeker)
+	if !ok {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	stat, err := f.Stat()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	http.ServeContent(w, r, "index.html", stat.ModTime(), rs)
 }
