@@ -44,8 +44,8 @@ charts/k8s-sustain/charts
 site/
 
 # Frontend
-internal/dashboard/ui/frontend/node_modules/
-internal/dashboard/ui/dist/
+internal/dashboard/ui/dist/*
+!internal/dashboard/ui/dist/placeholder
 
 # Worktrees
 .worktrees/
