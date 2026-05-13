@@ -8,11 +8,21 @@ defineProps<{
   tone?: 'positive' | 'negative' | 'neutral' | 'warn' | 'danger'
   sparkPoints?: number[]
   sparkColor?: string
+  clickable?: boolean
+}>()
+defineEmits<{
+  (e: 'click'): void
 }>()
 </script>
 
 <template>
-  <div class="kpi-card" :class="tone ? 'tone-' + tone : ''">
+  <component
+    :is="clickable ? 'button' : 'div'"
+    class="kpi-card"
+    :class="[tone ? 'tone-' + tone : '', clickable ? 'kpi-clickable' : '']"
+    :type="clickable ? 'button' : undefined"
+    @click="clickable ? $emit('click') : null"
+  >
     <div class="kpi-label">{{ label }}</div>
     <div class="kpi-row">
       <div class="kpi-value">{{ value }}</div>
@@ -23,5 +33,5 @@ defineProps<{
       />
     </div>
     <div v-if="detail" class="kpi-detail">{{ detail }}</div>
-  </div>
+  </component>
 </template>

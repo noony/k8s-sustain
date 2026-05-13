@@ -25,6 +25,7 @@ onMounted(() => {
 watch(theme, (t) => {
   applyTheme(t)
   localStorage.setItem('theme', t)
+  window.dispatchEvent(new CustomEvent('themechange', { detail: t }))
 })
 
 function toggle() {

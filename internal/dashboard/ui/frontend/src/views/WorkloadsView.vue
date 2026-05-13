@@ -10,6 +10,7 @@ import PageHeader from '../components/PageHeader.vue'
 import LoadingState from '../components/LoadingState.vue'
 import ErrorState from '../components/ErrorState.vue'
 import EmptyState from '../components/EmptyState.vue'
+import Combobox from '../components/Combobox.vue'
 import { timeAgo } from '../lib/format'
 
 const route = useRoute()
@@ -150,18 +151,21 @@ const hasFilters = computed(
       <div class="card-header">
         <h2>Workloads</h2>
         <div class="filter-bar">
-          <select v-model="nsFilter" @change="page = 1">
-            <option value="">All namespaces</option>
-            <option v-for="ns in (list.data.value.namespaces || []).sort()" :key="ns" :value="ns">
-              {{ ns }}
-            </option>
-          </select>
-          <select v-model="kindFilter" @change="page = 1">
-            <option value="">All kinds</option>
-            <option v-for="k in (list.data.value.kinds || []).sort()" :key="k" :value="k">
-              {{ k }}
-            </option>
-          </select>
+          <Combobox
+            v-model="nsFilter"
+            :options="list.data.value.namespaces || []"
+            placeholder="Namespace…"
+            all-label="All namespaces"
+            @update:model-value="page = 1"
+          />
+          <Combobox
+            v-model="kindFilter"
+            :options="list.data.value.kinds || []"
+            placeholder="Kind…"
+            all-label="All kinds"
+            min-width="140px"
+            @update:model-value="page = 1"
+          />
           <select v-model="automatedFilter" @change="page = 1">
             <option value="">All status</option>
             <option value="true">Automated</option>

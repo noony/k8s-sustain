@@ -135,16 +135,16 @@ function memTrendSeries() {
         :value="String(summary.data.value.kpi.atRiskCount)"
         tone="danger"
         detail="OOM / blocked"
+        clickable
         @click="gotoFiltered('at-risk')"
-        style="cursor: pointer"
       />
       <KpiCard
         label="Drifted"
         :value="String(summary.data.value.kpi.driftedCount)"
         tone="warn"
         detail=">10% from rec"
+        clickable
         @click="gotoFiltered('drifted')"
-        style="cursor: pointer"
       />
       <KpiCard
         label="Coordinated"

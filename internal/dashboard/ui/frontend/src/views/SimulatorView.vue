@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import {
   api,
   defaultTimeRange,
@@ -23,6 +23,9 @@ import TimeRangeSelector from '../components/TimeRangeSelector.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
 import KpiCard from '../components/KpiCard.vue'
 import ErrorState from '../components/ErrorState.vue'
+import EmptyState from '../components/EmptyState.vue'
+import PageHeader from '../components/PageHeader.vue'
+import Combobox from '../components/Combobox.vue'
 import { type WorkloadListData } from '../lib/api'
 
 const props = defineProps<{
@@ -53,6 +56,29 @@ const selectedPolicy = ref('')
 const simData = ref<SimulationResult | null>(null)
 const simError = ref('')
 const firstRun = ref(true)
+const workloadList = ref<WorkloadListData['items']>([])
+
+const namespaceOptions = computed(() =>
+  Array.from(new Set(workloadList.value.map((w) => w.namespace))),
+)
+const nameOptions = computed(() =>
+  Array.from(
+    new Set(
+      workloadList.value
+        .filter((w) => (!simNs.value || w.namespace === simNs.value) && w.kind === simKind.value)
+        .map((w) => w.name),
+    ),
+  ),
+)
+
+async function loadWorkloads() {
+  try {
+    const list = await api<WorkloadListData>('/api/workloads?pageSize=500')
+    workloadList.value = list.items || []
+  } catch {
+    workloadList.value = []
+  }
+}
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let requestId = 0
 
@@ -406,7 +432,7 @@ watch(
 )
 
 onMounted(async () => {
-  await loadPolicies()
+  await Promise.all([loadPolicies(), loadWorkloads()])
   if (props.namespace && props.name) {
     runSimulation()
   }
@@ -419,22 +445,30 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="page-header">
-    <h1>Policy Simulator</h1>
-    <p>Simulate policy parameter changes and preview their effect on historical metrics</p>
-  </div>
+  <PageHeader
+    title="Policy Simulator"
+    subtitle="Simulate policy parameter changes and preview their effect on historical metrics"
+  />
 
   <!-- Workload Target -->
   <div class="card">
     <div class="card-header"><h2>Workload Target</h2></div>
     <div class="workload-selector">
       <div class="form-group">
-        <label>Namespace</label>
-        <input v-model="simNs" type="text" placeholder="default" />
+        <label for="sim-ns">Namespace</label>
+        <Combobox
+          v-model="simNs"
+          :options="namespaceOptions"
+          placeholder="default"
+          all-label="(any namespace)"
+          free-text
+          :show-all="false"
+          min-width="100%"
+        />
       </div>
       <div class="form-group">
-        <label>Kind</label>
-        <select v-model="simKind">
+        <label for="sim-kind">Kind</label>
+        <select id="sim-kind" v-model="simKind">
           <option value="Deployment">Deployment</option>
           <option value="StatefulSet">StatefulSet</option>
           <option value="DaemonSet">DaemonSet</option>
@@ -443,31 +477,27 @@ onUnmounted(() => {
         </select>
       </div>
       <div class="form-group">
-        <label>Name</label>
-        <input v-model="simName" type="text" placeholder="my-app" />
-      </div>
-      <div class="form-group">
-        <label>Time range</label>
-        <TimeRangeSelector v-model="timeRange" />
+        <label for="sim-name">Name</label>
+        <Combobox
+          v-model="simName"
+          :options="nameOptions"
+          placeholder="my-app"
+          free-text
+          :show-all="false"
+          min-width="100%"
+        />
       </div>
     </div>
   </div>
 
   <!-- Configuration -->
   <div class="card">
-    <div
-      class="card-header"
-      style="display: flex; align-items: center; justify-content: space-between"
-    >
+    <div class="card-header">
       <h2>Configuration</h2>
-      <div class="form-group" style="margin: 0; display: flex; align-items: center; gap: 8px">
-        <label style="margin: 0; white-space: nowrap; font-size: 12px">Load from policy</label>
-        <select
-          v-model="selectedPolicy"
-          style="min-width: 160px"
-          @change="loadPolicyConfig(selectedPolicy)"
-        >
-          <option value="">-- Select a policy --</option>
+      <div class="sim-policy-loader">
+        <label for="sim-policy">Load from policy</label>
+        <select id="sim-policy" v-model="selectedPolicy" @change="loadPolicyConfig(selectedPolicy)">
+          <option value="">— Select a policy —</option>
           <option v-for="p in policies" :key="p.name" :value="p.name">{{ p.name }}</option>
         </select>
       </div>
@@ -476,7 +506,7 @@ onUnmounted(() => {
     <div class="sim-grid">
       <!-- CPU -->
       <div class="sim-section">
-        <h3><span style="color: var(--accent-light)">CPU</span> Configuration</h3>
+        <h3><span class="sim-section-tag sim-tag-cpu">CPU</span> Configuration</h3>
         <div class="form-group">
           <label>Window</label>
           <TimeRangeSelector v-model="cpuWindow" />
@@ -507,7 +537,7 @@ onUnmounted(() => {
 
       <!-- Memory -->
       <div class="sim-section">
-        <h3><span style="color: var(--cyan)">Memory</span> Configuration</h3>
+        <h3><span class="sim-section-tag sim-tag-mem">Memory</span> Configuration</h3>
         <div class="form-group">
           <label>Window</label>
           <TimeRangeSelector v-model="memWindow" />
@@ -539,27 +569,29 @@ onUnmounted(() => {
   </div>
 
   <!-- Empty state: no workload selected -->
-  <div v-if="!simNs || !simName" class="card">
-    <div class="empty-state">
-      <p>
-        Pick a workload above to simulate. Or
-        <a href="#" @click.prevent="trySample">try a sample workload</a>.
-      </p>
-    </div>
-  </div>
+  <EmptyState
+    v-if="!simNs || !simName"
+    icon="search"
+    title="Pick a workload"
+    message="Enter a namespace and name above to simulate, or try a sample workload."
+  >
+    <template #actions>
+      <button class="btn btn-secondary btn-sm" type="button" @click="trySample">
+        Try sample workload
+      </button>
+    </template>
+  </EmptyState>
 
   <!-- Results -->
   <div v-if="firstRun && !simData && !simError"></div>
   <ErrorState v-else-if="simError" :message="simError" @retry="runSimulation" />
   <template v-else-if="simData">
-    <div v-if="Object.keys(simData.containers).length === 0" class="card">
-      <div class="empty-state">
-        <p>
-          No metrics data found for this workload. Make sure the namespace, kind, and name are
-          correct.
-        </p>
-      </div>
-    </div>
+    <EmptyState
+      v-if="Object.keys(simData.containers).length === 0"
+      icon="search"
+      title="No metrics found"
+      message="No metrics data for this workload. Make sure the namespace, kind, and name are correct."
+    />
     <template v-else>
       <div class="card">
         <div class="card-header"><h2>Savings impact</h2></div>
@@ -571,7 +603,7 @@ onUnmounted(() => {
       <div class="card">
         <div class="card-header">
           <h2>Simulation Results</h2>
-          <div style="display: flex; gap: 8px">
+          <div class="row">
             <button class="btn btn-secondary" @click="exportYAML" title="Download as YAML patch">
               <svg
                 viewBox="0 0 24 24"
@@ -668,12 +700,15 @@ onUnmounted(() => {
         </template>
       </div>
 
-      <h2
-        v-if="simInitContainerNames().length > 0 && simRegularContainerNames().length > 0"
-        style="margin-top: 16px"
-      >
-        Containers
-      </h2>
+      <div class="charts-toolbar">
+        <h2>Usage over time</h2>
+        <div class="charts-toolbar-control" role="group" aria-labelledby="charts-time-range-label">
+          <span id="charts-time-range-label" class="charts-toolbar-control-label">
+            Time range
+          </span>
+          <TimeRangeSelector v-model="timeRange" />
+        </div>
+      </div>
       <div v-for="cname in simRegularContainerNames()" :key="cname" class="card">
         <div class="card-header">
           <h2>

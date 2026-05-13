@@ -229,11 +229,22 @@ export function createTimeSeriesChart(
       label: opts.label,
       data: chartData,
       borderColor: opts.color,
-      backgroundColor: softFill(opts.color, 0.1),
+      backgroundColor: (ctx: any) => {
+        const chart = ctx.chart
+        const area = chart.chartArea
+        if (!area) return softFill(opts.color, 0.12)
+        const grad = chart.ctx.createLinearGradient(0, area.top, 0, area.bottom)
+        grad.addColorStop(0, softFill(opts.color, 0.32))
+        grad.addColorStop(1, softFill(opts.color, 0))
+        return grad
+      },
       fill: true,
-      borderWidth: 1.5,
+      borderWidth: 1.75,
       pointRadius: 0,
       pointHoverRadius: 4,
+      pointHoverBorderWidth: 2,
+      pointHoverBackgroundColor: opts.color,
+      pointHoverBorderColor: themeVar('--bg-card', '#0d1117'),
       tension: 0.3,
     },
   ]
@@ -301,6 +312,8 @@ export function createTimeSeriesChart(
           bodyColor: colors.text,
           padding: 10,
           cornerRadius: 6,
+          boxPadding: 6,
+          usePointStyle: true,
           callbacks: {
             label: (ctx: any) =>
               ctx.dataset.label + ': ' + opts.yFormat(ctx.parsed.y) + ' ' + opts.unit,
@@ -349,6 +362,47 @@ export function createTimeSeriesChart(
   canvas.addEventListener('dblclick', () => resetZoom(canvasId))
 
   return chart
+}
+
+// Re-apply theme tokens to every live chart instance. Called when the user
+// toggles the theme so charts don't stay frozen with the old palette.
+export function applyThemeToAllCharts() {
+  const colors = themeColors()
+  Object.values(chartInstances).forEach((chart) => {
+    const opts: any = chart.options
+    if (opts.scales?.x) {
+      opts.scales.x.grid = { ...opts.scales.x.grid, color: colors.grid }
+      opts.scales.x.ticks = { ...opts.scales.x.ticks, color: colors.tick }
+    }
+    if (opts.scales?.y) {
+      opts.scales.y.grid = { ...opts.scales.y.grid, color: colors.grid }
+      opts.scales.y.ticks = { ...opts.scales.y.ticks, color: colors.tick }
+    }
+    const plugins = opts.plugins || {}
+    if (plugins.tooltip) {
+      plugins.tooltip.backgroundColor = colors.tooltipBg
+      plugins.tooltip.borderColor = colors.tooltipBorder
+      plugins.tooltip.titleColor = colors.text
+      plugins.tooltip.bodyColor = colors.text
+    }
+    if (plugins.legend?.labels) {
+      plugins.legend.labels.color = colors.tick
+    }
+    if (plugins.zoom?.zoom?.drag) {
+      plugins.zoom.zoom.drag.backgroundColor = colors.accentSoft
+      plugins.zoom.zoom.drag.borderColor = colors.accent
+    }
+    // The primary dataset uses a hover border in the card background color —
+    // recompute it via the scriptable function on next draw by forcing update.
+    chart.data.datasets.forEach((ds: any) => {
+      if (ds.pointHoverBorderColor) ds.pointHoverBorderColor = themeVar('--bg-card', '#0d1117')
+    })
+    chart.update('none')
+  })
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('themechange', () => applyThemeToAllCharts())
 }
 
 export function pairedCanvasId(canvasId: string): string | null {

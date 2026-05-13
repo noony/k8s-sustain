@@ -21,6 +21,7 @@ import PageHeader from '../components/PageHeader.vue'
 import LoadingState from '../components/LoadingState.vue'
 import ErrorState from '../components/ErrorState.vue'
 import EmptyState from '../components/EmptyState.vue'
+import Combobox from '../components/Combobox.vue'
 
 const props = defineProps<{ name: string }>()
 const router = useRouter()
@@ -373,16 +374,14 @@ function renderYaml(p: typeof policy.value): string {
       <div class="card-header">
         <h2>Matched Workloads</h2>
         <div class="filter-bar">
-          <select
+          <Combobox
             v-if="(workloadData.namespaces || []).length > 1"
             v-model="nsFilter"
-            @change="page = 1"
-          >
-            <option value="">All namespaces</option>
-            <option v-for="ns in workloadData.namespaces?.sort()" :key="ns" :value="ns">
-              {{ ns }}
-            </option>
-          </select>
+            :options="workloadData.namespaces || []"
+            placeholder="Namespace…"
+            all-label="All namespaces"
+            @update:model-value="page = 1"
+          />
           <span class="badge badge-blue">{{ workloadData.total }} workloads</span>
           <button class="btn btn-primary btn-sm" @click="runBatchSimulate">Simulate All</button>
         </div>
