@@ -192,6 +192,59 @@ func TestPodIsStale_RestartableInitContainerDriftCountsAsStale(t *testing.T) {
 	}
 }
 
+// TestPodIsStale_DetectsChangedLimit verifies that a recommendation that only
+// changes a container's limit (request unchanged) still marks the pod stale.
+// Without this the eviction-mode reconcile would skip the pod and the stale
+// limit would persist indefinitely.
+func TestPodIsStale_DetectsChangedLimit(t *testing.T) {
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name: "app",
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
+					Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")},
+				},
+			}},
+		},
+	}
+	recs := map[string]ContainerRecommendation{
+		"app": {
+			MemoryRequest: qtyp("256Mi"),
+			MemoryLimit:   qtyp("1Gi"),
+		},
+	}
+	if !podIsStale(pod, recs) {
+		t.Error("expected pod to be stale: recommended limit differs from current")
+	}
+}
+
+// TestPodIsStale_DetectsRemovedLimit verifies that a recommendation asking to
+// remove a limit (RemoveCPULimit) marks the pod stale when the container still
+// has the limit set.
+func TestPodIsStale_DetectsRemovedLimit(t *testing.T) {
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name: "app",
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
+					Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+				},
+			}},
+		},
+	}
+	recs := map[string]ContainerRecommendation{
+		"app": {
+			CPURequest:     qtyp("100m"),
+			RemoveCPULimit: true,
+		},
+	}
+	if !podIsStale(pod, recs) {
+		t.Error("expected pod to be stale: recommendation removes a limit still present on the container")
+	}
+}
+
 // TestPodIsStale_ClassicInitContainerDriftIsIgnored verifies that drift in a
 // classic (non-restartable) init container does NOT trigger a pod recycle —
 // the init container has already exited by the time the pod is Running, and
@@ -305,14 +358,23 @@ func TestRecyclePods_Eviction_HappyPath(t *testing.T) {
 	}
 }
 
-// TestRecyclePods_SkipsTerminatingAndNonRunning verifies that pods being
-// deleted or not in the Running phase are skipped without trying to evict.
-func TestRecyclePods_SkipsTerminatingAndNonRunning(t *testing.T) {
+// TestRecyclePods_SkipsTerminatingAndTerminal verifies that pods being deleted
+// or already in Succeeded/Failed phase are skipped. Pending pods are eligible
+// for eviction so a pod stuck Pending because its request is too large gets
+// recycled — the webhook re-injects the smaller recommendation on the next
+// scheduling attempt.
+func TestRecyclePods_SkipsTerminatingAndTerminal(t *testing.T) {
 	terminating := runningPod("terminating", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	now := metav1.Now()
 	terminating.DeletionTimestamp = &now
 	finalizers := []string{"x"}
 	terminating.Finalizers = finalizers
+
+	succeeded := runningPod("succeeded", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	succeeded.Status.Phase = corev1.PodSucceeded
+
+	failed := runningPod("failed", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	failed.Status.Phase = corev1.PodFailed
 
 	pending := runningPod("pending", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	pending.Status.Phase = corev1.PodPending
@@ -321,14 +383,14 @@ func TestRecyclePods_SkipsTerminatingAndNonRunning(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 	_ = policyv1.AddToScheme(scheme)
 
-	calls := 0
+	var evicted []string
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(terminating, pending).
+		WithObjects(terminating, succeeded, failed, pending).
 		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
 				if sub == "eviction" {
-					calls++
+					evicted = append(evicted, obj.GetName())
 				}
 				return nil
 			},
@@ -342,8 +404,8 @@ func TestRecyclePods_SkipsTerminatingAndNonRunning(t *testing.T) {
 	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
-	if calls != 0 {
-		t.Errorf("expected zero evictions for terminating/pending pods, got %d", calls)
+	if len(evicted) != 1 || evicted[0] != "pending" {
+		t.Errorf("expected only the Pending pod to be evicted, got %v", evicted)
 	}
 }
 

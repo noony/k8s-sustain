@@ -9,7 +9,18 @@ import (
 	"github.com/prometheus/client_golang/api"
 	prometheusv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+// logWarnings emits Prometheus query Warnings at log level 0 so callers can
+// notice partial results, hit cardinality limits, or remote-read failures
+// instead of silently computing recommendations from incomplete data.
+func logWarnings(ctx context.Context, expr string, warnings prometheusv1.Warnings) {
+	if len(warnings) == 0 {
+		return
+	}
+	log.FromContext(ctx).Info("prometheus query returned warnings", "expr", expr, "warnings", warnings)
+}
 
 // ContainerValues maps container name → metric value (cores for CPU, bytes for memory).
 type ContainerValues map[string]float64
@@ -181,12 +192,13 @@ func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKin
 		`sum(k8s_sustain:workload_oom_24h{namespace=%q,owner_kind=%q,owner_name=%q})`,
 		namespace, ownerKind, ownerName,
 	)
-	oomRes, _, err := c.api.Query(ctx, oomExpr, time.Now())
+	oomRes, warnings, err := c.api.Query(ctx, oomExpr, time.Now())
 	if err != nil {
 		c.breaker.failure()
 		return OOMSignal{}, fmt.Errorf("prometheus oom probe %q: %w", oomExpr, err)
 	}
 	c.breaker.success()
+	logWarnings(ctx, oomExpr, warnings)
 	var oomCount float64
 	if vec, ok := oomRes.(model.Vector); ok && len(vec) > 0 {
 		oomCount = float64(vec[0].Value)
@@ -205,12 +217,13 @@ func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKin
 		`max by (container) (k8s_sustain:container_peak_memory_24h:bytes{namespace=%q,owner_kind=%q,owner_name=%q})`,
 		namespace, ownerKind, ownerName,
 	)
-	peakRes, _, err := c.api.Query(ctx, peakExpr, time.Now())
+	peakRes, warnings, err := c.api.Query(ctx, peakExpr, time.Now())
 	if err != nil {
 		c.breaker.failure()
 		return OOMSignal{OOMCount: oomCount}, fmt.Errorf("prometheus peak probe %q: %w", peakExpr, err)
 	}
 	c.breaker.success()
+	logWarnings(ctx, peakExpr, warnings)
 	peaks := ContainerValues{}
 	if vec, ok := peakRes.(model.Vector); ok {
 		for _, s := range vec {
@@ -267,7 +280,7 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 	end := time.Now()
 	start := end.Add(-time.Duration(windowDur))
 
-	result, _, err := c.api.QueryRange(ctx, expr, prometheusv1.Range{
+	result, warnings, err := c.api.QueryRange(ctx, expr, prometheusv1.Range{
 		Start: start,
 		End:   end,
 		Step:  time.Duration(stepDur),
@@ -278,6 +291,7 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		return nil, nil //nolint:nilerr
 	}
 	c.breaker.success()
+	logWarnings(ctx, expr, warnings)
 
 	matrix, ok := result.(model.Matrix)
 	if !ok {
@@ -339,7 +353,7 @@ func (c *Client) queryRangeByContainer(ctx context.Context, expr, window, step s
 	end := time.Now()
 	start := end.Add(-time.Duration(windowDur))
 
-	result, _, err := c.api.QueryRange(ctx, expr, prometheusv1.Range{
+	result, warnings, err := c.api.QueryRange(ctx, expr, prometheusv1.Range{
 		Start: start,
 		End:   end,
 		Step:  time.Duration(stepDur),
@@ -349,6 +363,7 @@ func (c *Client) queryRangeByContainer(ctx context.Context, expr, window, step s
 		return nil, fmt.Errorf("prometheus range query %q: %w", expr, err)
 	}
 	c.breaker.success()
+	logWarnings(ctx, expr, warnings)
 
 	matrix, ok := result.(model.Matrix)
 	if !ok {
@@ -383,12 +398,13 @@ func (c *Client) Ping(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_, _, err := c.api.Query(ctx, "up", time.Now())
+	_, warnings, err := c.api.Query(ctx, "up", time.Now())
 	if err != nil {
 		c.breaker.failure()
 		return fmt.Errorf("prometheus unreachable: %w", err)
 	}
 	c.breaker.success()
+	logWarnings(ctx, "up", warnings)
 	return nil
 }
 
@@ -399,12 +415,13 @@ func (c *Client) queryByContainer(ctx context.Context, expr string) (ContainerVa
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
-	result, _, err := c.api.Query(ctx, expr, time.Now())
+	result, warnings, err := c.api.Query(ctx, expr, time.Now())
 	if err != nil {
 		c.breaker.failure()
 		return nil, fmt.Errorf("prometheus query %q: %w", expr, err)
 	}
 	c.breaker.success()
+	logWarnings(ctx, expr, warnings)
 
 	vector, ok := result.(model.Vector)
 	if !ok {
@@ -436,12 +453,13 @@ func (c *Client) QueryReplicaCountMedian(ctx context.Context, namespace, ownerKi
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
-	result, _, err := c.api.Query(ctx, expr, time.Now())
+	result, warnings, err := c.api.Query(ctx, expr, time.Now())
 	if err != nil {
 		c.breaker.failure()
 		return 0, fmt.Errorf("prometheus query %q: %w", expr, err)
 	}
 	c.breaker.success()
+	logWarnings(ctx, expr, warnings)
 	vector, ok := result.(model.Vector)
 	if !ok || len(vector) == 0 {
 		return 0, nil
@@ -460,12 +478,13 @@ func (c *Client) QueryInstant(ctx context.Context, expr string) (float64, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
 	defer cancel()
-	v, _, err := c.api.Query(ctx, expr, time.Now())
+	v, warnings, err := c.api.Query(ctx, expr, time.Now())
 	if err != nil {
 		c.breaker.failure()
 		return 0, fmt.Errorf("instant query %q: %w", expr, err)
 	}
 	c.breaker.success()
+	logWarnings(ctx, expr, warnings)
 	switch typed := v.(type) {
 	case model.Vector:
 		if len(typed) == 0 {
@@ -497,12 +516,13 @@ func (c *Client) QueryRange(ctx context.Context, expr, window, step string) ([]T
 		return nil, fmt.Errorf("parse step %q: %w", step, err)
 	}
 	r := prometheusv1.Range{Start: end.Add(-time.Duration(dur)), End: end, Step: time.Duration(stp)}
-	v, _, err := c.api.QueryRange(ctx, expr, r)
+	v, warnings, err := c.api.QueryRange(ctx, expr, r)
 	if err != nil {
 		c.breaker.failure()
 		return nil, fmt.Errorf("range query %q: %w", expr, err)
 	}
 	c.breaker.success()
+	logWarnings(ctx, expr, warnings)
 	matrix, ok := v.(model.Matrix)
 	if !ok || len(matrix) == 0 {
 		return nil, nil
@@ -522,12 +542,13 @@ func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[stri
 	}
 	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
 	defer cancel()
-	v, _, err := c.api.Query(ctx, expr, time.Now())
+	v, warnings, err := c.api.Query(ctx, expr, time.Now())
 	if err != nil {
 		c.breaker.failure()
 		return nil, fmt.Errorf("by-label query %q: %w", expr, err)
 	}
 	c.breaker.success()
+	logWarnings(ctx, expr, warnings)
 	vec, ok := v.(model.Vector)
 	if !ok {
 		return map[string]float64{}, nil
@@ -552,12 +573,13 @@ func (c *Client) QueryByLabels(ctx context.Context, query string, labels ...stri
 	}
 	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
 	defer cancel()
-	v, _, err := c.api.Query(ctx, query, time.Now())
+	v, warnings, err := c.api.Query(ctx, query, time.Now())
 	if err != nil {
 		c.breaker.failure()
 		return nil, fmt.Errorf("by-labels query %q: %w", query, err)
 	}
 	c.breaker.success()
+	logWarnings(ctx, query, warnings)
 	vec, ok := v.(model.Vector)
 	if !ok {
 		return map[string]float64{}, nil

@@ -7,8 +7,8 @@ describe('usePrometheusTime', () => {
     expect(window.value).toBe('168h')
   })
 
-  it('reads window from URL hash on init', () => {
-    history.replaceState(null, '', '/#/overview?window=72h')
+  it('reads window from URL query string on init', () => {
+    history.replaceState(null, '', '/overview?window=72h')
     const { window } = usePrometheusTime()
     expect(window.value).toBe('72h')
   })

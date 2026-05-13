@@ -190,8 +190,23 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 			return ctx.Err()
 		}
 		pod := &podList.Items[i]
-		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
-			logger.V(1).Info("skipping pod", "pod", pod.Name, "phase", pod.Status.Phase, "deleting", pod.DeletionTimestamp != nil)
+		if pod.DeletionTimestamp != nil {
+			logger.V(1).Info("skipping terminating pod", "pod", pod.Name)
+			skipped++
+			continue
+		}
+		// In-place resize requires a Running pod (kubelet must observe the
+		// patch). Eviction also works on Pending pods — a pod stuck Pending
+		// because its request is too large is exactly the case we want to
+		// recycle so the webhook can re-inject the smaller recommendation.
+		// Succeeded/Failed pods are not worth touching in either mode.
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			logger.V(1).Info("skipping terminal pod", "pod", pod.Name, "phase", pod.Status.Phase)
+			skipped++
+			continue
+		}
+		if p.inPlace.Load() && pod.Status.Phase != corev1.PodRunning {
+			logger.V(1).Info("skipping non-Running pod for in-place resize", "pod", pod.Name, "phase", pod.Status.Phase)
 			skipped++
 			continue
 		}
@@ -377,20 +392,34 @@ func anyContainerStale(cs []corev1.Container, recs map[string]ContainerRecommend
 		if !ok {
 			continue
 		}
-		if rec.CPURequest != nil {
-			current := c.Resources.Requests.Cpu()
-			if current.Cmp(*rec.CPURequest) != 0 {
-				return true
-			}
+		if rec.CPURequest != nil && c.Resources.Requests.Cpu().Cmp(*rec.CPURequest) != 0 {
+			return true
 		}
-		if rec.MemoryRequest != nil {
-			current := c.Resources.Requests.Memory()
-			if current.Cmp(*rec.MemoryRequest) != 0 {
-				return true
-			}
+		if rec.MemoryRequest != nil && c.Resources.Requests.Memory().Cmp(*rec.MemoryRequest) != 0 {
+			return true
+		}
+		if limitStale(c.Resources.Limits.Cpu(), rec.CPULimit, rec.RemoveCPULimit) {
+			return true
+		}
+		if limitStale(c.Resources.Limits.Memory(), rec.MemoryLimit, rec.RemoveMemoryLimit) {
+			return true
 		}
 	}
 	return false
+}
+
+// limitStale reports whether a container's current limit differs from the
+// recommendation. A nil rec without remove=true means "leave it alone".
+// Resources.Limits.Cpu()/Memory() return a zero-valued Quantity (never nil)
+// when the limit is unset, which IsZero() detects.
+func limitStale(current *resource.Quantity, rec *resource.Quantity, remove bool) bool {
+	if remove {
+		return !current.IsZero()
+	}
+	if rec == nil {
+		return false
+	}
+	return current.Cmp(*rec) != 0
 }
 
 // isRestartableInitContainer reports whether an init container is a sidecar

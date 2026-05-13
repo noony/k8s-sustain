@@ -50,7 +50,7 @@ spec:
 
 **Ongoing reconciliation (controller) on clusters without in-place update support (k8s < 1.31):**
 
-1. Each running pod that has stale resources is evicted via the Eviction API
+1. Each non-terminal pod (Running or Pending) with stale resources is evicted via the Eviction API. Staleness is detected on both requests and limits — a recommendation that only changes a limit still triggers a recycle. Evicting Pending pods unblocks workloads stuck unschedulable because their original request was too large; the webhook re-injects the smaller recommendation on the replacement.
 2. The workload controller (Deployment/StatefulSet/DaemonSet) creates replacement pods
 3. The webhook injects the latest recommendations into the new pods at creation time
 4. PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle

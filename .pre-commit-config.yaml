@@ -71,7 +71,7 @@ repos:
         pass_filenames: false
       - id: dist-placeholder
         name: ensure dist placeholder exists
-        entry: bash -c 'test -f internal/dashboard/ui/dist/placeholder || { echo "internal/dashboard/ui/dist/placeholder is missing"; exit 1; }'
+        entry: bash -c 'test -f internal/dashboard/ui/dist/placeholder || { echo "internal/dashboard/ui/dist/placeholder is missing"; touch internal/dashboard/ui/dist/placeholder ; exit 1; }'
         language: system
         pass_filenames: false
         always_run: true

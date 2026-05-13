@@ -4,6 +4,8 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
+	"path"
+	"strings"
 )
 
 //go:embed ui/dist
@@ -16,24 +18,24 @@ func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serve static files; fall back to index.html for SPA routing
-	path := r.URL.Path
-	if path == "/" {
-		path = "/index.html"
+	// SPA routing: rewrite unknown non-asset paths to /index.html so
+	// client-side routes (e.g. /policies/foo) render the shell instead of 404.
+	// Asset requests (anything with a file extension) keep their original path
+	// so a missing .js/.css still surfaces as 404 — caching index.html as a
+	// script would break the app on reload.
+	reqPath := strings.TrimPrefix(r.URL.Path, "/")
+	if reqPath == "" {
+		reqPath = "index.html"
 	}
-
-	// Try to open the requested file
-	f, err := sub.Open(path[1:]) // strip leading /
-	if err != nil {
-		// SPA fallback: serve index.html for any unknown path
-		path = "index.html"
-		f, err = sub.Open(path)
-		if err != nil {
-			http.Error(w, "not found", http.StatusNotFound)
+	if _, err := fs.Stat(sub, reqPath); err != nil {
+		if path.Ext(reqPath) != "" {
+			http.NotFound(w, r)
 			return
 		}
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/index.html"
+		http.FileServer(http.FS(sub)).ServeHTTP(w, r2)
+		return
 	}
-	_ = f.Close()
-
 	http.FileServer(http.FS(sub)).ServeHTTP(w, r)
 }
