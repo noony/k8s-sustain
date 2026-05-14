@@ -1273,6 +1273,66 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP API
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="HTTP API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#response-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Response envelope
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#request-correlation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Request correlation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compression" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compression
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#routing-and-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      Routing and methods
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#helm-values-reference" class="md-nav__link">
     <span class="md-ellipsis">
       Helm Values Reference
@@ -1740,6 +1800,66 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP API
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="HTTP API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#response-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Response envelope
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#request-correlation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Request correlation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compression" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compression
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#routing-and-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      Routing and methods
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#helm-values-reference" class="md-nav__link">
     <span class="md-ellipsis">
       Helm Values Reference
@@ -1953,6 +2073,35 @@
 <li><strong>Duplicate kube-state-metrics instances</strong> — If multiple kube-state-metrics are scraped, the workload mapping rules can fail with "many-to-many matching not allowed". Either remove the duplicate kube-state-metrics or upgrade the chart (the recording rules deduplicate series automatically since v0.3).</li>
 <li><strong>Missing upstream metrics</strong> — The recording rules depend on <code>kube_pod_owner</code>, <code>kube_replicaset_owner</code>, <code>container_cpu_usage_seconds_total</code>, <code>container_memory_working_set_bytes</code>, and <code>kube_pod_container_resource_requests</code> (for historical request lines). Ensure kube-state-metrics and cAdvisor metrics are scraped.</li>
 </ul>
+<h2 id="http-api">HTTP API<a class="headerlink" href="#http-api" title="Permanent link">&para;</a></h2>
+<p>The dashboard backs every UI page with a small JSON API under <code>/api/</code>. The same endpoints are useful for ad-hoc scripts and integrations.</p>
+<h3 id="response-envelope">Response envelope<a class="headerlink" href="#response-envelope" title="Permanent link">&para;</a></h3>
+<p>Every successful response is wrapped:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;...&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;endpoint-specific payload&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;meta&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;requestId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a1b2c3d4e5f60718293a4b5c&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}</span>
+</code></pre></div>
+<p>Errors use a parallel shape:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;BAD_REQUEST&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;invalid pageSize \&quot;-1\&quot;: must be 1..200&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">&quot;field&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pageSize&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nt">&quot;requestId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a1b2c3d4e5f60718293a4b5c&quot;</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">}</span>
+</code></pre></div>
+<p>Error <code>code</code> values are stable: <code>BAD_REQUEST</code>, <code>NOT_FOUND</code>, <code>METHOD_NOT_ALLOWED</code>, <code>SERVICE_UNAVAILABLE</code>, <code>INTERNAL</code>. The <code>field</code> key is only present on 400 responses that can be attributed to a single request input (page, pageSize, kind, risk, autoscaler, automated, window, step, limit, …).</p>
+<h3 id="request-correlation">Request correlation<a class="headerlink" href="#request-correlation" title="Permanent link">&para;</a></h3>
+<p>Every request gets an <code>X-Request-Id</code> header on the response, generated server-side when the client doesn't supply one. The same value is included in <code>meta.requestId</code> (success) or <code>error.requestId</code> (failure) and emitted into structured logs, so an operator can grep a single request across UI report, backend logs, and Prometheus telemetry.</p>
+<p>Clients may forward their own value by sending <code>X-Request-Id: &lt;id&gt;</code> on the request — the dashboard echoes it back instead of generating a new one.</p>
+<h3 id="compression">Compression<a class="headerlink" href="#compression" title="Permanent link">&para;</a></h3>
+<p>Responses are gzip-encoded when the request advertises <code>Accept-Encoding: gzip</code> (browsers do this automatically; <code>curl --compressed</code> opts in). Large endpoints (<code>/api/workloads/.../metrics</code>, <code>/api/summary/trend</code>, <code>/api/policies/{name}/batch-simulate</code>) typically compress 5–10×.</p>
+<h3 id="routing-and-methods">Routing and methods<a class="headerlink" href="#routing-and-methods" title="Permanent link">&para;</a></h3>
+<p>Routes use Go 1.22 method-specific patterns, so the wrong HTTP verb returns <code>405 Method Not Allowed</code> with an <code>Allow</code> header listing the supported method(s). Path parameters (<code>{name}</code>, <code>{namespace}</code>, <code>{kind}</code>) are URL-decoded by the standard library.</p>
+<h3 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h3>
+<p>Query parameters are validated strictly. Unknown enum values (<code>?risk=foo</code>, <code>?autoscaler=maybe</code>, <code>?kind=Pod</code>) return 400 with the <code>field</code> set, instead of silently filtering out every workload. Likewise out-of-range integers (<code>?page=-1</code>, <code>?limit=10000</code>) and malformed durations (<code>?window=junk</code>) get a 400 pointing at the offending input.</p>
 <h2 id="helm-values-reference">Helm Values Reference<a class="headerlink" href="#helm-values-reference" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
