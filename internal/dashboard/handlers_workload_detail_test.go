@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -38,9 +37,7 @@ func TestHandleWorkloadDetailReturnsSnapshot(t *testing.T) {
 			CPUReplica     float64 `json:"cpuReplica"`
 		} `json:"coordinationFactors"`
 	}
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatal(err)
-	}
+	decodeEnvelopeData(t, rec.Body, &got)
 	if got.OOM24h != 1 {
 		t.Fatalf("oom24h: got %d want 1", got.OOM24h)
 	}

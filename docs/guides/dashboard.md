@@ -197,6 +197,54 @@ This message appears when Prometheus returns no time-series data for the workloa
 - **Duplicate kube-state-metrics instances** — If multiple kube-state-metrics are scraped, the workload mapping rules can fail with "many-to-many matching not allowed". Either remove the duplicate kube-state-metrics or upgrade the chart (the recording rules deduplicate series automatically since v0.3).
 - **Missing upstream metrics** — The recording rules depend on `kube_pod_owner`, `kube_replicaset_owner`, `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`, and `kube_pod_container_resource_requests` (for historical request lines). Ensure kube-state-metrics and cAdvisor metrics are scraped.
 
+## HTTP API
+
+The dashboard backs every UI page with a small JSON API under `/api/`. The same endpoints are useful for ad-hoc scripts and integrations.
+
+### Response envelope
+
+Every successful response is wrapped:
+
+```json
+{
+  "data": { "...": "endpoint-specific payload" },
+  "meta": { "requestId": "a1b2c3d4e5f60718293a4b5c" }
+}
+```
+
+Errors use a parallel shape:
+
+```json
+{
+  "error": {
+    "code": "BAD_REQUEST",
+    "message": "invalid pageSize \"-1\": must be 1..200",
+    "field": "pageSize",
+    "requestId": "a1b2c3d4e5f60718293a4b5c"
+  }
+}
+```
+
+Error `code` values are stable: `BAD_REQUEST`, `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `SERVICE_UNAVAILABLE`, `INTERNAL`. The `field` key is only present on 400 responses that can be attributed to a single request input (page, pageSize, kind, risk, autoscaler, automated, window, step, limit, …).
+
+### Request correlation
+
+Every request gets an `X-Request-Id` header on the response, generated server-side when the client doesn't supply one. The same value is included in `meta.requestId` (success) or `error.requestId` (failure) and emitted into structured logs, so an operator can grep a single request across UI report, backend logs, and Prometheus telemetry.
+
+Clients may forward their own value by sending `X-Request-Id: <id>` on the request — the dashboard echoes it back instead of generating a new one.
+
+### Compression
+
+Responses are gzip-encoded when the request advertises `Accept-Encoding: gzip` (browsers do this automatically; `curl --compressed` opts in). Large endpoints (`/api/workloads/.../metrics`, `/api/summary/trend`, `/api/policies/{name}/batch-simulate`) typically compress 5–10×.
+
+### Routing and methods
+
+Routes use Go 1.22 method-specific patterns, so the wrong HTTP verb returns `405 Method Not Allowed` with an `Allow` header listing the supported method(s). Path parameters (`{name}`, `{namespace}`, `{kind}`) are URL-decoded by the standard library.
+
+### Validation
+
+Query parameters are validated strictly. Unknown enum values (`?risk=foo`, `?autoscaler=maybe`, `?kind=Pod`) return 400 with the `field` set, instead of silently filtering out every workload. Likewise out-of-range integers (`?page=-1`, `?limit=10000`) and malformed durations (`?window=junk`) get a 400 pointing at the offending input.
+
 ## Helm Values Reference
 
 | Key                              | Default                    | Description                              |

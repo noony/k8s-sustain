@@ -23,13 +23,16 @@ func (s *Server) handleSummaryTrend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	window := r.URL.Query().Get("window")
-	if window == "" {
-		window = "30d"
+	q := r.URL.Query()
+	window, perr := parseDurationParam(q, "window", "30d")
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
-	step := r.URL.Query().Get("step")
-	if step == "" {
-		step = "1h"
+	step, perr := parseStepParam(q, "1h")
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
 

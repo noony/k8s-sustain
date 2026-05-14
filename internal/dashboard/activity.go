@@ -9,11 +9,28 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// activityLimitDefault and activityLimitMax bound the per-request page size.
+const (
+	activityLimitDefault = 20
+	activityLimitMax     = 100
+)
+
 // activityListLimit caps the per-page Event fetch from the API server.
 // k8s-sustain emits events sparsely; a single page is enough to backfill
 // the dashboard's activity feed without ever pulling the entire cluster's
 // Event history into memory.
 const activityListLimit = 500
+
+func parseActivityLimit(s string) (int, *paramError) {
+	if s == "" {
+		return activityLimitDefault, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 || n > activityLimitMax {
+		return 0, badParam("limit", "invalid limit %q: must be 1..%d", s, activityLimitMax)
+	}
+	return n, nil
+}
 
 type activityItem struct {
 	Timestamp string `json:"timestamp"`
@@ -30,9 +47,10 @@ func (s *Server) handleSummaryActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=15")
-	limit := 20
-	if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 && l <= 100 {
-		limit = l
+	limit, perr := parseActivityLimit(r.URL.Query().Get("limit"))
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
 
 	var list corev1.EventList

@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -40,9 +39,7 @@ func TestHandleSummaryTrendReturnsUsageRequestOriginalForCPUAndMemory(t *testing
 	}
 
 	var resp trendResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	decodeEnvelopeData(t, rec.Body, &resp)
 	for _, s := range []struct {
 		name string
 		s    trendSeries

@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -122,9 +121,7 @@ func TestHandleSummaryShape(t *testing.T) {
 	}
 
 	var got summaryResponseV2
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decoding response: %v body=%s", err, rec.Body.String())
-	}
+	decodeEnvelopeData(t, rec.Body, &got)
 
 	if got.KPI.CPUSavedCores != 3.2 {
 		t.Errorf("kpi.cpuSavedCores = %v, want 3.2", got.KPI.CPUSavedCores)
@@ -169,9 +166,7 @@ func TestHandleSummaryHeadroomAttentionPolicies(t *testing.T) {
 	}
 
 	var got summaryResponseV2
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decoding response: %v body=%s", err, rec.Body.String())
-	}
+	decodeEnvelopeData(t, rec.Body, &got)
 
 	cpuHR := got.Headroom["cpu"]
 	if cpuHR.Used != 0.4 || cpuHR.Idle != 0.3 || cpuHR.Free != 0.3 {
@@ -232,9 +227,7 @@ func TestHandleSummaryCacheHit(t *testing.T) {
 		t.Fatalf("first call: expected 200, got %d", rec1.Code)
 	}
 	var got1 summaryResponseV2
-	if err := json.Unmarshal(rec1.Body.Bytes(), &got1); err != nil {
-		t.Fatalf("decode 1: %v", err)
-	}
+	decodeEnvelopeData(t, rec1.Body, &got1)
 
 	// Mutate the underlying client; cache should still serve old value.
 	fp.instant["k8s_sustain:cluster_cpu_savings_cores"] = 99.9
@@ -245,9 +238,7 @@ func TestHandleSummaryCacheHit(t *testing.T) {
 		t.Fatalf("second call: expected 200, got %d", rec2.Code)
 	}
 	var got2 summaryResponseV2
-	if err := json.Unmarshal(rec2.Body.Bytes(), &got2); err != nil {
-		t.Fatalf("decode 2: %v", err)
-	}
+	decodeEnvelopeData(t, rec2.Body, &got2)
 	if got2.KPI.CPUSavedCores != got1.KPI.CPUSavedCores {
 		t.Errorf("expected cached value %v, got %v", got1.KPI.CPUSavedCores, got2.KPI.CPUSavedCores)
 	}
@@ -260,9 +251,7 @@ func TestHandleSummaryCacheHit(t *testing.T) {
 		t.Fatalf("third call: expected 200, got %d", rec3.Code)
 	}
 	var got3 summaryResponseV2
-	if err := json.Unmarshal(rec3.Body.Bytes(), &got3); err != nil {
-		t.Fatalf("decode 3: %v", err)
-	}
+	decodeEnvelopeData(t, rec3.Body, &got3)
 	if got3.KPI.CPUSavedCores != 99.9 {
 		t.Errorf("after cache reset: expected 99.9, got %v", got3.KPI.CPUSavedCores)
 	}

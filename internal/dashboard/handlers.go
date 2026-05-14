@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -119,35 +118,6 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
-func (s *Server) handlePolicyRoutes(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	parts := parsePath(r.URL.Path, "/api/policies/")
-	if len(parts) == 0 {
-		writeError(w, http.StatusBadRequest, "missing policy name")
-		return
-	}
-
-	policyName := parts[0]
-
-	if len(parts) == 1 {
-		s.handlePolicyDetail(w, r, policyName)
-		return
-	}
-	if len(parts) == 2 && parts[1] == "workloads" {
-		s.handlePolicyWorkloads(w, r, policyName)
-		return
-	}
-	if len(parts) == 2 && parts[1] == "batch-simulate" {
-		s.handlePolicyBatchSimulate(w, r, policyName)
-		return
-	}
-	writeError(w, http.StatusNotFound, "not found")
-}
-
 func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name string) {
 	ctx := r.Context()
 	policy := &sustainv1alpha1.Policy{}
@@ -166,13 +136,16 @@ func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name
 		})
 	}
 
-	window := r.URL.Query().Get("window")
-	if window == "" {
-		window = "30d"
+	q := r.URL.Query()
+	window, perr := parseDurationParam(q, "window", "30d")
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
-	step := r.URL.Query().Get("step")
-	if step == "" {
-		step = "1h"
+	step, perr := parseStepParam(q, "1h")
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
 
 	cpuSeries, _ := s.PromClient.QueryRange(ctx, fmt.Sprintf(`k8s_sustain:policy_cpu_savings_cores{policy=%q}`, name), window, step)
@@ -231,15 +204,12 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 
 	w.Header().Set("Cache-Control", "public, max-age=30")
 
-	// Query params
-	nsFilter := r.URL.Query().Get("namespace")
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 200 {
-		pageSize = 50
+	q := r.URL.Query()
+	nsFilter := q.Get("namespace")
+	page, pageSize, perr := parsePageParams(q, 50, 200)
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
 
 	var workloads []workloadSummary
@@ -581,19 +551,33 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=30")
 
 	ctx := r.Context()
-	nsFilter := r.URL.Query().Get("namespace")
-	kindFilter := r.URL.Query().Get("kind")
-	automatedFilter := r.URL.Query().Get("automated")
-	search := strings.ToLower(r.URL.Query().Get("search"))
-	riskFilter := r.URL.Query().Get("risk")
-	autoscalerFilter := r.URL.Query().Get("autoscaler")
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
-	if page < 1 {
-		page = 1
+	q := r.URL.Query()
+	nsFilter := q.Get("namespace")
+	search := strings.ToLower(q.Get("search"))
+	kindFilter, perr := parseEnumParam(q, "kind", []string{"Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job"})
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
-	if pageSize < 1 || pageSize > 200 {
-		pageSize = 50
+	automatedPtr, perr := parseBoolParam(q, "automated")
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
+	}
+	riskFilter, perr := parseEnumParam(q, "risk", []string{"safe", "drifted", "at-risk", "blocked"})
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
+	}
+	autoscalerFilter, perr := parseEnumParam(q, "autoscaler", []string{"has-autoscaler", "no-autoscaler"})
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
+	}
+	page, pageSize, perr := parsePageParams(q, 50, 200)
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
 
 	var listOpts []client.ListOption
@@ -753,8 +737,8 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply automated filter
-	if automatedFilter == "true" || automatedFilter == "false" {
-		wantAutomated := automatedFilter == "true"
+	if automatedPtr != nil {
+		wantAutomated := *automatedPtr
 		filtered := workloads[:0]
 		for _, w := range workloads {
 			if w.Automated == wantAutomated {
@@ -787,7 +771,7 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply autoscaler filter
-	if autoscalerFilter == "has-autoscaler" || autoscalerFilter == "no-autoscaler" {
+	if autoscalerFilter != "" {
 		wantAutoscaler := autoscalerFilter == "has-autoscaler"
 		filtered := workloads[:0]
 		for _, w := range workloads {
@@ -877,14 +861,17 @@ func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Re
 		memWindow = "168h"
 	}
 
-	// Chart time range from query params (defaults to CPU window for backward compat)
-	chartTimeRange := r.URL.Query().Get("window")
-	if chartTimeRange == "" {
-		chartTimeRange = cpuWindow
+	// Chart time range from query params (defaults to CPU window for backward compat).
+	q := r.URL.Query()
+	chartTimeRange, perr := parseDurationParam(q, "window", cpuWindow)
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
-	step := r.URL.Query().Get("step")
-	if step == "" {
-		step = "5m"
+	step, perr := parseStepParam(q, "5m")
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
 
 	req := simulateRequest{
@@ -977,46 +964,19 @@ func (s *Server) getWorkloadPolicyAnnotation(ctx context.Context, namespace, kin
 
 // ---- Workload metrics ----
 
-func (s *Server) handleWorkloadRoutes(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	// /api/workloads/:namespace/:kind/:name[/metrics|recommendations]
-	parts := parsePath(r.URL.Path, "/api/workloads/")
-	if len(parts) < 3 {
-		writeError(w, http.StatusBadRequest, "expected /api/workloads/:namespace/:kind/:name[/metrics|recommendations]")
-		return
-	}
-
-	namespace := parts[0]
-	kind := parts[1]
-	name := parts[2]
-
-	if len(parts) == 3 {
-		s.handleWorkloadDetail(w, r, namespace, kind, name)
-		return
-	}
-
-	if parts[3] == "recommendations" {
-		s.handleWorkloadRecommendations(w, r, namespace, kind, name)
-		return
-	}
-	if parts[3] != "metrics" {
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-
+func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
 
-	window := r.URL.Query().Get("window")
-	if window == "" {
-		window = "168h"
+	q := r.URL.Query()
+	window, perr := parseDurationParam(q, "window", "168h")
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
-	step := r.URL.Query().Get("step")
-	if step == "" {
-		step = "5m"
+	step, perr := parseStepParam(q, "5m")
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
 	}
 
 	cpuSeries, err := s.PromClient.QueryCPURangeByContainer(r.Context(), namespace, kind, name, window, step)

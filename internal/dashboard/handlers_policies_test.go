@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -31,9 +30,7 @@ func TestHandlePoliciesIncludesEffectiveness(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.handlePolicies(rec, httptest.NewRequest(http.MethodGet, "/api/policies", nil))
 	var got []map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatal(err)
-	}
+	decodeEnvelopeData(t, rec.Body, &got)
 	if len(got) != 1 || got[0]["cpuSavingsCores"] != 1.2 {
 		t.Fatalf("unexpected: %+v", got)
 	}
@@ -45,7 +42,7 @@ func TestHandlePolicyDetailIncludesEffectivenessSeries(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.handlePolicyDetail(rec, httptest.NewRequest(http.MethodGet, "/api/policies/p", nil), "p")
 	var got map[string]any
-	_ = json.NewDecoder(rec.Body).Decode(&got)
+	decodeEnvelopeData(t, rec.Body, &got)
 	if _, ok := got["effectivenessSeries"]; !ok {
 		t.Fatal("expected effectivenessSeries in payload")
 	}

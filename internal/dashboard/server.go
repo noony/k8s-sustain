@@ -4,11 +4,8 @@ package dashboard
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"runtime/debug"
-	"strings"
 	"sync"
 	"time"
 
@@ -45,17 +42,6 @@ type PromQuerier interface {
 	QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName, window, step string) ([]promclient.OOMEvent, error)
 }
 
-// responseWriter wraps http.ResponseWriter to capture the status code.
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
-}
-
 var dashboardScheme = runtime.NewScheme()
 
 func init() {
@@ -68,9 +54,9 @@ func Scheme() *runtime.Scheme { return dashboardScheme }
 
 // Server is the dashboard HTTP server.
 type Server struct {
-	K8sClient   client.Client
-	PromClient  PromQuerier
-	Logger      logr.Logger
+	K8sClient  client.Client
+	PromClient PromQuerier
+	Logger     logr.Logger
 	// CORSOrigins is the allowed CORS origin allowlist.
 	//
 	//   - nil / empty: no Access-Control-Allow-Origin header is set
@@ -85,6 +71,9 @@ type Server struct {
 }
 
 // Handler returns an http.Handler with all dashboard routes registered.
+// Routes use Go 1.22 method-specific patterns so the stdlib mux returns a
+// proper 405 with an `Allow` header when callers use the wrong verb, and
+// path variables are read with r.PathValue rather than hand-parsed.
 func (s *Server) Handler() http.Handler {
 	s.cacheInit.Do(func() {
 		if s.summaryCache == nil {
@@ -97,53 +86,48 @@ func (s *Server) Handler() http.Handler {
 
 	mux := http.NewServeMux()
 
-	// API routes
-	mux.HandleFunc("/api/policies", s.handlePolicies)
-	mux.HandleFunc("/api/policies/", s.handlePolicyRoutes)
-	mux.HandleFunc("/api/workloads", s.handleAllWorkloads)
-	mux.HandleFunc("/api/workloads/", s.handleWorkloadRoutes)
-	mux.HandleFunc("/api/simulate", s.handleSimulate)
-	mux.HandleFunc("/api/summary", s.handleSummary)
-	mux.HandleFunc("/api/summary/trend", s.handleSummaryTrend)
-	mux.HandleFunc("/api/summary/activity", s.handleSummaryActivity)
+	// Policy routes.
+	mux.HandleFunc("GET /api/policies", s.handlePolicies)
+	mux.HandleFunc("GET /api/policies/{name}", func(w http.ResponseWriter, r *http.Request) {
+		s.handlePolicyDetail(w, r, r.PathValue("name"))
+	})
+	mux.HandleFunc("GET /api/policies/{name}/workloads", func(w http.ResponseWriter, r *http.Request) {
+		s.handlePolicyWorkloads(w, r, r.PathValue("name"))
+	})
+	mux.HandleFunc("GET /api/policies/{name}/batch-simulate", func(w http.ResponseWriter, r *http.Request) {
+		s.handlePolicyBatchSimulate(w, r, r.PathValue("name"))
+	})
 
-	// Health
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// Workload routes.
+	mux.HandleFunc("GET /api/workloads", s.handleAllWorkloads)
+	mux.HandleFunc("GET /api/workloads/{namespace}/{kind}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		s.handleWorkloadDetail(w, r, r.PathValue("namespace"), r.PathValue("kind"), r.PathValue("name"))
+	})
+	mux.HandleFunc("GET /api/workloads/{namespace}/{kind}/{name}/metrics", func(w http.ResponseWriter, r *http.Request) {
+		s.handleWorkloadMetrics(w, r, r.PathValue("namespace"), r.PathValue("kind"), r.PathValue("name"))
+	})
+	mux.HandleFunc("GET /api/workloads/{namespace}/{kind}/{name}/recommendations", func(w http.ResponseWriter, r *http.Request) {
+		s.handleWorkloadRecommendations(w, r, r.PathValue("namespace"), r.PathValue("kind"), r.PathValue("name"))
+	})
+
+	// Simulation.
+	mux.HandleFunc("POST /api/simulate", s.handleSimulate)
+
+	// Summary routes.
+	mux.HandleFunc("GET /api/summary", s.handleSummary)
+	mux.HandleFunc("GET /api/summary/trend", s.handleSummaryTrend)
+	mux.HandleFunc("GET /api/summary/activity", s.handleSummaryActivity)
+
+	// Health.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/readyz", s.handleReadyz)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 
-	// Serve embedded UI
+	// Embedded UI catch-all.
 	mux.HandleFunc("/", s.handleUI)
 
-	return s.withTelemetry(s.withRecovery(s.withCORS(mux)))
-}
-
-// withRecovery turns a handler panic into a 500 response and a structured
-// log entry instead of crashing the dashboard process. Sits inside
-// withTelemetry so the recovered request still gets observed with its
-// final 500 status.
-func (s *Server) withRecovery(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			rec := recover()
-			if rec == nil {
-				return
-			}
-			if rec == http.ErrAbortHandler {
-				panic(rec)
-			}
-			s.Logger.Error(nil, "dashboard handler panic",
-				"panic", fmt.Sprint(rec),
-				"path", r.URL.Path,
-				"method", r.Method,
-				"stack", string(debug.Stack()),
-			)
-			panicTotal.WithLabelValues(r.URL.Path).Inc()
-			writeError(w, http.StatusInternalServerError, "internal error")
-		}()
-		next.ServeHTTP(w, r)
-	})
+	return s.withTelemetry(s.withRecovery(s.withCORS(s.withRequestID(s.withGzip(mux)))))
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
@@ -175,77 +159,6 @@ func (s *Server) ListenAndServe(addr string) error {
 	srv := s.NewHTTPServer(addr)
 	s.Logger.Info("Starting dashboard server", "addr", addr)
 	return srv.ListenAndServe()
-}
-
-func (s *Server) withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Default: no CORS headers — same-origin only. Operators must opt
-		// into cross-origin access by listing trusted origins (or "*"
-		// explicitly) in --cors-allowed-origins.
-		origin := ""
-		switch {
-		case len(s.CORSOrigins) == 0:
-			// same-origin only
-		case len(s.CORSOrigins) == 1 && s.CORSOrigins[0] == "*":
-			origin = "*"
-		default:
-			reqOrigin := r.Header.Get("Origin")
-			for _, o := range s.CORSOrigins {
-				if o == reqOrigin {
-					origin = o
-					break
-				}
-			}
-		}
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		}
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) withTelemetry(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-		next.ServeHTTP(rw, r)
-		dur := time.Since(start)
-		requestDuration.WithLabelValues(r.URL.Path, http.StatusText(rw.statusCode)).Observe(dur.Seconds())
-		s.Logger.V(1).Info("http request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rw.statusCode,
-			"duration", dur.String(),
-			"remote", r.RemoteAddr,
-		)
-	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
-}
-
-// parsePath splits a URL path by "/" and returns the segments after the prefix.
-// e.g. parsePath("/api/policies/my-policy/workloads", "/api/policies/") returns ["my-policy", "workloads"]
-func parsePath(path, prefix string) []string {
-	trimmed := strings.TrimPrefix(path, prefix)
-	trimmed = strings.TrimSuffix(trimmed, "/")
-	if trimmed == "" {
-		return nil
-	}
-	return strings.Split(trimmed, "/")
 }
 
 func formatQuantity(milliValue int64, format string) string {

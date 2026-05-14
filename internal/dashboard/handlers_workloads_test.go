@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -57,9 +56,7 @@ func TestAllWorkloadsIncludesRiskDriftHPA(t *testing.T) {
 			} `json:"coordinationFactors"`
 		} `json:"items"`
 	}
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatal(err)
-	}
+	decodeEnvelopeData(t, rec.Body, &resp)
 	if len(resp.Items) != 1 {
 		t.Fatalf("got %d items", len(resp.Items))
 	}
@@ -124,9 +121,7 @@ func TestAllWorkloadsIncludesStandaloneJobButSkipsCronJobOwned(t *testing.T) {
 		} `json:"items"`
 		Total int `json:"total"`
 	}
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatal(err)
-	}
+	decodeEnvelopeData(t, rec.Body, &resp)
 	if resp.Total != 1 || len(resp.Items) != 1 {
 		t.Fatalf("expected 1 item, got %d (items=%+v)", resp.Total, resp.Items)
 	}
@@ -162,9 +157,7 @@ func TestPolicyWorkloadsIncludesStandaloneJob(t *testing.T) {
 		} `json:"items"`
 		Total int `json:"total"`
 	}
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatal(err)
-	}
+	decodeEnvelopeData(t, rec.Body, &resp)
 	if resp.Total != 1 || resp.Items[0].Kind != "Job" || resp.Items[0].Name != "oneshot" {
 		t.Fatalf("expected 1 standalone Job, got %+v", resp)
 	}

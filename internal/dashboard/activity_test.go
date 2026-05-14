@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -29,9 +28,7 @@ func TestHandleSummaryActivityReturnsRecentEvents(t *testing.T) {
 	var got struct {
 		Items []map[string]any `json:"items"`
 	}
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatal(err)
-	}
+	decodeEnvelopeData(t, rec.Body, &got)
 	if len(got.Items) != 1 || got.Items[0]["reason"] != "Recycled" {
 		t.Fatalf("unexpected items: %+v", got.Items)
 	}

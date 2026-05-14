@@ -1,12 +1,49 @@
 const API_BASE = ''
 
+// ApiError carries the structured error returned by the dashboard's API.
+// Callers may catch and inspect `code` / `field` / `requestId` for richer
+// UX; ones that only need a string get `.message` via Error.
+export class ApiError extends Error {
+  code: string
+  status: number
+  field?: string
+  requestId?: string
+
+  constructor(
+    message: string,
+    opts: { code: string; status: number; field?: string; requestId?: string },
+  ) {
+    super(message)
+    this.name = 'ApiError'
+    this.code = opts.code
+    this.status = opts.status
+    this.field = opts.field
+    this.requestId = opts.requestId
+  }
+}
+
+// Every dashboard response is wrapped as `{data, meta}` on success or
+// `{error}` on failure. api() unwraps that envelope so each call site can
+// keep treating the response as the bare payload, and throws ApiError on
+// HTTP errors so callers can inspect `.code` or `.field` if they want.
 export async function api<T = unknown>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(API_BASE + path, opts)
+  const requestId = res.headers.get('X-Request-Id') || undefined
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(err.error || res.statusText)
+    const body = await res.json().catch(() => null)
+    const err = body?.error ?? {}
+    throw new ApiError(err.message || body?.error || res.statusText, {
+      code: err.code || 'INTERNAL',
+      status: res.status,
+      field: err.field,
+      requestId: err.requestId || requestId,
+    })
   }
-  return res.json()
+  const body = (await res.json()) as { data?: T } & T
+  // Tolerate non-enveloped responses too (e.g. UI development against an
+  // older server). When `body.data` is present, prefer it; otherwise the
+  // body itself is the payload.
+  return (body && typeof body === 'object' && 'data' in body ? (body.data as T) : body) as T
 }
 
 export interface TimeRangeOption {
