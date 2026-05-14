@@ -1,0 +1,355 @@
+package dashboard
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+)
+
+// ---- Workloads scoped to one policy ----
+
+type workloadSummary struct {
+	Namespace           string               `json:"namespace"`
+	Kind                string               `json:"kind"`
+	Name                string               `json:"name"`
+	Containers          []containerStatus    `json:"containers"`
+	RiskState           string               `json:"riskState"` // safe | drifted | at-risk | blocked
+	DriftPercent        float64              `json:"driftPercent"`
+	LastRecycledAt      string               `json:"lastRecycledAt,omitempty"`
+	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
+	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
+}
+
+type paginatedWorkloads struct {
+	Items      []workloadSummary `json:"items"`
+	Total      int               `json:"total"`
+	Page       int               `json:"page"`
+	PageSize   int               `json:"pageSize"`
+	Namespaces []string          `json:"namespaces"`
+}
+
+func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, policyName string) {
+	ctx := r.Context()
+
+	policy := &sustainv1alpha1.Policy{}
+	if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: policyName}, policy); err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("policy %q not found: %v", policyName, err))
+		return
+	}
+
+	w.Header().Set("Cache-Control", "public, max-age=30")
+
+	q := r.URL.Query()
+	nsFilter := q.Get("namespace")
+	page, pageSize, perr := parsePageParams(q, 50, 200)
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
+	}
+
+	workloads := s.listPolicyWorkloadRows(ctx, policy, policyName)
+	applyWorkloadSignals(ctx, s, workloads)
+
+	namespaces := uniqueNamespaces(workloads)
+	if nsFilter != "" {
+		workloads = filterByNamespace(workloads, nsFilter)
+	}
+
+	total := len(workloads)
+	start, end := paginateRange(total, page, pageSize)
+
+	writeJSON(w, http.StatusOK, paginatedWorkloads{
+		Items:      workloads[start:end],
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+		Namespaces: namespaces,
+	})
+}
+
+// listPolicyWorkloadRows gathers workload rows for every kind the policy
+// opts in to. Per-kind list errors are logged and skipped.
+func (s *Server) listPolicyWorkloadRows(ctx context.Context, policy *sustainv1alpha1.Policy, policyName string) []workloadSummary {
+	out := []workloadSummary{}
+	for _, kind := range supportedWorkloadKinds {
+		if !kindEnabledInPolicy(policy, kind) {
+			continue
+		}
+		entries, err := s.listWorkloadsOfKind(ctx, kind)
+		if err != nil {
+			s.Logger.Error(err, "failed to list workloads", "kind", kind, "policy", policyName)
+			continue
+		}
+		for _, e := range entries {
+			if e.PolicyAnnotation() != policyName {
+				continue
+			}
+			out = append(out, workloadSummary{
+				Namespace:  e.Namespace,
+				Kind:       kind,
+				Name:       e.Name,
+				Containers: containerStatuses(e.Containers(), e.InitContainers()),
+			})
+		}
+	}
+	return out
+}
+
+func uniqueNamespaces(workloads []workloadSummary) []string {
+	seen := make(map[string]struct{})
+	for _, w := range workloads {
+		seen[w.Namespace] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for ns := range seen {
+		out = append(out, ns)
+	}
+	return out
+}
+
+func filterByNamespace(workloads []workloadSummary, ns string) []workloadSummary {
+	out := workloads[:0]
+	for _, w := range workloads {
+		if w.Namespace == ns {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// applyWorkloadSignals overlays Prometheus-derived signals onto each row.
+func applyWorkloadSignals(ctx context.Context, s *Server, workloads []workloadSummary) {
+	keys := make([]string, len(workloads))
+	for i, w := range workloads {
+		keys[i] = workloadKey(w.Namespace, w.Kind, w.Name)
+	}
+	signals := s.fetchWorkloadSignals(ctx, keys)
+	for i := range workloads {
+		sig := signals[keys[i]]
+		workloads[i].RiskState = sig.RiskState
+		workloads[i].DriftPercent = sig.DriftPercent
+		workloads[i].AutoscalerPresent = sig.AutoscalerPresent
+		workloads[i].CoordinationFactors = sig.CoordinationFactors
+	}
+}
+
+// ---- All workloads (cluster-wide) ----
+
+type allWorkloadSummary struct {
+	Namespace           string               `json:"namespace"`
+	Kind                string               `json:"kind"`
+	Name                string               `json:"name"`
+	Containers          []containerStatus    `json:"containers"`
+	Automated           bool                 `json:"automated"`
+	PolicyName          string               `json:"policyName,omitempty"`
+	RiskState           string               `json:"riskState"` // safe | drifted | at-risk | blocked
+	DriftPercent        float64              `json:"driftPercent"`
+	LastRecycledAt      string               `json:"lastRecycledAt,omitempty"`
+	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
+	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
+}
+
+type paginatedAllWorkloads struct {
+	Items      []allWorkloadSummary `json:"items"`
+	Total      int                  `json:"total"`
+	Page       int                  `json:"page"`
+	PageSize   int                  `json:"pageSize"`
+	Namespaces []string             `json:"namespaces"`
+	Kinds      []string             `json:"kinds"`
+	Counts     workloadCounts       `json:"counts"`
+}
+
+type workloadCounts struct {
+	Total     int `json:"total"`
+	Automated int `json:"automated"`
+	Manual    int `json:"manual"`
+}
+
+type allWorkloadFilters struct {
+	namespace  string
+	kind       string
+	search     string
+	automated  *bool
+	risk       string
+	autoscaler string
+	page       int
+	pageSize   int
+}
+
+func parseAllWorkloadFilters(q url.Values) (allWorkloadFilters, *paramError) {
+	f := allWorkloadFilters{
+		namespace: q.Get("namespace"),
+		search:    strings.ToLower(q.Get("search")),
+	}
+	var perr *paramError
+	if f.kind, perr = parseEnumParam(q, "kind", []string{"Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job"}); perr != nil {
+		return f, perr
+	}
+	if f.automated, perr = parseBoolParam(q, "automated"); perr != nil {
+		return f, perr
+	}
+	if f.risk, perr = parseEnumParam(q, "risk", []string{"safe", "drifted", "at-risk", "blocked"}); perr != nil {
+		return f, perr
+	}
+	if f.autoscaler, perr = parseEnumParam(q, "autoscaler", []string{"has-autoscaler", "no-autoscaler"}); perr != nil {
+		return f, perr
+	}
+	if f.page, f.pageSize, perr = parsePageParams(q, 50, 200); perr != nil {
+		return f, perr
+	}
+	return f, nil
+}
+
+func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	w.Header().Set("Cache-Control", "public, max-age=30")
+
+	ctx := r.Context()
+	filters, perr := parseAllWorkloadFilters(r.URL.Query())
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
+	}
+
+	workloads := s.collectAllWorkloads(ctx, filters)
+	applyAllWorkloadSignals(ctx, s, workloads)
+
+	namespaces, kinds := uniqueNamespacesAndKinds(workloads)
+
+	// Filters that depend on signal data run after decoration.
+	workloads = applyAllWorkloadFilters(workloads, filters)
+
+	counts := countAllWorkloads(workloads)
+	total := len(workloads)
+	start, end := paginateRange(total, filters.page, filters.pageSize)
+
+	writeJSON(w, http.StatusOK, paginatedAllWorkloads{
+		Items:      workloads[start:end],
+		Total:      total,
+		Page:       filters.page,
+		PageSize:   filters.pageSize,
+		Namespaces: namespaces,
+		Kinds:      kinds,
+		Counts:     counts,
+	})
+}
+
+// collectAllWorkloads lists workloads across every kind allowed by the kind
+// filter, optionally narrowed to a namespace at the API-server level.
+func (s *Server) collectAllWorkloads(ctx context.Context, f allWorkloadFilters) []allWorkloadSummary {
+	var listOpts []client.ListOption
+	if f.namespace != "" {
+		listOpts = append(listOpts, client.InNamespace(f.namespace))
+	}
+
+	kinds := supportedWorkloadKinds
+	if f.kind != "" {
+		kinds = []string{f.kind}
+	}
+
+	out := []allWorkloadSummary{}
+	for _, kind := range kinds {
+		entries, err := s.listWorkloadsOfKind(ctx, kind, listOpts...)
+		if err != nil {
+			s.Logger.Error(err, "failed to list workloads", "kind", kind)
+			continue
+		}
+		for _, e := range entries {
+			policyName := e.PolicyAnnotation()
+			out = append(out, allWorkloadSummary{
+				Namespace:  e.Namespace,
+				Kind:       kind,
+				Name:       e.Name,
+				Containers: containerStatuses(e.Containers(), e.InitContainers()),
+				Automated:  policyName != "",
+				PolicyName: policyName,
+			})
+		}
+	}
+	return out
+}
+
+func applyAllWorkloadSignals(ctx context.Context, s *Server, workloads []allWorkloadSummary) {
+	keys := make([]string, len(workloads))
+	for i, w := range workloads {
+		keys[i] = workloadKey(w.Namespace, w.Kind, w.Name)
+	}
+	signals := s.fetchWorkloadSignals(ctx, keys)
+	for i := range workloads {
+		sig := signals[keys[i]]
+		workloads[i].RiskState = sig.RiskState
+		workloads[i].DriftPercent = sig.DriftPercent
+		workloads[i].AutoscalerPresent = sig.AutoscalerPresent
+		workloads[i].CoordinationFactors = sig.CoordinationFactors
+	}
+}
+
+func uniqueNamespacesAndKinds(workloads []allWorkloadSummary) (namespaces, kinds []string) {
+	nsSet := make(map[string]struct{})
+	kindSet := make(map[string]struct{})
+	for _, w := range workloads {
+		nsSet[w.Namespace] = struct{}{}
+		kindSet[w.Kind] = struct{}{}
+	}
+	namespaces = make([]string, 0, len(nsSet))
+	for ns := range nsSet {
+		namespaces = append(namespaces, ns)
+	}
+	kinds = make([]string, 0, len(kindSet))
+	for k := range kindSet {
+		kinds = append(kinds, k)
+	}
+	return
+}
+
+func applyAllWorkloadFilters(workloads []allWorkloadSummary, f allWorkloadFilters) []allWorkloadSummary {
+	if f.automated != nil {
+		want := *f.automated
+		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.Automated == want })
+	}
+	if f.search != "" {
+		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool {
+			return strings.Contains(strings.ToLower(w.Name), f.search)
+		})
+	}
+	if f.risk != "" {
+		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.RiskState == f.risk })
+	}
+	if f.autoscaler != "" {
+		want := f.autoscaler == "has-autoscaler"
+		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.AutoscalerPresent == want })
+	}
+	return workloads
+}
+
+func filterAllWorkloads(workloads []allWorkloadSummary, keep func(allWorkloadSummary) bool) []allWorkloadSummary {
+	out := workloads[:0]
+	for _, w := range workloads {
+		if keep(w) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func countAllWorkloads(workloads []allWorkloadSummary) workloadCounts {
+	c := workloadCounts{Total: len(workloads)}
+	for _, w := range workloads {
+		if w.Automated {
+			c.Automated++
+		} else {
+			c.Manual++
+		}
+	}
+	return c
+}

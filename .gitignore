@@ -54,3 +54,4 @@ internal/dashboard/ui/dist/*
 example1.yaml
 test-chart/
 misc/
+.DS_Store
