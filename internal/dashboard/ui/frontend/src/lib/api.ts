@@ -222,6 +222,10 @@ export interface MetricsData {
 export interface RecommendationContainer {
   cpuRequest?: string
   memoryRequest?: string
+  cpuLimit?: string
+  memoryLimit?: string
+  cpuLimitRemoved?: boolean
+  memoryLimitRemoved?: boolean
 }
 
 export interface RecommendationsData {
@@ -249,6 +253,15 @@ export interface SimulateResourceConfig {
   window: string
   minAllowed?: string
   maxAllowed?: string
+  limits?: SimulateLimitsConfig
+}
+
+export interface SimulateLimitsConfig {
+  equalsToRequest?: boolean
+  keepLimit?: boolean
+  keepLimitRequestRatio?: boolean
+  noLimit?: boolean
+  requestsLimitsRatio?: number
 }
 
 export interface SimulationResult {

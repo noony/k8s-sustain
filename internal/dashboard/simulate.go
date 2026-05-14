@@ -26,6 +26,10 @@ type simulationResult struct {
 type simulationContainerResult struct {
 	CPURequest       string  `json:"cpuRequest"`
 	MemoryRequest    string  `json:"memoryRequest"`
+	CPULimit         string  `json:"cpuLimit,omitempty"`
+	MemoryLimit      string  `json:"memoryLimit,omitempty"`
+	CPULimitRemoved  bool    `json:"cpuLimitRemoved,omitempty"`
+	MemoryLimitRemoved bool  `json:"memoryLimitRemoved,omitempty"`
 	CPUUsageCores    float64 `json:"cpuUsageCores,omitempty"`
 	MemoryUsageBytes float64 `json:"memoryUsageBytes,omitempty"`
 }
@@ -33,6 +37,8 @@ type simulationContainerResult struct {
 func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simulationResult, error) {
 	cpuCfg := buildRequestsConfig(req.CPU)
 	memCfg := buildRequestsConfig(req.Memory)
+	cpuLimCfg := buildLimitsConfig(req.CPU.Limits)
+	memLimCfg := buildLimitsConfig(req.Memory.Limits)
 
 	cpuQuantile := recommender.PercentileQuantile(cpuCfg.Percentile)
 	memQuantile := recommender.PercentileQuantile(memCfg.Percentile)
@@ -76,6 +82,8 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		return nil, fmt.Errorf("memory range query: %w", err)
 	}
 
+	resources := s.getContainerResources(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
+
 	// Compute recommendations per container
 	containers := make(map[string]simulationContainerResult)
 
@@ -90,22 +98,38 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 
 	for name := range allContainers {
 		result := simulationContainerResult{}
+		var cpuQty, memQty *resource.Quantity
 		if cores, ok := cpuValues[name]; ok {
-			qty := recommender.ComputeCPURequest(cores, cpuCfg)
-			if qty != nil {
-				result.CPURequest = qty.String()
+			cpuQty = recommender.ComputeCPURequest(cores, cpuCfg)
+			if cpuQty != nil {
+				result.CPURequest = cpuQty.String()
 			}
 		}
 		if bytes, ok := memValues[name]; ok {
-			qty := recommender.ComputeMemoryRequest(bytes, memCfg)
-			if qty != nil {
-				result.MemoryRequest = qty.String()
+			memQty = recommender.ComputeMemoryRequest(bytes, memCfg)
+			if memQty != nil {
+				result.MemoryRequest = memQty.String()
+			}
+		}
+		curReq, curLim := currentQuantities(resources[name])
+		if cpuQty != nil {
+			lim := recommender.ComputeLimit(cpuQty, curReq.cpu, curLim.cpu, cpuLimCfg)
+			if lim.Remove {
+				result.CPULimitRemoved = true
+			} else if lim.Quantity != nil {
+				result.CPULimit = lim.Quantity.String()
+			}
+		}
+		if memQty != nil {
+			lim := recommender.ComputeLimit(memQty, curReq.mem, curLim.mem, memLimCfg)
+			if lim.Remove {
+				result.MemoryLimitRemoved = true
+			} else if lim.Quantity != nil {
+				result.MemoryLimit = lim.Quantity.String()
 			}
 		}
 		containers[name] = result
 	}
-
-	resources := s.getContainerResources(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
 
 	// Fetch historical resource request time-series (best-effort, use chart time range)
 	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, timeRange, step)
@@ -185,4 +209,49 @@ func buildRequestsConfig(cfg simulateResourceConfig) sustainv1alpha1.ResourceReq
 		}
 	}
 	return rc
+}
+
+func buildLimitsConfig(cfg *simulateLimitsConfig) sustainv1alpha1.ResourceLimitsConfig {
+	if cfg == nil {
+		return sustainv1alpha1.ResourceLimitsConfig{}
+	}
+	return sustainv1alpha1.ResourceLimitsConfig{
+		EqualsToRequest:       cfg.EqualsToRequest,
+		KeepLimit:             cfg.KeepLimit,
+		KeepLimitRequestRatio: cfg.KeepLimitRequestRatio,
+		NoLimit:               cfg.NoLimit,
+		RequestsLimitsRatio:   cfg.RequestsLimitsRatio,
+	}
+}
+
+type quantPair struct {
+	cpu *resource.Quantity
+	mem *resource.Quantity
+}
+
+// currentQuantities parses the current container request/limit strings into
+// Quantity pointers (nil when absent or unparseable). Used to feed
+// ComputeLimit's keepLimitRequestRatio branch with the workload's live values.
+func currentQuantities(cr containerResources) (req quantPair, lim quantPair) {
+	if cr.CPURequest != "" {
+		if q, err := resource.ParseQuantity(cr.CPURequest); err == nil {
+			req.cpu = &q
+		}
+	}
+	if cr.MemoryRequest != "" {
+		if q, err := resource.ParseQuantity(cr.MemoryRequest); err == nil {
+			req.mem = &q
+		}
+	}
+	if cr.CPULimit != "" {
+		if q, err := resource.ParseQuantity(cr.CPULimit); err == nil {
+			lim.cpu = &q
+		}
+	}
+	if cr.MemoryLimit != "" {
+		if q, err := resource.ParseQuantity(cr.MemoryLimit); err == nil {
+			lim.mem = &q
+		}
+	}
+	return
 }

@@ -9,7 +9,7 @@ k8s-sustain includes a built-in web dashboard for exploring policies, viewing wo
 - **Workload Detail** — Status snapshot (mode, last recycle, drift, OOM 24h), risk and HPA badges, blocked-state diagnostics, copy-as-YAML, and interactive CPU/memory charts with sliding-window recommendation, historical requests/limits, and OOM markers.
 - **Policies** — 4-card stat strip (total policies, active workloads, CPU & memory savings) plus per-policy effectiveness columns.
 - **Policy Detail** — Effectiveness time-series, view-as-YAML modal, time range selector, and matched workloads with risk/drift columns.
-- **Policy Simulator** — Tweak percentile, headroom, min/max parameters; supports Argo Rollouts; shows projected savings impact; exports results as YAML, CSV, or Helm `--set` overrides.
+- **Policy Simulator** — Tweak percentile, headroom, min/max, and limits strategy; supports Argo Rollouts; shows projected savings impact; exports results as YAML, CSV, or Helm `--set` overrides.
 - **Health Checks** — The `/healthz` endpoint verifies Prometheus connectivity for reliable readiness probes.
 - **Request Logging** — Structured HTTP access logs for debugging and observability.
 
@@ -140,18 +140,19 @@ The simulator lets you test "what-if" scenarios:
 
 1. Select a **workload target** (namespace, kind, name). The kind picker now includes **Argo Rollout** alongside Deployment, StatefulSet, and DaemonSet.
 2. Choose a **time range** (1h to 30 days) — controls how much history is displayed on the charts.
-3. Optionally, use the **Load from policy** dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window) from an existing policy — useful as a starting point before tweaking values.
+3. Optionally, use the **Load from policy** dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window, and limits strategy) from an existing policy — useful as a starting point before tweaking values.
 4. Adjust **CPU and Memory parameters** independently:
     - Window (1h to 30 days) — the lookback period used to compute the recommendation, matching the Policy CRD structure. This is independent of the chart time range.
     - Percentile (50th to 99th)
     - Headroom percentage (0-100%)
     - Min/Max allowed values
+    - **Limits strategy** — pick one of `keepLimit` (default; existing pod limits stay unchanged), `noLimit`, `equalsToRequest`, `requestsLimitsRatio` (with a numeric multiplier), or `keepLimitRequestRatio`. Mirrors `spec.rightSizing.resourcesConfigs.<resource>.limits` on the Policy CRD.
 
 The simulation runs automatically whenever any parameter changes (with a short debounce to avoid excessive queries). There is no manual "Run" button — results update live as you adjust sliders, change windows, or modify min/max values.
 
 The results show:
 
-- Computed recommendation per container (CPU request, memory request)
+- Computed recommendation per container (CPU/memory request, and CPU/memory limit when a limits strategy is selected; `— removed —` is rendered when `noLimit` is active)
 - A **savings impact band** that summarises the projected CPU and memory delta as both a percentage change and an absolute saving (cores / bytes), so you can immediately see whether the candidate parameters reduce or increase footprint
 - Time-series charts with a **sliding-window recommendation line** (red) that shows how the recommendation would have evolved at each point in time, **historical request** (amber stepped), and **current limit** (orange) overlaid on historical usage
 

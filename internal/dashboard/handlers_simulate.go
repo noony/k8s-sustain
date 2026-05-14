@@ -9,11 +9,17 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// promDurationPattern matches the Prometheus duration grammar (e.g. "5m", "1h30m").
-// Same regex used by the CRD validator on Policy.Spec...Window. Reused here so
-// the simulate API rejects junk strings before they hit Prometheus and either
-// error out late or, worse, serialise into an unbounded query.
-var promDurationPattern = regexp.MustCompile(`^([0-9]+(ms|s|m|h|d|w|y))+$`)
+// windowPattern mirrors the CRD validator on Policy.Spec.RightSizing.ResourcesConfigs.*.Window
+// exactly. Observation windows are coarse — sub-minute units are deliberately
+// excluded. Reused here so the simulate API rejects junk strings before they
+// hit Prometheus and either error out late or, worse, serialise into an
+// unbounded query.
+var windowPattern = regexp.MustCompile(`^([0-9]+(m|h|d|w|y))+$`)
+
+// stepPattern allows sub-minute resolution (e.g. "30s", "5m") for the chart's
+// data-point granularity. Distinct from windowPattern — chart resolution is a
+// rendering concern, not a CRD field.
+var stepPattern = regexp.MustCompile(`^([0-9]+(ms|s|m|h|d|w|y))+$`)
 
 // simulateRequest is the body accepted by POST /api/simulate. It mirrors a
 // subset of the Policy spec so users can preview how a configuration change
@@ -30,11 +36,20 @@ type simulateRequest struct {
 }
 
 type simulateResourceConfig struct {
-	Percentile *int32  `json:"percentile,omitempty"`
-	Headroom   *int32  `json:"headroom,omitempty"`
-	MinAllowed *string `json:"minAllowed,omitempty"`
-	MaxAllowed *string `json:"maxAllowed,omitempty"`
-	Window     string  `json:"window,omitempty"`
+	Percentile *int32                `json:"percentile,omitempty"`
+	Headroom   *int32                `json:"headroom,omitempty"`
+	MinAllowed *string               `json:"minAllowed,omitempty"`
+	MaxAllowed *string               `json:"maxAllowed,omitempty"`
+	Window     string                `json:"window,omitempty"`
+	Limits     *simulateLimitsConfig `json:"limits,omitempty"`
+}
+
+type simulateLimitsConfig struct {
+	EqualsToRequest       bool     `json:"equalsToRequest,omitempty"`
+	KeepLimit             bool     `json:"keepLimit,omitempty"`
+	KeepLimitRequestRatio bool     `json:"keepLimitRequestRatio,omitempty"`
+	NoLimit               bool     `json:"noLimit,omitempty"`
+	RequestsLimitsRatio   *float64 `json:"requestsLimitsRatio,omitempty"`
 }
 
 // handleSimulate validates the request, fills defaults, dispatches to
@@ -72,12 +87,12 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	if req.Step == "" {
 		req.Step = "5m"
 	}
-	if !promDurationPattern.MatchString(req.Window) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid window %q: must be a Prometheus duration (e.g. 168h, 14d)", req.Window))
+	if !windowPattern.MatchString(req.Window) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid window %q: must be a duration like 168h, 14d (no sub-minute units)", req.Window))
 		return
 	}
-	if !promDurationPattern.MatchString(req.Step) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid step %q: must be a Prometheus duration (e.g. 5m, 1h)", req.Step))
+	if !stepPattern.MatchString(req.Step) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid step %q: must be a Prometheus duration (e.g. 30s, 5m, 1h)", req.Step))
 		return
 	}
 	if err := validateSimulateResource(req.CPU, "cpu"); err != nil {
@@ -115,8 +130,8 @@ func validateSimulateResource(cfg simulateResourceConfig, label string) error {
 			return fmt.Errorf("invalid %s headroom %d: must be 0..100", label, h)
 		}
 	}
-	if cfg.Window != "" && !promDurationPattern.MatchString(cfg.Window) {
-		return fmt.Errorf("invalid %s window %q: must be a Prometheus duration", label, cfg.Window)
+	if cfg.Window != "" && !windowPattern.MatchString(cfg.Window) {
+		return fmt.Errorf("invalid %s window %q: must be a duration like 168h, 14d (no sub-minute units)", label, cfg.Window)
 	}
 	if cfg.MinAllowed != nil {
 		if _, err := resource.ParseQuantity(*cfg.MinAllowed); err != nil {
@@ -126,6 +141,31 @@ func validateSimulateResource(cfg simulateResourceConfig, label string) error {
 	if cfg.MaxAllowed != nil {
 		if _, err := resource.ParseQuantity(*cfg.MaxAllowed); err != nil {
 			return fmt.Errorf("invalid %s maxAllowed %q: %w", label, *cfg.MaxAllowed, err)
+		}
+	}
+	if cfg.Limits != nil {
+		l := cfg.Limits
+		n := 0
+		if l.EqualsToRequest {
+			n++
+		}
+		if l.KeepLimit {
+			n++
+		}
+		if l.KeepLimitRequestRatio {
+			n++
+		}
+		if l.NoLimit {
+			n++
+		}
+		if l.RequestsLimitsRatio != nil {
+			n++
+			if *l.RequestsLimitsRatio < 1 {
+				return fmt.Errorf("invalid %s requestsLimitsRatio %v: must be >= 1", label, *l.RequestsLimitsRatio)
+			}
+		}
+		if n > 1 {
+			return fmt.Errorf("invalid %s limits: at most one of equalsToRequest, keepLimit, keepLimitRequestRatio, noLimit, requestsLimitsRatio may be set", label)
 		}
 	}
 	return nil
