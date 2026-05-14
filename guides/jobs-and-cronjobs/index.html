@@ -1556,6 +1556,7 @@
 <a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span>
 </code></pre></div>
 <p>Right-sizing a standalone Job is only meaningful when the same job type runs repeatedly enough to build a percentile history.</p>
+<p>Standalone Jobs appear on the dashboard's Workloads page as kind <code>Job</code>. Jobs owned by a CronJob are intentionally excluded — they appear under their owning CronJob row.</p>
 <h2 id="cronjobs">CronJobs<a class="headerlink" href="#cronjobs" title="Permanent link">&para;</a></h2>
 <p>CronJobs spawn ephemeral pods on a schedule. Because each run creates a fresh pod, <code>OnCreate</code> mode is a natural fit — the webhook injects recommendations at the start of every run.</p>
 <h3 id="owner-chain">Owner chain<a class="headerlink" href="#owner-chain" title="Permanent link">&para;</a></h3>

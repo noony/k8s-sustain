@@ -1477,6 +1477,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Building the container image">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multi-arch-publish" class="md-nav__link">
+    <span class="md-ellipsis">
+      Multi-arch publish
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1721,6 +1736,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Building the container image">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multi-arch-publish" class="md-nav__link">
+    <span class="md-ellipsis">
+      Multi-arch publish
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1938,9 +1968,15 @@ what the harness does or deviate from it.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>go<span class="w"> </span>install<span class="w"> </span>sigs.k8s.io/controller-tools/cmd/controller-gen@latest
 </code></pre></div>
 <h2 id="building-the-container-image">Building the container image<a class="headerlink" href="#building-the-container-image" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>docker<span class="w"> </span>build<span class="w"> </span>-t<span class="w"> </span>ghcr.io/noony/k8s-sustain:dev<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>ghcr.io/noony/k8s-sustain:dev
 </code></pre></div>
-<p>The Dockerfile uses a two-stage build: <code>golang:1.26-alpine</code> → <code>gcr.io/distroless/static:nonroot</code>.</p>
+<p>This builds a single-arch image for the host's native platform (e.g. <code>linux/arm64</code> on Apple Silicon, <code>linux/amd64</code> on Intel) using <code>docker buildx --load</code>. The Dockerfile is multi-arch aware: it honors <code>TARGETOS</code>/<code>TARGETARCH</code> and runs the Go and Node build stages on <code>$BUILDPLATFORM</code> so cross-compilation is native, not emulated.</p>
+<p><strong>Note for Apple Silicon + colima users:</strong> running an emulated <code>linux/amd64</code> binary inside colima has produced random stdlib panics (memory-model mismatches under x86-on-ARM translation). Always build natively — the default <code>make docker-build</code> does this.</p>
+<h3 id="multi-arch-publish">Multi-arch publish<a class="headerlink" href="#multi-arch-publish" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>docker<span class="w"> </span>buildx<span class="w"> </span>create<span class="w"> </span>--use<span class="w"> </span>--name<span class="w"> </span>k8s-sustain-builder<span class="w">   </span><span class="c1"># one-time</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>make<span class="w"> </span>docker-buildx<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>ghcr.io/noony/k8s-sustain:dev<span class="w">    </span><span class="c1"># builds + pushes linux/amd64 + linux/arm64</span>
+</code></pre></div>
+<p>Override <code>PLATFORMS</code> to change the matrix, e.g. <code>PLATFORMS=linux/arm64 make docker-buildx</code>. CI (<code>.github/workflows/release.yml</code>) publishes both <code>linux/amd64</code> and <code>linux/arm64</code> automatically on tag pushes.</p>
 <h2 id="makefile-targets">Makefile targets<a class="headerlink" href="#makefile-targets" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1964,7 +2000,11 @@ what the harness does or deviate from it.</p>
 </tr>
 <tr>
 <td><code>make docker-build</code></td>
-<td>Build the container image</td>
+<td>Build a native-arch container image and load it into the local daemon</td>
+</tr>
+<tr>
+<td><code>make docker-buildx</code></td>
+<td>Build and push a multi-arch image (<code>PLATFORMS</code> env, default <code>linux/amd64,linux/arm64</code>)</td>
 </tr>
 <tr>
 <td><code>make helm-lint</code></td>

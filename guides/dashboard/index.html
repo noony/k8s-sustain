@@ -1770,12 +1770,12 @@
 <p>k8s-sustain includes a built-in web dashboard for exploring policies, viewing workload resource usage, and simulating policy changes before applying them.</p>
 <h2 id="features">Features<a class="headerlink" href="#features" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Overview Story Flow</strong> — Six-band cluster summary covering savings KPIs, 7-day trend, headroom breakdown, attention queue (at risk / drifted / blocked), policy effectiveness, and recent activity.</li>
+<li><strong>Overview Story Flow</strong> — Cluster summary covering savings KPIs, CPU and memory usage-vs-request trends, headroom breakdown, attention queue (at risk / drifted / blocked), policy effectiveness, and recent activity.</li>
 <li><strong>Workloads</strong> — Cluster-wide list with risk/drift/autoscaler columns, plus filters for namespace, kind, risk state, and autoscaler presence.</li>
 <li><strong>Workload Detail</strong> — Status snapshot (mode, last recycle, drift, OOM 24h), risk and HPA badges, blocked-state diagnostics, copy-as-YAML, and interactive CPU/memory charts with sliding-window recommendation, historical requests/limits, and OOM markers.</li>
 <li><strong>Policies</strong> — 4-card stat strip (total policies, active workloads, CPU &amp; memory savings) plus per-policy effectiveness columns.</li>
 <li><strong>Policy Detail</strong> — Effectiveness time-series, view-as-YAML modal, time range selector, and matched workloads with risk/drift columns.</li>
-<li><strong>Policy Simulator</strong> — Tweak percentile, headroom, min/max parameters; supports Argo Rollouts; shows projected savings impact; exports results as YAML, CSV, or Helm <code>--set</code> overrides.</li>
+<li><strong>Policy Simulator</strong> — Tweak percentile, headroom, min/max, and limits strategy; supports Argo Rollouts; shows projected savings impact; exports results as YAML, CSV, or Helm <code>--set</code> overrides.</li>
 <li><strong>Health Checks</strong> — The <code>/healthz</code> endpoint verifies Prometheus connectivity for reliable readiness probes.</li>
 <li><strong>Request Logging</strong> — Structured HTTP access logs for debugging and observability.</li>
 </ul>
@@ -1822,7 +1822,7 @@
 </tr>
 <tr>
 <td><code>--cors-allowed-origins</code></td>
-<td><em>(empty — same-origin only)</em></td>
+<td><code>(empty — same-origin only)</code></td>
 <td>Allowed CORS origins (comma-separated). Use <code>*</code> to allow all (not recommended).</td>
 </tr>
 </tbody>
@@ -1847,14 +1847,22 @@
 <p>The overview is organised as a vertical "Story Flow" with six bands, each answering a specific operator question — from "what am I saving?" down to "what just happened?".</p>
 <ol>
 <li><strong>KPI strip</strong> — Headline savings cards for CPU (cores) and memory (bytes), each showing the absolute saving, the savings ratio versus current requests, and a sparkline of the last 24h. Two complementary cards count workloads currently <strong>at risk</strong> (drift exceeds the policy threshold) and <strong>drifted</strong> (request differs from the latest recommendation).</li>
-<li><strong>Trend</strong> — A 7-day cluster-wide chart of CPU and memory consumption, so you can correlate savings against real load.</li>
-<li><strong>Headroom breakdown</strong> — A stacked horizontal bar for CPU and memory split into <code>used</code>, <code>idle</code>, and <code>free</code> segments, sourced from the <code>k8s_sustain:cluster_cpu_headroom_breakdown</code> and <code>..._memory_headroom_breakdown</code> recording rules.</li>
-<li><strong>Attention queue</strong> — Three grouped lists: <strong>At risk</strong> (workloads exceeding the drift threshold), <strong>Drifted</strong> (request out-of-date with respect to the recommendation), and <strong>Blocked</strong> (workloads where the controller is in an exponential-backoff retry state). Each row links to the workload detail page.</li>
-<li><strong>Policy effectiveness</strong> — Per-policy rollup with the matched workload count, projected CPU/memory savings, and the count of at-risk workloads, so you can spot policies that need tuning.</li>
-<li><strong>Activity feed</strong> — Most recent reconcile and pod-recycle events from the controller, with timestamps and outcomes.</li>
+<li>
+<p><strong>Savings</strong> — A single card splits CPU and memory side-by-side, each plotting three lines over the selected window so you can see the savings story directly:</p>
+<ul>
+<li><strong>Usage</strong> — actual measured working set (memory) or CPU rate, summed across containers in policy-managed workloads.</li>
+<li><strong>Current request</strong> — the request currently set on running pods, post-injection.</li>
+<li><strong>Original request</strong> — the user's pod-template request before k8s-sustain rewrote it (<code>k8s_sustain_workload_template_*</code>).</li>
+</ul>
+<p>All three lines are scoped to managed workloads (those covered by a Policy) so they are directly comparable — usage and current-request queries are filtered with <code>and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*</code> so unmanaged pods don't inflate them. The card has its own time-range selector. The gap between <em>original</em> and <em>current request</em> is the realised saving; the gap between <em>current request</em> and <em>usage</em> is the remaining headroom.
+3. <strong>Headroom breakdown</strong> — A stacked horizontal bar for CPU and memory split into <code>used</code>, <code>idle</code>, and <code>free</code> segments, sourced from the <code>k8s_sustain:cluster_cpu_headroom_breakdown</code> and <code>..._memory_headroom_breakdown</code> recording rules.
+4. <strong>Attention queue</strong> — Three grouped lists: <strong>At risk</strong> (workloads exceeding the drift threshold), <strong>Drifted</strong> (request out-of-date with respect to the recommendation), and <strong>Blocked</strong> (workloads where the controller is in an exponential-backoff retry state). Each row links to the workload detail page.
+5. <strong>Policy effectiveness</strong> — Per-policy rollup with the matched workload count, projected CPU/memory savings, and the count of at-risk workloads, so you can spot policies that need tuning.
+6. <strong>Activity feed</strong> — Most recent reconcile and pod-recycle events from the controller, with timestamps and outcomes.</p>
+</li>
 </ol>
 <h3 id="workloads-page">Workloads Page<a class="headerlink" href="#workloads-page" title="Permanent link">&para;</a></h3>
-<p>Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs) across the cluster, regardless of whether it is governed by a policy.</p>
+<p>Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, standalone Jobs) across the cluster, regardless of whether it is governed by a policy. Jobs spawned by a CronJob are folded under their owning CronJob row to avoid double-counting.</p>
 <ul>
 <li><strong>Filters</strong> — Filter by namespace, kind, <strong>risk state</strong> (healthy, drifted, at risk, blocked), and <strong>autoscaler presence</strong> (with autoscaler / without autoscaler). The free-text name search remains.</li>
 <li><strong>Columns</strong> — A <strong>Risk</strong> badge summarises the workload's state at a glance, a <strong>Drift %</strong> column shows the gap between current request and recommendation, and an <strong>Autoscaler</strong> column indicates whether the workload is paired with an HPA or KEDA ScaledObject. The previous CPU/Memory request columns have been removed because the workload detail view now displays them in context.</li>
@@ -1868,7 +1876,6 @@
 <li><strong>Header badges</strong> — A <strong>Risk</strong> badge mirrors the value shown in the Workloads list. When the workload has a paired autoscaler (HPA or KEDA ScaledObject), an <strong>Autoscaler</strong> badge is shown.</li>
 <li><strong>Blocked card</strong> — Visible only when the controller has a retry record for this workload; surfaces the failure <strong>reason</strong>, the number of <strong>attempts</strong>, the <strong>next retry</strong> time, and the <strong>last error</strong> message. Hidden once retries clear.</li>
 <li><strong>Recommendations</strong> — If automated, shows the computed CPU and memory recommendations per container.</li>
-<li><strong>Copy as YAML</strong> — Builds a runnable manifest fragment (the <code>resources:</code> block keyed by container) that you can paste straight into a Helm values file or a workload spec.</li>
 <li><strong>CPU and Memory charts</strong> — Interactive time-series with a sliding-window recommendation line overlaid (for automated workloads). The recommendation evolves over time, showing how it would have been computed at each point using the policy's configured window and parameters, rather than a flat line.</li>
 <li><strong>Open in Simulator</strong> — Jump to the simulator with the workload pre-filled.</li>
 </ul>
@@ -1885,9 +1892,10 @@
 </ul>
 <p>Below the strip, the policy table replaces the previous Ready/Namespace columns with <strong>effectiveness columns</strong>: matched <strong>workload count</strong>, <strong>CPU savings</strong> and <strong>memory savings</strong> per policy, <strong>at-risk</strong> workload count, and <strong>last applied</strong> timestamp. The Ready status indicator is still shown alongside the policy name. Click any row to view the policy detail page.</p>
 <h3 id="policy-detail">Policy Detail<a class="headerlink" href="#policy-detail" title="Permanent link">&para;</a></h3>
-<p>Shows the full configuration (percentile, headroom, min/max, window) for both CPU and memory, plus the matched workloads table.</p>
+<p>Shows the full configuration for both CPU and memory, plus the matched workloads table.</p>
 <ul>
-<li><strong>Header rows</strong> — In addition to the existing summary fields, the header now displays the policy's <strong>Update mode</strong> so you can see at a glance how the policy is configured.</li>
+<li><strong>Configuration card</strong> — Per-resource (CPU and memory) cards display <strong>window</strong>, <strong>percentile</strong>, <strong>headroom</strong>, <strong>min</strong>/<strong>max allowed</strong>, <strong>keepRequest</strong> flag, and the active <strong>limits</strong> strategy (<code>equalsToRequest</code>, <code>keepLimit</code>, <code>keepLimitRequestRatio</code>, <code>noLimit</code>, or <code>requestsLimitsRatio</code>). Underneath, a meta row shows the <strong>update mode</strong> badges for all supported workload kinds (Deploy, STS, DS, CJ, Job, Family, DC, Argo Rollout), the <strong>eviction</strong> policy (<code>ignoreAutoscalerSafeToEvictAnnotations</code>), the <strong>excludeInitContainers</strong> flag, and the <strong>autoscaler coordination</strong> state (enabled / <code>replicaBudgetAnchor</code>).</li>
+<li><strong>Selector card</strong> — Lists the policy's <code>spec.selector</code> (target namespaces and any <code>matchLabels</code> / <code>matchExpressions</code>) so you can immediately see which workloads it scopes to.</li>
 <li><strong>Effectiveness card</strong> — A dedicated band with two time-series charts (CPU and memory) showing how this policy's savings have evolved over the selected time range.</li>
 <li><strong>TimeRangeSelector</strong> — A range picker (1h to 30 days) drives the Effectiveness charts, matching the selector used elsewhere in the dashboard.</li>
 <li><strong>View as YAML modal</strong> — Renders the entire <code>Policy</code> resource (sanitised of managed fields) inside a modal with a copy button — handy for sharing or storing in version control.</li>
@@ -1900,19 +1908,20 @@
 <ol>
 <li>Select a <strong>workload target</strong> (namespace, kind, name). The kind picker now includes <strong>Argo Rollout</strong> alongside Deployment, StatefulSet, and DaemonSet.</li>
 <li>Choose a <strong>time range</strong> (1h to 30 days) — controls how much history is displayed on the charts.</li>
-<li>Optionally, use the <strong>Load from policy</strong> dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window) from an existing policy — useful as a starting point before tweaking values.</li>
+<li>Optionally, use the <strong>Load from policy</strong> dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window, and limits strategy) from an existing policy — useful as a starting point before tweaking values.</li>
 <li>Adjust <strong>CPU and Memory parameters</strong> independently:<ul>
 <li>Window (1h to 30 days) — the lookback period used to compute the recommendation, matching the Policy CRD structure. This is independent of the chart time range.</li>
 <li>Percentile (50th to 99th)</li>
 <li>Headroom percentage (0-100%)</li>
 <li>Min/Max allowed values</li>
+<li><strong>Limits strategy</strong> — pick one of <code>keepLimit</code> (default; existing pod limits stay unchanged), <code>noLimit</code>, <code>equalsToRequest</code>, <code>requestsLimitsRatio</code> (with a numeric multiplier), or <code>keepLimitRequestRatio</code>. Mirrors <code>spec.rightSizing.resourcesConfigs.&lt;resource&gt;.limits</code> on the Policy CRD.</li>
 </ul>
 </li>
 </ol>
 <p>The simulation runs automatically whenever any parameter changes (with a short debounce to avoid excessive queries). There is no manual "Run" button — results update live as you adjust sliders, change windows, or modify min/max values.</p>
 <p>The results show:</p>
 <ul>
-<li>Computed recommendation per container (CPU request, memory request)</li>
+<li>Computed recommendation per container (CPU/memory request, and CPU/memory limit when a limits strategy is selected; <code>— removed —</code> is rendered when <code>noLimit</code> is active)</li>
 <li>A <strong>savings impact band</strong> that summarises the projected CPU and memory delta as both a percentage change and an absolute saving (cores / bytes), so you can immediately see whether the candidate parameters reduce or increase footprint</li>
 <li>Time-series charts with a <strong>sliding-window recommendation line</strong> (red) that shows how the recommendation would have evolved at each point in time, <strong>historical request</strong> (amber stepped), and <strong>current limit</strong> (orange) overlaid on historical usage</li>
 </ul>
