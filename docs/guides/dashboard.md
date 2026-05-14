@@ -35,12 +35,12 @@ At startup, the dashboard validates Prometheus connectivity and logs a warning i
 
 ### CLI Flags
 
-| Flag                      | Default                    | Description                              |
-|---------------------------|----------------------------|------------------------------------------|
-| `--bind-address`          | `:8090`                    | Address the dashboard server listens on  |
-| `--prometheus-address`    | `http://localhost:9090`    | Prometheus server URL                    |
-| `--log-level`             | `info`                     | Log level (debug, info, warn, error)     |
-| `--cors-allowed-origins`  | _(empty — same-origin only)_ | Allowed CORS origins (comma-separated). Use `*` to allow all (not recommended). |
+| Flag                      | Default                      | Description                              |
+|---------------------------|------------------------------|------------------------------------------|
+| `--bind-address`          | `:8090`                      | Address the dashboard server listens on  |
+| `--prometheus-address`    | `http://localhost:9090`      | Prometheus server URL                    |
+| `--log-level`             | `info`                       | Log level (debug, info, warn, error)     |
+| `--cors-allowed-origins`  | `(empty — same-origin only)` | Allowed CORS origins (comma-separated). Use `*` to allow all (not recommended). |
 
 ### Helm Chart
 
