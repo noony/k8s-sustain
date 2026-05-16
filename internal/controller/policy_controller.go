@@ -50,6 +50,14 @@ type PolicyReconciler struct {
 	RecommendOnly      bool
 	ConcurrencyLimit   int
 
+	// RecycleReplacementTimeout caps how long the patcher waits for a
+	// replacement pod to become Ready after an eviction. Must be generous
+	// enough to cover node-autoscaling latency on the slowest expected
+	// cluster (Karpenter / CAS provisioning can take several minutes); too
+	// short produces false-positive aborts during normal scale-up. Zero
+	// falls back to the patcher default.
+	RecycleReplacementTimeout time.Duration
+
 	// OrphanReapInterval bounds how often the manager scans for
 	// WorkloadRecommendation objects whose owning Policy no longer exists
 	// (strategy 2 cleanup). Zero falls back to 10 minutes.
@@ -62,7 +70,11 @@ type PolicyReconciler struct {
 
 // SetupWithManager registers the PolicyReconciler with the given manager.
 func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.patcher = workload.New(r.Client, r.InPlaceUpdates)
+	var patcherOpts []workload.Option
+	if r.RecycleReplacementTimeout > 0 {
+		patcherOpts = append(patcherOpts, workload.WithReadyTimeout(r.RecycleReplacementTimeout))
+	}
+	r.patcher = workload.New(r.Client, r.InPlaceUpdates, patcherOpts...)
 	r.recorder = mgr.GetEventRecorderFor("k8s-sustain")
 	r.retries = newRetryTracker()
 	if r.ConcurrencyLimit <= 0 {

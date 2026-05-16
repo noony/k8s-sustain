@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -40,6 +44,12 @@ type ContainerRecommendation struct {
 //     injects the latest resources into the replacement pods.
 //     PodDisruptionBudgets are respected; pods blocked by a PDB are
 //     skipped and retried on the next reconcile cycle.
+//     After each eviction the patcher waits for the replacement pod to
+//     become Ready before evicting the next one, and aborts the loop if
+//     any pod in the selector enters CrashLoopBackOff (likely caused by
+//     a bad recommendation).
+//     For StatefulSets, pods are processed in descending ordinal order to
+//     respect the StatefulSet's update semantics.
 type Patcher struct {
 	client client.Client
 	// inPlace is read on every recycle and may be flipped to false from
@@ -47,13 +57,66 @@ type Patcher struct {
 	// an atomic avoids a data race when reconciles for different
 	// workloads share this Patcher.
 	inPlace atomic.Bool
+
+	// readyPollInterval is how often we poll pod state while waiting for a
+	// replacement pod to become Ready after an eviction.
+	readyPollInterval time.Duration
+	// readyTimeout caps how long we wait for a replacement pod. When it
+	// fires we surface the failure so the caller can give up rather than
+	// continuing to evict into a broken workload.
+	readyTimeout time.Duration
 }
+
+// Option configures a Patcher at construction time.
+type Option func(*Patcher)
+
+// WithReadyPollInterval sets how often the patcher re-checks pod state
+// while waiting for a replacement after an eviction. Tests use a tight
+// interval; production keeps the default.
+func WithReadyPollInterval(d time.Duration) Option {
+	return func(p *Patcher) {
+		if d > 0 {
+			p.readyPollInterval = d
+		}
+	}
+}
+
+// WithReadyTimeout caps how long the patcher waits for a replacement pod
+// to become Ready after evicting one. A long timeout protects fragile
+// workloads from being hammered; a short timeout speeds tests up.
+func WithReadyTimeout(d time.Duration) Option {
+	return func(p *Patcher) {
+		if d > 0 {
+			p.readyTimeout = d
+		}
+	}
+}
+
+// Defaults for the eviction throttle. The replacement timeout has to cover
+// the slowest realistic recovery path on the cluster — node provisioning via
+// cluster-autoscaler or Karpenter, followed by image pull onto a fresh node
+// and init-container execution, regularly runs 2-3 minutes and can hit 5+
+// on slow registries. We default to 5 minutes so normal scale-up doesn't
+// trigger a false-positive abort; operators on faster or slower clusters
+// can override via Patcher options (and the controller's
+// RecycleReplacementTimeout / --recycle-replacement-timeout flag).
+const (
+	defaultReadyPollInterval = 2 * time.Second
+	defaultReadyTimeout      = 5 * time.Minute
+)
 
 // New returns a Patcher. Set inPlace=true when the cluster supports
 // InPlacePodVerticalScaling (k8s ≥ 1.31).
-func New(c client.Client, inPlace bool) *Patcher {
-	p := &Patcher{client: c}
+func New(c client.Client, inPlace bool, opts ...Option) *Patcher {
+	p := &Patcher{
+		client:            c,
+		readyPollInterval: defaultReadyPollInterval,
+		readyTimeout:      defaultReadyTimeout,
+	}
 	p.inPlace.Store(inPlace)
+	for _, opt := range opts {
+		opt(p)
+	}
 	return p
 }
 
@@ -167,6 +230,16 @@ func (p *Patcher) resizePodInPlaceNoEvict(ctx context.Context, pod *corev1.Pod, 
 // patched directly (zero restart). On older clusters each stale pod is evicted
 // via the Eviction API so the workload controller replaces it from the updated
 // template; PDB-blocked pods are skipped and retried on the next reconcile.
+//
+// In the eviction path, pods are processed one at a time: after each
+// successful eviction the patcher waits for the workload controller to bring
+// the replacement pod back to Ready before continuing. If any pod matching
+// the selector enters CrashLoopBackOff during the wait, the loop aborts so a
+// bad recommendation cannot cascade through the whole workload.
+//
+// For StatefulSets pods are processed in descending ordinal order so we
+// don't violate the ordinal invariant (e.g. evict pod-1 before pod-0 is
+// running again).
 func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation) error {
 	logger := log.FromContext(ctx).WithValues("namespace", namespace, "selector", selector.String())
 
@@ -183,13 +256,22 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 	}
 	logger.V(1).Info("listed pods for recycle", "count", len(podList.Items), "strategy", strategy)
 
+	// Build a stable ordering of pod pointers. For StatefulSets, descending
+	// ordinal — matches the StatefulSet controller's update sequence. For
+	// everything else, alphabetical by name keeps reconciles deterministic
+	// across runs (helpful for tests, logs, and rate-limited evictions).
+	pods := make([]*corev1.Pod, len(podList.Items))
+	for i := range podList.Items {
+		pods[i] = &podList.Items[i]
+	}
+	sortPodsForRecycle(pods)
+
 	var errs []error
 	processed, skipped := 0, 0
-	for i := range podList.Items {
+	for _, pod := range pods {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		pod := &podList.Items[i]
 		if pod.DeletionTimestamp != nil {
 			logger.V(1).Info("skipping terminating pod", "pod", pod.Name)
 			skipped++
@@ -213,13 +295,33 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 		var err error
 		if p.inPlace.Load() {
 			err = p.patchPodInPlace(ctx, pod, recs)
-		} else {
-			err = p.evictPod(ctx, pod, recs)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
+			}
+			processed++
+			continue
 		}
-		if err != nil {
-			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
+
+		// Eviction path: evict, then wait for the replacement before moving
+		// on so we don't take down the whole workload at once.
+		evicted, evictErr := p.evictPod(ctx, pod, recs)
+		if evictErr != nil {
+			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, evictErr))
 		}
 		processed++
+		if !evicted {
+			continue
+		}
+		if waitErr := p.waitForReplacement(ctx, namespace, selector, pod.Name); waitErr != nil {
+			// CrashLoopBackOff in the selector means the recommendation is
+			// likely making things worse — stop evicting and surface the
+			// error so the next reconcile can re-evaluate. Timeouts get the
+			// same treatment: continuing to evict an unhealthy workload only
+			// amplifies the damage.
+			errs = append(errs, fmt.Errorf("after evicting %s: %w", pod.Name, waitErr))
+			logger.Info("halting eviction loop for this reconcile", "reason", waitErr.Error())
+			break
+		}
 	}
 	logger.Info("recycle pass complete", "processed", processed, "skipped", skipped, "errors", len(errs), "strategy", strategy)
 	return errors.Join(errs...)
@@ -243,7 +345,8 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	switch pod.Status.Resize {
 	case corev1.PodResizeStatusInfeasible:
 		logger.Info("in-place resize infeasible, falling back to eviction")
-		return p.evictPod(ctx, pod, recs)
+		_, err := p.evictPod(ctx, pod, recs)
+		return err
 	case corev1.PodResizeStatusDeferred:
 		logger.Info("in-place resize deferred by kubelet, will apply when conditions allow")
 		return nil
@@ -316,7 +419,8 @@ func (p *Patcher) applyInPlaceResize(ctx context.Context, pod, base *corev1.Pod,
 		p.inPlace.Store(false)
 		pod.Spec.Containers = base.Spec.Containers
 		pod.Spec.InitContainers = base.Spec.InitContainers
-		return p.evictPod(ctx, pod, recs)
+		_, evErr := p.evictPod(ctx, pod, recs)
+		return evErr
 	}
 	if err == nil {
 		logger.Info("in-place resize applied")
@@ -330,12 +434,17 @@ func (p *Patcher) applyInPlaceResize(ctx context.Context, pod, base *corev1.Pod,
 // A 429 (Too Many Requests) response from the Eviction API means a
 // PodDisruptionBudget is blocking the eviction. The pod is skipped silently —
 // it will be retried on the next reconcile cycle.
-func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) error {
+//
+// Returns (evicted, err). evicted=true means the apiserver accepted the
+// Eviction request; the caller should wait for the replacement before
+// continuing. evicted=false covers no-op cases (pod already fresh, gone, or
+// PDB-blocked) where no wait is required.
+func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
 	if !podIsStale(pod, recs) {
 		logger.V(1).Info("pod already running recommended resources, eviction skipped")
-		return nil // already running with the recommended resources
+		return false, nil // already running with the recommended resources
 	}
 
 	eviction := &policyv1.Eviction{
@@ -348,18 +457,198 @@ func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string
 	logger.Info("evicting stale pod")
 	err := p.client.SubResource("eviction").Create(ctx, pod, eviction)
 	if err == nil {
-		return nil
+		return true, nil
 	}
 	if apierrors.IsNotFound(err) {
 		logger.Info("pod already deleted, skipping eviction")
-		return nil
+		return false, nil
 	}
 	if apierrors.IsTooManyRequests(err) {
 		// PDB is blocking — log and move on; next reconcile will retry.
 		logger.Info("eviction blocked by PodDisruptionBudget, will retry")
-		return nil
+		return false, nil
 	}
-	return err
+	return false, err
+}
+
+// errCrashLoopBackOff signals that a pod in the workload's selector has
+// entered CrashLoopBackOff during the post-eviction wait. The recycle loop
+// aborts when this happens so a bad recommendation cannot cascade across the
+// whole workload.
+var errCrashLoopBackOff = errors.New("pod in CrashLoopBackOff; aborting eviction loop")
+
+// waitForReplacement blocks until either:
+//   - the evicted pod is gone AND every other pod matching the selector has
+//     settled (Ready, or terminating, or Succeeded), OR
+//   - p.readyTimeout fires, OR
+//   - any pod in the selector enters CrashLoopBackOff (likely a bad
+//     recommendation — surface so the caller stops evicting).
+//
+// Rather than comparing against a frozen Ready-count baseline, we wait for
+// the selector to be quiescent — no peer is Pending or running-but-NotReady.
+// This handles HPA scale-down naturally: if the autoscaler decides to not
+// replace the evicted pod, the remaining peers stay Ready and the wait
+// returns immediately. A stuck or slow replacement keeps a Pending peer in
+// the list, blocking until the timeout.
+//
+// The evicted pod is identified by name: names are unique within a namespace
+// at any given time (the apiserver enforces this for active pods), and any
+// replacement spawned by the workload controller gets a fresh name, so we
+// won't confuse it with the pod we just evicted.
+func (p *Patcher) waitForReplacement(ctx context.Context, namespace string, selector klabels.Selector, evictedName string) error {
+	logger := log.FromContext(ctx).WithValues("namespace", namespace, "evictedName", evictedName)
+
+	deadline := time.Now().Add(p.readyTimeout)
+	for {
+		var list corev1.PodList
+		if err := p.client.List(ctx, &list,
+			client.InNamespace(namespace),
+			client.MatchingLabelsSelector{Selector: selector},
+		); err != nil {
+			return fmt.Errorf("listing pods while waiting for replacement: %w", err)
+		}
+
+		evictedGone := true
+		pending := 0
+		for i := range list.Items {
+			pod := &list.Items[i]
+			if hasCrashLoopBackOff(pod) {
+				logger.Info("crashloop detected during replacement wait", "pod", pod.Name)
+				return fmt.Errorf("%w: %s", errCrashLoopBackOff, pod.Name)
+			}
+			if pod.Name == evictedName {
+				evictedGone = false
+				continue
+			}
+			if isProgressing(pod) {
+				pending++
+			}
+		}
+
+		if evictedGone && pending == 0 {
+			logger.V(1).Info("workload quiescent; resuming eviction loop")
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %s waiting for replacement (evictedGone=%v, pending=%d)",
+				p.readyTimeout, evictedGone, pending)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(p.readyPollInterval):
+		}
+	}
+}
+
+// isProgressing reports whether a pod is still on its way to a steady state.
+// Pending pods (scheduler / image pull / init container running) and Running
+// pods without PodReady=True count as progressing. Terminating pods
+// (DeletionTimestamp set) and pods in Succeeded/Failed phase do NOT count —
+// they have already reached an end state, and waiting on them would deadlock
+// the eviction loop whenever a peer is in the process of being recycled.
+func isProgressing(pod *corev1.Pod) bool {
+	if pod.DeletionTimestamp != nil {
+		return false
+	}
+	switch pod.Status.Phase {
+	case corev1.PodSucceeded, corev1.PodFailed:
+		return false
+	case corev1.PodPending:
+		return true
+	}
+	return !isPodReady(pod)
+}
+
+// hasCrashLoopBackOff reports whether any container in the pod is currently
+// waiting in CrashLoopBackOff. Init and ephemeral container statuses are
+// included — a sidecar crashloop is just as fatal to the pod's usefulness
+// as a regular container crashloop.
+func hasCrashLoopBackOff(pod *corev1.Pod) bool {
+	if containersCrashing(pod.Status.ContainerStatuses) ||
+		containersCrashing(pod.Status.InitContainerStatuses) ||
+		containersCrashing(pod.Status.EphemeralContainerStatuses) {
+		return true
+	}
+	return false
+}
+
+func containersCrashing(cs []corev1.ContainerStatus) bool {
+	for _, c := range cs {
+		if c.State.Waiting != nil && c.State.Waiting.Reason == "CrashLoopBackOff" {
+			return true
+		}
+	}
+	return false
+}
+
+// isPodReady mirrors the k8s.io/kubernetes podutil helper: the pod is Ready
+// when it carries a PodReady condition with status=True.
+func isPodReady(pod *corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// sortPodsForRecycle imposes a deterministic order on the eviction loop. For
+// StatefulSet-owned pods we follow the StatefulSet update sequence (highest
+// ordinal first). For everything else we sort by name so that reconciles are
+// reproducible across runs.
+func sortPodsForRecycle(pods []*corev1.Pod) {
+	if len(pods) == 0 {
+		return
+	}
+	if isStatefulSetOwned(pods[0]) {
+		sort.SliceStable(pods, func(i, j int) bool {
+			oi, iok := podOrdinal(pods[i])
+			oj, jok := podOrdinal(pods[j])
+			// Fall back to name-desc when an ordinal can't be parsed so
+			// the sort stays total even with oddly-named pods.
+			if !iok || !jok {
+				return pods[i].Name > pods[j].Name
+			}
+			return oi > oj
+		})
+		return
+	}
+	sort.SliceStable(pods, func(i, j int) bool {
+		return pods[i].Name < pods[j].Name
+	})
+}
+
+// isStatefulSetOwned reports whether the pod has a controller-owner of kind
+// StatefulSet. StatefulSet pods are owned directly by the StatefulSet (unlike
+// Deployment pods, which go through a ReplicaSet), so a Kind=="StatefulSet"
+// ownerRef is a reliable signal.
+func isStatefulSetOwned(pod *corev1.Pod) bool {
+	for _, ref := range pod.OwnerReferences {
+		if ref.Controller != nil && *ref.Controller && ref.Kind == "StatefulSet" {
+			return true
+		}
+	}
+	return false
+}
+
+// podOrdinal extracts the trailing integer from a StatefulSet pod name
+// (e.g. "web-3" → 3). Returns (0, false) if the name has no parseable suffix.
+func podOrdinal(pod *corev1.Pod) (int, bool) {
+	idx := strings.LastIndex(pod.Name, "-")
+	if idx < 0 || idx == len(pod.Name)-1 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(pod.Name[idx+1:])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // podIsStale returns true if any container in the pod has different CPU or

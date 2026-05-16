@@ -69,14 +69,15 @@ func runStart(_ *cobra.Command, _ []string) error {
 	}
 
 	if err := (&controller.PolicyReconciler{
-		Client:             mgr.GetClient(),
-		Scheme:             mgr.GetScheme(),
-		PrometheusClient:   promClient,
-		ReconcileInterval:  cfg.ReconcileInterval,
-		InPlaceUpdates:     inPlaceUpdates,
-		ExcludedNamespaces: cfg.ExcludedNamespaces,
-		RecommendOnly:      cfg.RecommendOnly,
-		ConcurrencyLimit:   cfg.ConcurrencyLimit,
+		Client:                    mgr.GetClient(),
+		Scheme:                    mgr.GetScheme(),
+		PrometheusClient:          promClient,
+		ReconcileInterval:         cfg.ReconcileInterval,
+		InPlaceUpdates:            inPlaceUpdates,
+		ExcludedNamespaces:        cfg.ExcludedNamespaces,
+		RecommendOnly:             cfg.RecommendOnly,
+		ConcurrencyLimit:          cfg.ConcurrencyLimit,
+		RecycleReplacementTimeout: cfg.RecycleReplacementTimeout,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "Unable to create Policy controller")
 		return err

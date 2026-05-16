@@ -48,6 +48,7 @@ k8s-sustain start [flags]
 | `--reconcile-interval` | `5m` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces the reconciler should never touch |
 | `--concurrency-limit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
+| `--recycle-replacement-timeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) regularly takes longer than the default. |
 
 ### Environment variables
 

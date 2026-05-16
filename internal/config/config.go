@@ -78,6 +78,8 @@ func BindControllerFlags(cmd *cobra.Command) {
 	cmd.Flags().Duration("reconcile-interval", 1*time.Minute, "How often policies are re-evaluated")
 	cmd.Flags().StringSlice("excluded-namespaces", nil, "Namespaces the reconciler should never touch")
 	cmd.Flags().Int("concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
+	cmd.Flags().Duration("recycle-replacement-timeout", 5*time.Minute,
+		"In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) takes several minutes.")
 
 	_ = viper.BindPFlag("metrics-bind-address", cmd.Flags().Lookup("metrics-bind-address"))
 	_ = viper.BindPFlag("health-probe-bind-address", cmd.Flags().Lookup("health-probe-bind-address"))
@@ -88,35 +90,38 @@ func BindControllerFlags(cmd *cobra.Command) {
 	_ = viper.BindPFlag("reconcile-interval", cmd.Flags().Lookup("reconcile-interval"))
 	_ = viper.BindPFlag("excluded-namespaces", cmd.Flags().Lookup("excluded-namespaces"))
 	_ = viper.BindPFlag("concurrency-limit", cmd.Flags().Lookup("concurrency-limit"))
+	_ = viper.BindPFlag("recycle-replacement-timeout", cmd.Flags().Lookup("recycle-replacement-timeout"))
 }
 
 // ControllerConfig holds resolved configuration for the controller.
 type ControllerConfig struct {
-	MetricsBindAddress     string
-	HealthProbeBindAddress string
-	LeaderElect            bool
-	LeaderElectionID       string
-	LogLevel               string
-	PrometheusAddress      string
-	ReconcileInterval      time.Duration
-	ExcludedNamespaces     []string
-	ConcurrencyLimit       int
-	RecommendOnly          bool
+	MetricsBindAddress        string
+	HealthProbeBindAddress    string
+	LeaderElect               bool
+	LeaderElectionID          string
+	LogLevel                  string
+	PrometheusAddress         string
+	ReconcileInterval         time.Duration
+	ExcludedNamespaces        []string
+	ConcurrencyLimit          int
+	RecommendOnly             bool
+	RecycleReplacementTimeout time.Duration
 }
 
 // LoadControllerConfig reads the current Viper state and returns a ControllerConfig.
 func LoadControllerConfig() ControllerConfig {
 	return ControllerConfig{
-		MetricsBindAddress:     viper.GetString("metrics-bind-address"),
-		HealthProbeBindAddress: viper.GetString("health-probe-bind-address"),
-		LeaderElect:            viper.GetBool("leader-elect"),
-		LeaderElectionID:       viper.GetString("leader-election-id"),
-		LogLevel:               viper.GetString("log-level"),
-		PrometheusAddress:      viper.GetString("prometheus-address"),
-		ReconcileInterval:      viper.GetDuration("reconcile-interval"),
-		ExcludedNamespaces:     viper.GetStringSlice("excluded-namespaces"),
-		ConcurrencyLimit:       viper.GetInt("concurrency-limit"),
-		RecommendOnly:          RecommendOnly(),
+		MetricsBindAddress:        viper.GetString("metrics-bind-address"),
+		HealthProbeBindAddress:    viper.GetString("health-probe-bind-address"),
+		LeaderElect:               viper.GetBool("leader-elect"),
+		LeaderElectionID:          viper.GetString("leader-election-id"),
+		LogLevel:                  viper.GetString("log-level"),
+		PrometheusAddress:         viper.GetString("prometheus-address"),
+		ReconcileInterval:         viper.GetDuration("reconcile-interval"),
+		ExcludedNamespaces:        viper.GetStringSlice("excluded-namespaces"),
+		ConcurrencyLimit:          viper.GetInt("concurrency-limit"),
+		RecommendOnly:             RecommendOnly(),
+		RecycleReplacementTimeout: viper.GetDuration("recycle-replacement-timeout"),
 	}
 }
 

@@ -46,7 +46,10 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 	cfg := config.LoadWebhookConfig()
 	log := logging.Setup(cfg.LogLevel, "webhook")
 
-	promClient, err := promclient.New(cfg.PrometheusAddress)
+	// Tight per-query timeout: the webhook must fit within the apiserver's
+	// MutatingWebhookConfiguration timeout (5s by default). Background queries
+	// from the controller use the longer default.
+	promClient, err := promclient.New(cfg.PrometheusAddress, promclient.WithQueryTimeout(2*time.Second))
 	if err != nil {
 		log.Error(err, "Unable to create Prometheus client")
 		return err

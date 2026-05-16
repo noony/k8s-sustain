@@ -27,28 +27,50 @@ type ContainerValues map[string]float64
 
 // Client wraps the Prometheus HTTP API for k8s-sustain queries.
 type Client struct {
-	api     prometheusv1.API
-	breaker *breaker
+	api          prometheusv1.API
+	breaker      *breaker
+	queryTimeout time.Duration
 }
 
 // Default circuit-breaker tuning: trip after 5 consecutive failures,
-// stay open for 30 seconds. These values match queryTimeout so that one
-// stuck reconcile (≈ 5 queries × queryTimeout) is enough to open it.
+// stay open for 30 seconds. These values match the default queryTimeout so that
+// one stuck reconcile (≈ 5 queries × queryTimeout) is enough to open it.
 const (
 	defaultBreakerMaxFailures = 5
 	defaultBreakerCooldown    = 30 * time.Second
 )
 
+// Option configures a Client at construction time.
+type Option func(*Client)
+
+// WithQueryTimeout overrides the default per-query timeout. Callers with a
+// tight upstream budget (e.g. the admission webhook, which must respond within
+// the apiserver's webhook timeout) should set this to a value that fits within
+// that budget; the controller uses the default which is sized for background
+// reconciles.
+func WithQueryTimeout(d time.Duration) Option {
+	return func(c *Client) {
+		if d > 0 {
+			c.queryTimeout = d
+		}
+	}
+}
+
 // New creates a Prometheus client targeting addr (e.g. "http://prometheus:9090").
-func New(addr string) (*Client, error) {
+func New(addr string, opts ...Option) (*Client, error) {
 	c, err := api.NewClient(api.Config{Address: addr})
 	if err != nil {
 		return nil, fmt.Errorf("creating prometheus client: %w", err)
 	}
-	return &Client{
-		api:     prometheusv1.NewAPI(c),
-		breaker: newBreaker(defaultBreakerMaxFailures, defaultBreakerCooldown),
-	}, nil
+	cli := &Client{
+		api:          prometheusv1.NewAPI(c),
+		breaker:      newBreaker(defaultBreakerMaxFailures, defaultBreakerCooldown),
+		queryTimeout: defaultQueryTimeout,
+	}
+	for _, opt := range opts {
+		opt(cli)
+	}
+	return cli, nil
 }
 
 // QueryCPUByContainer returns per-container CPU usage (cores) at the given quantile,
@@ -185,7 +207,7 @@ func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKin
 	if !c.breaker.allow() {
 		return OOMSignal{}, ErrCircuitOpen
 	}
-	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
 
 	oomExpr := fmt.Sprintf(
@@ -265,7 +287,7 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		// Non-fatal: skip OOM lookup while breaker is open.
 		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
 
 	windowDur, err := model.ParseDuration(window)
@@ -338,7 +360,7 @@ func (c *Client) queryRangeByContainer(ctx context.Context, expr, window, step s
 	if !c.breaker.allow() {
 		return nil, ErrCircuitOpen
 	}
-	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
 
 	windowDur, err := model.ParseDuration(window)
@@ -388,8 +410,10 @@ func (c *Client) queryRangeByContainer(ctx context.Context, expr, window, step s
 	return series, nil
 }
 
-// queryTimeout is the maximum duration for a single Prometheus query.
-const queryTimeout = 30 * time.Second
+// defaultQueryTimeout is the default per-query timeout used when WithQueryTimeout
+// is not passed to New. Sized for background controller reconciles; the webhook
+// overrides this with a tighter value.
+const defaultQueryTimeout = 30 * time.Second
 
 // Ping checks that the Prometheus server is reachable by executing a trivial query.
 func (c *Client) Ping(ctx context.Context) error {
@@ -412,7 +436,7 @@ func (c *Client) queryByContainer(ctx context.Context, expr string) (ContainerVa
 	if !c.breaker.allow() {
 		return nil, ErrCircuitOpen
 	}
-	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
 
 	result, warnings, err := c.api.Query(ctx, expr, time.Now())
@@ -450,7 +474,7 @@ func (c *Client) QueryReplicaCountMedian(ctx context.Context, namespace, ownerKi
 		namespace, ownerKind, ownerName, window,
 	)
 
-	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
 
 	result, warnings, err := c.api.Query(ctx, expr, time.Now())

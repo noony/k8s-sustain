@@ -39,6 +39,14 @@ const maxPolicyNameLen = 253
 // and the AdmissionReview encode/decode on either side.
 const apiCallTimeout = 2 * time.Second
 
+// admissionTimeout caps the whole admit() handler. The apiserver's
+// MutatingWebhookConfiguration timeout is 5s by default; we keep a 1s headroom
+// for HTTP round-trip and JSON encode/decode so a stuck downstream (Prometheus
+// or apiserver Get) cannot push us past the upstream deadline. Failing open
+// inside the budget is strictly better than letting the apiserver time out and
+// fall back to failurePolicy.
+const admissionTimeout = 4 * time.Second
+
 // isValidPolicyName guards against malformed annotation values flowing into
 // Prometheus query selectors. Accepts only DNS-1123 subdomains up to 253 chars.
 func isValidPolicyName(name string) bool {
@@ -95,6 +103,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // admit processes a single AdmissionRequest. On any error it fails open
 // (allows the pod) to avoid blocking the cluster.
 func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) *admissionv1.AdmissionResponse {
+	ctx, cancel := context.WithTimeout(ctx, admissionTimeout)
+	defer cancel()
+
 	logger := log.FromContext(ctx).WithValues("namespace", req.Namespace, "name", req.Name, "uid", req.UID)
 	allow := &admissionv1.AdmissionResponse{Allowed: true}
 

@@ -26,6 +26,7 @@
 | `controller.healthProbeBindAddress` | `:8081` | Health probe address |
 | `controller.leaderElect` | `true` | Enable leader election |
 | `controller.concurrencyLimit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
+| `controller.recycleReplacementTimeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where Karpenter / cluster-autoscaler node provisioning regularly takes longer. |
 | `controller.logLevel` | `debug` | Log level |
 | `controller.service.type` | `ClusterIP` | Service type for the metrics endpoint |
 | `controller.service.port` | `8080` | Service port |
