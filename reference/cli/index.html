@@ -1733,11 +1733,26 @@
 <td><code>5</code></td>
 <td>Maximum number of workloads processed in parallel per reconcile cycle</td>
 </tr>
+<tr>
+<td><code>--recycle-replacement-timeout</code></td>
+<td><code>5m</code></td>
+<td>In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) regularly takes longer than the default.</td>
+</tr>
 </tbody>
 </table>
 <h3 id="environment-variables">Environment variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h3>
-<p>Every flag can be overridden with an environment variable prefixed by <code>K8SSUSTAIN_</code> (uppercase, hyphens → underscores):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">K8SSUSTAIN_RECONCILE_INTERVAL</span><span class="o">=</span>30m<span class="w"> </span>k8s-sustain<span class="w"> </span>start
+<p>Every flag can be overridden with an environment variable prefixed by <code>K8SSUSTAIN_</code> (uppercase, hyphens and dots → underscores). The mapping is:</p>
+<ul>
+<li><code>K8SSUSTAIN_</code> + flag name with <code>-</code> and <code>.</code> replaced by <code>_</code>, upper-cased.</li>
+</ul>
+<p>Examples:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Top-level flag (controller)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nv">K8SSUSTAIN_RECONCILE_INTERVAL</span><span class="o">=</span>30m<span class="w"> </span>k8s-sustain<span class="w"> </span>start
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nv">K8SSUSTAIN_LOG_LEVEL</span><span class="o">=</span>debug<span class="w"> </span>k8s-sustain<span class="w"> </span>start
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Subcommand-scoped flag (dashboard.bind-address, webhook.prometheus-address)</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nv">K8SSUSTAIN_DASHBOARD_BIND_ADDRESS</span><span class="o">=</span>:9999<span class="w"> </span>k8s-sustain<span class="w"> </span>dashboard
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nv">K8SSUSTAIN_WEBHOOK_PROMETHEUS_ADDRESS</span><span class="o">=</span>http://prom.example:9090<span class="w"> </span>k8s-sustain<span class="w"> </span>webhook
 </code></pre></div>
 <h3 id="log-verbosity">Log verbosity<a class="headerlink" href="#log-verbosity" title="Permanent link">&para;</a></h3>
 <ul>
@@ -1812,8 +1827,14 @@
 <td><code>info</code></td>
 <td>Log verbosity: <code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code></td>
 </tr>
+<tr>
+<td><code>--excluded-namespaces</code></td>
+<td>—</td>
+<td>Comma-separated list of namespaces the webhook must never mutate. Pods in these namespaces are admitted unchanged. Mirrors the controller flag so both components stay in lockstep.</td>
+</tr>
 </tbody>
 </table>
+<p>The webhook also honours each Policy's <code>spec.selector.namespaces</code> and <code>spec.selector.labelSelector</code> (see <a href="../policy/#specselector">Policy reference</a>). A pod is admitted without mutation if any of the following holds: its namespace is in <code>--excluded-namespaces</code>, its namespace is not in a non-empty <code>selector.namespaces</code>, or its pod labels do not satisfy <code>selector.labelSelector</code>. A malformed <code>labelSelector</code> causes the webhook to fail open (admit without mutation, log a warning) rather than deny.</p>
 <h3 id="health-endpoints_1">Health endpoints<a class="headerlink" href="#health-endpoints_1" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

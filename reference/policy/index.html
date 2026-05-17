@@ -1738,7 +1738,8 @@
 </code></pre></div>
 <hr />
 <h2 id="specselector"><code>spec.selector</code><a class="headerlink" href="#specselector" title="Permanent link">&para;</a></h2>
-<p>Restricts which namespaces and workloads this policy applies to. Used by the controller when listing workloads to reconcile.</p>
+<p>Restricts which namespaces and workloads this policy applies to. Both the controller (when listing workloads to reconcile) and the admission webhook (when deciding whether to inject resources at pod creation) honour the same selector — so a workload outside the policy's scope is left alone by both components.</p>
+<p>The webhook additionally honours the operator-level <code>--excluded-namespaces</code> flag (see <a href="../cli/">CLI reference</a>); a pod in an excluded namespace is admitted unchanged regardless of selector configuration. If <code>spec.selector.labelSelector</code> is malformed, the webhook fails open (admits the pod without mutation and logs a warning) rather than denying it.</p>
 <h3 id="specselectornamespaces"><code>spec.selector.namespaces</code><a class="headerlink" href="#specselectornamespaces" title="Permanent link">&para;</a></h3>
 <p>A list of namespace names to target. An empty list matches all namespaces.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
@@ -1749,6 +1750,7 @@
 </code></pre></div>
 <h3 id="specselectorlabelselector"><code>spec.selector.labelSelector</code><a class="headerlink" href="#specselectorlabelselector" title="Permanent link">&para;</a></h3>
 <p>A standard Kubernetes <a href="https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors">label selector</a> that restricts which workloads are governed by this policy. An empty selector matches all workloads in the targeted namespaces.</p>
+<p>The controller matches against the workload object's <code>metadata.labels</code> (e.g. the <code>Deployment</code>'s own labels). The webhook matches against the <em>pod</em>'s labels (the pod template's <code>metadata.labels</code>, which become the labels of every replica).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">spec</span><span class="p">:</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">labelSelector</span><span class="p">:</span>
@@ -1803,22 +1805,8 @@
 <td><code>OnCreate</code> | <code>Ongoing</code></td>
 <td>Manages standalone <code>Job</code> objects</td>
 </tr>
-<tr>
-<td><code>deploymentConfig</code></td>
-<td><code>OnCreate</code> | <code>Ongoing</code></td>
-<td>Reserved for OpenShift <code>DeploymentConfig</code> support; accepted by the CRD but not currently implemented — setting it has no effect</td>
-</tr>
-<tr>
-<td><code>family</code></td>
-<td><code>OnCreate</code> | <code>Ongoing</code></td>
-<td>Reserved for OpenShift Family resource support; accepted by the CRD but not currently implemented — setting it has no effect</td>
-</tr>
 </tbody>
 </table>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p><code>deploymentConfig</code> and <code>family</code> are present in the CRD schema for future OpenShift compatibility but have no controller implementation yet. The controller silently ignores them if set.</p>
-</div>
 <p>See <a href="../../concepts/update-modes/">Update Modes</a> for the difference between <code>OnCreate</code> and <code>Ongoing</code>.</p>
 <h4 id="specrightsizingupdateeviction"><code>spec.rightSizing.update.eviction</code><a class="headerlink" href="#specrightsizingupdateeviction" title="Permanent link">&para;</a></h4>
 <table>

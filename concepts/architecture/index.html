@@ -1559,6 +1559,7 @@
 <li>The API server applies the patch before persisting the pod</li>
 </ol>
 <p>The webhook <strong>fails open</strong> (<code>failurePolicy: Ignore</code> by default) — if it is unreachable or returns an error, the pod is admitted unchanged. The controller will handle ongoing reconciliation regardless.</p>
+<p><strong>Latency budget.</strong> The handler is bounded by a hard 4s deadline on the admission context (under the apiserver's 5s <code>MutatingWebhookConfiguration</code> timeout). Each Prometheus query has its own short 2s per-query timeout so a slow upstream cannot exhaust the budget for the cache-fallback path. If Prometheus is unavailable, the webhook serves the cached <code>WorkloadRecommendation</code> written by the controller; if the cache is missing or stale beyond <code>DefaultCacheStaleness</code> (30 min), the pod is admitted with its original template resources.</p>
 <h2 id="dashboard-k8s-sustain-dashboard">Dashboard (<code>k8s-sustain dashboard</code>)<a class="headerlink" href="#dashboard-k8s-sustain-dashboard" title="Permanent link">&para;</a></h2>
 <p>The dashboard is an optional web UI that provides:</p>
 <ul>

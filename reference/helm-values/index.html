@@ -1589,6 +1589,11 @@
 <td>Maximum number of workloads processed in parallel per reconcile cycle</td>
 </tr>
 <tr>
+<td><code>controller.recycleReplacementTimeout</code></td>
+<td><code>5m</code></td>
+<td>In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where Karpenter / cluster-autoscaler node provisioning regularly takes longer.</td>
+</tr>
+<tr>
 <td><code>controller.logLevel</code></td>
 <td><code>debug</code></td>
 <td>Log level</td>

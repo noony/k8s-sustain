@@ -1331,6 +1331,30 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#webhook-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      Webhook server
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Webhook server">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#about-the-path-label" class="md-nav__link">
+    <span class="md-ellipsis">
+      About the path label
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1567,6 +1591,30 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#webhook-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      Webhook server
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Webhook server">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#about-the-path-label" class="md-nav__link">
+    <span class="md-ellipsis">
+      About the path label
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1752,7 +1800,7 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 </tbody>
 </table>
 <p><code>k8s_sustain_recommendation_skipped_total</code> increments when the recommender bypasses a workload without emitting a recommendation. <code>reason="insufficient_history"</code> means the workload had fewer than 12 CPU rate samples in the configured window — typical of containers younger than ~12 minutes — so percentile queries would otherwise floor to ~0 and trigger an immediate recycle.</p>
-<p><code>k8s_sustain_oom_floor_applied_total</code> increments when the OOM-aware floor raises a memory recommendation above the percentile value. This means the workload OOM'd in the last 24h and the recommendation was floored at <code>max(peak_working_set, current_request)</code> plus headroom, instead of the (lower) percentile value.</p>
+<p><code>k8s_sustain_oom_floor_applied_total</code> increments when the OOM-aware floor raises a memory recommendation above the percentile value. This means the workload OOM'd in the last 24h and the recommendation was floored at <code>max(peak_working_set_24h, oom_time_limit × 1.20)</code> plus headroom, instead of the (lower) percentile value. The peak anchor relies on cAdvisor observing the high-water mark; the OOM-time-limit anchor is the safety net for cgroup v2 / sub-scrape OOM kills where peak underreports.</p>
 <h3 id="drift-retry-autoscaler">Drift, retry, autoscaler<a class="headerlink" href="#drift-retry-autoscaler" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -1837,8 +1885,50 @@ for the formulas.</p>
 <td>histogram</td>
 <td><code>rule</code></td>
 </tr>
+<tr>
+<td><code>k8s_sustain_dashboard_panic_total</code></td>
+<td>counter</td>
+<td><code>path</code></td>
+</tr>
 </tbody>
 </table>
+<h3 id="webhook-server">Webhook server<a class="headerlink" href="#webhook-server" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Labels</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>k8s_sustain_webhook_request_duration_seconds</code></td>
+<td>histogram</td>
+<td><code>path</code>, <code>status</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_webhook_panic_total</code></td>
+<td>counter</td>
+<td><code>path</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_webhook_cert_expiry_seconds</code></td>
+<td>gauge</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>The webhook shares the same HTTP middleware stack as the dashboard (request-ID correlation via <code>X-Request-Id</code>, panic recovery, duration telemetry, body-size limit). Both stacks live in <code>internal/httpx</code>.</p>
+<h4 id="about-the-path-label">About the <code>path</code> label<a class="headerlink" href="#about-the-path-label" title="Permanent link">&para;</a></h4>
+<p>The <code>path</code> label is <strong>not</strong> the raw request URL — it is the matched <a href="https://pkg.go.dev/net/http#ServeMux">Go 1.22
+route pattern</a> (for example
+<code>GET /api/policies/{name}</code>). Requests that don't match any registered route
+(404s, attacker probes against random URLs) are bucketed as <code>unknown</code> so an
+adversary can't blow up Prometheus label cardinality by inventing paths.
+Path parameters (<code>{name}</code>, <code>{namespace}</code>, etc.) collapse into a single
+bucket per route, so a workload with thousands of names still produces one
+time series, not thousands.</p>
 <h2 id="recording-rules">Recording rules<a class="headerlink" href="#recording-rules" title="Permanent link">&para;</a></h2>
 <p>All rules are evaluated every minute. They live in
 <code>charts/k8s-sustain/templates/prometheusrules.yaml</code>.</p>
