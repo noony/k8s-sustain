@@ -289,6 +289,30 @@ label_replace(
 
 Same `used`/`idle`/`free` split, for memory. Same rationale as CPU: raw inputs so unmapped pods are counted.
 
+### `k8s_sustain:container_oom_limit_24h:bytes`
+
+```promql
+max by (namespace, owner_kind, owner_name, container) (
+  max by (namespace, pod, container) (
+    max_over_time(
+      (
+        container_spec_memory_limit_bytes{container!="", container!="POD", image!="", node!=""}
+        and on(namespace, pod, container)
+        (changes(kube_pod_container_status_restarts_total{container!="", container!="POD"}[2m]) > 0)
+        and on(namespace, pod, container)
+        (kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"} == 1)
+      )[24h:1m]
+    )
+  )
+  * on(namespace, pod) group_left(owner_kind, owner_name)
+  k8s_sustain:pod_workload
+)
+```
+
+The cgroup memory limit observed at the moment a recent OOM event fired, per (workload, container), max over 24h. The recommender uses this as a bump anchor — when a workload OOM'd recently, the memory recommendation floor is `max(peak_working_set_24h, oom_time_limit × 1.20)` — to push the request above the limit the kernel killed at.
+
+The conjunction (`container_spec_memory_limit_bytes AND restart_changed AND last_term=OOMKilled`) ensures the limit is only recorded at moments a NEW OOM event fires, not while the workload sits at the bumped limit afterward. This is the property that prevents the feedback loop the `container_peak_memory_24h:bytes` comment warns about: once the workload fits after a bump, no new OOM events occur and the recorded limit stays at its pre-bump value. After 24h with no further OOMs, the signal drains and the recommender falls back to the percentile.
+
 ### `k8s_sustain:workload_oom_24h`
 
 ```promql

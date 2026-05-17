@@ -24,6 +24,13 @@ import (
 // (5m) used by k8s_sustain:container_cpu_usage:rate1m.
 const minWorkloadAge = 10 * time.Minute
 
+// defaultOOMBumpFactor is the multiplier applied to the OOM-time memory limit
+// when computing the recommendation floor for a recently OOM-killed workload.
+// 1.20 is the value used by VPA's MemoryBumpUpRatio — large enough to escape
+// the limit the kernel killed at, small enough to converge quickly when the
+// workload's real need sits just above the prior limit.
+const defaultOOMBumpFactor = 1.20
+
 func (r *PolicyReconciler) buildRecommendations(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
@@ -127,8 +134,10 @@ func (r *PolicyReconciler) buildRecommendations(
 				perPod = recommender.ApplyFloor(perPod, memFloors[c.Name])
 			}
 			oom := recommender.OOMSignal{
-				Recent:    recentOOM,
-				PeakBytes: oomSignal.PeakMemoryBytes[c.Name],
+				Recent:            recentOOM,
+				PeakBytes:         oomSignal.PeakMemoryBytes[c.Name],
+				OOMTimeLimitBytes: oomSignal.OOMLimitBytes[c.Name],
+				BumpFactor:        defaultOOMBumpFactor,
 			}
 			if cur := c.Resources.Requests.Memory(); cur != nil && !cur.IsZero() {
 				oom.CurrentRequestBytes = float64(cur.Value())

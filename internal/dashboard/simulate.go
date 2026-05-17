@@ -68,6 +68,17 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		return nil, fmt.Errorf("memory query: %w", err)
 	}
 
+	// OOM signal — best-effort, fail-open. Mirrors the controller's behavior so
+	// the dashboard shows the same memory floor (peak observed bytes) that the
+	// controller would actually apply when a workload OOM'd within the 24h
+	// lookback. Without this, the displayed recommendation stays at the
+	// percentile-based value and never reflects the OOM-driven floor.
+	oomSignal, err := s.PromClient.QueryWorkloadOOMSignal(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
+	if err != nil {
+		oomSignal = promclient.OOMSignal{}
+	}
+	recentOOM := oomSignal.OOMCount > 0
+
 	// Query time-series for graphs (use chart time range)
 	step := req.Step
 	if step == "" {
@@ -87,13 +98,20 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	// Compute recommendations per container
 	containers := make(map[string]simulationContainerResult)
 
-	// Collect all container names from both CPU and memory
+	// Collect all container names from CPU, memory, and the OOM peak set.
+	// Including OOM peaks ensures a crash-looping container with no usage
+	// samples yet still gets a memory recommendation anchored on the peak.
 	allContainers := make(map[string]struct{})
 	for name := range cpuValues {
 		allContainers[name] = struct{}{}
 	}
 	for name := range memValues {
 		allContainers[name] = struct{}{}
+	}
+	if recentOOM {
+		for name := range oomSignal.PeakMemoryBytes {
+			allContainers[name] = struct{}{}
+		}
 	}
 
 	for name := range allContainers {
@@ -105,8 +123,18 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 				result.CPURequest = cpuQty.String()
 			}
 		}
-		if bytes, ok := memValues[name]; ok {
-			memQty = recommender.ComputeMemoryRequest(bytes, memCfg)
+		// Memory: emit a recommendation when EITHER usage samples are present,
+		// OR a recent OOM gives us a peak to anchor on. Mirrors the controller's
+		// shape in recommendation_build.go so a crash-looping container that
+		// hasn't accumulated usage samples still gets the OOM-driven floor.
+		memBytes, hasUsage := memValues[name]
+		_, hasPeak := oomSignal.PeakMemoryBytes[name]
+		if hasUsage || (recentOOM && hasPeak) {
+			oom := recommender.OOMSignal{
+				Recent:    recentOOM,
+				PeakBytes: oomSignal.PeakMemoryBytes[name],
+			}
+			memQty = recommender.ComputeMemoryRequestWithOOM(memBytes, oom, memCfg)
 			if memQty != nil {
 				result.MemoryRequest = memQty.String()
 			}

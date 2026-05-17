@@ -50,6 +50,9 @@ internal/dashboard/ui/dist/*
 # Worktrees
 .worktrees/
 
+# Port-forward PIDs/logs
+.port-forward/
+
 # misc
 example1.yaml
 test-chart/

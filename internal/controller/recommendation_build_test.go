@@ -231,6 +231,69 @@ func TestBuildRecommendations_RecentOOMRaisesMemoryFloor(t *testing.T) {
 	}
 }
 
+// TestBuildRecommendations_OOMTimeLimitBumpsBeyondLimit verifies that when
+// peak working-set is unreliable (cgroup v2 / sub-scrape OOM kill) but the
+// OOM-time memory limit signal is present, the recommendation is bumped above
+// the limit the kernel killed at. Without this floor the recommendation would
+// drop to the percentile and the workload would OOM forever.
+func TestBuildRecommendations_OOMTimeLimitBumpsBeyondLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "count_over_time"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"168"]}]}}`))
+		case strings.Contains(q, "workload_oom_24h"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"9"]}]}}`))
+		case strings.Contains(q, "container_peak_memory_24h:bytes"):
+			// Peak underreports — cgroup v2 sub-scrape spike missed.
+			// 36Mi, well below the 96Mi limit the kernel killed at.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"37748736"]}
+			]}}`))
+		case strings.Contains(q, "container_oom_limit_24h:bytes"):
+			// 96Mi — the cgroup limit at the moment of OOM.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"100663296"]}
+			]}}`))
+		case strings.Contains(q, "workload_replicas"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}`))
+		case strings.Contains(q, "container_cpu_usage_by_workload"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.01"]}]}}`))
+		case strings.Contains(q, "container_memory_by_workload"):
+			// Percentile says 40Mi — the steady-state baseline.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"41943040"]}]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	policy := policyForReconcileWorkload(t, "p")
+	containers := []corev1.Container{{
+		Name: "app",
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("96Mi")},
+		},
+	}}
+
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	rec, ok := recs["app"]
+	if !ok || rec.MemoryRequest == nil {
+		t.Fatalf("expected memory recommendation, got recs=%v", recs)
+	}
+	// Floor = limit_at_oom * bump_factor = 96Mi * 1.20 = 115.2Mi → rounded up to 116Mi.
+	// Bare minimum: must be above the 96Mi limit the kernel killed at.
+	if rec.MemoryRequest.Cmp(resource.MustParse("96Mi")) <= 0 {
+		t.Errorf("expected memory > 96Mi (bump above OOM-time limit), got %s — recommendation would re-OOM", rec.MemoryRequest)
+	}
+}
+
 // TestBuildRecommendations_OOMSignalEmpty_DoesNotApplyFloor verifies that when
 // no OOM is reported, the percentile value flows through unchanged and the
 // floor counter is not incremented.

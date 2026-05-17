@@ -223,6 +223,47 @@ func TestComputeMemoryRequestWithOOM(t *testing.T) {
 			cfg:      sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true},
 			wantNil:  true,
 		},
+		{
+			// OOM-time-limit bump kicks in when peak underreports the real
+			// pressure (cgroup v2 / sub-scrape spikes). Floor =
+			// limit_at_oom * bump_factor = 96Mi * 1.25 = 120Mi.
+			name:     "oom-time-limit bump beats unreliable peak",
+			rawBytes: 40 * float64(mib),
+			signal: OOMSignal{
+				Recent:            true,
+				PeakBytes:         36 * float64(mib),
+				OOMTimeLimitBytes: 96 * float64(mib),
+				BumpFactor:        1.25,
+			},
+			cfg:     sustainv1alpha1.ResourceRequestsConfig{},
+			wantQty: "120Mi",
+		},
+		{
+			// Peak wins when it observed a higher value than the bump anchor.
+			name:     "peak above bump-anchor wins",
+			rawBytes: 40 * float64(mib),
+			signal: OOMSignal{
+				Recent:            true,
+				PeakBytes:         300 * float64(mib),
+				OOMTimeLimitBytes: 96 * float64(mib),
+				BumpFactor:        1.20,
+			},
+			cfg:     sustainv1alpha1.ResourceRequestsConfig{},
+			wantQty: "300Mi",
+		},
+		{
+			// BumpFactor==0 (or <=1) disables the bump path; only peak counts.
+			name:     "zero bump factor disables bump",
+			rawBytes: 40 * float64(mib),
+			signal: OOMSignal{
+				Recent:            true,
+				PeakBytes:         50 * float64(mib),
+				OOMTimeLimitBytes: 96 * float64(mib),
+				BumpFactor:        0,
+			},
+			cfg:     sustainv1alpha1.ResourceRequestsConfig{},
+			wantQty: "50Mi",
+		},
 	}
 
 	for _, tc := range tests {

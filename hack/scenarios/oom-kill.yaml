@@ -2,12 +2,15 @@
 # expected: container OOMs repeatedly because the loadgen periodically allocates
 # above its 96Mi limit. The percentile-based memory reco would otherwise sit
 # around ~30-40Mi (most samples are quiet), but the OOM-aware floor
-# (k8s_sustain:workload_oom_24h > 0) pulls the recommendation up to
-# max(peak_working_set_24h, current_request) + headroom — i.e. ≥ current 96Mi.
+# (k8s_sustain:workload_oom_24h > 0) lifts the recommendation to
+# max(peak_working_set_24h, oom_time_limit × 1.20) + headroom.
+# The OOM-time-limit anchor handles the cgroup-v2/sub-scrape case where
+# peak underreports — bump = 96Mi × 1.20 = 115.2Mi, so the next reco is ~116Mi
+# and the kernel stops killing the pod.
 # Verification:
 #   kubectl get pods -n scenario-oom-kill -o wide  # reason=OOMKilled visible
 #   kubectl get workloadrecommendation -n scenario-oom-kill stress -o yaml
-#   # → memory recommendation should be ≥ ~96Mi (well above the percentile)
+#   # → memory recommendation should be > current limit (e.g. ≥ 116Mi after a 96Mi limit)
 #   kubectl -n k8s-sustain logs deploy/k8s-sustain | grep oomRecent
 #   # → "oomRecent=true" in the controller log
 #   curl -s localhost:9090/api/v1/query?query='sum(k8s_sustain_oom_floor_applied_total{owner_name="stress"})'

@@ -198,6 +198,11 @@ func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, 
 type OOMSignal struct {
 	OOMCount        float64
 	PeakMemoryBytes ContainerValues
+	// OOMLimitBytes is the cgroup memory limit observed at the moment a
+	// recent OOM event fired, per container. Used by the recommender as a
+	// bump anchor when peak working-set is unreliable (cgroup v2,
+	// sub-scrape spikes can hide the real high-water mark).
+	OOMLimitBytes ContainerValues
 }
 
 // QueryWorkloadOOMSignal returns the recent OOM count (24h) and the peak
@@ -255,7 +260,32 @@ func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKin
 			}
 		}
 	}
-	return OOMSignal{OOMCount: oomCount, PeakMemoryBytes: peaks}, nil
+
+	// OOM-time memory limit. Independent rule, queried after the peak so
+	// even if this one fails we still return peak + count. Failures here
+	// are non-fatal: bumping just won't fire, but the existing peak floor
+	// still works.
+	limitExpr := fmt.Sprintf(
+		`max by (container) (k8s_sustain:container_oom_limit_24h:bytes{namespace=%q,owner_kind=%q,owner_name=%q})`,
+		namespace, ownerKind, ownerName,
+	)
+	limitRes, warnings, err := c.api.Query(ctx, limitExpr, time.Now())
+	if err != nil {
+		c.breaker.failure()
+		return OOMSignal{OOMCount: oomCount, PeakMemoryBytes: peaks}, fmt.Errorf("prometheus oom-limit probe %q: %w", limitExpr, err)
+	}
+	c.breaker.success()
+	logWarnings(ctx, limitExpr, warnings)
+	limits := ContainerValues{}
+	if vec, ok := limitRes.(model.Vector); ok {
+		for _, s := range vec {
+			name := string(s.Metric["container"])
+			if name != "" {
+				limits[name] = float64(s.Value)
+			}
+		}
+	}
+	return OOMSignal{OOMCount: oomCount, PeakMemoryBytes: peaks, OOMLimitBytes: limits}, nil
 }
 
 // OOMEvent represents a single OOM kill event for a container.
@@ -270,6 +300,24 @@ type OOMEvent struct {
 // kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} to detect
 // restart events caused by OOM kills.
 func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName, window, step string) ([]OOMEvent, error) {
+	stepDur, err := model.ParseDuration(step)
+	if err != nil {
+		return nil, fmt.Errorf("parsing step %q: %w", step, err)
+	}
+	windowDur, err := model.ParseDuration(window)
+	if err != nil {
+		return nil, fmt.Errorf("parsing window %q: %w", window, err)
+	}
+
+	// `increase()` needs ≥2 samples inside its lookback range to return anything.
+	// kube-state-metrics typically scrapes every 30–60s, so when the UI picks a
+	// short step (e.g. step=1m for the 1h window), `increase(restarts[step])`
+	// silently drops real OOM kills because only one scrape lands in the
+	// lookback. Floor the lookback at 5m so the query is resilient to ordinary
+	// scrape intervals regardless of the chart step.
+	lookback := max(time.Duration(stepDur), 5*time.Minute)
+	lookbackExpr := model.Duration(lookback).String()
+
 	// Detect restarts where the last termination reason was OOMKilled,
 	// scoped to the workload via the pod_workload mapping.
 	expr := fmt.Sprintf(
@@ -278,7 +326,7 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		   kube_pod_container_status_last_terminated_reason{namespace=%q, reason="OOMKilled", container!="", container!="POD"}
 		 * on(namespace, pod) group_left(owner_kind, owner_name)
 		   k8s_sustain:pod_workload{namespace=%q, owner_kind=%q, owner_name=%q}`,
-		namespace, step,
+		namespace, lookbackExpr,
 		namespace,
 		namespace, ownerKind, ownerName,
 	)
@@ -289,15 +337,6 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
-
-	windowDur, err := model.ParseDuration(window)
-	if err != nil {
-		return nil, fmt.Errorf("parsing window %q: %w", window, err)
-	}
-	stepDur, err := model.ParseDuration(step)
-	if err != nil {
-		return nil, fmt.Errorf("parsing step %q: %w", step, err)
-	}
 
 	end := time.Now()
 	start := end.Add(-time.Duration(windowDur))
@@ -320,15 +359,14 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		return nil, nil
 	}
 
-	// Dedup consecutive positive samples per (pod, container). `increase()` over
-	// a counter that keeps growing during CrashLoopBackOff produces a positive
-	// sample at every step until the loop ends, which would otherwise spam the
-	// chart with one marker per step. Collapse anything within a `2 × step`
-	// gap (floor 30s) to a single event.
-	dedupGap := 2 * time.Duration(stepDur)
-	if dedupGap < 30*time.Second {
-		dedupGap = 30 * time.Second
-	}
+	// Dedup consecutive positive samples per (pod, container). A single counter
+	// increment makes `increase()` positive at every evaluation grid point
+	// inside its lookback window, so without dedup one OOM produces up to
+	// `lookback/step` markers. CrashLoopBackOff stretches that further. The gap
+	// therefore has to be at least the lookback to collapse a single restart's
+	// smear to one event; 2 × step covers the CrashLoopBackOff tail past
+	// lookback.
+	dedupGap := max(2*time.Duration(stepDur), lookback, 30*time.Second)
 	var events []OOMEvent
 	for _, stream := range matrix {
 		container := string(stream.Metric["container"])

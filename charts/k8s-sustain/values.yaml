@@ -633,6 +633,37 @@ prometheus:
                   k8s_sustain:pod_workload
                 )
 
+            # OOM-time memory limit: the cgroup memory limit observed at the moment
+            # an OOM event fired. Used by the recommender as a bump anchor —
+            # max(peak, oom_time_limit * bump_factor) — so workloads whose peak
+            # working-set is unreliable (cgroup v2, sub-scrape spikes) still get
+            # pushed above the limit the kernel killed them at.
+            #
+            # Why this doesn't create the feedback loop the peak rule's comment
+            # warned about: this rule only records the limit at moments a NEW OOM
+            # event fires (restart counter increased AND last_terminated_reason is
+            # OOMKilled). Once the recommender bumps the limit and the workload
+            # fits, no new OOM events fire, so the recorded limit stays at the OLD
+            # (pre-bump) value and stops growing. After 24h with no further OOMs
+            # the signal drains and the recommendation falls back to the percentile.
+            - record: k8s_sustain:container_oom_limit_24h:bytes
+              expr: |
+                max by (namespace, owner_kind, owner_name, container) (
+                  max by (namespace, pod, container) (
+                    max_over_time(
+                      (
+                        container_spec_memory_limit_bytes{container!="", container!="POD", image!="", node!=""}
+                        and on(namespace, pod, container)
+                        (changes(kube_pod_container_status_restarts_total{container!="", container!="POD"}[2m]) > 0)
+                        and on(namespace, pod, container)
+                        (kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"} == 1)
+                      )[24h:1m]
+                    )
+                  )
+                  * on(namespace, pod) group_left(owner_kind, owner_name)
+                  k8s_sustain:pod_workload
+                )
+
             # OOM detection combines two paths so it works for both restartable
             # workloads (Deployment/StatefulSet/DaemonSet/Rollout) AND one-shot Job
             # pods (Job/CronJob).

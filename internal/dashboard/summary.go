@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 )
 
@@ -404,12 +405,26 @@ func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, na
 		return nil, fmt.Errorf("memory query: %w", err)
 	}
 
+	// OOM signal — best-effort, fail-open. Mirrors the controller so the
+	// per-workload recommendation in /api/workloads/* reflects the OOM-driven
+	// memory floor (peak observed bytes) the controller would actually apply.
+	oomSignal, err := s.PromClient.QueryWorkloadOOMSignal(ctx, namespace, kind, name)
+	if err != nil {
+		oomSignal = promclient.OOMSignal{}
+	}
+	recentOOM := oomSignal.OOMCount > 0
+
 	allContainers := make(map[string]struct{})
 	for n := range cpuValues {
 		allContainers[n] = struct{}{}
 	}
 	for n := range memValues {
 		allContainers[n] = struct{}{}
+	}
+	if recentOOM {
+		for n := range oomSignal.PeakMemoryBytes {
+			allContainers[n] = struct{}{}
+		}
 	}
 
 	containers := make(map[string]simulationContainerResult, len(allContainers))
@@ -421,9 +436,17 @@ func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, na
 				cr.CPURequest = qty.String()
 			}
 		}
-		if bytes, ok := memValues[n]; ok {
-			cr.MemoryUsageBytes = bytes
-			if qty := recommender.ComputeMemoryRequest(bytes, memCfg.Requests); qty != nil {
+		memBytes, hasUsage := memValues[n]
+		_, hasPeak := oomSignal.PeakMemoryBytes[n]
+		if hasUsage {
+			cr.MemoryUsageBytes = memBytes
+		}
+		if hasUsage || (recentOOM && hasPeak) {
+			oom := recommender.OOMSignal{
+				Recent:    recentOOM,
+				PeakBytes: oomSignal.PeakMemoryBytes[n],
+			}
+			if qty := recommender.ComputeMemoryRequestWithOOM(memBytes, oom, memCfg.Requests); qty != nil {
 				cr.MemoryRequest = qty.String()
 			}
 		}

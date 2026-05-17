@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 // ---- handleWorkloadRecommendations ----
@@ -83,6 +84,49 @@ func TestHandleWorkloadRecommendations_BadWindow(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// When the workload OOM'd within the last 24h and the kernel high-water peak
+// is above the percentile-based recommendation, the dashboard must surface the
+// peak-floored value — same behavior the controller applies — so users don't
+// see a recommendation that just got the workload killed.
+func TestHandleWorkloadRecommendations_AppliesOOMFloor(t *testing.T) {
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "stress"}}
+	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
+	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d, policy).Build()
+
+	const mib = 1 << 20
+	prom := &fakePromClient{
+		// p95 says 100 MiB is enough...
+		memByContainer: promclient.ContainerValues{"app": 100 * mib},
+		// ...but the workload OOM'd and the kernel saw 200 MiB.
+		oomSignal: promclient.OOMSignal{
+			OOMCount:        1,
+			PeakMemoryBytes: promclient.ContainerValues{"app": 200 * mib},
+		},
+	}
+	srv := &Server{K8sClient: c, PromClient: prom, Logger: testLogger(t)}
+
+	rec := httptest.NewRecorder()
+	srv.handleWorkloadRecommendations(rec,
+		httptest.NewRequest(http.MethodGet, "/api/workloads/default/Deployment/stress/recommendations", nil),
+		"default", "Deployment", "stress")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var got recommendationResult
+	decodeEnvelopeData(t, rec.Body, &got)
+	app, ok := got.Containers["app"]
+	if !ok {
+		t.Fatalf("missing app container in response: %+v", got.Containers)
+	}
+	// Expected: peak (200 MiB) wins over p95 (100 MiB).
+	if app.MemoryRequest != "200Mi" {
+		t.Errorf("MemoryRequest = %q, want 200Mi (OOM floor)", app.MemoryRequest)
 	}
 }
 

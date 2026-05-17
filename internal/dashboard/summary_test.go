@@ -28,6 +28,11 @@ type fakePromClient struct {
 	byLabels   map[string]map[string]float64
 	instantErr map[string]error
 	byLabelErr map[string]error
+
+	// Per-container memory percentile bytes returned by QueryMemoryByContainer.
+	memByContainer promclient.ContainerValues
+	// OOM signal returned by QueryWorkloadOOMSignal (zero value = no OOM).
+	oomSignal promclient.OOMSignal
 }
 
 func (f *fakePromClient) QueryInstant(_ context.Context, expr string) (float64, error) {
@@ -65,6 +70,9 @@ func (f *fakePromClient) QueryCPUByContainer(_ context.Context, _, _, _ string, 
 }
 
 func (f *fakePromClient) QueryMemoryByContainer(_ context.Context, _, _, _ string, _ float64, _ string) (promclient.ContainerValues, error) {
+	if f.memByContainer != nil {
+		return f.memByContainer, nil
+	}
 	return promclient.ContainerValues{}, nil
 }
 
@@ -94,6 +102,10 @@ func (f *fakePromClient) QueryMemoryRecommendationRangeByContainer(_ context.Con
 
 func (f *fakePromClient) QueryOOMKillEvents(_ context.Context, _, _, _, _, _ string) ([]promclient.OOMEvent, error) {
 	return nil, nil
+}
+
+func (f *fakePromClient) QueryWorkloadOOMSignal(_ context.Context, _, _, _ string) (promclient.OOMSignal, error) {
+	return f.oomSignal, nil
 }
 
 func TestHandleSummaryShape(t *testing.T) {

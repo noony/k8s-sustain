@@ -35,7 +35,7 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 
 `k8s_sustain_recommendation_skipped_total` increments when the recommender bypasses a workload without emitting a recommendation. `reason="insufficient_history"` means the workload had fewer than 12 CPU rate samples in the configured window — typical of containers younger than ~12 minutes — so percentile queries would otherwise floor to ~0 and trigger an immediate recycle.
 
-`k8s_sustain_oom_floor_applied_total` increments when the OOM-aware floor raises a memory recommendation above the percentile value. This means the workload OOM'd in the last 24h and the recommendation was floored at `max(peak_working_set, current_request)` plus headroom, instead of the (lower) percentile value.
+`k8s_sustain_oom_floor_applied_total` increments when the OOM-aware floor raises a memory recommendation above the percentile value. This means the workload OOM'd in the last 24h and the recommendation was floored at `max(peak_working_set_24h, oom_time_limit × 1.20)` plus headroom, instead of the (lower) percentile value. The peak anchor relies on cAdvisor observing the high-water mark; the OOM-time-limit anchor is the safety net for cgroup v2 / sub-scrape OOM kills where peak underreports.
 
 ### Drift, retry, autoscaler
 

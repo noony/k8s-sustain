@@ -40,6 +40,7 @@ type PromQuerier interface {
 	QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (promclient.ContainerTimeSeries, error)
 	QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (promclient.ContainerTimeSeries, error)
 	QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName, window, step string) ([]promclient.OOMEvent, error)
+	QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKind, ownerName string) (promclient.OOMSignal, error)
 }
 
 var dashboardScheme = runtime.NewScheme()

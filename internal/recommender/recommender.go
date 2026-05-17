@@ -95,15 +95,29 @@ func ComputeMemoryRequest(rawBytes float64, cfg sustainv1alpha1.ResourceRequests
 
 // OOMSignal carries an OOM-aware floor for memory recommendations. Recent=true
 // means the workload OOM'd within the lookback window (24h), in which case the
-// recommendation is floored at PeakBytes (with headroom applied once).
+// recommendation is floored at max(PeakBytes, OOMTimeLimitBytes*BumpFactor)
+// (with headroom applied once on top).
+//
+// Two anchors so we degrade gracefully:
+//   - PeakBytes is the kernel high-water mark when cAdvisor manages to
+//     observe it. Unreliable on cgroup v2 (sub-scrape OOM kills) but precise
+//     when it works.
+//   - OOMTimeLimitBytes is the cgroup limit captured at the moment the OOM
+//     fired. Always available (it's the limit the kernel killed at), and the
+//     BumpFactor multiplier pushes the recommendation above it.
 //
 // CurrentRequestBytes is intentionally NOT a floor: doing so would compound
 // the previous reco's already-headroomed value on each reconcile, causing the
 // limit to grow by `(1 + headroom)` per cycle even after the workload fits.
+// The OOM-time-limit anchor avoids this because it only refreshes when a NEW
+// OOM event fires; once the workload fits after a bump, no new OOM events
+// occur and the recorded limit stays at the pre-bump value.
 // To enforce a hard "never go below X", use cfg.MinAllowed.
 type OOMSignal struct {
 	Recent              bool
 	PeakBytes           float64
+	OOMTimeLimitBytes   float64
+	BumpFactor          float64
 	CurrentRequestBytes float64
 }
 
@@ -125,9 +139,17 @@ func ComputeMemoryRequestWithOOMFloorReport(rawBytes float64, signal OOMSignal, 
 	}
 	effective := rawBytes
 	floorApplied := false
-	if signal.Recent && signal.PeakBytes > effective {
-		effective = signal.PeakBytes
-		floorApplied = true
+	if signal.Recent {
+		floor := signal.PeakBytes
+		if signal.BumpFactor > 1 && signal.OOMTimeLimitBytes > 0 {
+			if bumped := signal.OOMTimeLimitBytes * signal.BumpFactor; bumped > floor {
+				floor = bumped
+			}
+		}
+		if floor > effective {
+			effective = floor
+			floorApplied = true
+		}
 	}
 	return ComputeMemoryRequest(effective, cfg), floorApplied
 }

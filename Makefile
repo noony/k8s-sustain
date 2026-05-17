@@ -5,7 +5,11 @@ PLATFORMS ?= linux/amd64,linux/arm64
 
 include Makefile.scenarios
 
-.PHONY: help build test lint generate manifests sync-crds verify-crds sync-rules verify-rules tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template
+.PHONY: help build test lint generate manifests sync-crds verify-crds sync-rules verify-rules tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template port-forward port-forward-stop
+
+NAMESPACE ?= k8s-sustain
+DASHBOARD_PORT ?= 8090
+PROMETHEUS_PORT ?= 9090
 
 .DEFAULT_GOAL := help
 
@@ -72,3 +76,19 @@ helm-lint: helm-deps ## Lint Helm chart
 
 helm-template: helm-deps ## Render Helm chart templates
 	helm template k8s-sustain charts/k8s-sustain
+
+port-forward: port-forward-stop ## Port-forward dashboard ($(DASHBOARD_PORT)) and Prometheus ($(PROMETHEUS_PORT)) in the background
+	@mkdir -p .port-forward
+	@nohup kubectl port-forward -n $(NAMESPACE) svc/k8s-sustain-dashboard $(DASHBOARD_PORT):8090 \
+		>.port-forward/dashboard.log 2>&1 & echo $$! > .port-forward/dashboard.pid
+	@nohup kubectl port-forward -n $(NAMESPACE) svc/k8s-sustain-prometheus-server $(PROMETHEUS_PORT):80 \
+		>.port-forward/prometheus.log 2>&1 & echo $$! > .port-forward/prometheus.pid
+	@sleep 1
+	@echo "Dashboard:  http://localhost:$(DASHBOARD_PORT)"
+	@echo "Prometheus: http://localhost:$(PROMETHEUS_PORT)"
+	@echo "Logs in .port-forward/, stop with 'make port-forward-stop'"
+
+port-forward-stop: ## Stop background port-forwards started by 'make port-forward'
+	-@pkill -f 'kubectl port-forward.*k8s-sustain-dashboard' 2>/dev/null || true
+	-@pkill -f 'kubectl port-forward.*k8s-sustain-prometheus-server' 2>/dev/null || true
+	@rm -f .port-forward/*.pid

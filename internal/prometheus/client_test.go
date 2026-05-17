@@ -434,8 +434,11 @@ func TestQueryOOMKillEvents_FiltersZeroSamplesAndEmptyContainer(t *testing.T) {
 }
 
 func TestQueryOOMKillEvents_DedupsConsecutiveEventsPerContainer(t *testing.T) {
-	// Five consecutive positive samples 60s apart (CrashLoopBackOff smear).
-	// With step=1m the gap is 2m → only the 1st, 3rd, and 5th should survive.
+	// Seven consecutive positive samples 60s apart (CrashLoopBackOff smear).
+	// With step=1m the lookback is floored at 5m and the dedup gap follows it,
+	// so samples within any 5-minute window collapse to one event: the 1st
+	// (t=0s) and the 6th (t=300s) survive, the 7th (t=360s) is inside the
+	// second event's 5m gap and is dropped.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
@@ -444,7 +447,9 @@ func TestQueryOOMKillEvents_DedupsConsecutiveEventsPerContainer(t *testing.T) {
 				[1700000060,"1"],
 				[1700000120,"1"],
 				[1700000180,"1"],
-				[1700000240,"1"]
+				[1700000240,"1"],
+				[1700000300,"1"],
+				[1700000360,"1"]
 			]}
 		]}}`))
 	}))
@@ -455,8 +460,8 @@ func TestQueryOOMKillEvents_DedupsConsecutiveEventsPerContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryOOMKillEvents: %v", err)
 	}
-	if len(events) != 3 {
-		t.Fatalf("expected 3 deduped events (gap=2m), got %d: %+v", len(events), events)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 deduped events (gap=5m), got %d: %+v", len(events), events)
 	}
 }
 
@@ -511,6 +516,8 @@ func TestQueryWorkloadOOMSignal_ReturnsCountAndPeak(t *testing.T) {
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"3"]}]}}`))
 		case strings.Contains(q, "container_peak_memory_24h:bytes"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"209715200"]}]}}`))
+		case strings.Contains(q, "container_oom_limit_24h:bytes"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"104857600"]}]}}`))
 		default:
 			t.Errorf("unexpected query: %q", q)
 		}
@@ -528,8 +535,11 @@ func TestQueryWorkloadOOMSignal_ReturnsCountAndPeak(t *testing.T) {
 	if sig.PeakMemoryBytes["app"] != 209715200 {
 		t.Errorf("peak[app]: got %v want 209715200", sig.PeakMemoryBytes["app"])
 	}
-	if len(queries) != 2 {
-		t.Errorf("expected 2 queries (oom + peak), got %d", len(queries))
+	if sig.OOMLimitBytes["app"] != 104857600 {
+		t.Errorf("oom-limit[app]: got %v want 104857600", sig.OOMLimitBytes["app"])
+	}
+	if len(queries) != 3 {
+		t.Errorf("expected 3 queries (oom + peak + oom-limit), got %d", len(queries))
 	}
 }
 
