@@ -181,7 +181,8 @@ func TestFilterTargets(t *testing.T) {
 		{Kind: "Deployment", Name: "admin", Namespace: "kube-system", PolicyName: "my-policy"},
 	}
 
-	filtered := filterTargets(targets, "my-policy", []string{"kube-system"})
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "my-policy"}}
+	filtered := filterTargets(targets, policy, []string{"kube-system"})
 	if len(filtered) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(filtered))
 	}

@@ -52,10 +52,20 @@ k8s-sustain start [flags]
 
 ### Environment variables
 
-Every flag can be overridden with an environment variable prefixed by `K8SSUSTAIN_` (uppercase, hyphens → underscores):
+Every flag can be overridden with an environment variable prefixed by `K8SSUSTAIN_` (uppercase, hyphens and dots → underscores). The mapping is:
+
+- `K8SSUSTAIN_` + flag name with `-` and `.` replaced by `_`, upper-cased.
+
+Examples:
 
 ```bash
+# Top-level flag (controller)
 K8SSUSTAIN_RECONCILE_INTERVAL=30m k8s-sustain start
+K8SSUSTAIN_LOG_LEVEL=debug k8s-sustain start
+
+# Subcommand-scoped flag (dashboard.bind-address, webhook.prometheus-address)
+K8SSUSTAIN_DASHBOARD_BIND_ADDRESS=:9999 k8s-sustain dashboard
+K8SSUSTAIN_WEBHOOK_PROMETHEUS_ADDRESS=http://prom.example:9090 k8s-sustain webhook
 ```
 
 ### Log verbosity
@@ -92,6 +102,9 @@ k8s-sustain webhook [flags]
 | `--tls-key-file` | `/tls/tls.key` | Path to the TLS private key file |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `--excluded-namespaces` | — | Comma-separated list of namespaces the webhook must never mutate. Pods in these namespaces are admitted unchanged. Mirrors the controller flag so both components stay in lockstep. |
+
+The webhook also honours each Policy's `spec.selector.namespaces` and `spec.selector.labelSelector` (see [Policy reference](./policy.md#specselector)). A pod is admitted without mutation if any of the following holds: its namespace is in `--excluded-namespaces`, its namespace is not in a non-empty `selector.namespaces`, or its pod labels do not satisfy `selector.labelSelector`. A malformed `labelSelector` causes the webhook to fail open (admit without mutation, log a warning) rather than deny.
 
 ### Health endpoints
 

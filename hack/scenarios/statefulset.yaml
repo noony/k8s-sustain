@@ -1,0 +1,139 @@
+# scenario: statefulset
+# expected: 3-replica StatefulSet "web" (web-0, web-1, web-2) with deliberately
+# oversized requests (500m / 256Mi) and ~200m / ~100Mi actual load. After
+# WINDOW + reconcile_interval the controller recycles pods.
+#
+# What this scenario validates beyond the Deployment scenarios:
+#   1. Ordinal-descending eviction order: web-2 is killed before web-1 before
+#      web-0. Watch via `kubectl get events -n scenario-statefulset --sort-by=.lastTimestamp | grep Evicted`.
+#   2. Same-name replacement detection: the StatefulSet controller recreates an
+#      evicted pod with the SAME name but a NEW UID. The recycle wait must key
+#      on UID, not Name, or every pod recycle would block for the full
+#      replacement-timeout (5 min default) and the loop would stall on web-2.
+#      Verify the full 3-pod recycle finishes in roughly one reconcile cycle,
+#      not 15+ minutes.
+#   3. Resource recommendations are applied uniformly across all ordinals — the
+#      webhook injects the same percentile-based recommendation into web-0,
+#      web-1, and web-2 on their replacement admissions.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scenario-statefulset
+  labels:
+    k8s-sustain.io/scenario: statefulset
+---
+apiVersion: k8s.sustain.io/v1alpha1
+kind: Policy
+metadata:
+  name: scenario-statefulset
+spec:
+  selector:
+    namespaces: [scenario-statefulset]
+  rightSizing:
+    update:
+      types:
+        statefulSet: Ongoing
+    resourcesConfigs:
+      cpu:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 10
+        limits:
+          noLimit: true
+      memory:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 15
+        limits:
+          requestsLimitsRatio: 1.5
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen
+  namespace: scenario-statefulset
+data:
+  loadgen.py: |
+    import os, time
+    duty = float(os.environ.get('LOAD_DUTY', '0.2'))
+    mem_mb = int(os.environ.get('LOAD_MEM_MB', '50'))
+    phases = os.environ.get('LOAD_PHASES', '').strip()
+    buf = bytearray(mem_mb * 1024 * 1024)
+    for i in range(0, len(buf), 4096):
+        buf[i] = 1
+    def burn(d, deadline):
+        period = 0.1
+        on = period * d
+        off = period - on
+        while time.monotonic() < deadline:
+            s = time.monotonic()
+            while time.monotonic() - s < on:
+                pass
+            if off > 0:
+                time.sleep(off)
+    if phases:
+        schedule = [(float(p.split(':')[0]), float(p.split(':')[1])) for p in phases.split(',')]
+        while True:
+            for d, secs in schedule:
+                burn(d, time.monotonic() + secs)
+    else:
+        burn(duty, float('inf'))
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: scenario-statefulset
+spec:
+  clusterIP: None
+  selector:
+    app: web
+  ports:
+    - name: noop
+      port: 80
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: web
+  namespace: scenario-statefulset
+spec:
+  serviceName: web
+  replicas: 3
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+      annotations:
+        k8s.sustain.io/policy: scenario-statefulset
+    spec:
+      terminationGracePeriodSeconds: 5
+      containers:
+      - name: web
+        image: python:3.12-alpine
+        command: ["python3", "/loadgen/loadgen.py"]
+        env:
+          - name: LOAD_DUTY
+            value: "0.20"   # ~200m of one core
+          - name: LOAD_MEM_MB
+            value: "100"
+        volumeMounts:
+          - name: loadgen
+            mountPath: /loadgen
+        resources:
+          requests:
+            cpu: 500m
+            memory: 256Mi
+          limits:
+            memory: 256Mi
+      volumes:
+        - name: loadgen
+          configMap:
+            name: loadgen

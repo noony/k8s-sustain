@@ -41,6 +41,7 @@ spec:
             - --log-level={{ .Values.webhook.logLevel }}
             - --tls-cert-file=/tls/tls.crt
             - --tls-key-file=/tls/tls.key
+            - --excluded-namespaces={{ concat (list .Release.Namespace "kube-system" "kube-public") .Values.webhook.excludedNamespaces | join "," }}
             {{- if .Values.recommendOnly }}
             - --recommend-only=true
             {{- end }}

@@ -65,7 +65,17 @@ func (rt *retryTracker) recordFailure(key string) {
 		rt.states[key] = s
 	}
 	s.attempts++
-	delay := baseRetryDelay * (1 << (s.attempts - 1))
+	// Cap the shift exponent before shifting: time.Duration is an int64 of
+	// nanoseconds, so `baseRetryDelay << shift` overflows when shift is large
+	// (and becomes undefined / wraps to zero once shift >= 64). maxShift=16
+	// is plenty: baseRetryDelay (30s) << 16 ≈ 23 days, far above
+	// maxRetryDelay, yet nowhere near int64 overflow.
+	const maxShift = 16
+	shift := s.attempts - 1
+	if shift > maxShift {
+		shift = maxShift
+	}
+	delay := baseRetryDelay << shift
 	if delay > maxRetryDelay {
 		delay = maxRetryDelay
 	}

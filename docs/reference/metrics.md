@@ -86,6 +86,17 @@ for the formulas.
 
 The webhook shares the same HTTP middleware stack as the dashboard (request-ID correlation via `X-Request-Id`, panic recovery, duration telemetry, body-size limit). Both stacks live in `internal/httpx`.
 
+#### About the `path` label
+
+The `path` label is **not** the raw request URL — it is the matched [Go 1.22
+route pattern](https://pkg.go.dev/net/http#ServeMux) (for example
+`GET /api/policies/{name}`). Requests that don't match any registered route
+(404s, attacker probes against random URLs) are bucketed as `unknown` so an
+adversary can't blow up Prometheus label cardinality by inventing paths.
+Path parameters (`{name}`, `{namespace}`, etc.) collapse into a single
+bucket per route, so a workload with thousands of names still produces one
+time series, not thousands.
+
 ## Recording rules
 
 All rules are evaluated every minute. They live in

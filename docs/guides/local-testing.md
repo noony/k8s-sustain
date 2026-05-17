@@ -223,6 +223,46 @@ kubectl get pod -n scenario-job -l app=stress \
   -o jsonpath='{.items[0].spec.containers[0].resources}{"\n"}'
 ```
 
+### `statefulset`
+
+Three-replica StatefulSet (`web-0`, `web-1`, `web-2`) with deliberately
+oversized requests (`500m / 256Mi`) and ~`200m / ~100Mi` of actual load.
+
+**Expected:**
+
+- After `WINDOW + reconcile_interval` the controller recycles all three
+  pods. On Kubernetes ≥ 1.31 this is in-place via `/resize`; on older
+  versions it is eviction.
+- In the eviction path, pods are evicted in **descending ordinal order**:
+  `web-2 → web-1 → web-0`, matching the StatefulSet controller's update
+  semantics. Inspect with:
+
+  ```bash
+  kubectl get events -n scenario-statefulset \
+    --sort-by=.lastTimestamp | grep -E 'Evicted|Killing|Recycled'
+  ```
+
+- The full 3-pod recycle finishes in roughly one reconcile cycle. If the
+  recycle wait ever regressed back to keying on pod name (which the
+  StatefulSet controller reuses across replacements), each pod would
+  block for the full `--replacement-timeout` (5 min default) and the run
+  would stretch to 15+ minutes before failing. Watch the controller log:
+
+  ```bash
+  kubectl logs -n k8s-sustain -l app.kubernetes.io/name=k8s-sustain \
+    -c controller --since=5m | grep -E 'evict|recycle|replacement'
+  ```
+
+- The CPU request drops to ~`220m` and memory to ~`110Mi` on every
+  replacement pod. Confirm uniformly across ordinals:
+
+  ```bash
+  for i in 0 1 2; do
+    kubectl get pod -n scenario-statefulset web-$i \
+      -o jsonpath='{.spec.containers[0].resources}{"\n"}'
+  done
+  ```
+
 ### `oom-kill`
 
 Single-container Deployment that quietly holds ~30Mi for 60 s, then attempts

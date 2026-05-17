@@ -2,6 +2,7 @@ package workload
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -562,16 +564,17 @@ func TestPatchPodInPlace_InfeasibleFallsBackToEviction(t *testing.T) {
 				}
 				return nil
 			},
-			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+			SubResourceCreate: func(ctx context.Context, inner client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
 				if sub == "eviction" {
 					evicted = append(evicted, obj.GetName())
+					return inner.Delete(ctx, obj)
 				}
 				return nil
 			},
 		}).
 		Build()
 
-	p := New(c, true)
+	p := New(c, true, testEvictionOpts()...)
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
@@ -1048,10 +1051,11 @@ func TestResizePodsInPlace_FeatureGateRejectionDoesNotEvict(t *testing.T) {
 }
 
 // statefulSetPod is a builder for StatefulSet-owned pods (e.g. web-0, web-1).
-// The OwnerReference points to a StatefulSet so isStatefulSetOwned picks it up
-// and the recycle loop sorts by ordinal.
+// The OwnerReference points to a StatefulSet so the recycle loop recognizes
+// the slice as StatefulSet-owned and sorts by ordinal.
 func statefulSetPod(name string, requests corev1.ResourceList) *corev1.Pod {
 	p := runningPod(name, requests)
+	p.UID = types.UID("uid-" + name)
 	controller := true
 	p.OwnerReferences = []metav1.OwnerReference{{
 		APIVersion: "apps/v1",
@@ -1062,11 +1066,61 @@ func statefulSetPod(name string, requests corev1.ResourceList) *corev1.Pod {
 	return p
 }
 
+// statefulSetEvictionInterceptor mimics the StatefulSet controller: when a
+// pod is evicted it is deleted, then immediately recreated with the SAME name
+// but a NEW UID (and freshly applied recommendations), modelling what kubelet
+// + the StatefulSet controller actually do in production. Without this the
+// fake apiserver lets the evicted name disappear, masking bug 1 where the
+// recycle loop only spots replacements by name.
+func statefulSetEvictionInterceptor(evictedNames *[]string, recs map[string]ContainerRecommendation, uidCounter *int) interceptor.Funcs {
+	var mu sync.Mutex
+	return interceptor.Funcs{
+		SubResourceCreate: func(ctx context.Context, inner client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+			if sub != "eviction" {
+				return nil
+			}
+			mu.Lock()
+			*evictedNames = append(*evictedNames, obj.GetName())
+			mu.Unlock()
+
+			// Snapshot the live pod, delete it, then recreate it with the
+			// same name + new UID + recommended resources applied.
+			key := client.ObjectKey{Namespace: obj.GetNamespace(), Name: obj.GetName()}
+			var live corev1.Pod
+			if err := inner.Get(ctx, key, &live); err != nil {
+				return err
+			}
+			if err := inner.Delete(ctx, &live); err != nil {
+				return err
+			}
+			replacement := live.DeepCopy()
+			replacement.ResourceVersion = ""
+			mu.Lock()
+			*uidCounter++
+			replacement.UID = types.UID("uid-recycled-" + obj.GetName() + "-" + string(rune('0'+*uidCounter)))
+			mu.Unlock()
+			ApplyRecommendationsToPodSpec(&replacement.Spec, recs)
+			replacement.Status = corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:   corev1.PodReady,
+					Status: corev1.ConditionTrue,
+				}},
+			}
+			return inner.Create(ctx, replacement)
+		},
+	}
+}
+
 // TestRecyclePods_StatefulSetEvictsByDescendingOrdinal verifies that pods
-// owned by a StatefulSet are evicted in descending ordinal order. The
-// StatefulSet controller updates pods high → low; doing the opposite would
-// violate StatefulSet invariants (e.g. pod-0 cannot run while pod-1 is
-// being rolled).
+// owned by a StatefulSet are evicted in descending ordinal order, AND that
+// the post-eviction wait recognises the replacement when the StatefulSet
+// controller re-uses the evicted pod's name (different UID).
+//
+// This is the regression test for bug 1: the wait used to key on pod name
+// and would never see a same-named replacement, so every StatefulSet pod
+// recycle would only finish via the readyTimeout fallback (and then halt
+// the loop).
 func TestRecyclePods_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	pods := []*corev1.Pod{
@@ -1084,19 +1138,30 @@ func TestRecyclePods_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
 	_ = policyv1.AddToScheme(scheme)
 
 	var evicted []string
+	uidCounter := 0
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objs...).
-		WithInterceptorFuncs(evictionInterceptor(&evicted)).
+		WithInterceptorFuncs(statefulSetEvictionInterceptor(&evicted, recs, &uidCounter)).
 		Build()
 
 	p := New(c, false, testEvictionOpts()...)
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
-	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
+	// Cap wall-clock duration with a tight per-call timeout. Each
+	// waitForReplacement call must return promptly because the replacement
+	// is already Ready at observation time. If bug 1 regresses, this test
+	// would have to wait readyTimeout * 3 — but the deadline below would
+	// catch that long before the standard `go test` timeout.
+	start := time.Now()
 	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
+	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
+		t.Errorf("RecyclePods took %s; replacements should be detected immediately (bug 1 regression?)", elapsed)
+	}
+
 	want := []string{"web-2", "web-1", "web-0"}
 	if len(evicted) != len(want) {
 		t.Fatalf("expected %d evictions, got %d (%v)", len(want), len(evicted), evicted)
@@ -1106,6 +1171,115 @@ func TestRecyclePods_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
 			t.Errorf("eviction order: got %v, want %v", evicted, want)
 			break
 		}
+	}
+}
+
+// TestSortPodsForRecycle_DetectsStatefulSetFromAnyPod verifies that the
+// recycle order is StatefulSet-ordinal as long as ANY pod in the slice
+// carries the StatefulSet ownerRef. Regression for bug 2: the sort used to
+// inspect only pods[0]; if that pod's ownerRef was transiently missing the
+// slice degraded to alphabetical (web-0, web-1, web-10, web-2) — wrong.
+func TestSortPodsForRecycle_DetectsStatefulSetFromAnyPod(t *testing.T) {
+	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
+	// pods[0] has NO ownerRef. pods[1..3] carry the StatefulSet ownerRef.
+	// The expected order is descending ordinal among the four pods.
+	orphan := runningPod("web-2", stale) // no ownerRef
+	owned1 := statefulSetPod("web-0", stale)
+	owned10 := statefulSetPod("web-10", stale)
+	owned1b := statefulSetPod("web-1", stale)
+
+	pods := []*corev1.Pod{orphan, owned1, owned10, owned1b}
+	sortPodsForRecycle(pods)
+
+	wantOrder := []string{"web-10", "web-2", "web-1", "web-0"}
+	for i, w := range wantOrder {
+		if pods[i].Name != w {
+			gotNames := make([]string, len(pods))
+			for j, p := range pods {
+				gotNames[j] = p.Name
+			}
+			t.Fatalf("sort order: got %v, want %v", gotNames, wantOrder)
+		}
+	}
+}
+
+// TestRecyclePods_InPlaceInvalidFallback_WaitsForReplacement is the
+// regression test for bug 3. When /resize returns IsInvalid (feature gate
+// off) and the patcher falls back to eviction inside the in-place path, the
+// outer recycle loop used to skip the post-eviction wait for that pod. The
+// next pod's eviction would also skip the wait (because p.inPlace is now
+// false but the loop already passed the in-place branch for the first pod
+// before learning that). After the fix, the very first eviction in a
+// gate-detection fallback also goes through waitForReplacement.
+func TestRecyclePods_InPlaceInvalidFallback_WaitsForReplacement(t *testing.T) {
+	stale1 := runningPod("a", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	stale1.UID = types.UID("uid-a")
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evicted []string
+	listCallsAfterEviction := 0
+	var firstEvictAt time.Time
+	var firstListAfterEvictAt time.Time
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale1).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), "a", nil)
+				}
+				return nil
+			},
+			Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+				return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), "a", nil)
+			},
+			SubResourceCreate: func(ctx context.Context, inner client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub != "eviction" {
+					return nil
+				}
+				evicted = append(evicted, obj.GetName())
+				firstEvictAt = time.Now()
+				return inner.Delete(ctx, obj)
+			},
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if len(evicted) > 0 {
+					listCallsAfterEviction++
+					if firstListAfterEvictAt.IsZero() {
+						firstListAfterEvictAt = time.Now()
+					}
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+
+	p := New(c, true /* in-place */, testEvictionOpts()...)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+
+	if len(evicted) != 1 || evicted[0] != "a" {
+		t.Fatalf("expected pod 'a' evicted exactly once via in-place fallback, got %v", evicted)
+	}
+	// After the inline eviction in applyInPlaceResize, the outer loop must
+	// run a post-eviction List to wait for quiescence. Without the fix the
+	// initial list (used to enumerate pods) was the last list and there
+	// would be no post-eviction list at all.
+	if listCallsAfterEviction == 0 {
+		t.Errorf("expected at least one List after eviction (waitForReplacement should run), got 0")
+	}
+	if !firstEvictAt.IsZero() && !firstListAfterEvictAt.IsZero() && firstListAfterEvictAt.Before(firstEvictAt) {
+		t.Errorf("post-eviction list timing looks off: list=%s eviction=%s", firstListAfterEvictAt, firstEvictAt)
+	}
+	if p.InPlace() {
+		t.Error("expected p.inPlace to be flipped off after IsInvalid")
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/httpx"
+	"github.com/noony/k8s-sustain/internal/policymatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -73,6 +74,11 @@ type Handler struct {
 	Client           client.Client
 	PrometheusClient *promclient.Client
 	RecommendOnly    bool
+
+	// ExcludedNamespaces lists namespaces the webhook must never mutate.
+	// Mirrors the controller's --excluded-namespaces flag so a workload in,
+	// say, kube-system is left untouched by both components.
+	ExcludedNamespaces []string
 
 	// CacheStaleness bounds how old a WorkloadRecommendation can be before
 	// the webhook refuses to use it as a fallback. Zero falls back to
@@ -157,6 +163,25 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 			return allow // policy deleted — let pod through
 		}
 		logger.Error(policyErr, "failed to fetch policy")
+		return allow
+	}
+
+	// Enforce the Policy's selector and the operator's excluded-namespaces
+	// list. The controller applies the same predicate when listing
+	// reconciliation targets (internal/controller/workload_target.go
+	// filterTargets), so a workload outside the policy's scope is left alone
+	// by both components.
+	//
+	// SelectorOK fails open: a malformed label selector is logged and
+	// treated as non-matching, never as a pod denial.
+	if _, selErr := policymatch.SelectorOK(policy.Spec.Selector.LabelSelector); selErr != nil {
+		logger.Info("policy has invalid labelSelector; allowing pod without injection (fail-open)", "err", selErr)
+		return allow
+	}
+	if !policymatch.Matches(&policy, req.Namespace, pod.Labels, h.ExcludedNamespaces) {
+		logger.V(1).Info("pod does not match policy selector (namespace/labels) or is in excluded namespace; allowing without injection",
+			"selectorNamespaces", policy.Spec.Selector.Namespaces,
+			"excludedNamespaces", h.ExcludedNamespaces)
 		return allow
 	}
 

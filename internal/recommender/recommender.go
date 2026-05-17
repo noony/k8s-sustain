@@ -133,12 +133,18 @@ func ComputeMemoryRequestWithOOM(rawBytes float64, signal OOMSignal, cfg sustain
 // ComputeMemoryRequestWithOOMFloorReport is the same as ComputeMemoryRequestWithOOM
 // but also reports whether the OOM floor produced the final value. Used by the
 // controller to emit a metric when the floor is applied.
+//
+// floorApplied is true only when the floor actually drove the final returned
+// quantity: floor must beat the raw percentile AND MaxAllowed must not have
+// clamped the result below the floor's (headroomed, MiB-rounded) value. If
+// MaxAllowed clamps below the floor, the user override produced the value and
+// floorApplied is false.
 func ComputeMemoryRequestWithOOMFloorReport(rawBytes float64, signal OOMSignal, cfg sustainv1alpha1.ResourceRequestsConfig) (*resource.Quantity, bool) {
 	if cfg.KeepRequest {
 		return nil, false
 	}
 	effective := rawBytes
-	floorApplied := false
+	floorWins := false
 	if signal.Recent {
 		floor := signal.PeakBytes
 		if signal.BumpFactor > 1 && signal.OOMTimeLimitBytes > 0 {
@@ -148,10 +154,20 @@ func ComputeMemoryRequestWithOOMFloorReport(rawBytes float64, signal OOMSignal, 
 		}
 		if floor > effective {
 			effective = floor
-			floorApplied = true
+			floorWins = true
 		}
 	}
-	return ComputeMemoryRequest(effective, cfg), floorApplied
+	finalQty := ComputeMemoryRequest(effective, cfg)
+	if !floorWins {
+		return finalQty, false
+	}
+	// Floor beat the raw percentile, but MaxAllowed may still have clamped
+	// the result below the floor-derived value. Recompute the unclamped
+	// floor-with-headroom quantity and only report floorApplied when the
+	// final quantity is at least that value.
+	floorQty := ComputeMemoryRequest(effective, sustainv1alpha1.ResourceRequestsConfig{Headroom: cfg.Headroom})
+	floorApplied := finalQty != nil && floorQty != nil && finalQty.Cmp(*floorQty) >= 0
+	return finalQty, floorApplied
 }
 
 // ComputeLimit derives a resource limit from the computed request and the limit

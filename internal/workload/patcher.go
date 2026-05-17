@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	klabels "k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -292,27 +293,31 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 			skipped++
 			continue
 		}
-		var err error
+		var (
+			evicted bool
+			err     error
+		)
 		if p.inPlace.Load() {
-			err = p.patchPodInPlace(ctx, pod, recs)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
-			}
-			processed++
-			continue
+			// The in-place path can still evict the pod inline as a
+			// fallback (Infeasible status, or IsInvalid response indicating
+			// the InPlacePodVerticalScaling feature gate is off). When it
+			// does, the outer loop must run the same throttle/wait the
+			// pure-eviction branch uses below — otherwise the first
+			// fallback eviction skips the wait entirely.
+			evicted, err = p.patchPodInPlace(ctx, pod, recs)
+		} else {
+			// Eviction path: evict, then wait for the replacement before
+			// moving on so we don't take down the whole workload at once.
+			evicted, err = p.evictPod(ctx, pod, recs)
 		}
-
-		// Eviction path: evict, then wait for the replacement before moving
-		// on so we don't take down the whole workload at once.
-		evicted, evictErr := p.evictPod(ctx, pod, recs)
-		if evictErr != nil {
-			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, evictErr))
+		if err != nil {
+			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
 		}
 		processed++
 		if !evicted {
 			continue
 		}
-		if waitErr := p.waitForReplacement(ctx, namespace, selector, pod.Name); waitErr != nil {
+		if waitErr := p.waitForReplacement(ctx, namespace, selector, pod.Name, pod.UID); waitErr != nil {
 			// CrashLoopBackOff in the selector means the recommendation is
 			// likely making things worse — stop evicting and surface the
 			// error so the next reconcile can re-evaluate. Timeouts get the
@@ -339,17 +344,21 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 //     Skip for now — the kubelet will apply it without further action from us.
 //   - InProgress / "" (not set): patch is being applied or not yet requested;
 //     proceed normally.
-func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) error {
+//
+// Returns (evicted, err). evicted=true means the in-place path bailed out
+// to an Eviction (Infeasible status, or feature-gate detection via IsInvalid)
+// and the caller must run the same throttle/wait the pure-eviction branch
+// uses, so the loop doesn't take down the whole workload at once.
+func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
 	switch pod.Status.Resize {
 	case corev1.PodResizeStatusInfeasible:
 		logger.Info("in-place resize infeasible, falling back to eviction")
-		_, err := p.evictPod(ctx, pod, recs)
-		return err
+		return p.evictPod(ctx, pod, recs)
 	case corev1.PodResizeStatusDeferred:
 		logger.Info("in-place resize deferred by kubelet, will apply when conditions allow")
-		return nil
+		return false, nil
 	}
 
 	base := pod.DeepCopy()
@@ -357,7 +366,7 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	initContainers, initChanged := applyRecommendationsToSidecars(pod.Spec.InitContainers, recs)
 	if !regChanged && !initChanged {
 		logger.V(1).Info("pod already at target resources, no in-place patch needed")
-		return nil
+		return false, nil
 	}
 
 	// Patch regular containers and sidecar init containers in two separate
@@ -367,8 +376,15 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	// regular containers' resize.
 	if regChanged {
 		pod.Spec.Containers = containers
-		if err := p.applyInPlaceResize(ctx, pod, base, recs); err != nil {
-			return err
+		evicted, err := p.applyInPlaceResize(ctx, pod, base, recs)
+		if err != nil {
+			return evicted, err
+		}
+		if evicted {
+			// Fell back to eviction (feature gate off). Skip the sidecar
+			// resize attempt — the replacement pod is on its way and the
+			// webhook will inject the new requests there.
+			return true, nil
 		}
 	}
 
@@ -392,14 +408,18 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 			logger.Info("sidecar in-place resize applied")
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // applyInPlaceResize submits an in-place /resize patch (with fallbacks for
 // older clusters) for the regular-container changes already staged on `pod`.
-// Returns an error only when the pod could not be brought to its target state
-// at all; eviction-fallback errors propagate to the caller as well.
-func (p *Patcher) applyInPlaceResize(ctx context.Context, pod, base *corev1.Pod, recs map[string]ContainerRecommendation) error {
+//
+// Returns (evicted, err). evicted=true means the API server rejected the
+// in-place patch as Invalid (feature gate off) and we fell back to evicting
+// the pod inline. The caller must propagate evicted upward so the outer
+// recycle loop can run its post-eviction throttle/wait for this pod.
+// err is non-nil only when the pod could not be brought to its target state.
+func (p *Patcher) applyInPlaceResize(ctx context.Context, pod, base *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
 	// K8s 1.33+ requires the /resize subresource for in-place pod resource
@@ -419,13 +439,12 @@ func (p *Patcher) applyInPlaceResize(ctx context.Context, pod, base *corev1.Pod,
 		p.inPlace.Store(false)
 		pod.Spec.Containers = base.Spec.Containers
 		pod.Spec.InitContainers = base.Spec.InitContainers
-		_, evErr := p.evictPod(ctx, pod, recs)
-		return evErr
+		return p.evictPod(ctx, pod, recs)
 	}
 	if err == nil {
 		logger.Info("in-place resize applied")
 	}
-	return err
+	return false, err
 }
 
 // evictPod evicts a pod if it is running stale resources, so the workload
@@ -491,12 +510,14 @@ var errCrashLoopBackOff = errors.New("pod in CrashLoopBackOff; aborting eviction
 // returns immediately. A stuck or slow replacement keeps a Pending peer in
 // the list, blocking until the timeout.
 //
-// The evicted pod is identified by name: names are unique within a namespace
-// at any given time (the apiserver enforces this for active pods), and any
-// replacement spawned by the workload controller gets a fresh name, so we
-// won't confuse it with the pod we just evicted.
-func (p *Patcher) waitForReplacement(ctx context.Context, namespace string, selector klabels.Selector, evictedName string) error {
-	logger := log.FromContext(ctx).WithValues("namespace", namespace, "evictedName", evictedName)
+// The evicted pod is identified by UID, not by name. For Deployments the
+// replacement gets a fresh name (and UID) so name would work too, but
+// StatefulSets reuse the evicted pod's name for the replacement (e.g.
+// `web-2` reappears with a new UID). Keying on UID is the only way to tell
+// "still the original, terminating" from "fresh replacement, same name" in
+// the StatefulSet case.
+func (p *Patcher) waitForReplacement(ctx context.Context, namespace string, selector klabels.Selector, evictedName string, evictedUID types.UID) error {
+	logger := log.FromContext(ctx).WithValues("namespace", namespace, "evictedName", evictedName, "evictedUID", evictedUID)
 
 	deadline := time.Now().Add(p.readyTimeout)
 	for {
@@ -516,7 +537,18 @@ func (p *Patcher) waitForReplacement(ctx context.Context, namespace string, sele
 				logger.Info("crashloop detected during replacement wait", "pod", pod.Name)
 				return fmt.Errorf("%w: %s", errCrashLoopBackOff, pod.Name)
 			}
-			if pod.Name == evictedName {
+			// A pod sharing the evicted name but carrying a different UID is
+			// the StatefulSet/etc replacement — count it as a peer, not as
+			// "the evicted pod still hanging around".
+			if pod.UID == evictedUID && evictedUID != "" {
+				evictedGone = false
+				continue
+			}
+			// Fallback when the caller didn't supply a UID (e.g. older
+			// callers, or a pod object that never carried one): rely on
+			// name uniqueness, accepting that StatefulSet replacements may
+			// be misclassified during a brief window.
+			if evictedUID == "" && pod.Name == evictedName {
 				evictedGone = false
 				continue
 			}
@@ -602,11 +634,16 @@ func isPodReady(pod *corev1.Pod) bool {
 // StatefulSet-owned pods we follow the StatefulSet update sequence (highest
 // ordinal first). For everything else we sort by name so that reconciles are
 // reproducible across runs.
+//
+// StatefulSet detection inspects every pod in the slice, not just pods[0]:
+// an orphan/relabel/transiently-missing ownerRef on the first pod must not
+// downgrade the slice to alphabetical ordering, which would mis-order names
+// like web-0/web-1/web-10/web-2 and violate StatefulSet update invariants.
 func sortPodsForRecycle(pods []*corev1.Pod) {
 	if len(pods) == 0 {
 		return
 	}
-	if IsOwnedByKind(pods[0].OwnerReferences, "StatefulSet") {
+	if anyOwnedByStatefulSet(pods) {
 		sort.SliceStable(pods, func(i, j int) bool {
 			oi, iok := podOrdinal(pods[i])
 			oj, jok := podOrdinal(pods[j])
@@ -622,6 +659,19 @@ func sortPodsForRecycle(pods []*corev1.Pod) {
 	sort.SliceStable(pods, func(i, j int) bool {
 		return pods[i].Name < pods[j].Name
 	})
+}
+
+// anyOwnedByStatefulSet reports whether any pod in the slice carries a
+// controller ownerRef pointing at a StatefulSet. We treat the whole slice as
+// StatefulSet-owned even if a single pod has the ref, because pods returned
+// by a label selector are by construction peers of the same workload.
+func anyOwnedByStatefulSet(pods []*corev1.Pod) bool {
+	for _, pod := range pods {
+		if IsOwnedByKind(pod.OwnerReferences, "StatefulSet") {
+			return true
+		}
+	}
+	return false
 }
 
 // podOrdinal extracts the trailing integer from a StatefulSet pod name

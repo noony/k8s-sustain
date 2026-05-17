@@ -318,16 +318,41 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 	lookback := max(time.Duration(stepDur), 5*time.Minute)
 	lookbackExpr := model.Duration(lookback).String()
 
-	// Detect restarts where the last termination reason was OOMKilled,
-	// scoped to the workload via the pod_workload mapping.
+	// Detect OOM kills using two complementary paths, mirroring the
+	// `k8s_sustain:workload_oom_24h` recording rule semantics:
+	//
+	//   1. "restarts" path: increase(restarts) * (last_terminated_reason==OOMKilled).
+	//      Accurate event count for restartable pods while their current
+	//      last_terminated_reason is still OOMKilled.
+	//   2. "kill" path: max_over_time(last_terminated_reason{reason="OOMKilled"}==1[lookback]).
+	//      Survives the case where a pod OOMed earlier in the window and then
+	//      terminated for some other reason (CrashLoopBackOff/Error/SIGTERM),
+	//      which flips last_terminated_reason away from OOMKilled and would
+	//      zero out the multiplication in path (1).
+	//
+	// The two paths are joined with `or` so a marker survives at time T when
+	// either is positive. Each is independently scoped to the target workload
+	// via `k8s_sustain:pod_workload`.
 	expr := fmt.Sprintf(
-		`increase(kube_pod_container_status_restarts_total{namespace=%q, container!="", container!="POD"}[%s])
-		 * on(namespace, pod, container) group_left()
-		   kube_pod_container_status_last_terminated_reason{namespace=%q, reason="OOMKilled", container!="", container!="POD"}
-		 * on(namespace, pod) group_left(owner_kind, owner_name)
-		   k8s_sustain:pod_workload{namespace=%q, owner_kind=%q, owner_name=%q}`,
+		`(
+		   increase(kube_pod_container_status_restarts_total{namespace=%q, container!="", container!="POD"}[%s])
+		   * on(namespace, pod, container) group_left()
+		     (kube_pod_container_status_last_terminated_reason{namespace=%q, reason="OOMKilled", container!="", container!="POD"} == 1)
+		   * on(namespace, pod) group_left(owner_kind, owner_name)
+		     k8s_sustain:pod_workload{namespace=%q, owner_kind=%q, owner_name=%q}
+		 )
+		 or
+		 (
+		   max_over_time(
+		     (kube_pod_container_status_last_terminated_reason{namespace=%q, reason="OOMKilled", container!="", container!="POD"} == 1)[%s:]
+		   )
+		   * on(namespace, pod) group_left(owner_kind, owner_name)
+		     k8s_sustain:pod_workload{namespace=%q, owner_kind=%q, owner_name=%q}
+		 )`,
 		namespace, lookbackExpr,
 		namespace,
+		namespace, ownerKind, ownerName,
+		namespace, lookbackExpr,
 		namespace, ownerKind, ownerName,
 	)
 

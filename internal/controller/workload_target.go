@@ -1,8 +1,6 @@
 package controller
 
 import (
-	"slices"
-
 	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -11,6 +9,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/policymatch"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -25,7 +24,10 @@ type workloadTarget struct {
 	Containers     []corev1.Container
 	InitContainers []corev1.Container
 	Selector       *metav1.LabelSelector
-	Object         client.Object
+	// Labels is the workload object's metadata.labels. Used by filterTargets
+	// to evaluate Policy.Spec.Selector.LabelSelector.
+	Labels map[string]string
+	Object client.Object
 }
 
 // key returns a unique identifier for this workload target, used as the retry map key.
@@ -51,6 +53,7 @@ func newTargetFromTemplate(obj client.Object, kind string, tmpl *corev1.PodTempl
 		Name:      obj.GetName(),
 		Namespace: obj.GetNamespace(),
 		Selector:  selector,
+		Labels:    obj.GetLabels(),
 		Object:    obj,
 	}
 	if tmpl != nil {
@@ -85,15 +88,22 @@ func cronJobToTarget(c *batchv1.CronJob) workloadTarget {
 	return newTargetFromTemplate(c, "CronJob", &c.Spec.JobTemplate.Spec.Template, nil)
 }
 
-// filterTargets returns targets that match the given policy name and are not
-// in the excluded namespaces list.
-func filterTargets(targets []workloadTarget, policyName string, excludedNamespaces []string) []workloadTarget {
+// filterTargets returns targets that match the given policy: the workload's
+// pod template carries the policy annotation, the workload's namespace is
+// allowed by Policy.Spec.Selector.Namespaces (and not in excludedNamespaces),
+// and the workload's labels satisfy Policy.Spec.Selector.LabelSelector. The
+// webhook applies the same predicate at pod admission time so the two
+// components stay in lockstep on what a Policy targets.
+func filterTargets(targets []workloadTarget, policy *sustainv1alpha1.Policy, excludedNamespaces []string) []workloadTarget {
+	if policy == nil {
+		return nil
+	}
 	var filtered []workloadTarget
 	for _, t := range targets {
-		if t.PolicyName != policyName {
+		if t.PolicyName != policy.Name {
 			continue
 		}
-		if slices.Contains(excludedNamespaces, t.Namespace) {
+		if !policymatch.Matches(policy, t.Namespace, t.Labels, excludedNamespaces) {
 			continue
 		}
 		filtered = append(filtered, t)

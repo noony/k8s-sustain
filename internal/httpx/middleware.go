@@ -19,6 +19,27 @@ type PanicCounter func(path string)
 // metric accounting.
 type LatencyObserver func(path, status string, duration time.Duration)
 
+// RouteLabeler maps an *http.Request to a low-cardinality label suitable for
+// Prometheus. It's called after the inner handler runs so callers can rely on
+// router-populated fields like r.Pattern (set by http.ServeMux in Go 1.22+).
+// Implementations MUST return a bounded set of values — the raw URL path is
+// attacker-controlled and will blow up label cardinality.
+//
+// Returning "" is allowed and gets normalized to "unknown".
+type RouteLabeler func(r *http.Request) string
+
+// DefaultRouteLabeler returns r.Pattern when the request matched a registered
+// http.ServeMux pattern, falling back to "unknown" otherwise. This keeps the
+// catch-all SPA mount ("/") from collapsing onto attacker-controlled paths
+// while still surfacing meaningful labels for API routes that have an
+// explicit pattern (e.g. "GET /api/policies/{name}").
+func DefaultRouteLabeler(r *http.Request) string {
+	if r == nil || r.Pattern == "" {
+		return "unknown"
+	}
+	return r.Pattern
+}
+
 // WithRequestID accepts an inbound X-Request-Id (so a frontend can stitch
 // together its own correlation chain) or generates one. The value is then
 // available three ways:
@@ -43,9 +64,12 @@ func WithRequestID(next http.Handler) http.Handler {
 // log entry instead of crashing the process. Sits inside WithTelemetry so a
 // recovered request still gets observed with its final 500 status.
 //
-// When count is non-nil it is invoked once per recovered panic with the URL
-// path so the caller can drive a Prometheus counter.
-func WithRecovery(next http.Handler, logger logr.Logger, count PanicCounter) http.Handler {
+// When count is non-nil it is invoked once per recovered panic with the route
+// label (derived from labelRoute, which defaults to "unknown" when nil or
+// when the function returns ""). Passing the raw URL path here would let an
+// attacker explode the panic counter's label cardinality just by triggering
+// crashes against bogus paths.
+func WithRecovery(next http.Handler, logger logr.Logger, count PanicCounter, labelRoute RouteLabeler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			rec := recover()
@@ -63,7 +87,13 @@ func WithRecovery(next http.Handler, logger logr.Logger, count PanicCounter) htt
 				"stack", string(debug.Stack()),
 			)
 			if count != nil {
-				count(r.URL.Path)
+				label := "unknown"
+				if labelRoute != nil {
+					if v := labelRoute(r); v != "" {
+						label = v
+					}
+				}
+				count(label)
 			}
 			WriteError(w, http.StatusInternalServerError, "internal error")
 		}()
@@ -83,17 +113,39 @@ func (rw *statusResponseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// Flush passes through to the underlying writer so streaming endpoints
+// (Prometheus query-range responses, SSE) keep working even when telemetry
+// wraps them.
+func (rw *statusResponseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // WithTelemetry records request duration and emits a verbose access-log
 // line. The status histogram is supplied through observe; pass nil to log
 // without exporting a metric.
-func WithTelemetry(next http.Handler, logger logr.Logger, observe LatencyObserver) http.Handler {
+//
+// labelRoute is called after the inner handler has run to derive the low-
+// cardinality route label that's reported to the observer. Passing nil
+// collapses every request onto a single "unknown" bucket — useful for tests
+// but never what you want in production, where the raw URL path (an
+// attacker-controlled value on the dashboard's SPA catch-all) is an OOM
+// footgun against Prometheus.
+func WithTelemetry(next http.Handler, logger logr.Logger, observe LatencyObserver, labelRoute RouteLabeler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rw := &statusResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(rw, r)
 		dur := time.Since(start)
 		if observe != nil {
-			observe(r.URL.Path, http.StatusText(rw.statusCode), dur)
+			label := "unknown"
+			if labelRoute != nil {
+				if v := labelRoute(r); v != "" {
+					label = v
+				}
+			}
+			observe(label, http.StatusText(rw.statusCode), dur)
 		}
 		logger.V(1).Info("http request",
 			"method", r.Method,

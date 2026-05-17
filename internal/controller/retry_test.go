@@ -68,6 +68,28 @@ func TestRetryTracker_MaxBackoff(t *testing.T) {
 	}
 }
 
+// TestRetryTracker_MaxBackoff_NoOverflow guards against int64 overflow in the
+// exponential backoff shift. With baseRetryDelay=30s, `1 << (attempts-1)` starts
+// overflowing time.Duration once attempts ≈ 30, and becomes undefined/zero once
+// attempts >= 64. Drive the counter well past both thresholds and assert the
+// computed delay stays clamped to [0, maxRetryDelay].
+func TestRetryTracker_MaxBackoff_NoOverflow(t *testing.T) {
+	rt := newRetryTracker()
+	const key = "Deployment/prod/web"
+	for i := 0; i < 200; i++ {
+		before := time.Now()
+		rt.recordFailure(key)
+		state := rt.getState(key)
+		delay := state.nextRetry.Sub(before)
+		if delay < 0 {
+			t.Fatalf("iteration %d: negative delay %v (overflow corrupted backoff)", i, delay)
+		}
+		if delay > maxRetryDelay+time.Second {
+			t.Fatalf("iteration %d (attempts=%d): delay %v exceeds max %v", i, state.attempts, delay, maxRetryDelay)
+		}
+	}
+}
+
 func TestRetryTracker_RemoveSilently(t *testing.T) {
 	rt := newRetryTracker()
 	rt.recordFailure("Deployment/prod/web")

@@ -57,7 +57,9 @@ spec:
 
 ## `spec.selector`
 
-Restricts which namespaces and workloads this policy applies to. Used by the controller when listing workloads to reconcile.
+Restricts which namespaces and workloads this policy applies to. Both the controller (when listing workloads to reconcile) and the admission webhook (when deciding whether to inject resources at pod creation) honour the same selector — so a workload outside the policy's scope is left alone by both components.
+
+The webhook additionally honours the operator-level `--excluded-namespaces` flag (see [CLI reference](./cli.md)); a pod in an excluded namespace is admitted unchanged regardless of selector configuration. If `spec.selector.labelSelector` is malformed, the webhook fails open (admits the pod without mutation and logs a warning) rather than denying it.
 
 ### `spec.selector.namespaces`
 
@@ -74,6 +76,8 @@ spec:
 ### `spec.selector.labelSelector`
 
 A standard Kubernetes [label selector](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors) that restricts which workloads are governed by this policy. An empty selector matches all workloads in the targeted namespaces.
+
+The controller matches against the workload object's `metadata.labels` (e.g. the `Deployment`'s own labels). The webhook matches against the *pod*'s labels (the pod template's `metadata.labels`, which become the labels of every replica).
 
 ```yaml
 spec:

@@ -1000,3 +1000,137 @@ func TestAdmit_InvalidPolicyAnnotation_AllowsWithoutPatch(t *testing.T) {
 		t.Errorf("expected no patch for invalid policy name, got %d bytes", len(resp.Patch))
 	}
 }
+
+// TestAdmit_PolicySelectorNamespaces_PodOutsideListSkipped verifies that the
+// webhook honours Policy.Spec.Selector.Namespaces: a pod in a namespace not
+// listed by the policy is admitted without mutation.
+func TestAdmit_PolicySelectorNamespaces_PodOutsideListSkipped(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	policy.Spec.Selector.Namespaces = []string{"production"}
+
+	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+
+	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow (fail-open) for pod outside selector.namespaces")
+	}
+	if resp.Patch != nil {
+		t.Errorf("expected no patch when pod ns not in selector.namespaces, got %d bytes", len(resp.Patch))
+	}
+}
+
+// TestAdmit_PolicySelectorNamespaces_PodInsideListInjected verifies the
+// positive case: a pod in a namespace listed by the policy IS mutated.
+func TestAdmit_PolicySelectorNamespaces_PodInsideListInjected(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	policy.Spec.Selector.Namespaces = []string{"production"}
+
+	rs := deploymentReplicaSet("production", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+
+	pod := podWithRSOwner("production", "my-app-rs-xyz", "my-app-rs", "p")
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch == nil {
+		t.Fatal("expected patch when pod ns in selector.namespaces")
+	}
+}
+
+// TestAdmit_ExcludedNamespaces_Skipped verifies the webhook respects its
+// configured --excluded-namespaces list: a pod in an excluded ns is admitted
+// without mutation regardless of selector configuration.
+func TestAdmit_ExcludedNamespaces_Skipped(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+
+	rs := deploymentReplicaSet("kube-system", "kube-app-rs", "kube-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+	env.handler.ExcludedNamespaces = []string{"kube-system"}
+
+	pod := podWithRSOwner("kube-system", "kube-app-rs-xyz", "kube-app-rs", "p")
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow (fail-open) for excluded namespace")
+	}
+	if resp.Patch != nil {
+		t.Errorf("expected no patch for excluded namespace, got %d bytes", len(resp.Patch))
+	}
+}
+
+// TestAdmit_LabelSelector_PodLabelsDontMatch_Skipped verifies the webhook
+// honours Policy.Spec.Selector.LabelSelector: a pod whose labels do not match
+// is admitted without mutation.
+func TestAdmit_LabelSelector_PodLabelsDontMatch_Skipped(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{
+		MatchLabels: map[string]string{"team": "platform"},
+	}
+
+	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+
+	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
+	pod.Labels = map[string]string{"team": "growth"}
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow for non-matching labels")
+	}
+	if resp.Patch != nil {
+		t.Errorf("expected no patch when labels don't match, got %d bytes", len(resp.Patch))
+	}
+}
+
+// TestAdmit_LabelSelector_PodLabelsMatch_Injected verifies the positive case:
+// a pod whose labels match the selector IS mutated.
+func TestAdmit_LabelSelector_PodLabelsMatch_Injected(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{
+		MatchLabels: map[string]string{"team": "platform"},
+	}
+
+	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+
+	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
+	pod.Labels = map[string]string{"team": "platform"}
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch == nil {
+		t.Fatal("expected patch when labels match selector")
+	}
+}
+
+// TestAdmit_InvalidLabelSelector_FailsOpen verifies the webhook fails open on
+// malformed selectors — the pod is admitted without mutation, never denied.
+func TestAdmit_InvalidLabelSelector_FailsOpen(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{
+		MatchExpressions: []metav1.LabelSelectorRequirement{{
+			Key:      "app",
+			Operator: "InvalidOperator",
+		}},
+	}
+
+	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+
+	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("webhook must fail open (allow) on invalid selector")
+	}
+	if resp.Patch != nil {
+		t.Errorf("must not patch when selector is malformed, got %d bytes", len(resp.Patch))
+	}
+}

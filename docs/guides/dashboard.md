@@ -42,6 +42,12 @@ At startup, the dashboard validates Prometheus connectivity and logs a warning i
 | `--log-level`             | `info`                       | Log level (debug, info, warn, error)     |
 | `--cors-allowed-origins`  | `(empty — same-origin only)` | Allowed CORS origins (comma-separated). Use `*` to allow all (not recommended). |
 
+When a request carries an `Origin` header and a CORS allowlist is configured,
+the dashboard appends `Vary: Origin` to the response. This prevents shared
+caches and CDNs from serving one origin's `Access-Control-Allow-Origin` header
+back to a different origin (which would otherwise break the browser's
+same-origin policy when two trusted origins share the same upstream cache).
+
 ### Helm Chart
 
 Enable the dashboard in your Helm values:

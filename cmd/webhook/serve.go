@@ -68,9 +68,10 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 	}
 
 	handler := &whhandler.Handler{
-		Client:           k8sClient,
-		PrometheusClient: promClient,
-		RecommendOnly:    cfg.RecommendOnly,
+		Client:             k8sClient,
+		PrometheusClient:   promClient,
+		RecommendOnly:      cfg.RecommendOnly,
+		ExcludedNamespaces: cfg.ExcludedNamespaces,
 	}
 
 	registry := prometheus.NewRegistry()
@@ -96,16 +97,24 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 	// Shared HTTP stack: request-ID correlation, panic recovery, telemetry,
 	// matching what the dashboard exposes. Order matters — telemetry needs
 	// to wrap recovery so a recovered request is still observed.
+	//
+	// Route labels are derived via DefaultRouteLabeler so the histogram and
+	// panic counter only ever see the registered patterns (/mutate, /metrics,
+	// /healthz). Without that, an attacker hitting bogus URLs would blow up
+	// Prometheus label cardinality on the webhook the same way it would on
+	// the dashboard.
 	wrapped := httpx.WithTelemetry(
 		httpx.WithRecovery(
 			httpx.WithRequestID(mux),
 			log,
 			func(path string) { whhandler.PanicTotal.WithLabelValues(path).Inc() },
+			httpx.DefaultRouteLabeler,
 		),
 		log,
 		func(path, status string, dur time.Duration) {
 			whhandler.RequestDuration.WithLabelValues(path, status).Observe(dur.Seconds())
 		},
+		httpx.DefaultRouteLabeler,
 	)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)

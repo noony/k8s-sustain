@@ -504,6 +504,85 @@ func TestQueryOOMKillEvents_ServerErrorIsNonFatal(t *testing.T) {
 	}
 }
 
+// Regression: QueryOOMKillEvents used to multiply
+// `increase(restarts_total)` by `last_terminated_reason{reason="OOMKilled"}`
+// without an `== 1` filter and without an OR-arm. Because kube-state-metrics
+// emits the last_terminated_reason series with value 0 once the *current*
+// termination is something else (CrashLoopBackOff/Error/SIGTERM), historical
+// OOM markers were silently zeroed out and dropped by the `<=0` skip.
+//
+// The fix mirrors the `k8s_sustain:workload_oom_24h` recording rule:
+// the query MUST contain the `max_over_time(...== 1[...])` "kill" arm and
+// an `or` joining it to the restart arm.
+func TestQueryOOMKillEvents_QueryContainsKillArm(t *testing.T) {
+	var query string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		query = r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	if _, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m"); err != nil {
+		t.Fatalf("QueryOOMKillEvents: %v", err)
+	}
+
+	// "kill" arm: max_over_time on last_terminated_reason{reason="OOMKilled"}==1.
+	if !strings.Contains(query, "max_over_time") {
+		t.Errorf("expected max_over_time kill arm in query, got %q", query)
+	}
+	if !strings.Contains(query, `reason="OOMKilled"`) {
+		t.Errorf("expected OOMKilled reason filter in query, got %q", query)
+	}
+	// The restart arm must also gate on `== 1` so a non-OOM current termination
+	// (last_terminated_reason==0) actually zeroes that arm rather than letting
+	// the bare 0/1 series multiply through ambiguously.
+	if !strings.Contains(query, "== 1") {
+		t.Errorf("expected `== 1` filter on last_terminated_reason in query, got %q", query)
+	}
+	// The two arms must be unioned, not multiplied — otherwise the kill arm
+	// can't rescue events the restart arm zeroed. Normalize whitespace so
+	// pretty-printed multi-line queries still match.
+	normalized := strings.Join(strings.Fields(query), " ")
+	if !strings.Contains(normalized, ") or (") {
+		t.Errorf("expected `or` union between restart and kill arms in query, got %q", query)
+	}
+}
+
+// Behavior test: when the kill-arm path of the query produces a positive
+// sample at time T (last_terminated_reason was OOMKilled earlier in the
+// window, even if currently 0), the event must still be emitted. The mock
+// returns the matrix that represents the merged (restart_arm or kill_arm)
+// result — a single positive sample per series — to prove the result-loop
+// surfaces the marker.
+func TestQueryOOMKillEvents_KillArmSurfacesHistoricalOOM(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// One series, positive only at an earlier sub-step (kill-arm contributes 1
+		// there) and 0 at the latest step (current last_terminated_reason is no
+		// longer OOMKilled). Pre-fix this returned no event because the
+		// multiplication zeroed the only positive timestamp.
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
+			{"metric":{"container":"app","pod":"pod-1"},"values":[[1700000000,"1"],[1700000600,"0"]]}
+		]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	if err != nil {
+		t.Fatalf("QueryOOMKillEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected the historical OOM marker to survive, got %d events: %+v", len(events), events)
+	}
+	if events[0].Container != "app" || events[0].Pod != "pod-1" {
+		t.Errorf("unexpected event: %+v", events[0])
+	}
+}
+
 func TestQueryWorkloadOOMSignal_ReturnsCountAndPeak(t *testing.T) {
 	var queries []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

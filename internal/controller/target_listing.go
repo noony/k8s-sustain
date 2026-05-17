@@ -73,7 +73,7 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		targets = append(targets, t...)
 	}
 
-	filtered := filterTargets(targets, policy.Name, r.ExcludedNamespaces)
+	filtered := filterTargets(targets, policy, r.ExcludedNamespaces)
 	logger.V(1).Info("filtered targets",
 		"raw", len(targets),
 		"matching", len(filtered),

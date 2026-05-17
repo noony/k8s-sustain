@@ -316,6 +316,27 @@ func TestComputeMemoryRequestWithOOM_FloorAppliedFlag(t *testing.T) {
 	if applied {
 		t.Errorf("expected floor NOT applied when no recent OOM")
 	}
+	// MaxAllowed clamps below the floor: floor did NOT produce the final
+	// value, so floorApplied must be false even though the raw floor beats
+	// the raw percentile. Mirrors the "max allowed wins over oom floor"
+	// case from TestComputeMemoryRequestWithOOM.
+	q, applied = ComputeMemoryRequestWithOOMFloorReport(
+		50*float64(mib),
+		OOMSignal{Recent: true, PeakBytes: 500 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+		sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("256Mi")},
+	)
+	if applied {
+		t.Errorf("expected floor NOT applied when MaxAllowed clamps below floor (q=%s)", q)
+	}
+	// Floor wins with no MaxAllowed clamp: floorApplied must be true.
+	q, applied = ComputeMemoryRequestWithOOMFloorReport(
+		50*float64(mib),
+		OOMSignal{Recent: true, PeakBytes: 500 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+		sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("1Gi")},
+	)
+	if !applied {
+		t.Errorf("expected floor applied when MaxAllowed is above floor (q=%s)", q)
+	}
 }
 
 // --- ComputeLimit ---

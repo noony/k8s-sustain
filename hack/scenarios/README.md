@@ -24,6 +24,7 @@ for the operator-facing walkthrough.
 | `cronjob-long-running` | CronJob with a 12-minute pod runtime (every 15 min, `concurrencyPolicy: Forbid`). Validates the **in-place pod resize** path on a live `restartPolicy: Never` pod (k8s ≥ 1.35): while a run is in flight, the controller patches `pods/resize` and the container's resources change without a restart. Watch a single pod across two reconcile intervals and confirm `restartCount` stays at 0. |
 | `cronjob-overprovisioned` | CronJob analogue of the `overprovisioned` Deployment scenario. Heavy downsizing: CPU 1000m → ~60m, memory 512Mi → ~50Mi, observed on each new run's pod. The CronJob spec is intentionally unchanged. |
 | `job`                | Standalone `batch/v1` Job (no CronJob owner). Validates the webhook's `Pod → Job` resolution branch in isolation — the controller does not reconcile standalone Jobs, so any resource adjustment on the pod is purely the webhook's doing. Re-apply the Job after WINDOW elapses to see the recommendation kick in. |
+| `statefulset`        | 3-replica StatefulSet (`web-0..2`) with oversized requests. Validates (a) eviction in descending ordinal order (`web-2 → web-1 → web-0`), and (b) the UID-keyed recycle wait — StatefulSets recreate evicted pods under the **same name** but a new UID, so the wait must key on UID. The full 3-pod recycle should complete in roughly one reconcile cycle, not 15+ minutes (one replacement-timeout per pod). |
 
 ## Running a scenario
 

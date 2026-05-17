@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
@@ -38,6 +39,10 @@ func InitViper() {
 	}
 
 	viper.SetEnvPrefix("K8SSUSTAIN")
+	// Map `.` (viper subkey separator) and `-` (kebab-case flag names) to `_`
+	// so env vars like K8SSUSTAIN_DASHBOARD_BIND_ADDRESS bind to keys such as
+	// `dashboard.bind-address`.
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err == nil {
@@ -134,32 +139,36 @@ func BindWebhookFlags(cmd *cobra.Command) {
 	cmd.Flags().Int("port", 9443, "Port the webhook server listens on")
 	cmd.Flags().String("prometheus-address", "http://localhost:9090", "Prometheus server address")
 	cmd.Flags().String("log-level", "info", "Log level (debug, info, warn, error)")
+	cmd.Flags().StringSlice("excluded-namespaces", nil, "Namespaces the webhook should never mutate (mirrors the controller flag)")
 	_ = viper.BindPFlag("webhook.tls-cert-file", cmd.Flags().Lookup("tls-cert-file"))
 	_ = viper.BindPFlag("webhook.tls-key-file", cmd.Flags().Lookup("tls-key-file"))
 	_ = viper.BindPFlag("webhook.port", cmd.Flags().Lookup("port"))
 	_ = viper.BindPFlag("webhook.prometheus-address", cmd.Flags().Lookup("prometheus-address"))
 	_ = viper.BindPFlag("webhook.log-level", cmd.Flags().Lookup("log-level"))
+	_ = viper.BindPFlag("webhook.excluded-namespaces", cmd.Flags().Lookup("excluded-namespaces"))
 }
 
 // WebhookConfig holds resolved configuration for the webhook server.
 type WebhookConfig struct {
-	TLSCertFile       string
-	TLSKeyFile        string
-	Port              int
-	PrometheusAddress string
-	LogLevel          string
-	RecommendOnly     bool
+	TLSCertFile        string
+	TLSKeyFile         string
+	Port               int
+	PrometheusAddress  string
+	LogLevel           string
+	RecommendOnly      bool
+	ExcludedNamespaces []string
 }
 
 // LoadWebhookConfig reads the current Viper state and returns a WebhookConfig.
 func LoadWebhookConfig() WebhookConfig {
 	return WebhookConfig{
-		TLSCertFile:       viper.GetString("webhook.tls-cert-file"),
-		TLSKeyFile:        viper.GetString("webhook.tls-key-file"),
-		Port:              viper.GetInt("webhook.port"),
-		PrometheusAddress: viper.GetString("webhook.prometheus-address"),
-		LogLevel:          viper.GetString("webhook.log-level"),
-		RecommendOnly:     RecommendOnly(),
+		TLSCertFile:        viper.GetString("webhook.tls-cert-file"),
+		TLSKeyFile:         viper.GetString("webhook.tls-key-file"),
+		Port:               viper.GetInt("webhook.port"),
+		PrometheusAddress:  viper.GetString("webhook.prometheus-address"),
+		LogLevel:           viper.GetString("webhook.log-level"),
+		RecommendOnly:      RecommendOnly(),
+		ExcludedNamespaces: viper.GetStringSlice("webhook.excluded-namespaces"),
 	}
 }
 

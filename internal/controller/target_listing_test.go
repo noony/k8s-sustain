@@ -19,13 +19,63 @@ func TestFilterTargets_PolicyAndNamespace(t *testing.T) {
 		{Kind: "Deployment", Namespace: "default", Name: "d", PolicyName: "p"},
 	}
 
-	got := filterTargets(targets, "p", []string{"kube-system"})
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	got := filterTargets(targets, policy, []string{"kube-system"})
 	if len(got) != 2 {
 		t.Fatalf("expected 2 targets, got %d (%v)", len(got), got)
 	}
 	names := []string{got[0].Name, got[1].Name}
 	if names[0] != "a" || names[1] != "d" {
 		t.Errorf("unexpected names: %v", names)
+	}
+}
+
+// TestFilterTargets_SelectorNamespaces verifies that
+// policy.Spec.Selector.Namespaces narrows the target list to only the listed
+// namespaces; this is the controller-side enforcement that mirrors the
+// webhook's new check.
+func TestFilterTargets_SelectorNamespaces(t *testing.T) {
+	targets := []workloadTarget{
+		{Kind: "Deployment", Namespace: "production", Name: "a", PolicyName: "p"},
+		{Kind: "Deployment", Namespace: "staging", Name: "b", PolicyName: "p"},
+		{Kind: "Deployment", Namespace: "default", Name: "c", PolicyName: "p"},
+	}
+	policy := &sustainv1alpha1.Policy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p"},
+		Spec: sustainv1alpha1.PolicySpec{
+			Selector: sustainv1alpha1.PolicySelector{
+				Namespaces: []string{"production"},
+			},
+		},
+	}
+	got := filterTargets(targets, policy, nil)
+	if len(got) != 1 || got[0].Name != "a" {
+		t.Fatalf("expected only target a (production), got %+v", got)
+	}
+}
+
+// TestFilterTargets_LabelSelector verifies that
+// policy.Spec.Selector.LabelSelector is enforced — targets whose workload
+// labels do not satisfy the selector are dropped.
+func TestFilterTargets_LabelSelector(t *testing.T) {
+	targets := []workloadTarget{
+		{Kind: "Deployment", Namespace: "default", Name: "matching", PolicyName: "p", Labels: map[string]string{"team": "platform"}},
+		{Kind: "Deployment", Namespace: "default", Name: "other-team", PolicyName: "p", Labels: map[string]string{"team": "growth"}},
+		{Kind: "Deployment", Namespace: "default", Name: "no-labels", PolicyName: "p"},
+	}
+	policy := &sustainv1alpha1.Policy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p"},
+		Spec: sustainv1alpha1.PolicySpec{
+			Selector: sustainv1alpha1.PolicySelector{
+				LabelSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"team": "platform"},
+				},
+			},
+		},
+	}
+	got := filterTargets(targets, policy, nil)
+	if len(got) != 1 || got[0].Name != "matching" {
+		t.Fatalf("expected only matching target, got %+v", got)
 	}
 }
 
