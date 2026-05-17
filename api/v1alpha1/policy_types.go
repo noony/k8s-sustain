@@ -164,13 +164,30 @@ type UpdateTypes struct {
 	Job *UpdateMode `json:"job,omitempty"`
 	// +optional
 	// +kubebuilder:validation:Enum=OnCreate;Ongoing
-	Family *UpdateMode `json:"family,omitempty"`
-	// +optional
-	// +kubebuilder:validation:Enum=OnCreate;Ongoing
-	DeploymentConfig *UpdateMode `json:"deploymentConfig,omitempty"`
-	// +optional
-	// +kubebuilder:validation:Enum=OnCreate;Ongoing
 	ArgoRollout *UpdateMode `json:"argoRollout,omitempty"`
+}
+
+// ModeForKind returns the update mode configured for the given workload
+// kind, or nil if the policy doesn't opt that kind in. The string keys here
+// match the values that internal/webhook.resolveOwner, the controller's
+// reconcile loop, and the dashboard handlers all use, so callers can plug
+// owner_kind labels straight in.
+func (t UpdateTypes) ModeForKind(kind string) *UpdateMode {
+	switch kind {
+	case "Deployment":
+		return t.Deployment
+	case "StatefulSet":
+		return t.StatefulSet
+	case "DaemonSet":
+		return t.DaemonSet
+	case "CronJob":
+		return t.CronJob
+	case "Job":
+		return t.Job
+	case "Rollout":
+		return t.ArgoRollout
+	}
+	return nil
 }
 
 // UpdateSpec defines which workload types are managed and how, plus eviction behaviour.

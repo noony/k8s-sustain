@@ -9,18 +9,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/noony/k8s-sustain/cmd/controller"
 	"github.com/noony/k8s-sustain/internal/config"
+	"github.com/noony/k8s-sustain/internal/httpx"
+	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
 	"github.com/noony/k8s-sustain/internal/logging"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	whhandler "github.com/noony/k8s-sustain/internal/webhook"
@@ -55,8 +53,7 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	restCfg := ctrl.GetConfigOrDie()
-	k8sClient, err := client.New(restCfg, client.Options{Scheme: config.Scheme()})
+	k8sClient, err := k8sclient.New(config.Scheme())
 	if err != nil {
 		log.Error(err, "Unable to create Kubernetes client")
 		return err
@@ -77,6 +74,7 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 	}
 
 	registry := prometheus.NewRegistry()
+	whhandler.RegisterMetrics(registry)
 	certWatcher, err := whhandler.NewCertExpiry(cfg.TLSCertFile, cfg.TLSKeyFile, log, registry)
 	if err != nil {
 		log.Error(err, "Unable to register cert expiry gauge; continuing without it")
@@ -95,10 +93,25 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 		w.WriteHeader(http.StatusOK)
 	})
 
+	// Shared HTTP stack: request-ID correlation, panic recovery, telemetry,
+	// matching what the dashboard exposes. Order matters — telemetry needs
+	// to wrap recovery so a recovered request is still observed.
+	wrapped := httpx.WithTelemetry(
+		httpx.WithRecovery(
+			httpx.WithRequestID(mux),
+			log,
+			func(path string) { whhandler.PanicTotal.WithLabelValues(path).Inc() },
+		),
+		log,
+		func(path, status string, dur time.Duration) {
+			whhandler.RequestDuration.WithLabelValues(path, status).Observe(dur.Seconds())
+		},
+	)
+
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           wrapped,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -116,8 +129,13 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 
 	log.Info("Starting webhook server", "addr", addr, "certFile", cfg.TLSCertFile)
 
-	errCh := make(chan error, 1)
-	go func() {
+	watcherCtx, stopWatcher := context.WithCancel(context.Background())
+	defer stopWatcher()
+	if certWatcher != nil {
+		go certWatcher.Run(watcherCtx, time.Hour)
+	}
+
+	return httpx.ListenAndServeWithShutdown(srv, log, "webhook", 10*time.Second, func() error {
 		// Empty cert/key paths: the keypair comes from TLSConfig.GetCertificate.
 		// Falls back to disk-loading paths when GetCertificate isn't wired
 		// (e.g. cert watcher init failed).
@@ -125,29 +143,6 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 		if certWatcher == nil {
 			certPath, keyPath = cfg.TLSCertFile, cfg.TLSKeyFile
 		}
-		if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
-			errCh <- err
-		}
-	}()
-
-	watcherCtx, stopWatcher := context.WithCancel(context.Background())
-	defer stopWatcher()
-	if certWatcher != nil {
-		go certWatcher.Run(watcherCtx, time.Hour)
-	}
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-
-	select {
-	case err := <-errCh:
-		stopWatcher()
-		return err
-	case <-sigCh:
-		log.Info("Shutting down webhook server")
-		stopWatcher()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return srv.Shutdown(shutCtx)
-	}
+		return srv.ListenAndServeTLS(certPath, keyPath)
+	})
 }

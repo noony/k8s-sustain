@@ -606,7 +606,7 @@ func sortPodsForRecycle(pods []*corev1.Pod) {
 	if len(pods) == 0 {
 		return
 	}
-	if isStatefulSetOwned(pods[0]) {
+	if IsOwnedByKind(pods[0].OwnerReferences, "StatefulSet") {
 		sort.SliceStable(pods, func(i, j int) bool {
 			oi, iok := podOrdinal(pods[i])
 			oj, jok := podOrdinal(pods[j])
@@ -622,19 +622,6 @@ func sortPodsForRecycle(pods []*corev1.Pod) {
 	sort.SliceStable(pods, func(i, j int) bool {
 		return pods[i].Name < pods[j].Name
 	})
-}
-
-// isStatefulSetOwned reports whether the pod has a controller-owner of kind
-// StatefulSet. StatefulSet pods are owned directly by the StatefulSet (unlike
-// Deployment pods, which go through a ReplicaSet), so a Kind=="StatefulSet"
-// ownerRef is a reliable signal.
-func isStatefulSetOwned(pod *corev1.Pod) bool {
-	for _, ref := range pod.OwnerReferences {
-		if ref.Controller != nil && *ref.Controller && ref.Kind == "StatefulSet" {
-			return true
-		}
-	}
-	return false
 }
 
 // podOrdinal extracts the trailing integer from a StatefulSet pod name
@@ -802,48 +789,14 @@ func applyRecToContainer(c *corev1.Container, rec ContainerRecommendation) bool 
 }
 
 // applyRecommendations modifies container resources and returns
-// (updated slice, whether any change was made).
+// (updated slice, whether any change was made). The slice is copied first so
+// callers can safely overwrite their input.
 func applyRecommendations(in []corev1.Container, recs map[string]ContainerRecommendation) ([]corev1.Container, bool) {
 	out := make([]corev1.Container, len(in))
 	copy(out, in)
 	changed := false
-
-	for i, c := range out {
-		rec, ok := recs[c.Name]
-		if !ok {
-			continue
-		}
-
-		if out[i].Resources.Requests == nil {
-			out[i].Resources.Requests = corev1.ResourceList{}
-		}
-		if out[i].Resources.Limits == nil {
-			out[i].Resources.Limits = corev1.ResourceList{}
-		}
-
-		if rec.CPURequest != nil {
-			out[i].Resources.Requests[corev1.ResourceCPU] = *rec.CPURequest
-			changed = true
-		}
-		switch {
-		case rec.RemoveCPULimit:
-			delete(out[i].Resources.Limits, corev1.ResourceCPU)
-			changed = true
-		case rec.CPULimit != nil:
-			out[i].Resources.Limits[corev1.ResourceCPU] = *rec.CPULimit
-			changed = true
-		}
-
-		if rec.MemoryRequest != nil {
-			out[i].Resources.Requests[corev1.ResourceMemory] = *rec.MemoryRequest
-			changed = true
-		}
-		switch {
-		case rec.RemoveMemoryLimit:
-			delete(out[i].Resources.Limits, corev1.ResourceMemory)
-			changed = true
-		case rec.MemoryLimit != nil:
-			out[i].Resources.Limits[corev1.ResourceMemory] = *rec.MemoryLimit
+	for i := range out {
+		if applyRecToContainer(&out[i], recs[out[i].Name]) {
 			changed = true
 		}
 	}

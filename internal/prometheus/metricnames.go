@@ -1,0 +1,51 @@
+package prometheus
+
+// Recording-rule and raw-metric names produced by the controller / webhook
+// and exposed through the Prometheus recording rules in
+// charts/k8s-sustain/files/recording-rules.yaml. Centralising them lets the
+// dashboard's query helpers stay typo-safe and gives IDEs a single grep
+// target whenever a rule name changes.
+//
+// Two namespaces live here:
+//   - lower_snake_case names declared as raw operator metrics
+//     (k8s_sustain_*) — emitted directly by the Go code.
+//   - colon-separated recording-rule names (k8s_sustain:*) — defined in
+//     recording-rules.yaml; the Go code only queries them.
+//
+// Adding a new metric? Update both this file and recording-rules.yaml; CI's
+// `make verify-rules` will keep the chart in sync.
+const (
+	// --- Cluster aggregates (recording rules) -----------------------------
+
+	MetricClusterCPUSavingsCores         = "k8s_sustain:cluster_cpu_savings_cores"
+	MetricClusterCPUSavingsRatio         = "k8s_sustain:cluster_cpu_savings_ratio"
+	MetricClusterMemorySavingsBytes      = "k8s_sustain:cluster_memory_savings_bytes"
+	MetricClusterMemorySavingsRatio      = "k8s_sustain:cluster_memory_savings_ratio"
+	MetricClusterCPUHeadroomBreakdown    = "k8s_sustain:cluster_cpu_headroom_breakdown"
+	MetricClusterMemoryHeadroomBreakdown = "k8s_sustain:cluster_memory_headroom_breakdown"
+
+	// --- Policy aggregates ------------------------------------------------
+
+	MetricPolicyCPUSavingsCores    = "k8s_sustain:policy_cpu_savings_cores"
+	MetricPolicyMemorySavingsBytes = "k8s_sustain:policy_memory_savings_bytes"
+	MetricPolicyWorkloadCount      = "k8s_sustain_policy_workload_count"
+	MetricPolicyAtRiskCount        = "k8s_sustain_policy_at_risk_count"
+
+	// --- Per-workload signals ---------------------------------------------
+
+	MetricWorkloadOOM24h             = "k8s_sustain:workload_oom_24h"
+	MetricWorkloadDrifted            = "k8s_sustain:workload_drifted"
+	MetricWorkloadDriftRatio         = "k8s_sustain_workload_drift_ratio"
+	MetricWorkloadRetryState         = "k8s_sustain_workload_retry_state"
+	MetricWorkloadRetryAttempts      = "k8s_sustain_workload_retry_attempts"
+	MetricWorkloadTemplateCPUCores   = "k8s_sustain_workload_template_cpu_cores"
+	MetricWorkloadTemplateMemoryBytes = "k8s_sustain_workload_template_memory_bytes"
+	MetricWorkloadCPUUsageCores      = "k8s_sustain:workload_cpu_usage:cores"
+	MetricWorkloadMemoryUsageBytes   = "k8s_sustain:workload_memory_usage:bytes"
+
+	MetricContainerCPURequestsByWorkloadCores    = "k8s_sustain:container_cpu_requests_by_workload:cores"
+	MetricContainerMemoryRequestsByWorkloadBytes = "k8s_sustain:container_memory_requests_by_workload:bytes"
+
+	MetricAutoscalerPresent     = "k8s_sustain_autoscaler_present"
+	MetricCoordinationFactor    = "k8s_sustain_coordination_factor"
+)

@@ -38,14 +38,17 @@ k8s-sustain/
 │   ├── webhook/           # webhook subcommand
 │   └── dashboard/         # dashboard subcommand
 ├── internal/
+│   ├── autoscaler/        # HPA / KEDA detection used by recommender + webhook
 │   ├── config/            # Centralized Viper config (flags, env, file)
 │   ├── controller/        # Policy reconciler
 │   ├── dashboard/         # Dashboard HTTP server
+│   ├── httpx/             # Shared HTTP stack: envelope, middleware, shutdown
+│   ├── k8s/               # client.New helper used by webhook + dashboard
 │   ├── logging/           # Shared zap logger setup
-│   ├── prometheus/        # Prometheus HTTP API client
+│   ├── prometheus/        # Prometheus HTTP API client + metric name constants
 │   ├── recommender/       # Resource recommendation logic (pure functions)
 │   ├── webhook/           # Admission webhook HTTP handler
-│   └── workload/          # Pod recycler for Deployment/StatefulSet/DaemonSet
+│   └── workload/          # Pod recycler, template/owner-ref helpers
 ├── charts/k8s-sustain/    # Helm chart
 ├── docs/                  # This documentation
 ├── Dockerfile
@@ -238,7 +241,7 @@ To support a new workload kind (e.g. `Rollout` from Argo):
 2. Add the deepcopy block to `zz_generated.deepcopy.go`
 3. Add `RecycleRolloutPods` to `internal/workload/patcher.go`
 4. Add `reconcileRollouts` to `internal/controller/policy_controller.go`
-5. Add the case to `modeForKind` and `resolveOwner` in `internal/webhook/handler.go`
+5. Add the case to `UpdateTypes.ModeForKind` in `api/v1alpha1/policy_types.go` and to `resolveOwner` in `internal/webhook/handler.go`
 6. Add RBAC markers (`+kubebuilder:rbac:...`) to the controller
 7. Add the Helm RBAC rule in `charts/k8s-sustain/templates/rbac.yaml`
 

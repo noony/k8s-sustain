@@ -12,17 +12,24 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	apivalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/types"
+	apivalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/httpx"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
+
+// maxAdmissionBodyBytes caps the AdmissionReview payload the webhook will
+// decode. Pod specs in real clusters are kilobytes; 1 MiB is a generous
+// ceiling that still defends against a malicious or malformed apiserver
+// pushing an unbounded body.
+const maxAdmissionBodyBytes = 1 << 20
 
 // maxPolicyNameLen mirrors the Kubernetes resource-name limit (DNS subdomain).
 // Anything longer cannot be a real Policy object.
@@ -83,10 +90,17 @@ type jsonPatch struct {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logger := log.FromContext(r.Context())
 
+	httpx.LimitRequestBody(w, r, maxAdmissionBodyBytes)
+
 	var review admissionv1.AdmissionReview
 	if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
 		logger.Error(err, "failed to decode AdmissionReview")
-		http.Error(w, "invalid body", http.StatusBadRequest)
+		httpx.WriteError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if review.Request == nil {
+		logger.Error(nil, "AdmissionReview has nil request")
+		httpx.WriteError(w, http.StatusBadRequest, "missing request")
 		return
 	}
 
@@ -161,20 +175,16 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	// Act on both OnCreate and Ongoing policies so that pods always start
 	// with the latest recommendation. Without this, Ongoing pods would start
 	// with whatever the template currently has and only be resized later.
-	mode := modeForKind(policy.Spec.RightSizing.Update.Types, ownerKind)
+	mode := policy.Spec.RightSizing.Update.Types.ModeForKind(ownerKind)
 	if mode == nil {
 		logger.V(1).Info("policy does not configure this workload kind, skipping")
 		return allow
 	}
 	logger.V(1).Info("policy configured for workload kind", "mode", *mode)
 
-	containers := pod.Spec.Containers
-	if !policy.Spec.RightSizing.ExcludeInitContainers && len(pod.Spec.InitContainers) > 0 {
-		merged := make([]corev1.Container, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
-		merged = append(merged, pod.Spec.Containers...)
-		merged = append(merged, pod.Spec.InitContainers...)
-		containers = merged
-	}
+	containers, _ := workload.MergeContainersForRecommendation(
+		pod.Spec.Containers, pod.Spec.InitContainers, policy.Spec.RightSizing.ExcludeInitContainers,
+	)
 	recs, err := h.buildRecommendations(ctx, &policy, req.Namespace, ownerKind, ownerName, containers)
 	if err != nil {
 		// Prometheus failed (timeout, network, or circuit breaker open).
@@ -305,24 +315,6 @@ func (h *Handler) resolveOwner(ctx context.Context, pod *corev1.Pod) (kind, name
 	return "", "", nil
 }
 
-func modeForKind(ut sustainv1alpha1.UpdateTypes, kind string) *sustainv1alpha1.UpdateMode {
-	switch kind {
-	case "Deployment":
-		return ut.Deployment
-	case "StatefulSet":
-		return ut.StatefulSet
-	case "DaemonSet":
-		return ut.DaemonSet
-	case "CronJob":
-		return ut.CronJob
-	case "Job":
-		return ut.Job
-	case "Rollout":
-		return ut.ArgoRollout
-	}
-	return nil
-}
-
 // buildRecommendations queries Prometheus for workload-level CPU/memory totals
 // and replica count, then derives per-container per-pod recommendations.
 // A per-pod floor is applied to protect against load imbalance.
@@ -449,34 +441,16 @@ func patchesForContainers(cs []corev1.Container, recs map[string]workload.Contai
 		if !ok {
 			continue
 		}
-
-		newRes := c.Resources.DeepCopy()
-		if newRes.Requests == nil {
-			newRes.Requests = corev1.ResourceList{}
+		// DeepCopy so the source pod object isn't mutated; ApplyRecommendation
+		// writes the resource list in place.
+		copyC := c.DeepCopy()
+		if !workload.ApplyRecommendation(copyC, rec) {
+			continue
 		}
-		if newRes.Limits == nil {
-			newRes.Limits = corev1.ResourceList{}
-		}
-
-		if rec.CPURequest != nil {
-			newRes.Requests[corev1.ResourceCPU] = *rec.CPURequest
-		}
-		if rec.MemoryRequest != nil {
-			newRes.Requests[corev1.ResourceMemory] = *rec.MemoryRequest
-		}
-		switch {
-		case rec.RemoveCPULimit:
-			delete(newRes.Limits, corev1.ResourceCPU)
-		case rec.CPULimit != nil:
-			newRes.Limits[corev1.ResourceCPU] = *rec.CPULimit
-		}
-		switch {
-		case rec.RemoveMemoryLimit:
-			delete(newRes.Limits, corev1.ResourceMemory)
-		case rec.MemoryLimit != nil:
-			newRes.Limits[corev1.ResourceMemory] = *rec.MemoryLimit
-		}
-
+		newRes := copyC.Resources
+		// ApplyRecommendation always seeds non-nil Limits; drop it back to nil
+		// when empty so the generated patch leaves the wire identical to a pod
+		// that never had limits set.
 		if len(newRes.Limits) == 0 {
 			newRes.Limits = nil
 		}

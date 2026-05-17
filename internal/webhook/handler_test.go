@@ -69,7 +69,7 @@ func TestModeForKind(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := modeForKind(ut, tt.kind)
+		got := ut.ModeForKind(tt.kind)
 		if tt.want == nil {
 			if got != nil {
 				t.Errorf("modeForKind(%q) = %v, want nil", tt.kind, *got)

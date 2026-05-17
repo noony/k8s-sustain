@@ -139,49 +139,49 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var err error
-	resp.KPI.CPUSavedCores, err = s.PromClient.QueryInstant(ctx, "k8s_sustain:cluster_cpu_savings_cores")
+	resp.KPI.CPUSavedCores, err = s.PromClient.QueryInstant(ctx, promclient.MetricClusterCPUSavingsCores)
 	recordErr(err)
-	resp.KPI.CPUSavedRatio, err = s.PromClient.QueryInstant(ctx, "k8s_sustain:cluster_cpu_savings_ratio")
+	resp.KPI.CPUSavedRatio, err = s.PromClient.QueryInstant(ctx, promclient.MetricClusterCPUSavingsRatio)
 	recordErr(err)
-	resp.KPI.MemSavedBytes, err = s.PromClient.QueryInstant(ctx, "k8s_sustain:cluster_memory_savings_bytes")
+	resp.KPI.MemSavedBytes, err = s.PromClient.QueryInstant(ctx, promclient.MetricClusterMemorySavingsBytes)
 	recordErr(err)
-	resp.KPI.MemSavedRatio, err = s.PromClient.QueryInstant(ctx, "k8s_sustain:cluster_memory_savings_ratio")
+	resp.KPI.MemSavedRatio, err = s.PromClient.QueryInstant(ctx, promclient.MetricClusterMemorySavingsRatio)
 	recordErr(err)
 
 	var sparkErr error
-	resp.KPI.CPUSpark7d, sparkErr = sparklinePoints(ctx, s.PromClient, "k8s_sustain:cluster_cpu_savings_cores", "168h", "30m")
+	resp.KPI.CPUSpark7d, sparkErr = sparklinePoints(ctx, s.PromClient, promclient.MetricClusterCPUSavingsCores, "168h", "30m")
 	recordErr(sparkErr)
-	resp.KPI.MemSpark7d, sparkErr = sparklinePoints(ctx, s.PromClient, "k8s_sustain:cluster_memory_savings_bytes", "168h", "30m")
+	resp.KPI.MemSpark7d, sparkErr = sparklinePoints(ctx, s.PromClient, promclient.MetricClusterMemorySavingsBytes, "168h", "30m")
 	recordErr(sparkErr)
 
-	atRiskByPolicy, err := s.PromClient.QueryByLabel(ctx, "k8s_sustain_policy_at_risk_count", "policy")
+	atRiskByPolicy, err := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyAtRiskCount, "policy")
 	recordErr(err)
 	for _, n := range atRiskByPolicy {
 		resp.KPI.AtRiskCount += int(n)
 	}
-	drifted, err := s.PromClient.QueryInstant(ctx, "count(k8s_sustain:workload_drifted == 1)")
+	drifted, err := s.PromClient.QueryInstant(ctx, fmt.Sprintf("count(%s == 1)", promclient.MetricWorkloadDrifted))
 	recordErr(err)
 	resp.KPI.DriftedCount = int(drifted)
 
 	var hrErr error
-	resp.Headroom["cpu"], hrErr = readHeadroom(ctx, s.PromClient, "k8s_sustain:cluster_cpu_headroom_breakdown")
+	resp.Headroom["cpu"], hrErr = readHeadroom(ctx, s.PromClient, promclient.MetricClusterCPUHeadroomBreakdown)
 	recordErr(hrErr)
-	resp.Headroom["memory"], hrErr = readHeadroom(ctx, s.PromClient, "k8s_sustain:cluster_memory_headroom_breakdown")
+	resp.Headroom["memory"], hrErr = readHeadroom(ctx, s.PromClient, promclient.MetricClusterMemoryHeadroomBreakdown)
 	recordErr(hrErr)
 
 	var attErr error
-	resp.Attention["risk"], attErr = collectAttention(ctx, s.PromClient, "k8s_sustain:workload_oom_24h > 0", "OOM")
+	resp.Attention["risk"], attErr = collectAttention(ctx, s.PromClient, promclient.MetricWorkloadOOM24h+" > 0", "OOM")
 	recordErr(attErr)
-	resp.Attention["drift"], attErr = collectAttention(ctx, s.PromClient, "k8s_sustain:workload_drifted == 1", "drift")
+	resp.Attention["drift"], attErr = collectAttention(ctx, s.PromClient, promclient.MetricWorkloadDrifted+" == 1", "drift")
 	recordErr(attErr)
-	resp.Attention["blocked"], attErr = collectAttention(ctx, s.PromClient, "k8s_sustain_workload_retry_state == 1", "blocked")
+	resp.Attention["blocked"], attErr = collectAttention(ctx, s.PromClient, promclient.MetricWorkloadRetryState+" == 1", "blocked")
 	recordErr(attErr)
 
-	wlByPolicy, err := s.PromClient.QueryByLabel(ctx, "k8s_sustain_policy_workload_count", "policy")
+	wlByPolicy, err := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyWorkloadCount, "policy")
 	recordErr(err)
-	cpuByPolicy, err := s.PromClient.QueryByLabel(ctx, "k8s_sustain:policy_cpu_savings_cores", "policy")
+	cpuByPolicy, err := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyCPUSavingsCores, "policy")
 	recordErr(err)
-	memByPolicy, err := s.PromClient.QueryByLabel(ctx, "k8s_sustain:policy_memory_savings_bytes", "policy")
+	memByPolicy, err := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyMemorySavingsBytes, "policy")
 	recordErr(err)
 
 	// Iterate union of policy keys so partial-data rollups still surface.

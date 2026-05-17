@@ -321,20 +321,6 @@ spec:
                             - OnCreate
                             - Ongoing
                             type: string
-                          deploymentConfig:
-                            description: UpdateMode defines how resources are updated
-                              on a given workload type.
-                            enum:
-                            - OnCreate
-                            - Ongoing
-                            type: string
-                          family:
-                            description: UpdateMode defines how resources are updated
-                              on a given workload type.
-                            enum:
-                            - OnCreate
-                            - Ongoing
-                            type: string
                           job:
                             description: UpdateMode defines how resources are updated
                               on a given workload type.

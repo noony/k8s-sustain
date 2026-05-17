@@ -12,6 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // supportedWorkloadKinds is the canonical ordering used by responses that
@@ -126,7 +128,7 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		out := make([]workloadEntry, 0, len(list.Items))
 		for i := range list.Items {
 			j := &list.Items[i]
-			if isOwnedByCronJob(j.OwnerReferences) {
+			if workload.IsOwnedByKind(j.OwnerReferences, "CronJob") {
 				continue
 			}
 			out = append(out, workloadEntry{Namespace: j.Namespace, Name: j.Name, Template: &j.Spec.Template, OwnerRefs: j.OwnerReferences})
@@ -141,50 +143,26 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 // workloadEntry. Used wherever a handler needs the pod template, container
 // list, or policy annotation for one specific object.
 func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name string) (workloadEntry, error) {
-	key := client.ObjectKey{Namespace: namespace, Name: name}
+	var obj client.Object
 	switch kind {
 	case "Deployment":
-		obj := &appsv1.Deployment{}
-		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
-			return workloadEntry{}, err
-		}
-		return workloadEntry{Namespace: obj.Namespace, Name: obj.Name, Template: &obj.Spec.Template, OwnerRefs: obj.OwnerReferences}, nil
+		obj = &appsv1.Deployment{}
 	case "StatefulSet":
-		obj := &appsv1.StatefulSet{}
-		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
-			return workloadEntry{}, err
-		}
-		return workloadEntry{Namespace: obj.Namespace, Name: obj.Name, Template: &obj.Spec.Template, OwnerRefs: obj.OwnerReferences}, nil
+		obj = &appsv1.StatefulSet{}
 	case "DaemonSet":
-		obj := &appsv1.DaemonSet{}
-		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
-			return workloadEntry{}, err
-		}
-		return workloadEntry{Namespace: obj.Namespace, Name: obj.Name, Template: &obj.Spec.Template, OwnerRefs: obj.OwnerReferences}, nil
+		obj = &appsv1.DaemonSet{}
 	case "CronJob":
-		obj := &batchv1.CronJob{}
-		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
-			return workloadEntry{}, err
-		}
-		return workloadEntry{Namespace: obj.Namespace, Name: obj.Name, Template: &obj.Spec.JobTemplate.Spec.Template, OwnerRefs: obj.OwnerReferences}, nil
+		obj = &batchv1.CronJob{}
 	case "Job":
-		obj := &batchv1.Job{}
-		if err := s.K8sClient.Get(ctx, key, obj); err != nil {
-			return workloadEntry{}, err
-		}
-		return workloadEntry{Namespace: obj.Namespace, Name: obj.Name, Template: &obj.Spec.Template, OwnerRefs: obj.OwnerReferences}, nil
+		obj = &batchv1.Job{}
 	default:
 		return workloadEntry{}, fmt.Errorf("unsupported kind %q", kind)
 	}
-}
-
-func isOwnedByCronJob(refs []metav1.OwnerReference) bool {
-	for _, ref := range refs {
-		if ref.Controller != nil && *ref.Controller && ref.Kind == "CronJob" {
-			return true
-		}
+	if err := s.K8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, obj); err != nil {
+		return workloadEntry{}, err
 	}
-	return false
+	tmpl, refs, _, _ := workload.PodTemplateOf(obj)
+	return workloadEntry{Namespace: obj.GetNamespace(), Name: obj.GetName(), Template: tmpl, OwnerRefs: refs}, nil
 }
 
 // workloadKey assembles the "namespace|kind|name" key used to address a
@@ -268,10 +246,10 @@ func (s *Server) fetchWorkloadSignals(ctx context.Context, keys []string) map[st
 	if len(keys) == 0 {
 		return nil
 	}
-	oom, _ := s.PromClient.QueryByLabels(ctx, "k8s_sustain:workload_oom_24h", "namespace", "owner_kind", "owner_name")
-	drift, _ := s.PromClient.QueryByLabels(ctx, "max by (namespace, owner_kind, owner_name) (abs(1 - k8s_sustain_workload_drift_ratio))", "namespace", "owner_kind", "owner_name")
-	blocked, _ := s.PromClient.QueryByLabels(ctx, "k8s_sustain_workload_retry_state == 1", "namespace", "owner_kind", "owner_name")
-	autoscaler, _ := s.PromClient.QueryByLabels(ctx, "k8s_sustain_autoscaler_present", "namespace", "owner_kind", "owner_name")
+	oom, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricWorkloadOOM24h, "namespace", "owner_kind", "owner_name")
+	drift, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("max by (namespace, owner_kind, owner_name) (abs(1 - %s))", promclient.MetricWorkloadDriftRatio), "namespace", "owner_kind", "owner_name")
+	blocked, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricWorkloadRetryState+" == 1", "namespace", "owner_kind", "owner_name")
+	autoscaler, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricAutoscalerPresent, "namespace", "owner_kind", "owner_name")
 
 	out := make(map[string]workloadSignals, len(keys))
 	for _, key := range keys {
@@ -314,8 +292,8 @@ func parseWorkloadKey(key string) (namespace, kind, name string) {
 // webhook applied. Returns nil when no series exist for this workload.
 func (s *Server) fetchCoordinationFactors(ctx context.Context, namespace, kind, name string) *coordinationFactors {
 	expr := fmt.Sprintf(
-		`k8s_sustain_coordination_factor{namespace=%q,owner_kind=%q,owner_name=%q}`,
-		namespace, kind, name,
+		`%s{namespace=%q,owner_kind=%q,owner_name=%q}`,
+		promclient.MetricCoordinationFactor, namespace, kind, name,
 	)
 	byLabels, err := s.PromClient.QueryByLabels(ctx, expr, "resource", "kind")
 	if err != nil || len(byLabels) == 0 {
@@ -338,37 +316,11 @@ func (s *Server) fetchCoordinationFactors(ctx context.Context, namespace, kind, 
 // kindEnabledInPolicy reports whether a policy opts in to the given workload
 // kind via its RightSizing.Update.Types map.
 func kindEnabledInPolicy(p *sustainv1alpha1.Policy, kind string) bool {
-	t := p.Spec.RightSizing.Update.Types
-	switch kind {
-	case "Deployment":
-		return t.Deployment != nil
-	case "StatefulSet":
-		return t.StatefulSet != nil
-	case "DaemonSet":
-		return t.DaemonSet != nil
-	case "CronJob":
-		return t.CronJob != nil
-	case "Job":
-		return t.Job != nil
-	}
-	return false
+	return p.Spec.RightSizing.Update.Types.ModeForKind(kind) != nil
 }
 
 // updateModeForKind returns the policy's per-kind update mode pointer, or nil
 // if the policy doesn't opt this kind in.
 func updateModeForKind(p *sustainv1alpha1.Policy, kind string) *sustainv1alpha1.UpdateMode {
-	t := p.Spec.RightSizing.Update.Types
-	switch kind {
-	case "Deployment":
-		return t.Deployment
-	case "StatefulSet":
-		return t.StatefulSet
-	case "DaemonSet":
-		return t.DaemonSet
-	case "CronJob":
-		return t.CronJob
-	case "Job":
-		return t.Job
-	}
-	return nil
+	return p.Spec.RightSizing.Update.Types.ModeForKind(kind)
 }

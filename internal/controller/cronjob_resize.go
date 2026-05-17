@@ -6,8 +6,6 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -66,7 +64,7 @@ func (r *PolicyReconciler) listActiveJobsForCronJob(ctx context.Context, cj *bat
 	var out []batchv1.Job
 	for i := range list.Items {
 		j := &list.Items[i]
-		if !isOwnedBy(j.OwnerReferences, cj.UID) {
+		if !workload.IsOwnedBy(j.OwnerReferences, cj.UID) {
 			continue
 		}
 		if jobIsTerminal(j) {
@@ -88,17 +86,6 @@ func (r *PolicyReconciler) listPodsForJob(ctx context.Context, job *batchv1.Job)
 		return nil, err
 	}
 	return list.Items, nil
-}
-
-// isOwnedBy reports whether refs contains a controller ownerReference with
-// the given UID.
-func isOwnedBy(refs []metav1.OwnerReference, uid types.UID) bool {
-	for _, ref := range refs {
-		if ref.Controller != nil && *ref.Controller && ref.UID == uid {
-			return true
-		}
-	}
-	return false
 }
 
 // jobIsTerminal reports whether the Job has reached a terminal state

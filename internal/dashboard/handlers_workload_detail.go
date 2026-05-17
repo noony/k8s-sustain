@@ -9,6 +9,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 type workloadDetailResponse struct {
@@ -67,15 +68,15 @@ func (s *Server) lookupUpdateMode(ctx context.Context, namespace, kind, name str
 }
 
 func (s *Server) fillDetailPrometheusSignals(ctx context.Context, resp *workloadDetailResponse, namespace, kind, name string) {
-	oomExpr := fmt.Sprintf(`k8s_sustain:workload_oom_24h{namespace=%q,owner_kind=%q,owner_name=%q}`, namespace, kind, name)
+	oomExpr := fmt.Sprintf(`%s{namespace=%q,owner_kind=%q,owner_name=%q}`, promclient.MetricWorkloadOOM24h, namespace, kind, name)
 	if v, _ := s.PromClient.QueryInstant(ctx, oomExpr); v > 0 {
 		resp.OOM24h = int(v)
 	}
-	driftExpr := fmt.Sprintf(`max(abs(1 - k8s_sustain_workload_drift_ratio{namespace=%q,owner_kind=%q,owner_name=%q}))`, namespace, kind, name)
+	driftExpr := fmt.Sprintf(`max(abs(1 - %s{namespace=%q,owner_kind=%q,owner_name=%q}))`, promclient.MetricWorkloadDriftRatio, namespace, kind, name)
 	if v, _ := s.PromClient.QueryInstant(ctx, driftExpr); v > 0 {
 		resp.DriftPercent = v * 100
 	}
-	blockedExpr := fmt.Sprintf(`k8s_sustain_workload_retry_state{namespace=%q,owner_kind=%q,owner_name=%q} == 1`, namespace, kind, name)
+	blockedExpr := fmt.Sprintf(`%s{namespace=%q,owner_kind=%q,owner_name=%q} == 1`, promclient.MetricWorkloadRetryState, namespace, kind, name)
 	blockedByReason, _ := s.PromClient.QueryByLabel(ctx, blockedExpr, "reason")
 	if len(blockedByReason) == 0 {
 		return
@@ -85,7 +86,7 @@ func (s *Server) fillDetailPrometheusSignals(ctx context.Context, resp *workload
 		reason = k
 		break
 	}
-	attemptsExpr := fmt.Sprintf(`k8s_sustain_workload_retry_attempts{namespace=%q,owner_kind=%q,owner_name=%q}`, namespace, kind, name)
+	attemptsExpr := fmt.Sprintf(`%s{namespace=%q,owner_kind=%q,owner_name=%q}`, promclient.MetricWorkloadRetryAttempts, namespace, kind, name)
 	attempts, _ := s.PromClient.QueryInstant(ctx, attemptsExpr)
 	resp.Blocked = &workloadDetailBlocked{Reason: reason, Attempts: int(attempts)}
 }

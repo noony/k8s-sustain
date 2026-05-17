@@ -6,18 +6,15 @@ package dashboard
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/noony/k8s-sustain/cmd/controller"
 	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/dashboard"
+	"github.com/noony/k8s-sustain/internal/httpx"
+	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
 	"github.com/noony/k8s-sustain/internal/logging"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
@@ -55,8 +52,7 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 		log.Info("Prometheus connectivity verified", "address", cfg.PrometheusAddress)
 	}
 
-	restCfg := ctrl.GetConfigOrDie()
-	k8sClient, err := client.New(restCfg, client.Options{Scheme: config.Scheme()})
+	k8sClient, err := k8sclient.New(config.Scheme())
 	if err != nil {
 		return fmt.Errorf("creating kubernetes client: %w", err)
 	}
@@ -69,24 +65,6 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 	}
 
 	httpSrv := srv.NewHTTPServer(cfg.BindAddress)
-
-	errCh := make(chan error, 1)
-	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && err.Error() != "http: Server closed" {
-			errCh <- err
-		}
-	}()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-sigCh:
-		log.Info("Shutting down dashboard server")
-		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return httpSrv.Shutdown(shutCtx)
-	}
+	log.Info("Starting dashboard server", "addr", cfg.BindAddress)
+	return httpx.ListenAndServeWithShutdown(httpSrv, log, "dashboard", 10*time.Second, httpSrv.ListenAndServe)
 }

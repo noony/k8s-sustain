@@ -2,35 +2,30 @@ package dashboard
 
 import (
 	"compress/gzip"
-	"context"
-	"fmt"
 	"io"
 	"net/http"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/noony/k8s-sustain/internal/httpx"
 )
 
-// ---- Request ID ----
+// ---- Request ID / Recovery / Telemetry: delegate to internal/httpx ----
 
-// withRequestID accepts an inbound X-Request-Id (so a frontend can stitch
-// together its own correlation chain) or generates one. The value is then
-// available three ways:
-//
-//   - on the response headers (echoed back to the client)
-//   - on the request context for handlers
-//   - through writeJSON / writeError which copy it into the response body's
-//     meta so a UI error report can include it without inspecting headers
 func (s *Server) withRequestID(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rid := r.Header.Get(requestIDHeader)
-		if rid == "" {
-			rid = newRequestID()
-		}
-		w.Header().Set(requestIDHeader, rid)
-		ctx := context.WithValue(r.Context(), requestIDKey, rid)
-		next.ServeHTTP(w, r.WithContext(ctx))
+	return httpx.WithRequestID(next)
+}
+
+func (s *Server) withRecovery(next http.Handler) http.Handler {
+	return httpx.WithRecovery(next, s.Logger, func(path string) {
+		panicTotal.WithLabelValues(path).Inc()
+	})
+}
+
+func (s *Server) withTelemetry(next http.Handler) http.Handler {
+	return httpx.WithTelemetry(next, s.Logger, func(path, status string, dur time.Duration) {
+		requestDuration.WithLabelValues(path, status).Observe(dur.Seconds())
 	})
 }
 
@@ -67,68 +62,6 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
-	})
-}
-
-// ---- Recovery ----
-
-// withRecovery turns a handler panic into a 500 response and a structured
-// log entry instead of crashing the dashboard process. Sits inside
-// withTelemetry so the recovered request still gets observed with its
-// final 500 status.
-func (s *Server) withRecovery(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			rec := recover()
-			if rec == nil {
-				return
-			}
-			if rec == http.ErrAbortHandler {
-				panic(rec)
-			}
-			s.Logger.Error(nil, "dashboard handler panic",
-				"panic", fmt.Sprint(rec),
-				"path", r.URL.Path,
-				"method", r.Method,
-				"requestId", requestIDFromContext(r.Context()),
-				"stack", string(debug.Stack()),
-			)
-			panicTotal.WithLabelValues(r.URL.Path).Inc()
-			writeError(w, http.StatusInternalServerError, "internal error")
-		}()
-		next.ServeHTTP(w, r)
-	})
-}
-
-// ---- Telemetry ----
-
-// telemetryResponseWriter captures the status code so withTelemetry can
-// record it in the request_duration histogram and in the access log.
-type telemetryResponseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-func (rw *telemetryResponseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
-}
-
-func (s *Server) withTelemetry(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rw := &telemetryResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-		next.ServeHTTP(rw, r)
-		dur := time.Since(start)
-		requestDuration.WithLabelValues(r.URL.Path, http.StatusText(rw.statusCode)).Observe(dur.Seconds())
-		s.Logger.V(1).Info("http request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rw.statusCode,
-			"duration", dur.String(),
-			"requestId", requestIDFromContext(r.Context()),
-			"remote", r.RemoteAddr,
-		)
 	})
 }
 

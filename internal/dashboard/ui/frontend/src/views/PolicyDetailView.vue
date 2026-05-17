@@ -151,8 +151,6 @@ function modeBadges(): string {
   if (u.daemonSet) parts.push(`DS:${u.daemonSet}`)
   if (u.cronJob) parts.push(`CJ:${u.cronJob}`)
   if (u.job) parts.push(`Job:${u.job}`)
-  if (u.family) parts.push(`Family:${u.family}`)
-  if (u.deploymentConfig) parts.push(`DC:${u.deploymentConfig}`)
   if (u.argoRollout) parts.push(`Rollout:${u.argoRollout}`)
   return parts.join(', ') || '-'
 }

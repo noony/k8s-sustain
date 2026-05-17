@@ -110,8 +110,6 @@ export interface UpdateTypes {
   daemonSet?: string
   cronJob?: string
   job?: string
-  family?: string
-  deploymentConfig?: string
   argoRollout?: string
 }
 

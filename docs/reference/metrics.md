@@ -74,6 +74,17 @@ for the formulas.
 |------|------|--------|
 | `k8s_sustain_dashboard_request_duration_seconds`         | histogram | `path`, `status` |
 | `k8s_sustain_dashboard_prometheus_query_duration_seconds`| histogram | `rule` |
+| `k8s_sustain_dashboard_panic_total`                      | counter   | `path` |
+
+### Webhook server
+
+| Name | Type | Labels |
+|------|------|--------|
+| `k8s_sustain_webhook_request_duration_seconds` | histogram | `path`, `status` |
+| `k8s_sustain_webhook_panic_total`              | counter   | `path` |
+| `k8s_sustain_webhook_cert_expiry_seconds`      | gauge     | — |
+
+The webhook shares the same HTTP middleware stack as the dashboard (request-ID correlation via `X-Request-Id`, panic recovery, duration telemetry, body-size limit). Both stacks live in `internal/httpx`.
 
 ## Recording rules
 

@@ -45,10 +45,10 @@ type policyRollups struct {
 }
 
 func (s *Server) fetchPolicyRollups(ctx context.Context) policyRollups {
-	wl, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_policy_workload_count", "policy")
-	cpu, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain:policy_cpu_savings_cores", "policy")
-	mem, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain:policy_memory_savings_bytes", "policy")
-	risk, _ := s.PromClient.QueryByLabel(ctx, "k8s_sustain_policy_at_risk_count", "policy")
+	wl, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyWorkloadCount, "policy")
+	cpu, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyCPUSavingsCores, "policy")
+	mem, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyMemorySavingsBytes, "policy")
+	risk, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyAtRiskCount, "policy")
 	return policyRollups{workloadCount: wl, cpuSavingsCores: cpu, memSavingsBytes: mem, atRiskCount: risk}
 }
 
@@ -123,8 +123,8 @@ func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name
 		return
 	}
 
-	cpuSeries, _ := s.PromClient.QueryRange(ctx, fmt.Sprintf(`k8s_sustain:policy_cpu_savings_cores{policy=%q}`, name), window, step)
-	memSeries, _ := s.PromClient.QueryRange(ctx, fmt.Sprintf(`k8s_sustain:policy_memory_savings_bytes{policy=%q}`, name), window, step)
+	cpuSeries, _ := s.PromClient.QueryRange(ctx, fmt.Sprintf(`%s{policy=%q}`, promclient.MetricPolicyCPUSavingsCores, name), window, step)
+	memSeries, _ := s.PromClient.QueryRange(ctx, fmt.Sprintf(`%s{policy=%q}`, promclient.MetricPolicyMemorySavingsBytes, name), window, step)
 	if cpuSeries == nil {
 		cpuSeries = []promclient.TimeValue{}
 	}

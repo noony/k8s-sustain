@@ -368,16 +368,6 @@ func (in *UpdateTypes) DeepCopyInto(out *UpdateTypes) {
 		*out = new(UpdateMode)
 		**out = **in
 	}
-	if in.Family != nil {
-		in, out := &in.Family, &out.Family
-		*out = new(UpdateMode)
-		**out = **in
-	}
-	if in.DeploymentConfig != nil {
-		in, out := &in.DeploymentConfig, &out.DeploymentConfig
-		*out = new(UpdateMode)
-		**out = **in
-	}
 	if in.ArgoRollout != nil {
 		in, out := &in.ArgoRollout, &out.ArgoRollout
 		*out = new(UpdateMode)

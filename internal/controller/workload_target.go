@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // workloadTarget is the unit of work for reconciliation. It represents a single
@@ -37,69 +38,43 @@ func (w *workloadTarget) key() string { //nolint:unused // used in Task 5 reconc
 // When excludeInit is true (or the workload has no init containers), the init
 // list is dropped and the returned set is empty.
 func (w *workloadTarget) recommendableContainers(excludeInit bool) ([]corev1.Container, map[string]struct{}) {
-	if excludeInit || len(w.InitContainers) == 0 {
-		return w.Containers, nil
+	return workload.MergeContainersForRecommendation(w.Containers, w.InitContainers, excludeInit)
+}
+
+// newTargetFromTemplate assembles a workloadTarget from a typed workload
+// object and its pod template. Callers pass the template explicitly so this
+// helper can stay agnostic of the rollouts API (workload.PodTemplateOf does
+// not handle Argo Rollouts).
+func newTargetFromTemplate(obj client.Object, kind string, tmpl *corev1.PodTemplateSpec, selector *metav1.LabelSelector) workloadTarget {
+	t := workloadTarget{
+		Kind:      kind,
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+		Selector:  selector,
+		Object:    obj,
 	}
-	merged := make([]corev1.Container, 0, len(w.Containers)+len(w.InitContainers))
-	merged = append(merged, w.Containers...)
-	merged = append(merged, w.InitContainers...)
-	initNames := make(map[string]struct{}, len(w.InitContainers))
-	for _, c := range w.InitContainers {
-		initNames[c.Name] = struct{}{}
+	if tmpl != nil {
+		t.PolicyName = tmpl.Annotations[sustainv1alpha1.PolicyAnnotation]
+		t.Containers = tmpl.Spec.Containers
+		t.InitContainers = tmpl.Spec.InitContainers
 	}
-	return merged, initNames
+	return t
 }
 
 func deploymentToTarget(d *appsv1.Deployment) workloadTarget {
-	return workloadTarget{
-		Kind:           "Deployment",
-		Name:           d.Name,
-		Namespace:      d.Namespace,
-		PolicyName:     d.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
-		Containers:     d.Spec.Template.Spec.Containers,
-		InitContainers: d.Spec.Template.Spec.InitContainers,
-		Selector:       d.Spec.Selector,
-		Object:         d,
-	}
+	return newTargetFromTemplate(d, "Deployment", &d.Spec.Template, d.Spec.Selector)
 }
 
 func statefulSetToTarget(s *appsv1.StatefulSet) workloadTarget {
-	return workloadTarget{
-		Kind:           "StatefulSet",
-		Name:           s.Name,
-		Namespace:      s.Namespace,
-		PolicyName:     s.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
-		Containers:     s.Spec.Template.Spec.Containers,
-		InitContainers: s.Spec.Template.Spec.InitContainers,
-		Selector:       s.Spec.Selector,
-		Object:         s,
-	}
+	return newTargetFromTemplate(s, "StatefulSet", &s.Spec.Template, s.Spec.Selector)
 }
 
 func daemonSetToTarget(ds *appsv1.DaemonSet) workloadTarget {
-	return workloadTarget{
-		Kind:           "DaemonSet",
-		Name:           ds.Name,
-		Namespace:      ds.Namespace,
-		PolicyName:     ds.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
-		Containers:     ds.Spec.Template.Spec.Containers,
-		InitContainers: ds.Spec.Template.Spec.InitContainers,
-		Selector:       ds.Spec.Selector,
-		Object:         ds,
-	}
+	return newTargetFromTemplate(ds, "DaemonSet", &ds.Spec.Template, ds.Spec.Selector)
 }
 
 func rolloutToTarget(r *rolloutsv1alpha1.Rollout) workloadTarget {
-	return workloadTarget{
-		Kind:           "Rollout",
-		Name:           r.Name,
-		Namespace:      r.Namespace,
-		PolicyName:     r.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
-		Containers:     r.Spec.Template.Spec.Containers,
-		InitContainers: r.Spec.Template.Spec.InitContainers,
-		Selector:       r.Spec.Selector,
-		Object:         r,
-	}
+	return newTargetFromTemplate(r, "Rollout", &r.Spec.Template, r.Spec.Selector)
 }
 
 // cronJobToTarget builds a workloadTarget from a CronJob. The opt-in policy
@@ -107,16 +82,7 @@ func rolloutToTarget(r *rolloutsv1alpha1.Rollout) workloadTarget {
 // used for other kinds. Selector is left nil — CronJob reconciliation patches
 // the JobTemplate directly and never lists/recycles pods.
 func cronJobToTarget(c *batchv1.CronJob) workloadTarget {
-	return workloadTarget{
-		Kind:           "CronJob",
-		Name:           c.Name,
-		Namespace:      c.Namespace,
-		PolicyName:     c.Spec.JobTemplate.Spec.Template.Annotations[sustainv1alpha1.PolicyAnnotation],
-		Containers:     c.Spec.JobTemplate.Spec.Template.Spec.Containers,
-		InitContainers: c.Spec.JobTemplate.Spec.Template.Spec.InitContainers,
-		Selector:       nil,
-		Object:         c,
-	}
+	return newTargetFromTemplate(c, "CronJob", &c.Spec.JobTemplate.Spec.Template, nil)
 }
 
 // filterTargets returns targets that match the given policy name and are not

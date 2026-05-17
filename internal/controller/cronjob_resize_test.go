@@ -34,7 +34,7 @@ func TestIsOwnedBy_ControllerRefMatch(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isOwnedBy(tc.refs, uid); got != tc.want {
+			if got := workload.IsOwnedBy(tc.refs, uid); got != tc.want {
 				t.Errorf("isOwnedBy = %v, want %v", got, tc.want)
 			}
 		})

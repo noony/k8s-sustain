@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -41,40 +42,29 @@ func (s *Server) handleSummaryTrend(w http.ResponseWriter, r *http.Request) {
 	// mapping), so summing them as-is over-counts and makes Current request
 	// appear above Original request even when right-sizing is working. Filter
 	// usage and current-request to the same managed-workload scope by joining
-	// against k8s_sustain_workload_template_*.
-	const (
-		cpuUsageScoped = `sum(
-			k8s_sustain:workload_cpu_usage:cores
+	// against the template-* metrics.
+	scoped := func(metric, joinKey string) string {
+		return fmt.Sprintf(`sum(
+			%s
 			and on(namespace, owner_kind, owner_name, container)
-			k8s_sustain_workload_template_cpu_cores
-		)`
-		cpuRequestScoped = `sum(
-			k8s_sustain:container_cpu_requests_by_workload:cores
-			and on(namespace, owner_kind, owner_name, container)
-			k8s_sustain_workload_template_cpu_cores
-		)`
-		memUsageScoped = `sum(
-			k8s_sustain:workload_memory_usage:bytes
-			and on(namespace, owner_kind, owner_name, container)
-			k8s_sustain_workload_template_memory_bytes
-		)`
-		memRequestScoped = `sum(
-			k8s_sustain:container_memory_requests_by_workload:bytes
-			and on(namespace, owner_kind, owner_name, container)
-			k8s_sustain_workload_template_memory_bytes
-		)`
-	)
+			%s
+		)`, metric, joinKey)
+	}
+	cpuUsageScoped := scoped(promclient.MetricWorkloadCPUUsageCores, promclient.MetricWorkloadTemplateCPUCores)
+	cpuRequestScoped := scoped(promclient.MetricContainerCPURequestsByWorkloadCores, promclient.MetricWorkloadTemplateCPUCores)
+	memUsageScoped := scoped(promclient.MetricWorkloadMemoryUsageBytes, promclient.MetricWorkloadTemplateMemoryBytes)
+	memRequestScoped := scoped(promclient.MetricContainerMemoryRequestsByWorkloadBytes, promclient.MetricWorkloadTemplateMemoryBytes)
 
 	resp := trendResponse{
 		CPU: trendSeries{
 			Usage:           s.queryRangeOrEmpty(r.Context(), cpuUsageScoped, window, step),
 			Request:         s.queryRangeOrEmpty(r.Context(), cpuRequestScoped, window, step),
-			OriginalRequest: s.queryRangeOrEmpty(r.Context(), "sum(k8s_sustain_workload_template_cpu_cores)", window, step),
+			OriginalRequest: s.queryRangeOrEmpty(r.Context(), fmt.Sprintf("sum(%s)", promclient.MetricWorkloadTemplateCPUCores), window, step),
 		},
 		Memory: trendSeries{
 			Usage:           s.queryRangeOrEmpty(r.Context(), memUsageScoped, window, step),
 			Request:         s.queryRangeOrEmpty(r.Context(), memRequestScoped, window, step),
-			OriginalRequest: s.queryRangeOrEmpty(r.Context(), "sum(k8s_sustain_workload_template_memory_bytes)", window, step),
+			OriginalRequest: s.queryRangeOrEmpty(r.Context(), fmt.Sprintf("sum(%s)", promclient.MetricWorkloadTemplateMemoryBytes), window, step),
 		},
 	}
 	writeJSON(w, http.StatusOK, resp)
