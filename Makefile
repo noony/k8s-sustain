@@ -1,5 +1,5 @@
 BINARY ?= k8s-sustain
-CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@latest
+CONTROLLER_GEN ?= go tool controller-gen
 IMG ?= ghcr.io/noony/k8s-sustain:dev
 PLATFORMS ?= linux/amd64,linux/arm64
 
@@ -36,7 +36,7 @@ tidy: ## Run go mod tidy
 	go mod tidy
 
 generate: ## Generate DeepCopy methods
-	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+	$(CONTROLLER_GEN) object:headerFile=hack/boilerplate.go.txt paths="./..."
 
 manifests: sync-crds ## Generate CRD manifests and sync to Helm chart
 
