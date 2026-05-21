@@ -5,7 +5,7 @@ PLATFORMS ?= linux/amd64,linux/arm64
 
 include Makefile.scenarios
 
-.PHONY: help build test lint generate manifests sync-crds verify-crds sync-rules verify-rules tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template port-forward port-forward-stop
+.PHONY: help build test lint generate manifests generate-crds verify-crds sync-rules verify-rules tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template port-forward port-forward-stop
 
 NAMESPACE ?= k8s-sustain
 DASHBOARD_PORT ?= 8090
@@ -38,17 +38,14 @@ tidy: ## Run go mod tidy
 generate: ## Generate DeepCopy methods
 	$(CONTROLLER_GEN) object:headerFile=hack/boilerplate.go.txt paths="./..."
 
-manifests: sync-crds ## Generate CRD manifests and sync to Helm chart
+manifests: generate-crds ## Generate CRD manifests into the Helm chart
 
 generate-crds:
-	$(CONTROLLER_GEN) crd:allowDangerousTypes=true paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) crd:allowDangerousTypes=true paths="./..." output:crd:artifacts:config=charts/k8s-sustain/files/crds
 
-sync-crds: generate-crds
-	./hack/sync-crds.sh
-
-verify-crds: sync-crds ## Verify Helm chart CRD is in sync with generated one
-	@git diff --exit-code charts/k8s-sustain/templates/crd-policy.yaml || \
-		(echo "ERROR: CRD in Helm chart is out of sync. Run 'make manifests' and commit." && exit 1)
+verify-crds: generate-crds ## Verify generated CRDs are in sync with the Go types
+	@git diff --exit-code charts/k8s-sustain/files/crds || \
+		(echo "ERROR: CRDs in Helm chart are out of sync with Go types. Run 'make manifests' and commit." && exit 1)
 
 sync-rules: ## Regenerate values.yaml's recording rules block from charts/k8s-sustain/files/recording-rules.yaml
 	@./hack/sync-recording-rules.sh

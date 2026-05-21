@@ -38,7 +38,7 @@ repos:
         entry: make verify-crds
         language: system
         pass_filenames: false
-        files: ^(api/|charts/k8s-sustain/templates/crd-)
+        files: ^(api/|charts/k8s-sustain/files/crds/)
       - id: verify-rules
         name: verify recording rules in sync
         entry: make verify-rules
