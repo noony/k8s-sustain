@@ -11,6 +11,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -59,7 +60,12 @@ func (r *PolicyReconciler) buildRecommendations(
 		logger.V(1).Info("oom signal query failed; proceeding without OOM floor", "err", err)
 		oomSignal = promclient.OOMSignal{}
 	}
-	recentOOM := oomSignal.OOMCount > 0
+
+	var liveOOMs map[string]*oomwatch.OOMRecord
+	if r.LiveOOM.Enabled() {
+		liveOOMs = r.LiveOOM.Source.RecentByWorkload(ns, ownerKind, ownerName, r.LiveOOM.EffectiveMaxAge())
+	}
+	recentOOM := oomSignal.OOMCount > 0 || len(liveOOMs) > 0
 
 	// Skip recommendation when the workload itself is too young to have
 	// produced stable rate samples. This is a workload-age question, not a
@@ -127,7 +133,9 @@ func (r *PolicyReconciler) buildRecommendations(
 		// OR a recent OOM gives us a peak/current floor to anchor on.
 		total, hasUsage := memTotals[c.Name]
 		_, hasPeak := oomSignal.PeakMemoryBytes[c.Name]
-		if hasUsage || (recentOOM && hasPeak) {
+		liveRec := liveOOMs[c.Name]
+		hasLive := liveRec != nil
+		if hasUsage || (recentOOM && hasPeak) || hasLive {
 			var perPod float64
 			if hasUsage {
 				perPod = recommender.PerPodFromTotal(total, replicas)
@@ -139,6 +147,15 @@ func (r *PolicyReconciler) buildRecommendations(
 				OOMTimeLimitBytes: oomSignal.OOMLimitBytes[c.Name],
 				BumpFactor:        defaultOOMBumpFactor,
 			}
+			if hasLive {
+				oom.LiveEventAt = liveRec.TerminatedAt
+				// Fall back to the cache-captured limit when Prometheus has not
+				// yet surfaced it. The cache value is the cgroup limit the
+				// kernel killed at, captured from the pod spec at OOM time.
+				if oom.OOMTimeLimitBytes == 0 && liveRec.OOMLimitBytes > 0 {
+					oom.OOMTimeLimitBytes = float64(liveRec.OOMLimitBytes)
+				}
+			}
 			if cur := c.Resources.Requests.Memory(); cur != nil && !cur.IsZero() {
 				oom.CurrentRequestBytes = float64(cur.Value())
 			}
@@ -146,6 +163,9 @@ func (r *PolicyReconciler) buildRecommendations(
 			rec.MemoryRequest = memQty
 			if floorApplied {
 				oomFloorApplied.WithLabelValues(ns, ownerKind, ownerName, c.Name).Inc()
+				if hasLive && !liveRec.TerminatedAt.IsZero() {
+					EmitOOMReactionLatency(ns, ownerKind, ownerName, time.Since(liveRec.TerminatedAt).Seconds())
+				}
 			}
 			logger.V(1).Info("computed memory recommendation",
 				"container", c.Name, "hasUsage", hasUsage, "totalBytes", total, "replicas", replicas,

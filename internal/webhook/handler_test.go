@@ -121,7 +121,7 @@ func TestResolveOwner_RolloutChain(t *testing.T) {
 		},
 	}
 
-	kind, name, err := h.resolveOwner(context.Background(), pod)
+	kind, name, err := workload.ResolvePodOwner(context.Background(), h.Client, pod)
 	if err != nil {
 		t.Fatalf("resolveOwner: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestResolveOwner_DeploymentChain(t *testing.T) {
 		},
 	}
 
-	kind, name, err := h.resolveOwner(context.Background(), pod)
+	kind, name, err := workload.ResolvePodOwner(context.Background(), h.Client, pod)
 	if err != nil {
 		t.Fatalf("resolveOwner: %v", err)
 	}

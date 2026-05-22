@@ -65,6 +65,20 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
 
 The controller requeues after `--reconcile-interval` (default `5m`).
 
+### Pod OOM watcher
+
+A second controller-runtime reconciler runs alongside the Policy reconciler and watches `Pod` objects cluster-wide, filtered to those carrying the `k8s.sustain.io/policy` annotation. It exists to close the multi-minute latency window between an OOM kill and the next recording-rule-driven reconcile (kube-state-metrics scrape → Prometheus scrape → 1m rule evaluation → 5–10m reconcile interval).
+
+When a container's `LastTerminationState.Terminated.Reason == "OOMKilled"` is observed, the watcher:
+
+- Resolves the pod's top-level workload owner and upserts an entry in an in-memory cache keyed by `(namespace, ownerKind, ownerName, container)`. Restart-count and termination timestamp are used to dedup repeated observations of the same kill.
+- Captures the container's memory limit from the pod spec at that moment, so the recommender has a bump anchor even when Prometheus hasn't yet surfaced the OOM-time limit recording rule.
+- Enqueues the owning Policy for immediate reconcile via a `source.Channel` wired into the Policy reconciler's work queue.
+
+The recommender reads the cache during recommendation build: a hit sets the live OOM signal equivalent to the Prometheus `workload_oom_24h` flag and feeds the OOM-floor stage of the [Recommendation Pipeline](recommendation-pipeline.md#stages). The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.
+
+**Operational notes.** The cache is in-memory and lives only for the lifetime of the controller process; on restart, the 24h Prometheus history (`k8s_sustain:workload_oom_24h`, `k8s_sustain:container_oom_limit_24h:bytes`) repopulates the floor on the next reconcile. Only pods carrying the `k8s.sustain.io/policy` annotation are watched, so cardinality is bounded by opted-in workloads. The watcher is leader-elected like other controllers — non-leaders idle.
+
 ## Admission Webhook (`k8s-sustain webhook`)
 
 The webhook is a [mutating admission webhook](https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#mutatingadmissionwebhook) that intercepts `pods/CREATE` requests.

@@ -100,6 +100,22 @@ var (
 		},
 		[]string{"namespace", "owner_kind", "owner_name", "resource", "kind"},
 	)
+
+	oomObservedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "k8s_sustain_oom_observed_total",
+		Help: "Total OOM kills observed by the active Pod watcher.",
+	}, []string{"namespace", "owner_kind", "owner_name", "container"})
+
+	oomReactionLatencySeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "k8s_sustain_oom_reaction_latency_seconds",
+		Help:    "Seconds between an OOM kill (live record TerminatedAt) and the floor-driven memory recommendation that responds to it.",
+		Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600, 1200},
+	}, []string{"namespace", "owner_kind", "owner_name"})
+
+	oomCacheEntries = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "k8s_sustain_oom_cache_entries",
+		Help: "Current number of distinct workload+container entries in the OOM watch cache.",
+	})
 )
 
 func init() {
@@ -121,5 +137,24 @@ func init() {
 		coordinationFactor,
 		recommendationSkipped,
 		oomFloorApplied,
+		oomObservedTotal,
+		oomReactionLatencySeconds,
+		oomCacheEntries,
 	)
+}
+
+// EmitOOMObserved increments the observed-OOM counter for a workload container.
+func EmitOOMObserved(namespace, ownerKind, ownerName, container string) {
+	oomObservedTotal.WithLabelValues(namespace, ownerKind, ownerName, container).Inc()
+}
+
+// EmitOOMReactionLatency records the elapsed time between the cache record's
+// TerminatedAt and the floor-driven memory recommendation that responds to it.
+func EmitOOMReactionLatency(namespace, ownerKind, ownerName string, seconds float64) {
+	oomReactionLatencySeconds.WithLabelValues(namespace, ownerKind, ownerName).Observe(seconds)
+}
+
+// SetOOMCacheEntries sets the current cache size gauge.
+func SetOOMCacheEntries(n int) {
+	oomCacheEntries.Set(float64(n))
 }

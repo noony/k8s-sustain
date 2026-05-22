@@ -9,8 +9,6 @@ import (
 	"time"
 
 	admissionv1 "k8s.io/api/admission/v1"
-	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	apivalidation "k8s.io/apimachinery/pkg/util/validation"
@@ -185,7 +183,9 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allow
 	}
 
-	ownerKind, ownerName, err := h.resolveOwner(ctx, &pod)
+	ownerCtx, ownerCancel := context.WithTimeout(ctx, 2*apiCallTimeout)
+	ownerKind, ownerName, err := workload.ResolvePodOwner(ownerCtx, h.Client, &pod)
+	ownerCancel()
 	if err != nil {
 		logger.Error(err, "failed to resolve owner kind")
 		return allow
@@ -284,60 +284,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		Patch:     patchBytes,
 		PatchType: &pt,
 	}
-}
-
-// resolveOwner walks a pod's ownerReferences to determine the top-level
-// workload kind and name. Handles three indirect chains:
-//   - Pod → ReplicaSet → Deployment
-//   - Pod → ReplicaSet → Rollout (Argo Rollouts)
-//   - Pod → Job → CronJob
-//
-// Returns ("", "", nil) for standalone pods.
-func (h *Handler) resolveOwner(ctx context.Context, pod *corev1.Pod) (kind, name string, err error) {
-	for _, ref := range pod.OwnerReferences {
-		if ref.Controller == nil || !*ref.Controller {
-			continue
-		}
-		switch ref.Kind {
-		case "ReplicaSet":
-			var rs appsv1.ReplicaSet
-			rsCtx, rsCancel := context.WithTimeout(ctx, apiCallTimeout)
-			rsErr := h.Client.Get(rsCtx, types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}, &rs)
-			rsCancel()
-			if rsErr != nil {
-				return "", "", fmt.Errorf("getting replicaset %s: %w", ref.Name, rsErr)
-			}
-			for _, rsRef := range rs.OwnerReferences {
-				if rsRef.Controller == nil || !*rsRef.Controller {
-					continue
-				}
-				switch rsRef.Kind {
-				case "Deployment":
-					return "Deployment", rsRef.Name, nil
-				case "Rollout":
-					return "Rollout", rsRef.Name, nil
-				}
-			}
-			return "ReplicaSet", ref.Name, nil
-		case "Job":
-			var job batchv1.Job
-			jobCtx, jobCancel := context.WithTimeout(ctx, apiCallTimeout)
-			jobErr := h.Client.Get(jobCtx, types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}, &job)
-			jobCancel()
-			if jobErr != nil {
-				return "", "", fmt.Errorf("getting job %s: %w", ref.Name, jobErr)
-			}
-			for _, jobRef := range job.OwnerReferences {
-				if jobRef.Controller != nil && *jobRef.Controller && jobRef.Kind == "CronJob" {
-					return "CronJob", jobRef.Name, nil
-				}
-			}
-			return "Job", ref.Name, nil
-		default:
-			return ref.Kind, ref.Name, nil
-		}
-	}
-	return "", "", nil
 }
 
 // buildRecommendations queries Prometheus for workload-level CPU/memory totals

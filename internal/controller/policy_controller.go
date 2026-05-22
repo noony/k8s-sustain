@@ -12,13 +12,19 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -63,9 +69,39 @@ type PolicyReconciler struct {
 	// (strategy 2 cleanup). Zero falls back to 10 minutes.
 	OrphanReapInterval time.Duration
 
+	// LiveOOM bundles the dependencies for the active Pod-watcher path.
+	// A zero value (Source nil, TriggerCh nil) disables it; both fields are
+	// expected to be wired as a pair.
+	LiveOOM LiveOOMConfig
+
 	recorder record.EventRecorder
 	patcher  *workload.Patcher
 	retries  *retryTracker
+}
+
+// LiveOOMConfig groups the inputs from the active OOM Pod watcher. Source
+// feeds the recommender; TriggerCh enqueues affected Policies on each
+// observed kill; MaxAge bounds how recent a cache record must be to count as
+// a live signal (zero means oomwatch.DefaultRecentMaxAge).
+type LiveOOMConfig struct {
+	Source    oomwatch.Source
+	TriggerCh <-chan event.GenericEvent
+	MaxAge    time.Duration
+}
+
+// Enabled reports whether both halves of the live-OOM path are wired.
+// Partial wiring is treated as disabled so a caller that forgets one field
+// doesn't get a half-active feature.
+func (c LiveOOMConfig) Enabled() bool {
+	return c.Source != nil && c.TriggerCh != nil
+}
+
+// EffectiveMaxAge returns MaxAge or DefaultRecentMaxAge when MaxAge <= 0.
+func (c LiveOOMConfig) EffectiveMaxAge() time.Duration {
+	if c.MaxAge <= 0 {
+		return oomwatch.DefaultRecentMaxAge
+	}
+	return c.MaxAge
 }
 
 // SetupWithManager registers the PolicyReconciler with the given manager.
@@ -83,9 +119,24 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.Add(&orphanReaper{reconciler: r, interval: r.OrphanReapInterval}); err != nil {
 		return err
 	}
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&sustainv1alpha1.Policy{}).
-		Complete(r)
+	b := ctrl.NewControllerManagedBy(mgr).
+		For(&sustainv1alpha1.Policy{})
+	if r.LiveOOM.Enabled() {
+		// The watcher feeds synthetic Policy GenericEvents (Name = policy
+		// annotation value). The map func turns each into a reconcile.Request,
+		// so an observed OOM enqueues the owning Policy immediately.
+		b = b.WatchesRawSource(
+			source.Channel(r.LiveOOM.TriggerCh,
+				handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+					if obj == nil || obj.GetName() == "" {
+						return nil
+					}
+					return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: obj.GetName()}}}
+				}),
+			),
+		)
+	}
+	return b.Complete(r)
 }
 
 // Reconcile is the main reconciliation loop for Policy objects.

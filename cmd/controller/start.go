@@ -1,20 +1,26 @@
 package controller
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/controller"
 	"github.com/noony/k8s-sustain/internal/logging"
+	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
@@ -68,6 +74,42 @@ func runStart(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
+	oomCache := oomwatch.NewCache(oomwatch.DefaultRecentMaxAge)
+	oomCache.SizeObserver = controller.SetOOMCacheEntries
+	// Big enough to absorb a rolling-restart burst across a few hundred pods;
+	// small enough that a stuck reconciler does not pile up unbounded events.
+	// Drops on overflow are safe — the next ReconcileInterval tick catches up.
+	const oomTriggerBuffer = 256
+	triggerCh := make(chan event.GenericEvent, oomTriggerBuffer)
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		oomCache.Run(ctx)
+		return nil
+	})); err != nil {
+		log.Error(err, "Unable to start OOM cache sweeper")
+		return err
+	}
+	oomHandler := oomwatch.EventHandlerFunc(func(ctx context.Context, key oomwatch.Key, rec oomwatch.OOMRecord) {
+		if rec.PolicyName == "" {
+			return
+		}
+		controller.EmitOOMObserved(key.Namespace, key.OwnerKind, key.OwnerName, key.Container)
+		select {
+		case triggerCh <- event.GenericEvent{Object: &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: rec.PolicyName}}}:
+		default:
+			// Channel full: the next reconcile interval will catch up via
+			// Prometheus. Better than blocking the watcher.
+		}
+	})
+	watcher := &oomwatch.Watcher{
+		Client:  mgr.GetClient(),
+		Sink:    oomCache,
+		Handler: oomHandler,
+	}
+	if err := watcher.SetupWithManager(mgr); err != nil {
+		log.Error(err, "Unable to create OOM watcher")
+		return err
+	}
+
 	if err := (&controller.PolicyReconciler{
 		Client:                    mgr.GetClient(),
 		Scheme:                    mgr.GetScheme(),
@@ -78,6 +120,10 @@ func runStart(_ *cobra.Command, _ []string) error {
 		RecommendOnly:             cfg.RecommendOnly,
 		ConcurrencyLimit:          cfg.ConcurrencyLimit,
 		RecycleReplacementTimeout: cfg.RecycleReplacementTimeout,
+		LiveOOM: controller.LiveOOMConfig{
+			Source:    oomCache,
+			TriggerCh: triggerCh,
+		},
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "Unable to create Policy controller")
 		return err

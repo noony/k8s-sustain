@@ -2,6 +2,7 @@ package recommender
 
 import (
 	"math"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -113,12 +114,19 @@ func ComputeMemoryRequest(rawBytes float64, cfg sustainv1alpha1.ResourceRequests
 // OOM event fires; once the workload fits after a bump, no new OOM events
 // occur and the recorded limit stays at the pre-bump value.
 // To enforce a hard "never go below X", use cfg.MinAllowed.
+//
+// LiveEventAt is non-zero when an in-memory OOM observation (from the
+// active Pod watcher) corroborates or replaces the Prometheus signal. The
+// floor logic treats `LiveEventAt non-zero` as equivalent to `Recent==true`
+// so a freshly-observed kill drives a bump without waiting for the recording
+// rule to surface it.
 type OOMSignal struct {
 	Recent              bool
 	PeakBytes           float64
 	OOMTimeLimitBytes   float64
 	BumpFactor          float64
 	CurrentRequestBytes float64
+	LiveEventAt         time.Time
 }
 
 // ComputeMemoryRequestWithOOM is ComputeMemoryRequest with an OOM-aware floor.
@@ -145,7 +153,8 @@ func ComputeMemoryRequestWithOOMFloorReport(rawBytes float64, signal OOMSignal, 
 	}
 	effective := rawBytes
 	floorWins := false
-	if signal.Recent {
+	recent := signal.Recent || !signal.LiveEventAt.IsZero()
+	if recent {
 		floor := signal.PeakBytes
 		if signal.BumpFactor > 1 && signal.OOMTimeLimitBytes > 0 {
 			if bumped := signal.OOMTimeLimitBytes * signal.BumpFactor; bumped > floor {
