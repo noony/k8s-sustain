@@ -102,7 +102,3 @@ type WorkloadRecommendationList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []WorkloadRecommendation `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&WorkloadRecommendation{}, &WorkloadRecommendationList{})
-}
