@@ -113,7 +113,7 @@ A **time range selector** in the top-right lets you choose how much history to d
 
 Memory charts also display **OOM kill events** as red vertical markers with a count badge in the chart header. These are detected via `kube_pod_container_status_restarts_total` correlated with `kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}`. If no kube-state-metrics is available, OOM markers are silently omitted.
 
-When the workload has OOM'd in the last 24h, the displayed **memory recommendation** is floored at the kernel high-water peak (same `OOM floor` step described in [Recommendation pipeline](../concepts/recommendation-pipeline.md)), so what the dashboard shows matches what the controller would actually apply.
+When the workload has OOM'd in the last 24h, the displayed **memory recommendation** is floored at `max(kernel high-water peak, OOM-time cgroup limit × 1.20)` (same `OOM floor` step described in [Recommendation pipeline](../concepts/recommendation-pipeline.md)), so what the dashboard's recommendation card and chart line show matches what the controller would actually apply — including the bump anchor that takes over when the kernel peak underreports on cgroup v2.
 
 Enable **Auto-refresh** to keep data current.
 

@@ -19,6 +19,25 @@ const (
 	minMemoryMiB     = 1
 )
 
+// DefaultOOMBumpFactor is the multiplier applied to the OOM-time memory limit
+// when computing the OOM-aware floor. 1.20 matches VPA's MemoryBumpUpRatio —
+// large enough to escape the limit the kernel killed at, small enough to
+// converge quickly when the workload's real need sits just above the prior
+// limit.
+const DefaultOOMBumpFactor = 1.20
+
+// NewOOMSignal builds an OOMSignal with DefaultOOMBumpFactor pre-set.
+// Callers that need LiveEventAt or CurrentRequestBytes set those fields on
+// the returned value directly.
+func NewOOMSignal(recent bool, peakBytes, oomLimitBytes float64) OOMSignal {
+	return OOMSignal{
+		Recent:            recent,
+		PeakBytes:         peakBytes,
+		OOMTimeLimitBytes: oomLimitBytes,
+		BumpFactor:        DefaultOOMBumpFactor,
+	}
+}
+
 // MinCPURequest returns the hard floor applied to CPU recommendations.
 func MinCPURequest() *resource.Quantity {
 	return resource.NewMilliQuantity(minCPUMillicores, resource.DecimalSI)

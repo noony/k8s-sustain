@@ -442,10 +442,7 @@ func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, na
 			cr.MemoryUsageBytes = memBytes
 		}
 		if hasUsage || (recentOOM && hasPeak) {
-			oom := recommender.OOMSignal{
-				Recent:    recentOOM,
-				PeakBytes: oomSignal.PeakMemoryBytes[n],
-			}
+			oom := recommender.NewOOMSignal(recentOOM, oomSignal.PeakMemoryBytes[n], oomSignal.OOMLimitBytes[n])
 			if qty := recommender.ComputeMemoryRequestWithOOM(memBytes, oom, memCfg.Requests); qty != nil {
 				cr.MemoryRequest = qty.String()
 			}

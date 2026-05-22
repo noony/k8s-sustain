@@ -130,10 +130,7 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		memBytes, hasUsage := memValues[name]
 		_, hasPeak := oomSignal.PeakMemoryBytes[name]
 		if hasUsage || (recentOOM && hasPeak) {
-			oom := recommender.OOMSignal{
-				Recent:    recentOOM,
-				PeakBytes: oomSignal.PeakMemoryBytes[name],
-			}
+			oom := recommender.NewOOMSignal(recentOOM, oomSignal.PeakMemoryBytes[name], oomSignal.OOMLimitBytes[name])
 			memQty = recommender.ComputeMemoryRequestWithOOM(memBytes, oom, memCfg)
 			if memQty != nil {
 				result.MemoryRequest = memQty.String()
@@ -167,9 +164,8 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	cpuRecSeries, _ := s.PromClient.QueryCPURecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, cpuQuantile, string(cpuWindow), string(timeRange), step)
 	memRecSeries, _ := s.PromClient.QueryMemoryRecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, memQuantile, string(memWindow), string(timeRange), step)
 
-	// Apply headroom / min / max clamping to recommendation series
-	cpuRecSeries = applyClampingToSeries(cpuRecSeries, cpuCfg, true)
-	memRecSeries = applyClampingToSeries(memRecSeries, memCfg, false)
+	cpuRecSeries = applyCPUClampingToSeries(cpuRecSeries, cpuCfg)
+	memRecSeries = applyMemoryClampingToSeries(memRecSeries, memCfg, oomSignal, recentOOM)
 
 	initContainers := s.getInitContainerNames(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
 
@@ -186,28 +182,44 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	}, nil
 }
 
-// applyClampingToSeries runs each raw percentile point through the real
+// applyCPUClampingToSeries runs each raw percentile point through the real
 // recommender so the chart shows the exact value that would be applied to a
-// container's request (including ceil-to-millicore / ceil-to-MiB rounding,
-// floors, and min/max clamping).
-func applyClampingToSeries(series promclient.ContainerTimeSeries, cfg sustainv1alpha1.ResourceRequestsConfig, isCPU bool) promclient.ContainerTimeSeries {
+// container's CPU request (ceil-to-millicore, headroom, min/max clamping).
+func applyCPUClampingToSeries(series promclient.ContainerTimeSeries, cfg sustainv1alpha1.ResourceRequestsConfig) promclient.ContainerTimeSeries {
 	if series == nil {
 		return nil
 	}
-
 	result := make(promclient.ContainerTimeSeries, len(series))
 	for name, points := range series {
 		clamped := make([]promclient.TimeValue, len(points))
 		for i, p := range points {
 			var v float64
-			if isCPU {
-				if qty := recommender.ComputeCPURequest(p.Value, cfg); qty != nil {
-					v = float64(qty.MilliValue()) / 1000.0
-				}
-			} else {
-				if qty := recommender.ComputeMemoryRequest(p.Value, cfg); qty != nil {
-					v = float64(qty.Value())
-				}
+			if qty := recommender.ComputeCPURequest(p.Value, cfg); qty != nil {
+				v = float64(qty.MilliValue()) / 1000.0
+			}
+			clamped[i] = promclient.TimeValue{Timestamp: p.Timestamp, Value: v}
+		}
+		result[name] = clamped
+	}
+	return result
+}
+
+// applyMemoryClampingToSeries is the memory counterpart of
+// applyCPUClampingToSeries. The OOM-aware floor (max(peak, oomLimit × BumpFactor))
+// is applied per container so the chart line tracks what the controller would
+// actually apply.
+func applyMemoryClampingToSeries(series promclient.ContainerTimeSeries, cfg sustainv1alpha1.ResourceRequestsConfig, oomSignal promclient.OOMSignal, recentOOM bool) promclient.ContainerTimeSeries {
+	if series == nil {
+		return nil
+	}
+	result := make(promclient.ContainerTimeSeries, len(series))
+	for name, points := range series {
+		clamped := make([]promclient.TimeValue, len(points))
+		oom := recommender.NewOOMSignal(recentOOM, oomSignal.PeakMemoryBytes[name], oomSignal.OOMLimitBytes[name])
+		for i, p := range points {
+			var v float64
+			if qty := recommender.ComputeMemoryRequestWithOOM(p.Value, oom, cfg); qty != nil {
+				v = float64(qty.Value())
 			}
 			clamped[i] = promclient.TimeValue{Timestamp: p.Timestamp, Value: v}
 		}
