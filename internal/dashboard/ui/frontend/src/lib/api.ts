@@ -250,6 +250,8 @@ export interface MetricsData {
   resources?: Record<string, ContainerResources>
   cpuRequests?: Record<string, TimeValue[]>
   memoryRequests?: Record<string, TimeValue[]>
+  cpuLimits?: Record<string, TimeValue[]>
+  memoryLimits?: Record<string, TimeValue[]>
   oomEvents?: OOMEvent[]
   initContainers?: string[]
 }

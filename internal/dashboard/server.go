@@ -37,6 +37,8 @@ type PromQuerier interface {
 	QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
 	QueryCPURequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
 	QueryMemoryRequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
+	QueryCPULimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
+	QueryMemoryLimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
 	QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (promclient.ContainerTimeSeries, error)
 	QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (promclient.ContainerTimeSeries, error)
 	QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName, window, step string) ([]promclient.OOMEvent, error)

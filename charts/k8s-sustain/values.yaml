@@ -486,6 +486,26 @@ prometheus:
                   * on(namespace, pod) group_left(owner_kind, owner_name)
                   k8s_sustain:pod_workload
                 )
+            # Per-container CPU limits WITH workload labels — used by the dashboard so
+            # the chart reflects the actually-applied per-pod limit (after webhook
+            # injection) rather than the static workload-spec value, which the
+            # operator deliberately never touches.
+            - record: k8s_sustain:container_cpu_limits_by_workload:cores
+              expr: |
+                max by (namespace, container, owner_kind, owner_name) (
+                  kube_pod_container_resource_limits{resource="cpu", container!="", container!="POD"}
+                  * on(namespace, pod) group_left(owner_kind, owner_name)
+                  k8s_sustain:pod_workload
+                )
+            # Per-container memory limits WITH workload labels — same rationale as the
+            # CPU limits rule above.
+            - record: k8s_sustain:container_memory_limits_by_workload:bytes
+              expr: |
+                max by (namespace, container, owner_kind, owner_name) (
+                  kube_pod_container_resource_limits{resource="memory", container!="", container!="POD"}
+                  * on(namespace, pod) group_left(owner_kind, owner_name)
+                  k8s_sustain:pod_workload
+                )
             # Per-pod-container CPU request, enriched with workload labels.
             # Sums over this give cluster totals (one series per pod-container).
             - record: k8s_sustain:pod_container_cpu_request:cores

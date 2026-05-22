@@ -165,6 +165,30 @@ max by (namespace, container, owner_kind, owner_name) (
 
 Per-container memory requests with workload labels.
 
+### `k8s_sustain:container_cpu_limits_by_workload:cores`
+
+```promql
+max by (namespace, container, owner_kind, owner_name) (
+  kube_pod_container_resource_limits{resource="cpu", container!="", container!="POD"}
+  * on(namespace, pod) group_left(owner_kind, owner_name)
+  k8s_sustain:pod_workload
+)
+```
+
+Per-container CPU limits with workload labels. Reflects the per-pod cgroup limit (the value the webhook injects on admission), which can differ from the static `Deployment.spec.template` value the operator deliberately never touches.
+
+### `k8s_sustain:container_memory_limits_by_workload:bytes`
+
+```promql
+max by (namespace, container, owner_kind, owner_name) (
+  kube_pod_container_resource_limits{resource="memory", container!="", container!="POD"}
+  * on(namespace, pod) group_left(owner_kind, owner_name)
+  k8s_sustain:pod_workload
+)
+```
+
+Per-container memory limits with workload labels. Same rationale as the CPU limits rule.
+
 ### `k8s_sustain:pod_container_cpu_request:cores`
 
 ```promql

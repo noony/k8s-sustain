@@ -152,24 +152,35 @@ func (c *Client) QueryMemoryRangeByContainer(ctx context.Context, namespace, own
 	return c.queryRangeByContainer(ctx, expr, window, step)
 }
 
-// QueryCPURequestRangeByContainer returns per-container CPU request time-series (cores)
-// over the specified window with the given step resolution.
-// Uses the k8s_sustain:container_cpu_requests_by_workload:cores recording rule.
+// QueryCPURequestRangeByContainer returns per-container CPU request time-series (cores).
 func (c *Client) QueryCPURequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
-	expr := fmt.Sprintf(
-		`max by (container) (k8s_sustain:container_cpu_requests_by_workload:cores{namespace=%q,owner_kind=%q,owner_name=%q})`,
-		namespace, ownerKind, ownerName,
-	)
-	return c.queryRangeByContainer(ctx, expr, window, step)
+	return c.queryMaxByContainerForWorkload(ctx, MetricContainerCPURequestsByWorkloadCores, namespace, ownerKind, ownerName, window, step)
 }
 
-// QueryMemoryRequestRangeByContainer returns per-container memory request time-series (bytes)
-// over the specified window with the given step resolution.
-// Uses the k8s_sustain:container_memory_requests_by_workload:bytes recording rule.
+// QueryMemoryRequestRangeByContainer returns per-container memory request time-series (bytes).
 func (c *Client) QueryMemoryRequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
+	return c.queryMaxByContainerForWorkload(ctx, MetricContainerMemoryRequestsByWorkloadBytes, namespace, ownerKind, ownerName, window, step)
+}
+
+// QueryCPULimitRangeByContainer returns per-container CPU limit time-series (cores).
+// Reads the per-pod cgroup limit (which the webhook updates on pod creation),
+// not the workload spec — the dashboard needs the value pods are actually
+// running with.
+func (c *Client) QueryCPULimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
+	return c.queryMaxByContainerForWorkload(ctx, MetricContainerCPULimitsByWorkloadCores, namespace, ownerKind, ownerName, window, step)
+}
+
+// QueryMemoryLimitRangeByContainer returns per-container memory limit time-series (bytes).
+func (c *Client) QueryMemoryLimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
+	return c.queryMaxByContainerForWorkload(ctx, MetricContainerMemoryLimitsByWorkloadBytes, namespace, ownerKind, ownerName, window, step)
+}
+
+// queryMaxByContainerForWorkload runs `max by (container) (<rule>{workload labels})`
+// against a recording rule and returns the per-container time-series.
+func (c *Client) queryMaxByContainerForWorkload(ctx context.Context, ruleName, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
 	expr := fmt.Sprintf(
-		`max by (container) (k8s_sustain:container_memory_requests_by_workload:bytes{namespace=%q,owner_kind=%q,owner_name=%q})`,
-		namespace, ownerKind, ownerName,
+		`max by (container) (%s{namespace=%q,owner_kind=%q,owner_name=%q})`,
+		ruleName, namespace, ownerKind, ownerName,
 	)
 	return c.queryRangeByContainer(ctx, expr, window, step)
 }
@@ -318,41 +329,34 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 	lookback := max(time.Duration(stepDur), 5*time.Minute)
 	lookbackExpr := model.Duration(lookback).String()
 
-	// Detect OOM kills using two complementary paths, mirroring the
-	// `k8s_sustain:workload_oom_24h` recording rule semantics:
+	// Per-event detection: increase(restarts[lookback]) gated on
+	// last_terminated_reason==OOMKilled. Each restart bumps the value
+	// (0→1, 1→2, …); the value-bump dedup below turns each bump into one
+	// event. A max_over_time fallback on the reason would keep the signal
+	// positive for the entire CrashLoopBackOff tail and collapse subsequent
+	// OOMs into one continuous run — fine for the workload_oom_24h boolean,
+	// not for per-event markers.
 	//
-	//   1. "restarts" path: increase(restarts) * (last_terminated_reason==OOMKilled).
-	//      Accurate event count for restartable pods while their current
-	//      last_terminated_reason is still OOMKilled.
-	//   2. "kill" path: max_over_time(last_terminated_reason{reason="OOMKilled"}==1[lookback]).
-	//      Survives the case where a pod OOMed earlier in the window and then
-	//      terminated for some other reason (CrashLoopBackOff/Error/SIGTERM),
-	//      which flips last_terminated_reason away from OOMKilled and would
-	//      zero out the multiplication in path (1).
-	//
-	// The two paths are joined with `or` so a marker survives at time T when
-	// either is positive. Each is independently scoped to the target workload
-	// via `k8s_sustain:pod_workload`.
+	// Both sides are aggregated with `max by (namespace, pod, container)` to
+	// drop kube-state-metrics scrape-target labels (instance, service, …).
+	// Without this, a KSM rollout inside the chart window produces overlapping
+	// series for the same pod, and the `group_left()` join fails with
+	// "many-to-many matching not allowed", aborting the whole query — which
+	// the dashboard then swallows as an empty OOM list.
 	expr := fmt.Sprintf(
-		`(
-		   increase(kube_pod_container_status_restarts_total{namespace=%q, container!="", container!="POD"}[%s])
-		   * on(namespace, pod, container) group_left()
-		     (kube_pod_container_status_last_terminated_reason{namespace=%q, reason="OOMKilled", container!="", container!="POD"} == 1)
-		   * on(namespace, pod) group_left(owner_kind, owner_name)
-		     k8s_sustain:pod_workload{namespace=%q, owner_kind=%q, owner_name=%q}
-		 )
-		 or
-		 (
-		   max_over_time(
-		     (kube_pod_container_status_last_terminated_reason{namespace=%q, reason="OOMKilled", container!="", container!="POD"} == 1)[%s:]
+		`max by (namespace, pod, container, owner_kind, owner_name) (
+		   max by (namespace, pod, container) (
+		     increase(kube_pod_container_status_restarts_total{namespace=%q, container!="", container!="POD"}[%s])
 		   )
+		   * on(namespace, pod, container) group_left()
+		     max by (namespace, pod, container) (
+		       kube_pod_container_status_last_terminated_reason{namespace=%q, reason="OOMKilled", container!="", container!="POD"} == 1
+		     )
 		   * on(namespace, pod) group_left(owner_kind, owner_name)
 		     k8s_sustain:pod_workload{namespace=%q, owner_kind=%q, owner_name=%q}
 		 )`,
 		namespace, lookbackExpr,
 		namespace,
-		namespace, ownerKind, ownerName,
-		namespace, lookbackExpr,
 		namespace, ownerKind, ownerName,
 	)
 
@@ -384,14 +388,13 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		return nil, nil
 	}
 
-	// Dedup consecutive positive samples per (pod, container). A single counter
-	// increment makes `increase()` positive at every evaluation grid point
-	// inside its lookback window, so without dedup one OOM produces up to
-	// `lookback/step` markers. CrashLoopBackOff stretches that further. The gap
-	// therefore has to be at least the lookback to collapse a single restart's
-	// smear to one event; 2 × step covers the CrashLoopBackOff tail past
-	// lookback.
-	dedupGap := max(2*time.Duration(stepDur), lookback, 30*time.Second)
+	// Value-bump dedup per (pod, container). `increase()` smears each
+	// restart across the lookback (flat 1, 1, 1), but a SECOND OOM inside
+	// the lookback bumps the value up (1 → 2). Emit on each upward step;
+	// skip flat smears and the downward tail as the counter ages out. The
+	// 0.5 threshold absorbs extrapolation noise without missing the next
+	// integer bump (~1.0).
+	const valueBumpThreshold = 0.5
 	var events []OOMEvent
 	for _, stream := range matrix {
 		container := string(stream.Metric["container"])
@@ -399,21 +402,21 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		if container == "" {
 			continue
 		}
-		var lastTs time.Time
+		var lastValue float64
 		for _, v := range stream.Values {
-			if float64(v.Value) <= 0 {
+			cur := float64(v.Value)
+			if cur <= 0 {
+				lastValue = 0
 				continue
 			}
-			ts := v.Timestamp.Time()
-			if !lastTs.IsZero() && ts.Sub(lastTs) < dedupGap {
-				continue
+			if cur > lastValue+valueBumpThreshold {
+				events = append(events, OOMEvent{
+					Timestamp: v.Timestamp.Time(),
+					Container: container,
+					Pod:       pod,
+				})
 			}
-			lastTs = ts
-			events = append(events, OOMEvent{
-				Timestamp: ts,
-				Container: container,
-				Pod:       pod,
-			})
+			lastValue = cur
 		}
 	}
 	return events, nil

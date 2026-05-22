@@ -92,6 +92,14 @@ func (f *fakePromClient) QueryMemoryRequestRangeByContainer(_ context.Context, _
 	return promclient.ContainerTimeSeries{}, nil
 }
 
+func (f *fakePromClient) QueryCPULimitRangeByContainer(_ context.Context, _, _, _, _, _ string) (promclient.ContainerTimeSeries, error) {
+	return promclient.ContainerTimeSeries{}, nil
+}
+
+func (f *fakePromClient) QueryMemoryLimitRangeByContainer(_ context.Context, _, _, _, _, _ string) (promclient.ContainerTimeSeries, error) {
+	return promclient.ContainerTimeSeries{}, nil
+}
+
 func (f *fakePromClient) QueryCPURecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _, _, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }

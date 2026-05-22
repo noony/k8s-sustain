@@ -129,6 +129,8 @@ function renderCharts() {
   const resources = metrics.value.resources || {}
   const cpuRequests = metrics.value.cpuRequests || {}
   const memoryRequests = metrics.value.memoryRequests || {}
+  const cpuLimits = metrics.value.cpuLimits || {}
+  const memoryLimits = metrics.value.memoryLimits || {}
   const cpuRecSeries = recs.value?.cpuRecommendations || {}
   const memRecSeries = recs.value?.memoryRecommendations || {}
   const ooms = oomByContainer()
@@ -155,13 +157,21 @@ function renderCharts() {
           dash: [4, 4],
         })
       }
-      if (res.cpuLimit)
+      if (cpuLimits[cname]?.length) {
+        cpuExtra.push({
+          data: cpuLimits[cname],
+          label: 'Limit',
+          color: '#f97316',
+          dash: [2, 2],
+        })
+      } else if (res.cpuLimit) {
         cpuAnnotations.push({
           value: parseCPUQuantity(res.cpuLimit),
           label: 'Limit: ' + res.cpuLimit,
           color: '#f97316',
           dash: [2, 2],
         })
+      }
       if (recs.value?.automated && cpuRecSeries[cname]?.length) {
         cpuExtra.push({
           data: cpuRecSeries[cname],
@@ -201,13 +211,21 @@ function renderCharts() {
           dash: [4, 4],
         })
       }
-      if (res.memoryLimit)
+      if (memoryLimits[cname]?.length) {
+        memExtra.push({
+          data: memoryLimits[cname],
+          label: 'Limit',
+          color: '#f97316',
+          dash: [2, 2],
+        })
+      } else if (res.memoryLimit) {
         memAnnotations.push({
           value: parseMemoryQuantity(res.memoryLimit),
           label: 'Limit: ' + res.memoryLimit,
           color: '#f97316',
           dash: [2, 2],
         })
+      }
       if (recs.value?.automated && memRecSeries[cname]?.length) {
         memExtra.push({
           data: memRecSeries[cname],

@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -433,35 +434,65 @@ func TestQueryOOMKillEvents_FiltersZeroSamplesAndEmptyContainer(t *testing.T) {
 	}
 }
 
-func TestQueryOOMKillEvents_DedupsConsecutiveEventsPerContainer(t *testing.T) {
-	// Seven consecutive positive samples 60s apart (CrashLoopBackOff smear).
-	// With step=1m the lookback is floored at 5m and the dedup gap follows it,
-	// so samples within any 5-minute window collapse to one event: the 1st
-	// (t=0s) and the 6th (t=300s) survive, the 7th (t=360s) is inside the
-	// second event's 5m gap and is dropped.
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
-			{"metric":{"container":"app","pod":"pod-1"},"values":[
-				[1700000000,"1"],
-				[1700000060,"1"],
-				[1700000120,"1"],
-				[1700000180,"1"],
-				[1700000240,"1"],
-				[1700000300,"1"],
-				[1700000360,"1"]
-			]}
-		]}}`))
-	}))
-	defer server.Close()
-
-	c, _ := New(server.URL)
-	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
-	if err != nil {
-		t.Fatalf("QueryOOMKillEvents: %v", err)
+func TestQueryOOMKillEvents_Dedup(t *testing.T) {
+	cases := []struct {
+		name   string
+		values string
+		want   int
+	}{
+		{
+			name: "flat smear collapses to one event",
+			values: `[
+				[1700000000,"1"],[1700000060,"1"],[1700000120,"1"],
+				[1700000180,"1"],[1700000240,"1"],[1700000300,"1"],[1700000360,"1"]
+			]`,
+			want: 1,
+		},
+		{
+			name: "value bump within same lookback emits a second event",
+			values: `[
+				[1700000000,"1"],[1700000060,"2"],[1700000120,"2"],
+				[1700000180,"1"],[1700000240,"0"]
+			]`,
+			want: 2,
+		},
+		{
+			name: "distinct bursts separated by zero each emit",
+			values: `[
+				[1700000000,"1"],[1700000060,"1"],[1700000120,"0"],
+				[1700000180,"1"],[1700000240,"1"]
+			]`,
+			want: 2,
+		},
+		{
+			name: "extrapolation noise stays under the threshold",
+			values: `[
+				[1700000000,"0.96"],[1700000060,"1.04"],
+				[1700000120,"0.98"],[1700000180,"1.02"]
+			]`,
+			want: 1,
+		},
 	}
-	if len(events) != 2 {
-		t.Fatalf("expected 2 deduped events (gap=5m), got %d: %+v", len(events), events)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"status":"success","data":{"resultType":"matrix","result":[
+				{"metric":{"container":"app","pod":"pod-1"},"values":%s}
+			]}}`, tc.values)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			}))
+			defer server.Close()
+
+			c, _ := New(server.URL)
+			events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+			if err != nil {
+				t.Fatalf("QueryOOMKillEvents: %v", err)
+			}
+			if len(events) != tc.want {
+				t.Fatalf("got %d events, want %d: %+v", len(events), tc.want, events)
+			}
+		})
 	}
 }
 
@@ -486,6 +517,34 @@ func TestQueryOOMKillEvents_DistinctPodsNotDeduped(t *testing.T) {
 	}
 }
 
+// Regression: a kube-state-metrics rollout exposes overlapping series for the
+// same pod/container with different `instance` labels for a brief window. The
+// OOM query joins restarts_total with last_terminated_reason on
+// (namespace, pod, container); if the right-hand side carries `instance`,
+// Prometheus rejects the join with "many-to-many matching not allowed" and
+// the whole range query fails. The handler swallows that error and the chart
+// shows zero OOMs. The query must aggregate both sides with `max by` to drop
+// scrape-target labels.
+func TestQueryOOMKillEvents_QueryDropsScrapeTargetLabels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		q := r.Form.Get("query")
+		if !strings.Contains(q, "max by (namespace, pod, container)") {
+			t.Fatalf("OOM query must aggregate KSM scrape-target labels with `max by (namespace, pod, container)`, got: %q", q)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	if _, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m"); err != nil {
+		t.Fatalf("QueryOOMKillEvents: %v", err)
+	}
+}
+
 func TestQueryOOMKillEvents_ServerErrorIsNonFatal(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -504,66 +563,41 @@ func TestQueryOOMKillEvents_ServerErrorIsNonFatal(t *testing.T) {
 	}
 }
 
-// Regression: QueryOOMKillEvents used to multiply
-// `increase(restarts_total)` by `last_terminated_reason{reason="OOMKilled"}`
-// without an `== 1` filter and without an OR-arm. Because kube-state-metrics
-// emits the last_terminated_reason series with value 0 once the *current*
-// termination is something else (CrashLoopBackOff/Error/SIGTERM), historical
-// OOM markers were silently zeroed out and dropped by the `<=0` skip.
-//
-// The fix mirrors the `k8s_sustain:workload_oom_24h` recording rule:
-// the query MUST contain the `max_over_time(...== 1[...])` "kill" arm and
-// an `or` joining it to the restart arm.
-func TestQueryOOMKillEvents_QueryContainsKillArm(t *testing.T) {
-	var query string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		query = r.Form.Get("query")
+// Regression: when a CrashLoopBackOff pod's last_terminated_reason stays
+// OOMKilled across the whole window, the underlying signal must still
+// resolve to one event per restart bump, not collapse to a single event
+// for the entire stuck-OOM tail. This is the failure mode that motivated
+// dropping the max_over_time(reason==OOMKilled) fallback arm.
+func TestQueryOOMKillEvents_CrashLoopCountsEachRestart(t *testing.T) {
+	// 3 OOMs within the lookback push `increase()` to 1, 2, 3, then ages
+	// back down. A union with max_over_time would have left the signal at
+	// a flat 1 throughout and produced just one event.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
+			{"metric":{"container":"app","pod":"pod-1"},"values":[
+				[1700000000,"1"],[1700000060,"2"],[1700000120,"3"],
+				[1700000180,"3"],[1700000240,"2"],[1700000300,"1"],[1700000360,"0"]
+			]}
+		]}}`))
 	}))
 	defer server.Close()
 
 	c, _ := New(server.URL)
-	if _, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m"); err != nil {
+	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	if err != nil {
 		t.Fatalf("QueryOOMKillEvents: %v", err)
 	}
-
-	// "kill" arm: max_over_time on last_terminated_reason{reason="OOMKilled"}==1.
-	if !strings.Contains(query, "max_over_time") {
-		t.Errorf("expected max_over_time kill arm in query, got %q", query)
-	}
-	if !strings.Contains(query, `reason="OOMKilled"`) {
-		t.Errorf("expected OOMKilled reason filter in query, got %q", query)
-	}
-	// The restart arm must also gate on `== 1` so a non-OOM current termination
-	// (last_terminated_reason==0) actually zeroes that arm rather than letting
-	// the bare 0/1 series multiply through ambiguously.
-	if !strings.Contains(query, "== 1") {
-		t.Errorf("expected `== 1` filter on last_terminated_reason in query, got %q", query)
-	}
-	// The two arms must be unioned, not multiplied — otherwise the kill arm
-	// can't rescue events the restart arm zeroed. Normalize whitespace so
-	// pretty-printed multi-line queries still match.
-	normalized := strings.Join(strings.Fields(query), " ")
-	if !strings.Contains(normalized, ") or (") {
-		t.Errorf("expected `or` union between restart and kill arms in query, got %q", query)
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events (one per restart bump), got %d: %+v", len(events), events)
 	}
 }
 
-// Behavior test: when the kill-arm path of the query produces a positive
-// sample at time T (last_terminated_reason was OOMKilled earlier in the
-// window, even if currently 0), the event must still be emitted. The mock
-// returns the matrix that represents the merged (restart_arm or kill_arm)
-// result — a single positive sample per series — to prove the result-loop
-// surfaces the marker.
-func TestQueryOOMKillEvents_KillArmSurfacesHistoricalOOM(t *testing.T) {
+// A single positive sample followed by a zero must still surface one event,
+// even though the latest sample is no longer positive.
+func TestQueryOOMKillEvents_HistoricalOOMEmits(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// One series, positive only at an earlier sub-step (kill-arm contributes 1
-		// there) and 0 at the latest step (current last_terminated_reason is no
-		// longer OOMKilled). Pre-fix this returned no event because the
-		// multiplication zeroed the only positive timestamp.
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
 			{"metric":{"container":"app","pod":"pod-1"},"values":[[1700000000,"1"],[1700000600,"0"]]}
 		]}}`))

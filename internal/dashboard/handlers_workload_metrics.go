@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -147,21 +148,36 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	}
 
 	ctx := r.Context()
-	cpuSeries, err := s.PromClient.QueryCPURangeByContainer(ctx, namespace, kind, name, window, step)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("cpu range query: %v", err))
-		return
-	}
-	memSeries, err := s.PromClient.QueryMemoryRangeByContainer(ctx, namespace, kind, name, window, step)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("memory range query: %v", err))
-		return
-	}
 
-	// Best-effort: tolerate Prometheus blips for these supplementary series.
-	oomEvents, _ := s.PromClient.QueryOOMKillEvents(ctx, namespace, kind, name, window, step)
-	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(ctx, namespace, kind, name, window, step)
-	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(ctx, namespace, kind, name, window, step)
+	// Fan out the seven Prometheus queries so chart-load latency is bounded
+	// by the slowest single query, not their sum. cpu/memory usage are the
+	// only two whose failure aborts the response; the rest are best-effort
+	// supplementary series and tolerate a Prometheus blip.
+	var (
+		cpuSeries, memSeries                                 promclient.ContainerTimeSeries
+		cpuRequests, memRequests, cpuLimits, memLimits       promclient.ContainerTimeSeries
+		oomEvents                                            []promclient.OOMEvent
+		cpuErr, memErr                                       error
+	)
+	var wg sync.WaitGroup
+	wg.Add(7)
+	go func() { defer wg.Done(); cpuSeries, cpuErr = s.PromClient.QueryCPURangeByContainer(ctx, namespace, kind, name, window, step) }()
+	go func() { defer wg.Done(); memSeries, memErr = s.PromClient.QueryMemoryRangeByContainer(ctx, namespace, kind, name, window, step) }()
+	go func() { defer wg.Done(); oomEvents, _ = s.PromClient.QueryOOMKillEvents(ctx, namespace, kind, name, window, step) }()
+	go func() { defer wg.Done(); cpuRequests, _ = s.PromClient.QueryCPURequestRangeByContainer(ctx, namespace, kind, name, window, step) }()
+	go func() { defer wg.Done(); memRequests, _ = s.PromClient.QueryMemoryRequestRangeByContainer(ctx, namespace, kind, name, window, step) }()
+	go func() { defer wg.Done(); cpuLimits, _ = s.PromClient.QueryCPULimitRangeByContainer(ctx, namespace, kind, name, window, step) }()
+	go func() { defer wg.Done(); memLimits, _ = s.PromClient.QueryMemoryLimitRangeByContainer(ctx, namespace, kind, name, window, step) }()
+	wg.Wait()
+
+	if cpuErr != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("cpu range query: %v", cpuErr))
+		return
+	}
+	if memErr != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("memory range query: %v", memErr))
+		return
+	}
 
 	resources := s.getContainerResources(ctx, namespace, kind, name)
 	initContainers := s.getInitContainerNames(ctx, namespace, kind, name)
@@ -172,6 +188,8 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		"resources":      resources,
 		"cpuRequests":    cpuRequests,
 		"memoryRequests": memRequests,
+		"cpuLimits":      cpuLimits,
+		"memoryLimits":   memLimits,
 		"oomEvents":      oomEvents,
 		"initContainers": initContainers,
 	})
