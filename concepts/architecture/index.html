@@ -612,6 +612,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Controller (k8s-sustain start)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pod-oom-watcher" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pod OOM watcher
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1405,6 +1420,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Controller (k8s-sustain start)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pod-oom-watcher" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pod OOM watcher
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1539,6 +1569,16 @@
 <li>On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a <code>ReconciliationRetryScheduled</code> warning event on the workload</li>
 </ol>
 <p>The controller requeues after <code>--reconcile-interval</code> (default <code>5m</code>).</p>
+<h3 id="pod-oom-watcher">Pod OOM watcher<a class="headerlink" href="#pod-oom-watcher" title="Permanent link">&para;</a></h3>
+<p>A second controller-runtime reconciler runs alongside the Policy reconciler and watches <code>Pod</code> objects cluster-wide, filtered to those carrying the <code>k8s.sustain.io/policy</code> annotation. It exists to close the multi-minute latency window between an OOM kill and the next recording-rule-driven reconcile (kube-state-metrics scrape → Prometheus scrape → 1m rule evaluation → 5–10m reconcile interval).</p>
+<p>When a container's <code>LastTerminationState.Terminated.Reason == "OOMKilled"</code> is observed, the watcher:</p>
+<ul>
+<li>Resolves the pod's top-level workload owner and upserts an entry in an in-memory cache keyed by <code>(namespace, ownerKind, ownerName, container)</code>. Restart-count and termination timestamp are used to dedup repeated observations of the same kill.</li>
+<li>Captures the container's memory limit from the pod spec at that moment, so the recommender has a bump anchor even when Prometheus hasn't yet surfaced the OOM-time limit recording rule.</li>
+<li>Enqueues the owning Policy for immediate reconcile via a <code>source.Channel</code> wired into the Policy reconciler's work queue.</li>
+</ul>
+<p>The recommender reads the cache during recommendation build: a hit sets the live OOM signal equivalent to the Prometheus <code>workload_oom_24h</code> flag and feeds the OOM-floor stage of the <a href="../recommendation-pipeline/#stages">Recommendation Pipeline</a>. The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.</p>
+<p><strong>Operational notes.</strong> The cache is in-memory and lives only for the lifetime of the controller process; on restart, the 24h Prometheus history (<code>k8s_sustain:workload_oom_24h</code>, <code>k8s_sustain:container_oom_limit_24h:bytes</code>) repopulates the floor on the next reconcile. Only pods carrying the <code>k8s.sustain.io/policy</code> annotation are watched, so cardinality is bounded by opted-in workloads. The watcher is leader-elected like other controllers — non-leaders idle.</p>
 <h2 id="admission-webhook-k8s-sustain-webhook">Admission Webhook (<code>k8s-sustain webhook</code>)<a class="headerlink" href="#admission-webhook-k8s-sustain-webhook" title="Permanent link">&para;</a></h2>
 <p>The webhook is a <a href="https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#mutatingadmissionwebhook">mutating admission webhook</a> that intercepts <code>pods/CREATE</code> requests.</p>
 <p><strong>Admission flow:</strong></p>

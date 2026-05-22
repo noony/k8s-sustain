@@ -1797,10 +1797,26 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 <td>counter</td>
 <td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code></td>
 </tr>
+<tr>
+<td><code>k8s_sustain_oom_observed_total</code></td>
+<td>counter</td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_oom_reaction_latency_seconds</code></td>
+<td>histogram</td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_oom_cache_entries</code></td>
+<td>gauge</td>
+<td>—</td>
+</tr>
 </tbody>
 </table>
 <p><code>k8s_sustain_recommendation_skipped_total</code> increments when the recommender bypasses a workload without emitting a recommendation. <code>reason="insufficient_history"</code> means the workload had fewer than 12 CPU rate samples in the configured window — typical of containers younger than ~12 minutes — so percentile queries would otherwise floor to ~0 and trigger an immediate recycle.</p>
 <p><code>k8s_sustain_oom_floor_applied_total</code> increments when the OOM-aware floor raises a memory recommendation above the percentile value. This means the workload OOM'd in the last 24h and the recommendation was floored at <code>max(peak_working_set_24h, oom_time_limit × 1.20)</code> plus headroom, instead of the (lower) percentile value. The peak anchor relies on cAdvisor observing the high-water mark; the OOM-time-limit anchor is the safety net for cgroup v2 / sub-scrape OOM kills where peak underreports.</p>
+<p><code>k8s_sustain_oom_observed_total</code>, <code>k8s_sustain_oom_reaction_latency_seconds</code>, and <code>k8s_sustain_oom_cache_entries</code> are emitted by the <a href="../../concepts/architecture/#pod-oom-watcher">Pod OOM watcher</a>. <code>observed_total</code> counts deduped OOM kills seen on annotated pods. <code>reaction_latency_seconds</code> measures the wall-clock delay from the container's <code>TerminatedAt</code> to the floor-driven memory recommendation that responds to it — the value the watcher is designed to compress. <code>cache_entries</code> reports the current size of the in-memory OOM cache.</p>
 <h3 id="drift-retry-autoscaler">Drift, retry, autoscaler<a class="headerlink" href="#drift-retry-autoscaler" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
