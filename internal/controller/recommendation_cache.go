@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -15,18 +14,6 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
-
-// quantityPtrEqual reports whether two *resource.Quantity values represent
-// the same amount, treating nil as "unset" (equal to nil but not to zero).
-func quantityPtrEqual(a, b *resource.Quantity) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return a.Cmp(*b) == 0
-}
 
 // wlrName builds the WorkloadRecommendation object name for a workload target.
 // Format: "<lowercase-kind>-<name>". Two workloads of different kinds with the
@@ -296,10 +283,10 @@ func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
 		if !ok {
 			return false
 		}
-		if !quantityPtrEqual(av.CPURequest, bv.CPURequest) ||
-			!quantityPtrEqual(av.MemoryRequest, bv.MemoryRequest) ||
-			!quantityPtrEqual(av.CPULimit, bv.CPULimit) ||
-			!quantityPtrEqual(av.MemoryLimit, bv.MemoryLimit) ||
+		if !quantityEqual(av.CPURequest, bv.CPURequest) ||
+			!quantityEqual(av.MemoryRequest, bv.MemoryRequest) ||
+			!quantityEqual(av.CPULimit, bv.CPULimit) ||
+			!quantityEqual(av.MemoryLimit, bv.MemoryLimit) ||
 			av.RemoveCPULimit != bv.RemoveCPULimit ||
 			av.RemoveMemoryLimit != bv.RemoveMemoryLimit {
 			return false

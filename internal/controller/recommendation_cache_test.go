@@ -25,24 +25,6 @@ func TestWlrName(t *testing.T) {
 	}
 }
 
-func TestQuantityPtrEqual(t *testing.T) {
-	q := resource.MustParse("100m")
-	other := resource.MustParse("200m")
-
-	if !quantityPtrEqual(nil, nil) {
-		t.Error("nil/nil should be equal")
-	}
-	if quantityPtrEqual(&q, nil) {
-		t.Error("nonzero/nil should not be equal")
-	}
-	if !quantityPtrEqual(&q, &q) {
-		t.Error("same value should be equal")
-	}
-	if quantityPtrEqual(&q, &other) {
-		t.Error("100m/200m should not be equal")
-	}
-}
-
 // reconcilerForCache builds a PolicyReconciler with WLR scheme registered.
 func reconcilerForCache(t *testing.T, objs ...runtime.Object) *PolicyReconciler {
 	t.Helper()

@@ -58,26 +58,13 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	// Chart time range (top-level Window controls what's displayed on graphs)
 	timeRange := recommender.ResourceWindow(req.Window)
 
-	// Query single-value percentiles for recommendations (use per-resource windows)
-	cpuValues, err := s.PromClient.QueryCPUByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, cpuQuantile, cpuWindow)
+	containers, oomSignal, recentOOM, err := s.buildContainerRecommendations(ctx,
+		req.Namespace, req.OwnerKind, req.OwnerName,
+		cpuCfg, memCfg, cpuWindow, memWindow,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("cpu query: %w", err)
+		return nil, err
 	}
-	memValues, err := s.PromClient.QueryMemoryByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, memQuantile, memWindow)
-	if err != nil {
-		return nil, fmt.Errorf("memory query: %w", err)
-	}
-
-	// OOM signal — best-effort, fail-open. Mirrors the controller's behavior so
-	// the dashboard shows the same memory floor (peak observed bytes) that the
-	// controller would actually apply when a workload OOM'd within the 24h
-	// lookback. Without this, the displayed recommendation stays at the
-	// percentile-based value and never reflects the OOM-driven floor.
-	oomSignal, err := s.PromClient.QueryWorkloadOOMSignal(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
-	if err != nil {
-		oomSignal = promclient.OOMSignal{}
-	}
-	recentOOM := oomSignal.OOMCount > 0
 
 	// Query time-series for graphs (use chart time range)
 	step := req.Step
@@ -95,62 +82,29 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 
 	resources := s.getContainerResources(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
 
-	// Compute recommendations per container
-	containers := make(map[string]simulationContainerResult)
-
-	// Collect all container names from CPU, memory, and the OOM peak set.
-	// Including OOM peaks ensures a crash-looping container with no usage
-	// samples yet still gets a memory recommendation anchored on the peak.
-	allContainers := make(map[string]struct{})
-	for name := range cpuValues {
-		allContainers[name] = struct{}{}
-	}
-	for name := range memValues {
-		allContainers[name] = struct{}{}
-	}
-	if recentOOM {
-		for name := range oomSignal.PeakMemoryBytes {
-			allContainers[name] = struct{}{}
-		}
-	}
-
-	for name := range allContainers {
-		result := simulationContainerResult{}
-		var cpuQty, memQty *resource.Quantity
-		if cores, ok := cpuValues[name]; ok {
-			cpuQty = recommender.ComputeCPURequest(cores, cpuCfg)
-			if cpuQty != nil {
-				result.CPURequest = cpuQty.String()
-			}
-		}
-		// Memory: emit a recommendation when EITHER usage samples are present,
-		// OR a recent OOM gives us a peak to anchor on. Mirrors the controller's
-		// shape in recommendation_build.go so a crash-looping container that
-		// hasn't accumulated usage samples still gets the OOM-driven floor.
-		memBytes, hasUsage := memValues[name]
-		_, hasPeak := oomSignal.PeakMemoryBytes[name]
-		if hasUsage || (recentOOM && hasPeak) {
-			oom := recommender.NewOOMSignal(recentOOM, oomSignal.PeakMemoryBytes[name], oomSignal.OOMLimitBytes[name])
-			memQty = recommender.ComputeMemoryRequestWithOOM(memBytes, oom, memCfg)
-			if memQty != nil {
-				result.MemoryRequest = memQty.String()
-			}
-		}
+	// Layer per-container limit recommendations on top of the request map.
+	// The request strings are already final (clamped, MiB-rounded); reparsing
+	// them is cheap and keeps the shared builder limit-agnostic.
+	for name, result := range containers {
 		curReq, curLim := currentQuantities(resources[name])
-		if cpuQty != nil {
-			lim := recommender.ComputeLimit(cpuQty, curReq.cpu, curLim.cpu, cpuLimCfg)
-			if lim.Remove {
-				result.CPULimitRemoved = true
-			} else if lim.Quantity != nil {
-				result.CPULimit = lim.Quantity.String()
+		if result.CPURequest != "" {
+			if cpuQty, err := resource.ParseQuantity(result.CPURequest); err == nil {
+				lim := recommender.ComputeLimit(&cpuQty, curReq.cpu, curLim.cpu, cpuLimCfg)
+				if lim.Remove {
+					result.CPULimitRemoved = true
+				} else if lim.Quantity != nil {
+					result.CPULimit = lim.Quantity.String()
+				}
 			}
 		}
-		if memQty != nil {
-			lim := recommender.ComputeLimit(memQty, curReq.mem, curLim.mem, memLimCfg)
-			if lim.Remove {
-				result.MemoryLimitRemoved = true
-			} else if lim.Quantity != nil {
-				result.MemoryLimit = lim.Quantity.String()
+		if result.MemoryRequest != "" {
+			if memQty, err := resource.ParseQuantity(result.MemoryRequest); err == nil {
+				lim := recommender.ComputeLimit(&memQty, curReq.mem, curLim.mem, memLimCfg)
+				if lim.Remove {
+					result.MemoryLimitRemoved = true
+				} else if lim.Quantity != nil {
+					result.MemoryLimit = lim.Quantity.String()
+				}
 			}
 		}
 		containers[name] = result

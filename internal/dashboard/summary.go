@@ -387,33 +387,61 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 
 // ---- Shared recommendation computation ----
 
+// computeRecommendations is the policy-driven entry point used by the batch
+// simulate handler. It maps Policy.Spec config into the shared
+// buildContainerRecommendations pipeline and discards the OOM signal (the
+// batch handler only needs the request strings + per-container usage).
 func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, name string, policy *sustainv1alpha1.Policy) (map[string]simulationContainerResult, error) {
 	cpuCfg := policy.Spec.RightSizing.ResourcesConfigs.CPU
 	memCfg := policy.Spec.RightSizing.ResourcesConfigs.Memory
+	containers, _, _, err := s.buildContainerRecommendations(ctx,
+		namespace, kind, name,
+		cpuCfg.Requests, memCfg.Requests,
+		recommender.ResourceWindow(cpuCfg.Window), recommender.ResourceWindow(memCfg.Window),
+	)
+	return containers, err
+}
 
-	cpuWindow := recommender.ResourceWindow(cpuCfg.Window)
-	memWindow := recommender.ResourceWindow(memCfg.Window)
-	cpuQuantile := recommender.PercentileQuantile(cpuCfg.Requests.Percentile)
-	memQuantile := recommender.PercentileQuantile(memCfg.Requests.Percentile)
+// buildContainerRecommendations runs the dashboard's recommendation pipeline
+// for a single workload: per-container CPU/memory percentile queries plus the
+// fail-open OOM signal, then the OOM-aware request computation for every
+// observed container.
+//
+// Returned fields populated: CPURequest, MemoryRequest, CPUUsageCores,
+// MemoryUsageBytes. Limits and chart series are not computed here — callers
+// that need them layer that on top (see runSimulation). The OOM signal and
+// recentOOM flag are returned so simulate.go can reuse them when clamping
+// recommendation time-series.
+func (s *Server) buildContainerRecommendations(
+	ctx context.Context,
+	namespace, kind, name string,
+	cpuCfg, memCfg sustainv1alpha1.ResourceRequestsConfig,
+	cpuWindow, memWindow string,
+) (map[string]simulationContainerResult, promclient.OOMSignal, bool, error) {
+	cpuQuantile := recommender.PercentileQuantile(cpuCfg.Percentile)
+	memQuantile := recommender.PercentileQuantile(memCfg.Percentile)
 
 	cpuValues, err := s.PromClient.QueryCPUByContainer(ctx, namespace, kind, name, cpuQuantile, cpuWindow)
 	if err != nil {
-		return nil, fmt.Errorf("cpu query: %w", err)
+		return nil, promclient.OOMSignal{}, false, fmt.Errorf("cpu query: %w", err)
 	}
 	memValues, err := s.PromClient.QueryMemoryByContainer(ctx, namespace, kind, name, memQuantile, memWindow)
 	if err != nil {
-		return nil, fmt.Errorf("memory query: %w", err)
+		return nil, promclient.OOMSignal{}, false, fmt.Errorf("memory query: %w", err)
 	}
 
 	// OOM signal — best-effort, fail-open. Mirrors the controller so the
-	// per-workload recommendation in /api/workloads/* reflects the OOM-driven
-	// memory floor (peak observed bytes) the controller would actually apply.
+	// per-workload recommendation reflects the OOM-driven memory floor (peak
+	// observed bytes) the controller would actually apply.
 	oomSignal, err := s.PromClient.QueryWorkloadOOMSignal(ctx, namespace, kind, name)
 	if err != nil {
 		oomSignal = promclient.OOMSignal{}
 	}
 	recentOOM := oomSignal.OOMCount > 0
 
+	// Include OOM peaks in the container set so a crash-looping container
+	// with no usage samples still gets a memory recommendation anchored on
+	// the kernel-observed peak.
 	allContainers := make(map[string]struct{})
 	for n := range cpuValues {
 		allContainers[n] = struct{}{}
@@ -432,7 +460,7 @@ func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, na
 		cr := simulationContainerResult{}
 		if cores, ok := cpuValues[n]; ok {
 			cr.CPUUsageCores = cores
-			if qty := recommender.ComputeCPURequest(cores, cpuCfg.Requests); qty != nil {
+			if qty := recommender.ComputeCPURequest(cores, cpuCfg); qty != nil {
 				cr.CPURequest = qty.String()
 			}
 		}
@@ -443,14 +471,14 @@ func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, na
 		}
 		if hasUsage || (recentOOM && hasPeak) {
 			oom := recommender.NewOOMSignal(recentOOM, oomSignal.PeakMemoryBytes[n], oomSignal.OOMLimitBytes[n])
-			if qty := recommender.ComputeMemoryRequestWithOOM(memBytes, oom, memCfg.Requests); qty != nil {
+			if qty := recommender.ComputeMemoryRequestWithOOM(memBytes, oom, memCfg); qty != nil {
 				cr.MemoryRequest = qty.String()
 			}
 		}
 		containers[n] = cr
 	}
 
-	return containers, nil
+	return containers, oomSignal, recentOOM, nil
 }
 
 // ---- Workload collection helpers ----
