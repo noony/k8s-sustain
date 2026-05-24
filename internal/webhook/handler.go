@@ -15,6 +15,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"golang.org/x/sync/errgroup"
+
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/httpx"
@@ -286,97 +288,106 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 }
 
-// buildRecommendations queries Prometheus for workload-level CPU/memory totals
-// and replica count, then derives per-container per-pod recommendations.
-// A per-pod floor is applied to protect against load imbalance.
-// Autoscaler detection provides the MinReplicas fallback when Prometheus has
-// no replica data (KEDA scale-to-zero, missing samples).
+// buildRecommendations queries Prometheus for workload-level CPU/memory totals,
+// recent OOM signal, and replica count (in parallel with autoscaler detection
+// and the workload-creation lookup), then derives per-container per-pod
+// recommendations. A per-pod floor is applied to protect against load
+// imbalance. Autoscaler detection provides the MinReplicas fallback when
+// Prometheus has no replica data (KEDA scale-to-zero, missing samples).
+//
+// The workload-age gate skips brand-new workloads (no usage history yet) so
+// the webhook doesn't inject the hard-floored minimums that would crashloop
+// the first pod. A recent OOM bypasses the gate so a replacement pod after
+// an OOMKill gets a recommendation anchored on the kernel-observed peak
+// rather than the too-small request that killed its predecessor.
+//
+// Unlike the controller, the webhook process has no access to the in-memory
+// live OOM watcher — it relies solely on the Prometheus OOM signal.
 func (h *Handler) buildRecommendations(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
 	ns, ownerKind, ownerName string,
 	containers []corev1.Container,
 ) (map[string]workload.ContainerRecommendation, error) {
+	logger := log.FromContext(ctx).WithValues("kind", ownerKind, "name", ownerName, "namespace", ns)
 	rsCfg := policy.Spec.RightSizing.ResourcesConfigs
 
-	cpuQuantile := recommender.PercentileQuantile(rsCfg.CPU.Requests.Percentile)
-	cpuWindow := recommender.ResourceWindow(rsCfg.CPU.Window)
-	memQuantile := recommender.PercentileQuantile(rsCfg.Memory.Requests.Percentile)
-	memWindow := recommender.ResourceWindow(rsCfg.Memory.Window)
-	logger := log.FromContext(ctx).WithValues("kind", ownerKind, "name", ownerName, "namespace", ns)
+	// FetchWorkloadInputs, autoscaler.Detect, and the workload-creation lookup
+	// all run in parallel. The replica divisor and OOM signal are produced by
+	// FetchWorkloadInputs; autoscaler.MinReplicas only feeds the post-fetch
+	// EffectiveReplicas computation, so overlapping these K8s + Prometheus
+	// round-trips cuts admission wall time.
+	var (
+		inputs          *recommender.WorkloadInputs
+		autoInfo        autoscaler.Info
+		workloadCreated time.Time
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		v, err := recommender.FetchWorkloadInputs(gctx, h.PrometheusClient, ns, ownerKind, ownerName, rsCfg)
+		if err != nil {
+			return err
+		}
+		inputs = v
+		return nil
+	})
+	g.Go(func() error {
+		info, err := autoscaler.Detect(gctx, h.Client, ns, ownerKind, ownerName)
+		if err != nil {
+			logger.V(1).Info("autoscaler detection failed; using empty info", "err", err)
+			autoInfo = autoscaler.Info{Kind: autoscaler.KindNone}
+			return nil
+		}
+		autoInfo = info
+		return nil
+	})
+	g.Go(func() error {
+		workloadCreated = workload.GetWorkloadCreationTime(gctx, h.Client, ownerKind, ns, ownerName)
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
 
-	cpuTotals, err := h.PrometheusClient.QueryWorkloadCPUByContainer(ctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
-	if err != nil {
-		return nil, fmt.Errorf("workload cpu query: %w", err)
-	}
-	memTotals, err := h.PrometheusClient.QueryWorkloadMemoryByContainer(ctx, ns, ownerKind, ownerName, memQuantile, memWindow)
-	if err != nil {
-		return nil, fmt.Errorf("workload memory query: %w", err)
+	if recommender.ShouldSkipYoungWorkload(workloadCreated, inputs.HasRecentOOM()) {
+		recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "workload_too_young").Inc()
+		logger.Info("skipping injection: workload too young",
+			"age", time.Since(workloadCreated), "minAge", recommender.MinWorkloadAge)
+		return map[string]workload.ContainerRecommendation{}, nil
 	}
 
-	cpuFloors, err := h.PrometheusClient.QueryCPUByContainer(ctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
-	if err != nil {
-		logger.V(1).Info("per-pod cpu floor query failed; proceeding without floor", "err", err)
-		cpuFloors = nil
-	}
-	memFloors, err := h.PrometheusClient.QueryMemoryByContainer(ctx, ns, ownerKind, ownerName, memQuantile, memWindow)
-	if err != nil {
-		logger.V(1).Info("per-pod memory floor query failed; proceeding without floor", "err", err)
-		memFloors = nil
-	}
-
-	autoInfo, autoErr := autoscaler.Detect(ctx, h.Client, ns, ownerKind, ownerName)
-	if autoErr != nil {
-		logger.V(1).Info("autoscaler detection failed; using empty info", "err", autoErr)
-		autoInfo = autoscaler.Info{Kind: autoscaler.KindNone}
-	}
-	medianReplicas, err := h.PrometheusClient.QueryReplicaCountMedian(ctx, ns, ownerKind, ownerName, cpuWindow)
-	if err != nil {
-		return nil, fmt.Errorf("replica count query: %w", err)
-	}
-	replicas := recommender.EffectiveReplicas(medianReplicas, autoInfo.MinReplicas)
+	replicas := recommender.EffectiveReplicas(inputs.MedianReplicas, autoInfo.MinReplicas)
 
 	coordCfg := policy.Spec.RightSizing.AutoscalerCoordination
-
 	recs := make(map[string]workload.ContainerRecommendation)
 	for _, c := range containers {
-		var rec workload.ContainerRecommendation
-		hasData := false
-
-		if total, ok := cpuTotals[c.Name]; ok {
-			perPod := recommender.PerPodFromTotal(total, replicas)
-			perPod = recommender.ApplyFloor(perPod, cpuFloors[c.Name])
-			rec.CPURequest = recommender.ComputeCPURequest(perPod, rsCfg.CPU.Requests)
-			hasData = true
-		}
-		if total, ok := memTotals[c.Name]; ok {
-			perPod := recommender.PerPodFromTotal(total, replicas)
-			perPod = recommender.ApplyFloor(perPod, memFloors[c.Name])
-			rec.MemoryRequest = recommender.ComputeMemoryRequest(perPod, rsCfg.Memory.Requests)
-			hasData = true
-		}
-
-		if !hasData {
+		cpuTotal, hasCPU := inputs.CPUTotals[c.Name]
+		memTotal, hasMem := inputs.MemTotals[c.Name]
+		_, hasPeak := inputs.OOM.PeakMemoryBytes[c.Name]
+		oom := recommender.NewOOMSignal(
+			inputs.HasRecentOOM(),
+			inputs.OOM.PeakMemoryBytes[c.Name],
+			inputs.OOM.OOMLimitBytes[c.Name],
+		)
+		res := recommender.ComputeContainerRec(recommender.ContainerInputs{
+			Container:   c,
+			CPUTotal:    cpuTotal,
+			HasCPU:      hasCPU,
+			CPUFloor:    inputs.CPUFloors[c.Name],
+			MemTotal:    memTotal,
+			HasMemUsage: hasMem,
+			MemFloor:    inputs.MemFloors[c.Name],
+			Replicas:    replicas,
+			OOM:         oom,
+			HasOOMPeak:  hasPeak,
+			AutoInfo:    autoInfo,
+			RsCfg:       rsCfg,
+			CoordCfg:    coordCfg,
+		})
+		if !res.HasData {
 			continue
 		}
-
-		// Apply autoscaler coordination (overhead + replica budget) before
-		// limits are derived, so limits track the adjusted requests.
-		rec = recommender.ApplyCoordination(rec, coordCfg, autoInfo, rsCfg)
-
-		// Re-derive limits from the (possibly) adjusted requests.
-		if rec.CPURequest != nil {
-			lr := recommender.ComputeLimit(rec.CPURequest, c.Resources.Requests.Cpu(), c.Resources.Limits.Cpu(), rsCfg.CPU.Limits)
-			rec.CPULimit = lr.Quantity
-			rec.RemoveCPULimit = lr.Remove
-		}
-		if rec.MemoryRequest != nil {
-			lr := recommender.ComputeLimit(rec.MemoryRequest, c.Resources.Requests.Memory(), c.Resources.Limits.Memory(), rsCfg.Memory.Limits)
-			rec.MemoryLimit = lr.Quantity
-			rec.RemoveMemoryLimit = lr.Remove
-		}
-
-		recs[c.Name] = rec
+		recs[c.Name] = res.Rec
 	}
 	return recs, nil
 }

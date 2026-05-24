@@ -3,6 +3,7 @@ package workload
 import (
 	"context"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -10,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // IsOwnedBy reports whether refs contains a controller ownerReference with
@@ -81,4 +83,40 @@ func ResolvePodOwner(ctx context.Context, c client.Client, pod *corev1.Pod) (kin
 		}
 	}
 	return "", "", nil
+}
+
+// GetWorkloadCreationTime returns the CreationTimestamp of the top-level
+// workload object identified by (kind, namespace, name). Returns the zero
+// time when the workload is not found, the kind is unknown, or the object
+// cannot be fetched, so callers can treat the age gate as a no-op rather
+// than failing the recommendation path.
+//
+// Rollout (Argo) is intentionally treated as unknown — fetching it would
+// require the Argo CRD scheme to be registered; the controller path already
+// supplies CreationTimestamp via its own typed lookup, so the webhook
+// falling back to the zero time (no age gate) is acceptable.
+func GetWorkloadCreationTime(ctx context.Context, c client.Client, kind, ns, name string) time.Time {
+	var obj client.Object
+	switch kind {
+	case "Deployment":
+		obj = &appsv1.Deployment{}
+	case "StatefulSet":
+		obj = &appsv1.StatefulSet{}
+	case "DaemonSet":
+		obj = &appsv1.DaemonSet{}
+	case "ReplicaSet":
+		obj = &appsv1.ReplicaSet{}
+	case "Job":
+		obj = &batchv1.Job{}
+	case "CronJob":
+		obj = &batchv1.CronJob{}
+	default:
+		return time.Time{}
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, obj); err != nil {
+		log.FromContext(ctx).V(1).Info("workload age lookup failed; gate will be skipped",
+			"kind", kind, "namespace", ns, "name", name, "err", err)
+		return time.Time{}
+	}
+	return obj.GetCreationTimestamp().Time
 }

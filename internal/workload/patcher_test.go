@@ -81,7 +81,7 @@ func TestApplyRecommendations_AlwaysApplies(t *testing.T) {
 		"app": {CPURequest: qtyp("200m"), MemoryRequest: qtyp("64Mi")},
 	}
 
-	out, changed := applyRecommendations(containers, recs)
+	out, changed := applyRecsFiltered(containers, recs, nil)
 	if !changed {
 		t.Error("expected change")
 	}
@@ -101,7 +101,7 @@ func TestApplyRecommendations_SetsWhenNoCPU(t *testing.T) {
 		"app": {CPURequest: qtyp("200m")},
 	}
 
-	out, changed := applyRecommendations(containers, recs)
+	out, changed := applyRecsFiltered(containers, recs, nil)
 	if !changed {
 		t.Error("expected change when no CPU request set")
 	}
@@ -125,7 +125,7 @@ func TestApplyRecommendations_RemovesLimit(t *testing.T) {
 		"app": {CPURequest: qtyp("100m"), RemoveCPULimit: true},
 	}
 
-	out, changed := applyRecommendations(containers, recs)
+	out, changed := applyRecsFiltered(containers, recs, nil)
 	if !changed {
 		t.Error("expected change")
 	}
@@ -142,7 +142,7 @@ func TestApplyRecommendations_NoMatchingContainer(t *testing.T) {
 		"sidecar": {CPURequest: qtyp("100m")},
 	}
 
-	_, changed := applyRecommendations(containers, recs)
+	_, changed := applyRecsFiltered(containers, recs, nil)
 	if changed {
 		t.Error("expected no change when container names don't match")
 	}
@@ -320,7 +320,7 @@ func TestApplyRecommendationsToSidecars_OnlyMutatesRestartableContainers(t *test
 		"sidecar": {CPURequest: qtyp("100m")},
 		"migrate": {CPURequest: qtyp("100m")},
 	}
-	out, changed := applyRecommendationsToSidecars(in, recs)
+	out, changed := applyRecsFiltered(in, recs, isRestartableInitContainer)
 	if !changed {
 		t.Fatal("expected change for sidecar")
 	}

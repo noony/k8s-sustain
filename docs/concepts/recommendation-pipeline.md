@@ -19,7 +19,7 @@ requests apply on next pod creation via webhook injection.
 
 The recommender runs each container through the following stages, in order:
 
-1. **History gate.** Probe `count_over_time(k8s_sustain:container_cpu_usage_by_workload:rate1m[window:1m])`. If fewer than 12 samples are available, the workload is skipped with `k8s_sustain_recommendation_skipped_total{reason="insufficient_history"}`. This avoids producing a near-zero percentile that would floor to the hard minimum and trigger a recycle on the next reconcile.
+1. **Workload-age gate.** If the workload object's `CreationTimestamp` is younger than 10 minutes, the workload is skipped (controller emits `k8s_sustain_recommendation_skipped_total{reason="workload_too_young"}`). This avoids producing a near-zero percentile that would floor to the hard minimum and trigger a recycle on the next reconcile. The gate is workload-age based rather than sample-count based so it doesn't punish workloads with intrinsically sparse signal (e.g. a daily CronJob). EXCEPTION: a recent OOM (`k8s_sustain:workload_oom_24h > 0` or a fresh kill from the in-memory watcher) bypasses the gate so a crash-looping container can still get a memory recommendation anchored on the OOM peak. Both the controller (periodic reconcile) and the admission webhook (pod CREATE) apply this gate — without it, the first pod of a brand-new workload would be admitted with the hard-floored minimums (1m CPU / 1Mi memory) and almost certainly crashloop.
 2. **Query.** Read the percentile-of-usage from a recording rule over the configured window (`spec.rightSizing.resourcesConfigs.<cpu|memory>.window`). The signal is workload-level (sum across replicas) divided by the median replica count over the window, with a per-pod percentile floor to absorb load imbalance.
 3. **OOM floor (memory only).** When the workload OOM'd in the last 24 h (`k8s_sustain:workload_oom_24h > 0`), the memory recommendation is floored at `max(peak_working_set_24h, oom_time_limit × 1.20)` before headroom. Two anchors are combined so the floor degrades gracefully: the peak working-set is precise when cAdvisor observes it, while the OOM-time limit bump is the safety net when peak is unreliable (cgroup v2 / sub-scrape OOM kills can hide the real high-water). The bump factor (`1.20`, matching VPA's `MemoryBumpUpRatio`) lifts the recommendation above the limit the kernel killed at, breaking the OOM loop. The OOM-time-limit anchor only refreshes when a NEW OOM event fires, so once the workload fits after a bump, the recorded limit stays at its pre-bump value and stops growing. The metric `k8s_sustain_oom_floor_applied_total{container}` increments when this floor wins.
 
@@ -34,7 +34,7 @@ The recommender runs each container through the following stages, in order:
 
 ```mermaid
 flowchart LR
-    G[history gate<br/>≥12 rate samples] --> Q[Prometheus query<br/>percentile over window]
+    G[workload-age gate<br/>≥10 min, bypassed on OOM] --> Q[Prometheus query<br/>percentile over window]
     Q --> F[OOM floor<br/>memory only]
     F --> H[+ headroom]
     H --> C[clamp min/max]

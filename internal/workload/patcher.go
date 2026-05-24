@@ -183,8 +183,8 @@ func (p *Patcher) resizePodInPlaceNoEvict(ctx context.Context, pod *corev1.Pod, 
 	}
 
 	base := pod.DeepCopy()
-	containers, regChanged := applyRecommendations(pod.Spec.Containers, recs)
-	initContainers, initChanged := applyRecommendationsToSidecars(pod.Spec.InitContainers, recs)
+	containers, regChanged := applyRecsFiltered(pod.Spec.Containers, recs, nil)
+	initContainers, initChanged := applyRecsFiltered(pod.Spec.InitContainers, recs, isRestartableInitContainer)
 	if !regChanged && !initChanged {
 		logger.V(1).Info("pod already at target resources, no in-place patch needed")
 		return nil
@@ -192,36 +192,20 @@ func (p *Patcher) resizePodInPlaceNoEvict(ctx context.Context, pod *corev1.Pod, 
 
 	if regChanged {
 		pod.Spec.Containers = containers
-		err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(base))
-		if apierrors.IsNotFound(err) {
-			logger.V(1).Info("/resize subresource not available, falling back to direct pod patch")
-			err = p.client.Patch(ctx, pod, client.MergeFrom(base))
-		}
-		if apierrors.IsInvalid(err) {
-			logger.Info("in-place pod resource patch rejected, feature gate likely disabled; skipping (next run via webhook)")
-			p.inPlace.Store(false)
-			pod.Spec.Containers = base.Spec.Containers
-			return nil
-		}
+		applied, err := p.submitInPlaceResize(ctx, pod, base)
 		if err != nil {
 			return err
 		}
-		logger.Info("in-place resize applied")
+		if !applied {
+			// Feature gate off; pod reverted. New resources will land at next
+			// pod creation via the webhook — don't evict short-lived pods.
+			logger.Info("skipping short-lived pod (next run via webhook)")
+			return nil
+		}
 	}
 
 	if initChanged {
-		sidecarBase := pod.DeepCopy()
-		sidecarBase.Spec.InitContainers = base.Spec.InitContainers
-		pod.Spec.InitContainers = initContainers
-
-		err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(sidecarBase))
-		if err != nil {
-			logger.Info("sidecar in-place resize not accepted, will apply at next pod creation",
-				"err", err.Error())
-			pod.Spec.InitContainers = base.Spec.InitContainers
-		} else {
-			logger.Info("sidecar in-place resize applied")
-		}
+		p.applySidecarResize(ctx, pod, base, initContainers)
 	}
 	return nil
 }
@@ -362,8 +346,8 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	}
 
 	base := pod.DeepCopy()
-	containers, regChanged := applyRecommendations(pod.Spec.Containers, recs)
-	initContainers, initChanged := applyRecommendationsToSidecars(pod.Spec.InitContainers, recs)
+	containers, regChanged := applyRecsFiltered(pod.Spec.Containers, recs, nil)
+	initContainers, initChanged := applyRecsFiltered(pod.Spec.InitContainers, recs, isRestartableInitContainer)
 	if !regChanged && !initChanged {
 		logger.V(1).Info("pod already at target resources, no in-place patch needed")
 		return false, nil
@@ -376,55 +360,42 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	// regular containers' resize.
 	if regChanged {
 		pod.Spec.Containers = containers
-		evicted, err := p.applyInPlaceResize(ctx, pod, base, recs)
+		applied, err := p.submitInPlaceResize(ctx, pod, base)
 		if err != nil {
-			return evicted, err
+			return false, err
 		}
-		if evicted {
-			// Fell back to eviction (feature gate off). Skip the sidecar
-			// resize attempt — the replacement pod is on its way and the
-			// webhook will inject the new requests there.
-			return true, nil
+		if !applied {
+			// Feature gate off; pod reverted. Fall back to eviction so the
+			// webhook can re-inject the new requests on the replacement.
+			// Skip the sidecar resize attempt — the replacement pod is on
+			// its way.
+			logger.Info("falling back to eviction")
+			return p.evictPod(ctx, pod, recs)
 		}
 	}
 
 	if initChanged {
-		// Build a baseline that reflects the (possibly already applied)
-		// regular-container changes so the sidecar diff is the only remaining
-		// delta. The base in-place resize call above mutated `pod` in place.
-		sidecarBase := pod.DeepCopy()
-		sidecarBase.Spec.InitContainers = base.Spec.InitContainers
-		pod.Spec.InitContainers = initContainers
-
-		err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(sidecarBase))
-		if err != nil {
-			// Sidecar resize is best-effort: kubelet rejects it on older
-			// clusters. The new requests will land at next pod creation via
-			// webhook injection — don't fail the reconcile.
-			logger.Info("sidecar in-place resize not accepted, will apply at next pod creation",
-				"err", err.Error())
-			pod.Spec.InitContainers = base.Spec.InitContainers
-		} else {
-			logger.Info("sidecar in-place resize applied")
-		}
+		p.applySidecarResize(ctx, pod, base, initContainers)
 	}
 	return false, nil
 }
 
-// applyInPlaceResize submits an in-place /resize patch (with fallbacks for
-// older clusters) for the regular-container changes already staged on `pod`.
+// submitInPlaceResize submits an in-place /resize patch to bring the pod's
+// staged spec changes from base to pod. Tries the /resize subresource (k8s
+// 1.33+) first, falling back to a direct pod Patch on k8s 1.31-1.32 where the
+// subresource doesn't exist yet.
 //
-// Returns (evicted, err). evicted=true means the API server rejected the
-// in-place patch as Invalid (feature gate off) and we fell back to evicting
-// the pod inline. The caller must propagate evicted upward so the outer
-// recycle loop can run its post-eviction throttle/wait for this pod.
-// err is non-nil only when the pod could not be brought to its target state.
-func (p *Patcher) applyInPlaceResize(ctx context.Context, pod, base *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
+// Returns:
+//
+//	(true,  nil) — patch applied successfully
+//	(false, nil) — API server rejected the patch as Invalid
+//	               (InPlacePodVerticalScaling feature gate off); in-place is
+//	               disabled for the rest of this process and the pod has been
+//	               reverted to base. The caller decides whether to evict.
+//	(false, err) — unrecoverable patch failure
+func (p *Patcher) submitInPlaceResize(ctx context.Context, pod, base *corev1.Pod) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
-	// K8s 1.33+ requires the /resize subresource for in-place pod resource
-	// changes. Try that first; fall back to a regular pod patch for 1.31-1.32
-	// where the subresource doesn't exist yet.
 	logger.V(1).Info("attempting in-place resize via /resize subresource")
 	err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(base))
 	if apierrors.IsNotFound(err) {
@@ -432,19 +403,39 @@ func (p *Patcher) applyInPlaceResize(ctx context.Context, pod, base *corev1.Pod,
 		err = p.client.Patch(ctx, pod, client.MergeFrom(base))
 	}
 	if apierrors.IsInvalid(err) {
-		// The API server rejected the pod resource patch — InPlacePodVerticalScaling
-		// feature gate is not enabled on this cluster. Disable in-place for the rest
-		// of this reconcile cycle and fall back to eviction.
-		logger.Info("in-place pod resource patch rejected, feature gate likely disabled; falling back to eviction")
+		logger.Info("in-place pod resource patch rejected, feature gate likely disabled")
 		p.inPlace.Store(false)
 		pod.Spec.Containers = base.Spec.Containers
 		pod.Spec.InitContainers = base.Spec.InitContainers
-		return p.evictPod(ctx, pod, recs)
+		return false, nil
 	}
-	if err == nil {
-		logger.Info("in-place resize applied")
+	if err != nil {
+		return false, err
 	}
-	return false, err
+	logger.Info("in-place resize applied")
+	return true, nil
+}
+
+// applySidecarResize submits an in-place /resize for staged sidecar init
+// container changes. Sidecar in-place resize is best-effort: kubelet rejects
+// it on older clusters (it requires k8s 1.33+ with the right feature gates),
+// so any error is logged and the original sidecar resources are restored.
+// The replacement pod will pick up the new resources via the webhook at next
+// pod creation. A baseline reflecting the (possibly already applied)
+// regular-container changes is built so the sidecar diff is the only
+// remaining delta.
+func (p *Patcher) applySidecarResize(ctx context.Context, pod, base *corev1.Pod, initContainers []corev1.Container) {
+	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
+	sidecarBase := pod.DeepCopy()
+	sidecarBase.Spec.InitContainers = base.Spec.InitContainers
+	pod.Spec.InitContainers = initContainers
+	if err := p.client.SubResource("resize").Patch(ctx, pod, client.MergeFrom(sidecarBase)); err != nil {
+		logger.Info("sidecar in-place resize not accepted, will apply at next pod creation",
+			"err", err.Error())
+		pod.Spec.InitContainers = base.Spec.InitContainers
+		return
+	}
+	logger.Info("sidecar in-place resize applied")
 }
 
 // evictPod evicts a pod if it is running stale resources, so the workload
@@ -774,22 +765,26 @@ func ApplyRecommendationsToPodSpec(spec *corev1.PodSpec, recs map[string]Contain
 	return changed
 }
 
-// applyRecommendationsToSidecars mirrors applyRecommendations but only mutates
-// restartable init containers (sidecars). Classic init containers have already
-// exited in a Running pod, so patching their resources in-place would be a
-// no-op at best and an API error on some versions.
-func applyRecommendationsToSidecars(in []corev1.Container, recs map[string]ContainerRecommendation) ([]corev1.Container, bool) {
+// applyRecsFiltered copies the container slice and applies the matching
+// recommendation to every container the predicate accepts. Returns the new
+// slice and whether anything changed. A nil predicate accepts all containers.
+//
+// Use a non-nil predicate for init containers — only restartable sidecars
+// should be patched in place; classic init containers have already exited in
+// a Running pod, so patching their resources is a no-op at best and an API
+// error on some versions.
+func applyRecsFiltered(in []corev1.Container, recs map[string]ContainerRecommendation, accept func(corev1.Container) bool) ([]corev1.Container, bool) {
 	if len(in) == 0 {
 		return in, false
 	}
 	out := make([]corev1.Container, len(in))
 	copy(out, in)
 	changed := false
-	for i, c := range out {
-		if !isRestartableInitContainer(c) {
+	for i := range out {
+		if accept != nil && !accept(out[i]) {
 			continue
 		}
-		if applyRecToContainer(&out[i], recs[c.Name]) {
+		if applyRecToContainer(&out[i], recs[out[i].Name]) {
 			changed = true
 		}
 	}
@@ -836,19 +831,4 @@ func applyRecToContainer(c *corev1.Container, rec ContainerRecommendation) bool 
 		changed = true
 	}
 	return changed
-}
-
-// applyRecommendations modifies container resources and returns
-// (updated slice, whether any change was made). The slice is copied first so
-// callers can safely overwrite their input.
-func applyRecommendations(in []corev1.Container, recs map[string]ContainerRecommendation) ([]corev1.Container, bool) {
-	out := make([]corev1.Container, len(in))
-	copy(out, in)
-	changed := false
-	for i := range out {
-		if applyRecToContainer(&out[i], recs[out[i].Name]) {
-			changed = true
-		}
-	}
-	return out, changed
 }

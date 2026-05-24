@@ -21,13 +21,20 @@ var (
 		Name: "k8s_sustain_webhook_panic_total",
 		Help: "Number of panics recovered by the webhook middleware, by request path.",
 	}, []string{"path"})
+
+	// recommendationSkipped mirrors the controller-side metric of the same
+	// name so both injection paths report skip events with identical labels.
+	recommendationSkipped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "k8s_sustain_webhook_recommendation_skipped_total",
+		Help: "Webhook injections skipped without emitting, by reason (e.g. workload_too_young).",
+	}, []string{"namespace", "owner_kind", "owner_name", "reason"})
 )
 
 // RegisterMetrics attaches the webhook's request-level metrics to reg.
 // Registration is idempotent across processes that share a registry: a
 // second call with the same collector is silently absorbed.
 func RegisterMetrics(reg prometheus.Registerer) {
-	for _, c := range []prometheus.Collector{RequestDuration, PanicTotal} {
+	for _, c := range []prometheus.Collector{RequestDuration, PanicTotal, recommendationSkipped} {
 		if err := reg.Register(c); err != nil {
 			if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
 				// Surfaces only programming errors (e.g. duplicate name with
