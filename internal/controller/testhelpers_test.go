@@ -26,17 +26,6 @@ import (
 
 func qty(s string) *resource.Quantity { q := resource.MustParse(s); return &q }
 
-func boolPtr(b bool) *bool { return &b }
-
-func containsString(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
-}
-
 func testutilCounterValue(t *testing.T, vec *prom.CounterVec, ns, kind, name, container string) float64 {
 	t.Helper()
 	return testutil.ToFloat64(vec.With(prom.Labels{

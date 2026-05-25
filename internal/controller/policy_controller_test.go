@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +73,7 @@ func TestReconcile_AddsFinalizerAndRequeues(t *testing.T) {
 	if err := r.Get(context.Background(), types.NamespacedName{Name: "p"}, &got); err != nil {
 		t.Fatalf("get policy: %v", err)
 	}
-	if !containsString(got.Finalizers, "k8s.sustain.io/cleanup") {
+	if !slices.Contains(got.Finalizers, "k8s.sustain.io/cleanup") {
 		t.Errorf("expected finalizer to be added, got %v", got.Finalizers)
 	}
 }
@@ -146,7 +147,7 @@ func TestReconcile_DeletedPolicy_RemovesFinalizer(t *testing.T) {
 	err := r.Get(context.Background(), types.NamespacedName{Name: "p"}, &got)
 	// The fake client garbage-collects the object once finalizers are removed,
 	// so a NotFound here is also acceptable.
-	if err == nil && containsString(got.Finalizers, "k8s.sustain.io/cleanup") {
+	if err == nil && slices.Contains(got.Finalizers, "k8s.sustain.io/cleanup") {
 		t.Error("expected finalizer to be removed on deletion")
 	}
 }

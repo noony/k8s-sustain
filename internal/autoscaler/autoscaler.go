@@ -157,11 +157,11 @@ func lookupScaledObject(ctx context.Context, c client.Client, namespace, workloa
 	}
 	for i := range list.Items {
 		so := &list.Items[i]
-		spec, ok := so.Object["spec"].(map[string]interface{})
+		spec, ok := so.Object["spec"].(map[string]any)
 		if !ok {
 			continue
 		}
-		ref, ok := spec["scaleTargetRef"].(map[string]interface{})
+		ref, ok := spec["scaleTargetRef"].(map[string]any)
 		if !ok {
 			continue
 		}
@@ -170,7 +170,7 @@ func lookupScaledObject(ctx context.Context, c client.Client, namespace, workloa
 		}
 		minR := int32Or(spec["minReplicaCount"], 1)
 		maxR := int32Or(spec["maxReplicaCount"], 0)
-		status, _ := so.Object["status"].(map[string]interface{})
+		status, _ := so.Object["status"].(map[string]any)
 		curR := int32Or(status["currentReplicas"], 0)
 		targets, unknown := extractScaledObjectTriggers(spec["triggers"])
 		return &Info{
@@ -187,24 +187,24 @@ func lookupScaledObject(ctx context.Context, c client.Client, namespace, workloa
 	return nil, nil
 }
 
-// extractScaledObjectTriggers walks `spec.triggers` (an []interface{} from
+// extractScaledObjectTriggers walks `spec.triggers` (an []any from
 // unstructured) and returns per-resource averageUtilization for cpu/memory
 // triggers; bool reports presence of any other trigger type.
-func extractScaledObjectTriggers(raw interface{}) (map[string]int32, bool) {
-	triggers, ok := raw.([]interface{})
+func extractScaledObjectTriggers(raw any) (map[string]int32, bool) {
+	triggers, ok := raw.([]any)
 	if !ok {
 		return nil, false
 	}
 	out := map[string]int32{}
 	unknown := false
 	for _, t := range triggers {
-		m, ok := t.(map[string]interface{})
+		m, ok := t.(map[string]any)
 		if !ok {
 			unknown = true
 			continue
 		}
 		typ := str(m["type"])
-		md, _ := m["metadata"].(map[string]interface{})
+		md, _ := m["metadata"].(map[string]any)
 		val := str(md["value"])
 		switch typ {
 		case "cpu":
@@ -229,12 +229,12 @@ func extractScaledObjectTriggers(raw interface{}) (map[string]int32, bool) {
 	return out, unknown
 }
 
-func str(v interface{}) string {
+func str(v any) string {
 	s, _ := v.(string)
 	return s
 }
 
-func int32Or(v interface{}, fallback int32) int32 {
+func int32Or(v any, fallback int32) int32 {
 	switch t := v.(type) {
 	case int64:
 		return int32(t)

@@ -71,14 +71,8 @@ func (rt *retryTracker) recordFailure(key string) {
 	// is plenty: baseRetryDelay (30s) << 16 ≈ 23 days, far above
 	// maxRetryDelay, yet nowhere near int64 overflow.
 	const maxShift = 16
-	shift := s.attempts - 1
-	if shift > maxShift {
-		shift = maxShift
-	}
-	delay := baseRetryDelay << shift
-	if delay > maxRetryDelay {
-		delay = maxRetryDelay
-	}
+	shift := min(s.attempts-1, maxShift)
+	delay := min(baseRetryDelay<<shift, maxRetryDelay)
 	s.nextRetry = now.Add(delay)
 	rt.pruneLocked(now)
 }

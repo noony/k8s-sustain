@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -27,9 +28,9 @@ func TestIsOwnedBy_ControllerRefMatch(t *testing.T) {
 		want bool
 	}{
 		{"empty", nil, false},
-		{"different uid", []metav1.OwnerReference{{Controller: boolPtr(true), UID: "other"}}, false},
-		{"matching uid but not controller", []metav1.OwnerReference{{Controller: boolPtr(false), UID: uid}}, false},
-		{"matching uid with controller", []metav1.OwnerReference{{Controller: boolPtr(true), UID: uid}}, true},
+		{"different uid", []metav1.OwnerReference{{Controller: ptr.To(true), UID: "other"}}, false},
+		{"matching uid but not controller", []metav1.OwnerReference{{Controller: ptr.To(false), UID: uid}}, false},
+		{"matching uid with controller", []metav1.OwnerReference{{Controller: ptr.To(true), UID: uid}}, true},
 		{"controller nil", []metav1.OwnerReference{{UID: uid}}, false},
 	}
 	for _, tc := range tests {
@@ -77,7 +78,7 @@ func TestListActiveJobsForCronJob_FiltersOwnerAndState(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:       "default",
 				Name:            name,
-				OwnerReferences: []metav1.OwnerReference{{Controller: boolPtr(true), UID: "cj-uid", Kind: "CronJob", Name: "nightly"}},
+				OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "cj-uid", Kind: "CronJob", Name: "nightly"}},
 			},
 		}
 		if terminal {
@@ -89,7 +90,7 @@ func TestListActiveJobsForCronJob_FiltersOwnerAndState(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       "default",
 			Name:            "unrelated",
-			OwnerReferences: []metav1.OwnerReference{{Controller: boolPtr(true), UID: "other-uid", Kind: "CronJob"}},
+			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "other-uid", Kind: "CronJob"}},
 		},
 	}
 	r := makeReconciler(t, cj, owned("active", false), owned("done", true), other)
@@ -170,7 +171,7 @@ func TestResizeCronJobPods_NeverPatchesCronJob(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       "default",
 			Name:            "nightly-1",
-			OwnerReferences: []metav1.OwnerReference{{Controller: boolPtr(true), UID: "cj-uid", Kind: "CronJob"}},
+			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "cj-uid", Kind: "CronJob"}},
 		},
 	}
 	pod := &corev1.Pod{

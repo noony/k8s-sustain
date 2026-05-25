@@ -4,14 +4,13 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/utils/ptr"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
 // helpers
 
-func int32p(i int32) *int32            { return &i }
-func float64p(f float64) *float64      { return &f }
 func qty(s string) resource.Quantity   { return resource.MustParse(s) }
 func qtyp(s string) *resource.Quantity { q := qty(s); return &q }
 
@@ -34,7 +33,7 @@ func TestComputeCPURequest(t *testing.T) {
 		{
 			name:     "with 20% headroom",
 			rawCores: 0.1,
-			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: int32p(20)},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](20)},
 			wantQty:  "120m",
 		},
 		{
@@ -59,7 +58,7 @@ func TestComputeCPURequest(t *testing.T) {
 			name:     "headroom then clamped to max",
 			rawCores: 0.9,
 			cfg: sustainv1alpha1.ResourceRequestsConfig{
-				Headroom:   int32p(50),
+				Headroom:   ptr.To[int32](50),
 				MaxAllowed: qtyp("1"),
 			},
 			wantQty: "1", // 0.9 * 1.5 = 1.35 → clamped to 1
@@ -111,7 +110,7 @@ func TestComputeMemoryRequest(t *testing.T) {
 		{
 			name:     "with 10% headroom",
 			rawBytes: 100 * 1024 * 1024,
-			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: int32p(10)},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](10)},
 			wantQty:  "110Mi",
 		},
 		{
@@ -206,7 +205,7 @@ func TestComputeMemoryRequestWithOOM(t *testing.T) {
 			name:     "recent oom headroom applied to peak",
 			rawBytes: 50 * float64(mib),
 			signal:   OOMSignal{Recent: true, PeakBytes: 100 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
-			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: int32p(20)},
+			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](20)},
 			wantQty:  "120Mi",
 		},
 		{
@@ -370,7 +369,7 @@ func TestComputeLimit(t *testing.T) {
 		},
 		{
 			name:    "fixed ratio 2×",
-			cfg:     sustainv1alpha1.ResourceLimitsConfig{RequestsLimitsRatio: float64p(2.0)},
+			cfg:     sustainv1alpha1.ResourceLimitsConfig{RequestsLimitsRatio: ptr.To(2.0)},
 			wantQty: "400m",
 		},
 		{
@@ -417,7 +416,7 @@ func TestPercentileQuantile(t *testing.T) {
 	if q := PercentileQuantile(nil); q != 0.95 {
 		t.Errorf("nil → want 0.95, got %v", q)
 	}
-	if q := PercentileQuantile(int32p(70)); q != 0.70 {
+	if q := PercentileQuantile(ptr.To[int32](70)); q != 0.70 {
 		t.Errorf("70 → want 0.70, got %v", q)
 	}
 }

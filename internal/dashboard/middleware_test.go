@@ -183,7 +183,7 @@ func TestCORS_VaryOriginAlwaysSetWhenOriginPresent(t *testing.T) {
 			vary := rec.Header().Values("Vary")
 			hasOrigin := false
 			for _, v := range vary {
-				for _, part := range strings.Split(v, ",") {
+				for part := range strings.SplitSeq(v, ",") {
 					if strings.EqualFold(strings.TrimSpace(part), "Origin") {
 						hasOrigin = true
 					}
@@ -207,7 +207,7 @@ func TestCORS_VaryOriginNotSetWhenNoAllowlist(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	for _, v := range rec.Header().Values("Vary") {
-		for _, part := range strings.Split(v, ",") {
+		for part := range strings.SplitSeq(v, ",") {
 			if strings.EqualFold(strings.TrimSpace(part), "Origin") {
 				t.Errorf("did not expect Vary: Origin when no CORSOrigins configured (Vary=%v)", rec.Header().Values("Vary"))
 			}

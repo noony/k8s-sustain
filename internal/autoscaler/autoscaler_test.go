@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	_ "k8s.io/api/autoscaling/v2"
@@ -29,8 +30,8 @@ func newScaledObject(ns, name, targetKind, targetName string, minR, maxR int32) 
 	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "ScaledObject"})
 	u.SetNamespace(ns)
 	u.SetName(name)
-	u.Object["spec"] = map[string]interface{}{
-		"scaleTargetRef": map[string]interface{}{
+	u.Object["spec"] = map[string]any{
+		"scaleTargetRef": map[string]any{
 			"kind": targetKind,
 			"name": targetName,
 		},
@@ -53,15 +54,13 @@ func newHPA(ns, name, targetKind, targetName string, minR, maxR int32) *autoscal
 					Name: corev1.ResourceCPU,
 					Target: autoscalingv2.MetricTarget{
 						Type:               autoscalingv2.UtilizationMetricType,
-						AverageUtilization: ptrInt32(70),
+						AverageUtilization: ptr.To[int32](70),
 					},
 				},
 			}},
 		},
 	}
 }
-
-func ptrInt32(v int32) *int32 { return &v }
 
 func newHPAWithTargets(ns, name, targetKind, targetName string, minR, maxR int32, cpuPct, memPct *int32) *autoscalingv2.HorizontalPodAutoscaler {
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{
@@ -100,7 +99,7 @@ func newHPAWithTargets(ns, name, targetKind, targetName string, minR, maxR int32
 }
 
 func TestDetect_HPA_ExtractsCPUAndMemoryTargets(t *testing.T) {
-	hpa := newHPAWithTargets("default", "web-hpa", "Deployment", "web", 1, 5, ptrInt32(70), ptrInt32(80))
+	hpa := newHPAWithTargets("default", "web-hpa", "Deployment", "web", 1, 5, ptr.To[int32](70), ptr.To[int32](80))
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(hpa).Build()
 
 	got, err := Detect(context.Background(), c, "default", "Deployment", "web")
@@ -123,7 +122,7 @@ func TestDetect_HPA_FlagsUnknownTrigger(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "ext-hpa"},
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
 			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "ext"},
-			MinReplicas:    ptrInt32(1),
+			MinReplicas:    ptr.To[int32](1),
 			MaxReplicas:    5,
 			Metrics: []autoscalingv2.MetricSpec{{
 				Type: autoscalingv2.ExternalMetricSourceType,
@@ -146,17 +145,17 @@ func TestDetect_HPA_FlagsUnknownTrigger(t *testing.T) {
 	}
 }
 
-func newScaledObjectWithTriggers(ns, name, targetKind, targetName string, minR, maxR int32, triggers []interface{}) *unstructured.Unstructured {
+func newScaledObjectWithTriggers(ns, name, targetKind, targetName string, minR, maxR int32, triggers []any) *unstructured.Unstructured {
 	u := newScaledObject(ns, name, targetKind, targetName, minR, maxR)
-	spec := u.Object["spec"].(map[string]interface{})
+	spec := u.Object["spec"].(map[string]any)
 	spec["triggers"] = triggers
 	return u
 }
 
 func TestDetect_ScaledObject_ExtractsCPUAndMemoryTriggers(t *testing.T) {
-	so := newScaledObjectWithTriggers("default", "web-so", "Deployment", "web", 1, 8, []interface{}{
-		map[string]interface{}{"type": "cpu", "metadata": map[string]interface{}{"value": "60"}},
-		map[string]interface{}{"type": "memory", "metadata": map[string]interface{}{"value": "75"}},
+	so := newScaledObjectWithTriggers("default", "web-so", "Deployment", "web", 1, 8, []any{
+		map[string]any{"type": "cpu", "metadata": map[string]any{"value": "60"}},
+		map[string]any{"type": "memory", "metadata": map[string]any{"value": "75"}},
 	})
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(so).Build()
 	got, err := Detect(context.Background(), c, "default", "Deployment", "web")
@@ -175,8 +174,8 @@ func TestDetect_ScaledObject_ExtractsCPUAndMemoryTriggers(t *testing.T) {
 }
 
 func TestDetect_ScaledObject_FlagsUnknownTriggerType(t *testing.T) {
-	so := newScaledObjectWithTriggers("default", "q-so", "Deployment", "q", 0, 5, []interface{}{
-		map[string]interface{}{"type": "kafka", "metadata": map[string]interface{}{"lagThreshold": "10"}},
+	so := newScaledObjectWithTriggers("default", "q-so", "Deployment", "q", 0, 5, []any{
+		map[string]any{"type": "kafka", "metadata": map[string]any{"lagThreshold": "10"}},
 	})
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(so).Build()
 	got, err := Detect(context.Background(), c, "default", "Deployment", "q")
@@ -233,7 +232,7 @@ func TestDetect_HPACurrentReplicas(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "h"},
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
 			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "w"},
-			MinReplicas:    ptrInt32(2),
+			MinReplicas:    ptr.To[int32](2),
 			MaxReplicas:    10,
 			Metrics: []autoscalingv2.MetricSpec{{
 				Type: autoscalingv2.ResourceMetricSourceType,
@@ -241,7 +240,7 @@ func TestDetect_HPACurrentReplicas(t *testing.T) {
 					Name: corev1.ResourceCPU,
 					Target: autoscalingv2.MetricTarget{
 						Type:               autoscalingv2.UtilizationMetricType,
-						AverageUtilization: ptrInt32(70),
+						AverageUtilization: ptr.To[int32](70),
 					},
 				},
 			}},
@@ -263,7 +262,7 @@ func TestDetect_HPACurrentReplicas(t *testing.T) {
 
 func TestDetect_KEDACurrentReplicas(t *testing.T) {
 	so := newScaledObject("ns", "so", "Deployment", "w", 1, 10)
-	so.Object["status"] = map[string]interface{}{
+	so.Object["status"] = map[string]any{
 		"currentReplicas": int64(7),
 	}
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(so).Build()

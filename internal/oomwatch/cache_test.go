@@ -335,11 +335,9 @@ func TestRunSecondCallIsNoOp(t *testing.T) {
 	// Second call must return immediately even with an independent,
 	// never-cancelled context. Blocking here would leak a goroutine in any
 	// caller that wires Run twice.
-	secondCtx, secondCancel := context.WithCancel(context.Background())
-	defer secondCancel()
 	secondDone := make(chan struct{})
 	go func() {
-		c.Run(secondCtx)
+		c.Run(t.Context())
 		close(secondDone)
 	}()
 	select {
@@ -362,12 +360,10 @@ func TestConcurrentAccess(t *testing.T) {
 	const perWorker = 200
 
 	var wg sync.WaitGroup
-	wg.Add(workers * 2)
 
-	for w := 0; w < workers; w++ {
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perWorker; i++ {
+	for w := range workers {
+		wg.Go(func() {
+			for i := range perWorker {
 				key := Key{
 					Namespace: "ns",
 					OwnerKind: "Deployment",
@@ -381,15 +377,14 @@ func TestConcurrentAccess(t *testing.T) {
 					RestartCount: int32(i),
 				})
 			}
-		}()
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perWorker; i++ {
+		})
+		wg.Go(func() {
+			for i := range perWorker {
 				_ = c.Recent("ns", "Deployment", fmt.Sprintf("app-%d", i%4), fmt.Sprintf("c-%d", i%8), time.Minute)
 				_ = c.RecentByWorkload("ns", "Deployment", fmt.Sprintf("app-%d", i%4), time.Minute)
 				_ = c.Size()
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

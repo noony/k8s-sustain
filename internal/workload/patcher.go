@@ -1,10 +1,11 @@
 package workload
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -635,20 +636,20 @@ func sortPodsForRecycle(pods []*corev1.Pod) {
 		return
 	}
 	if anyOwnedByStatefulSet(pods) {
-		sort.SliceStable(pods, func(i, j int) bool {
-			oi, iok := podOrdinal(pods[i])
-			oj, jok := podOrdinal(pods[j])
+		slices.SortStableFunc(pods, func(a, b *corev1.Pod) int {
+			oa, aok := podOrdinal(a)
+			ob, bok := podOrdinal(b)
 			// Fall back to name-desc when an ordinal can't be parsed so
 			// the sort stays total even with oddly-named pods.
-			if !iok || !jok {
-				return pods[i].Name > pods[j].Name
+			if !aok || !bok {
+				return cmp.Compare(b.Name, a.Name)
 			}
-			return oi > oj
+			return cmp.Compare(ob, oa)
 		})
 		return
 	}
-	sort.SliceStable(pods, func(i, j int) bool {
-		return pods[i].Name < pods[j].Name
+	slices.SortStableFunc(pods, func(a, b *corev1.Pod) int {
+		return cmp.Compare(a.Name, b.Name)
 	})
 }
 

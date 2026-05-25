@@ -1,11 +1,13 @@
 package dashboard
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
-	"sort"
+	"slices"
 	"sync"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -195,11 +197,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	for n := range memByPolicy {
 		policyNames[n] = struct{}{}
 	}
-	sortedPolicyNames := make([]string, 0, len(policyNames))
-	for n := range policyNames {
-		sortedPolicyNames = append(sortedPolicyNames, n)
-	}
-	sort.Strings(sortedPolicyNames)
+	sortedPolicyNames := slices.Sorted(maps.Keys(policyNames))
 	for _, name := range sortedPolicyNames {
 		resp.Policies = append(resp.Policies, policyRollup{
 			Name:            name,
@@ -251,15 +249,12 @@ func collectAttention(ctx context.Context, p PromQuerier, expr, signal string) (
 		return rows, nil
 	}
 	// Sort deterministically: descending by value, ties broken alphabetically.
-	names := make([]string, 0, len(bySeries))
-	for n := range bySeries {
-		names = append(names, n)
-	}
-	sort.Slice(names, func(i, j int) bool {
-		if bySeries[names[i]] != bySeries[names[j]] {
-			return bySeries[names[i]] > bySeries[names[j]]
+	names := slices.Collect(maps.Keys(bySeries))
+	slices.SortFunc(names, func(a, b string) int {
+		if c := cmp.Compare(bySeries[b], bySeries[a]); c != 0 {
+			return c
 		}
-		return names[i] < names[j]
+		return cmp.Compare(a, b)
 	})
 	if len(names) > 10 {
 		names = names[:10]
@@ -298,14 +293,12 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 	var wg sync.WaitGroup
 
 	for i, wl := range workloads {
-		wg.Add(1)
-		go func(idx int, wl automatedWorkload) {
-			defer wg.Done()
+		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			recs, err := s.computeRecommendations(ctx, wl.Namespace, wl.Kind, wl.Name, policy)
-			results[idx] = recResult{recs: recs, err: err}
-		}(i, wl)
+			results[i] = recResult{recs: recs, err: err}
+		})
 	}
 	wg.Wait()
 

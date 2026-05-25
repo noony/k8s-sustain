@@ -1,8 +1,9 @@
 package dashboard
 
 import (
+	"cmp"
 	"net/http"
-	"sort"
+	"slices"
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
@@ -72,7 +73,7 @@ func (s *Server) handleSummaryActivity(w http.ResponseWriter, r *http.Request) {
 			Message:   e.Message,
 		})
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].Timestamp > items[j].Timestamp })
+	slices.SortFunc(items, func(a, b activityItem) int { return cmp.Compare(b.Timestamp, a.Timestamp) })
 	if len(items) > limit {
 		items = items[:limit]
 	}

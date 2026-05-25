@@ -6,6 +6,8 @@
 package policymatch
 
 import (
+	"slices"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -25,10 +27,8 @@ func Matches(policy *sustainv1alpha1.Policy, namespace string, podLabels map[str
 	if policy == nil {
 		return false
 	}
-	for _, ex := range excludedNamespaces {
-		if ex == namespace {
-			return false
-		}
+	if slices.Contains(excludedNamespaces, namespace) {
+		return false
 	}
 	if !namespaceAllowed(policy.Spec.Selector.Namespaces, namespace) {
 		return false
@@ -58,10 +58,5 @@ func namespaceAllowed(allowed []string, namespace string) bool {
 	if len(allowed) == 0 {
 		return true
 	}
-	for _, ns := range allowed {
-		if ns == namespace {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, namespace)
 }

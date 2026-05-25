@@ -90,15 +90,13 @@ func TestBreaker_ConcurrentFailuresOpenOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	const goroutines = 50
 	const callsEach = 100
-	wg.Add(goroutines)
 	for range goroutines {
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range callsEach {
 				_ = b.allow()
 				b.failure()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -147,16 +145,14 @@ func TestBreaker_HalfOpenSingleProbe(t *testing.T) {
 	allowed := 0
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	wg.Add(probes)
 	for range probes {
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if b.allow() {
 				mu.Lock()
 				allowed++
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if allowed == 0 {

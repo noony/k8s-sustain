@@ -197,10 +197,7 @@ func (c *Cache) Run(ctx context.Context) {
 		return
 	}
 
-	interval := c.ttl / 2
-	if interval < minSweepInterval {
-		interval = minSweepInterval
-	}
+	interval := max(c.ttl/2, minSweepInterval)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

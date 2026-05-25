@@ -160,35 +160,27 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		cpuErr, memErr                                 error
 	)
 	var wg sync.WaitGroup
-	wg.Add(7)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		cpuSeries, cpuErr = s.PromClient.QueryCPURangeByContainer(ctx, namespace, kind, name, window, step)
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		memSeries, memErr = s.PromClient.QueryMemoryRangeByContainer(ctx, namespace, kind, name, window, step)
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		oomEvents, _ = s.PromClient.QueryOOMKillEvents(ctx, namespace, kind, name, window, step)
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		cpuRequests, _ = s.PromClient.QueryCPURequestRangeByContainer(ctx, namespace, kind, name, window, step)
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		memRequests, _ = s.PromClient.QueryMemoryRequestRangeByContainer(ctx, namespace, kind, name, window, step)
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		cpuLimits, _ = s.PromClient.QueryCPULimitRangeByContainer(ctx, namespace, kind, name, window, step)
-	}()
-	go func() {
-		defer wg.Done()
+	})
+	wg.Go(func() {
 		memLimits, _ = s.PromClient.QueryMemoryLimitRangeByContainer(ctx, namespace, kind, name, window, step)
-	}()
+	})
 	wg.Wait()
 
 	if cpuErr != nil {

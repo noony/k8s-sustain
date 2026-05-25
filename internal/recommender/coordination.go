@@ -86,12 +86,7 @@ func applyReplicaCorrection(qty *resource.Quantity, anchor *float64, current, mi
 		a = 1
 	}
 	target := int32(math.Round(float64(minR) + a*float64(maxR-minR)))
-	if target < minR {
-		target = minR
-	}
-	if target > maxR {
-		target = maxR
-	}
+	target = min(max(target, minR), maxR)
 	if target <= 0 {
 		return &cp
 	}

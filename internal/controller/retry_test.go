@@ -58,7 +58,7 @@ func TestRetryTracker_ExponentialBackoff(t *testing.T) {
 
 func TestRetryTracker_MaxBackoff(t *testing.T) {
 	rt := newRetryTracker()
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		rt.recordFailure("Deployment/prod/web")
 	}
 	state := rt.getState("Deployment/prod/web")
@@ -76,7 +76,7 @@ func TestRetryTracker_MaxBackoff(t *testing.T) {
 func TestRetryTracker_MaxBackoff_NoOverflow(t *testing.T) {
 	rt := newRetryTracker()
 	const key = "Deployment/prod/web"
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		before := time.Now()
 		rt.recordFailure(key)
 		state := rt.getState(key)
