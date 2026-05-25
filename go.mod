@@ -17,7 +17,7 @@ require (
 	k8s.io/api v0.36.1
 	k8s.io/apimachinery v0.36.1
 	k8s.io/client-go v0.36.1
-	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
+	k8s.io/utils v0.0.0-20260507154919-ff6756f316d2
 	sigs.k8s.io/controller-runtime v0.24.1
 )
 
@@ -97,3 +97,8 @@ require (
 )
 
 tool sigs.k8s.io/controller-tools/cmd/controller-gen
+
+// argo-rollouts declares k8s.io/kubelet v0.0.0 and pins it via a replace in its
+// own go.mod; replace directives don't propagate to consumers, so we mirror the
+// pin here to a real version matching our other k8s.io/* modules.
+replace k8s.io/kubelet => k8s.io/kubelet v0.36.1
