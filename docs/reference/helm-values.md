@@ -142,6 +142,7 @@ Only needed when running the Prometheus Operator externally (not the bundled sub
 | `webhook.serviceMonitor.additionalLabels` | `{}` | Extra labels added to the webhook `ServiceMonitor`. Same purpose as the controller variant. |
 | `prometheusRule.enabled` | `false` | Create a Prometheus Operator `PrometheusRule` holding the k8s-sustain recording rules. Leave disabled when using the bundled `prometheus` subchart — the same rules are already embedded in `prometheus.server.serverFiles`, and enabling both would duplicate the series. |
 | `prometheusRule.additionalLabels` | `{}` | Extra labels added to the `PrometheusRule`. Use to match a specific Prometheus operator's `ruleSelector` in clusters with multiple Prometheus instances. |
+| `prometheusRule.groups` | _(see values.yaml)_ | The recording-rule groups themselves. Anchored as `&recordingRulesGroups` so the bundled `prometheus` subchart's `serverFiles."recording_rules.yml".groups` aliases this exact list — edits flow to both consumers. The list is consumed regardless of `prometheusRule.enabled`; the toggle only gates the standalone `PrometheusRule` resource. |
 
 ---
 

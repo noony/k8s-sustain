@@ -2,7 +2,7 @@ package prometheus
 
 // Recording-rule and raw-metric names produced by the controller / webhook
 // and exposed through the Prometheus recording rules defined in
-// charts/k8s-sustain/values.yaml under the `recordingRules` anchor.
+// charts/k8s-sustain/values.yaml under `prometheusRule.groups`.
 // Centralising them lets the dashboard's query helpers stay typo-safe and
 // gives IDEs a single grep target whenever a rule name changes.
 //
@@ -10,10 +10,10 @@ package prometheus
 //   - lower_snake_case names declared as raw operator metrics
 //     (k8s_sustain_*) — emitted directly by the Go code.
 //   - colon-separated recording-rule names (k8s_sustain:*) — defined in
-//     values.yaml's `recordingRules.groups`; the Go code only queries them.
+//     values.yaml's `prometheusRule.groups`; the Go code only queries them.
 //
-// Adding a new metric? Update both this file and the `recordingRules` block
-// in values.yaml.
+// Adding a new metric? Update both this file and the `prometheusRule.groups`
+// list in values.yaml.
 const (
 	// --- Cluster aggregates (recording rules) -----------------------------
 
