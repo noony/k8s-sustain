@@ -1539,7 +1539,7 @@
 <p class="admonition-title">Recording rules required</p>
 <p>When <code>prometheus.enabled=false</code>, you must install the recording rules manually.
 Copy the rule groups from <code>prometheus.server.serverFiles</code> in <code>values.yaml</code> into your existing Prometheus configuration.
-If you use the Prometheus Operator, enable <code>controller.serviceMonitor.enabled=true</code> to deploy the <code>PrometheusRule</code> and <code>ServiceMonitor</code> CRDs instead.</p>
+If you use the Prometheus Operator, enable <code>prometheusRule.enabled=true</code> to deploy the recording rules as a <code>PrometheusRule</code> resource, and <code>controller.serviceMonitor.enabled=true</code> for the controller metrics <code>ServiceMonitor</code>.</p>
 </div>
 <h2 id="install-without-the-admission-webhook">Install without the admission webhook<a class="headerlink" href="#install-without-the-admission-webhook" title="Permanent link">&para;</a></h2>
 <p>If you only need <code>Ongoing</code> mode (no <code>OnCreate</code>), you can disable the webhook entirely. This removes the TLS certificate requirement.</p>

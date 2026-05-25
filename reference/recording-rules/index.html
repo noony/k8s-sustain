@@ -1941,10 +1941,10 @@
   
 
 
-<!-- Source of truth: charts/k8s-sustain/files/recording-rules.yaml -->
+<!-- Source of truth: charts/k8s-sustain/values.yaml under `prometheusRule.groups` -->
 
 <h1 id="recording-rules">Recording Rules<a class="headerlink" href="#recording-rules" title="Permanent link">&para;</a></h1>
-<p>k8s-sustain ships a set of Prometheus recording rules used to compute right-sizing recommendations and to power the dashboard. The rules are defined once in <code>charts/k8s-sustain/files/recording-rules.yaml</code>. <code>templates/prometheusrules.yaml</code> reads that file directly at render time; <code>charts/k8s-sustain/values.yaml</code>'s <code>prometheus.serverFiles."recording_rules.yml".groups</code> block (consumed by the bundled Prometheus subchart) is regenerated from the same file by <code>make sync-rules</code>. CI runs <code>make verify-rules</code> to detect drift.</p>
+<p>k8s-sustain ships a set of Prometheus recording rules used to compute right-sizing recommendations and to power the dashboard. The rules are defined once in <code>charts/k8s-sustain/values.yaml</code> under <code>prometheusRule.groups</code>, which carries a YAML anchor (<code>&amp;recordingRulesGroups</code>). Both consumers read the same list: <code>templates/prometheusrule.yaml</code> renders it into a <code>PrometheusRule</code> resource via <code>.Values.prometheusRule.groups</code>, and the bundled Prometheus subchart receives it through <code>prometheus.serverFiles."recording_rules.yml".groups: *recordingRulesGroups</code>. No sync step or drift check is needed — edit the rules in one place and both consumers update together. The list is always consumed; the <code>prometheusRule.enabled</code> toggle only gates whether the standalone <code>PrometheusRule</code> resource is rendered.</p>
 <h2 id="why-recording-rules">Why recording rules?<a class="headerlink" href="#why-recording-rules" title="Permanent link">&para;</a></h2>
 <p>Computing percentiles over multi-day windows from raw <code>container_cpu_usage_seconds_total</code> / <code>container_memory_working_set_bytes</code> is expensive at query time. Pre-aggregating into recording rules at write-time keeps the recommender's queries cheap and consistent.</p>
 <h2 id="rules-at-a-glance">Rules at a glance<a class="headerlink" href="#rules-at-a-glance" title="Permanent link">&para;</a></h2>
@@ -2285,7 +2285,7 @@ cAdvisor series that briefly lose the node label.</p>
 <p>Driven off <code>pod_workload</code> (not CPU rate) so idle workloads with zero recent CPU activity, or short-running pods missing rate samples, still report their replica count correctly.</p>
 <p>Replica count, derived from distinct pods reporting metrics. Counted at workload level so multi-container pods don't inflate the count.</p>
 <h2 id="customising">Customising<a class="headerlink" href="#customising" title="Permanent link">&para;</a></h2>
-<p>The chart exposes the rules via <code>prometheusRule.rules</code> in <code>values.yaml</code>. Override individual rules to adapt to your environment, but keep names stable — the recommender queries by name.</p>
+<p>The chart exposes the rules via <code>prometheusRule.groups</code> in <code>values.yaml</code>. Override individual rules to adapt to your environment, but keep names stable — the recommender queries by name.</p>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../metrics/">Metrics</a> — controller self-metrics (distinct from these recording rules).</li>

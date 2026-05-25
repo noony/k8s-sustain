@@ -1871,7 +1871,7 @@
 <tr>
 <td><code>controller.serviceMonitor.enabled</code></td>
 <td><code>false</code></td>
-<td>Create a Prometheus Operator <code>ServiceMonitor</code> and <code>PrometheusRule</code> for the controller</td>
+<td>Create a Prometheus Operator <code>ServiceMonitor</code> for the controller metrics endpoint</td>
 </tr>
 <tr>
 <td><code>controller.serviceMonitor.interval</code></td>
@@ -1909,9 +1909,19 @@
 <td>Extra labels added to the webhook <code>ServiceMonitor</code>. Same purpose as the controller variant.</td>
 </tr>
 <tr>
+<td><code>prometheusRule.enabled</code></td>
+<td><code>false</code></td>
+<td>Create a Prometheus Operator <code>PrometheusRule</code> holding the k8s-sustain recording rules. Leave disabled when using the bundled <code>prometheus</code> subchart — the same rules are already embedded in <code>prometheus.server.serverFiles</code>, and enabling both would duplicate the series.</td>
+</tr>
+<tr>
 <td><code>prometheusRule.additionalLabels</code></td>
 <td><code>{}</code></td>
 <td>Extra labels added to the <code>PrometheusRule</code>. Use to match a specific Prometheus operator's <code>ruleSelector</code> in clusters with multiple Prometheus instances.</td>
+</tr>
+<tr>
+<td><code>prometheusRule.groups</code></td>
+<td><em>(see values.yaml)</em></td>
+<td>The recording-rule groups themselves. Anchored as <code>&amp;recordingRulesGroups</code> so the bundled <code>prometheus</code> subchart's <code>serverFiles."recording_rules.yml".groups</code> aliases this exact list — edits flow to both consumers. The list is consumed regardless of <code>prometheusRule.enabled</code>; the toggle only gates the standalone <code>PrometheusRule</code> resource.</td>
 </tr>
 </tbody>
 </table>
