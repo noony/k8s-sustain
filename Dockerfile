@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM node:24-alpine AS ui-builder
+FROM --platform=$BUILDPLATFORM node:26-alpine AS ui-builder
 WORKDIR /workspace/internal/dashboard/ui/frontend
 COPY internal/dashboard/ui/frontend/package.json internal/dashboard/ui/frontend/package-lock.json ./
 RUN npm ci
