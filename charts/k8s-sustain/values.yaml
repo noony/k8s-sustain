@@ -717,12 +717,13 @@ prometheus:
       enabled: true
       scrape_interval: 20s
       relabel_configs:
-        - action: labelmap
-          regex: __meta_kubernetes_node_label_(.+)
-        - source_labels: [__metrics_path__]
-          target_label: metrics_path
-        - source_labels: [__meta_kubernetes_node_name]
-          target_label: node
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+      - source_labels: [__metrics_path__]
+        target_label: metrics_path
+      # Decrease cardinality
+      - action: labeldrop
+        regex: "container_id|host_ip|id|image|image_id|image_spec|internal_ip|pod_ip|provider_id|system_uuid|uid"
     # Disabled — these scrape ANY pod/service in ANY namespace that carries the
     # `prometheus.io/scrape: "true"` annotation.
     kubernetes-service-endpoints: { enabled: false }
@@ -732,10 +733,39 @@ prometheus:
     kubernetes-pods-slow: { enabled: false }
     prometheus-pushgateway: { enabled: false }
 
-  # k8s-sustain components only — restricted to Prometheus's own namespace
-  # and matched by app.kubernetes.io/name label (k8s-sustain, kube-state-metrics).
+  # k8s-sustain / kube-state-metrics components only — restricted to Prometheus's own namespace
   extraScrapeConfigs: |
     - job_name: k8s-sustain
+      honor_labels: true
+      kubernetes_sd_configs:
+        - role: endpoints
+          namespaces:
+            own_namespace: true
+      relabel_configs:
+        - action: keep
+          source_labels: [__meta_kubernetes_service_name]
+          regex: ^.*-metrics$
+        - action: drop
+          source_labels: [__meta_kubernetes_service_name]
+          regex: ^.*-kube-state-metrics$
+        # Only scrape ports actually serving metrics — drops the controller's
+        # healthz port and any non-metrics container port discovered alongside.
+        - action: keep
+          source_labels: [__meta_kubernetes_endpoint_port_name]
+          regex: metrics
+        - action: replace
+          source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - action: replace
+          source_labels: [__meta_kubernetes_service_name]
+          target_label: service
+        - action: replace
+          source_labels: [__meta_kubernetes_pod_node_name]
+          target_label: node
+        - action: replace
+          source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+    - job_name: kube-state-metrics
       # Required so the labels exported by kube-state-metrics (namespace, pod,
       # owner_*, etc.) survive scraping. Without this, Prometheus rewrites the
       # `namespace` and `pod` labels to the kube-state-metrics target's identity
@@ -752,7 +782,7 @@ prometheus:
         # by service name suffix instead.
         - action: keep
           source_labels: [__meta_kubernetes_service_name]
-          regex: .*-metrics$|.*-kube-state-metrics$
+          regex: ^.*-kube-state-metrics$
         # Only scrape ports actually serving metrics — drops the controller's
         # healthz port and any non-metrics container port discovered alongside.
         - action: keep
@@ -770,6 +800,9 @@ prometheus:
         - action: replace
           source_labels: [__meta_kubernetes_pod_name]
           target_label: pod
+        # Decrease cardinality
+        - action: labeldrop
+          regex: "container_id|host_ip|id|image|image_id|image_spec|internal_ip|pod_ip|provider_id|system_uuid|uid"
 
   serverFiles:
     recording_rules.yml:
