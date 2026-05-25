@@ -8,6 +8,7 @@ package autoscaler
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -237,11 +238,21 @@ func str(v any) string {
 func int32Or(v any, fallback int32) int32 {
 	switch t := v.(type) {
 	case int64:
-		return int32(t)
+		return clampInt32(t)
 	case float64:
-		return int32(t)
+		return clampInt32(int64(t))
 	case int:
-		return int32(t)
+		return clampInt32(int64(t))
 	}
 	return fallback
+}
+
+func clampInt32(v int64) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if v < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(v)
 }

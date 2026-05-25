@@ -33,13 +33,14 @@ linters:
     gosec:
       excludes:
         - G104   # unhandled errors (covered by errcheck; gosec over-reports)
-        - G115   # integer overflow — fires on k8s int32/int conversions throughout
     errorlint:
       comparison: true
       asserts: true
       errorf: true
 
   exclusions:
+    paths:
+      - internal/dashboard/ui/
     rules:
       - path: _test\.go
         linters:
