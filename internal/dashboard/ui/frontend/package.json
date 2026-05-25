@@ -29,7 +29,7 @@
     "@eslint/js": "^10.0.1",
     "@types/hammerjs": "^2.0.46",
     "@types/node": "^25.9.0",
-    "@vitejs/plugin-vue": "^6.0.5",
+    "@vitejs/plugin-vue": "^6.0.7",
     "@vue/test-utils": "^2.4.10",
     "@vue/tsconfig": "^0.9.1",
     "eslint": "^10.4.0",
