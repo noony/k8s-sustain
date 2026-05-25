@@ -34,7 +34,7 @@ helm install k8s-sustain k8s-sustain/k8s-sustain \
 !!! warning "Recording rules required"
     When `prometheus.enabled=false`, you must install the recording rules manually.
     Copy the rule groups from `prometheus.server.serverFiles` in `values.yaml` into your existing Prometheus configuration.
-    If you use the Prometheus Operator, enable `controller.serviceMonitor.enabled=true` to deploy the `PrometheusRule` and `ServiceMonitor` CRDs instead.
+    If you use the Prometheus Operator, enable `prometheusRule.enabled=true` to deploy the recording rules as a `PrometheusRule` resource, and `controller.serviceMonitor.enabled=true` for the controller metrics `ServiceMonitor`.
 
 ## Install without the admission webhook
 

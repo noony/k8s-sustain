@@ -39,12 +39,6 @@ repos:
         language: system
         pass_filenames: false
         files: ^(api/|charts/k8s-sustain/files/crds/)
-      - id: verify-rules
-        name: verify recording rules in sync
-        entry: make verify-rules
-        language: system
-        pass_filenames: false
-        files: ^charts/k8s-sustain/(values\.yaml|templates/prometheusrules\.yaml|files/recording-rules\.yaml)
       - id: go-mod-tidy
         name: go mod tidy
         entry: bash -c 'go mod tidy && git diff --exit-code go.mod go.sum'

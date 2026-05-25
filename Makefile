@@ -5,7 +5,7 @@ PLATFORMS ?= linux/amd64,linux/arm64
 
 include Makefile.scenarios
 
-.PHONY: help build test test-race lint generate manifests generate-crds verify-crds sync-rules verify-rules tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template port-forward port-forward-stop
+.PHONY: help build test test-race lint generate manifests generate-crds verify-crds tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template port-forward port-forward-stop
 
 NAMESPACE ?= k8s-sustain
 DASHBOARD_PORT ?= 8090
@@ -49,14 +49,6 @@ generate-crds:
 verify-crds: generate-crds ## Verify generated CRDs are in sync with the Go types
 	@git diff --exit-code charts/k8s-sustain/files/crds || \
 		(echo "ERROR: CRDs in Helm chart are out of sync with Go types. Run 'make manifests' and commit." && exit 1)
-
-sync-rules: ## Regenerate values.yaml's recording rules block from charts/k8s-sustain/files/recording-rules.yaml
-	@./hack/sync-recording-rules.sh
-
-verify-rules: sync-rules helm-deps ## Verify values.yaml is in sync with the canonical rules file and matches the rendered PrometheusRule
-	@git diff --exit-code charts/k8s-sustain/values.yaml || \
-		(echo "ERROR: values.yaml drifted from charts/k8s-sustain/files/recording-rules.yaml. Run 'make sync-rules' and commit." && exit 1)
-	@./hack/diff-recording-rules.sh
 
 docker-build: ## Build Docker image for the host's native platform
 	DOCKER_BUILDKIT=1 docker build -t $(IMG) .

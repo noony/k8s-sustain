@@ -127,7 +127,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "additionalLabels": { "type": "object", "additionalProperties": { "type": "string" } }
+        "enabled": { "type": "boolean" },
+        "additionalLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "groups": { "type": "array" }
       }
     },
     "dashboard": {

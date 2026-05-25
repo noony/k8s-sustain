@@ -12,8 +12,8 @@ WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
 helm template k8s-sustain ./charts/k8s-sustain \
-  --set controller.serviceMonitor.enabled=true \
-  --show-only templates/prometheusrules.yaml \
+  --set prometheusRule.enabled=true \
+  --show-only templates/prometheusrule.yaml \
   > "$WORKDIR/rules.yaml"
 
 # Strip the kubernetes object envelope and keep just `groups:` for promtool.

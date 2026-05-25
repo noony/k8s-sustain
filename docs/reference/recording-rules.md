@@ -1,8 +1,8 @@
-<!-- Source of truth: charts/k8s-sustain/files/recording-rules.yaml -->
+<!-- Source of truth: charts/k8s-sustain/values.yaml under `prometheusRule.groups` -->
 
 # Recording Rules
 
-k8s-sustain ships a set of Prometheus recording rules used to compute right-sizing recommendations and to power the dashboard. The rules are defined once in `charts/k8s-sustain/files/recording-rules.yaml`. `templates/prometheusrules.yaml` reads that file directly at render time; `charts/k8s-sustain/values.yaml`'s `prometheus.serverFiles."recording_rules.yml".groups` block (consumed by the bundled Prometheus subchart) is regenerated from the same file by `make sync-rules`. CI runs `make verify-rules` to detect drift.
+k8s-sustain ships a set of Prometheus recording rules used to compute right-sizing recommendations and to power the dashboard. The rules are defined once in `charts/k8s-sustain/values.yaml` under `prometheusRule.groups`, which carries a YAML anchor (`&recordingRulesGroups`). Both consumers read the same list: `templates/prometheusrule.yaml` renders it into a `PrometheusRule` resource via `.Values.prometheusRule.groups`, and the bundled Prometheus subchart receives it through `prometheus.serverFiles."recording_rules.yml".groups: *recordingRulesGroups`. No sync step or drift check is needed — edit the rules in one place and both consumers update together. The list is always consumed; the `prometheusRule.enabled` toggle only gates whether the standalone `PrometheusRule` resource is rendered.
 
 ## Why recording rules?
 
@@ -425,7 +425,7 @@ Replica count, derived from distinct pods reporting metrics. Counted at workload
 
 ## Customising
 
-The chart exposes the rules via `prometheusRule.rules` in `values.yaml`. Override individual rules to adapt to your environment, but keep names stable — the recommender queries by name.
+The chart exposes the rules via `prometheusRule.groups` in `values.yaml`. Override individual rules to adapt to your environment, but keep names stable — the recommender queries by name.
 
 ## See also
 

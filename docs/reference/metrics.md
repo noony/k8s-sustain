@@ -105,7 +105,7 @@ time series, not thousands.
 ## Recording rules
 
 All rules are evaluated every minute. They live in
-`charts/k8s-sustain/templates/prometheusrules.yaml`.
+`charts/k8s-sustain/templates/prometheusrule.yaml`.
 
 ### Workload mapping (existing)
 
