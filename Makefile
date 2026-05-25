@@ -5,7 +5,7 @@ PLATFORMS ?= linux/amd64,linux/arm64
 
 include Makefile.scenarios
 
-.PHONY: help build test lint generate manifests generate-crds verify-crds sync-rules verify-rules tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template port-forward port-forward-stop
+.PHONY: help build test test-race lint generate manifests generate-crds verify-crds sync-rules verify-rules tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template port-forward port-forward-stop
 
 NAMESPACE ?= k8s-sustain
 DASHBOARD_PORT ?= 8090
@@ -23,10 +23,13 @@ build: build-ui ## Build binary to bin/k8s-sustain
 	go build -o bin/$(BINARY) ./
 
 test: ## Run all tests
-	go test ./...
+	go test -shuffle=on ./...
 
-coverage: ## Run tests with coverage report
-	go test -coverprofile=coverage.out ./...
+test-race: ## Run all tests with the race detector and randomized order
+	go test -race -shuffle=on ./...
+
+coverage: ## Run tests with coverage report (race detector + shuffled order)
+	go test -race -shuffle=on -coverprofile=coverage.out ./...
 	go tool cover -func=coverage.out
 
 lint: ## Run golangci-lint

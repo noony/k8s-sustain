@@ -37,6 +37,7 @@ resource requests/limits based on matching policies with OnCreate update mode.
 
 Requires a TLS certificate and key (--tls-cert-file / --tls-key-file).
 Use cert-manager or provide a pre-existing Secret mounted at /tls.`,
+	Args: cobra.NoArgs,
 	RunE: runWebhook,
 }
 

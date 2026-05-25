@@ -378,7 +378,7 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 	if err != nil {
 		// Non-fatal: OOM data may not be available (missing kube-state-metrics etc.)
 		c.breaker.failure()
-		return nil, nil //nolint:nilerr
+		return nil, nil
 	}
 	c.breaker.success()
 	logWarnings(ctx, expr, warnings)

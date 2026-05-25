@@ -16,7 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -176,7 +176,7 @@ func reconcilerForPolicy(t *testing.T, policy *sustainv1alpha1.Policy, extra ...
 		PrometheusClient:  pc,
 		ReconcileInterval: time.Hour,
 		ConcurrencyLimit:  1,
-		recorder:          record.NewFakeRecorder(100),
+		recorder:          events.NewFakeRecorder(100),
 		patcher:           workload.New(c, false),
 		retries:           newRetryTracker(),
 	}
@@ -242,7 +242,7 @@ func reconcilerWithProm(t *testing.T, server *httptest.Server, inPlace bool, ext
 		ReconcileInterval: time.Hour,
 		ConcurrencyLimit:  1,
 		InPlaceUpdates:    inPlace,
-		recorder:          record.NewFakeRecorder(100),
+		recorder:          events.NewFakeRecorder(100),
 		patcher:           workload.New(c, inPlace),
 		retries:           newRetryTracker(),
 	}
@@ -270,7 +270,8 @@ func deploymentTarget(ns, name string) *workloadTarget {
 		Name:      name,
 		Namespace: ns,
 		Selector:  &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
-		Containers: []corev1.Container{{Name: "app",
+		Containers: []corev1.Container{{
+			Name: "app",
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceCPU:    resource.MustParse("500m"),

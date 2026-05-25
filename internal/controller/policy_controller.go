@@ -13,7 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -74,7 +74,7 @@ type PolicyReconciler struct {
 	// expected to be wired as a pair.
 	LiveOOM LiveOOMConfig
 
-	recorder record.EventRecorder
+	recorder events.EventRecorder
 	patcher  *workload.Patcher
 	retries  *retryTracker
 }
@@ -111,7 +111,7 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		patcherOpts = append(patcherOpts, workload.WithReadyTimeout(r.RecycleReplacementTimeout))
 	}
 	r.patcher = workload.New(r.Client, r.InPlaceUpdates, patcherOpts...)
-	r.recorder = mgr.GetEventRecorderFor("k8s-sustain")
+	r.recorder = mgr.GetEventRecorder("k8s-sustain")
 	r.retries = newRetryTracker()
 	if r.ConcurrencyLimit <= 0 {
 		r.ConcurrencyLimit = 5
@@ -165,7 +165,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				logger.Error(err, "failed to delete WorkloadRecommendations for policy; will retry")
 				return ctrl.Result{}, err
 			}
-			r.recorder.Event(policy, corev1.EventTypeNormal, "Cleanup", "Policy deleted, removing finalizer.")
+			r.recorder.Eventf(policy, nil, corev1.EventTypeNormal, "Cleanup", "Cleanup", "Policy deleted, removing finalizer.")
 			controllerutil.RemoveFinalizer(policy, finalizerName)
 			if err := r.Update(ctx, policy); err != nil {
 				return ctrl.Result{}, err
@@ -192,7 +192,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if listErr != nil {
 		logger.Error(listErr, "failed to list workloads")
 		_ = r.failCondition(ctx, policy, "ListFailed", listErr)
-		r.recorder.Event(policy, corev1.EventTypeWarning, "ListFailed", listErr.Error())
+		r.recorder.Eventf(policy, nil, corev1.EventTypeWarning, "ListFailed", "ListFailed", "%s", listErr.Error())
 		reconcileTotal.WithLabelValues(policy.Name, "error").Inc()
 		return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
 	}
@@ -242,7 +242,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if failed > 0 {
 		msg := fmt.Sprintf("%d of %d workloads failed", failed, len(targets))
 		_ = r.failCondition(ctx, policy, "PartialFailure", fmt.Errorf("%d of %d workloads failed", failed, len(targets)))
-		r.recorder.Event(policy, corev1.EventTypeWarning, "PartialFailure", msg)
+		r.recorder.Eventf(policy, nil, corev1.EventTypeWarning, "PartialFailure", "PartialFailure", "%s", msg)
 		reconcileTotal.WithLabelValues(policy.Name, "error").Inc()
 	} else {
 		_ = r.setCondition(ctx, policy, metav1.Condition{
@@ -252,8 +252,8 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			Message:            fmt.Sprintf("All %d targeted workloads have been processed.", len(targets)),
 			ObservedGeneration: policy.Generation,
 		})
-		r.recorder.Event(policy, corev1.EventTypeNormal, "ReconciliationSucceeded",
-			fmt.Sprintf("All %d targeted workloads have been processed.", len(targets)))
+		r.recorder.Eventf(policy, nil, corev1.EventTypeNormal, "ReconciliationSucceeded", "ReconciliationSucceeded",
+			"All %d targeted workloads have been processed.", len(targets))
 		reconcileTotal.WithLabelValues(policy.Name, "success").Inc()
 	}
 

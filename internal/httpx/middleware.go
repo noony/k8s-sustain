@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"runtime/debug"
@@ -76,10 +77,14 @@ func WithRecovery(next http.Handler, logger logr.Logger, count PanicCounter, lab
 			if rec == nil {
 				return
 			}
-			if rec == http.ErrAbortHandler {
+			// http.ErrAbortHandler is the stdlib's signal to drop the
+			// connection silently — propagate it so net/http's own handler
+			// sees the panic instead of treating it as a 500.
+			if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 				panic(rec)
 			}
-			logger.Error(nil, "http handler panic",
+			logger.Error(
+				nil, "http handler panic",
 				"panic", fmt.Sprint(rec),
 				"path", r.URL.Path,
 				"method", r.Method,
@@ -147,7 +152,8 @@ func WithTelemetry(next http.Handler, logger logr.Logger, observe LatencyObserve
 			}
 			observe(label, http.StatusText(rw.statusCode), dur)
 		}
-		logger.V(1).Info("http request",
+		logger.V(1).Info(
+			"http request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", rw.statusCode,

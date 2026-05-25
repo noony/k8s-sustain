@@ -76,13 +76,33 @@ jobs:
           go-version-file: go.mod
 
       - name: Build release binaries
+        env:
+          # -trimpath: strip $GOPATH/build host paths from the binary so the
+          #            output is reproducible across machines.
+          # -s -w   : drop the symbol and DWARF tables (~30% smaller binary).
+          # -X      : embed the tag as a build-time version string. Picked up
+          #            by `k8s-sustain version` if/when that subcommand exists.
+          VERSION: ${{ github.ref_name }}
         run: |
-          GOOS=linux GOARCH=amd64 go build -o bin/k8s-sustain-linux-amd64 ./
-          GOOS=linux GOARCH=arm64 go build -o bin/k8s-sustain-linux-arm64 ./
-          GOOS=darwin GOARCH=arm64 go build -o bin/k8s-sustain-darwin-arm64 ./
+          set -euo pipefail
+          LDFLAGS="-s -w -X github.com/noony/k8s-sustain/internal/version.Version=${VERSION}"
+          mkdir -p bin
+          for target in linux/amd64 linux/arm64 darwin/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} \
+              go build -trimpath -ldflags "${LDFLAGS}" \
+                -o "bin/k8s-sustain-${target%/*}-${target#*/}" ./
+          done
+
+      - name: Generate SHA256 checksums
+        working-directory: bin
+        run: |
+          sha256sum k8s-sustain-* > sha256sums.txt
+          cat sha256sums.txt
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
-          files: bin/k8s-sustain-*
+          files: |
+            bin/k8s-sustain-*
+            bin/sha256sums.txt

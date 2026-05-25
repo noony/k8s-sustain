@@ -160,6 +160,9 @@ type WebhookConfig struct {
 }
 
 // LoadWebhookConfig reads the current Viper state and returns a WebhookConfig.
+// viper.UnmarshalKey would be tidier but does not see BindPFlag-bound nested
+// keys (viper.Sub("webhook") returns nil even though AllSettings exposes the
+// subtree). Explicit Get calls are uglier but reliable.
 func LoadWebhookConfig() WebhookConfig {
 	return WebhookConfig{
 		TLSCertFile:        viper.GetString("webhook.tls-cert-file"),
@@ -196,6 +199,7 @@ type DashboardConfig struct {
 }
 
 // LoadDashboardConfig reads the current Viper state and returns a DashboardConfig.
+// See LoadWebhookConfig for why we avoid viper.UnmarshalKey here.
 func LoadDashboardConfig() DashboardConfig {
 	return DashboardConfig{
 		BindAddress:        viper.GetString("dashboard.bind-address"),

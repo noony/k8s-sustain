@@ -112,7 +112,7 @@ func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name
 	}
 
 	q := r.URL.Query()
-	window, perr := parseDurationParam(q, "window", "30d")
+	window, perr := parseDurationParam(q, "30d")
 	if perr != nil {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return

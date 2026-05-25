@@ -31,8 +31,8 @@ func TestAllWorkloadsIncludesRiskDriftHPA(t *testing.T) {
 		byLabels: map[string]map[string]float64{
 			"k8s_sustain:workload_oom_24h": {"default|Deployment|web": 2},
 			"max by (namespace, owner_kind, owner_name) (abs(1 - k8s_sustain_workload_drift_ratio))": {"default|Deployment|web": 0.6},
-			"k8s_sustain_workload_retry_state == 1": {},
-			"k8s_sustain_autoscaler_present":        {"default|Deployment|web": 1},
+			"k8s_sustain_workload_retry_state == 1":                                                  {},
+			"k8s_sustain_autoscaler_present":                                                         {"default|Deployment|web": 1},
 			`k8s_sustain_coordination_factor{namespace="default",owner_kind="Deployment",owner_name="web"}`: {
 				"cpu|overhead":    1.2,
 				"memory|overhead": 1.1,

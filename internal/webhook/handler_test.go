@@ -761,6 +761,28 @@ func admissionRequestFor(t *testing.T, pod *corev1.Pod) *admissionv1.AdmissionRe
 	}
 }
 
+// TestAdmit_EmptyObjectRaw_AllowsWithoutPatch verifies the handler fails open
+// when AdmissionRequest.Object.Raw is nil/empty (a malformed apiserver review
+// or an unrelated subresource where Object is not populated).
+func TestAdmit_EmptyObjectRaw_AllowsWithoutPatch(t *testing.T) {
+	env := newAdmitEnv(t)
+	defer env.close()
+
+	resp := env.handler.admit(context.Background(), &admissionv1.AdmissionRequest{
+		UID:       "uid",
+		Namespace: "default",
+		Name:      "n",
+		Kind:      metav1.GroupVersionKind{Kind: "Pod"},
+		Object:    runtime.RawExtension{}, // Raw is nil
+	})
+	if !resp.Allowed {
+		t.Fatal("expected allow on empty Object.Raw")
+	}
+	if resp.Patch != nil {
+		t.Errorf("expected no patch, got %d bytes", len(resp.Patch))
+	}
+}
+
 // TestAdmit_NoAnnotation_AllowsWithoutPatch verifies pods without the policy
 // annotation pass through untouched.
 func TestAdmit_NoAnnotation_AllowsWithoutPatch(t *testing.T) {
@@ -967,12 +989,12 @@ func TestIsValidPolicyName(t *testing.T) {
 		{"good", true},
 		{"good-name-123", true},
 		{"", false},
-		{"UPPER", false},                          // DNS-1123 is lowercase
-		{"a/b", false},                            // slash
-		{strings.Repeat("a", 254), false},         // > 253 chars
+		{"UPPER", false},                  // DNS-1123 is lowercase
+		{"a/b", false},                    // slash
+		{strings.Repeat("a", 254), false}, // > 253 chars
 		{"-leading-dash", false},
 		{"trailing-dash-", false},
-		{"a..b", false},                           // empty label
+		{"a..b", false}, // empty label
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

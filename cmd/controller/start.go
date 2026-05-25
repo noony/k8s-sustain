@@ -32,6 +32,7 @@ func init() {
 var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the k8s-sustain controller",
+	Args:  cobra.NoArgs,
 	RunE:  runStart,
 }
 

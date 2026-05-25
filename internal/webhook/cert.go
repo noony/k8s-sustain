@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -52,15 +53,15 @@ func NewCertExpiry(certFile, keyFile string, log logr.Logger, registerer prometh
 	if registerer != nil {
 		if err := registerer.Register(g); err != nil {
 			// AlreadyRegisteredError is fine in tests/restarts; surface anything else.
-			if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
-				if existing, ok2 := are.ExistingCollector.(prometheus.Gauge); ok2 {
-					g = existing
-				} else {
-					return nil, fmt.Errorf("registering cert expiry gauge: %w", err)
-				}
-			} else {
+			var are prometheus.AlreadyRegisteredError
+			if !errors.As(err, &are) {
 				return nil, fmt.Errorf("registering cert expiry gauge: %w", err)
 			}
+			existing, ok := are.ExistingCollector.(prometheus.Gauge)
+			if !ok {
+				return nil, fmt.Errorf("registering cert expiry gauge: %w", err)
+			}
+			g = existing
 		}
 	}
 	return &CertExpiry{certFile: certFile, keyFile: keyFile, gauge: g, log: log}, nil

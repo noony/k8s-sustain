@@ -131,6 +131,13 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 
 	logger.V(1).Info("admit invoked", "operation", req.Operation, "kind", req.Kind.Kind)
 
+	if len(req.Object.Raw) == 0 {
+		// AdmissionRequest.Object is optional on the wire (e.g. DELETE has Raw
+		// empty; a malformed apiserver review could also set it to nil). Bail
+		// out fail-open rather than json.Unmarshal panicking on a nil slice.
+		logger.V(1).Info("admission request has empty Object.Raw, allowing without injection")
+		return allow
+	}
 	var pod corev1.Pod
 	if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
 		logger.Error(err, "failed to decode Pod")

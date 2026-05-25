@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,7 +31,7 @@ func ListenAndServeWithShutdown(
 ) error {
 	errCh := make(chan error, 1)
 	go func() {
-		if err := listen(); err != nil && err != http.ErrServerClosed {
+		if err := listen(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()

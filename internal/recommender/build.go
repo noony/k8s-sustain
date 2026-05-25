@@ -84,10 +84,10 @@ func FetchWorkloadInputs(
 	logger := log.FromContext(ctx)
 
 	var (
-		cpuTotals, memTotals       promclient.ContainerValues
-		cpuFloors, memFloors       promclient.ContainerValues
-		oomSignal                  promclient.OOMSignal
-		median                     float64
+		cpuTotals, memTotals promclient.ContainerValues
+		cpuFloors, memFloors promclient.ContainerValues
+		oomSignal            promclient.OOMSignal
+		median               float64
 	)
 
 	g, gctx := errgroup.WithContext(ctx)

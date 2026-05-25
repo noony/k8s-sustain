@@ -30,9 +30,9 @@ const (
 
 // Info is the detection result for a workload.
 type Info struct {
-	Kind        Kind
-	Namespace   string
-	Name        string
+	Kind            Kind
+	Namespace       string
+	Name            string
 	MinReplicas     int32
 	MaxReplicas     int32
 	CurrentReplicas int32

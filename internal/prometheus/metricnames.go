@@ -33,21 +33,21 @@ const (
 
 	// --- Per-workload signals ---------------------------------------------
 
-	MetricWorkloadOOM24h             = "k8s_sustain:workload_oom_24h"
-	MetricWorkloadDrifted            = "k8s_sustain:workload_drifted"
-	MetricWorkloadDriftRatio         = "k8s_sustain_workload_drift_ratio"
-	MetricWorkloadRetryState         = "k8s_sustain_workload_retry_state"
-	MetricWorkloadRetryAttempts      = "k8s_sustain_workload_retry_attempts"
-	MetricWorkloadTemplateCPUCores   = "k8s_sustain_workload_template_cpu_cores"
+	MetricWorkloadOOM24h              = "k8s_sustain:workload_oom_24h"
+	MetricWorkloadDrifted             = "k8s_sustain:workload_drifted"
+	MetricWorkloadDriftRatio          = "k8s_sustain_workload_drift_ratio"
+	MetricWorkloadRetryState          = "k8s_sustain_workload_retry_state"
+	MetricWorkloadRetryAttempts       = "k8s_sustain_workload_retry_attempts"
+	MetricWorkloadTemplateCPUCores    = "k8s_sustain_workload_template_cpu_cores"
 	MetricWorkloadTemplateMemoryBytes = "k8s_sustain_workload_template_memory_bytes"
-	MetricWorkloadCPUUsageCores      = "k8s_sustain:workload_cpu_usage:cores"
-	MetricWorkloadMemoryUsageBytes   = "k8s_sustain:workload_memory_usage:bytes"
+	MetricWorkloadCPUUsageCores       = "k8s_sustain:workload_cpu_usage:cores"
+	MetricWorkloadMemoryUsageBytes    = "k8s_sustain:workload_memory_usage:bytes"
 
 	MetricContainerCPURequestsByWorkloadCores    = "k8s_sustain:container_cpu_requests_by_workload:cores"
 	MetricContainerMemoryRequestsByWorkloadBytes = "k8s_sustain:container_memory_requests_by_workload:bytes"
 	MetricContainerCPULimitsByWorkloadCores      = "k8s_sustain:container_cpu_limits_by_workload:cores"
 	MetricContainerMemoryLimitsByWorkloadBytes   = "k8s_sustain:container_memory_limits_by_workload:bytes"
 
-	MetricAutoscalerPresent     = "k8s_sustain_autoscaler_present"
-	MetricCoordinationFactor    = "k8s_sustain_coordination_factor"
+	MetricAutoscalerPresent  = "k8s_sustain_autoscaler_present"
+	MetricCoordinationFactor = "k8s_sustain_coordination_factor"
 )

@@ -187,13 +187,13 @@ func (c *Cache) Size() int {
 }
 
 // Run starts the active sweeper that drops entries older than ttl. It blocks
-// until ctx is canceled. Subsequent calls are no-ops; two sweepers on the same
-// cache would race on entries without adding any value.
+// until ctx is canceled. Subsequent calls return immediately so a misuse (two
+// callers wiring Run as a manager Runnable) does not silently leak a goroutine
+// blocked on its own ctx — the first call owns the lifetime.
 func (c *Cache) Run(ctx context.Context) {
 	started := false
 	c.runOnce.Do(func() { started = true })
 	if !started {
-		<-ctx.Done()
 		return
 	}
 

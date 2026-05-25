@@ -33,6 +33,7 @@ The dashboard provides:
   - Policy overview and exploration
   - Per-workload CPU and memory usage graphs
   - Policy simulator for testing parameter changes against historical data`,
+	Args: cobra.NoArgs,
 	RunE: runDashboard,
 }
 

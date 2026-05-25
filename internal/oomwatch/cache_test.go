@@ -332,18 +332,27 @@ func TestRunSecondCallIsNoOp(t *testing.T) {
 	}()
 	time.Sleep(50 * time.Millisecond)
 
+	// Second call must return immediately even with an independent,
+	// never-cancelled context. Blocking here would leak a goroutine in any
+	// caller that wires Run twice.
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	defer secondCancel()
 	secondDone := make(chan struct{})
 	go func() {
-		c.Run(ctx)
+		c.Run(secondCtx)
 		close(secondDone)
 	}()
-
-	cancel()
-	<-firstDone
 	select {
 	case <-secondDone:
 	case <-time.After(time.Second):
-		t.Fatalf("second Run did not return after context cancel")
+		t.Fatalf("second Run did not return immediately when first is still running")
+	}
+
+	cancel()
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatalf("first Run did not return after context cancel")
 	}
 }
 
@@ -356,7 +365,6 @@ func TestConcurrentAccess(t *testing.T) {
 	wg.Add(workers * 2)
 
 	for w := 0; w < workers; w++ {
-		w := w
 		go func() {
 			defer wg.Done()
 			for i := 0; i < perWorker; i++ {

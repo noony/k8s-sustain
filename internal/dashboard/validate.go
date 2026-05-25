@@ -76,10 +76,11 @@ func parseBoolParam(q url.Values, name string) (*bool, *paramError) {
 	}
 }
 
-// parseDurationParam validates a Prometheus-style duration window
-// (?window=168h, 14d, etc.). Sub-minute units are rejected — they're
-// nonsensical for the recommendation windows this dashboard surfaces.
-func parseDurationParam(q url.Values, name, def string) (string, *paramError) {
+// parseDurationParam validates a Prometheus-style ?window= duration
+// (168h, 14d, etc.). Sub-minute units are rejected — they're nonsensical for
+// the recommendation windows this dashboard surfaces.
+func parseDurationParam(q url.Values, def string) (string, *paramError) {
+	const name = "window"
 	v := q.Get(name)
 	if v == "" {
 		return def, nil

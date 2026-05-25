@@ -20,7 +20,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	// still kick off autoscaler detection + Prometheus queries that will
 	// each fail through their own timeout path, slowing graceful shutdown.
 	if err := ctx.Err(); err != nil {
-		return nil
+		return nil //nolint:nilerr // ctx-cancel is graceful shutdown, not a workload error
 	}
 
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
@@ -40,7 +40,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		autoInfo = autoscaler.Info{Kind: autoscaler.KindNone}
 	}
 	if autoInfo.Kind != autoscaler.KindNone {
-		r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "AutoscalerDetected",
+		r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "AutoscalerDetected", "AutoscalerDetected",
 			"%s %s detected targeting %s/%s (replicas %d–%d)",
 			autoInfo.Kind, autoInfo.Name, t.Kind, t.Name, autoInfo.MinReplicas, autoInfo.MaxReplicas)
 	}
@@ -93,7 +93,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		r.recordStepSuccess(t)
 		changed := changedContainers(containers, recs)
 		if len(changed) > 0 {
-			r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "ResourcesUpdated",
+			r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
 				"in-place resized cronjob pods for containers: %v", changed)
 		}
 		return nil
@@ -119,7 +119,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		logger.V(1).Info("recommendations match current resources, no event emitted")
 		return nil
 	}
-	r.recorder.Eventf(t.Object, corev1.EventTypeNormal, "ResourcesUpdated",
+	r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
 		"Updated resources for containers: %v", changed)
 	logger.Info("workload resources updated", "containers", changed)
 
@@ -139,7 +139,7 @@ func (r *PolicyReconciler) handleStepError(ctx context.Context, t *workloadTarge
 	}
 	r.retries.recordFailure(t.key())
 	state := r.retries.getState(t.key())
-	r.recorder.Eventf(t.Object, corev1.EventTypeWarning, "ReconciliationRetryScheduled",
+	r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, "ReconciliationRetryScheduled", "ReconciliationRetryScheduled",
 		"%s: %v. Retry attempt %d at %s", msg, err, state.attempts, state.nextRetry.Format(time.RFC3339))
 	log.FromContext(ctx).Error(err, msg+", retry scheduled", "attempt", state.attempts)
 	EmitRetryState(t.Namespace, t.Kind, t.Name, phase, true)

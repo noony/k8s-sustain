@@ -31,7 +31,7 @@ type workloadTarget struct {
 }
 
 // key returns a unique identifier for this workload target, used as the retry map key.
-func (w *workloadTarget) key() string { //nolint:unused // used in Task 5 reconcile rewrite
+func (w *workloadTarget) key() string {
 	return w.Kind + "/" + w.Namespace + "/" + w.Name
 }
 

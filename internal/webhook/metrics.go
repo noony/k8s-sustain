@@ -1,6 +1,10 @@
 package webhook
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"errors"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 // RequestDuration tracks how long each webhook HTTP request takes, labelled
 // by route and HTTP status text. PanicTotal counts panics caught by the
@@ -36,7 +40,8 @@ var (
 func RegisterMetrics(reg prometheus.Registerer) {
 	for _, c := range []prometheus.Collector{RequestDuration, PanicTotal, recommendationSkipped} {
 		if err := reg.Register(c); err != nil {
-			if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			var already prometheus.AlreadyRegisteredError
+			if !errors.As(err, &already) {
 				// Surfaces only programming errors (e.g. duplicate name with
 				// different help); panic so it shows up loudly in tests.
 				panic(err)

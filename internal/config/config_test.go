@@ -3,6 +3,7 @@ package config
 import (
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
@@ -17,9 +18,9 @@ import (
 // `K8SSUSTAIN_DASHBOARD_BIND_ADDRESS`.
 func TestInitViper_EnvBinding_DotAndDashKeys(t *testing.T) {
 	tests := []struct {
-		name    string
-		envVar  string
-		envVal  string
+		name     string
+		envVar   string
+		envVal   string
 		viperKey string
 	}{
 		{
@@ -58,5 +59,51 @@ func TestInitViper_EnvBinding_DotAndDashKeys(t *testing.T) {
 					tc.viperKey, got, tc.envVal, tc.envVar, tc.envVal)
 			}
 		})
+	}
+}
+
+// TestLoadWebhookConfig_RoundTripsBoundFlags verifies BindWebhookFlags +
+// LoadWebhookConfig surface bound-flag defaults and env overrides correctly.
+func TestLoadWebhookConfig_RoundTripsBoundFlags(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	cmd := &cobra.Command{Use: "webhook"}
+	BindWebhookFlags(cmd)
+
+	t.Setenv("K8SSUSTAIN_WEBHOOK_TLS_CERT_FILE", "/etc/foo.crt")
+	t.Setenv("K8SSUSTAIN_WEBHOOK_PORT", "9999")
+	InitViper()
+
+	cfg := LoadWebhookConfig()
+	if cfg.TLSCertFile != "/etc/foo.crt" {
+		t.Errorf("TLSCertFile = %q, want /etc/foo.crt", cfg.TLSCertFile)
+	}
+	if cfg.Port != 9999 {
+		t.Errorf("Port = %d, want 9999", cfg.Port)
+	}
+	if cfg.TLSKeyFile != "/tls/tls.key" {
+		t.Errorf("TLSKeyFile = %q, want /tls/tls.key (default)", cfg.TLSKeyFile)
+	}
+}
+
+// TestLoadDashboardConfig_RoundTripsBoundFlags mirrors the webhook test for
+// the dashboard subcommand.
+func TestLoadDashboardConfig_RoundTripsBoundFlags(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	cmd := &cobra.Command{Use: "dashboard"}
+	BindDashboardFlags(cmd)
+
+	t.Setenv("K8SSUSTAIN_DASHBOARD_BIND_ADDRESS", ":7777")
+	InitViper()
+
+	cfg := LoadDashboardConfig()
+	if cfg.BindAddress != ":7777" {
+		t.Errorf("BindAddress = %q, want :7777", cfg.BindAddress)
+	}
+	if cfg.LogLevel != "info" {
+		t.Errorf("LogLevel = %q, want info (default)", cfg.LogLevel)
 	}
 }

@@ -1,16 +1,56 @@
 version: "2"
 run:
-  timeout: 2m
+  timeout: 5m
 
 linters:
   default: standard
+  enable:
+    # Correctness / safety
+    - bodyclose      # response Body close after every http call
+    - errorlint      # %w usage, errors.Is/As over == and type assert
+    - nilerr         # return nil after err != nil
+    - copyloopvar    # loop-var aliasing (Go 1.22+)
+    - durationcheck  # multiplying two durations is almost always a bug
 
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - unparam
-    - path: zz_generated
-      linters:
-        - all
+    # Hygiene
+    - unconvert      # redundant type conversions
+    - unparam        # always-the-same-arg / unused function results
+    - gocritic       # broad checks (capLocal, ifElseChain, ...)
+    - nolintlint     # //nolint comments must justify themselves
+
+    # Security
+    - gosec          # SAST
+
+    # NOTE: paralleltest is intentionally left off until the suite is audited
+    # for shared state (viper globals, controller-runtime registries, etc.).
+    # Adding t.Parallel() blindly to ~50 leaf tests would risk hard-to-debug
+    # data races on package-level singletons. Track as a follow-up.
+
+  settings:
+    gocritic:
+      disabled-checks:
+        - ifElseChain    # too noisy on idiomatic dispatch tables
+    gosec:
+      excludes:
+        - G104   # unhandled errors (covered by errcheck; gosec over-reports)
+        - G115   # integer overflow — fires on k8s int32/int conversions throughout
+    errorlint:
+      comparison: true
+      asserts: true
+      errorf: true
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - unparam
+          - gosec
+          - bodyclose
+      - path: zz_generated
+        linters:
+          - all
+
+formatters:
+  enable:
+    - gofumpt

@@ -59,8 +59,8 @@ func TestComputeCPURequest(t *testing.T) {
 			name:     "headroom then clamped to max",
 			rawCores: 0.9,
 			cfg: sustainv1alpha1.ResourceRequestsConfig{
-				Headroom: int32p(50),
-				MaxAllowed:         qtyp("1"),
+				Headroom:   int32p(50),
+				MaxAllowed: qtyp("1"),
 			},
 			wantQty: "1", // 0.9 * 1.5 = 1.35 → clamped to 1
 		},

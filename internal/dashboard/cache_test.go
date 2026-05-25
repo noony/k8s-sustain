@@ -22,9 +22,13 @@ func TestCacheGetHitWithinTTL(t *testing.T) {
 }
 
 func TestCacheExpiresAfterTTL(t *testing.T) {
+	// Drive expiry deterministically off an injectable clock instead of
+	// real-wall-clock time.Sleep — avoids a 50ms-TTL test flaking on a busy CI.
+	now := time.Now()
 	c := NewCache(10, 50*time.Millisecond)
+	c.now = func() time.Time { return now }
 	c.Set("k", 1)
-	time.Sleep(80 * time.Millisecond)
+	now = now.Add(80 * time.Millisecond)
 	if _, ok := c.Get("k"); ok {
 		t.Fatal("expected expiry")
 	}

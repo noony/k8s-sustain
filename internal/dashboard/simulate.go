@@ -24,14 +24,14 @@ type simulationResult struct {
 }
 
 type simulationContainerResult struct {
-	CPURequest       string  `json:"cpuRequest"`
-	MemoryRequest    string  `json:"memoryRequest"`
-	CPULimit         string  `json:"cpuLimit,omitempty"`
-	MemoryLimit      string  `json:"memoryLimit,omitempty"`
-	CPULimitRemoved  bool    `json:"cpuLimitRemoved,omitempty"`
-	MemoryLimitRemoved bool  `json:"memoryLimitRemoved,omitempty"`
-	CPUUsageCores    float64 `json:"cpuUsageCores,omitempty"`
-	MemoryUsageBytes float64 `json:"memoryUsageBytes,omitempty"`
+	CPURequest         string  `json:"cpuRequest"`
+	MemoryRequest      string  `json:"memoryRequest"`
+	CPULimit           string  `json:"cpuLimit,omitempty"`
+	MemoryLimit        string  `json:"memoryLimit,omitempty"`
+	CPULimitRemoved    bool    `json:"cpuLimitRemoved,omitempty"`
+	MemoryLimitRemoved bool    `json:"memoryLimitRemoved,omitempty"`
+	CPUUsageCores      float64 `json:"cpuUsageCores,omitempty"`
+	MemoryUsageBytes   float64 `json:"memoryUsageBytes,omitempty"`
 }
 
 func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simulationResult, error) {
@@ -58,7 +58,8 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	// Chart time range (top-level Window controls what's displayed on graphs)
 	timeRange := recommender.ResourceWindow(req.Window)
 
-	containers, oomSignal, recentOOM, err := s.buildContainerRecommendations(ctx,
+	containers, oomSignal, recentOOM, err := s.buildContainerRecommendations(
+		ctx,
 		req.Namespace, req.OwnerKind, req.OwnerName,
 		cpuCfg, memCfg, cpuWindow, memWindow,
 	)
@@ -115,8 +116,8 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, timeRange, step)
 
 	// Sliding-window recommendation time-series
-	cpuRecSeries, _ := s.PromClient.QueryCPURecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, cpuQuantile, string(cpuWindow), string(timeRange), step)
-	memRecSeries, _ := s.PromClient.QueryMemoryRecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, memQuantile, string(memWindow), string(timeRange), step)
+	cpuRecSeries, _ := s.PromClient.QueryCPURecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, cpuQuantile, cpuWindow, timeRange, step)
+	memRecSeries, _ := s.PromClient.QueryMemoryRecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, memQuantile, memWindow, timeRange, step)
 
 	cpuRecSeries = applyCPUClampingToSeries(cpuRecSeries, cpuCfg)
 	memRecSeries = applyMemoryClampingToSeries(memRecSeries, memCfg, oomSignal, recentOOM)

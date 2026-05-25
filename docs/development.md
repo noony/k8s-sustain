@@ -23,8 +23,39 @@ go build ./...
 ## Run tests
 
 ```bash
-go test ./...
+make test         # go test -shuffle=on ./...
+make test-race    # go test -race -shuffle=on ./...   (matches CI)
+make coverage     # go test -race -shuffle=on -coverprofile=coverage.out ./...
 ```
+
+CI runs the race detector and goroutine-leak detection (via `go.uber.org/goleak`
+on the `oomwatch`, `prometheus`, `dashboard`, and `webhook` packages), so flakes
+or leaks introduced by new tests will surface in the test job.
+
+## Lint
+
+```bash
+make lint   # golangci-lint run
+```
+
+`.golangci.yml` enables the standard linters plus `bodyclose`, `errorlint`,
+`nilerr`, `copyloopvar`, `durationcheck`, `unconvert`, `unparam`, `gocritic`,
+`nolintlint`, `gosec`, and the `gofumpt` formatter. `paralleltest` is
+intentionally disabled until the suite is audited for shared state (Viper
+globals, controller-runtime registries); adding `t.Parallel()` mechanically
+risks hard-to-debug races on those singletons.
+
+## Security & dependency scans
+
+CI runs `govulncheck` and `gosec` on every push. Locally:
+
+```bash
+go install golang.org/x/vuln/cmd/govulncheck@latest
+govulncheck ./...
+```
+
+Dependabot is configured for `gomod`, GitHub Actions, the dashboard's npm
+modules, and Docker base images — PRs are opened weekly.
 
 ## Project structure
 

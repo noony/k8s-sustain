@@ -14,6 +14,7 @@ type Cache struct {
 	ttl   time.Duration
 	ll    *list.List
 	items map[string]*list.Element
+	now   func() time.Time // injectable for tests; defaults to time.Now
 }
 
 type cacheEntry struct {
@@ -28,7 +29,7 @@ func NewCache(max int, ttl time.Duration) *Cache {
 	if max < 1 {
 		panic("dashboard.NewCache: max must be >= 1")
 	}
-	return &Cache{max: max, ttl: ttl, ll: list.New(), items: map[string]*list.Element{}}
+	return &Cache{max: max, ttl: ttl, ll: list.New(), items: map[string]*list.Element{}, now: time.Now}
 }
 
 // Get returns the cached value if present and not expired.
@@ -40,7 +41,7 @@ func (c *Cache) Get(key string) (any, bool) {
 		return nil, false
 	}
 	entry := el.Value.(*cacheEntry)
-	if time.Now().After(entry.expiresAt) {
+	if c.now().After(entry.expiresAt) {
 		c.ll.Remove(el)
 		delete(c.items, key)
 		return nil, false
@@ -56,11 +57,11 @@ func (c *Cache) Set(key string, value any) {
 	if el, ok := c.items[key]; ok {
 		entry := el.Value.(*cacheEntry)
 		entry.value = value
-		entry.expiresAt = time.Now().Add(c.ttl)
+		entry.expiresAt = c.now().Add(c.ttl)
 		c.ll.MoveToFront(el)
 		return
 	}
-	entry := &cacheEntry{key: key, value: value, expiresAt: time.Now().Add(c.ttl)}
+	entry := &cacheEntry{key: key, value: value, expiresAt: c.now().Add(c.ttl)}
 	el := c.ll.PushFront(entry)
 	c.items[key] = el
 	if c.ll.Len() > c.max {

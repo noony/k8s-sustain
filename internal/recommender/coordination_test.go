@@ -154,7 +154,7 @@ func TestApplyReplicaCorrection_AnchorAtMin(t *testing.T) {
 }
 
 func TestApplyReplicaCorrection_NilQty(t *testing.T) {
-	var anchor = 0.10
+	anchor := 0.10
 	if got := applyReplicaCorrection(nil, &anchor, 5, 1, 10); got != nil {
 		t.Fatalf("nil qty → nil out, got %v", got)
 	}

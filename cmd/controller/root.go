@@ -13,6 +13,10 @@ var rootCmd = &cobra.Command{
 	Use:   "k8s-sustain",
 	Short: "Kubernetes sustainability operator",
 	Long:  "k8s-sustain is a Kubernetes operator for workload right-sizing and sustainability policies.",
+	// Errors from RunE are printed once by Execute() below; cobra would also
+	// print the usage wall on every error which is noise for a daemon.
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
 // Execute is the package entry point called from main.

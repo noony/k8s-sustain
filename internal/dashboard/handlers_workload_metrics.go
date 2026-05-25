@@ -85,7 +85,7 @@ func buildSimulateRequestFromPolicy(q url.Values, policy *sustainv1alpha1.Policy
 		memWindow = "168h"
 	}
 
-	chartWindow, perr := parseDurationParam(q, "window", cpuWindow)
+	chartWindow, perr := parseDurationParam(q, cpuWindow)
 	if perr != nil {
 		return simulateRequest{}, perr
 	}
@@ -136,7 +136,7 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	w.Header().Set("Cache-Control", "public, max-age=60")
 
 	q := r.URL.Query()
-	window, perr := parseDurationParam(q, "window", "168h")
+	window, perr := parseDurationParam(q, "168h")
 	if perr != nil {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return
@@ -154,20 +154,41 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	// only two whose failure aborts the response; the rest are best-effort
 	// supplementary series and tolerate a Prometheus blip.
 	var (
-		cpuSeries, memSeries                                 promclient.ContainerTimeSeries
-		cpuRequests, memRequests, cpuLimits, memLimits       promclient.ContainerTimeSeries
-		oomEvents                                            []promclient.OOMEvent
-		cpuErr, memErr                                       error
+		cpuSeries, memSeries                           promclient.ContainerTimeSeries
+		cpuRequests, memRequests, cpuLimits, memLimits promclient.ContainerTimeSeries
+		oomEvents                                      []promclient.OOMEvent
+		cpuErr, memErr                                 error
 	)
 	var wg sync.WaitGroup
 	wg.Add(7)
-	go func() { defer wg.Done(); cpuSeries, cpuErr = s.PromClient.QueryCPURangeByContainer(ctx, namespace, kind, name, window, step) }()
-	go func() { defer wg.Done(); memSeries, memErr = s.PromClient.QueryMemoryRangeByContainer(ctx, namespace, kind, name, window, step) }()
-	go func() { defer wg.Done(); oomEvents, _ = s.PromClient.QueryOOMKillEvents(ctx, namespace, kind, name, window, step) }()
-	go func() { defer wg.Done(); cpuRequests, _ = s.PromClient.QueryCPURequestRangeByContainer(ctx, namespace, kind, name, window, step) }()
-	go func() { defer wg.Done(); memRequests, _ = s.PromClient.QueryMemoryRequestRangeByContainer(ctx, namespace, kind, name, window, step) }()
-	go func() { defer wg.Done(); cpuLimits, _ = s.PromClient.QueryCPULimitRangeByContainer(ctx, namespace, kind, name, window, step) }()
-	go func() { defer wg.Done(); memLimits, _ = s.PromClient.QueryMemoryLimitRangeByContainer(ctx, namespace, kind, name, window, step) }()
+	go func() {
+		defer wg.Done()
+		cpuSeries, cpuErr = s.PromClient.QueryCPURangeByContainer(ctx, namespace, kind, name, window, step)
+	}()
+	go func() {
+		defer wg.Done()
+		memSeries, memErr = s.PromClient.QueryMemoryRangeByContainer(ctx, namespace, kind, name, window, step)
+	}()
+	go func() {
+		defer wg.Done()
+		oomEvents, _ = s.PromClient.QueryOOMKillEvents(ctx, namespace, kind, name, window, step)
+	}()
+	go func() {
+		defer wg.Done()
+		cpuRequests, _ = s.PromClient.QueryCPURequestRangeByContainer(ctx, namespace, kind, name, window, step)
+	}()
+	go func() {
+		defer wg.Done()
+		memRequests, _ = s.PromClient.QueryMemoryRequestRangeByContainer(ctx, namespace, kind, name, window, step)
+	}()
+	go func() {
+		defer wg.Done()
+		cpuLimits, _ = s.PromClient.QueryCPULimitRangeByContainer(ctx, namespace, kind, name, window, step)
+	}()
+	go func() {
+		defer wg.Done()
+		memLimits, _ = s.PromClient.QueryMemoryLimitRangeByContainer(ctx, namespace, kind, name, window, step)
+	}()
 	wg.Wait()
 
 	if cpuErr != nil {
