@@ -371,11 +371,7 @@ textarea:focus-visible {
 .main {
   flex: 1;
   padding: 32px;
-  max-width: 1200px;
   min-width: 0;
-}
-.main-wide {
-  max-width: 100%;
 }
 
 /* Cards */

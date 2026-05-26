@@ -89,7 +89,7 @@ watch(
         Simulator
       </router-link>
     </nav>
-    <main class="main" :class="{ 'main-wide': isActive('simulator') }">
+    <main class="main">
       <router-view />
     </main>
   </div>
