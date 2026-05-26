@@ -1452,14 +1452,29 @@
 </code></pre></div>
 <h2 id="prometheus">Prometheus<a class="headerlink" href="#prometheus" title="Permanent link">&para;</a></h2>
 <p>k8s-sustain queries Prometheus for historical usage data. The chart bundles a <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">Prometheus</a> instance by default, or you can point it at an existing Prometheus.</p>
-<p>If you bring your own Prometheus, make sure <strong>kube-state-metrics</strong> and <strong>cAdvisor</strong> metrics are scraped:</p>
+<p>If you bring your own Prometheus, make sure <strong>kube-state-metrics</strong> and <strong>cAdvisor</strong> metrics are scraped. The bundled Prometheus subchart restricts both jobs to an allowlist via <code>metric_relabel_configs</code> to keep TSDB cardinality low; bring-your-own deployments can do the same.</p>
+<p>From <strong>kube-state-metrics</strong>:</p>
 <ul>
 <li><code>kube_pod_owner</code> — maps pods to their workload owner</li>
-<li><code>kube_replicaset_owner</code> — resolves ReplicaSet → Deployment</li>
+<li><code>kube_job_owner</code> — resolves Job → CronJob</li>
+<li><code>kube_replicaset_owner</code> — resolves ReplicaSet → Deployment (or Rollout)</li>
+<li><code>kube_pod_container_resource_requests</code> / <code>kube_pod_container_resource_limits</code> — current CPU/memory requests and limits</li>
+<li><code>kube_pod_container_status_restarts_total</code> / <code>kube_pod_container_status_last_terminated_reason</code> — OOMKill detection</li>
+<li><code>kube_node_status_allocatable</code> — cluster capacity for the headroom panels</li>
+</ul>
+<p>From <strong>cAdvisor</strong>:</p>
+<ul>
 <li><code>container_cpu_usage_seconds_total</code> — CPU usage per container</li>
 <li><code>container_memory_working_set_bytes</code> — memory usage per container</li>
+<li><code>container_memory_max_usage_bytes</code> (cgroup v1) / <code>container_memory_peak_working_set_bytes</code> (cgroup v2) — peak memory between scrapes</li>
+<li><code>container_spec_memory_limit_bytes</code> — the limit that was in effect when an OOMKill fired</li>
 </ul>
-<p>The recording rules filter cAdvisor series by <code>node!=""</code>, so your scrape config must inject a <code>node</code> label onto cAdvisor metrics (e.g. <code>relabel_configs: source_labels: [__meta_kubernetes_node_name], target_label: node</code>). kube-prometheus-stack does this by default; the bundled Prometheus subchart is configured to do it as well.</p>
+<p>The recording rules filter cAdvisor series by <code>node!=""</code>, so your scrape config must inject a <code>node</code> label onto cAdvisor metrics:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">relabel_configs</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">source_labels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">__meta_kubernetes_node_name</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">target_label</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">node</span>
+</code></pre></div>
+<p>kube-prometheus-stack does this by default; the bundled Prometheus subchart is configured to do it as well.</p>
 <h2 id="tls-certificate-webhook-only">TLS certificate (webhook only)<a class="headerlink" href="#tls-certificate-webhook-only" title="Permanent link">&para;</a></h2>
 <p>The admission webhook requires a valid TLS certificate trusted by the Kubernetes API server. Two options are supported:</p>
 <ul>
