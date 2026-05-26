@@ -721,9 +721,17 @@ prometheus:
         regex: __meta_kubernetes_node_label_(.+)
       - source_labels: [__metrics_path__]
         target_label: metrics_path
-      # Decrease cardinality
+      - source_labels: [__meta_kubernetes_node_name]
+        target_label: node
+      # Keep only the cAdvisor series the recording rules consume. Everything
+      # else (network, fs, accelerator, hugepages, sched stats, etc.) is dropped
+      # at ingestion to slash TSDB cardinality.
+      metric_relabel_configs:
+      - action: keep
+        source_labels: [__name__]
+        regex: "container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_max_usage_bytes|container_memory_peak_working_set_bytes|container_spec_memory_limit_bytes"
       - action: labeldrop
-        regex: "container_id|host_ip|id|image|image_id|image_spec|internal_ip|pod_ip|provider_id|system_uuid|uid"
+        regex: "container_id|host_ip|id|image_id|image_spec|internal_ip|name|pod_ip|provider_id|system_uuid|uid"
     # Disabled — these scrape ANY pod/service in ANY namespace that carries the
     # `prometheus.io/scrape: "true"` annotation.
     kubernetes-service-endpoints: { enabled: false }
@@ -800,9 +808,15 @@ prometheus:
         - action: replace
           source_labels: [__meta_kubernetes_pod_name]
           target_label: pod
-        # Decrease cardinality
+      # Keep only the kube-state-metrics series the recording rules consume.
+      # Everything else (node info, deployment status, hpa, pdb, services, etc.)
+      # is dropped at ingestion to slash TSDB cardinality.
+      metric_relabel_configs:
+        - action: keep
+          source_labels: [__name__]
+          regex: "kube_pod_owner|kube_job_owner|kube_replicaset_owner|kube_pod_container_resource_requests|kube_pod_container_resource_limits|kube_pod_container_status_restarts_total|kube_pod_container_status_last_terminated_reason|kube_node_status_allocatable"
         - action: labeldrop
-          regex: "container_id|host_ip|id|image|image_id|image_spec|internal_ip|pod_ip|provider_id|system_uuid|uid"
+          regex: "container_id|host_ip|id|image_id|image_spec|internal_ip|pod_ip|provider_id|system_uuid|uid|unit"
 
   serverFiles:
     recording_rules.yml:

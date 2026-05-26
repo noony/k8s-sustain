@@ -21,14 +21,33 @@ helm version
 
 k8s-sustain queries Prometheus for historical usage data. The chart bundles a [Prometheus](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) instance by default, or you can point it at an existing Prometheus.
 
-If you bring your own Prometheus, make sure **kube-state-metrics** and **cAdvisor** metrics are scraped:
+If you bring your own Prometheus, make sure **kube-state-metrics** and **cAdvisor** metrics are scraped. The bundled Prometheus subchart restricts both jobs to an allowlist via `metric_relabel_configs` to keep TSDB cardinality low; bring-your-own deployments can do the same.
+
+From **kube-state-metrics**:
 
 - `kube_pod_owner` — maps pods to their workload owner
-- `kube_replicaset_owner` — resolves ReplicaSet → Deployment
+- `kube_job_owner` — resolves Job → CronJob
+- `kube_replicaset_owner` — resolves ReplicaSet → Deployment (or Rollout)
+- `kube_pod_container_resource_requests` / `kube_pod_container_resource_limits` — current CPU/memory requests and limits
+- `kube_pod_container_status_restarts_total` / `kube_pod_container_status_last_terminated_reason` — OOMKill detection
+- `kube_node_status_allocatable` — cluster capacity for the headroom panels
+
+From **cAdvisor**:
+
 - `container_cpu_usage_seconds_total` — CPU usage per container
 - `container_memory_working_set_bytes` — memory usage per container
+- `container_memory_max_usage_bytes` (cgroup v1) / `container_memory_peak_working_set_bytes` (cgroup v2) — peak memory between scrapes
+- `container_spec_memory_limit_bytes` — the limit that was in effect when an OOMKill fired
 
-The recording rules filter cAdvisor series by `node!=""`, so your scrape config must inject a `node` label onto cAdvisor metrics (e.g. `relabel_configs: source_labels: [__meta_kubernetes_node_name], target_label: node`). kube-prometheus-stack does this by default; the bundled Prometheus subchart is configured to do it as well.
+The recording rules filter cAdvisor series by `node!=""`, so your scrape config must inject a `node` label onto cAdvisor metrics:
+
+```yaml
+relabel_configs:
+  - source_labels: [__meta_kubernetes_node_name]
+    target_label: node
+```
+
+kube-prometheus-stack does this by default; the bundled Prometheus subchart is configured to do it as well.
 
 ## TLS certificate (webhook only)
 
