@@ -11,7 +11,13 @@ import {
   type RecommendationContainer,
   type ResourceLimitsConfig,
 } from '../lib/api'
-import { parseCPUQuantity, parseMemoryQuantity, downloadFile, formatBytes } from '../lib/format'
+import {
+  parseCPUQuantity,
+  parseMemoryQuantity,
+  parseStepToMs,
+  downloadFile,
+  formatBytes,
+} from '../lib/format'
 import {
   createTimeSeriesChart,
   destroyAllCharts,
@@ -353,6 +359,7 @@ function renderCharts(data: SimulationResult) {
   const simMemReq = data.memoryRequests || {}
   const simCpuRec = data.cpuRecommendations || {}
   const simMemRec = data.memoryRecommendations || {}
+  const stepMs = parseStepToMs(getTimeRangeStep(timeRange.value))
 
   containers.forEach((cname) => {
     const res = simResources[cname] || {}
@@ -395,6 +402,7 @@ function renderCharts(data: SimulationResult) {
         annotations: cpuAnnotations,
         extraSeries: cpuExtra,
         onZoomComplete: syncZoom,
+        stepMs,
       })
     }
 
@@ -437,6 +445,7 @@ function renderCharts(data: SimulationResult) {
         annotations: memAnnotations,
         extraSeries: memExtra,
         onZoomComplete: syncZoom,
+        stepMs,
       })
     }
   })

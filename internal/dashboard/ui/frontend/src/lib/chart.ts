@@ -189,6 +189,36 @@ export interface ChartOpts {
   extraSeries?: ExtraSeries[]
   oomEvents?: { timestamp: string; pod?: string }[]
   onZoomComplete?: (chart: Chart) => void
+  // When set, breaks the line at gaps wider than ~1.5× this step. Used to
+  // avoid drawing a continuous line across periods where the workload had no
+  // pods running (e.g. between CronJob runs).
+  stepMs?: number
+}
+
+type ChartPoint = { x: Date; y: number | null }
+
+// withGaps converts a sparse time-series into chart data, inserting an
+// explicit null between consecutive points spaced farther apart than
+// gapThreshold so Chart.js breaks the line instead of connecting across the
+// gap. When stepMs is omitted, points are returned as-is.
+function withGaps(
+  points: TimeValue[] | undefined,
+  transform: (v: number) => number,
+  stepMs?: number,
+): ChartPoint[] {
+  if (!points || !points.length) return []
+  const threshold = stepMs ? stepMs * 1.5 : 0
+  const out: ChartPoint[] = []
+  let prevT: number | null = null
+  for (const p of points) {
+    const t = new Date(p.timestamp).getTime()
+    if (threshold > 0 && prevT !== null && t - prevT > threshold) {
+      out.push({ x: new Date(prevT + 1), y: null })
+    }
+    out.push({ x: new Date(t), y: transform(p.value) })
+    prevT = t
+  }
+  return out
 }
 
 // Global chart instance registry
@@ -222,7 +252,7 @@ export function createTimeSeriesChart(
   destroyChart(canvasId)
 
   const transform = opts.transform || ((v: number) => v)
-  const chartData = points.map((p) => ({ x: new Date(p.timestamp) as any, y: transform(p.value) }))
+  const chartData = withGaps(points, transform, opts.stepMs)
 
   const datasets: any[] = [
     {
@@ -252,10 +282,7 @@ export function createTimeSeriesChart(
   // Extra time-series
   ;(opts.extraSeries || []).forEach((s) => {
     if (!s.data || !s.data.length) return
-    const seriesData = s.data.map((p) => ({
-      x: new Date(p.timestamp) as any,
-      y: transform(p.value),
-    }))
+    const seriesData = withGaps(s.data, transform, opts.stepMs)
     const ds: any = {
       label: s.label,
       data: seriesData,

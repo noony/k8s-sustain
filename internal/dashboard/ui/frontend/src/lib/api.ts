@@ -58,8 +58,8 @@ export const timeRangeOptions: TimeRangeOption[] = [
   { label: '12h', window: '12h', step: '5m' },
   { label: '1d', window: '24h', step: '5m' },
   { label: '3d', window: '72h', step: '5m' },
-  { label: '7d', window: '168h', step: '15m' },
-  { label: '30d', window: '720h', step: '1h' },
+  { label: '7d', window: '168h', step: '10m' },
+  { label: '30d', window: '720h', step: '20m' },
 ]
 
 export const defaultTimeRange = '168h'

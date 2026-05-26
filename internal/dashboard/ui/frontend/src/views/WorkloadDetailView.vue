@@ -11,7 +11,7 @@ import {
   type WorkloadDetailSnapshot,
   type CoordinationFactors,
 } from '../lib/api'
-import { parseCPUQuantity, parseMemoryQuantity, timeAgo } from '../lib/format'
+import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs, timeAgo } from '../lib/format'
 import {
   createTimeSeriesChart,
   destroyAllCharts,
@@ -134,6 +134,7 @@ function renderCharts() {
   const cpuRecSeries = recs.value?.cpuRecommendations || {}
   const memRecSeries = recs.value?.memoryRecommendations || {}
   const ooms = oomByContainer()
+  const stepMs = parseStepToMs(getTimeRangeStep(timeRange.value))
 
   containers().forEach((cname) => {
     const res = resources[cname] || {}
@@ -189,6 +190,7 @@ function renderCharts() {
         annotations: cpuAnnotations,
         extraSeries: cpuExtra,
         onZoomComplete: syncZoom,
+        stepMs,
       })
     }
 
@@ -245,6 +247,7 @@ function renderCharts() {
         extraSeries: memExtra,
         oomEvents: ooms[cname] || [],
         onZoomComplete: syncZoom,
+        stepMs,
       })
     }
   })

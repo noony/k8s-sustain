@@ -62,3 +62,22 @@ export function formatBytes(b: number): string {
   if (mib >= 1024) return (mib / 1024).toFixed(1) + ' Gi'
   return mib.toFixed(0) + ' Mi'
 }
+
+// parseStepToMs converts a Prometheus-style step string ("30s", "1m", "5m",
+// "1h") to milliseconds. Falls back to 60_000ms (1m) on unknown input.
+export function parseStepToMs(step: string): number {
+  const m = step.match(/^(\d+)(s|m|h|d)$/)
+  if (!m) return 60_000
+  const n = parseInt(m[1], 10)
+  switch (m[2]) {
+    case 's':
+      return n * 1_000
+    case 'm':
+      return n * 60_000
+    case 'h':
+      return n * 60 * 60_000
+    case 'd':
+      return n * 24 * 60 * 60_000
+  }
+  return 60_000
+}
