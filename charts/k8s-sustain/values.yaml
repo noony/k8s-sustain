@@ -242,10 +242,18 @@ prometheusRule:
       interval: 1m
       rules:
         # Per-container CPU requests WITH workload labels — used by the dashboard.
+        # Unions regular and init containers (kube-state-metrics emits init/sidecar
+        # requests under a separate kube_pod_init_container_resource_* metric) so
+        # the chart's request line is populated for sidecars too. Container names
+        # are unique across both lists, so the `or` produces one series per container.
         - record: k8s_sustain:container_cpu_requests_by_workload:cores
           expr: |
             max by (namespace, container, owner_kind, owner_name) (
-              kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}
+              (
+                kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}
+                or
+                kube_pod_init_container_resource_requests{resource="cpu", container!="", container!="POD"}
+              )
               * on(namespace, pod) group_left(owner_kind, owner_name)
               k8s_sustain:pod_workload
             )
@@ -253,7 +261,11 @@ prometheusRule:
         - record: k8s_sustain:container_memory_requests_by_workload:bytes
           expr: |
             max by (namespace, container, owner_kind, owner_name) (
-              kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}
+              (
+                kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}
+                or
+                kube_pod_init_container_resource_requests{resource="memory", container!="", container!="POD"}
+              )
               * on(namespace, pod) group_left(owner_kind, owner_name)
               k8s_sustain:pod_workload
             )
@@ -264,7 +276,11 @@ prometheusRule:
         - record: k8s_sustain:container_cpu_limits_by_workload:cores
           expr: |
             max by (namespace, container, owner_kind, owner_name) (
-              kube_pod_container_resource_limits{resource="cpu", container!="", container!="POD"}
+              (
+                kube_pod_container_resource_limits{resource="cpu", container!="", container!="POD"}
+                or
+                kube_pod_init_container_resource_limits{resource="cpu", container!="", container!="POD"}
+              )
               * on(namespace, pod) group_left(owner_kind, owner_name)
               k8s_sustain:pod_workload
             )
@@ -273,7 +289,11 @@ prometheusRule:
         - record: k8s_sustain:container_memory_limits_by_workload:bytes
           expr: |
             max by (namespace, container, owner_kind, owner_name) (
-              kube_pod_container_resource_limits{resource="memory", container!="", container!="POD"}
+              (
+                kube_pod_container_resource_limits{resource="memory", container!="", container!="POD"}
+                or
+                kube_pod_init_container_resource_limits{resource="memory", container!="", container!="POD"}
+              )
               * on(namespace, pod) group_left(owner_kind, owner_name)
               k8s_sustain:pod_workload
             )
@@ -792,7 +812,7 @@ prometheus:
       metric_relabel_configs:
         - action: keep
           source_labels: [__name__]
-          regex: "kube_pod_owner|kube_job_owner|kube_replicaset_owner|kube_pod_container_resource_requests|kube_pod_container_resource_limits|kube_pod_container_status_restarts_total|kube_pod_container_status_last_terminated_reason|kube_node_status_allocatable"
+          regex: "kube_pod_owner|kube_job_owner|kube_replicaset_owner|kube_pod_container_resource_requests|kube_pod_container_resource_limits|kube_pod_init_container_resource_requests|kube_pod_init_container_resource_limits|kube_pod_container_status_restarts_total|kube_pod_container_status_last_terminated_reason|kube_node_status_allocatable"
         - action: labeldrop
           regex: "container_id|host_ip|id|image_id|image_spec|internal_ip|pod_ip|provider_id|system_uuid|uid|unit"
 

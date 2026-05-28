@@ -121,19 +121,27 @@ Per-container memory with workload labels. Retains the `pod` label, so it is the
 
 ```promql
 max by (namespace, container, owner_kind, owner_name) (
-  kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}
+  (
+    kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}
+    or
+    kube_pod_init_container_resource_requests{resource="cpu", container!="", container!="POD"}
+  )
   * on(namespace, pod) group_left(owner_kind, owner_name)
   k8s_sustain:pod_workload
 )
 ```
 
-Per-container CPU requests with workload labels. Used for current-vs-recommended comparison.
+Per-container CPU requests with workload labels. Used for current-vs-recommended comparison. Unions regular and init containers — kube-state-metrics reports init/sidecar requests under the separate `kube_pod_init_container_resource_requests` metric, so the `or` is required for the request line to appear for sidecars on the dashboard. Container names are unique across both lists, so one series is produced per container.
 
 ### `k8s_sustain:container_memory_requests_by_workload:bytes`
 
 ```promql
 max by (namespace, container, owner_kind, owner_name) (
-  kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}
+  (
+    kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}
+    or
+    kube_pod_init_container_resource_requests{resource="memory", container!="", container!="POD"}
+  )
   * on(namespace, pod) group_left(owner_kind, owner_name)
   k8s_sustain:pod_workload
 )
@@ -145,19 +153,27 @@ Per-container memory requests with workload labels.
 
 ```promql
 max by (namespace, container, owner_kind, owner_name) (
-  kube_pod_container_resource_limits{resource="cpu", container!="", container!="POD"}
+  (
+    kube_pod_container_resource_limits{resource="cpu", container!="", container!="POD"}
+    or
+    kube_pod_init_container_resource_limits{resource="cpu", container!="", container!="POD"}
+  )
   * on(namespace, pod) group_left(owner_kind, owner_name)
   k8s_sustain:pod_workload
 )
 ```
 
-Per-container CPU limits with workload labels. Reflects the per-pod cgroup limit (the value the webhook injects on admission), which can differ from the static `Deployment.spec.template` value the operator deliberately never touches.
+Per-container CPU limits with workload labels. Reflects the per-pod cgroup limit (the value the webhook injects on admission), which can differ from the static `Deployment.spec.template` value the operator deliberately never touches. Unions regular and init containers (see the CPU requests rule above).
 
 ### `k8s_sustain:container_memory_limits_by_workload:bytes`
 
 ```promql
 max by (namespace, container, owner_kind, owner_name) (
-  kube_pod_container_resource_limits{resource="memory", container!="", container!="POD"}
+  (
+    kube_pod_container_resource_limits{resource="memory", container!="", container!="POD"}
+    or
+    kube_pod_init_container_resource_limits{resource="memory", container!="", container!="POD"}
+  )
   * on(namespace, pod) group_left(owner_kind, owner_name)
   k8s_sustain:pod_workload
 )
