@@ -1571,7 +1571,7 @@
 <li><strong><code>Ongoing</code> vs <code>OnCreate</code>.</strong> <code>Ongoing</code> keeps running pods aligned with the latest recommendation by recycling them on drift. <code>OnCreate</code> only injects at admission and lets the controller leave running pods alone. See <a href="../../concepts/update-modes/">Update Modes</a>.</li>
 <li><strong>In-place vs eviction.</strong> On Kubernetes 1.31+ the controller patches running pods in place; on older versions it falls back to PDB-respecting eviction. See <a href="../../concepts/in-place-updates/">In-Place Updates</a>.</li>
 <li><strong>Pinned containers.</strong> If a container already has a non-zero CPU request when the webhook intercepts the pod, k8s-sustain leaves it unchanged. Use this to pin specific sidecars while letting the main container be managed.</li>
-<li><strong>Combining with HPA.</strong> Recommendations are computed from the workload-level Prometheus signal (sum across replicas), so HPA scale-out does not perturb the recommendation. To shape requests so the HPA's utilization target stays meaningful, enable <a href="../../concepts/autoscaler-coordination/">Autoscaler Coordination</a>. See also the <a href="../keda/">KEDA guide</a>.</li>
+<li><strong>Combining with HPA.</strong> Recommendations are computed from the busiest replica's per-pod percentile (<code>max by</code> across pods), which is invariant to replica count, so HPA scale-out does not perturb the recommendation. To shape requests so the HPA's utilization target stays meaningful, enable <a href="../../concepts/autoscaler-coordination/">Autoscaler Coordination</a>. See also the <a href="../keda/">KEDA guide</a>.</li>
 <li><strong>Headroom suggestions.</strong></li>
 </ul>
 <table>

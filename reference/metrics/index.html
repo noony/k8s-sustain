@@ -1953,14 +1953,11 @@ time series, not thousands.</p>
 <h3 id="usage-rates-existing">Usage rates (existing)<a class="headerlink" href="#usage-rates-existing" title="Permanent link">&para;</a></h3>
 <p><code>k8s_sustain:container_cpu_usage:rate1m</code>, <code>k8s_sustain:container_cpu_usage_by_workload:rate1m</code>,
 <code>k8s_sustain:container_memory_working_set:bytes</code>, <code>k8s_sustain:container_memory_by_workload:bytes</code>,
-<code>k8s_sustain:pod_cpu_usage:rate1m</code>, <code>k8s_sustain:pod_memory_working_set:bytes</code>.</p>
+<code>k8s_sustain:workload_max_pod_cpu:cores</code>, <code>k8s_sustain:workload_max_pod_memory:bytes</code>.</p>
 <h3 id="resource-requests-existing">Resource requests (existing)<a class="headerlink" href="#resource-requests-existing" title="Permanent link">&para;</a></h3>
 <p>Per-workload (max across replicas — used for per-workload dashboard views):
 <code>k8s_sustain:container_cpu_requests_by_workload:cores</code>,
 <code>k8s_sustain:container_memory_requests_by_workload:bytes</code>.</p>
-<p>Per-pod-container (one series per pod, used by cluster-total aggregations):
-<code>k8s_sustain:pod_container_cpu_request:cores</code>,
-<code>k8s_sustain:pod_container_memory_request:bytes</code>.</p>
 <h3 id="savings-aggregates-new">Savings aggregates (new)<a class="headerlink" href="#savings-aggregates-new" title="Permanent link">&para;</a></h3>
 <p><code>k8s_sustain:cluster_cpu_savings_cores</code>, <code>k8s_sustain:cluster_memory_savings_bytes</code>,
 <code>k8s_sustain:cluster_cpu_savings_ratio</code>, <code>k8s_sustain:cluster_memory_savings_ratio</code>,

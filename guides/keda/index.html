@@ -1593,9 +1593,9 @@
 <p>The metric <code>k8s_sustain_coordination_factor</code> should report the applied multiplier (<code>kind="overhead"</code>) for the workload.</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Workload-level signal.</strong> k8s-sustain queries the <strong>sum</strong> of CPU/memory across all replicas, not per-pod averages. The sum is invariant to replica count, so KEDA scaling 3 → 6 pods does not change the recommendation.</li>
+<li><strong>Per-pod signal.</strong> k8s-sustain sizes from the busiest replica's per-pod percentile (<code>max by</code> across pods), not a sum or per-pod average. Because <code>max</code> picks the hottest pod at each instant regardless of replica count, KEDA scaling 3 → 6 pods does not change the recommendation.</li>
 <li><strong>HPA + ScaledObject co-existence.</strong> KEDA itself manages an HPA on behalf of each <code>ScaledObject</code>. When k8s-sustain finds both targeting the same workload, the <code>ScaledObject</code> is canonical and the HPA is ignored for autoscaler-coordination purposes.</li>
-<li><strong>Scale-to-zero.</strong> When <code>minReplicaCount: 0</code> is configured and the current replica count is 0, the per-pod division falls back to <code>max(1, minReplicaCount)</code> so the recommendation does not divide by zero during quiet windows.</li>
+<li><strong>Scale-to-zero.</strong> When <code>minReplicaCount: 0</code> is configured and the workload scales to 0, the <code>max by</code> recording rule simply produces no samples for the idle window; <code>quantile_over_time</code> ignores the gap and sizes from the periods the workload was actually running — there is no replica division to guard against divide-by-zero.</li>
 <li><strong>CRD-absent behavior.</strong> If the KEDA CRD is not installed, the <code>ScaledObject</code> lookup returns no match silently and recommendations proceed using HPA-only detection.</li>
 <li><strong>No HPA / ScaledObject patches.</strong> k8s-sustain never modifies an HPA or a <code>ScaledObject</code>. Both are read-only inputs to the recommender.</li>
 </ul>

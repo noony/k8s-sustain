@@ -1459,6 +1459,7 @@
 <li><code>kube_job_owner</code> — resolves Job → CronJob</li>
 <li><code>kube_replicaset_owner</code> — resolves ReplicaSet → Deployment (or Rollout)</li>
 <li><code>kube_pod_container_resource_requests</code> / <code>kube_pod_container_resource_limits</code> — current CPU/memory requests and limits</li>
+<li><code>kube_pod_init_container_resource_requests</code> / <code>kube_pod_init_container_resource_limits</code> — same, for init and sidecar containers (kube-state-metrics reports init containers under these separate metric names)</li>
 <li><code>kube_pod_container_status_restarts_total</code> / <code>kube_pod_container_status_last_terminated_reason</code> — OOMKill detection</li>
 <li><code>kube_node_status_allocatable</code> — cluster capacity for the headroom panels</li>
 </ul>
