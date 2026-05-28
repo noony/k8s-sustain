@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -16,10 +17,10 @@ const (
 	activityLimitMax     = 100
 )
 
-// activityListLimit caps the per-page Event fetch from the API server.
-// k8s-sustain emits events sparsely; a single page is enough to backfill
-// the dashboard's activity feed without ever pulling the entire cluster's
-// Event history into memory.
+// activityListLimit caps the Event fetch from the API server. The list is
+// filtered server-side to k8s-sustain's own events via a field selector, so
+// this bound only guards against an unexpectedly large backlog of those —
+// it never pulls the entire cluster's Event history into memory.
 const activityListLimit = 500
 
 func parseActivityLimit(s string) (int, *paramError) {
@@ -55,17 +56,18 @@ func (s *Server) handleSummaryActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var list corev1.EventList
-	if err := s.K8sClient.List(r.Context(), &list, client.Limit(activityListLimit)); err != nil {
+	opts := []client.ListOption{
+		client.Limit(activityListLimit),
+		client.MatchingFields{"source": "k8s-sustain"},
+	}
+	if err := s.K8sClient.List(r.Context(), &list, opts...); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := []activityItem{}
 	for _, e := range list.Items {
-		if e.Source.Component != "k8s-sustain" {
-			continue
-		}
 		items = append(items, activityItem{
-			Timestamp: e.LastTimestamp.Format("2006-01-02T15:04:05Z"),
+			Timestamp: eventTimestamp(e).UTC().Format("2006-01-02T15:04:05Z"),
 			Namespace: e.InvolvedObject.Namespace,
 			Kind:      e.InvolvedObject.Kind,
 			Name:      e.InvolvedObject.Name,
@@ -78,4 +80,25 @@ func (s *Server) handleSummaryActivity(w http.ResponseWriter, r *http.Request) {
 		items = items[:limit]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// eventTimestamp returns the most recent time an Event was observed. Events
+// created through the events.k8s.io API (the default for current Kubernetes)
+// leave the legacy FirstTimestamp/LastTimestamp fields empty and instead carry
+// EventTime, plus Series.LastObservedTime for deduplicated repeats. We prefer
+// the freshest populated field so the activity feed sorts by real recency.
+func eventTimestamp(e corev1.Event) time.Time {
+	if e.Series != nil && !e.Series.LastObservedTime.IsZero() {
+		return e.Series.LastObservedTime.Time
+	}
+	if !e.LastTimestamp.IsZero() {
+		return e.LastTimestamp.Time
+	}
+	if !e.EventTime.IsZero() {
+		return e.EventTime.Time
+	}
+	if !e.FirstTimestamp.IsZero() {
+		return e.FirstTimestamp.Time
+	}
+	return e.CreationTimestamp.Time
 }
