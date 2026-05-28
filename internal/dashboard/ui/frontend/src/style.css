@@ -552,7 +552,9 @@ tbody tr:last-child td {
 /* Charts */
 .chart-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, 1fr) so columns can shrink below the canvas's rendered width;
+     plain 1fr (= minmax(auto, 1fr)) traps Chart.js canvases and overflows on resize */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 20px;
 }
 .chart-container {
