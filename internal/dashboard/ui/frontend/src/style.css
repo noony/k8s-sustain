@@ -783,6 +783,9 @@ tbody tr:last-child td {
   border-color: var(--border-strong);
 }
 .rec-card h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 12px;
@@ -1329,6 +1332,9 @@ button.kpi-card {
   border-color: var(--border-strong);
 }
 .container-card h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 12px;

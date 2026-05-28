@@ -207,6 +207,13 @@ function simInitContainers(): [string, RecommendationContainer][] {
   return Object.entries(simData.value.containers).filter(([name]) => inits.has(name))
 }
 
+function simAllContainers(): { name: string; rec: RecommendationContainer; isInit: boolean }[] {
+  return [
+    ...simRegularContainers().map(([name, rec]) => ({ name, rec, isInit: false })),
+    ...simInitContainers().map(([name, rec]) => ({ name, rec, isInit: true })),
+  ]
+}
+
 function simRegularContainerNames(): string[] {
   return simRegularContainers().map(([name]) => name)
 }
@@ -958,9 +965,16 @@ onUnmounted(() => {
             </button>
           </div>
         </div>
-        <div v-if="simRegularContainers().length > 0" class="rec-grid">
-          <div v-for="[cname, rec] in simRegularContainers()" :key="cname" class="rec-card">
-            <h4>{{ cname }}</h4>
+        <div v-if="simAllContainers().length > 0" class="rec-grid">
+          <div
+            v-for="{ name: cname, rec, isInit } in simAllContainers()"
+            :key="cname"
+            class="rec-card"
+          >
+            <h4>
+              <span>{{ cname }}</span>
+              <span v-if="isInit" class="badge">init</span>
+            </h4>
             <div class="rec-row">
               <span class="label">CPU Request</span>
               <ResourceDiff
@@ -999,54 +1013,6 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
-
-        <template v-if="simInitContainers().length > 0">
-          <div class="card-header" style="margin-top: 16px">
-            <h3>Init containers</h3>
-            <span class="badge">init</span>
-          </div>
-          <div class="rec-grid">
-            <div v-for="[cname, rec] in simInitContainers()" :key="cname" class="rec-card">
-              <h4>{{ cname }}</h4>
-              <div class="rec-row">
-                <span class="label">CPU Request</span>
-                <ResourceDiff
-                  :current="(simData.resources || {})[cname]?.cpuRequest"
-                  :recommended="rec.cpuRequest"
-                  resource-type="cpu"
-                />
-              </div>
-              <div class="rec-row">
-                <span class="label">CPU Limit</span>
-                <span v-if="rec.cpuLimitRemoved" class="recommended">— removed —</span>
-                <ResourceDiff
-                  v-else
-                  :current="(simData.resources || {})[cname]?.cpuLimit"
-                  :recommended="rec.cpuLimit"
-                  resource-type="cpu"
-                />
-              </div>
-              <div class="rec-row">
-                <span class="label">Memory Request</span>
-                <ResourceDiff
-                  :current="(simData.resources || {})[cname]?.memoryRequest"
-                  :recommended="rec.memoryRequest"
-                  resource-type="memory"
-                />
-              </div>
-              <div class="rec-row">
-                <span class="label">Memory Limit</span>
-                <span v-if="rec.memoryLimitRemoved" class="recommended">— removed —</span>
-                <ResourceDiff
-                  v-else
-                  :current="(simData.resources || {})[cname]?.memoryLimit"
-                  :recommended="rec.memoryLimit"
-                  resource-type="memory"
-                />
-              </div>
-            </div>
-          </div>
-        </template>
       </div>
 
       <div class="charts-toolbar">

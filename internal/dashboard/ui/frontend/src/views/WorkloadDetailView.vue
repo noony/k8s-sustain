@@ -118,6 +118,13 @@ function initRecContainers(): [string, RecommendationContainer][] {
   return Object.entries(all).filter(([name]) => inits.has(name))
 }
 
+function allRecContainers(): { name: string; rec: RecommendationContainer; isInit: boolean }[] {
+  return [
+    ...regularRecContainers().map(([name, rec]) => ({ name, rec, isInit: false })),
+    ...initRecContainers().map(([name, rec]) => ({ name, rec, isInit: true })),
+  ]
+}
+
 function oomByContainer() {
   return groupOOMEventsByContainer(metrics.value?.oomEvents)
 }
@@ -376,40 +383,18 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
     </div>
 
     <!-- Recommendations -->
-    <div v-if="recs.automated && regularRecContainers().length > 0" class="card">
+    <div v-if="recs.automated && allRecContainers().length > 0" class="card">
       <div class="card-header"><h2>Recommendations</h2></div>
       <div class="container-grid">
-        <div v-for="[cname, rec] in regularRecContainers()" :key="cname" class="container-card">
-          <h4>{{ cname }}</h4>
-          <div class="resource-row">
-            <span class="label">CPU Request</span>
-            <ResourceDiff
-              :current="(metrics.resources || {})[cname]?.cpuRequest"
-              :recommended="rec.cpuRequest"
-              resource-type="cpu"
-            />
-          </div>
-          <div class="resource-row">
-            <span class="label">Memory Request</span>
-            <ResourceDiff
-              :current="(metrics.resources || {})[cname]?.memoryRequest"
-              :recommended="rec.memoryRequest"
-              resource-type="memory"
-            />
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Init container recommendations -->
-    <div v-if="recs.automated && initRecContainers().length > 0" class="card">
-      <div class="card-header">
-        <h2>Init container recommendations</h2>
-        <span class="badge">init</span>
-      </div>
-      <div class="container-grid">
-        <div v-for="[cname, rec] in initRecContainers()" :key="cname" class="container-card">
-          <h4>{{ cname }}</h4>
+        <div
+          v-for="{ name: cname, rec, isInit } in allRecContainers()"
+          :key="cname"
+          class="container-card"
+        >
+          <h4>
+            <span>{{ cname }}</span>
+            <span v-if="isInit" class="badge">init</span>
+          </h4>
           <div class="resource-row">
             <span class="label">CPU Request</span>
             <ResourceDiff
