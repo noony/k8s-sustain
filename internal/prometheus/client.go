@@ -95,23 +95,27 @@ func (c *Client) QueryMemoryByContainer(ctx context.Context, namespace, ownerKin
 	return c.queryByContainer(ctx, expr)
 }
 
-// QueryWorkloadCPUByContainer returns the total CPU (cores) per container summed
-// across all replicas of the workload, at the given quantile over the window.
-// Reads the k8s_sustain:workload_cpu_usage:cores recording rule.
+// QueryWorkloadCPUByContainer returns the per-pod CPU recommendation basis (cores)
+// per container: the given-quantile over the window of the busiest replica's CPU
+// rate at each instant. Reads the k8s_sustain:workload_max_pod_cpu:cores recording
+// rule, which collapses per-pod usage to the hottest live pod, so the result is a
+// genuine percentile that covers the busiest replica — no replica division needed.
 func (c *Client) QueryWorkloadCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
 	expr := fmt.Sprintf(
-		`quantile_over_time(%.2f, k8s_sustain:workload_cpu_usage:cores{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m])`,
+		`quantile_over_time(%.2f, k8s_sustain:workload_max_pod_cpu:cores{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m])`,
 		quantile, namespace, ownerKind, ownerName, window,
 	)
 	return c.queryByContainer(ctx, expr)
 }
 
-// QueryWorkloadMemoryByContainer returns the total memory (bytes) per container summed
-// across all replicas of the workload, at the given quantile over the window.
-// Reads the k8s_sustain:workload_memory_usage:bytes recording rule.
+// QueryWorkloadMemoryByContainer returns the per-pod memory recommendation basis
+// (bytes) per container: the given-quantile over the window of the busiest
+// replica's memory working set at each instant. Reads the
+// k8s_sustain:workload_max_pod_memory:bytes recording rule. Same per-pod-percentile
+// semantics as QueryWorkloadCPUByContainer.
 func (c *Client) QueryWorkloadMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
 	expr := fmt.Sprintf(
-		`quantile_over_time(%.2f, k8s_sustain:workload_memory_usage:bytes{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m])`,
+		`quantile_over_time(%.2f, k8s_sustain:workload_max_pod_memory:bytes{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m])`,
 		quantile, namespace, ownerKind, ownerName, window,
 	)
 	return c.queryByContainer(ctx, expr)
@@ -526,35 +530,6 @@ func (c *Client) queryByContainer(ctx context.Context, expr string) (ContainerVa
 		}
 	}
 	return values, nil
-}
-
-// QueryReplicaCountMedian returns the median replica count of the workload over
-// the window. Returns 0 with no error if the rule produced no samples.
-// Reads the k8s_sustain:workload_replicas:count recording rule.
-func (c *Client) QueryReplicaCountMedian(ctx context.Context, namespace, ownerKind, ownerName, window string) (float64, error) {
-	if !c.breaker.allow() {
-		return 0, ErrCircuitOpen
-	}
-	expr := fmt.Sprintf(
-		`quantile_over_time(0.50, k8s_sustain:workload_replicas:count{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m])`,
-		namespace, ownerKind, ownerName, window,
-	)
-
-	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
-	defer cancel()
-
-	result, warnings, err := c.api.Query(ctx, expr, time.Now())
-	if err != nil {
-		c.breaker.failure()
-		return 0, fmt.Errorf("prometheus query %q: %w", expr, err)
-	}
-	c.breaker.success()
-	logWarnings(ctx, expr, warnings)
-	vector, ok := result.(model.Vector)
-	if !ok || len(vector) == 0 {
-		return 0, nil
-	}
-	return float64(vector[0].Value), nil
 }
 
 // dashboardQueryTimeout bounds dashboard-side reads of recording rules.

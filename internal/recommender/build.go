@@ -38,16 +38,12 @@ func ShouldSkipYoungWorkload(workloadCreated time.Time, recentOOM bool) bool {
 }
 
 // WorkloadInputs bundles the Prometheus query results needed to build
-// per-container recommendations for a single workload. The replica divisor
-// is returned raw (MedianReplicas) so the caller can compute
-// EffectiveReplicas with its autoscaler.Info — this lets autoscaler.Detect
-// run in parallel with FetchWorkloadInputs.
+// per-container recommendations for a single workload. CPUPerPod and MemPerPod
+// are already per-pod percentiles of the busiest replica (see
+// QueryWorkloadCPUByContainer) — no replica division is applied downstream.
 type WorkloadInputs struct {
-	CPUTotals      promclient.ContainerValues
-	MemTotals      promclient.ContainerValues
-	CPUFloors      promclient.ContainerValues // nil when per-pod floor query failed
-	MemFloors      promclient.ContainerValues // nil when per-pod floor query failed
-	MedianReplicas float64
+	CPUPerPod promclient.ContainerValues
+	MemPerPod promclient.ContainerValues
 	// OOM is the workload-level OOM signal from the past 24h. Empty when the
 	// query failed (fail-open) — callers should not block recommendations on
 	// missing OOM data.
@@ -63,13 +59,12 @@ func (w *WorkloadInputs) HasRecentOOM() bool {
 }
 
 // FetchWorkloadInputs runs the Prometheus queries shared by the controller
-// and webhook recommendation paths. All six queries run in parallel so the
+// and webhook recommendation paths. All three queries run in parallel so the
 // total wall time is bounded by the slowest single query rather than the sum
-// — important on the webhook hot path. Per-pod floor and OOM query failures
-// are non-fatal: a failure logs at V(1) and degrades to a nil/empty value so
-// the workload-level result still produces a recommendation. CPU totals,
-// memory totals, and replica count are fatal — they're the recommendation's
-// primary inputs.
+// — important on the webhook hot path. The OOM-signal failure is non-fatal: it
+// logs at V(1) and degrades to an empty value so the workload still produces a
+// recommendation. The CPU and memory per-pod percentiles are fatal — they're
+// the recommendation's primary inputs.
 func FetchWorkloadInputs(
 	ctx context.Context,
 	pc *promclient.Client,
@@ -84,16 +79,14 @@ func FetchWorkloadInputs(
 	logger := log.FromContext(ctx)
 
 	var (
-		cpuTotals, memTotals promclient.ContainerValues
-		cpuFloors, memFloors promclient.ContainerValues
+		cpuPerPod, memPerPod promclient.ContainerValues
 		oomSignal            promclient.OOMSignal
-		median               float64
 	)
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		var err error
-		cpuTotals, err = pc.QueryWorkloadCPUByContainer(gctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
+		cpuPerPod, err = pc.QueryWorkloadCPUByContainer(gctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
 		if err != nil {
 			return fmt.Errorf("workload cpu query: %w", err)
 		}
@@ -101,40 +94,14 @@ func FetchWorkloadInputs(
 	})
 	g.Go(func() error {
 		var err error
-		memTotals, err = pc.QueryWorkloadMemoryByContainer(gctx, ns, ownerKind, ownerName, memQuantile, memWindow)
+		memPerPod, err = pc.QueryWorkloadMemoryByContainer(gctx, ns, ownerKind, ownerName, memQuantile, memWindow)
 		if err != nil {
 			return fmt.Errorf("workload memory query: %w", err)
 		}
 		return nil
 	})
-	g.Go(func() error {
-		var err error
-		median, err = pc.QueryReplicaCountMedian(gctx, ns, ownerKind, ownerName, cpuWindow)
-		if err != nil {
-			return fmt.Errorf("replica count query: %w", err)
-		}
-		return nil
-	})
-	// Best-effort queries: swallow errors inside the goroutine so a floor or
+	// Best-effort query: swallow the error inside the goroutine so an
 	// OOM-signal failure doesn't cancel the errgroup.
-	g.Go(func() error {
-		v, err := pc.QueryCPUByContainer(gctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
-		if err != nil {
-			logger.V(1).Info("per-pod cpu floor query failed; proceeding without floor", "err", err)
-			return nil
-		}
-		cpuFloors = v
-		return nil
-	})
-	g.Go(func() error {
-		v, err := pc.QueryMemoryByContainer(gctx, ns, ownerKind, ownerName, memQuantile, memWindow)
-		if err != nil {
-			logger.V(1).Info("per-pod memory floor query failed; proceeding without floor", "err", err)
-			return nil
-		}
-		memFloors = v
-		return nil
-	})
 	g.Go(func() error {
 		v, err := pc.QueryWorkloadOOMSignal(gctx, ns, ownerKind, ownerName)
 		if err != nil {
@@ -149,26 +116,22 @@ func FetchWorkloadInputs(
 	}
 
 	return &WorkloadInputs{
-		CPUTotals:      cpuTotals,
-		MemTotals:      memTotals,
-		CPUFloors:      cpuFloors,
-		MemFloors:      memFloors,
-		MedianReplicas: median,
-		OOM:            oomSignal,
+		CPUPerPod: cpuPerPod,
+		MemPerPod: memPerPod,
+		OOM:       oomSignal,
 	}, nil
 }
 
 // ContainerInputs is the per-container slice of WorkloadInputs plus the
-// OOM/autoscaler/config context needed to compute one recommendation.
+// OOM/autoscaler/config context needed to compute one recommendation. CPUPerPod
+// and MemPerPod are already per-pod percentiles (busiest replica) — they feed
+// the request computation directly without replica division.
 type ContainerInputs struct {
 	Container   corev1.Container
-	CPUTotal    float64
+	CPUPerPod   float64
 	HasCPU      bool
-	CPUFloor    float64
-	MemTotal    float64
+	MemPerPod   float64
 	HasMemUsage bool
-	MemFloor    float64
-	Replicas    float64
 	// OOM is the per-container memory floor signal. Pass the zero value when
 	// the caller has no OOM context (the webhook path). HasOOMPeak gates
 	// memory emission when usage samples are absent — see ComputeContainerRec.
@@ -204,9 +167,7 @@ func ComputeContainerRec(in ContainerInputs) ContainerRecResult {
 	floorApplied := false
 
 	if in.HasCPU {
-		perPod := PerPodFromTotal(in.CPUTotal, in.Replicas)
-		perPod = ApplyFloor(perPod, in.CPUFloor)
-		rec.CPURequest = ComputeCPURequest(perPod, in.RsCfg.CPU.Requests)
+		rec.CPURequest = ComputeCPURequest(in.CPUPerPod, in.RsCfg.CPU.Requests)
 		hasData = true
 	}
 
@@ -216,8 +177,7 @@ func ComputeContainerRec(in ContainerInputs) ContainerRecResult {
 	if emitMem {
 		var perPod float64
 		if in.HasMemUsage {
-			perPod = PerPodFromTotal(in.MemTotal, in.Replicas)
-			perPod = ApplyFloor(perPod, in.MemFloor)
+			perPod = in.MemPerPod
 		}
 		if cur := in.Container.Resources.Requests.Memory(); cur != nil && !cur.IsZero() {
 			in.OOM.CurrentRequestBytes = float64(cur.Value())

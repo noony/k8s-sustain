@@ -86,7 +86,7 @@ These differ — the webhook mutates pods at admission, not the workload spec.
 - **`Ongoing` vs `OnCreate`.** `Ongoing` keeps running pods aligned with the latest recommendation by recycling them on drift. `OnCreate` only injects at admission and lets the controller leave running pods alone. See [Update Modes](../concepts/update-modes.md).
 - **In-place vs eviction.** On Kubernetes 1.31+ the controller patches running pods in place; on older versions it falls back to PDB-respecting eviction. See [In-Place Updates](../concepts/in-place-updates.md).
 - **Pinned containers.** If a container already has a non-zero CPU request when the webhook intercepts the pod, k8s-sustain leaves it unchanged. Use this to pin specific sidecars while letting the main container be managed.
-- **Combining with HPA.** Recommendations are computed from the workload-level Prometheus signal (sum across replicas), so HPA scale-out does not perturb the recommendation. To shape requests so the HPA's utilization target stays meaningful, enable [Autoscaler Coordination](../concepts/autoscaler-coordination.md). See also the [KEDA guide](keda.md).
+- **Combining with HPA.** Recommendations are computed from the busiest replica's per-pod percentile (`max by` across pods), which is invariant to replica count, so HPA scale-out does not perturb the recommendation. To shape requests so the HPA's utilization target stays meaningful, enable [Autoscaler Coordination](../concepts/autoscaler-coordination.md). See also the [KEDA guide](keda.md).
 - **Headroom suggestions.**
 
   | Workload type | CPU headroom | Memory headroom |

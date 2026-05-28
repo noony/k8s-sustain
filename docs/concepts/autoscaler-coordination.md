@@ -54,11 +54,14 @@ overhead" without modelling their actual traffic shape.
 
 - **HPA stabilization windows are not modelled.** During a scale-out
   event, replica count is in flux and per-pod usage swings. The
-  recommender uses the *median* replica count over the recommendation
-  window (`spec.rightSizing.resourcesConfigs.<cpu|memory>.window`), so
-  brief replica spikes don't dominate. A workload that scales 3↔30
-  multiple times a day will see noisier recommendations than one that
-  rarely scales — pick a longer window if your traffic has daily cycles.
+  recommender sizes from the busiest replica's per-pod percentile over the
+  recommendation window (`spec.rightSizing.resourcesConfigs.<cpu|memory>.window`),
+  which is inherently invariant to replica count — `max by` picks the
+  hottest pod at each instant regardless of how many replicas exist. A
+  workload that scales 3↔30 multiple times a day will still see noisier
+  recommendations than one that rarely scales (cold-start spikes on new
+  pods land in the envelope) — pick a longer window if your traffic has
+  daily cycles.
 - **HPA target changes propagate next cycle.** If you change the HPA's
   `averageUtilization` from 70% to 50%, the next k8s-sustain reconcile
   picks up the new target and re-shapes requests. The HPA's own scaling

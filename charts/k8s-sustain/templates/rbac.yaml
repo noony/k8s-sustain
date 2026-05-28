@@ -67,9 +67,14 @@ rules:
     verbs: [get, list, watch]
   # Events — controller emits reconcile/recycle events via EventRecorder.
   # Patch is required by client-go's EventBroadcaster for server-side
-  # event aggregation/deduplication. The dashboard reads events via its
-  # own narrower role.
+  # event aggregation/deduplication. The newer client-go events broadcaster
+  # writes to events.k8s.io; the legacy one writes to the core group. Grant
+  # both so we don't depend on which broadcaster the controller-runtime
+  # version pulls in. The dashboard reads events via its own narrower role.
   - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [events.k8s.io]
     resources: [events]
     verbs: [create, patch]
 ---
@@ -117,6 +122,9 @@ rules:
     resources: [namespaces, pods]
     verbs: [get, list, watch]
   - apiGroups: [""]
+    resources: [events]
+    verbs: [get, list, watch]
+  - apiGroups: [events.k8s.io]
     resources: [events]
     verbs: [get, list, watch]
   - apiGroups: [autoscaling]

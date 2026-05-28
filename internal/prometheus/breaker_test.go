@@ -178,7 +178,7 @@ func TestClient_CircuitOpensOnRepeatedFailures(t *testing.T) {
 
 	ctx := context.Background()
 	for i := range 3 {
-		_, err := c.QueryReplicaCountMedian(ctx, "ns", "Deployment", "foo", "1h")
+		_, err := c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "foo", 0.95, "1h")
 		if err == nil {
 			t.Fatalf("call %d: expected error from failing server", i)
 		}
@@ -188,7 +188,7 @@ func TestClient_CircuitOpensOnRepeatedFailures(t *testing.T) {
 	}
 
 	// 4th call should short-circuit.
-	_, err = c.QueryReplicaCountMedian(ctx, "ns", "Deployment", "foo", "1h")
+	_, err = c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "foo", 0.95, "1h")
 	if !errors.Is(err, ErrCircuitOpen) {
 		t.Fatalf("expected ErrCircuitOpen after threshold, got %v", err)
 	}

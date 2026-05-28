@@ -295,12 +295,11 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 }
 
-// buildRecommendations queries Prometheus for workload-level CPU/memory totals,
-// recent OOM signal, and replica count (in parallel with autoscaler detection
-// and the workload-creation lookup), then derives per-container per-pod
-// recommendations. A per-pod floor is applied to protect against load
-// imbalance. Autoscaler detection provides the MinReplicas fallback when
-// Prometheus has no replica data (KEDA scale-to-zero, missing samples).
+// buildRecommendations queries Prometheus for per-pod CPU/memory percentiles
+// (busiest-replica, via the workload_max_pod recording rules) and the recent OOM
+// signal (in parallel with autoscaler detection and the workload-creation
+// lookup), then derives per-container recommendations. The percentile already
+// covers the busiest replica, so no replica division or per-pod floor is needed.
 //
 // The workload-age gate skips brand-new workloads (no usage history yet) so
 // the webhook doesn't inject the hard-floored minimums that would crashloop
@@ -320,10 +319,9 @@ func (h *Handler) buildRecommendations(
 	rsCfg := policy.Spec.RightSizing.ResourcesConfigs
 
 	// FetchWorkloadInputs, autoscaler.Detect, and the workload-creation lookup
-	// all run in parallel. The replica divisor and OOM signal are produced by
-	// FetchWorkloadInputs; autoscaler.MinReplicas only feeds the post-fetch
-	// EffectiveReplicas computation, so overlapping these K8s + Prometheus
-	// round-trips cuts admission wall time.
+	// all run in parallel. The per-pod percentiles and OOM signal are produced
+	// by FetchWorkloadInputs; autoscaler.Info feeds coordination, so overlapping
+	// these K8s + Prometheus round-trips cuts admission wall time.
 	var (
 		inputs          *recommender.WorkloadInputs
 		autoInfo        autoscaler.Info
@@ -363,13 +361,11 @@ func (h *Handler) buildRecommendations(
 		return map[string]workload.ContainerRecommendation{}, nil
 	}
 
-	replicas := recommender.EffectiveReplicas(inputs.MedianReplicas, autoInfo.MinReplicas)
-
 	coordCfg := policy.Spec.RightSizing.AutoscalerCoordination
 	recs := make(map[string]workload.ContainerRecommendation)
 	for _, c := range containers {
-		cpuTotal, hasCPU := inputs.CPUTotals[c.Name]
-		memTotal, hasMem := inputs.MemTotals[c.Name]
+		cpuPerPod, hasCPU := inputs.CPUPerPod[c.Name]
+		memPerPod, hasMem := inputs.MemPerPod[c.Name]
 		_, hasPeak := inputs.OOM.PeakMemoryBytes[c.Name]
 		oom := recommender.NewOOMSignal(
 			inputs.HasRecentOOM(),
@@ -378,13 +374,10 @@ func (h *Handler) buildRecommendations(
 		)
 		res := recommender.ComputeContainerRec(recommender.ContainerInputs{
 			Container:   c,
-			CPUTotal:    cpuTotal,
+			CPUPerPod:   cpuPerPod,
 			HasCPU:      hasCPU,
-			CPUFloor:    inputs.CPUFloors[c.Name],
-			MemTotal:    memTotal,
+			MemPerPod:   memPerPod,
 			HasMemUsage: hasMem,
-			MemFloor:    inputs.MemFloors[c.Name],
-			Replicas:    replicas,
 			OOM:         oom,
 			HasOOMPeak:  hasPeak,
 			AutoInfo:    autoInfo,

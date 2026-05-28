@@ -167,16 +167,10 @@ func TestBuildRecommendations_RecentOOMRaisesMemoryFloor(t *testing.T) {
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
 				{"metric":{"container":"app"},"value":[0,"838860800"]}
 			]}}`))
-		case strings.Contains(q, "workload_cpu_usage"):
+		case strings.Contains(q, "workload_max_pod_cpu"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.1"]}]}}`))
-		case strings.Contains(q, "workload_memory_usage"):
+		case strings.Contains(q, "workload_max_pod_memory"):
 			// Percentile says 100Mi — but recent OOM should override.
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"104857600"]}]}}`))
-		case strings.Contains(q, "workload_replicas"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}`))
-		case strings.Contains(q, "container_cpu_usage_by_workload"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.1"]}]}}`))
-		case strings.Contains(q, "container_memory_by_workload"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"104857600"]}]}}`))
 		default:
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
@@ -257,12 +251,10 @@ func TestBuildRecommendations_OOMTimeLimitBumpsBeyondLimit(t *testing.T) {
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
 				{"metric":{"container":"app"},"value":[0,"100663296"]}
 			]}}`))
-		case strings.Contains(q, "workload_replicas"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}`))
-		case strings.Contains(q, "container_cpu_usage_by_workload"):
+		case strings.Contains(q, "workload_max_pod_cpu"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.01"]}]}}`))
-		case strings.Contains(q, "container_memory_by_workload"):
-			// Percentile says 40Mi — the steady-state baseline.
+		case strings.Contains(q, "workload_max_pod_memory"):
+			// Percentile says 40Mi — the steady-state baseline; OOM floor should override.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"41943040"]}]}}`))
 		default:
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))

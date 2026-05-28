@@ -30,8 +30,6 @@ func (r *PolicyReconciler) buildRecommendations(
 	if err != nil {
 		return nil, err
 	}
-	replicas := recommender.EffectiveReplicas(inputs.MedianReplicas, autoInfo.MinReplicas)
-	logger.V(1).Info("effective replica divisor", "autoMinReplicas", autoInfo.MinReplicas, "effective", replicas)
 
 	var liveOOMs map[string]*oomwatch.OOMRecord
 	if r.LiveOOM.Enabled() {
@@ -57,8 +55,8 @@ func (r *PolicyReconciler) buildRecommendations(
 	coordCfg := policy.Spec.RightSizing.AutoscalerCoordination
 	recs := make(map[string]workload.ContainerRecommendation)
 	for _, c := range containers {
-		cpuTotal, hasCPU := inputs.CPUTotals[c.Name]
-		memTotal, hasMem := inputs.MemTotals[c.Name]
+		cpuPerPod, hasCPU := inputs.CPUPerPod[c.Name]
+		memPerPod, hasMem := inputs.MemPerPod[c.Name]
 		_, hasPeak := inputs.OOM.PeakMemoryBytes[c.Name]
 		liveRec := liveOOMs[c.Name]
 
@@ -75,13 +73,10 @@ func (r *PolicyReconciler) buildRecommendations(
 
 		res := recommender.ComputeContainerRec(recommender.ContainerInputs{
 			Container:   c,
-			CPUTotal:    cpuTotal,
+			CPUPerPod:   cpuPerPod,
 			HasCPU:      hasCPU,
-			CPUFloor:    inputs.CPUFloors[c.Name],
-			MemTotal:    memTotal,
+			MemPerPod:   memPerPod,
 			HasMemUsage: hasMem,
-			MemFloor:    inputs.MemFloors[c.Name],
-			Replicas:    replicas,
 			OOM:         oom,
 			HasOOMPeak:  hasPeak,
 			AutoInfo:    autoInfo,

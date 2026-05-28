@@ -92,8 +92,8 @@ The metric `k8s_sustain_coordination_factor` should report the applied multiplie
 
 ## Notes
 
-- **Workload-level signal.** k8s-sustain queries the **sum** of CPU/memory across all replicas, not per-pod averages. The sum is invariant to replica count, so KEDA scaling 3 → 6 pods does not change the recommendation.
+- **Per-pod signal.** k8s-sustain sizes from the busiest replica's per-pod percentile (`max by` across pods), not a sum or per-pod average. Because `max` picks the hottest pod at each instant regardless of replica count, KEDA scaling 3 → 6 pods does not change the recommendation.
 - **HPA + ScaledObject co-existence.** KEDA itself manages an HPA on behalf of each `ScaledObject`. When k8s-sustain finds both targeting the same workload, the `ScaledObject` is canonical and the HPA is ignored for autoscaler-coordination purposes.
-- **Scale-to-zero.** When `minReplicaCount: 0` is configured and the current replica count is 0, the per-pod division falls back to `max(1, minReplicaCount)` so the recommendation does not divide by zero during quiet windows.
+- **Scale-to-zero.** When `minReplicaCount: 0` is configured and the workload scales to 0, the `max by` recording rule simply produces no samples for the idle window; `quantile_over_time` ignores the gap and sizes from the periods the workload was actually running — there is no replica division to guard against divide-by-zero.
 - **CRD-absent behavior.** If the KEDA CRD is not installed, the `ScaledObject` lookup returns no match silently and recommendations proceed using HPA-only detection.
 - **No HPA / ScaledObject patches.** k8s-sustain never modifies an HPA or a `ScaledObject`. Both are read-only inputs to the recommender.

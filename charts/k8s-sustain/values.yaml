@@ -196,7 +196,7 @@ prometheusRule:
                 container!="POD",
                 image!="",
                 node!=""
-              }[1m])
+              }[1m:10s])
             )
             or
             max by (namespace, pod, container) (
@@ -213,15 +213,6 @@ prometheusRule:
             k8s_sustain:container_cpu_usage:rate1m
             * on(namespace, pod) group_left(owner_kind, owner_name)
             k8s_sustain:pod_workload
-        # Per-pod CPU rate, enriched with workload labels.
-        # Containers within the same pod are summed.
-        - record: k8s_sustain:pod_cpu_usage:rate1m
-          expr: |
-            sum by (namespace, pod, owner_kind, owner_name) (
-              k8s_sustain:container_cpu_usage:rate1m
-              * on(namespace, pod) group_left(owner_kind, owner_name)
-              k8s_sustain:pod_workload
-            )
     - name: k8s_sustain.memory_rates
       interval: 1m
       rules:
@@ -247,15 +238,6 @@ prometheusRule:
             k8s_sustain:container_memory_working_set:bytes
             * on(namespace, pod) group_left(owner_kind, owner_name)
             k8s_sustain:pod_workload
-        # Per-pod memory working set, enriched with workload labels.
-        # Containers within the same pod are summed.
-        - record: k8s_sustain:pod_memory_working_set:bytes
-          expr: |
-            sum by (namespace, pod, owner_kind, owner_name) (
-              k8s_sustain:container_memory_working_set:bytes
-              * on(namespace, pod) group_left(owner_kind, owner_name)
-              k8s_sustain:pod_workload
-            )
     - name: k8s_sustain.resource_requests
       interval: 1m
       rules:
@@ -295,19 +277,6 @@ prometheusRule:
               * on(namespace, pod) group_left(owner_kind, owner_name)
               k8s_sustain:pod_workload
             )
-        # Per-pod-container CPU request, enriched with workload labels.
-        # Sums over this give cluster totals (one series per pod-container).
-        - record: k8s_sustain:pod_container_cpu_request:cores
-          expr: |
-            kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}
-            * on(namespace, pod) group_left(owner_kind, owner_name)
-            k8s_sustain:pod_workload
-        # Per-pod-container memory request, enriched with workload labels.
-        - record: k8s_sustain:pod_container_memory_request:bytes
-          expr: |
-            kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}
-            * on(namespace, pod) group_left(owner_kind, owner_name)
-            k8s_sustain:pod_workload
 
     - name: k8s_sustain.savings_aggregates
       interval: 1m
@@ -542,15 +511,24 @@ prometheusRule:
             sum by (namespace, owner_kind, owner_name, container) (
               k8s_sustain:container_memory_by_workload:bytes
             )
-        # Replica count for a workload, derived from the pod_workload mapping.
-        # Driving this off pod_workload (not CPU rate) means idle workloads
-        # — pods with zero recent CPU activity that still get rate=0 series,
-        # or short-running pods missing rate samples — keep their replica
-        # count.
-        - record: k8s_sustain:workload_replicas:count
+        # Busiest-replica CPU rate, per container, per workload. At each instant
+        # this is the hottest live pod; collapsing across pods here (instead of
+        # at query time) keeps the recommender's quantile_over_time subquery
+        # cheap (one series per workload×container) and immune to pod-name churn
+        # — dead pods simply drop out of the max. The recommender runs
+        # quantile_over_time(p, …) over this to get a true per-pod percentile
+        # that covers the busiest replica.
+        - record: k8s_sustain:workload_max_pod_cpu:cores
           expr: |
-            count by (namespace, owner_kind, owner_name) (
-              k8s_sustain:pod_workload
+            max by (namespace, owner_kind, owner_name, container) (
+              k8s_sustain:container_cpu_usage_by_workload:rate1m
+            )
+        # Busiest-replica memory working set, per container, per workload.
+        # Same rationale as workload_max_pod_cpu above.
+        - record: k8s_sustain:workload_max_pod_memory:bytes
+          expr: |
+            max by (namespace, owner_kind, owner_name, container) (
+              k8s_sustain:container_memory_by_workload:bytes
             )
 
 serviceAccount:

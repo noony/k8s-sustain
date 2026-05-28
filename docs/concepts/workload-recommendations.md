@@ -4,7 +4,7 @@
 
 ## Why it exists
 
-The webhook needs six Prometheus queries (workload CPU/memory totals, per-pod CPU/memory floors, replica count, OOM signal) to compute an injection on every pod CREATE. If Prometheus is unreachable — restart, network partition, OOM, etc. — the circuit breaker (`internal/prometheus/breaker.go`) opens and `buildRecommendations` returns `ErrCircuitOpen`. Without a cache, the webhook would fail open and admit pods with whatever requests the workload's pod template specifies, undoing any rightsizing for new pods until Prometheus recovers.
+The webhook needs three Prometheus queries (per-pod CPU percentile, per-pod memory percentile, OOM signal) to compute an injection on every pod CREATE. If Prometheus is unreachable — restart, network partition, OOM, etc. — the circuit breaker (`internal/prometheus/breaker.go`) opens and `buildRecommendations` returns `ErrCircuitOpen`. Without a cache, the webhook would fail open and admit pods with whatever requests the workload's pod template specifies, undoing any rightsizing for new pods until Prometheus recovers.
 
 `WorkloadRecommendation` provides a last-known-good fallback that lives in the cluster API, so:
 

@@ -14,13 +14,13 @@ Computing percentiles over multi-day windows from raw `container_cpu_usage_secon
 |---|---|
 | `pod_workload` | Pod → workload mapping (foundational) |
 | `container_cpu_usage:rate1m`, `container_memory_working_set:bytes` | Per-container usage (foundational) |
-| `container_cpu_usage_by_workload:rate1m`, `container_memory_by_workload:bytes` | Per-container usage with workload labels (recommender) |
-| `pod_cpu_usage:rate1m`, `pod_memory_working_set:bytes` | Per-pod usage (dashboard headroom) |
-| `container_*_requests_by_workload:*`, `pod_container_*_request:*` | Configured requests (recommender + dashboard) |
+| `container_cpu_usage_by_workload:rate1m`, `container_memory_by_workload:bytes` | Per-container usage with workload labels (feeds the max-pod rules) |
+| `workload_max_pod_cpu:cores`, `workload_max_pod_memory:bytes` | Busiest-replica per-pod usage — the recommender's percentile input |
+| `container_*_requests_by_workload:*` | Configured requests (dashboard) |
 | `cluster_*_savings_*`, `policy_*_savings_*` | Savings aggregates (dashboard) |
 | `cluster_*_headroom_breakdown` | Used/idle/free split (dashboard) |
 | `workload_oom_24h`, `workload_drifted` | Risk signals (dashboard) |
-| `workload_*_usage:*`, `workload_replicas:count` | Per-workload aggregates (recommender) |
+| `workload_*_usage:*` | Per-workload usage totals (dashboard trend) |
 
 ## Rules
 
@@ -85,19 +85,7 @@ k8s_sustain:container_cpu_usage:rate1m
 k8s_sustain:pod_workload
 ```
 
-Per-container CPU rate enriched with workload labels. Queried by `internal/prometheus/client.go` for percentile-based CPU requests.
-
-### `k8s_sustain:pod_cpu_usage:rate1m`
-
-```promql
-sum by (namespace, pod, owner_kind, owner_name) (
-  k8s_sustain:container_cpu_usage:rate1m
-  * on(namespace, pod) group_left(owner_kind, owner_name)
-  k8s_sustain:pod_workload
-)
-```
-
-Per-pod CPU usage (containers summed within the pod), with workload labels.
+Per-container CPU rate enriched with workload labels. Retains the `pod` label, so it is the input to `workload_max_pod_cpu:cores` (busiest-replica collapse) and to the dashboard's per-pod queries.
 
 ### `k8s_sustain:container_memory_working_set:bytes`
 
@@ -127,19 +115,7 @@ k8s_sustain:container_memory_working_set:bytes
 k8s_sustain:pod_workload
 ```
 
-Per-container memory with workload labels. Queried for percentile-based memory requests.
-
-### `k8s_sustain:pod_memory_working_set:bytes`
-
-```promql
-sum by (namespace, pod, owner_kind, owner_name) (
-  k8s_sustain:container_memory_working_set:bytes
-  * on(namespace, pod) group_left(owner_kind, owner_name)
-  k8s_sustain:pod_workload
-)
-```
-
-Per-pod memory working set (containers summed), with workload labels.
+Per-container memory with workload labels. Retains the `pod` label, so it is the input to `workload_max_pod_memory:bytes` (busiest-replica collapse) and to the dashboard's per-pod queries.
 
 ### `k8s_sustain:container_cpu_requests_by_workload:cores`
 
@@ -188,26 +164,6 @@ max by (namespace, container, owner_kind, owner_name) (
 ```
 
 Per-container memory limits with workload labels. Same rationale as the CPU limits rule.
-
-### `k8s_sustain:pod_container_cpu_request:cores`
-
-```promql
-kube_pod_container_resource_requests{resource="cpu", container!="", container!="POD"}
-* on(namespace, pod) group_left(owner_kind, owner_name)
-k8s_sustain:pod_workload
-```
-
-Per-pod-container CPU request (one series per pod-container) with workload labels. Sums give cluster totals.
-
-### `k8s_sustain:pod_container_memory_request:bytes`
-
-```promql
-kube_pod_container_resource_requests{resource="memory", container!="", container!="POD"}
-* on(namespace, pod) group_left(owner_kind, owner_name)
-k8s_sustain:pod_workload
-```
-
-Per-pod-container memory request, same shape as the CPU rule above.
 
 ### `k8s_sustain:cluster_cpu_savings_cores`
 
@@ -399,7 +355,7 @@ sum by (namespace, owner_kind, owner_name, container) (
 )
 ```
 
-Total CPU usage across all replicas, per container, per workload.
+Total CPU usage summed across all replicas, per container, per workload. Used by the dashboard trend view, **not** by the recommender (which uses `workload_max_pod_cpu:cores`).
 
 ### `k8s_sustain:workload_memory_usage:bytes`
 
@@ -409,19 +365,29 @@ sum by (namespace, owner_kind, owner_name, container) (
 )
 ```
 
-Total memory working set across all replicas, per container, per workload.
+Total memory working set summed across all replicas, per container, per workload. Dashboard trend view only.
 
-### `k8s_sustain:workload_replicas:count`
+### `k8s_sustain:workload_max_pod_cpu:cores`
 
 ```promql
-count by (namespace, owner_kind, owner_name) (
-  k8s_sustain:pod_workload
+max by (namespace, owner_kind, owner_name, container) (
+  k8s_sustain:container_cpu_usage_by_workload:rate1m
 )
 ```
 
-Driven off `pod_workload` (not CPU rate) so idle workloads with zero recent CPU activity, or short-running pods missing rate samples, still report their replica count correctly.
+Busiest-replica CPU rate, per container, per workload: at each instant this is the hottest live pod. The recommender runs `quantile_over_time(p, …)` over this to get a true per-pod percentile that covers the busiest replica — so it needs no replica division and no separate per-pod floor.
 
-Replica count, derived from distinct pods reporting metrics. Counted at workload level so multi-container pods don't inflate the count.
+Collapsing across pods **here** (in the recording rule) rather than at query time is deliberate: it keeps the recommender's `[window:1m]` subquery cheap (one series per workload×container instead of one per historical pod) and immune to pod-name churn — a pod that briefly ran hot then died is the `max` for only those instants and drops out afterward, so its partial-lifetime samples can't distort the percentile.
+
+### `k8s_sustain:workload_max_pod_memory:bytes`
+
+```promql
+max by (namespace, owner_kind, owner_name, container) (
+  k8s_sustain:container_memory_by_workload:bytes
+)
+```
+
+Busiest-replica memory working set, per container, per workload. Same rationale and percentile usage as `workload_max_pod_cpu:cores` above.
 
 ## Customising
 

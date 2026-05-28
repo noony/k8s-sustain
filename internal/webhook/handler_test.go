@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -378,30 +377,20 @@ func TestBuildPatches_PatchesInitContainers(t *testing.T) {
 }
 
 // TestBuildRecommendations_WorkloadLevelSignal verifies that buildRecommendations
-// uses workload-level totals divided by replica count to derive per-pod values.
-// With replicas=3, total CPU=1.2 cores → per-pod=0.4 cores → request=400m
-// (no headroom configured), total memory=300MiB → per-pod=100MiB.
+// uses the per-pod (busiest-replica) percentile directly, with no replica
+// division. The max-pod query returns per-pod CPU=0.4 cores → request=400m
+// (no headroom configured), per-pod memory=100MiB → request=100MiB.
 func TestBuildRecommendations_WorkloadLevelSignal(t *testing.T) {
-	replicas := 3
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		q := r.Form.Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "workload_cpu_usage"):
-			// workload total = 0.4 * replicas cores
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.4 * float64(replicas)})))
-		case strings.Contains(q, "workload_memory_usage"):
-			// workload total = 100 MiB * replicas bytes
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 100 * 1024 * 1024 * float64(replicas)})))
-		case strings.Contains(q, "workload_replicas"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"` + strconv.Itoa(replicas) + `"]}]}}`))
-		case strings.Contains(q, "container_cpu_usage_by_workload"):
-			// per-pod floor (same as per-pod value, so no floor bump)
+		case strings.Contains(q, "workload_max_pod_cpu"):
+			// per-pod p95 of the busiest replica = 0.4 cores
 			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.4})))
-		case strings.Contains(q, "container_memory_by_workload"):
-			// per-pod floor
+		case strings.Contains(q, "workload_max_pod_memory"):
+			// per-pod p95 of the busiest replica = 100 MiB
 			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 100 * 1024 * 1024})))
 		default:
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
@@ -451,9 +440,8 @@ func TestBuildRecommendations_WorkloadLevelSignal(t *testing.T) {
 		t.Fatal("expected recommendation for container 'app'")
 	}
 
-	// Per-pod CPU = 1.2 / 3 ≈ 0.4 cores. Due to float64 rounding the recommender
-	// sees ~400.000...005 millicores and math.Ceil rounds up to 401m.
-	wantCPU := resource.MustParse("401m")
+	// Per-pod CPU = 0.4 cores → 400m (no headroom configured).
+	wantCPU := resource.MustParse("400m")
 	if rec.CPURequest == nil {
 		t.Fatal("CPURequest is nil")
 	}
@@ -461,7 +449,7 @@ func TestBuildRecommendations_WorkloadLevelSignal(t *testing.T) {
 		t.Errorf("CPURequest = %s, want %s", rec.CPURequest.String(), wantCPU.String())
 	}
 
-	// Per-pod memory = 300MiB / 3 = 100MiB
+	// Per-pod memory = 100MiB
 	wantMem := resource.MustParse("100Mi")
 	if rec.MemoryRequest == nil {
 		t.Fatal("MemoryRequest is nil")
@@ -476,14 +464,8 @@ func TestBuildRecommendations_WorkloadLevelSignal(t *testing.T) {
 func TestBuildRecommendations_NoPrometheusData(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
-		q := r.Form.Get("query")
 		w.Header().Set("Content-Type", "application/json")
-		// workload_replicas returns 1 so we don't fail the replica query
-		if strings.Contains(q, "workload_replicas") {
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}`))
-			return
-		}
-		// All other queries return empty
+		// All queries return empty
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
 	defer server.Close()
@@ -526,22 +508,14 @@ func TestBuildRecommendations_NoPrometheusData(t *testing.T) {
 // a baseline of 100m CPU and an HPA targeting CPU at 70%, the request should
 // be bumped to ceil(100 * 110 / 70) = 158m.
 func TestBuildRecommendations_AppliesAutoscalerCoordination(t *testing.T) {
-	const replicas = 1
-	const baselineCores = 0.1 // 100m baseline
+	const baselineCores = 0.1 // 100m baseline (per-pod)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		q := r.Form.Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "workload_cpu_usage"):
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": baselineCores * float64(replicas)})))
-		case strings.Contains(q, "workload_memory_usage"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		case strings.Contains(q, "workload_replicas"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"` + strconv.Itoa(replicas) + `"]}]}}`))
-		case strings.Contains(q, "container_cpu_usage_by_workload"):
-			// Floor matches per-pod baseline so floor doesn't bump it.
+		case strings.Contains(q, "workload_max_pod_cpu"):
 			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": baselineCores})))
 		default:
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
@@ -650,15 +624,9 @@ func newAdmitEnv(t *testing.T, objs ...runtime.Object) *admitTestEnv {
 		q := r.Form.Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "workload_cpu_usage"):
+		case strings.Contains(q, "workload_max_pod_cpu"):
 			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.1})))
-		case strings.Contains(q, "workload_memory_usage"):
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 64 * 1024 * 1024})))
-		case strings.Contains(q, "workload_replicas"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}`))
-		case strings.Contains(q, "container_cpu_usage_by_workload"):
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.1})))
-		case strings.Contains(q, "container_memory_by_workload"):
+		case strings.Contains(q, "workload_max_pod_memory"):
 			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 64 * 1024 * 1024})))
 		default:
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))

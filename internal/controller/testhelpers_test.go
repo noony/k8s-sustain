@@ -185,16 +185,10 @@ func promServerForReconcile(t *testing.T) *httptest.Server {
 		case strings.Contains(q, "workload_oom_24h"):
 			// No recent OOMs in tests by default.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		case strings.Contains(q, "workload_cpu_usage"):
-			// 100m × 1 replica.
+		case strings.Contains(q, "workload_max_pod_cpu"):
+			// Per-pod p95 of the busiest replica = 100m.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.1"]}]}}`))
-		case strings.Contains(q, "workload_memory_usage"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"67108864"]}]}}`))
-		case strings.Contains(q, "workload_replicas"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}`))
-		case strings.Contains(q, "container_cpu_usage_by_workload"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.1"]}]}}`))
-		case strings.Contains(q, "container_memory_by_workload"):
+		case strings.Contains(q, "workload_max_pod_memory"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"67108864"]}]}}`))
 		default:
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
