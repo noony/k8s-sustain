@@ -54,11 +54,12 @@ spec:
             capabilities:
               drop: [ALL]
           ports:
+            # Derived from the bind addresses so listeners and ports always agree.
             - name: metrics
-              containerPort: 8080
+              containerPort: {{ splitList ":" .Values.controller.metricsBindAddress | last | int }}
               protocol: TCP
             - name: health
-              containerPort: 8081
+              containerPort: {{ splitList ":" .Values.controller.healthProbeBindAddress | last | int }}
               protocol: TCP
           livenessProbe:
             httpGet:

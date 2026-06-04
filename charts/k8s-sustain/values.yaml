@@ -20,6 +20,8 @@ prometheusAddress: ""
 
 controller:
   replicaCount: 1
+  # Bind addresses (":port" or "host:port") — single source of truth for the
+  # listeners: the container ports and probes derive from their port parts.
   metricsBindAddress: ":8080"
   healthProbeBindAddress: ":8081"
   leaderElect: true
@@ -39,9 +41,10 @@ controller:
   service:
     type: ClusterIP
     port: 8080
-    # Extra annotations for the metrics Service. The chart already adds
-    # prometheus.io/scrape, prometheus.io/port, and prometheus.io/path so the
-    # bundled Prometheus subchart picks up the controller's metrics endpoint.
+    # Extra annotations for the metrics Service. Not needed for the bundled
+    # Prometheus subchart: its scoped `k8s-sustain` scrape job discovers this
+    # Service by name (`*-metrics`) and port name (`metrics`), not by
+    # prometheus.io/* annotations (annotation-based discovery is disabled).
     annotations: {}
   resources:
     requests:
@@ -649,7 +652,8 @@ httpRoute:
 dashboard:
   enabled: false
   replicaCount: 1
-  port: 8090
+  # Server bind address (":port" or "host:port") — single source of truth for
+  # the listener: the container port and probes derive from its port part.
   bindAddress: ":8090"
   logLevel: debug
   # Allowed CORS origins. Empty (default) is same-origin only — the safe choice.

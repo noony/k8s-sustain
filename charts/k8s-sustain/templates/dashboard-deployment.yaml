@@ -49,7 +49,8 @@ spec:
               drop: [ALL]
           ports:
             - name: http
-              containerPort: {{ .Values.dashboard.port }}
+              # Derived from bindAddress so the listener and port always agree.
+              containerPort: {{ splitList ":" .Values.dashboard.bindAddress | last | int }}
               protocol: TCP
           livenessProbe:
             httpGet:

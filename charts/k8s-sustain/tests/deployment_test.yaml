@@ -115,6 +115,27 @@ tests:
             path: /readyz
             port: health
 
+  - it: derives the container ports from the bind address port parts
+    set:
+      controller.metricsBindAddress: ":9090"
+      controller.healthProbeBindAddress: 127.0.0.1:9091
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+            - name: health
+              containerPort: 9091
+              protocol: TCP
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=:9090
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --health-probe-bind-address=127.0.0.1:9091
+
   - it: applies the default resources
     asserts:
       - equal:

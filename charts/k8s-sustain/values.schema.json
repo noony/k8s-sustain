@@ -35,8 +35,8 @@
       "additionalProperties": true,
       "properties": {
         "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10 },
-        "metricsBindAddress": { "type": "string" },
-        "healthProbeBindAddress": { "type": "string" },
+        "metricsBindAddress": { "type": "string", "pattern": ":[0-9]+$" },
+        "healthProbeBindAddress": { "type": "string", "pattern": ":[0-9]+$" },
         "leaderElect": { "type": "boolean" },
         "leaderElectionID": { "type": "string" },
         "concurrencyLimit": { "type": "integer", "minimum": 1, "maximum": 100 },
@@ -138,8 +138,7 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "replicaCount": { "type": "integer", "minimum": 1, "maximum": 10 },
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "bindAddress": { "type": "string" },
+        "bindAddress": { "type": "string", "pattern": ":[0-9]+$" },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
         "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0, "maximum": 600 },
         "corsAllowedOrigins": { "type": "array", "items": { "type": "string" } },

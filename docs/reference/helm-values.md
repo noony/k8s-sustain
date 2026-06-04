@@ -22,8 +22,8 @@
 | Value | Default | Description |
 |-------|---------|-------------|
 | `controller.replicaCount` | `1` | Controller replicas |
-| `controller.metricsBindAddress` | `:8080` | Metrics endpoint address |
-| `controller.healthProbeBindAddress` | `:8081` | Health probe address |
+| `controller.metricsBindAddress` | `:8080` | Metrics endpoint address (`:port` or `host:port`); the metrics container port derives from its port part |
+| `controller.healthProbeBindAddress` | `:8081` | Health probe address (`:port` or `host:port`); the health container port derives from its port part |
 | `controller.leaderElect` | `true` | Enable leader election |
 | `controller.concurrencyLimit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
 | `controller.recycleReplacementTimeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where Karpenter / cluster-autoscaler node provisioning regularly takes longer. |
@@ -91,8 +91,7 @@ webhook:
 |-------|---------|-------------|
 | `dashboard.enabled` | `false` | Deploy the dashboard |
 | `dashboard.replicaCount` | `1` | Dashboard replicas |
-| `dashboard.port` | `8090` | Container port |
-| `dashboard.bindAddress` | `:8090` | Server bind address |
+| `dashboard.bindAddress` | `:8090` | Server bind address (`:port` or `host:port`); the container port derives from its port part |
 | `dashboard.logLevel` | `debug` | Log level |
 | `dashboard.corsAllowedOrigins` | `[]` | Allowed CORS origins. Empty = same-origin only (the safe default). Set to `["https://your-grafana"]` to embed the dashboard cross-origin, or `["*"]` to allow all (not recommended). |
 | `dashboard.service.type` | `ClusterIP` | Service type |
@@ -120,7 +119,7 @@ dashboard:
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `serviceAccount.create` | `true` | Create a ServiceAccount |
+| `serviceAccount.create` | `true` | Create the controller/webhook ServiceAccount. The dashboard's dedicated ServiceAccount is always created alongside the dashboard (`dashboard.enabled`) |
 | `serviceAccount.name` | `""` | Override the ServiceAccount name |
 | `serviceAccount.annotations` | `{}` | Annotations on the ServiceAccount (e.g. for IRSA or Workload Identity) |
 

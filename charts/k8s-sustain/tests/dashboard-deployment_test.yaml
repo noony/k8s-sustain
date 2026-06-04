@@ -92,14 +92,29 @@ tests:
             path: /readyz
             port: http
 
-  - it: wires a custom container port
+  - it: derives the container port from the bindAddress port part
     set:
       dashboard.enabled: true
-      dashboard.port: 9000
+      dashboard.bindAddress: ":9000"
     asserts:
       - equal:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 9000
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --bind-address=:9000
+
+  - it: supports a host-qualified bindAddress
+    set:
+      dashboard.enabled: true
+      dashboard.bindAddress: 127.0.0.1:9999
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --bind-address=127.0.0.1:9999
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 9999
 
   - it: enforces the restricted security contexts and default resources
     set:

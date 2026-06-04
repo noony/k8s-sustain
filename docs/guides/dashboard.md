@@ -261,8 +261,7 @@ Query parameters are validated strictly. Unknown enum values (`?risk=foo`, `?aut
 |----------------------------------|----------------------------|------------------------------------------|
 | `dashboard.enabled`              | `false`                    | Enable the dashboard deployment          |
 | `dashboard.replicaCount`         | `1`                        | Number of dashboard replicas             |
-| `dashboard.port`                 | `8090`                     | Container port                           |
-| `dashboard.bindAddress`          | `:8090`                    | Server bind address                      |
+| `dashboard.bindAddress`          | `:8090`                    | Server bind address (`:port` or `host:port`); the container port derives from its port part |
 | `dashboard.logLevel`             | `info`                     | Log level                                |
 | `dashboard.corsAllowedOrigins`   | `[]`                       | Allowed CORS origins. Empty = same-origin only. |
 | `dashboard.service.type`         | `ClusterIP`                | Service type                             |
