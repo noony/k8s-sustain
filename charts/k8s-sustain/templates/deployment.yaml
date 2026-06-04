@@ -65,14 +65,12 @@ spec:
             httpGet:
               path: /healthz
               port: health
-            initialDelaySeconds: 15
-            periodSeconds: 20
+            {{- toYaml .Values.controller.livenessProbe | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /readyz
               port: health
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            {{- toYaml .Values.controller.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.controller.resources | nindent 12 }}
       {{- with .Values.controller.nodeSelector }}

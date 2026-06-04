@@ -115,6 +115,52 @@ tests:
             path: /readyz
             port: health
 
+  - it: renders the default probe timings
+    asserts:
+      - isSubset:
+          path: spec.template.spec.containers[0].livenessProbe
+          content:
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+      - isSubset:
+          path: spec.template.spec.containers[0].readinessProbe
+          content:
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+
+  - it: wires custom probe timings into the probes
+    set:
+      controller.livenessProbe.initialDelaySeconds: 30
+      controller.livenessProbe.failureThreshold: 6
+      controller.readinessProbe.periodSeconds: 5
+      controller.readinessProbe.timeoutSeconds: 2
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.initialDelaySeconds
+          value: 30
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 6
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 2
+      # The probe endpoints stay fixed regardless of timing overrides.
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+
   - it: derives the container ports from the bind address port parts
     set:
       controller.metricsBindAddress: ":9090"

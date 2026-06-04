@@ -32,6 +32,8 @@
 | `controller.service.port` | `8080` | Service port |
 | `controller.service.annotations` | `{}` | Extra annotations for the metrics Service (the chart already adds `prometheus.io/scrape`, `prometheus.io/port`, and `prometheus.io/path`) |
 | `controller.resources` | see below | Controller container resources |
+| `controller.livenessProbe` | see below | Liveness probe timings (`initialDelaySeconds`, `periodSeconds`, `timeoutSeconds`, `successThreshold`, `failureThreshold`). The probe endpoint (`/healthz` on the health port) is fixed by the chart. |
+| `controller.readinessProbe` | see below | Readiness probe timings, same fields. The probe endpoint (`/readyz` on the health port) is fixed by the chart. |
 | `controller.nodeSelector` | `{}` | Node selector |
 | `controller.tolerations` | `[]` | Tolerations |
 | `controller.affinity` | `{}` | Affinity rules |
@@ -46,6 +48,24 @@ controller:
       memory: 128Mi
     limits:
       memory: 256Mi
+```
+
+**Default probe timings** (same for `livenessProbe` and `readinessProbe`, and for all components):
+
+```yaml
+controller:
+  livenessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
 ```
 
 ---
@@ -67,6 +87,8 @@ controller:
 | `webhook.certManager.issuerRef.name` | `""` | Issuer name (only used when `createIssuer=false`) |
 | `webhook.certManager.issuerRef.kind` | `Issuer` | Issuer kind (only used when `createIssuer=false`) |
 | `webhook.resources` | see below | Webhook container resources |
+| `webhook.livenessProbe` | same as controller | Liveness probe timings. The probe endpoint (HTTPS `/healthz` on the webhook port) is fixed by the chart. |
+| `webhook.readinessProbe` | same as controller | Readiness probe timings. Same fixed endpoint as the liveness probe. |
 | `webhook.nodeSelector` | `{}` | Node selector |
 | `webhook.tolerations` | `[]` | Tolerations |
 | `webhook.affinity` | `{}` | Affinity rules |
@@ -97,6 +119,8 @@ webhook:
 | `dashboard.service.type` | `ClusterIP` | Service type |
 | `dashboard.service.port` | `8090` | Service port |
 | `dashboard.resources` | see below | Dashboard container resources |
+| `dashboard.livenessProbe` | same as controller | Liveness probe timings. The probe endpoint (`/healthz` on the http port) is fixed by the chart. |
+| `dashboard.readinessProbe` | same as controller | Readiness probe timings. The probe endpoint (`/readyz` on the http port) is fixed by the chart. |
 | `dashboard.nodeSelector` | `{}` | Node selector |
 | `dashboard.tolerations` | `[]` | Tolerations |
 | `dashboard.affinity` | `{}` | Affinity rules |

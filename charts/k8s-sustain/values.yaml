@@ -52,6 +52,20 @@ controller:
       memory: 128Mi
     limits:
       memory: 256Mi
+  # Probe timings. The probe endpoints (path/port/scheme) are fixed by the
+  # chart and derive from the bind addresses above.
+  livenessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
   # ServiceMonitor for the controller metrics endpoint.
   # Only useful when running the Prometheus Operator (e.g. kube-prometheus-stack).
   # Not needed when using the bundled prometheus subchart.
@@ -600,6 +614,19 @@ webhook:
       memory: 128Mi
     limits:
       memory: 256Mi
+  # Probe timings. The probe endpoints (path/port/scheme) are fixed by the chart.
+  livenessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
   # ServiceMonitor for the webhook /metrics endpoint (cert expiry gauge etc.).
   # Only useful when running the Prometheus Operator (e.g. kube-prometheus-stack).
   # Not needed when using the bundled prometheus subchart, which scrapes the
@@ -669,6 +696,20 @@ dashboard:
       memory: 128Mi
     limits:
       memory: 256Mi
+  # Probe timings. The probe endpoints (path/port) are fixed by the chart and
+  # derive from bindAddress above.
+  livenessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
   nodeSelector: {}
   tolerations: []
   affinity: {}

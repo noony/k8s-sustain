@@ -92,6 +92,47 @@ tests:
             path: /readyz
             port: http
 
+  - it: renders the default probe timings
+    set:
+      dashboard.enabled: true
+    asserts:
+      - isSubset:
+          path: spec.template.spec.containers[0].livenessProbe
+          content:
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+      - isSubset:
+          path: spec.template.spec.containers[0].readinessProbe
+          content:
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+
+  - it: wires custom probe timings into the probes
+    set:
+      dashboard.enabled: true
+      dashboard.livenessProbe.periodSeconds: 30
+      dashboard.readinessProbe.initialDelaySeconds: 1
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.periodSeconds
+          value: 30
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.initialDelaySeconds
+          value: 1
+      # The probe endpoints stay fixed regardless of timing overrides.
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+
   - it: derives the container port from the bindAddress port part
     set:
       dashboard.enabled: true

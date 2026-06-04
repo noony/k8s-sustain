@@ -62,15 +62,13 @@ spec:
               path: /healthz
               port: webhook
               scheme: HTTPS
-            initialDelaySeconds: 15
-            periodSeconds: 20
+            {{- toYaml .Values.webhook.livenessProbe | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /healthz
               port: webhook
               scheme: HTTPS
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            {{- toYaml .Values.webhook.readinessProbe | nindent 12 }}
           volumeMounts:
             - name: tls
               mountPath: /tls

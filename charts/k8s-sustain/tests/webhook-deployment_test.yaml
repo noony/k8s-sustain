@@ -109,6 +109,41 @@ tests:
             port: webhook
             scheme: HTTPS
 
+  - it: renders the default probe timings
+    asserts:
+      - isSubset:
+          path: spec.template.spec.containers[0].livenessProbe
+          content:
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+      - isSubset:
+          path: spec.template.spec.containers[0].readinessProbe
+          content:
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+
+  - it: wires custom probe timings into the probes
+    set:
+      webhook.livenessProbe.initialDelaySeconds: 30
+      webhook.readinessProbe.failureThreshold: 6
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.initialDelaySeconds
+          value: 30
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.failureThreshold
+          value: 6
+      # The probe endpoint stays fixed regardless of timing overrides.
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTPS
+
   - it: wires a custom webhook port into args and container ports
     set:
       webhook.port: 8443
