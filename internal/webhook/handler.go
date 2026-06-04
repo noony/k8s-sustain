@@ -180,12 +180,15 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	// by both components.
 	//
 	// SelectorOK fails open: a malformed label selector is logged and
-	// treated as non-matching, never as a pod denial.
-	if _, selErr := policymatch.SelectorOK(policy.Spec.Selector.LabelSelector); selErr != nil {
+	// treated as non-matching, never as a pod denial. Compile the selector
+	// once here and reuse it below, rather than calling Matches (which would
+	// recompile the same selector a second time on this hot path).
+	sel, selErr := policymatch.SelectorOK(policy.Spec.Selector.LabelSelector)
+	if selErr != nil {
 		logger.Info("policy has invalid labelSelector; allowing pod without injection (fail-open)", "err", selErr)
 		return allow
 	}
-	if !policymatch.Matches(&policy, req.Namespace, pod.Labels, h.ExcludedNamespaces) {
+	if !policymatch.MatchesSelector(&policy, req.Namespace, pod.Labels, h.ExcludedNamespaces, sel) {
 		logger.V(1).Info("pod does not match policy selector (namespace/labels) or is in excluded namespace; allowing without injection",
 			"selectorNamespaces", policy.Spec.Selector.Namespaces,
 			"excludedNamespaces", h.ExcludedNamespaces)
@@ -270,6 +273,15 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allow
 	}
 
+	// RecommendOnly records the recommendation but never mutates the pod, so
+	// the response is always an allow with no patch. Short-circuit here to skip
+	// buildPatches' per-container DeepCopy + json.Marshal — wasted work on the
+	// pod-create hot path when the result is discarded.
+	if h.RecommendOnly {
+		logger.Info("recommend-only: would inject resources", "containers", len(filtered), "recommendations", filtered)
+		return allow
+	}
+
 	patchBytes, err := buildPatches(&pod, filtered)
 	if err != nil {
 		logger.Error(err, "failed to build JSON patches")
@@ -277,11 +289,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 	if patchBytes == nil {
 		logger.V(1).Info("no patch needed (recommendations match current pod spec)")
-		return allow
-	}
-
-	if h.RecommendOnly {
-		logger.Info("recommend-only: would inject resources", "containers", len(filtered), "recommendations", filtered)
 		return allow
 	}
 
@@ -362,33 +369,12 @@ func (h *Handler) buildRecommendations(
 	}
 
 	coordCfg := policy.Spec.RightSizing.AutoscalerCoordination
-	recs := make(map[string]workload.ContainerRecommendation)
-	for _, c := range containers {
-		cpuPerPod, hasCPU := inputs.CPUPerPod[c.Name]
-		memPerPod, hasMem := inputs.MemPerPod[c.Name]
-		_, hasPeak := inputs.OOM.PeakMemoryBytes[c.Name]
-		oom := recommender.NewOOMSignal(
-			inputs.HasRecentOOM(),
-			inputs.OOM.PeakMemoryBytes[c.Name],
-			inputs.OOM.OOMLimitBytes[c.Name],
-		)
-		res := recommender.ComputeContainerRec(recommender.ContainerInputs{
-			Container:   c,
-			CPUPerPod:   cpuPerPod,
-			HasCPU:      hasCPU,
-			MemPerPod:   memPerPod,
-			HasMemUsage: hasMem,
-			OOM:         oom,
-			HasOOMPeak:  hasPeak,
-			AutoInfo:    autoInfo,
-			RsCfg:       rsCfg,
-			CoordCfg:    coordCfg,
-		})
-		if !res.HasData {
-			continue
-		}
-		recs[c.Name] = res.Rec
-	}
+	// The webhook has no live OOM watcher and emits no per-container metrics, so
+	// it passes no hooks — the shared loop runs with the Prometheus-only signal.
+	recs := recommender.BuildContainerRecs(
+		containers, inputs, inputs.HasRecentOOM(), autoInfo, rsCfg, coordCfg,
+		recommender.BuildContainerRecsOptions{},
+	)
 	return recs, nil
 }
 

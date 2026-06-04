@@ -2,13 +2,16 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/api"
 	prometheusv1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/common/model"
+	"golang.org/x/sync/errgroup"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -25,6 +28,80 @@ func logWarnings(ctx context.Context, expr string, warnings prometheusv1.Warning
 // ContainerValues maps container name → metric value (cores for CPU, bytes for memory).
 type ContainerValues map[string]float64
 
+// workloadSelector builds the shared `{namespace=...,owner_kind=...,owner_name=...}`
+// PromQL label-selector fragment used to scope queries to a single workload.
+// The output is byte-identical to the inline `%q`-quoted selectors it replaces.
+func workloadSelector(namespace, ownerKind, ownerName string) string {
+	return fmt.Sprintf("{namespace=%q,owner_kind=%q,owner_name=%q}", namespace, ownerKind, ownerName)
+}
+
+// quantileOverTimeExpr builds `quantile_over_time(<q>, <rule>{selector}[<window>:1m])`,
+// the per-instant sub-query percentile used by the recommendation queries.
+func quantileOverTimeExpr(quantile float64, rule, selector, window string) string {
+	return fmt.Sprintf("quantile_over_time(%.2f, %s%s[%s:1m])", quantile, rule, selector, window)
+}
+
+// avgByContainer wraps an inner expression in `avg by (container) (...)`.
+func avgByContainer(inner string) string {
+	return fmt.Sprintf("avg by (container) (%s)", inner)
+}
+
+// maxByContainer wraps an inner expression in `max by (container) (...)`.
+func maxByContainer(inner string) string {
+	return fmt.Sprintf("max by (container) (%s)", inner)
+}
+
+// execInstant runs an instant query through the circuit breaker: it gates on
+// breaker.allow(), applies the given per-call timeout, records failure/success,
+// and logs warnings — exactly the preamble the query methods used to inline.
+// On an open breaker it returns ErrCircuitOpen with a nil value; on a query
+// error it returns the raw API error (callers wrap it with their own prefix).
+func (c *Client) execInstant(ctx context.Context, expr string, ts time.Time, timeout time.Duration) (model.Value, error) {
+	if !c.breaker.allow() {
+		return nil, ErrCircuitOpen
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	v, warnings, err := c.api.Query(ctx, expr, ts)
+	if err != nil {
+		c.breaker.failure()
+		return nil, err
+	}
+	c.breaker.success()
+	logWarnings(ctx, expr, warnings)
+	return v, nil
+}
+
+// runRange runs a range query through the circuit breaker without the
+// breaker.allow() gate, for callers that must parse durations or share a single
+// allow() gate before querying. It applies the per-call timeout, records
+// failure/success, and logs warnings — the same preamble execInstant inlines.
+func (c *Client) runRange(ctx context.Context, expr string, r prometheusv1.Range, timeout time.Duration) (model.Value, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	v, warnings, err := c.api.QueryRange(ctx, expr, r)
+	if err != nil {
+		c.breaker.failure()
+		return nil, err
+	}
+	c.breaker.success()
+	logWarnings(ctx, expr, warnings)
+	return v, nil
+}
+
+// vectorToContainerValues unpacks an instant-query vector into per-container
+// values, dropping samples whose `container` label is empty.
+func vectorToContainerValues(vec model.Vector) ContainerValues {
+	values := make(ContainerValues, len(vec))
+	for _, sample := range vec {
+		name := string(sample.Metric["container"])
+		if name != "" {
+			values[name] = float64(sample.Value)
+		}
+	}
+	return values
+}
+
 // Client wraps the Prometheus HTTP API for k8s-sustain queries.
 type Client struct {
 	api          prometheusv1.API
@@ -33,8 +110,12 @@ type Client struct {
 }
 
 // Default circuit-breaker tuning: trip after 5 consecutive failures,
-// stay open for 30 seconds. These values match the default queryTimeout so that
-// one stuck reconcile (≈ 5 queries × queryTimeout) is enough to open it.
+// stay open for 30 seconds. Sized so a sustained Prometheus outage opens the
+// breaker within a couple of reconcile passes without over-counting a single
+// outage: each reconcile records a handful of failures (the CPU and memory
+// queries plus QueryWorkloadOOMSignal, which now coalesces its three probes to
+// at most one breaker failure per call — see QueryWorkloadOOMSignal), so a few
+// stuck reconciles (each ≈ one queryTimeout long) reach the threshold.
 const (
 	defaultBreakerMaxFailures = 5
 	defaultBreakerCooldown    = 30 * time.Second
@@ -77,10 +158,7 @@ func New(addr string, opts ...Option) (*Client, error) {
 // averaged across pods of the workload, over the specified window.
 // Relies on the k8s_sustain:container_cpu_usage_by_workload:rate1m recording rule.
 func (c *Client) QueryCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := fmt.Sprintf(
-		`avg by (container) (quantile_over_time(%.2f, k8s_sustain:container_cpu_usage_by_workload:rate1m{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
-		quantile, namespace, ownerKind, ownerName, window,
-	)
+	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerCPUUsageByWorkloadRate1m, workloadSelector(namespace, ownerKind, ownerName), window))
 	return c.queryByContainer(ctx, expr)
 }
 
@@ -88,10 +166,7 @@ func (c *Client) QueryCPUByContainer(ctx context.Context, namespace, ownerKind, 
 // averaged across pods of the workload, over the specified window.
 // Relies on the k8s_sustain:container_memory_by_workload:bytes recording rule.
 func (c *Client) QueryMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := fmt.Sprintf(
-		`avg by (container) (quantile_over_time(%.2f, k8s_sustain:container_memory_by_workload:bytes{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
-		quantile, namespace, ownerKind, ownerName, window,
-	)
+	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerMemoryByWorkloadBytes, workloadSelector(namespace, ownerKind, ownerName), window))
 	return c.queryByContainer(ctx, expr)
 }
 
@@ -101,10 +176,7 @@ func (c *Client) QueryMemoryByContainer(ctx context.Context, namespace, ownerKin
 // rule, which collapses per-pod usage to the hottest live pod, so the result is a
 // genuine percentile that covers the busiest replica — no replica division needed.
 func (c *Client) QueryWorkloadCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := fmt.Sprintf(
-		`quantile_over_time(%.2f, k8s_sustain:workload_max_pod_cpu:cores{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m])`,
-		quantile, namespace, ownerKind, ownerName, window,
-	)
+	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodCPUCores, workloadSelector(namespace, ownerKind, ownerName), window)
 	return c.queryByContainer(ctx, expr)
 }
 
@@ -114,10 +186,7 @@ func (c *Client) QueryWorkloadCPUByContainer(ctx context.Context, namespace, own
 // k8s_sustain:workload_max_pod_memory:bytes recording rule. Same per-pod-percentile
 // semantics as QueryWorkloadCPUByContainer.
 func (c *Client) QueryWorkloadMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := fmt.Sprintf(
-		`quantile_over_time(%.2f, k8s_sustain:workload_max_pod_memory:bytes{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m])`,
-		quantile, namespace, ownerKind, ownerName, window,
-	)
+	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodMemoryBytes, workloadSelector(namespace, ownerKind, ownerName), window)
 	return c.queryByContainer(ctx, expr)
 }
 
@@ -139,20 +208,14 @@ type ContainerTimeSeries map[string][]TimeValue
 // QueryCPURangeByContainer returns per-container CPU usage time-series (cores)
 // over the specified window with the given step resolution.
 func (c *Client) QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
-	expr := fmt.Sprintf(
-		`avg by (container) (k8s_sustain:container_cpu_usage_by_workload:rate1m{namespace=%q,owner_kind=%q,owner_name=%q})`,
-		namespace, ownerKind, ownerName,
-	)
+	expr := avgByContainer(MetricContainerCPUUsageByWorkloadRate1m + workloadSelector(namespace, ownerKind, ownerName))
 	return c.queryRangeByContainer(ctx, expr, window, step)
 }
 
 // QueryMemoryRangeByContainer returns per-container memory working set time-series (bytes)
 // over the specified window with the given step resolution.
 func (c *Client) QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
-	expr := fmt.Sprintf(
-		`avg by (container) (k8s_sustain:container_memory_by_workload:bytes{namespace=%q,owner_kind=%q,owner_name=%q})`,
-		namespace, ownerKind, ownerName,
-	)
+	expr := avgByContainer(MetricContainerMemoryByWorkloadBytes + workloadSelector(namespace, ownerKind, ownerName))
 	return c.queryRangeByContainer(ctx, expr, window, step)
 }
 
@@ -182,30 +245,21 @@ func (c *Client) QueryMemoryLimitRangeByContainer(ctx context.Context, namespace
 // queryMaxByContainerForWorkload runs `max by (container) (<rule>{workload labels})`
 // against a recording rule and returns the per-container time-series.
 func (c *Client) queryMaxByContainerForWorkload(ctx context.Context, ruleName, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
-	expr := fmt.Sprintf(
-		`max by (container) (%s{namespace=%q,owner_kind=%q,owner_name=%q})`,
-		ruleName, namespace, ownerKind, ownerName,
-	)
+	expr := maxByContainer(ruleName + workloadSelector(namespace, ownerKind, ownerName))
 	return c.queryRangeByContainer(ctx, expr, window, step)
 }
 
 // QueryCPURecommendationRangeByContainer returns per-container sliding-window CPU recommendation
 // time-series (cores) — at each step, the quantile is computed over the trailing window.
 func (c *Client) QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (ContainerTimeSeries, error) {
-	expr := fmt.Sprintf(
-		`avg by (container) (quantile_over_time(%.2f, k8s_sustain:container_cpu_usage_by_workload:rate1m{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
-		quantile, namespace, ownerKind, ownerName, recWindow,
-	)
+	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerCPUUsageByWorkloadRate1m, workloadSelector(namespace, ownerKind, ownerName), recWindow))
 	return c.queryRangeByContainer(ctx, expr, timeRange, step)
 }
 
 // QueryMemoryRecommendationRangeByContainer returns per-container sliding-window memory recommendation
 // time-series (bytes) — at each step, the quantile is computed over the trailing window.
 func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (ContainerTimeSeries, error) {
-	expr := fmt.Sprintf(
-		`avg by (container) (quantile_over_time(%.2f, k8s_sustain:container_memory_by_workload:bytes{namespace=%q,owner_kind=%q,owner_name=%q}[%s:1m]))`,
-		quantile, namespace, ownerKind, ownerName, recWindow,
-	)
+	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerMemoryByWorkloadBytes, workloadSelector(namespace, ownerKind, ownerName), recWindow))
 	return c.queryRangeByContainer(ctx, expr, timeRange, step)
 }
 
@@ -220,85 +274,143 @@ type OOMSignal struct {
 	OOMLimitBytes ContainerValues
 }
 
+// recordOnce records at most one breaker failure across all probes of a single
+// QueryWorkloadOOMSignal call. The shared counted flag is flipped with a
+// compare-and-swap so that whichever caller (an in-goroutine genuine error or
+// the post-Wait deadline/cancel inspection) gets there first counts, and every
+// later caller is a no-op. This is what makes the at-most-one-per-call contract
+// hold in every interleaving.
+func (c *Client) recordOnce(counted *atomic.Bool) {
+	if counted.CompareAndSwap(false, true) {
+		c.breaker.failure()
+	}
+}
+
 // QueryWorkloadOOMSignal returns the recent OOM count (24h) and the peak
 // per-container memory working-set bytes observed alongside it. Used as a floor
 // signal: if a workload OOM'd, never recommend memory below max(peak, current).
+//
+// The three probes run concurrently under a shared per-call timeout, so several
+// can error at once. To keep the circuit breaker honest this method records AT
+// MOST ONE breaker failure per call, in every interleaving:
+//   - Genuine independent probe error (group context not yet cancelled):
+//     counted once, in the goroutine that observed it.
+//   - Shared queryTimeout deadline: counted once (a real Prometheus failure).
+//   - Parent context cancellation (context.Canceled cause): counted once, for
+//     parity with the old sequential code where the first failing query counted.
+//   - Collateral abort from an OUTER errgroup sibling failing (this method runs
+//     inside errgroups in recommender/build.go and dashboard/recommendations.go):
+//     counted ZERO times. The outer cancellation cause propagates through the
+//     WithTimeout child as a NON-context error, so it is attributed to the outer
+//     sibling, not to Prometheus.
+//
+// The single count is enforced by a per-call atomic flag shared by the probe
+// goroutines and the post-Wait inspection (see recordOnce). Each goroutine only
+// counts a genuine independent error — one observed while the group context is
+// still live (gctx.Err() == nil). Every cancellation-driven abort (shared
+// deadline, parent cancel, outer-sibling collateral) is left to the post-Wait
+// inspection of context.Cause on the WithTimeout child, which counts only the
+// context sentinels and ignores the non-context outer-sibling cause.
 func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKind, ownerName string) (OOMSignal, error) {
 	if !c.breaker.allow() {
 		return OOMSignal{}, ErrCircuitOpen
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
+	// Flipped once when any failure is attributed to this call; shared by the
+	// probe goroutines and the post-Wait inspection below.
+	var counted atomic.Bool
 
-	oomExpr := fmt.Sprintf(
-		`sum(k8s_sustain:workload_oom_24h{namespace=%q,owner_kind=%q,owner_name=%q})`,
-		namespace, ownerKind, ownerName,
-	)
-	oomRes, warnings, err := c.api.Query(ctx, oomExpr, time.Now())
-	if err != nil {
-		c.breaker.failure()
-		return OOMSignal{}, fmt.Errorf("prometheus oom probe %q: %w", oomExpr, err)
-	}
-	c.breaker.success()
-	logWarnings(ctx, oomExpr, warnings)
-	var oomCount float64
-	if vec, ok := oomRes.(model.Vector); ok && len(vec) > 0 {
-		oomCount = float64(vec[0].Value)
-	}
+	// Single evaluation timestamp so all three probes share a consistent
+	// snapshot of the Prometheus TSDB.
+	now := time.Now()
 
+	selector := workloadSelector(namespace, ownerKind, ownerName)
+	oomExpr := fmt.Sprintf("sum(%s%s)", MetricWorkloadOOM24h, selector)
 	// Use the dedicated peak rule (kernel high-water + OOM-scoped limit fallback).
 	// Working-set sampled at scrape interval misses sub-second spikes that
 	// trigger the kill — `container_memory_max_usage_bytes` (cgroup v1) and
 	// `container_memory_peak_working_set_bytes` (cgroup v2) survive across scrape gaps.
-	//
-	// No second breaker.allow() check here: the first query just succeeded, the
-	// shared 30s context still bounds runtime, and a transient race that flips
-	// the breaker between the two calls would silently drop peak data — better
-	// to let the second query attempt and fail fast through the normal path.
-	peakExpr := fmt.Sprintf(
-		`max by (container) (k8s_sustain:container_peak_memory_24h:bytes{namespace=%q,owner_kind=%q,owner_name=%q})`,
-		namespace, ownerKind, ownerName,
-	)
-	peakRes, warnings, err := c.api.Query(ctx, peakExpr, time.Now())
-	if err != nil {
-		c.breaker.failure()
-		return OOMSignal{OOMCount: oomCount}, fmt.Errorf("prometheus peak probe %q: %w", peakExpr, err)
-	}
-	c.breaker.success()
-	logWarnings(ctx, peakExpr, warnings)
-	peaks := ContainerValues{}
-	if vec, ok := peakRes.(model.Vector); ok {
-		for _, s := range vec {
-			name := string(s.Metric["container"])
-			if name != "" {
-				peaks[name] = float64(s.Value)
-			}
-		}
-	}
+	peakExpr := maxByContainer(MetricContainerPeakMemory24hBytes + selector)
+	// OOM-time memory limit. Independent rule: failures here are non-fatal in the
+	// sense that bumping just won't fire, but the existing peak floor still works.
+	limitExpr := maxByContainer(MetricContainerOOMLimit24hBytes + selector)
 
-	// OOM-time memory limit. Independent rule, queried after the peak so
-	// even if this one fails we still return peak + count. Failures here
-	// are non-fatal: bumping just won't fire, but the existing peak floor
-	// still works.
-	limitExpr := fmt.Sprintf(
-		`max by (container) (k8s_sustain:container_oom_limit_24h:bytes{namespace=%q,owner_kind=%q,owner_name=%q})`,
-		namespace, ownerKind, ownerName,
+	// The three probes are independent and share the single breaker.allow() gate
+	// above plus the shared timeout context, so run them concurrently. Each
+	// goroutine writes only its own result variable; results are combined after
+	// Wait(). Each query keeps the same per-query breaker.success()/failure()
+	// and warning-logging semantics as the original sequential code.
+	var (
+		oomCount float64
+		peaks    = ContainerValues{}
+		limits   = ContainerValues{}
 	)
-	limitRes, warnings, err := c.api.Query(ctx, limitExpr, time.Now())
-	if err != nil {
-		c.breaker.failure()
-		return OOMSignal{OOMCount: oomCount, PeakMemoryBytes: peaks}, fmt.Errorf("prometheus oom-limit probe %q: %w", limitExpr, err)
-	}
-	c.breaker.success()
-	logWarnings(ctx, limitExpr, warnings)
-	limits := ContainerValues{}
-	if vec, ok := limitRes.(model.Vector); ok {
-		for _, s := range vec {
-			name := string(s.Metric["container"])
-			if name != "" {
-				limits[name] = float64(s.Value)
-			}
+	g, gctx := errgroup.WithContext(ctx)
+	// recordProbeError counts a genuine independent probe error exactly once.
+	// A failure observed while the group context is still live (gctx.Err() ==
+	// nil) is a real, independent Prometheus error and is counted here. Any
+	// cancellation-driven abort (shared deadline, parent cancel, or an
+	// outer-sibling collateral cancel) leaves gctx non-nil and is deferred to
+	// the post-Wait inspection, which knows how to distinguish them.
+	recordProbeError := func() {
+		if gctx.Err() == nil {
+			c.recordOnce(&counted)
 		}
+	}
+	g.Go(func() error {
+		oomRes, warnings, err := c.api.Query(gctx, oomExpr, now)
+		if err != nil {
+			recordProbeError()
+			return fmt.Errorf("prometheus oom probe %q: %w", oomExpr, err)
+		}
+		c.breaker.success()
+		logWarnings(gctx, oomExpr, warnings)
+		if vec, ok := oomRes.(model.Vector); ok && len(vec) > 0 {
+			oomCount = float64(vec[0].Value)
+		}
+		return nil
+	})
+	g.Go(func() error {
+		peakRes, warnings, err := c.api.Query(gctx, peakExpr, now)
+		if err != nil {
+			recordProbeError()
+			return fmt.Errorf("prometheus peak probe %q: %w", peakExpr, err)
+		}
+		c.breaker.success()
+		logWarnings(gctx, peakExpr, warnings)
+		if vec, ok := peakRes.(model.Vector); ok {
+			peaks = vectorToContainerValues(vec)
+		}
+		return nil
+	})
+	g.Go(func() error {
+		limitRes, warnings, err := c.api.Query(gctx, limitExpr, now)
+		if err != nil {
+			recordProbeError()
+			return fmt.Errorf("prometheus oom-limit probe %q: %w", limitExpr, err)
+		}
+		c.breaker.success()
+		logWarnings(gctx, limitExpr, warnings)
+		if vec, ok := limitRes.(model.Vector); ok {
+			limits = vectorToContainerValues(vec)
+		}
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		// A cancellation-driven abort (shared deadline, parent cancel, or an
+		// outer-sibling collateral cancel) is not counted in-goroutine; settle
+		// it here from the WithTimeout child's cause. A context sentinel
+		// (DeadlineExceeded/Canceled) is a real failure attributable to this
+		// call and counts once; a non-context cause is the outer sibling's
+		// failure (propagated through this child) and counts zero. recordOnce is
+		// CAS-guarded, so if a genuine probe error already counted, this is a
+		// no-op.
+		if cause := context.Cause(ctx); errors.Is(cause, context.DeadlineExceeded) || errors.Is(cause, context.Canceled) {
+			c.recordOnce(&counted)
+		}
+		return OOMSignal{}, err
 	}
 	return OOMSignal{OOMCount: oomCount, PeakMemoryBytes: peaks, OOMLimitBytes: limits}, nil
 }
@@ -357,35 +469,32 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		       kube_pod_container_status_last_terminated_reason{namespace=%q, reason="OOMKilled", container!="", container!="POD"} == 1
 		     )
 		   * on(namespace, pod) group_left(owner_kind, owner_name)
-		     k8s_sustain:pod_workload{namespace=%q, owner_kind=%q, owner_name=%q}
+		     %s{namespace=%q, owner_kind=%q, owner_name=%q}
 		 )`,
 		namespace, lookbackExpr,
 		namespace,
-		namespace, ownerKind, ownerName,
+		MetricPodWorkload, namespace, ownerKind, ownerName,
 	)
 
 	if !c.breaker.allow() {
 		// Non-fatal: skip OOM lookup while breaker is open.
 		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
-	defer cancel()
 
 	end := time.Now()
 	start := end.Add(-time.Duration(windowDur))
 
-	result, warnings, err := c.api.QueryRange(ctx, expr, prometheusv1.Range{
+	result, err := c.runRange(ctx, expr, prometheusv1.Range{
 		Start: start,
 		End:   end,
 		Step:  time.Duration(stepDur),
-	})
+	}, c.queryTimeout)
 	if err != nil {
-		// Non-fatal: OOM data may not be available (missing kube-state-metrics etc.)
-		c.breaker.failure()
-		return nil, nil
+		// Non-fatal: OOM data may not be available (missing kube-state-metrics etc.),
+		// so the dashboard still renders. runRange already recorded the breaker
+		// failure; swallowing the error here is the documented contract.
+		return nil, nil //nolint:nilerr // intentional non-fatal swallow, see comment above
 	}
-	c.breaker.success()
-	logWarnings(ctx, expr, warnings)
 
 	matrix, ok := result.(model.Matrix)
 	if !ok {
@@ -430,8 +539,6 @@ func (c *Client) queryRangeByContainer(ctx context.Context, expr, window, step s
 	if !c.breaker.allow() {
 		return nil, ErrCircuitOpen
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
-	defer cancel()
 
 	windowDur, err := model.ParseDuration(window)
 	if err != nil {
@@ -445,17 +552,14 @@ func (c *Client) queryRangeByContainer(ctx context.Context, expr, window, step s
 	end := time.Now()
 	start := end.Add(-time.Duration(windowDur))
 
-	result, warnings, err := c.api.QueryRange(ctx, expr, prometheusv1.Range{
+	result, err := c.runRange(ctx, expr, prometheusv1.Range{
 		Start: start,
 		End:   end,
 		Step:  time.Duration(stepDur),
-	})
+	}, c.queryTimeout)
 	if err != nil {
-		c.breaker.failure()
 		return nil, fmt.Errorf("prometheus range query %q: %w", expr, err)
 	}
-	c.breaker.success()
-	logWarnings(ctx, expr, warnings)
 
 	matrix, ok := result.(model.Matrix)
 	if !ok {
@@ -487,49 +591,29 @@ const defaultQueryTimeout = 30 * time.Second
 
 // Ping checks that the Prometheus server is reachable by executing a trivial query.
 func (c *Client) Ping(ctx context.Context) error {
-	if !c.breaker.allow() {
-		return ErrCircuitOpen
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_, warnings, err := c.api.Query(ctx, "up", time.Now())
-	if err != nil {
-		c.breaker.failure()
+	if _, err := c.execInstant(ctx, "up", time.Now(), 5*time.Second); err != nil {
+		if errors.Is(err, ErrCircuitOpen) {
+			return err
+		}
 		return fmt.Errorf("prometheus unreachable: %w", err)
 	}
-	c.breaker.success()
-	logWarnings(ctx, "up", warnings)
 	return nil
 }
 
 func (c *Client) queryByContainer(ctx context.Context, expr string) (ContainerValues, error) {
-	if !c.breaker.allow() {
-		return nil, ErrCircuitOpen
-	}
-	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
-	defer cancel()
-
-	result, warnings, err := c.api.Query(ctx, expr, time.Now())
+	result, err := c.execInstant(ctx, expr, time.Now(), c.queryTimeout)
 	if err != nil {
-		c.breaker.failure()
+		if errors.Is(err, ErrCircuitOpen) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("prometheus query %q: %w", expr, err)
 	}
-	c.breaker.success()
-	logWarnings(ctx, expr, warnings)
 
 	vector, ok := result.(model.Vector)
 	if !ok {
 		return nil, fmt.Errorf("unexpected prometheus result type %T", result)
 	}
-
-	values := make(ContainerValues, len(vector))
-	for _, sample := range vector {
-		name := string(sample.Metric["container"])
-		if name != "" {
-			values[name] = float64(sample.Value)
-		}
-	}
-	return values, nil
+	return vectorToContainerValues(vector), nil
 }
 
 // dashboardQueryTimeout bounds dashboard-side reads of recording rules.
@@ -538,18 +622,13 @@ const dashboardQueryTimeout = 10 * time.Second
 // QueryInstant runs a single instant query and returns the scalar/first-vector
 // value. Returns 0 with no error if the query produces no samples.
 func (c *Client) QueryInstant(ctx context.Context, expr string) (float64, error) {
-	if !c.breaker.allow() {
-		return 0, ErrCircuitOpen
-	}
-	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
-	defer cancel()
-	v, warnings, err := c.api.Query(ctx, expr, time.Now())
+	v, err := c.execInstant(ctx, expr, time.Now(), dashboardQueryTimeout)
 	if err != nil {
-		c.breaker.failure()
+		if errors.Is(err, ErrCircuitOpen) {
+			return 0, err
+		}
 		return 0, fmt.Errorf("instant query %q: %w", expr, err)
 	}
-	c.breaker.success()
-	logWarnings(ctx, expr, warnings)
 	switch typed := v.(type) {
 	case model.Vector:
 		if len(typed) == 0 {
@@ -569,8 +648,6 @@ func (c *Client) QueryRange(ctx context.Context, expr, window, step string) ([]T
 	if !c.breaker.allow() {
 		return nil, ErrCircuitOpen
 	}
-	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
-	defer cancel()
 	end := time.Now()
 	dur, err := model.ParseDuration(window)
 	if err != nil {
@@ -581,13 +658,10 @@ func (c *Client) QueryRange(ctx context.Context, expr, window, step string) ([]T
 		return nil, fmt.Errorf("parse step %q: %w", step, err)
 	}
 	r := prometheusv1.Range{Start: end.Add(-time.Duration(dur)), End: end, Step: time.Duration(stp)}
-	v, warnings, err := c.api.QueryRange(ctx, expr, r)
+	v, err := c.runRange(ctx, expr, r, dashboardQueryTimeout)
 	if err != nil {
-		c.breaker.failure()
 		return nil, fmt.Errorf("range query %q: %w", expr, err)
 	}
-	c.breaker.success()
-	logWarnings(ctx, expr, warnings)
 	matrix, ok := v.(model.Matrix)
 	if !ok || len(matrix) == 0 {
 		return nil, nil
@@ -602,18 +676,13 @@ func (c *Client) QueryRange(ctx context.Context, expr, window, step string) ([]T
 // QueryByLabel runs an instant query and returns a map of label-value -> sample value.
 // Used for per-policy and per-workload aggregates.
 func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error) {
-	if !c.breaker.allow() {
-		return nil, ErrCircuitOpen
-	}
-	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
-	defer cancel()
-	v, warnings, err := c.api.Query(ctx, expr, time.Now())
+	v, err := c.execInstant(ctx, expr, time.Now(), dashboardQueryTimeout)
 	if err != nil {
-		c.breaker.failure()
+		if errors.Is(err, ErrCircuitOpen) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("by-label query %q: %w", expr, err)
 	}
-	c.breaker.success()
-	logWarnings(ctx, expr, warnings)
 	vec, ok := v.(model.Vector)
 	if !ok {
 		return map[string]float64{}, nil
@@ -633,18 +702,13 @@ func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[stri
 // labels joined with '|'. Samples missing any of the requested labels are
 // skipped. Useful when several labels jointly identify a series.
 func (c *Client) QueryByLabels(ctx context.Context, query string, labels ...string) (map[string]float64, error) {
-	if !c.breaker.allow() {
-		return nil, ErrCircuitOpen
-	}
-	ctx, cancel := context.WithTimeout(ctx, dashboardQueryTimeout)
-	defer cancel()
-	v, warnings, err := c.api.Query(ctx, query, time.Now())
+	v, err := c.execInstant(ctx, query, time.Now(), dashboardQueryTimeout)
 	if err != nil {
-		c.breaker.failure()
+		if errors.Is(err, ErrCircuitOpen) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("by-labels query %q: %w", query, err)
 	}
-	c.breaker.success()
-	logWarnings(ctx, query, warnings)
 	vec, ok := v.(model.Vector)
 	if !ok {
 		return map[string]float64{}, nil

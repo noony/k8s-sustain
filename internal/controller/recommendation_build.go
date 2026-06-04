@@ -53,49 +53,36 @@ func (r *PolicyReconciler) buildRecommendations(
 	}
 
 	coordCfg := policy.Spec.RightSizing.AutoscalerCoordination
-	recs := make(map[string]workload.ContainerRecommendation)
-	for _, c := range containers {
-		cpuPerPod, hasCPU := inputs.CPUPerPod[c.Name]
-		memPerPod, hasMem := inputs.MemPerPod[c.Name]
-		_, hasPeak := inputs.OOM.PeakMemoryBytes[c.Name]
-		liveRec := liveOOMs[c.Name]
-
-		// Construct the per-container OOM context: prometheus signal + any
-		// live OOM observation, with a fallback to the cache-captured cgroup
-		// limit when Prometheus hasn't yet surfaced it.
-		oom := recommender.NewOOMSignal(recentOOM, inputs.OOM.PeakMemoryBytes[c.Name], inputs.OOM.OOMLimitBytes[c.Name])
-		if liveRec != nil {
-			oom.LiveEventAt = liveRec.TerminatedAt
-			if oom.OOMTimeLimitBytes == 0 && liveRec.OOMLimitBytes > 0 {
-				oom.OOMTimeLimitBytes = float64(liveRec.OOMLimitBytes)
-			}
-		}
-
-		res := recommender.ComputeContainerRec(recommender.ContainerInputs{
-			Container:   c,
-			CPUPerPod:   cpuPerPod,
-			HasCPU:      hasCPU,
-			MemPerPod:   memPerPod,
-			HasMemUsage: hasMem,
-			OOM:         oom,
-			HasOOMPeak:  hasPeak,
-			AutoInfo:    autoInfo,
-			RsCfg:       rsCfg,
-			CoordCfg:    coordCfg,
+	// liveRec is the live-OOM record for the container currently being built.
+	// BuildContainerRecs invokes EnrichOOM then OnResult for the same container
+	// in sequence (no concurrency), so EnrichOOM looks the record up once and
+	// OnResult reuses it — avoiding a second map lookup per container.
+	var liveRec *oomwatch.OOMRecord
+	recs := recommender.BuildContainerRecs(containers, inputs, recentOOM, autoInfo, rsCfg, coordCfg,
+		recommender.BuildContainerRecsOptions{
+			// Construct the per-container OOM context: prometheus signal + any
+			// live OOM observation, with a fallback to the cache-captured cgroup
+			// limit when Prometheus hasn't yet surfaced it.
+			EnrichOOM: func(name string, oom recommender.OOMSignal) recommender.OOMSignal {
+				liveRec = liveOOMs[name]
+				if liveRec != nil {
+					oom.LiveEventAt = liveRec.TerminatedAt
+					if oom.OOMTimeLimitBytes == 0 && liveRec.OOMLimitBytes > 0 {
+						oom.OOMTimeLimitBytes = float64(liveRec.OOMLimitBytes)
+					}
+				}
+				return oom
+			},
+			OnResult: func(name string, res recommender.ContainerRecResult) {
+				if res.MemFloorApplied {
+					oomFloorApplied.WithLabelValues(ns, ownerKind, ownerName, name).Inc()
+					if liveRec != nil && !liveRec.TerminatedAt.IsZero() {
+						EmitOOMReactionLatency(ns, ownerKind, ownerName, time.Since(liveRec.TerminatedAt).Seconds())
+					}
+				}
+				emitCoordinationFactors(ns, ownerKind, ownerName, coordCfg, autoInfo, res.Base, res.Rec)
+			},
 		})
-		if !res.HasData {
-			continue
-		}
-		if res.MemFloorApplied {
-			oomFloorApplied.WithLabelValues(ns, ownerKind, ownerName, c.Name).Inc()
-			if liveRec != nil && !liveRec.TerminatedAt.IsZero() {
-				EmitOOMReactionLatency(ns, ownerKind, ownerName, time.Since(liveRec.TerminatedAt).Seconds())
-			}
-		}
-		emitCoordinationFactors(ns, ownerKind, ownerName, coordCfg, autoInfo, res.Base, res.Rec)
-
-		recs[c.Name] = res.Rec
-	}
 	return recs, nil
 }
 

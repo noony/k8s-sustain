@@ -302,3 +302,89 @@ func TestHandleSummaryDoesNotCacheOnPromError(t *testing.T) {
 		t.Fatalf("cache was poisoned despite prom error")
 	}
 }
+
+// On a brief Prometheus blip (partial failure, last-good still recent) the
+// handler serves the most recent complete snapshot rather than the partial one.
+func TestHandleSummaryServesRecentLastGoodOnPartialError(t *testing.T) {
+	fp := &fakePromClient{
+		instant: map[string]float64{"k8s_sustain:cluster_cpu_savings_cores": 3.2},
+	}
+	now := time.Now()
+	cache := NewCache(8, 60*time.Second)
+	cache.now = func() time.Time { return now }
+	srv := &Server{
+		K8sClient:    fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		PromClient:   fp,
+		Logger:       testr.New(t),
+		summaryCache: cache,
+	}
+	handler := srv.Handler()
+
+	// Prime the cache with a complete snapshot (CPU=3.2).
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("prime: expected 200, got %d", rec1.Code)
+	}
+
+	// TTL lapses but we are still within maxSummaryLastGoodAge; a partial
+	// failure should serve the stale-but-recent last-good value (3.2).
+	now = now.Add(5 * time.Minute)
+	fp.instant["k8s_sustain:cluster_cpu_savings_cores"] = 99.9
+	fp.instantErr = map[string]error{
+		"k8s_sustain:cluster_memory_savings_bytes": errors.New("prom unreachable"),
+	}
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("blip: expected 200, got %d", rec2.Code)
+	}
+	var got summaryResponseV2
+	decodeEnvelopeData(t, rec2.Body, &got)
+	if got.KPI.CPUSavedCores != 3.2 {
+		t.Errorf("expected last-good 3.2, got %v", got.KPI.CPUSavedCores)
+	}
+}
+
+// During a sustained outage longer than maxSummaryLastGoodAge the handler stops
+// serving the stale snapshot and falls back to the fresh-but-partial result.
+func TestHandleSummaryServesFreshPartialWhenLastGoodTooOld(t *testing.T) {
+	fp := &fakePromClient{
+		instant: map[string]float64{"k8s_sustain:cluster_cpu_savings_cores": 3.2},
+	}
+	now := time.Now()
+	cache := NewCache(8, 60*time.Second)
+	cache.now = func() time.Time { return now }
+	srv := &Server{
+		K8sClient:    fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		PromClient:   fp,
+		Logger:       testr.New(t),
+		summaryCache: cache,
+	}
+	handler := srv.Handler()
+
+	// Prime the cache with a complete snapshot (CPU=3.2).
+	rec1 := httptest.NewRecorder()
+	handler.ServeHTTP(rec1, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("prime: expected 200, got %d", rec1.Code)
+	}
+
+	// Advance past maxSummaryLastGoodAge and induce a partial failure. The
+	// stale last-good is now too old, so the fresh partial value (99.9) wins.
+	now = now.Add(maxSummaryLastGoodAge + time.Minute)
+	fp.instant["k8s_sustain:cluster_cpu_savings_cores"] = 99.9
+	fp.instantErr = map[string]error{
+		"k8s_sustain:cluster_memory_savings_bytes": errors.New("prom unreachable"),
+	}
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("outage: expected 200, got %d", rec2.Code)
+	}
+	var got summaryResponseV2
+	decodeEnvelopeData(t, rec2.Body, &got)
+	if got.KPI.CPUSavedCores != 99.9 {
+		t.Errorf("expected fresh-but-partial 99.9, got %v", got.KPI.CPUSavedCores)
+	}
+}

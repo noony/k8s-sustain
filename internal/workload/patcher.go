@@ -168,19 +168,51 @@ func (p *Patcher) ResizePodsInPlace(ctx context.Context, pods []*corev1.Pod, rec
 	return errors.Join(errs...)
 }
 
+// unapplyStrategy encodes what to do when an in-place resize can't be applied
+// (the node reports the resize Infeasible, or the API server rejects it because
+// the InPlacePodVerticalScaling feature gate is off). It returns (evicted, err)
+// in the same shape as patchPodInPlace: evicted=true means the pod was evicted
+// and the caller must run the post-eviction throttle/wait.
+//
+// infeasibleLog and unappliedLog are the call-site-specific log lines emitted
+// before the strategy runs, preserving each public function's exact logging.
+type unapplyStrategy struct {
+	infeasibleLog string
+	unappliedLog  string
+	onUnapplied   func(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error)
+}
+
 // resizePodInPlaceNoEvict mirrors patchPodInPlace but never evicts. Infeasible
 // resizes and feature-gate rejections are logged and skipped — the next pod
 // creation will pick up the new resources via the webhook.
 func (p *Patcher) resizePodInPlaceNoEvict(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) error {
+	_, err := p.resizePodInPlaceWith(ctx, pod, recs, unapplyStrategy{
+		infeasibleLog: "in-place resize infeasible for short-lived pod, skipping (next run will pick up new resources)",
+		unappliedLog:  "skipping short-lived pod (next run via webhook)",
+		// New resources will land at next pod creation via the webhook —
+		// don't evict short-lived pods.
+		onUnapplied: func(context.Context, *corev1.Pod, map[string]ContainerRecommendation) (bool, error) {
+			return false, nil
+		},
+	})
+	return err
+}
+
+// resizePodInPlaceWith holds the in-place resize body shared by patchPodInPlace
+// and resizePodInPlaceNoEvict. The two diverge only in what happens when a
+// resize can't be applied, captured by the strategy: the Resize-status switch,
+// applyRecsFiltered, the no-change short-circuit, the regular-container submit,
+// and the sidecar handling are all identical. Returns (evicted, err).
+func (p *Patcher) resizePodInPlaceWith(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, strat unapplyStrategy) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
 	switch pod.Status.Resize {
 	case corev1.PodResizeStatusInfeasible:
-		logger.Info("in-place resize infeasible for short-lived pod, skipping (next run will pick up new resources)")
-		return nil
+		logger.Info(strat.infeasibleLog)
+		return strat.onUnapplied(ctx, pod, recs)
 	case corev1.PodResizeStatusDeferred:
 		logger.Info("in-place resize deferred by kubelet, will apply when conditions allow")
-		return nil
+		return false, nil
 	}
 
 	base := pod.DeepCopy()
@@ -188,27 +220,32 @@ func (p *Patcher) resizePodInPlaceNoEvict(ctx context.Context, pod *corev1.Pod, 
 	initContainers, initChanged := applyRecsFiltered(pod.Spec.InitContainers, recs, isRestartableInitContainer)
 	if !regChanged && !initChanged {
 		logger.V(1).Info("pod already at target resources, no in-place patch needed")
-		return nil
+		return false, nil
 	}
 
+	// Patch regular containers and sidecar init containers in two separate
+	// /resize calls. Sidecar in-place resize requires k8s 1.33+ with the right
+	// feature gates and may be rejected on older clusters; isolating it from
+	// the regular-container patch ensures a sidecar rejection cannot block the
+	// regular containers' resize.
 	if regChanged {
 		pod.Spec.Containers = containers
 		applied, err := p.submitInPlaceResize(ctx, pod, base)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !applied {
-			// Feature gate off; pod reverted. New resources will land at next
-			// pod creation via the webhook — don't evict short-lived pods.
-			logger.Info("skipping short-lived pod (next run via webhook)")
-			return nil
+			// Feature gate off; pod reverted. The strategy decides whether to
+			// evict (so the webhook re-injects on the replacement) or skip.
+			logger.Info(strat.unappliedLog)
+			return strat.onUnapplied(ctx, pod, recs)
 		}
 	}
 
 	if initChanged {
 		p.applySidecarResize(ctx, pod, base, initContainers)
 	}
-	return nil
+	return false, nil
 }
 
 // recyclePods drives running pods toward the updated resource spec.
@@ -335,50 +372,15 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 // and the caller must run the same throttle/wait the pure-eviction branch
 // uses, so the loop doesn't take down the whole workload at once.
 func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
-	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
-
-	switch pod.Status.Resize {
-	case corev1.PodResizeStatusInfeasible:
-		logger.Info("in-place resize infeasible, falling back to eviction")
-		return p.evictPod(ctx, pod, recs)
-	case corev1.PodResizeStatusDeferred:
-		logger.Info("in-place resize deferred by kubelet, will apply when conditions allow")
-		return false, nil
-	}
-
-	base := pod.DeepCopy()
-	containers, regChanged := applyRecsFiltered(pod.Spec.Containers, recs, nil)
-	initContainers, initChanged := applyRecsFiltered(pod.Spec.InitContainers, recs, isRestartableInitContainer)
-	if !regChanged && !initChanged {
-		logger.V(1).Info("pod already at target resources, no in-place patch needed")
-		return false, nil
-	}
-
-	// Patch regular containers and sidecar init containers in two separate
-	// /resize calls. Sidecar in-place resize requires k8s 1.33+ with the right
-	// feature gates and may be rejected on older clusters; isolating it from
-	// the regular-container patch ensures a sidecar rejection cannot block the
-	// regular containers' resize.
-	if regChanged {
-		pod.Spec.Containers = containers
-		applied, err := p.submitInPlaceResize(ctx, pod, base)
-		if err != nil {
-			return false, err
-		}
-		if !applied {
-			// Feature gate off; pod reverted. Fall back to eviction so the
-			// webhook can re-inject the new requests on the replacement.
-			// Skip the sidecar resize attempt — the replacement pod is on
-			// its way.
-			logger.Info("falling back to eviction")
-			return p.evictPod(ctx, pod, recs)
-		}
-	}
-
-	if initChanged {
-		p.applySidecarResize(ctx, pod, base, initContainers)
-	}
-	return false, nil
+	return p.resizePodInPlaceWith(ctx, pod, recs, unapplyStrategy{
+		infeasibleLog: "in-place resize infeasible, falling back to eviction",
+		unappliedLog:  "falling back to eviction",
+		// Feature gate off / node can't satisfy the resize: fall back to
+		// eviction so the webhook re-injects the new requests on the
+		// replacement. The sidecar resize is skipped — the replacement pod
+		// is on its way.
+		onUnapplied: p.evictPod,
+	})
 }
 
 // submitInPlaceResize submits an in-place /resize patch to bring the pod's
@@ -710,34 +712,11 @@ func anyContainerStale(cs []corev1.Container, recs map[string]ContainerRecommend
 		if !ok {
 			continue
 		}
-		if rec.CPURequest != nil && c.Resources.Requests.Cpu().Cmp(*rec.CPURequest) != 0 {
-			return true
-		}
-		if rec.MemoryRequest != nil && c.Resources.Requests.Memory().Cmp(*rec.MemoryRequest) != 0 {
-			return true
-		}
-		if limitStale(c.Resources.Limits.Cpu(), rec.CPULimit, rec.RemoveCPULimit) {
-			return true
-		}
-		if limitStale(c.Resources.Limits.Memory(), rec.MemoryLimit, rec.RemoveMemoryLimit) {
+		if !ContainerMatches(c.Resources, rec) {
 			return true
 		}
 	}
 	return false
-}
-
-// limitStale reports whether a container's current limit differs from the
-// recommendation. A nil rec without remove=true means "leave it alone".
-// Resources.Limits.Cpu()/Memory() return a zero-valued Quantity (never nil)
-// when the limit is unset, which IsZero() detects.
-func limitStale(current *resource.Quantity, rec *resource.Quantity, remove bool) bool {
-	if remove {
-		return !current.IsZero()
-	}
-	if rec == nil {
-		return false
-	}
-	return current.Cmp(*rec) != 0
 }
 
 // isRestartableInitContainer reports whether an init container is a sidecar

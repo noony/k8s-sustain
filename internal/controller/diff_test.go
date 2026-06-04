@@ -31,38 +31,6 @@ func TestQuantityEqual(t *testing.T) {
 	}
 }
 
-func TestRequestEqual(t *testing.T) {
-	// nil rec means "leave alone" — treated as equal regardless of current.
-	if !requestEqual(nil, qty("123m")) {
-		t.Error("nil rec should be treated as unchanged")
-	}
-	if !requestEqual(qty("100m"), qty("100m")) {
-		t.Error("equal rec/current should be true")
-	}
-	if requestEqual(qty("100m"), qty("200m")) {
-		t.Error("different rec/current should be false")
-	}
-}
-
-func TestLimitEqual(t *testing.T) {
-	// remove=true, current zero → equal (already removed).
-	if !limitEqual(nil, true, qty("0")) {
-		t.Error("remove=true with zero current should be equal")
-	}
-	// remove=true, current nonzero → not equal (we still need to remove it).
-	if limitEqual(nil, true, qty("500m")) {
-		t.Error("remove=true with nonzero current should be NOT equal")
-	}
-	// rec nil, remove false → leave alone, equal.
-	if !limitEqual(nil, false, qty("500m")) {
-		t.Error("nil rec without remove should be unchanged")
-	}
-	// rec set, matches current.
-	if !limitEqual(qty("500m"), false, qty("500m")) {
-		t.Error("matching rec should be equal")
-	}
-}
-
 // TestChangedContainers_DetectsRequestAndLimitDrift verifies that
 // changedContainers flags every container whose request or limit drifts from
 // the recommendation, ignoring containers without a recommendation entry.

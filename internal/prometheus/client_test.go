@@ -2,11 +2,14 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestQueryInstantReturnsScalarFromVector(t *testing.T) {
@@ -568,11 +571,16 @@ func TestQueryOOMKillEvents_HistoricalOOMEmits(t *testing.T) {
 }
 
 func TestQueryWorkloadOOMSignal_ReturnsCountAndPeak(t *testing.T) {
-	var queries []string
+	var (
+		queriesMu sync.Mutex
+		queries   []string
+	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		q := r.Form.Get("query")
+		queriesMu.Lock()
 		queries = append(queries, q)
+		queriesMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.Contains(q, "workload_oom_24h"):
@@ -624,6 +632,153 @@ func TestQueryWorkloadOOMSignal_NoOOMReturnsZeroCount(t *testing.T) {
 	}
 	if len(sig.PeakMemoryBytes) != 0 {
 		t.Errorf("expected empty peak map, got %v", sig.PeakMemoryBytes)
+	}
+}
+
+// TestQueryWorkloadOOMSignal_SingleFailureDoesNotMultiCountBreaker asserts that
+// one real Prometheus failure records exactly one breaker.failure(), even though
+// the errgroup cancels the sibling probes (which then return context.Canceled).
+// Before the fix, each cancelled sibling also called breaker.failure(), so a
+// single outage recorded up to 3 failures and tripped the circuit too fast.
+func TestQueryWorkloadOOMSignal_SingleFailureDoesNotMultiCountBreaker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		switch {
+		case strings.Contains(q, "workload_oom_24h"):
+			// The genuine, independent failure.
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"status":"error","errorType":"internal","error":"boom"}`))
+		default:
+			// Sibling probes: block until the errgroup cancels gctx, which
+			// cancels this request's context and yields context.Canceled in
+			// the client goroutine. Never succeed, so no success() reset races.
+			<-r.Context().Done()
+		}
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	// Make sure the breaker is enabled and counting (default may already be).
+	c.breaker = newBreaker(10, time.Minute)
+
+	_, err := c.QueryWorkloadOOMSignal(context.Background(), "ns", "Deployment", "web")
+	if err == nil {
+		t.Fatal("expected an error from the failing oom probe")
+	}
+
+	c.breaker.mu.Lock()
+	failures := c.breaker.failures
+	c.breaker.mu.Unlock()
+	if failures != 1 {
+		t.Fatalf("expected exactly 1 breaker failure for a single real outage, got %d", failures)
+	}
+}
+
+// breakerFailures reads the breaker's failure counter under its mutex.
+func breakerFailures(c *Client) int {
+	c.breaker.mu.Lock()
+	defer c.breaker.mu.Unlock()
+	return c.breaker.failures
+}
+
+// hangingOOMServer returns an httptest server whose handler blocks until its
+// request context is cancelled or the returned release channel is closed. The
+// caller MUST close release at test end so blocked handler goroutines unwind
+// and goleak stays happy.
+func hangingOOMServer(t *testing.T) (*httptest.Server, chan struct{}) {
+	t.Helper()
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	return server, release
+}
+
+// TestQueryWorkloadOOMSignal_SharedTimeoutCountsOnce asserts that when the
+// shared per-call queryTimeout deadline fires (a genuinely stalled Prometheus,
+// the common outage), QueryWorkloadOOMSignal records EXACTLY ONE breaker
+// failure — not one per in-flight probe. Before the fix, all three probes
+// observe context.DeadlineExceeded as the cause and each calls failure(), so a
+// single outage records 3 and trips the 5-failure breaker in ~2 reconciles.
+func TestQueryWorkloadOOMSignal_SharedTimeoutCountsOnce(t *testing.T) {
+	server, release := hangingOOMServer(t)
+	defer server.Close()
+	defer close(release)
+
+	c, _ := New(server.URL, WithQueryTimeout(50*time.Millisecond))
+	c.breaker = newBreaker(10, time.Minute)
+
+	_, err := c.QueryWorkloadOOMSignal(context.Background(), "ns", "Deployment", "web")
+	if err == nil {
+		t.Fatal("expected an error from the shared-timeout outage")
+	}
+	if got := breakerFailures(c); got != 1 {
+		t.Fatalf("expected exactly 1 breaker failure for a single shared-timeout outage, got %d", got)
+	}
+}
+
+// TestQueryWorkloadOOMSignal_ParentCancelCountsOnce asserts that cancelling the
+// parent context (context.Canceled cause) while Prometheus hangs records
+// EXACTLY ONE breaker failure — parity with the old sequential code, where only
+// the first failing query counted. Before the fix, all three probes observe
+// context.Canceled and each calls failure(), recording 3.
+func TestQueryWorkloadOOMSignal_ParentCancelCountsOnce(t *testing.T) {
+	server, release := hangingOOMServer(t)
+	defer server.Close()
+	defer close(release)
+
+	c, _ := New(server.URL)
+	c.breaker = newBreaker(10, time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+	}()
+	defer cancel()
+
+	_, err := c.QueryWorkloadOOMSignal(ctx, "ns", "Deployment", "web")
+	if err == nil {
+		t.Fatal("expected an error from the parent-context cancellation")
+	}
+	if got := breakerFailures(c); got != 1 {
+		t.Fatalf("expected exactly 1 breaker failure for a single parent cancellation, got %d", got)
+	}
+}
+
+// TestQueryWorkloadOOMSignal_OuterSiblingCancelCountsZero asserts that when an
+// OUTER errgroup sibling fails (QueryWorkloadOOMSignal is itself called inside
+// errgroups in build.go / recommendations.go), the collateral cancellation —
+// whose cause is a NON-context error propagated through the WithTimeout child —
+// records ZERO breaker failures. The outage belongs to the outer sibling, not
+// to Prometheus. This is a regression guard: it already passes today via the
+// sibling-cancel skip, and must keep passing.
+func TestQueryWorkloadOOMSignal_OuterSiblingCancelCountsZero(t *testing.T) {
+	server, release := hangingOOMServer(t)
+	defer server.Close()
+	defer close(release)
+
+	c, _ := New(server.URL)
+	c.breaker = newBreaker(10, time.Minute)
+
+	siblingErr := errors.New("outer errgroup sibling failed")
+	ctx, cancelCause := context.WithCancelCause(context.Background())
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancelCause(siblingErr)
+	}()
+	defer cancelCause(nil)
+
+	_, err := c.QueryWorkloadOOMSignal(ctx, "ns", "Deployment", "web")
+	if err == nil {
+		t.Fatal("expected an error from the outer-sibling cancellation")
+	}
+	if got := breakerFailures(c); got != 0 {
+		t.Fatalf("expected 0 breaker failures for outer-sibling collateral cancellation, got %d", got)
 	}
 }
 

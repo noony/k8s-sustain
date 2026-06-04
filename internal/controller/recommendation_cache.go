@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -138,6 +139,45 @@ func buildWLRStatus(recs map[string]workload.ContainerRecommendation, now metav1
 	return out
 }
 
+// deleteWLRsWhere lists WorkloadRecommendation objects with the given options
+// and deletes every item for which keep returns false. IsNotFound on delete is
+// tolerated (the object is counted as deleted). Each delete failure is logged
+// at V(1) via logger and the first such error is returned alongside the count
+// of successful deletions. A list failure is returned (wrapped) with a zero
+// count so callers can distinguish it from a partial delete failure.
+//
+// This is the shared core of the three WLR cleanup paths (per-cycle sweep,
+// per-policy delete, orphan reaper); each wraps it with its own list options,
+// keep predicate, error handling and aggregate logging.
+func (r *PolicyReconciler) deleteWLRsWhere(
+	ctx context.Context,
+	logger logr.Logger,
+	listOpts []client.ListOption,
+	keep func(*sustainv1alpha1.WorkloadRecommendation) bool,
+) (deleted int, listErr error, deleteErr error) {
+	var list sustainv1alpha1.WorkloadRecommendationList
+	if err := r.List(ctx, &list, listOpts...); err != nil {
+		return 0, err, nil
+	}
+
+	for i := range list.Items {
+		wlr := &list.Items[i]
+		if keep(wlr) {
+			continue
+		}
+		if err := r.Delete(ctx, wlr); err != nil && !apierrors.IsNotFound(err) {
+			logger.V(1).Info("failed to delete WorkloadRecommendation",
+				"name", wlr.Name, "namespace", wlr.Namespace, "policy", wlr.Spec.Policy, "err", err)
+			if deleteErr == nil {
+				deleteErr = err
+			}
+			continue
+		}
+		deleted++
+	}
+	return deleted, nil, deleteErr
+}
+
 // sweepWorkloadRecommendations deletes WorkloadRecommendation objects that
 // were created by this policy but whose target workload no longer appears in
 // the current target set. Called once per Reconcile after a successful pass.
@@ -153,29 +193,20 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 		wanted[t.Namespace+"/"+wlrName(t.Kind, t.Name)] = struct{}{}
 	}
 
-	var list sustainv1alpha1.WorkloadRecommendationList
-	if err := r.List(ctx, &list, client.MatchingLabels{wlrPolicyLabel: policyName}); err != nil {
-		logger.V(1).Info("failed to list WorkloadRecommendations for sweep", "err", err)
+	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger,
+		[]client.ListOption{client.MatchingLabels{wlrPolicyLabel: policyName}},
+		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
+			// Defensive: if the label is stale relative to spec.policy (e.g. on
+			// WLRs migrated mid-rename), keep filtering by spec.policy too.
+			if wlr.Spec.Policy != policyName {
+				return true
+			}
+			_, ok := wanted[wlr.Namespace+"/"+wlr.Name]
+			return ok
+		})
+	if listErr != nil {
+		logger.V(1).Info("failed to list WorkloadRecommendations for sweep", "err", listErr)
 		return
-	}
-
-	deleted := 0
-	for i := range list.Items {
-		wlr := &list.Items[i]
-		// Defensive: if the label is stale relative to spec.policy (e.g. on
-		// WLRs migrated mid-rename), keep filtering by spec.policy too.
-		if wlr.Spec.Policy != policyName {
-			continue
-		}
-		key := wlr.Namespace + "/" + wlr.Name
-		if _, ok := wanted[key]; ok {
-			continue
-		}
-		if err := r.Delete(ctx, wlr); err != nil && !apierrors.IsNotFound(err) {
-			logger.V(1).Info("failed to delete stale WorkloadRecommendation", "name", wlr.Name, "namespace", wlr.Namespace, "err", err)
-			continue
-		}
-		deleted++
 	}
 	if deleted > 0 {
 		logger.V(1).Info("swept stale WorkloadRecommendations", "deleted", deleted)
@@ -192,31 +223,19 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 func (r *PolicyReconciler) deleteAllRecommendationsForPolicy(ctx context.Context, policyName string) error {
 	logger := log.FromContext(ctx).WithValues("policy", policyName)
 
-	var list sustainv1alpha1.WorkloadRecommendationList
-	if err := r.List(ctx, &list, client.MatchingLabels{wlrPolicyLabel: policyName}); err != nil {
-		return fmt.Errorf("listing WorkloadRecommendations for policy delete: %w", err)
-	}
-
-	var firstErr error
-	deleted := 0
-	for i := range list.Items {
-		wlr := &list.Items[i]
-		// Defensive: belt-and-braces against label drift on legacy WLRs.
-		if wlr.Spec.Policy != policyName {
-			continue
-		}
-		if err := r.Delete(ctx, wlr); err != nil && !apierrors.IsNotFound(err) {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		deleted++
+	deleted, listErr, deleteErr := r.deleteWLRsWhere(ctx, logger,
+		[]client.ListOption{client.MatchingLabels{wlrPolicyLabel: policyName}},
+		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
+			// Defensive: belt-and-braces against label drift on legacy WLRs.
+			return wlr.Spec.Policy != policyName
+		})
+	if listErr != nil {
+		return fmt.Errorf("listing WorkloadRecommendations for policy delete: %w", listErr)
 	}
 	if deleted > 0 {
 		logger.Info("deleted WorkloadRecommendations for removed policy", "deleted", deleted)
 	}
-	return firstErr
+	return deleteErr
 }
 
 // reapOrphanedRecommendations is the belt-and-braces sweeper: it lists every
@@ -240,27 +259,17 @@ func (r *PolicyReconciler) reapOrphanedRecommendations(ctx context.Context) erro
 		known[policies.Items[i].Name] = struct{}{}
 	}
 
-	var wlrs sustainv1alpha1.WorkloadRecommendationList
-	if err := r.List(ctx, &wlrs); err != nil {
-		return fmt.Errorf("listing workloadrecommendations: %w", err)
-	}
-
-	deleted := 0
-	for i := range wlrs.Items {
-		wlr := &wlrs.Items[i]
-		if wlr.Spec.Policy == "" {
-			// Untracked entry — leave it; some other writer may own it.
-			continue
-		}
-		if _, ok := known[wlr.Spec.Policy]; ok {
-			continue
-		}
-		if err := r.Delete(ctx, wlr); err != nil && !apierrors.IsNotFound(err) {
-			logger.V(1).Info("failed to delete orphan WorkloadRecommendation",
-				"name", wlr.Name, "namespace", wlr.Namespace, "policy", wlr.Spec.Policy, "err", err)
-			continue
-		}
-		deleted++
+	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, nil,
+		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
+			if wlr.Spec.Policy == "" {
+				// Untracked entry — leave it; some other writer may own it.
+				return true
+			}
+			_, ok := known[wlr.Spec.Policy]
+			return ok
+		})
+	if listErr != nil {
+		return fmt.Errorf("listing workloadrecommendations: %w", listErr)
 	}
 	if deleted > 0 {
 		logger.Info("reaped orphan WorkloadRecommendations", "deleted", deleted)

@@ -27,14 +27,26 @@ func Matches(policy *sustainv1alpha1.Policy, namespace string, podLabels map[str
 	if policy == nil {
 		return false
 	}
+	sel, err := SelectorOK(policy.Spec.Selector.LabelSelector)
+	if err != nil {
+		return false
+	}
+	return MatchesSelector(policy, namespace, podLabels, excludedNamespaces, sel)
+}
+
+// MatchesSelector is like Matches but takes an already-compiled label selector,
+// so hot paths (e.g. the admission webhook) can parse the selector once via
+// SelectorOK and reuse it. A nil sel means "match all labels", consistent with
+// SelectorOK returning (nil, nil) for a nil LabelSelector. The namespace and
+// excluded-namespace rules are identical to Matches.
+func MatchesSelector(policy *sustainv1alpha1.Policy, namespace string, podLabels map[string]string, excludedNamespaces []string, sel labels.Selector) bool {
+	if policy == nil {
+		return false
+	}
 	if slices.Contains(excludedNamespaces, namespace) {
 		return false
 	}
 	if !namespaceAllowed(policy.Spec.Selector.Namespaces, namespace) {
-		return false
-	}
-	sel, err := SelectorOK(policy.Spec.Selector.LabelSelector)
-	if err != nil {
 		return false
 	}
 	if sel == nil {

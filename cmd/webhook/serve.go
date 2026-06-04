@@ -119,14 +119,12 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 	)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           wrapped,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
+	// Hardened timeouts come from httpx.NewServer's shared defaults
+	// (ReadHeaderTimeout 5s, Read/WriteTimeout 15s, IdleTimeout 60s). This
+	// widens the webhook's old 10s Read/WriteTimeout to the shared 15s; the
+	// webhook's effective deadline is still enforced upstream by the
+	// apiserver's MutatingWebhookConfiguration timeout, so this is safe.
+	srv := httpx.NewServer(addr, wrapped)
 	if certWatcher != nil {
 		// Hot-reload path: GetCertificate is consulted on every TLS handshake,
 		// so cert-manager rotations are picked up at the next Refresh tick

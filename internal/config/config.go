@@ -11,6 +11,7 @@ import (
 
 	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -19,14 +20,47 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
+// --- Flag registration helpers ---------------------------------------------
+//
+// Each helper registers a pflag on the given flagset under flagName and binds
+// it to the given Viper key in a single call, so the flag-name string is
+// written once instead of being repeated (and hand-aligned) across a separate
+// pflag declaration and BindPFlag call. The Viper key may differ from the flag
+// name (e.g. the "tls-cert-file" flag binds to the "webhook.tls-cert-file"
+// key).
+
+func bindString(flags *pflag.FlagSet, key, flagName, def, usage string) {
+	flags.String(flagName, def, usage)
+	_ = viper.BindPFlag(key, flags.Lookup(flagName))
+}
+
+func bindBool(flags *pflag.FlagSet, key, flagName string, def bool, usage string) {
+	flags.Bool(flagName, def, usage)
+	_ = viper.BindPFlag(key, flags.Lookup(flagName))
+}
+
+func bindInt(flags *pflag.FlagSet, key, flagName string, def int, usage string) {
+	flags.Int(flagName, def, usage)
+	_ = viper.BindPFlag(key, flags.Lookup(flagName))
+}
+
+func bindDuration(flags *pflag.FlagSet, key, flagName string, def time.Duration, usage string) {
+	flags.Duration(flagName, def, usage)
+	_ = viper.BindPFlag(key, flags.Lookup(flagName))
+}
+
+func bindStringSlice(flags *pflag.FlagSet, key, flagName string, def []string, usage string) {
+	flags.StringSlice(flagName, def, usage)
+	_ = viper.BindPFlag(key, flags.Lookup(flagName))
+}
+
 // --- Global (persistent) flags, shared by every subcommand -----------------
 
 // BindGlobalFlags registers global persistent flags on the root command.
 func BindGlobalFlags(root *cobra.Command) {
 	root.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: $HOME/.k8s-sustain.yaml)")
-	root.PersistentFlags().Bool("recommend-only", false,
+	bindBool(root.PersistentFlags(), "recommend-only", "recommend-only", false,
 		"Compute recommendations but never patch workloads or mutate pods (dry-run mode)")
-	_ = viper.BindPFlag("recommend-only", root.PersistentFlags().Lookup("recommend-only"))
 }
 
 var cfgFile string
@@ -74,28 +108,18 @@ func RecommendOnly() bool {
 
 // BindControllerFlags registers flags for the "start" subcommand.
 func BindControllerFlags(cmd *cobra.Command) {
-	cmd.Flags().String("metrics-bind-address", ":8080", "Address the metrics endpoint binds to")
-	cmd.Flags().String("health-probe-bind-address", ":8081", "Address the health probe endpoint binds to")
-	cmd.Flags().Bool("leader-elect", false, "Enable leader election for high availability")
-	cmd.Flags().String("leader-election-id", "k8s-sustain-leader-election", "Lease name for leader election. Override when running multiple operator installs in the same cluster.")
-	cmd.Flags().String("log-level", "info", "Log level (debug, info, warn, error)")
-	cmd.Flags().String("prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
-	cmd.Flags().Duration("reconcile-interval", 1*time.Minute, "How often policies are re-evaluated")
-	cmd.Flags().StringSlice("excluded-namespaces", nil, "Namespaces the reconciler should never touch")
-	cmd.Flags().Int("concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
-	cmd.Flags().Duration("recycle-replacement-timeout", 5*time.Minute,
+	flags := cmd.Flags()
+	bindString(flags, "metrics-bind-address", "metrics-bind-address", ":8080", "Address the metrics endpoint binds to")
+	bindString(flags, "health-probe-bind-address", "health-probe-bind-address", ":8081", "Address the health probe endpoint binds to")
+	bindBool(flags, "leader-elect", "leader-elect", false, "Enable leader election for high availability")
+	bindString(flags, "leader-election-id", "leader-election-id", "k8s-sustain-leader-election", "Lease name for leader election. Override when running multiple operator installs in the same cluster.")
+	bindString(flags, "log-level", "log-level", "info", "Log level (debug, info, warn, error)")
+	bindString(flags, "prometheus-address", "prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
+	bindDuration(flags, "reconcile-interval", "reconcile-interval", 1*time.Minute, "How often policies are re-evaluated")
+	bindStringSlice(flags, "excluded-namespaces", "excluded-namespaces", nil, "Namespaces the reconciler should never touch")
+	bindInt(flags, "concurrency-limit", "concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
+	bindDuration(flags, "recycle-replacement-timeout", "recycle-replacement-timeout", 5*time.Minute,
 		"In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) takes several minutes.")
-
-	_ = viper.BindPFlag("metrics-bind-address", cmd.Flags().Lookup("metrics-bind-address"))
-	_ = viper.BindPFlag("health-probe-bind-address", cmd.Flags().Lookup("health-probe-bind-address"))
-	_ = viper.BindPFlag("leader-elect", cmd.Flags().Lookup("leader-elect"))
-	_ = viper.BindPFlag("leader-election-id", cmd.Flags().Lookup("leader-election-id"))
-	_ = viper.BindPFlag("log-level", cmd.Flags().Lookup("log-level"))
-	_ = viper.BindPFlag("prometheus-address", cmd.Flags().Lookup("prometheus-address"))
-	_ = viper.BindPFlag("reconcile-interval", cmd.Flags().Lookup("reconcile-interval"))
-	_ = viper.BindPFlag("excluded-namespaces", cmd.Flags().Lookup("excluded-namespaces"))
-	_ = viper.BindPFlag("concurrency-limit", cmd.Flags().Lookup("concurrency-limit"))
-	_ = viper.BindPFlag("recycle-replacement-timeout", cmd.Flags().Lookup("recycle-replacement-timeout"))
 }
 
 // ControllerConfig holds resolved configuration for the controller.
@@ -134,18 +158,13 @@ func LoadControllerConfig() ControllerConfig {
 
 // BindWebhookFlags registers flags for the "webhook" subcommand.
 func BindWebhookFlags(cmd *cobra.Command) {
-	cmd.Flags().String("tls-cert-file", "/tls/tls.crt", "Path to TLS certificate file")
-	cmd.Flags().String("tls-key-file", "/tls/tls.key", "Path to TLS private key file")
-	cmd.Flags().Int("port", 9443, "Port the webhook server listens on")
-	cmd.Flags().String("prometheus-address", "http://localhost:9090", "Prometheus server address")
-	cmd.Flags().String("log-level", "info", "Log level (debug, info, warn, error)")
-	cmd.Flags().StringSlice("excluded-namespaces", nil, "Namespaces the webhook should never mutate (mirrors the controller flag)")
-	_ = viper.BindPFlag("webhook.tls-cert-file", cmd.Flags().Lookup("tls-cert-file"))
-	_ = viper.BindPFlag("webhook.tls-key-file", cmd.Flags().Lookup("tls-key-file"))
-	_ = viper.BindPFlag("webhook.port", cmd.Flags().Lookup("port"))
-	_ = viper.BindPFlag("webhook.prometheus-address", cmd.Flags().Lookup("prometheus-address"))
-	_ = viper.BindPFlag("webhook.log-level", cmd.Flags().Lookup("log-level"))
-	_ = viper.BindPFlag("webhook.excluded-namespaces", cmd.Flags().Lookup("excluded-namespaces"))
+	flags := cmd.Flags()
+	bindString(flags, "webhook.tls-cert-file", "tls-cert-file", "/tls/tls.crt", "Path to TLS certificate file")
+	bindString(flags, "webhook.tls-key-file", "tls-key-file", "/tls/tls.key", "Path to TLS private key file")
+	bindInt(flags, "webhook.port", "port", 9443, "Port the webhook server listens on")
+	bindString(flags, "webhook.prometheus-address", "prometheus-address", "http://localhost:9090", "Prometheus server address")
+	bindString(flags, "webhook.log-level", "log-level", "info", "Log level (debug, info, warn, error)")
+	bindStringSlice(flags, "webhook.excluded-namespaces", "excluded-namespaces", nil, "Namespaces the webhook should never mutate (mirrors the controller flag)")
 }
 
 // WebhookConfig holds resolved configuration for the webhook server.
@@ -179,15 +198,11 @@ func LoadWebhookConfig() WebhookConfig {
 
 // BindDashboardFlags registers flags for the "dashboard" subcommand.
 func BindDashboardFlags(cmd *cobra.Command) {
-	cmd.Flags().String("bind-address", ":8090", "Address the dashboard server listens on")
-	cmd.Flags().String("prometheus-address", "http://localhost:9090", "Prometheus server address")
-	cmd.Flags().String("log-level", "info", "Log level (debug, info, warn, error)")
-	cmd.Flags().StringSlice("cors-allowed-origins", nil, "Allowed CORS origins (e.g. http://localhost:3000). Empty (default) means same-origin only. Use * to allow all.")
-
-	_ = viper.BindPFlag("dashboard.bind-address", cmd.Flags().Lookup("bind-address"))
-	_ = viper.BindPFlag("dashboard.prometheus-address", cmd.Flags().Lookup("prometheus-address"))
-	_ = viper.BindPFlag("dashboard.log-level", cmd.Flags().Lookup("log-level"))
-	_ = viper.BindPFlag("dashboard.cors-allowed-origins", cmd.Flags().Lookup("cors-allowed-origins"))
+	flags := cmd.Flags()
+	bindString(flags, "dashboard.bind-address", "bind-address", ":8090", "Address the dashboard server listens on")
+	bindString(flags, "dashboard.prometheus-address", "prometheus-address", "http://localhost:9090", "Prometheus server address")
+	bindString(flags, "dashboard.log-level", "log-level", "info", "Log level (debug, info, warn, error)")
+	bindStringSlice(flags, "dashboard.cors-allowed-origins", "cors-allowed-origins", nil, "Allowed CORS origins (e.g. http://localhost:3000). Empty (default) means same-origin only. Use * to allow all.")
 }
 
 // DashboardConfig holds resolved configuration for the dashboard server.

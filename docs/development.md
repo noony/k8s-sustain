@@ -73,7 +73,7 @@ k8s-sustain/
 │   ├── config/            # Centralized Viper config (flags, env, file)
 │   ├── controller/        # Policy reconciler
 │   ├── dashboard/         # Dashboard HTTP server
-│   ├── httpx/             # Shared HTTP stack: envelope, middleware, shutdown
+│   ├── httpx/             # Shared HTTP stack: envelope, middleware, hardened NewServer, shutdown
 │   ├── k8s/               # client.New helper used by webhook + dashboard
 │   ├── logging/           # Shared zap logger setup
 │   ├── prometheus/        # Prometheus HTTP API client + metric name constants

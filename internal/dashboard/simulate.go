@@ -35,6 +35,21 @@ type simulationContainerResult struct {
 }
 
 func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simulationResult, error) {
+	// Fetch the workload entry once up front. Errors are tolerated (the entry
+	// stays zero-valued) to preserve the prior behavior where getContainerResources
+	// and getInitContainerNames each swallowed a failed Get and returned nil.
+	entry, err := s.getWorkloadEntry(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
+	if err != nil {
+		s.Logger.Error(err, "failed to get workload entry", "namespace", req.Namespace, "kind", req.OwnerKind, "name", req.OwnerName)
+		entry = workloadEntry{}
+	}
+	return s.runSimulationWithEntry(ctx, req, entry)
+}
+
+// runSimulationWithEntry runs the simulation pipeline against an already-fetched
+// workload entry, avoiding a redundant API-server Get when the caller (e.g. the
+// recommendations handler) has already resolved the workload.
+func (s *Server) runSimulationWithEntry(ctx context.Context, req simulateRequest, entry workloadEntry) (*simulationResult, error) {
 	cpuCfg := buildRequestsConfig(req.CPU)
 	memCfg := buildRequestsConfig(req.Memory)
 	cpuLimCfg := buildLimitsConfig(req.CPU.Limits)
@@ -81,7 +96,7 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		return nil, fmt.Errorf("memory range query: %w", err)
 	}
 
-	resources := s.getContainerResources(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
+	resources := containerResourcesFromEntry(entry)
 
 	// Layer per-container limit recommendations on top of the request map.
 	// The request strings are already final (clamped, MiB-rounded); reparsing
@@ -122,7 +137,7 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	cpuRecSeries = applyCPUClampingToSeries(cpuRecSeries, cpuCfg)
 	memRecSeries = applyMemoryClampingToSeries(memRecSeries, memCfg, oomSignal, recentOOM)
 
-	initContainers := s.getInitContainerNames(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
+	initContainers := initContainerNamesFromEntry(entry)
 
 	return &simulationResult{
 		Containers:         containers,

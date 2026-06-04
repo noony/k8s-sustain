@@ -89,7 +89,7 @@ for the formulas.
 | `k8s_sustain_webhook_panic_total`              | counter   | `path` |
 | `k8s_sustain_webhook_cert_expiry_seconds`      | gauge     | — |
 
-The webhook shares the same HTTP middleware stack as the dashboard (request-ID correlation via `X-Request-Id`, panic recovery, duration telemetry, body-size limit). Both stacks live in `internal/httpx`.
+The webhook shares the same core HTTP middleware as the dashboard (request-ID correlation via `X-Request-Id`, panic recovery, duration telemetry, body-size limit), all living in `internal/httpx`. The dashboard additionally layers CORS and gzip for its SPA + API; the webhook deliberately omits both. Both servers are constructed through `httpx.NewServer`, which applies a single set of hardened timeout defaults (`ReadHeaderTimeout` 5s, `ReadTimeout`/`WriteTimeout` 15s, `IdleTimeout` 60s) so the two can no longer drift apart.
 
 #### About the `path` label
 

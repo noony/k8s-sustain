@@ -8,7 +8,6 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -68,7 +67,3 @@ func (h *Handler) fetchCachedRecommendations(
 func wlrName(kind, name string) string {
 	return fmt.Sprintf("%s-%s", strings.ToLower(kind), name)
 }
-
-// silence "unused client" import in builds where the file is read in
-// isolation; client is referenced elsewhere in the package.
-var _ = client.IgnoreNotFound

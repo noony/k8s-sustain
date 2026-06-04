@@ -12,12 +12,6 @@ var (
 		Buckets: prometheus.DefBuckets,
 	}, []string{"path", "status"})
 
-	promQueryDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "k8s_sustain_dashboard_prometheus_query_duration_seconds",
-		Help:    "Time spent running a Prometheus query from the dashboard.",
-		Buckets: prometheus.DefBuckets,
-	}, []string{"rule"})
-
 	panicTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_dashboard_panic_total",
 		Help: "Number of panics recovered by the dashboard middleware, by request path.",
@@ -25,5 +19,5 @@ var (
 )
 
 func init() {
-	metrics.Registry.MustRegister(requestDuration, promQueryDuration, panicTotal)
+	metrics.Registry.MustRegister(requestDuration, panicTotal)
 }

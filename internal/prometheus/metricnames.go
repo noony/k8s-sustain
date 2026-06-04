@@ -43,6 +43,16 @@ const (
 	MetricWorkloadCPUUsageCores       = "k8s_sustain:workload_cpu_usage:cores"
 	MetricWorkloadMemoryUsageBytes    = "k8s_sustain:workload_memory_usage:bytes"
 
+	// --- Recommendation-basis recording rules -----------------------------
+
+	MetricContainerCPUUsageByWorkloadRate1m = "k8s_sustain:container_cpu_usage_by_workload:rate1m"
+	MetricContainerMemoryByWorkloadBytes    = "k8s_sustain:container_memory_by_workload:bytes"
+	MetricWorkloadMaxPodCPUCores            = "k8s_sustain:workload_max_pod_cpu:cores"
+	MetricWorkloadMaxPodMemoryBytes         = "k8s_sustain:workload_max_pod_memory:bytes"
+	MetricContainerPeakMemory24hBytes       = "k8s_sustain:container_peak_memory_24h:bytes"
+	MetricContainerOOMLimit24hBytes         = "k8s_sustain:container_oom_limit_24h:bytes"
+	MetricPodWorkload                       = "k8s_sustain:pod_workload"
+
 	MetricContainerCPURequestsByWorkloadCores    = "k8s_sustain:container_cpu_requests_by_workload:cores"
 	MetricContainerMemoryRequestsByWorkloadBytes = "k8s_sustain:container_memory_requests_by_workload:bytes"
 	MetricContainerCPULimitsByWorkloadCores      = "k8s_sustain:container_cpu_limits_by_workload:cores"

@@ -33,6 +33,11 @@ func NewCache(max int, ttl time.Duration) *Cache {
 }
 
 // Get returns the cached value if present and not expired.
+//
+// A TTL-expired entry reports a miss but is intentionally retained (not evicted)
+// so GetLastGoodWithin can still serve it as a bounded stale-but-good fallback.
+// Retained-but-expired entries are reclaimed naturally: overwritten by the next
+// Set for the same key, or evicted by LRU pressure when the cache is full.
 func (c *Cache) Get(key string) (any, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -42,11 +47,33 @@ func (c *Cache) Get(key string) (any, bool) {
 	}
 	entry := el.Value.(*cacheEntry)
 	if c.now().After(entry.expiresAt) {
-		c.ll.Remove(el)
-		delete(c.items, key)
 		return nil, false
 	}
 	c.ll.MoveToFront(el)
+	return entry.value, true
+}
+
+// GetLastGoodWithin returns the cached value for the key if an entry exists and
+// was stored no longer than maxAge ago, ignoring normal TTL expiry. It serves a
+// stale-but-recent value when a fresh recompute partially fails, while still
+// bounding how stale that fallback may be so a sustained outage cannot pin an
+// arbitrarily-old snapshot in front of clients. Unlike Get it does not evict
+// expired entries and does not bump LRU recency.
+//
+// The entry's store time is derived from its expiry minus the cache TTL
+// (expiresAt == storedAt + ttl), so no extra timestamp field is needed.
+func (c *Cache) GetLastGoodWithin(key string, maxAge time.Duration) (any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.items[key]
+	if !ok {
+		return nil, false
+	}
+	entry := el.Value.(*cacheEntry)
+	storedAt := entry.expiresAt.Add(-c.ttl)
+	if c.now().Sub(storedAt) > maxAge {
+		return nil, false
+	}
 	return entry.value, true
 }
 

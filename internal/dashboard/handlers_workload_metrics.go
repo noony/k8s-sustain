@@ -30,11 +30,15 @@ func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Re
 
 	w.Header().Set("Cache-Control", "public, max-age=60")
 
-	policyName, err := s.getWorkloadPolicyAnnotation(ctx, namespace, kind, name)
+	// Fetch the workload entry once: it supplies the policy annotation here and
+	// is threaded into runSimulationWithEntry below so the simulation does not
+	// re-Get the same object.
+	entry, err := s.getWorkloadEntry(ctx, namespace, kind, name)
 	if err != nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("workload not found: %v", err))
 		return
 	}
+	policyName := entry.PolicyAnnotation()
 
 	if policyName == "" {
 		writeJSON(w, http.StatusOK, recommendationResult{Automated: false})
@@ -53,7 +57,7 @@ func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	result, err := s.runSimulation(ctx, req)
+	result, err := s.runSimulationWithEntry(ctx, req, entry)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("computing recommendations: %v", err))
 		return
@@ -192,8 +196,16 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		return
 	}
 
-	resources := s.getContainerResources(ctx, namespace, kind, name)
-	initContainers := s.getInitContainerNames(ctx, namespace, kind, name)
+	// Fetch the workload entry once and derive both resources and init-container
+	// names from it. A failed Get is tolerated (nil results), matching the prior
+	// behavior where each helper swallowed its own error.
+	entry, err := s.getWorkloadEntry(ctx, namespace, kind, name)
+	if err != nil {
+		s.Logger.Error(err, "failed to get workload entry", "namespace", namespace, "kind", kind, "name", name)
+		entry = workloadEntry{}
+	}
+	resources := containerResourcesFromEntry(entry)
+	initContainers := initContainerNamesFromEntry(entry)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cpu":            cpuSeries,
@@ -225,14 +237,14 @@ func (s *Server) getWorkloadPolicyAnnotation(ctx context.Context, namespace, kin
 	return e.PolicyAnnotation(), nil
 }
 
-func (s *Server) getContainerResources(ctx context.Context, namespace, kind, name string) map[string]containerResources {
-	e, err := s.getWorkloadEntry(ctx, namespace, kind, name)
-	if err != nil {
-		s.Logger.Error(err, "failed to get workload containers", "namespace", namespace, "kind", kind, "name", name)
-		return nil
-	}
+func containerResourcesFromEntry(e workloadEntry) map[string]containerResources {
 	all := append([]corev1.Container{}, e.Containers()...)
 	all = append(all, e.InitContainers()...)
+	if len(all) == 0 {
+		// Preserve the nil map returned when the workload could not be resolved
+		// (no template / failed Get), so the JSON stays `null` rather than `{}`.
+		return nil
+	}
 	result := make(map[string]containerResources, len(all))
 	for _, c := range all {
 		cpuReq, cpuLim, memReq, memLim := resourceStrings(c)
@@ -246,11 +258,7 @@ func (s *Server) getContainerResources(ctx context.Context, namespace, kind, nam
 	return result
 }
 
-func (s *Server) getInitContainerNames(ctx context.Context, namespace, kind, name string) []string {
-	e, err := s.getWorkloadEntry(ctx, namespace, kind, name)
-	if err != nil {
-		return nil
-	}
+func initContainerNamesFromEntry(e workloadEntry) []string {
 	initCs := e.InitContainers()
 	if len(initCs) == 0 {
 		return nil

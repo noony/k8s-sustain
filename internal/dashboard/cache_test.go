@@ -91,6 +91,40 @@ func TestCacheMaxOneEvictsOnSecondInsert(t *testing.T) {
 	}
 }
 
+func TestGetLastGoodWithinServesStaleButRecentEntry(t *testing.T) {
+	// An entry whose TTL has lapsed is still served as last-good provided it
+	// was stored within maxAge.
+	now := time.Now()
+	c := NewCache(10, 60*time.Second)
+	c.now = func() time.Time { return now }
+	c.Set("k", 7)
+	now = now.Add(5 * time.Minute) // well past the 60s TTL, but within maxAge
+	// Note: deliberately do not call Get here — Get evicts the expired entry,
+	// which would defeat the last-good fallback. GetLastGoodWithin must see it.
+	v, ok := c.GetLastGoodWithin("k", 10*time.Minute)
+	if !ok || v.(int) != 7 {
+		t.Fatalf("expected stale-but-recent hit 7, got ok=%v v=%v", ok, v)
+	}
+}
+
+func TestGetLastGoodWithinRejectsTooOldEntry(t *testing.T) {
+	now := time.Now()
+	c := NewCache(10, 60*time.Second)
+	c.now = func() time.Time { return now }
+	c.Set("k", 7)
+	now = now.Add(11 * time.Minute) // beyond maxAge
+	if _, ok := c.GetLastGoodWithin("k", 10*time.Minute); ok {
+		t.Fatal("expected miss for entry older than maxAge")
+	}
+}
+
+func TestGetLastGoodWithinMissOnAbsentKey(t *testing.T) {
+	c := NewCache(10, 60*time.Second)
+	if _, ok := c.GetLastGoodWithin("nope", 10*time.Minute); ok {
+		t.Fatal("expected miss for absent key")
+	}
+}
+
 func TestNewCachePanicsOnInvalidMax(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

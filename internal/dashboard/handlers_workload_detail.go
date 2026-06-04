@@ -1,9 +1,11 @@
 package dashboard
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -92,20 +94,39 @@ func (s *Server) fillDetailPrometheusSignals(ctx context.Context, resp *workload
 }
 
 // recentSustainEvents returns up to `limit` k8s-sustain-emitted events for one
-// workload, ordered by the namespace event-list iteration order.
+// workload, most-recent first.
 func (s *Server) recentSustainEvents(ctx context.Context, namespace, kind, name string, limit int) []activityItem {
 	var list corev1.EventList
-	_ = s.K8sClient.List(ctx, &list, client.InNamespace(namespace))
+	// Push the workload identity into the field selector so the API server
+	// returns only THIS workload's events. The Event field selectors
+	// involvedObject.name/involvedObject.kind are built in, and InNamespace
+	// scopes involvedObject.namespace. With the result already narrowed to one
+	// workload, the activityListLimit cap can no longer truncate the target's
+	// events the way a namespace-wide >500 backlog could. The source filter is
+	// kept so only k8s-sustain's own events surface (mirrors handleSummaryActivity).
+	_ = s.K8sClient.List(ctx, &list,
+		client.InNamespace(namespace),
+		client.Limit(activityListLimit),
+		client.MatchingFields{
+			"source":              "k8s-sustain",
+			"involvedObject.kind": kind,
+			"involvedObject.name": name,
+		},
+	)
+	// Defensive sort: the API server does not guarantee Events come back ordered
+	// by recency, so sort newest-first before applying the keep-limit cap (mirrors
+	// the sort in handleSummaryActivity).
+	slices.SortFunc(list.Items, func(a, b corev1.Event) int {
+		return cmp.Compare(eventTimestamp(b).UnixNano(), eventTimestamp(a).UnixNano())
+	})
 	out := []activityItem{}
 	for _, e := range list.Items {
+		// Guard against a fake/permissive lister that ignores the selector.
 		if e.InvolvedObject.Kind != kind || e.InvolvedObject.Name != name {
 			continue
 		}
-		if e.Source.Component != "k8s-sustain" {
-			continue
-		}
 		out = append(out, activityItem{
-			Timestamp: e.LastTimestamp.Format("2006-01-02T15:04:05Z"),
+			Timestamp: eventTimestamp(e).UTC().Format("2006-01-02T15:04:05Z"),
 			Namespace: e.InvolvedObject.Namespace,
 			Kind:      e.InvolvedObject.Kind,
 			Name:      e.InvolvedObject.Name,

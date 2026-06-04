@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -204,6 +205,13 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var failCount atomic.Int32
 	var skipped atomic.Int32
 
+	// Build autoscaler discovery ONCE per reconcile pass instead of per
+	// workload. Targets may span multiple namespaces, so this lazily lists
+	// HPAs + ScaledObjects per namespace on first lookup and caches the result,
+	// turning the former 2·M namespace-wide List calls into 2·(distinct
+	// namespaces). Lookups are concurrency-safe.
+	autoSnap := autoscaler.NewNamespacedSnapshot(r.Client)
+
 	for _, t := range targets {
 		if r.retries.shouldSkip(t.key()) {
 			logger.V(1).Info("skipping workload in retry backoff", "target", t.key())
@@ -211,7 +219,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			continue
 		}
 		g.Go(func() error {
-			if err := r.reconcileWorkload(gctx, policy, &t); err != nil {
+			if err := r.reconcileWorkload(gctx, policy, &t, autoSnap); err != nil {
 				failCount.Add(1)
 			}
 			return nil // never cancel sibling goroutines

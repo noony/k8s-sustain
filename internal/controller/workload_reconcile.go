@@ -14,7 +14,7 @@ import (
 
 // reconcileWorkload processes a single workload target: queries Prometheus,
 // computes recommendations, recycles pods, emits events, and tracks retries.
-func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustainv1alpha1.Policy, t *workloadTarget) error {
+func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustainv1alpha1.Policy, t *workloadTarget, autoSnap *autoscaler.NamespacedSnapshot) error {
 	// Early bail-out if the parent reconcile context has already been cancelled
 	// (typically a manager shutdown mid-batch). Without this, queued workers
 	// still kick off autoscaler detection + Prometheus queries that will
@@ -34,7 +34,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 
 	// Detect HPA / KEDA ScaledObject (read-only). Used as a replica-count
 	// fallback for workload-level recommendations and for observability.
-	autoInfo, autoErr := autoscaler.Detect(ctx, r.Client, t.Namespace, t.Kind, t.Name)
+	autoInfo, autoErr := autoSnap.Lookup(ctx, t.Namespace, t.Kind, t.Name)
 	if autoErr != nil {
 		logger.Error(autoErr, "autoscaler detection failed, proceeding without it")
 		autoInfo = autoscaler.Info{Kind: autoscaler.KindNone}

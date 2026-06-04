@@ -3,7 +3,6 @@ package dashboard
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -238,10 +237,13 @@ type workloadSignals struct {
 	CoordinationFactors *coordinationFactors
 }
 
-// fetchWorkloadSignals batches the four signal queries (oom, drift, blocked,
-// autoscaler) for every workload at once, then fetches per-workload
-// coordination factors only when an autoscaler is present. Returns a map
-// keyed by workloadKey(namespace, kind, name) covering every requested key.
+// fetchWorkloadSignals batches the five signal queries (oom, drift, blocked,
+// autoscaler, coordination factors) for every workload at once, then indexes
+// the results per row in memory. Returns a map keyed by
+// workloadKey(namespace, kind, name) covering every requested key. The
+// coordination-factor query is grouped by namespace/owner_kind/owner_name plus
+// resource/kind so a single round-trip covers all rows; only rows with an
+// autoscaler present get factors, matching the prior per-row condition.
 func (s *Server) fetchWorkloadSignals(ctx context.Context, keys []string) map[string]workloadSignals {
 	if len(keys) == 0 {
 		return nil
@@ -250,10 +252,14 @@ func (s *Server) fetchWorkloadSignals(ctx context.Context, keys []string) map[st
 	drift, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("max by (namespace, owner_kind, owner_name) (abs(1 - %s))", promclient.MetricWorkloadDriftRatio), "namespace", "owner_kind", "owner_name")
 	blocked, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricWorkloadRetryState+" == 1", "namespace", "owner_kind", "owner_name")
 	autoscaler, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricAutoscalerPresent, "namespace", "owner_kind", "owner_name")
+	// Single batched coordination-factor query for every workload. Keyed by
+	// namespace|owner_kind|owner_name|resource|kind; the per-workload prefix
+	// (first three labels) matches workloadKey, and the resource|kind suffix
+	// selects which factor field each series fills.
+	coord, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricCoordinationFactor, "namespace", "owner_kind", "owner_name", "resource", "kind")
 
 	out := make(map[string]workloadSignals, len(keys))
 	for _, key := range keys {
-		ns, kind, name := parseWorkloadKey(key)
 		sig := workloadSignals{AutoscalerPresent: autoscaler[key] > 0}
 		if d, ok := drift[key]; ok {
 			sig.DriftPercent = d * 100
@@ -269,21 +275,49 @@ func (s *Server) fetchWorkloadSignals(ctx context.Context, keys []string) map[st
 			sig.RiskState = "safe"
 		}
 		if sig.AutoscalerPresent {
-			sig.CoordinationFactors = s.fetchCoordinationFactors(ctx, ns, kind, name)
+			sig.CoordinationFactors = coordinationFactorsFor(coord, key)
 		}
 		out[key] = sig
 	}
 	return out
 }
 
-// parseWorkloadKey is the inverse of workloadKey. The three components never
-// contain the "|" separator (Kubernetes name validation forbids it).
-func parseWorkloadKey(key string) (namespace, kind, name string) {
-	parts := strings.SplitN(key, "|", 3)
-	if len(parts) != 3 {
-		return
+// coordinationFactorsFor extracts one workload's coordination factors from the
+// batched coordination-factor map (keyed namespace|owner_kind|owner_name|
+// resource|kind). prefix is the workloadKey (namespace|kind|name); since the
+// metric's owner_kind/owner_name correspond to kind/name, the series keys share
+// that three-component prefix followed by |resource|kind. Returns nil when no
+// series exist for this workload, matching fetchCoordinationFactors.
+func coordinationFactorsFor(coord map[string]float64, prefix string) *coordinationFactors {
+	byLabels := map[string]float64{}
+	for _, suffix := range []string{"cpu|overhead", "memory|overhead", "cpu|replica"} {
+		if v, ok := coord[prefix+"|"+suffix]; ok {
+			byLabels[suffix] = v
+		}
 	}
-	return parts[0], parts[1], parts[2]
+	if len(byLabels) == 0 {
+		return nil
+	}
+	return assembleCoordinationFactors(byLabels)
+}
+
+// assembleCoordinationFactors maps a {resource|kind: value} series map (e.g.
+// "cpu|overhead", "memory|overhead", "cpu|replica") onto a coordinationFactors
+// payload. Unknown keys are ignored; missing keys leave their field at zero.
+// Callers are responsible for the nil-vs-non-nil decision before calling.
+func assembleCoordinationFactors(byLabels map[string]float64) *coordinationFactors {
+	out := &coordinationFactors{Enabled: true}
+	for k, v := range byLabels {
+		switch k {
+		case "cpu|overhead":
+			out.CPUOverhead = v
+		case "memory|overhead":
+			out.MemoryOverhead = v
+		case "cpu|replica":
+			out.CPUReplica = v
+		}
+	}
+	return out
 }
 
 // fetchCoordinationFactors queries `k8s_sustain_coordination_factor` for one
@@ -299,18 +333,7 @@ func (s *Server) fetchCoordinationFactors(ctx context.Context, namespace, kind, 
 	if err != nil || len(byLabels) == 0 {
 		return nil
 	}
-	out := &coordinationFactors{Enabled: true}
-	for k, v := range byLabels {
-		switch k {
-		case "cpu|overhead":
-			out.CPUOverhead = v
-		case "memory|overhead":
-			out.MemoryOverhead = v
-		case "cpu|replica":
-			out.CPUReplica = v
-		}
-	}
-	return out
+	return assembleCoordinationFactors(byLabels)
 }
 
 // kindEnabledInPolicy reports whether a policy opts in to the given workload

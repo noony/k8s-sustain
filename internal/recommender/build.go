@@ -152,6 +152,81 @@ type ContainerRecResult struct {
 	MemFloorApplied bool
 }
 
+// BuildContainerRecsOptions carries the optional per-container hooks for
+// BuildContainerRecs. Both hooks are optional (nil-safe) so the webhook can
+// pass the zero value while the controller injects its live-OOM merge and
+// metric emission.
+type BuildContainerRecsOptions struct {
+	// EnrichOOM, when non-nil, is called for every container after the base
+	// OOMSignal is constructed (via NewOOMSignal) but before ComputeContainerRec
+	// runs. It returns the OOMSignal to actually compute with. The controller
+	// uses this to fold in its in-memory live-OOM observation. The webhook
+	// leaves it nil and the base signal is used unchanged.
+	EnrichOOM func(name string, sig OOMSignal) OOMSignal
+	// OnResult, when non-nil, is called for every container whose recommendation
+	// has data (res.HasData), after ComputeContainerRec. The controller uses
+	// this to emit per-container metrics (OOM floor, reaction latency,
+	// coordination factors). It runs before the result is stored in the
+	// returned map; mutating res.Rec there is not supported — store happens from
+	// the value returned by ComputeContainerRec.
+	OnResult func(name string, res ContainerRecResult)
+}
+
+// BuildContainerRecs runs the per-container recommendation loop shared by the
+// controller and the webhook. For each container it slices the per-pod inputs,
+// builds the OOM signal (NewOOMSignal, optionally enriched via
+// opts.EnrichOOM), computes the recommendation (ComputeContainerRec), and
+// collects the results with HasData. The recentOOM argument feeds the OOM
+// signal's Recent flag; callers OR their own OOM observations into it (the
+// controller adds live-OOM presence, the webhook passes inputs.HasRecentOOM()).
+//
+// This is the single source of truth for skip/threshold semantics on both
+// injection paths — the workload-age gate (ShouldSkipYoungWorkload) is applied
+// by the caller, but the per-container HasData handling lives here so the two
+// paths cannot drift.
+func BuildContainerRecs(
+	containers []corev1.Container,
+	inputs *WorkloadInputs,
+	recentOOM bool,
+	autoInfo autoscaler.Info,
+	rsCfg sustainv1alpha1.ResourcesConfigs,
+	coordCfg sustainv1alpha1.AutoscalerCoordination,
+	opts BuildContainerRecsOptions,
+) map[string]workload.ContainerRecommendation {
+	recs := make(map[string]workload.ContainerRecommendation)
+	for _, c := range containers {
+		cpuPerPod, hasCPU := inputs.CPUPerPod[c.Name]
+		memPerPod, hasMem := inputs.MemPerPod[c.Name]
+		_, hasPeak := inputs.OOM.PeakMemoryBytes[c.Name]
+
+		oom := NewOOMSignal(recentOOM, inputs.OOM.PeakMemoryBytes[c.Name], inputs.OOM.OOMLimitBytes[c.Name])
+		if opts.EnrichOOM != nil {
+			oom = opts.EnrichOOM(c.Name, oom)
+		}
+
+		res := ComputeContainerRec(ContainerInputs{
+			Container:   c,
+			CPUPerPod:   cpuPerPod,
+			HasCPU:      hasCPU,
+			MemPerPod:   memPerPod,
+			HasMemUsage: hasMem,
+			OOM:         oom,
+			HasOOMPeak:  hasPeak,
+			AutoInfo:    autoInfo,
+			RsCfg:       rsCfg,
+			CoordCfg:    coordCfg,
+		})
+		if !res.HasData {
+			continue
+		}
+		if opts.OnResult != nil {
+			opts.OnResult(c.Name, res)
+		}
+		recs[c.Name] = res.Rec
+	}
+	return recs
+}
+
 // ComputeContainerRec runs the shared per-container compute pipeline: CPU
 // request, memory request (with optional OOM floor), autoscaler coordination,
 // and limit derivation. HasData=false means neither CPU nor memory had enough

@@ -54,12 +54,16 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 	}
 
 	workloads := s.listPolicyWorkloadRows(ctx, policy, policyName)
-	applyWorkloadSignals(ctx, s, workloads)
 
+	// Namespace dropdown is derived from the full, unfiltered list.
 	namespaces := uniqueNamespaces(workloads)
+
+	// Narrow to the requested namespace before the (potentially N+1) signal
+	// decoration so we only do that work for the rows we will return.
 	if nsFilter != "" {
 		workloads = filterByNamespace(workloads, nsFilter)
 	}
+	applyWorkloadSignals(ctx, s, workloads)
 
 	total := len(workloads)
 	start, end := paginateRange(total, page, pageSize)
@@ -102,13 +106,20 @@ func (s *Server) listPolicyWorkloadRows(ctx context.Context, policy *sustainv1al
 }
 
 func uniqueNamespaces(workloads []workloadSummary) []string {
+	return uniqueValues(workloads, func(w workloadSummary) string { return w.Namespace })
+}
+
+// uniqueValues collects the distinct, unordered values produced by valueOf over
+// rows. It backs the per-kind unique-set helpers, which differ only in the row
+// type and which field(s) they pull.
+func uniqueValues[T any](rows []T, valueOf func(T) string) []string {
 	seen := make(map[string]struct{})
-	for _, w := range workloads {
-		seen[w.Namespace] = struct{}{}
+	for _, r := range rows {
+		seen[valueOf(r)] = struct{}{}
 	}
 	out := make([]string, 0, len(seen))
-	for ns := range seen {
-		out = append(out, ns)
+	for v := range seen {
+		out = append(out, v)
 	}
 	return out
 }
@@ -125,17 +136,29 @@ func filterByNamespace(workloads []workloadSummary, ns string) []workloadSummary
 
 // applyWorkloadSignals overlays Prometheus-derived signals onto each row.
 func applyWorkloadSignals(ctx context.Context, s *Server, workloads []workloadSummary) {
-	keys := make([]string, len(workloads))
-	for i, w := range workloads {
-		keys[i] = workloadKey(w.Namespace, w.Kind, w.Name)
+	applySignals(ctx, s, workloads,
+		func(w workloadSummary) string { return workloadKey(w.Namespace, w.Kind, w.Name) },
+		func(w *workloadSummary, sig workloadSignals) {
+			w.RiskState = sig.RiskState
+			w.DriftPercent = sig.DriftPercent
+			w.AutoscalerPresent = sig.AutoscalerPresent
+			w.CoordinationFactors = sig.CoordinationFactors
+		})
+}
+
+// applySignals batches the signal queries for every row and overlays the
+// result back onto each row. keyOf derives the Prometheus workload key for a
+// row; set copies the fetched signals onto a row in place. It is the shared
+// body behind applyWorkloadSignals and applyAllWorkloadSignals, which differ
+// only in their row struct type.
+func applySignals[T any](ctx context.Context, s *Server, rows []T, keyOf func(T) string, set func(*T, workloadSignals)) {
+	keys := make([]string, len(rows))
+	for i, r := range rows {
+		keys[i] = keyOf(r)
 	}
 	signals := s.fetchWorkloadSignals(ctx, keys)
-	for i := range workloads {
-		sig := signals[keys[i]]
-		workloads[i].RiskState = sig.RiskState
-		workloads[i].DriftPercent = sig.DriftPercent
-		workloads[i].AutoscalerPresent = sig.AutoscalerPresent
-		workloads[i].CoordinationFactors = sig.CoordinationFactors
+	for i := range rows {
+		set(&rows[i], signals[keys[i]])
 	}
 }
 
@@ -280,33 +303,29 @@ func (s *Server) collectAllWorkloads(ctx context.Context, f allWorkloadFilters) 
 }
 
 func applyAllWorkloadSignals(ctx context.Context, s *Server, workloads []allWorkloadSummary) {
-	keys := make([]string, len(workloads))
-	for i, w := range workloads {
-		keys[i] = workloadKey(w.Namespace, w.Kind, w.Name)
-	}
-	signals := s.fetchWorkloadSignals(ctx, keys)
-	for i := range workloads {
-		sig := signals[keys[i]]
-		workloads[i].RiskState = sig.RiskState
-		workloads[i].DriftPercent = sig.DriftPercent
-		workloads[i].AutoscalerPresent = sig.AutoscalerPresent
-		workloads[i].CoordinationFactors = sig.CoordinationFactors
-	}
+	applySignals(ctx, s, workloads,
+		func(w allWorkloadSummary) string { return workloadKey(w.Namespace, w.Kind, w.Name) },
+		func(w *allWorkloadSummary, sig workloadSignals) {
+			w.RiskState = sig.RiskState
+			w.DriftPercent = sig.DriftPercent
+			w.AutoscalerPresent = sig.AutoscalerPresent
+			w.CoordinationFactors = sig.CoordinationFactors
+		})
 }
 
 func uniqueNamespacesAndKinds(workloads []allWorkloadSummary) (namespaces, kinds []string) {
-	nsSet := make(map[string]struct{})
-	kindSet := make(map[string]struct{})
+	seenNamespaces := make(map[string]struct{})
+	seenKinds := make(map[string]struct{})
 	for _, w := range workloads {
-		nsSet[w.Namespace] = struct{}{}
-		kindSet[w.Kind] = struct{}{}
+		seenNamespaces[w.Namespace] = struct{}{}
+		seenKinds[w.Kind] = struct{}{}
 	}
-	namespaces = make([]string, 0, len(nsSet))
-	for ns := range nsSet {
+	namespaces = make([]string, 0, len(seenNamespaces))
+	for ns := range seenNamespaces {
 		namespaces = append(namespaces, ns)
 	}
-	kinds = make([]string, 0, len(kindSet))
-	for k := range kindSet {
+	kinds = make([]string, 0, len(seenKinds))
+	for k := range seenKinds {
 		kinds = append(kinds, k)
 	}
 	return

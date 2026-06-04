@@ -10,6 +10,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/noony/k8s-sustain/internal/autoscaler"
 )
 
 // TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods
@@ -39,7 +41,7 @@ func TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods(t *te
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
 
-	if err := r.reconcileWorkload(context.Background(), policy, tgt); err != nil {
+	if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 
@@ -75,7 +77,7 @@ func TestReconcileWorkload_RecommendOnly_DoesNotRecyclePods(t *testing.T) {
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
 
-	if err := r.reconcileWorkload(context.Background(), policy, tgt); err != nil {
+	if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 
@@ -102,7 +104,7 @@ func TestReconcileWorkload_TransientPromError_RecordsRetry(t *testing.T) {
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
 
-	err := r.reconcileWorkload(context.Background(), policy, tgt)
+	err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client))
 	if err == nil {
 		t.Fatal("expected transient error to bubble up")
 	}
@@ -130,7 +132,7 @@ func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *test
 	// Prime the retry tracker so we can confirm it gets cleared on success.
 	r.retries.recordFailure(tgt.key())
 
-	if err := r.reconcileWorkload(context.Background(), policy, tgt); err != nil {
+	if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 	if state := r.retries.getState(tgt.key()); state != nil && state.attempts != 0 {

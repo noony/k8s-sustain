@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/httpx"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
@@ -70,7 +71,6 @@ type Server struct {
 
 	cacheInit    sync.Once
 	summaryCache *Cache
-	policyCache  *Cache
 }
 
 // Handler returns an http.Handler with all dashboard routes registered.
@@ -81,9 +81,6 @@ func (s *Server) Handler() http.Handler {
 	s.cacheInit.Do(func() {
 		if s.summaryCache == nil {
 			s.summaryCache = NewCache(8, 60*time.Second)
-		}
-		if s.policyCache == nil {
-			s.policyCache = NewCache(32, 30*time.Second)
 		}
 	})
 
@@ -147,21 +144,10 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 // NewHTTPServer creates an http.Server for the dashboard bound to addr.
 // The caller is responsible for calling ListenAndServe and Shutdown.
 func (s *Server) NewHTTPServer(addr string) *http.Server {
-	return &http.Server{
-		Addr:              addr,
-		Handler:           s.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-}
-
-// ListenAndServe starts the dashboard server on the given address.
-func (s *Server) ListenAndServe(addr string) error {
-	srv := s.NewHTTPServer(addr)
-	s.Logger.Info("Starting dashboard server", "addr", addr)
-	return srv.ListenAndServe()
+	// Hardened timeouts come from httpx.NewServer's shared defaults
+	// (ReadHeaderTimeout 5s, Read/WriteTimeout 15s, IdleTimeout 60s) — the
+	// same values this used to set inline.
+	return httpx.NewServer(addr, s.Handler())
 }
 
 func formatQuantity(milliValue int64, format string) string {
