@@ -47,12 +47,7 @@ risks hard-to-debug races on those singletons.
 
 ## Security & dependency scans
 
-CI runs `govulncheck` and `gosec` on every push. Locally:
-
-```bash
-go install golang.org/x/vuln/cmd/govulncheck@latest
-govulncheck ./...
-```
+CI runs `gosec` on every push.
 
 Dependabot is configured for `gomod`, GitHub Actions, the dashboard's npm
 modules, and Docker base images — PRs are opened weekly.
