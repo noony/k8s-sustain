@@ -2130,14 +2130,9 @@ same-origin policy when two trusted origins share the same upstream cache).</p>
 <td>Number of dashboard replicas</td>
 </tr>
 <tr>
-<td><code>dashboard.port</code></td>
-<td><code>8090</code></td>
-<td>Container port</td>
-</tr>
-<tr>
 <td><code>dashboard.bindAddress</code></td>
 <td><code>:8090</code></td>
-<td>Server bind address</td>
+<td>Server bind address (<code>:port</code> or <code>host:port</code>); the container port derives from its port part</td>
 </tr>
 <tr>
 <td><code>dashboard.logLevel</code></td>

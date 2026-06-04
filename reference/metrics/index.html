@@ -1935,7 +1935,7 @@ for the formulas.</p>
 </tr>
 </tbody>
 </table>
-<p>The webhook shares the same HTTP middleware stack as the dashboard (request-ID correlation via <code>X-Request-Id</code>, panic recovery, duration telemetry, body-size limit). Both stacks live in <code>internal/httpx</code>.</p>
+<p>The webhook shares the same core HTTP middleware as the dashboard (request-ID correlation via <code>X-Request-Id</code>, panic recovery, duration telemetry, body-size limit), all living in <code>internal/httpx</code>. The dashboard additionally layers CORS and gzip for its SPA + API; the webhook deliberately omits both. Both servers are constructed through <code>httpx.NewServer</code>, which applies a single set of hardened timeout defaults (<code>ReadHeaderTimeout</code> 5s, <code>ReadTimeout</code>/<code>WriteTimeout</code> 15s, <code>IdleTimeout</code> 60s) so the two can no longer drift apart.</p>
 <h4 id="about-the-path-label">About the <code>path</code> label<a class="headerlink" href="#about-the-path-label" title="Permanent link">&para;</a></h4>
 <p>The <code>path</code> label is <strong>not</strong> the raw request URL — it is the matched <a href="https://pkg.go.dev/net/http#ServeMux">Go 1.22
 route pattern</a> (for example
