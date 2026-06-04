@@ -258,6 +258,29 @@ Override `PLATFORMS` to change the matrix, e.g. `PLATFORMS=linux/arm64 make dock
 | `make docker-buildx` | Build and push a multi-arch image (`PLATFORMS` env, default `linux/amd64,linux/arm64`) |
 | `make helm-lint` | Lint the Helm chart |
 | `make helm-template` | Render templates to stdout |
+| `make helm-unittest` | Run Helm chart unit tests (requires the helm-unittest plugin) |
+
+## Helm chart tests
+
+The chart ships a [helm-unittest](https://github.com/helm-unittest/helm-unittest) suite
+under `charts/k8s-sustain/tests/` — one `*_test.yaml` file per template, asserting on
+default rendering, every enable/disable conditional, and value wiring. Install the plugin
+once, then run the suite:
+
+```bash
+helm plugin install https://github.com/helm-unittest/helm-unittest.git --version 1.0.0
+make helm-unittest
+```
+
+Run a single suite with the plugin's `-f` flag (paths are relative to the chart root):
+
+```bash
+helm unittest charts/k8s-sustain -f 'tests/deployment_test.yaml'
+```
+
+CI runs the full suite in the `helm` job alongside `helm lint` and `helm template`.
+`charts/k8s-sustain/tests/promtool_test.sh` additionally validates the rendered
+PrometheusRule recording rules with `promtool` (requires `promtool` and `yq`).
 
 ## Adding a new workload kind
 

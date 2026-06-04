@@ -1,0 +1,52 @@
+suite: dashboard service
+templates:
+  - templates/dashboard-service.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: renders nothing by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the dashboard service when enabled
+    set:
+      dashboard.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-dashboard
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports
+          value:
+            - name: http
+              port: 8090
+              targetPort: http
+              protocol: TCP
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/name: k8s-sustain
+            app.kubernetes.io/instance: k8s-sustain
+            app.kubernetes.io/component: dashboard
+
+  - it: honors service type and port overrides
+    set:
+      dashboard.enabled: true
+      dashboard.service.type: NodePort
+      dashboard.service.port: 80
+    asserts:
+      - equal:
+          path: spec.type
+          value: NodePort
+      - equal:
+          path: spec.ports[0].port
+          value: 80

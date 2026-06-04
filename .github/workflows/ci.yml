@@ -113,6 +113,12 @@ jobs:
       - name: Template chart
         run: make helm-template
 
+      - name: Install helm-unittest
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version 1.0.0
+
+      - name: Run chart unit tests
+        run: make helm-unittest
+
   gosec:
     runs-on: ubuntu-latest
     permissions:

@@ -5,7 +5,7 @@ PLATFORMS ?= linux/amd64,linux/arm64
 
 include Makefile.scenarios
 
-.PHONY: help build test test-race lint generate manifests generate-crds verify-crds tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template port-forward port-forward-stop
+.PHONY: help build test test-race lint generate manifests generate-crds verify-crds tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template helm-unittest port-forward port-forward-stop
 
 NAMESPACE ?= k8s-sustain
 DASHBOARD_PORT ?= 8090
@@ -68,6 +68,9 @@ helm-lint: helm-deps ## Lint Helm chart
 
 helm-template: helm-deps ## Render Helm chart templates
 	helm template k8s-sustain charts/k8s-sustain
+
+helm-unittest: helm-deps ## Run Helm chart unit tests (requires the helm-unittest plugin)
+	helm unittest charts/k8s-sustain
 
 port-forward: port-forward-stop ## Port-forward dashboard ($(DASHBOARD_PORT)) and Prometheus ($(PROMETHEUS_PORT)) in the background
 	@mkdir -p .port-forward

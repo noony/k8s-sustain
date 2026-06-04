@@ -1,0 +1,160 @@
+suite: rbac
+templates:
+  - templates/rbac.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: renders the controller ClusterRole and binding by default
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: ClusterRole
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: k8s-sustain
+        documentIndex: 0
+      - isKind:
+          of: ClusterRoleBinding
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: k8s-sustain
+        documentIndex: 1
+
+  - it: grants the controller its core permissions
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [k8s.sustain.io]
+            resources: [policies]
+            verbs: [get, list, watch, create, update, patch, delete]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [k8s.sustain.io]
+            resources: [workloadrecommendations]
+            verbs: [get, list, watch, create, update, patch, delete]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [coordination.k8s.io]
+            resources: [leases]
+            verbs: [get, list, watch, create, update, patch, delete]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [pods]
+            verbs: [get, list, watch, patch]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [pods/resize]
+            verbs: [patch]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [pods/eviction]
+            verbs: [create]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [events]
+            verbs: [create, patch]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [events.k8s.io]
+            resources: [events]
+            verbs: [create, patch]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [autoscaling]
+            resources: [horizontalpodautoscalers]
+            verbs: [get, list, watch]
+
+  - it: binds the controller role to the chart service account
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: k8s-sustain
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: k8s-sustain
+              namespace: k8s-sustain
+
+  - it: binds to a custom service account name
+    set:
+      serviceAccount.name: custom-sa
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: subjects[0].name
+          value: custom-sa
+
+  - it: adds a read-only dashboard role and binding when the dashboard is enabled
+    set:
+      dashboard.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: ClusterRole
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-dashboard
+        documentIndex: 2
+      - contains:
+          path: rules
+          content:
+            apiGroups: [k8s.sustain.io]
+            resources: [policies, workloadrecommendations]
+            verbs: [get, list, watch]
+        documentIndex: 2
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [pods/resize]
+            verbs: [patch]
+        documentIndex: 2
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [pods/eviction]
+            verbs: [create]
+        documentIndex: 2
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [events]
+            verbs: [get, list, watch]
+        documentIndex: 2
+      - isKind:
+          of: ClusterRoleBinding
+        documentIndex: 3
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: k8s-sustain-dashboard
+              namespace: k8s-sustain
+        documentIndex: 3

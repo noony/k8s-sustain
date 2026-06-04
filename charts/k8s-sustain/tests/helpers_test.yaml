@@ -1,0 +1,60 @@
+suite: helpers naming
+templates:
+  - templates/deployment.yaml
+release:
+  name: my-release
+  namespace: my-ns
+tests:
+  - it: builds fullname as <release>-<chart> when release name does not contain the chart name
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-release-k8s-sustain
+      - equal:
+          path: metadata.namespace
+          value: my-ns
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: my-release-k8s-sustain
+      - isSubset:
+          path: metadata.labels
+          content:
+            app.kubernetes.io/name: k8s-sustain
+            app.kubernetes.io/instance: my-release
+
+  - it: derives the prometheus subchart address from release name and namespace
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-address=http://my-release-prometheus-server.my-ns.svc:80
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --excluded-namespaces=my-ns,kube-system,kube-public
+
+  - it: honors nameOverride in names and labels
+    set:
+      nameOverride: sustain
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-release-sustain
+      - isSubset:
+          path: metadata.labels
+          content:
+            app.kubernetes.io/name: sustain
+
+  - it: honors fullnameOverride
+    set:
+      fullnameOverride: custom-name
+    asserts:
+      - equal:
+          path: metadata.name
+          value: custom-name
+
+  - it: truncates fullnameOverride to 63 characters
+    set:
+      fullnameOverride: aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffffgggggggggg
+    asserts:
+      - equal:
+          path: metadata.name
+          value: aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffffggg

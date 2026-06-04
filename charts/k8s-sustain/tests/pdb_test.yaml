@@ -1,0 +1,117 @@
+suite: pod disruption budgets
+templates:
+  - templates/pdb.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: renders nothing at the default single replicas
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the controller PDB when the controller has multiple replicas
+    set:
+      controller.replicaCount: 2
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: metadata.name
+          value: k8s-sustain
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: k8s-sustain
+            app.kubernetes.io/instance: k8s-sustain
+
+  - it: renders the webhook PDB when the webhook has multiple replicas
+    set:
+      webhook.replicaCount: 2
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-webhook
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: k8s-sustain
+            app.kubernetes.io/instance: k8s-sustain
+            app.kubernetes.io/component: webhook
+
+  - it: ignores dashboard replicas while the dashboard is disabled
+    set:
+      dashboard.replicaCount: 2
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the dashboard PDB when enabled with multiple replicas
+    set:
+      dashboard.enabled: true
+      dashboard.replicaCount: 2
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-dashboard
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: k8s-sustain
+            app.kubernetes.io/instance: k8s-sustain
+            app.kubernetes.io/component: dashboard
+
+  - it: renders all three PDBs when every component is scaled out
+    set:
+      controller.replicaCount: 2
+      webhook.replicaCount: 2
+      dashboard.enabled: true
+      dashboard.replicaCount: 2
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: orders the controller PDB first when every component is scaled out
+    set:
+      controller.replicaCount: 2
+      webhook.replicaCount: 2
+      dashboard.enabled: true
+      dashboard.replicaCount: 2
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: metadata.name
+          value: k8s-sustain
+
+  - it: orders the webhook PDB second when every component is scaled out
+    set:
+      controller.replicaCount: 2
+      webhook.replicaCount: 2
+      dashboard.enabled: true
+      dashboard.replicaCount: 2
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-webhook
+
+  - it: orders the dashboard PDB third when every component is scaled out
+    set:
+      controller.replicaCount: 2
+      webhook.replicaCount: 2
+      dashboard.enabled: true
+      dashboard.replicaCount: 2
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-dashboard

@@ -1,0 +1,240 @@
+suite: controller deployment
+templates:
+  - templates/deployment.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: renders a Deployment with metadata, labels and replicas by default
+    asserts:
+      - isKind:
+          of: Deployment
+      - isAPIVersion:
+          of: apps/v1
+      - equal:
+          path: metadata.name
+          value: k8s-sustain
+      - equal:
+          path: metadata.namespace
+          value: k8s-sustain
+      - equal:
+          path: metadata.labels
+          value:
+            helm.sh/chart: k8s-sustain-0.1.0
+            app.kubernetes.io/name: k8s-sustain
+            app.kubernetes.io/instance: k8s-sustain
+            app.kubernetes.io/version: "0.1.0"
+            app.kubernetes.io/managed-by: Helm
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: k8s-sustain
+            app.kubernetes.io/instance: k8s-sustain
+      - equal:
+          path: spec.template.metadata.labels
+          value:
+            app.kubernetes.io/name: k8s-sustain
+            app.kubernetes.io/instance: k8s-sustain
+
+  - it: wires service account, grace period and image defaults
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: k8s-sustain
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 30
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: controller
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/noony/k8s-sustain:0.1.0
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: IfNotPresent
+      - notExists:
+          path: spec.template.spec.imagePullSecrets
+
+  - it: passes the default controller args
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - start
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+            - --leader-elect=true
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
+            - --log-level=debug
+            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --concurrency-limit=5
+            - --recycle-replacement-timeout=5m
+
+  - it: enforces the restricted security contexts
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+  - it: exposes metrics and health ports with probes
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet
+          value:
+            path: /healthz
+            port: health
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet
+          value:
+            path: /readyz
+            port: health
+
+  - it: applies the default resources
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+
+  - it: omits the recommend-only flag by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --recommend-only=true
+
+  - it: adds the recommend-only flag when recommendOnly is set
+    set:
+      recommendOnly: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --recommend-only=true
+
+  - it: adds the leader election id flag when configured
+    set:
+      controller.leaderElectionID: my-lock
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-election-id=my-lock
+
+  - it: can disable leader election
+    set:
+      controller.leaderElect: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-elect=false
+
+  - it: prefers an explicit prometheusAddress over subchart autodetection
+    set:
+      prometheusAddress: http://thanos.example:10902
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-address=http://thanos.example:10902
+
+  - it: falls back to localhost when the subchart is disabled and no address is set
+    set:
+      prometheus.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-address=http://localhost:9090
+
+  - it: appends webhook.excludedNamespaces to the built-in exclusions
+    set:
+      webhook.excludedNamespaces: [team-a, team-b]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --excluded-namespaces=k8s-sustain,kube-system,kube-public,team-a,team-b
+
+  - it: uses image.tag over the chart appVersion when set
+    set:
+      image.tag: v9.9.9
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/noony/k8s-sustain:v9.9.9
+
+  - it: renders imagePullSecrets when provided
+    set:
+      imagePullSecrets:
+        - name: regcred
+    asserts:
+      - equal:
+          path: spec.template.spec.imagePullSecrets
+          value:
+            - name: regcred
+
+  - it: honors a custom termination grace period
+    set:
+      controller.terminationGracePeriodSeconds: 120
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 120
+
+  - it: renders scheduling constraints when provided
+    set:
+      controller.nodeSelector:
+        disktype: ssd
+      controller.tolerations:
+        - key: dedicated
+          operator: Equal
+          value: infra
+          effect: NoSchedule
+      controller.affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: [arm64]
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector
+          value:
+            disktype: ssd
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: dedicated
+              operator: Equal
+              value: infra
+              effect: NoSchedule
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key
+          value: kubernetes.io/arch

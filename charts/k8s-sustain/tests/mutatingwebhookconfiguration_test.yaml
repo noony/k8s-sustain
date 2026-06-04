@@ -1,0 +1,117 @@
+suite: mutating webhook configuration
+templates:
+  - templates/mutatingwebhookconfiguration.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: renders by default with fail-open policy and CREATE-only pod rule
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: MutatingWebhookConfiguration
+      - equal:
+          path: metadata.name
+          value: k8s-sustain
+      - notExists:
+          path: metadata.annotations
+      - equal:
+          path: webhooks[0].name
+          value: pods.k8s-sustain.io
+      - equal:
+          path: webhooks[0].failurePolicy
+          value: Ignore
+      - equal:
+          path: webhooks[0].timeoutSeconds
+          value: 5
+      - equal:
+          path: webhooks[0].sideEffects
+          value: None
+      - equal:
+          path: webhooks[0].admissionReviewVersions
+          value: [v1]
+      - equal:
+          path: webhooks[0].rules
+          value:
+            - apiGroups: [""]
+              apiVersions: [v1]
+              resources: [pods]
+              operations: [CREATE]
+              scope: Namespaced
+
+  - it: targets the webhook service
+    asserts:
+      - equal:
+          path: webhooks[0].clientConfig.service
+          value:
+            name: k8s-sustain-webhook
+            namespace: k8s-sustain
+            path: /mutate
+            port: 443
+      - notExists:
+          path: webhooks[0].clientConfig.caBundle
+
+  - it: excludes the release and system namespaces
+    asserts:
+      - equal:
+          path: webhooks[0].namespaceSelector.matchExpressions
+          value:
+            - key: kubernetes.io/metadata.name
+              operator: NotIn
+              values:
+                - k8s-sustain
+                - kube-system
+                - kube-public
+
+  - it: appends webhook.excludedNamespaces to the namespace selector
+    set:
+      webhook.excludedNamespaces: [team-a, team-b]
+    asserts:
+      - equal:
+          path: webhooks[0].namespaceSelector.matchExpressions[0].values
+          value:
+            - k8s-sustain
+            - kube-system
+            - kube-public
+            - team-a
+            - team-b
+
+  - it: renders nothing when the webhook is disabled
+    set:
+      webhook.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: honors the failurePolicy override
+    set:
+      webhook.failurePolicy: Fail
+    asserts:
+      - equal:
+          path: webhooks[0].failurePolicy
+          value: Fail
+
+  - it: adds the cert-manager injection annotation when certManager is enabled
+    set:
+      webhook.certManager.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["cert-manager.io/inject-ca-from"]
+          value: k8s-sustain/k8s-sustain-webhook
+
+  - it: uses an explicit caBundle when certManager is disabled
+    set:
+      webhook.caBundle: Zm9vYmFy
+    asserts:
+      - equal:
+          path: webhooks[0].clientConfig.caBundle
+          value: Zm9vYmFy
+
+  - it: ignores caBundle when certManager is enabled
+    set:
+      webhook.certManager.enabled: true
+      webhook.caBundle: Zm9vYmFy
+    asserts:
+      - notExists:
+          path: webhooks[0].clientConfig.caBundle

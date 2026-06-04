@@ -1,0 +1,38 @@
+suite: crd installation
+templates:
+  - templates/crd.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: installs both CRDs by default
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: CustomResourceDefinition
+
+  - it: installs the policies CRD first
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: CustomResourceDefinition
+      - equal:
+          path: metadata.name
+          value: policies.k8s.sustain.io
+
+  - it: installs the workloadrecommendations CRD second
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: CustomResourceDefinition
+      - equal:
+          path: metadata.name
+          value: workloadrecommendations.k8s.sustain.io
+
+  - it: skips CRDs when installCRDs is disabled
+    set:
+      installCRDs: false
+    asserts:
+      - hasDocuments:
+          count: 0

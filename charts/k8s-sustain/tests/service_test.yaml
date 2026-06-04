@@ -1,0 +1,66 @@
+suite: controller metrics service
+templates:
+  - templates/service.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: always renders the metrics service with defaults
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-metrics
+      - equal:
+          path: metadata.namespace
+          value: k8s-sustain
+      - equal:
+          path: metadata.labels
+          value:
+            helm.sh/chart: k8s-sustain-0.1.0
+            app.kubernetes.io/name: k8s-sustain
+            app.kubernetes.io/instance: k8s-sustain
+            app.kubernetes.io/version: "0.1.0"
+            app.kubernetes.io/managed-by: Helm
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/name: k8s-sustain
+            app.kubernetes.io/instance: k8s-sustain
+      - equal:
+          path: spec.ports
+          value:
+            - name: metrics
+              port: 8080
+              targetPort: metrics
+              protocol: TCP
+      - notExists:
+          path: metadata.annotations
+
+  - it: renders custom annotations
+    set:
+      controller.service.annotations:
+        prometheus.io/scrape: "true"
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            prometheus.io/scrape: "true"
+
+  - it: honors type and port overrides
+    set:
+      controller.service.type: NodePort
+      controller.service.port: 9090
+    asserts:
+      - equal:
+          path: spec.type
+          value: NodePort
+      - equal:
+          path: spec.ports[0].port
+          value: 9090

@@ -1,0 +1,43 @@
+suite: prometheus rule
+templates:
+  - templates/prometheusrule.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: renders nothing by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the rule with all recording groups when enabled
+    set:
+      prometheusRule.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PrometheusRule
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-rules
+      - equal:
+          path: metadata.namespace
+          value: k8s-sustain
+      - lengthEqual:
+          path: spec.groups
+          count: 8
+      - equal:
+          path: spec.groups[0].name
+          value: k8s_sustain.workload_mapping
+
+  - it: adds additionalLabels
+    set:
+      prometheusRule.enabled: true
+      prometheusRule.additionalLabels:
+        role: alert-rules
+    asserts:
+      - isSubset:
+          path: metadata.labels
+          content:
+            role: alert-rules
