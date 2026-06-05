@@ -268,7 +268,8 @@ default rendering, every enable/disable conditional, and value wiring. Install t
 once, then run the suite:
 
 ```bash
-helm plugin install https://github.com/helm-unittest/helm-unittest.git --version 1.0.0
+# --verify=false: helm v4 verifies plugin provenance by default, which git-source installs don't support
+helm plugin install https://github.com/helm-unittest/helm-unittest.git --version 1.0.0 --verify=false
 make helm-unittest
 ```
 

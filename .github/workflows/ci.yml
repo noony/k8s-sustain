@@ -114,7 +114,9 @@ jobs:
         run: make helm-template
 
       - name: Install helm-unittest
-        run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version 1.0.0
+        # --verify=false: helm v4 enables plugin provenance verification by default,
+        # which git-source installs do not support.
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version 1.0.0 --verify=false
 
       - name: Run chart unit tests
         run: make helm-unittest
