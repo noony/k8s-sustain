@@ -124,7 +124,7 @@ Single Deployment whose pod template includes:
 
 **Expected:** All three containers receive recommendations
 (`kubectl get wlrec -n scenario-init-containers -o yaml`). Drift in `app` or
-`log-shipper` triggers a pod recycle (in-place on k8s ≥ 1.32, eviction
+`log-shipper` triggers a pod recycle (in-place on k8s ≥ 1.33, eviction
 otherwise). Drift in `migrate` does **not** trigger recycle — it has already
 exited; the new requests land via webhook injection on the next pod creation.
 
@@ -231,7 +231,7 @@ oversized requests (`500m / 256Mi`) and ~`200m / ~100Mi` of actual load.
 **Expected:**
 
 - After `WINDOW + reconcile_interval` the controller recycles all three
-  pods. On Kubernetes ≥ 1.31 this is in-place via `/resize`; on older
+  pods. On Kubernetes ≥ 1.33 this is in-place via `/resize`; on older
   versions it is eviction.
 - In the eviction path, pods are evicted in **descending ordinal order**:
   `web-2 → web-1 → web-0`, matching the StatefulSet controller's update
@@ -286,6 +286,46 @@ kubectl --raw \
   /api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics \
   | grep 'k8s_sustain_oom_floor_applied_total'
 ```
+
+### `qos-change`
+
+3-replica Deployment whose containers start as **Guaranteed QoS** —
+`requests == limits` for both CPU (`500m`) and memory (`256Mi`) — with
+~`200m / 100Mi` of actual load per pod, protected by a PodDisruptionBudget
+with `minAvailable: 2`. The policy removes the CPU limit (`noLimit: true`)
+and sets a 1.5× memory limit ratio, so the recommendation breaks the
+`requests == limits` equality: applying it would flip the pods to
+Burstable, which Kubernetes forbids through the `/resize` subresource.
+
+**Expected (k8s ≥ 1.33):**
+
+- Each in-place resize is rejected as `Invalid` by the API server (QoS
+  class change). This is a *per-pod* rejection — in-place mode stays
+  enabled for every other workload.
+- The controller falls back to **eviction**: pods are replaced (new
+  name/UID) rather than resized, one at a time — after each eviction the
+  recycle loop waits for the replacement to become Ready before evicting
+  the next pod, so the PDB's `minAvailable: 2` holds throughout. An
+  eviction blocked by the PDB (429) is skipped and retried on the next
+  reconcile.
+- The replacement pods run `Burstable` with CPU request ~`220m` (no limit)
+  and memory request ~`110Mi` (limit ~`165Mi`).
+
+```bash
+# Guaranteed before the recycle, Burstable after
+kubectl get pod -n scenario-qos-change -l app=stress \
+  -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.qosClass}{"\n"}{end}'
+# the per-pod Invalid rejection and the eviction fallback
+kubectl logs -n k8s-sustain deploy/k8s-sustain-controller \
+  | grep -E 'rejected as invalid|falling back to eviction'
+# PDB status during the recycle: disruptionsAllowed flips between 1 and 0,
+# at least 2 pods stay Ready
+kubectl get pdb -n scenario-qos-change stress -o wide
+```
+
+On clusters without in-place support (< 1.33) the scenario still converges —
+stale pods are evicted directly — but the interesting branch (the `Invalid`
+rejection on `/resize`) is never exercised.
 
 ## Observability
 

@@ -118,7 +118,7 @@ spec:
 
 ### Ongoing mode for CronJobs
 
-`Ongoing` mode resizes **currently running** job pods in place using the Kubernetes `pods/resize` subresource (requires `InPlacePodVerticalScaling` — GA on k8s ≥ 1.33; works for `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35). The CronJob spec itself is **never modified**, so GitOps tools (Argo CD, Flux) see no drift. Future runs continue to pick up the latest resources from the webhook at admission.
+`Ongoing` mode resizes **currently running** job pods in place using the Kubernetes `pods/resize` subresource (requires k8s ≥ 1.33, where `InPlacePodVerticalScaling` is on by default; works for `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35). The CronJob spec itself is **never modified**, so GitOps tools (Argo CD, Flux) see no drift. Future runs continue to pick up the latest resources from the webhook at admission.
 
 ```yaml
 spec:
@@ -132,7 +132,7 @@ Practical implications:
 
 - For CronJobs whose pods finish within seconds (e.g. `* * * * *` health pings), `Ongoing` is essentially equivalent to `OnCreate` — pods complete before any reconcile pass would touch them. The cost of running `Ongoing` is one extra Job/Pod list per reconcile.
 - For long-running runs (daily ETL, batch training, hour-long backfills), `Ongoing` can correct an under- or over-provisioned pod mid-run without restarting the container.
-- On clusters where `InPlacePodVerticalScaling` is unavailable, or the kubelet reports the resize as `Infeasible` or `Error`, or the API server rejects the resize for that pod (e.g. it would change the QoS class), the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook. The `ResourcesUpdated` event only counts pods whose resize the API server actually accepted.
+- On clusters below k8s 1.33, or when the kubelet reports the resize as `Infeasible` or `Error`, or the API server rejects the resize for that pod (e.g. it would change the QoS class), the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook. The `ResourcesUpdated` event only counts pods whose resize the API server actually accepted.
 - The controller never patches the `CronJob` or `Job` object, so RBAC for `batch/cronjobs` and `batch/jobs` is read-only.
 
 ### Collecting enough history

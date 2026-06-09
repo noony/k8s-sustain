@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -38,10 +37,9 @@ type ContainerRecommendation struct {
 // The Patcher never modifies workload specs (Deployment, StatefulSet, etc.).
 //
 // Ongoing mode behaviour:
-//   - k8s ≥ 1.31 (inPlace=true): patches running pods directly via
-//     InPlacePodVerticalScaling — zero restarts. Uses the /resize subresource
-//     on k8s ≥ 1.33, falls back to a direct pod patch on 1.31-1.32.
-//   - k8s < 1.31 (inPlace=false): evicts stale pods one by one via the
+//   - k8s ≥ 1.33 (inPlace=true): patches running pods directly via
+//     InPlacePodVerticalScaling — zero restarts. Uses the /resize subresource.
+//   - k8s < 1.33 (inPlace=false): evicts stale pods one by one via the
 //     Eviction API so the workload controller replaces them. The webhook
 //     injects the latest resources into the replacement pods.
 //     PodDisruptionBudgets are respected; pods blocked by a PDB are
@@ -54,11 +52,8 @@ type ContainerRecommendation struct {
 //     respect the StatefulSet's update semantics.
 type Patcher struct {
 	client client.Client
-	// inPlace is read on every recycle and may be flipped to false from
-	// any goroutine when the API server rejects an in-place patch. Using
-	// an atomic avoids a data race when reconciles for different
-	// workloads share this Patcher.
-	inPlace atomic.Bool
+	// inPlace is fixed at construction from the detected server version.
+	inPlace bool
 
 	// readyPollInterval is how often we poll pod state while waiting for a
 	// replacement pod to become Ready after an eviction.
@@ -108,24 +103,22 @@ const (
 )
 
 // New returns a Patcher. Set inPlace=true when the cluster supports
-// InPlacePodVerticalScaling (k8s ≥ 1.31).
+// InPlacePodVerticalScaling and the pods/resize subresource (k8s ≥ 1.33).
 func New(c client.Client, inPlace bool, opts ...Option) *Patcher {
 	p := &Patcher{
 		client:            c,
+		inPlace:           inPlace,
 		readyPollInterval: defaultReadyPollInterval,
 		readyTimeout:      defaultReadyTimeout,
 	}
-	p.inPlace.Store(inPlace)
 	for _, opt := range opts {
 		opt(p)
 	}
 	return p
 }
 
-// InPlace reports whether the patcher is currently using in-place pod
-// resource updates. It can flip to false at runtime if the API server
-// rejects an in-place patch (feature gate disabled).
-func (p *Patcher) InPlace() bool { return p.inPlace.Load() }
+// InPlace reports whether the patcher uses in-place pod resource updates.
+func (p *Patcher) InPlace() bool { return p.inPlace }
 
 // TargetWorkload identifies the workload whose pods are being recycled.
 // RecyclePods uses the UID to drop pods that merely match the label selector
@@ -155,13 +148,13 @@ func (p *Patcher) RecyclePods(ctx context.Context, target TargetWorkload, namesp
 //
 // Returns the number of pods whose resize the API server actually accepted,
 // so callers can report accurately: pods that were skipped, already at
-// target, or rejected (per-pod Invalid, feature gate off) are not counted.
+// target, or rejected (per-pod Invalid) are not counted.
 //
 // The caller is responsible for filtering out pods that should not be touched
 // (e.g. pods owned by Completed/Failed Jobs).
 func (p *Patcher) ResizePodsInPlace(ctx context.Context, pods []*corev1.Pod, recs map[string]ContainerRecommendation) (int, error) {
 	logger := log.FromContext(ctx)
-	if !p.inPlace.Load() {
+	if !p.inPlace {
 		logger.V(1).Info("in-place resize disabled on this cluster; deferring to next pod creation via webhook")
 		return 0, nil
 	}
@@ -199,9 +192,9 @@ func (p *Patcher) ResizePodsInPlace(ctx context.Context, pods []*corev1.Pod, rec
 //     (verdict Infeasible, or Error after a failed actuation) — the spec lies
 //     about what is actually allocated, so a staleness check against the spec
 //     would wrongly conclude the pod is fresh.
-//   - onUnapplied runs when the API server rejected the resize patch (per-pod
-//     validation failure, or feature gate off on 1.31-1.32); the pod object
-//     has been reverted to the server's spec by then.
+//   - onUnapplied runs when the API server rejected the resize patch as
+//     invalid for this pod; the pod object has been reverted to the server's
+//     spec by then.
 //
 // unsatisfiableLog and unappliedLog are the call-site-specific log lines
 // emitted before the strategy runs, preserving each public function's exact
@@ -220,10 +213,8 @@ type unapplyStrategy struct {
 // may report, or "" when no resize is pending (none requested, in progress,
 // or already applied).
 //
-// k8s ≥ 1.33 reports the verdict through the PodResizePending and
-// PodResizeInProgress conditions; the pod.Status.Resize field they replaced
-// is deprecated and no longer populated there, but is still the only signal
-// on 1.31-1.32, so both sources are consulted. A pending verdict wins over an
+// The verdict is reported through the PodResizePending and
+// PodResizeInProgress conditions (k8s ≥ 1.33). A pending verdict wins over an
 // in-progress error: it always refers to the most recent desired state.
 func resizePendingReason(pod *corev1.Pod) string {
 	errored := false
@@ -237,12 +228,6 @@ func resizePendingReason(pod *corev1.Pod) string {
 	}
 	if errored {
 		return corev1.PodReasonError
-	}
-	switch pod.Status.Resize {
-	case corev1.PodResizeStatusInfeasible:
-		return corev1.PodReasonInfeasible
-	case corev1.PodResizeStatusDeferred:
-		return corev1.PodReasonDeferred
 	}
 	return ""
 }
@@ -314,9 +299,9 @@ func (p *Patcher) resizePodInPlaceWith(ctx context.Context, pod *corev1.Pod, rec
 	}
 
 	// Patch regular containers and sidecar init containers in two separate
-	// /resize calls. Sidecar in-place resize requires k8s 1.33+ with the right
-	// feature gates and may be rejected on older clusters; isolating it from
-	// the regular-container patch ensures a sidecar rejection cannot block the
+	// /resize calls. Sidecar in-place resize needs feature gates beyond
+	// InPlacePodVerticalScaling and may be rejected; isolating it from the
+	// regular-container patch ensures a sidecar rejection cannot block the
 	// regular containers' resize.
 	if regChanged {
 		pod.Spec.Containers = containers
@@ -325,10 +310,10 @@ func (p *Patcher) resizePodInPlaceWith(ctx context.Context, pod *corev1.Pod, rec
 			return false, false, err
 		}
 		if !ok {
-			// Resize not applied: rejected as invalid for this pod, feature
-			// gate off (direct-patch path), or pod gone — the pod object was
-			// reverted to the server's spec. The strategy decides whether to
-			// evict (so the webhook re-injects on the replacement) or skip.
+			// Resize not applied: rejected as invalid for this pod, or pod
+			// gone — the pod object was reverted to the server's spec. The
+			// strategy decides whether to evict (so the webhook re-injects on
+			// the replacement) or skip.
 			logger.Info(strat.unappliedLog)
 			evicted, err = strat.onUnapplied(ctx, pod, recs)
 			return false, evicted, err
@@ -375,7 +360,7 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 		return fmt.Errorf("listing pods: %w", err)
 	}
 	strategy := "eviction"
-	if p.inPlace.Load() {
+	if p.inPlace {
 		strategy = "inPlace"
 	}
 	logger.V(1).Info("listed pods for recycle", "count", len(podList.Items), "strategy", strategy)
@@ -429,7 +414,7 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 			skipped++
 			continue
 		}
-		if p.inPlace.Load() && pod.Status.Phase != corev1.PodRunning {
+		if p.inPlace && pod.Status.Phase != corev1.PodRunning {
 			logger.V(1).Info("skipping non-Running pod for in-place resize", "pod", pod.Name, "phase", pod.Status.Phase)
 			skipped++
 			continue
@@ -438,7 +423,7 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 			evicted bool
 			err     error
 		)
-		if p.inPlace.Load() {
+		if p.inPlace {
 			// The in-place path can still evict the pod inline as a
 			// fallback (Infeasible status, or IsInvalid response indicating
 			// the InPlacePodVerticalScaling feature gate is off). When it
@@ -477,8 +462,7 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 //
 // When the pod spec already carries the target resources, the kubelet's
 // verdict on the staged resize (PodResizePending / PodResizeInProgress
-// conditions on k8s ≥ 1.33, the deprecated pod.Status.Resize field on
-// 1.31-1.32) decides what happens:
+// conditions) decides what happens:
 //
 //   - Infeasible: the node cannot satisfy the resources; fall back to eviction
 //     so the scheduler can place the replacement pod elsewhere. The eviction
@@ -495,10 +479,9 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 // regardless of any verdict on the previous one — the kubelet re-evaluates.
 //
 // Returns (evicted, err). evicted=true means the in-place path bailed out
-// to an Eviction (Infeasible/Error verdict, or feature-gate detection via
-// IsInvalid on the direct-patch fallback) and the caller must run the same
-// throttle/wait the pure-eviction branch uses, so the loop doesn't take down
-// the whole workload at once.
+// to an Eviction (Infeasible/Error verdict, or per-pod Invalid rejection)
+// and the caller must run the same throttle/wait the pure-eviction branch
+// uses, so the loop doesn't take down the whole workload at once.
 func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
 	_, evicted, err := p.resizePodInPlaceWith(ctx, pod, recs, unapplyStrategy{
 		unsatisfiableLog: "staged in-place resize cannot complete, falling back to eviction",
@@ -510,8 +493,8 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 		onUnsatisfiable: func(ctx context.Context, pod *corev1.Pod, verdict string) (bool, error) {
 			return p.submitEviction(ctx, pod, "in-place resize verdict "+verdict)
 		},
-		// API server rejected this pod's resize (per-pod validation failure,
-		// or feature gate off on 1.31-1.32): fall back to eviction so the
+		// API server rejected this pod's resize (per-pod validation
+		// failure, e.g. QoS class change): fall back to eviction so the
 		// webhook re-injects the new requests on the replacement. The
 		// sidecar resize is skipped — the replacement pod is on its way.
 		onUnapplied: p.evictPod,
@@ -519,20 +502,13 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 	return evicted, err
 }
 
-// submitInPlaceResize submits an in-place /resize patch to bring the pod's
-// staged spec changes from base to pod. Tries the /resize subresource (k8s
-// 1.33+) first, falling back to a direct pod Patch on k8s 1.31-1.32 where the
-// subresource doesn't exist yet.
+// submitInPlaceResize submits an in-place patch to the /resize subresource
+// (k8s ≥ 1.33) to bring the pod's staged spec changes from base to pod.
 //
-// An Invalid rejection means different things on the two paths:
-//
-//   - /resize subresource: the subresource being served means the feature is
-//     available, so Invalid is a per-pod validation failure (QoS class would
-//     change, memory limit decrease with a NotRequired resize policy, ...).
-//     Only this pod is affected; in-place stays enabled for the others.
-//   - direct pod patch: resource mutation is only accepted there when the
-//     InPlacePodVerticalScaling gate is on, so Invalid means the gate is off
-//     cluster-wide; in-place is disabled for the rest of this process.
+// The subresource is always served on supported clusters, so an Invalid
+// rejection is a per-pod validation failure (QoS class would change, memory
+// limit decrease with a NotRequired resize policy, ...) — only this pod is
+// affected. NotFound means the pod itself is gone.
 //
 // Returns:
 //
@@ -554,28 +530,11 @@ func (p *Patcher) submitInPlaceResize(ctx context.Context, pod, base *corev1.Pod
 		logger.Info("in-place resize rejected as invalid for this pod (e.g. QoS class change)", "err", err.Error())
 		revertStagedResize(pod, base)
 		return false, nil
-	case !apierrors.IsNotFound(err):
-		return false, err
-	}
-
-	// NotFound: the /resize subresource doesn't exist (k8s 1.31-1.32) — or
-	// the pod itself is gone, which the direct patch below disambiguates.
-	logger.V(1).Info("/resize subresource not available, falling back to direct pod patch", "err", err.Error())
-	err = p.client.Patch(ctx, pod, client.MergeFrom(base))
-	switch {
-	case err == nil:
-		logger.Info("in-place resize applied")
-		return true, nil
 	case apierrors.IsNotFound(err):
 		// Pod deleted between List and patch — mirror evictPod's NotFound
 		// handling and treat it as a no-op instead of surfacing a
 		// reconcile error.
 		logger.Info("pod gone before in-place resize, skipping")
-		return false, nil
-	case apierrors.IsInvalid(err):
-		logger.Info("in-place pod resource patch rejected, feature gate likely disabled")
-		p.inPlace.Store(false)
-		revertStagedResize(pod, base)
 		return false, nil
 	default:
 		return false, err
@@ -592,9 +551,9 @@ func revertStagedResize(pod, base *corev1.Pod) {
 
 // applySidecarResize submits an in-place /resize for staged sidecar init
 // container changes, reporting whether it was accepted. Sidecar in-place
-// resize is best-effort: kubelet rejects it on older clusters (it requires
-// k8s 1.33+ with the right feature gates), so any error is logged and the
-// original sidecar resources are restored. The replacement pod will pick up
+// resize is best-effort: it needs feature gates beyond
+// InPlacePodVerticalScaling and may be rejected, so any error is logged and
+// the original sidecar resources are restored. The replacement pod will pick up
 // the new resources via the webhook at next pod creation. A baseline
 // reflecting the (possibly already applied) regular-container changes is
 // built so the sidecar diff is the only remaining delta.

@@ -3,7 +3,7 @@
 # The CronJob spec is NEVER mutated (no GitOps drift). The webhook injects the
 # latest recommendation into each new run at admission time; if the controller
 # happens to reconcile while a run is still alive, it resizes the pod in place
-# via the pods/resize subresource (k8s ≥ 1.31; restartPolicy: Never coverage on
+# via the pods/resize subresource (k8s ≥ 1.33; restartPolicy: Never coverage on
 # k8s ≥ 1.35). RBAC is read-only on batch/cronjobs and batch/jobs.
 #
 # Initial requests: 500m / 256Mi. Per-run usage is ~200m / 100Mi for ~90s.

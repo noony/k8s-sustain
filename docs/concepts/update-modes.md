@@ -48,14 +48,14 @@ spec:
 - The webhook intercepts `Pod CREATE` requests for pods that carry the policy annotation
 - Unlike OnCreate mode, the webhook always injects the latest recommendation — even if the container already has a CPU request — ensuring new pods never start with stale resources
 
-**Ongoing reconciliation (controller) on clusters without in-place update support (k8s < 1.31):**
+**Ongoing reconciliation (controller) on clusters without in-place update support (k8s < 1.33):**
 
 1. Each non-terminal pod (Running or Pending) with stale resources is evicted via the Eviction API. Staleness is detected on both requests and limits — a recommendation that only changes a limit still triggers a recycle. Evicting Pending pods unblocks workloads stuck unschedulable because their original request was too large; the webhook re-injects the smaller recommendation on the replacement.
 2. The workload controller (Deployment/StatefulSet/DaemonSet) creates replacement pods
 3. The webhook injects the latest recommendations into the new pods at creation time
 4. PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle
 
-**Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.31):**
+**Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.33):**
 
 1. Controller patches each running, non-terminating pod's `spec.containers[*].resources` directly
 2. The kubelet applies the new resources without restarting the container
@@ -68,11 +68,11 @@ See [In-Place Updates](in-place-updates.md) for details.
 
 - Long-running workloads that accumulate meaningful usage history
 - Situations where you want resources to track actual usage over time
-- Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.31)
+- Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.33)
 
-**Note:** The controller never patches workload templates (Deployment, StatefulSet, CronJob, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s < 1.31), pods are replaced via PDB-respecting eviction, which causes pod restarts.
+**Note:** The controller never patches workload templates (Deployment, StatefulSet, CronJob, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s < 1.33), pods are replaced via PDB-respecting eviction, which causes pod restarts.
 
-**CronJob exception:** for `cronJob: Ongoing`, eviction is *never* used — evicting a Job pod would kill the run. Currently-running job pods are resized in place when the cluster supports it (k8s ≥ 1.31, with full coverage of `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35); otherwise they are left to finish on their original resources and the next scheduled run picks up the new values from the webhook. The CronJob spec itself is never modified, so GitOps tools see no drift.
+**CronJob exception:** for `cronJob: Ongoing`, eviction is *never* used — evicting a Job pod would kill the run. Currently-running job pods are resized in place when the cluster supports it (k8s ≥ 1.33, with full coverage of `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35); otherwise they are left to finish on their original resources and the next scheduled run picks up the new values from the webhook. The CronJob spec itself is never modified, so GitOps tools see no drift.
 
 ---
 
@@ -82,9 +82,9 @@ See [In-Place Updates](in-place-updates.md) for details.
 |----------|-----------------|
 | New cluster, no baseline yet | `OnCreate` — sets a sensible default at creation |
 | Existing workloads, must avoid downtime | `OnCreate` — only affects future pods |
-| Existing workloads, k8s ≥ 1.31 | `Ongoing` — in-place updates, zero restarts |
+| Existing workloads, k8s ≥ 1.33 | `Ongoing` — in-place updates, zero restarts |
 | CronJob pods (ephemeral per-run) | `OnCreate` — each run gets fresh recommendations |
-| StatefulSets with persistent state | `Ongoing` + k8s ≥ 1.31, or `OnCreate` |
+| StatefulSets with persistent state | `Ongoing` + k8s ≥ 1.33, or `OnCreate` |
 | DaemonSets | `Ongoing` (rolling update is DaemonSet's normal behaviour) |
 | Argo Rollouts | `Ongoing` or `OnCreate` — works like Deployments with canary/blue-green strategies |
 

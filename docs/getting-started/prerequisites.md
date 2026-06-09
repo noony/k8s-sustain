@@ -7,7 +7,7 @@ Cluster, tooling, and metrics requirements before installing k8s-sustain.
 | Requirement | Version |
 |-------------|---------|
 | Kubernetes | ≥ 1.24 |
-| Kubernetes (in-place updates) | ≥ 1.31 |
+| Kubernetes (in-place updates) | ≥ 1.33 |
 
 ## Helm
 

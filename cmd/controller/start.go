@@ -148,10 +148,11 @@ func runStart(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-// detectInPlaceSupport returns true when the cluster is k8s >= 1.31, where the
-// InPlacePodVerticalScaling feature gate is beta and enabled by default.
-// Versions 1.27-1.30 had the gate as alpha (disabled by default), so we don't
-// enable in-place updates there to avoid silent patch rejections.
+// detectInPlaceSupport returns true when the cluster is k8s >= 1.33, where the
+// InPlacePodVerticalScaling feature gate is beta and enabled by default and
+// the pods/resize subresource is served. Earlier versions had the gate as
+// alpha (disabled by default) and no /resize subresource, so we don't enable
+// in-place updates there to avoid silent patch rejections.
 // On any error it logs a warning and returns false (safe default).
 func detectInPlaceSupport(cfg *rest.Config, log logr.Logger) bool {
 	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
@@ -170,5 +171,5 @@ func detectInPlaceSupport(cfg *rest.Config, log logr.Logger) bool {
 		log.Info("Unable to parse server version; in-place updates disabled", "major", sv.Major, "minor", sv.Minor)
 		return false
 	}
-	return major > 1 || (major == 1 && minor >= 31)
+	return major > 1 || (major == 1 && minor >= 33)
 }

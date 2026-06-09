@@ -543,8 +543,8 @@ func TestPatchPodInPlace_HappyPath(t *testing.T) {
 	}
 }
 
-// withResizePendingCondition stamps the k8s ≥ 1.33 PodResizePending condition
-// on a pod, replacing the deprecated Status.Resize field used on 1.31-1.32.
+// withResizePendingCondition stamps the PodResizePending condition (k8s ≥
+// 1.33) on a pod.
 func withResizePendingCondition(pod *corev1.Pod, reason string) *corev1.Pod {
 	pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
 		Type:   corev1.PodResizePending,
@@ -566,63 +566,12 @@ func withResizeErrorCondition(pod *corev1.Pod) *corev1.Pod {
 	return pod
 }
 
-// TestPatchPodInPlace_InfeasibleFallsBackToEviction verifies that when the
-// kubelet has marked the resize as infeasible (legacy Status.Resize field,
-// k8s 1.31-1.32) and the pod spec already carries the target resources (the
-// resize was accepted by the apiserver but cannot land on the node), the
-// patcher evicts the pod even though the spec looks fresh — the spec lies
-// about what is actually allocated.
-func TestPatchPodInPlace_InfeasibleFallsBackToEviction(t *testing.T) {
-	// Spec already at the recommended 200m: a previous /resize patch was
-	// accepted, then the kubelet reported it Infeasible.
-	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")})
-	stale.Status.Resize = corev1.PodResizeStatusInfeasible
-
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = policyv1.AddToScheme(scheme)
-
-	var resizeCalled bool
-	var evicted []string
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(stale).
-		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
-				if sub == "resize" {
-					resizeCalled = true
-				}
-				return nil
-			},
-			SubResourceCreate: func(ctx context.Context, inner client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
-				if sub == "eviction" {
-					evicted = append(evicted, obj.GetName())
-					return inner.Delete(ctx, obj)
-				}
-				return nil
-			},
-		}).
-		Build()
-
-	p := New(c, true, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
-	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
-	}
-	if resizeCalled {
-		t.Error("did not expect /resize to be called when status is Infeasible")
-	}
-	if len(evicted) != 1 || evicted[0] != "stale" {
-		t.Errorf("expected eviction of 'stale', got %v", evicted)
-	}
-}
-
-// TestPatchPodInPlace_InfeasibleConditionFallsBackToEviction is the k8s ≥ 1.33
-// variant of the test above: the kubelet reports the infeasible resize through
-// the PodResizePending condition (Status.Resize is deprecated and no longer
-// populated there). The patcher must read the condition and evict.
+// TestPatchPodInPlace_InfeasibleConditionFallsBackToEviction verifies that
+// when the kubelet reports the staged resize as infeasible through the
+// PodResizePending condition and the pod spec already carries the target
+// resources (the resize was accepted by the apiserver but cannot land on the
+// node), the patcher evicts the pod even though the spec looks fresh — the
+// spec lies about what is actually allocated.
 func TestPatchPodInPlace_InfeasibleConditionFallsBackToEviction(t *testing.T) {
 	stale := withResizePendingCondition(
 		runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
@@ -773,12 +722,11 @@ func TestPatchPodInPlace_InfeasibleWithNewTargetRetriesResize(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_ResizeNotFoundFallsBackToDirectPatch verifies the
-// k8s 1.31–1.32 fallback: when the /resize subresource doesn't exist yet
-// (NotFound), the patcher patches the pod directly instead. Eviction must
-// not be triggered — direct patch is itself the in-place path on those
-// versions.
-func TestPatchPodInPlace_ResizeNotFoundFallsBackToDirectPatch(t *testing.T) {
+// TestPatchPodInPlace_ResizeNotFoundSkips verifies that a NotFound response
+// from /resize is treated as "pod gone between List and patch": no direct pod
+// patch is attempted (the subresource always exists on supported clusters),
+// no eviction is triggered, and no error surfaces.
+func TestPatchPodInPlace_ResizeNotFoundSkips(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
@@ -793,7 +741,7 @@ func TestPatchPodInPlace_ResizeNotFoundFallsBackToDirectPatch(t *testing.T) {
 			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
 				if sub == "resize" {
 					resizeCalled = true
-					return apierrors.NewNotFound(corev1.Resource("pods"), "resize")
+					return apierrors.NewNotFound(corev1.Resource("pods"), "stale")
 				}
 				return nil
 			},
@@ -818,13 +766,13 @@ func TestPatchPodInPlace_ResizeNotFoundFallsBackToDirectPatch(t *testing.T) {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if !resizeCalled {
-		t.Error("expected /resize attempt before fallback")
+		t.Error("expected /resize attempt")
 	}
-	if !podPatchCalled {
-		t.Error("expected direct pod patch fallback when /resize returns NotFound")
+	if podPatchCalled {
+		t.Error("did not expect a direct pod patch — that fallback was removed with pre-1.33 support")
 	}
 	if evictionCalled {
-		t.Error("did not expect eviction on NotFound — direct patch is the fallback")
+		t.Error("did not expect eviction when the pod is gone")
 	}
 }
 
@@ -857,7 +805,8 @@ func TestPatchPodInPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
 				return nil
 			},
 			Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
-				// Direct pod patch should NOT be tried for IsInvalid (only IsNotFound).
+				// A direct pod patch must never be attempted; resizes go
+				// through the /resize subresource only.
 				return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), "stale", nil)
 			},
 			SubResourceCreate: func(ctx context.Context, inner client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
@@ -887,64 +836,6 @@ func TestPatchPodInPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
 	}
 	if !p.InPlace() {
 		t.Error("per-pod Invalid on /resize must NOT flip p.inPlace off")
-	}
-}
-
-// TestPatchPodInPlace_DirectPatchInvalidDisablesInPlace verifies gate-off
-// detection on k8s 1.31-1.32: the /resize subresource does not exist
-// (NotFound) and the direct pod patch is rejected as Invalid — that
-// combination means InPlacePodVerticalScaling is disabled cluster-wide, so
-// the patcher flips to eviction mode for the rest of the process.
-func TestPatchPodInPlace_DirectPatchInvalidDisablesInPlace(t *testing.T) {
-	stale1 := runningPod("stale1", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
-	stale2 := runningPod("stale2", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
-
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = policyv1.AddToScheme(scheme)
-
-	var resizeCalls, patchCalls int
-	var evicted []string
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(stale1, stale2).
-		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
-				if sub == "resize" {
-					resizeCalls++
-					return apierrors.NewNotFound(corev1.Resource("pods"), "resize")
-				}
-				return nil
-			},
-			Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
-				patchCalls++
-				return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), "stale", nil)
-			},
-			SubResourceCreate: func(ctx context.Context, inner client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
-				if sub == "eviction" {
-					evicted = append(evicted, obj.GetName())
-					return inner.Delete(ctx, obj)
-				}
-				return nil
-			},
-		}).
-		Build()
-
-	p := New(c, true, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
-	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
-	}
-	if len(evicted) != 2 {
-		t.Errorf("expected both pods evicted once the gate is detected off; got %v", evicted)
-	}
-	if resizeCalls != 1 || patchCalls != 1 {
-		t.Errorf("expected exactly 1 /resize + 1 direct patch before disabling in-place, got resize=%d patch=%d", resizeCalls, patchCalls)
-	}
-	if p.InPlace() {
-		t.Error("expected p.inPlace flipped off after direct-patch Invalid (gate off)")
 	}
 }
 
@@ -1047,9 +938,7 @@ func TestPatchPodInPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
 // TestPatchPodInPlace_DeferredIsNoOp verifies that when the kubelet has
 // deferred the resize (PodResizePending condition, k8s ≥ 1.33) and the pod
 // spec already carries the target resources, the patcher leaves the pod
-// alone — the kubelet will apply it when conditions allow. The legacy
-// Status.Resize field variant is covered separately so each detection path
-// is exercised on its own.
+// alone — the kubelet will apply it when conditions allow.
 func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
 	// Spec already at the recommended 200m: the resize was accepted but the
 	// kubelet is waiting for room to apply it.
@@ -1091,51 +980,6 @@ func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
 	}
 	if resizeCalled || evictionCalled {
 		t.Errorf("expected no-op when resize Deferred (resize=%v, eviction=%v)", resizeCalled, evictionCalled)
-	}
-}
-
-// TestPatchPodInPlace_DeferredLegacyFieldIsNoOp is the k8s 1.31-1.32 variant
-// of the test above: only the deprecated Status.Resize field carries the
-// Deferred verdict, with no PodResizePending condition present. Guards the
-// legacy branch of resizePendingReason, which the condition-based test never
-// reaches.
-func TestPatchPodInPlace_DeferredLegacyFieldIsNoOp(t *testing.T) {
-	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")})
-	stale.Status.Resize = corev1.PodResizeStatusDeferred
-
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = policyv1.AddToScheme(scheme)
-
-	var resizeCalled, evictionCalled bool
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(stale).
-		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
-				if sub == "resize" {
-					resizeCalled = true
-				}
-				return nil
-			},
-			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
-				if sub == "eviction" {
-					evictionCalled = true
-				}
-				return nil
-			},
-		}).
-		Build()
-
-	p := New(c, true)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
-	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
-	}
-	if resizeCalled || evictionCalled {
-		t.Errorf("expected no-op when legacy Status.Resize=Deferred (resize=%v, eviction=%v)", resizeCalled, evictionCalled)
 	}
 }
 
@@ -1649,30 +1493,31 @@ func TestResizePodsInPlace_PerPodInvalidSkipsWithoutDisabling(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_GateOffDisablesInPlace verifies gate-off detection in
-// the no-evict path: /resize NotFound followed by an Invalid direct patch
-// (k8s 1.31-1.32 with the gate disabled) flips in-place mode off, and the
-// pod is not evicted.
-func TestResizePodsInPlace_GateOffDisablesInPlace(t *testing.T) {
-	pod := runningPod("rejected", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+// TestResizePodsInPlace_PodGoneSkips verifies the no-evict path when /resize
+// returns NotFound (the pod disappeared between List and patch): the pod is
+// skipped without eviction, not counted as resized, and no direct pod patch
+// is attempted.
+func TestResizePodsInPlace_PodGoneSkips(t *testing.T) {
+	pod := runningPod("gone", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	_ = policyv1.AddToScheme(scheme)
 
-	var evictionCalled bool
+	var podPatchCalled, evictionCalled bool
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(pod).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
 				if sub == "resize" {
-					return apierrors.NewNotFound(corev1.Resource("pods"), "resize")
+					return apierrors.NewNotFound(corev1.Resource("pods"), pod.Name)
 				}
 				return nil
 			},
 			Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
-				return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), pod.Name, nil)
+				podPatchCalled = true
+				return nil
 			},
 			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
 				if sub == "eviction" {
@@ -1690,11 +1535,8 @@ func TestResizePodsInPlace_GateOffDisablesInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResizePodsInPlace: %v", err)
 	}
-	if evictionCalled || resized != 0 {
-		t.Errorf("ResizePodsInPlace must never evict nor count pods on feature-gate rejection; resized=%d", resized)
-	}
-	if p.InPlace() {
-		t.Error("expected in-place mode disabled after direct-patch Invalid (gate off)")
+	if evictionCalled || podPatchCalled || resized != 0 {
+		t.Errorf("expected gone pod to be skipped (patch=%v, eviction=%v, resized=%d)", podPatchCalled, evictionCalled, resized)
 	}
 }
 

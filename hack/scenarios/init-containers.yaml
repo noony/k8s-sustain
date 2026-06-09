@@ -4,7 +4,7 @@
 #     request from 256Mi to ~110Mi.
 #   - sidecar init container `log-shipper` (restartPolicy: Always) gets
 #     CPU/memory recommendations from its own usage and is resized in-place on
-#     k8s >= 1.32 (or recycled along with the pod on older versions).
+#     k8s >= 1.33 (or recycled along with the pod on older versions).
 #   - classic init container `migrate` is recommended too: the webhook injects
 #     resources for it on next pod creation. Drift in `migrate` does NOT
 #     trigger a pod recycle since it has already exited when the pod is

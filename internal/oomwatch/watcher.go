@@ -187,7 +187,7 @@ func hasFreshOOM(pod *corev1.Pod) bool {
 // containerMemLimitBytes returns the configured memory limit (in bytes) for
 // the named container from the pod spec, or zero if no limit is set. We read
 // the spec rather than the status because Status.Resources only exists for
-// in-place resize-capable pods (k8s >= 1.27 and feature-gated until 1.31).
+// in-place resize-capable pods (k8s >= 1.27 and feature-gated until 1.33).
 func containerMemLimitBytes(pod *corev1.Pod, container string) int64 {
 	for i := range pod.Spec.Containers {
 		c := &pod.Spec.Containers[i]

@@ -75,6 +75,6 @@ All node pods carry the recommended values; the DaemonSet's pod template is unch
 ## Notes
 
 - **Higher percentile for node-critical agents.** Log shippers, CNI plugins, and node exporters cannot be OOM-killed without disturbing the node. Use p99 with generous memory headroom.
-- **`updateStrategy: OnDelete`.** When a DaemonSet uses `OnDelete`, the controller cannot create replacement pods on its own. On Kubernetes 1.31+ k8s-sustain patches running pods in place and bypasses this constraint; on older versions, plan to delete pods manually after a recommendation lands so the DaemonSet controller creates fresh ones.
+- **`updateStrategy: OnDelete`.** When a DaemonSet uses `OnDelete`, the controller cannot create replacement pods on its own. On Kubernetes 1.33+ k8s-sustain patches running pods in place and bypasses this constraint; on older versions, plan to delete pods manually after a recommendation lands so the DaemonSet controller creates fresh ones.
 - **Tolerations.** A DaemonSet typically tolerates control-plane taints. The eviction fallback respects these tolerations so a recycle does not strand control-plane node pods.
 - **`OnCreate` mode.** Less common for DaemonSets since their pods are long-lived. Useful during cluster bootstrap to size newly-added nodes' agents before the controller reconciles.

@@ -106,7 +106,7 @@ This walker is what makes `OnCreate` mode work for Rollouts without any extra co
 
 ## Notes
 
-- **`OnCreate` and `Ongoing` modes.** Right-sizing for `Rollout` workloads is supported in both modes. The admission webhook walks the `Pod → ReplicaSet → Rollout` owner chain and injects requests at pod creation; in `Ongoing` mode the controller additionally recycles stale pods (in-place on Kubernetes 1.31+, otherwise via eviction). The Rollout pod template is never patched — replacement pods are mutated by the webhook on the way in.
+- **`OnCreate` and `Ongoing` modes.** Right-sizing for `Rollout` workloads is supported in both modes. The admission webhook walks the `Pod → ReplicaSet → Rollout` owner chain and injects requests at pod creation; in `Ongoing` mode the controller additionally recycles stale pods (in-place on Kubernetes 1.33+, otherwise via eviction). The Rollout pod template is never patched — replacement pods are mutated by the webhook on the way in.
 - **Canary and blue-green steps.** k8s-sustain operates on the pods currently owned by the active ReplicaSet. A paused Rollout is not perturbed: the controller recycles stale pods only when their requests drift outside the policy's clamps.
 - **Analysis runs.** Right-sizing changes affect only pod resources, never the Rollout spec, so analysis runs behave the same as without k8s-sustain.
 - **RBAC.** The controller's ClusterRole includes `argoproj.io/rollouts` with `get`, `list`, `watch` verbs (read-only).

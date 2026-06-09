@@ -29,8 +29,8 @@ controller:
   # installs side-by-side in the same cluster.
   leaderElectionID: ""
   concurrencyLimit: 5
-  # When the controller falls back to eviction-based recycling (k8s < 1.31 or
-  # InPlacePodVerticalScaling disabled), it waits this long for the workload
+  # When the controller falls back to eviction-based recycling (k8s < 1.33),
+  # it waits this long for the workload
   # controller to bring a replacement pod back to Ready before evicting the
   # next stale pod. Must cover the slowest realistic recovery — Karpenter /
   # cluster-autoscaler node provisioning regularly takes several minutes on a
