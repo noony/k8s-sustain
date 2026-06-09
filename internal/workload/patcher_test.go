@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -59,7 +60,7 @@ func TestRecyclePods_ExposesPublicMethod(t *testing.T) {
 		}
 	}()
 
-	err := p.RecyclePods(context.Background(), "default", sel, nil)
+	err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, nil)
 	if err == nil {
 		t.Error("expected error with nil client")
 	}
@@ -382,7 +383,7 @@ func TestRecyclePods_Eviction_HappyPath(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "stale" {
@@ -426,7 +427,7 @@ func TestRecyclePods_SkipsTerminatingAndTerminal(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "pending" {
@@ -461,7 +462,7 @@ func TestEvictPod_PDBBlocked_ReturnsNil(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Errorf("expected nil on PDB block, got %v", err)
 	}
 }
@@ -492,7 +493,7 @@ func TestEvictPod_NotFound_ReturnsNil(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Errorf("expected nil on NotFound, got %v", err)
 	}
 }
@@ -531,7 +532,7 @@ func TestPatchPodInPlace_HappyPath(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if !resizeCalled {
@@ -579,7 +580,7 @@ func TestPatchPodInPlace_InfeasibleFallsBackToEviction(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if resizeCalled {
@@ -631,7 +632,7 @@ func TestPatchPodInPlace_ResizeNotFoundFallsBackToDirectPatch(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if !resizeCalled {
@@ -690,7 +691,7 @@ func TestPatchPodInPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if len(evicted) != 2 {
@@ -785,7 +786,7 @@ func TestPatchPodInPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
 		"sidecar": {CPURequest: qtyp("100m")},
 	}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("sidecar rejection should be best-effort, got: %v", err)
 	}
 	if !regularResizeOK {
@@ -836,7 +837,7 @@ func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if resizeCalled || evictionCalled {
@@ -884,7 +885,7 @@ func TestPatchPodInPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if resizeCalled || podPatchCalled || evictionCalled {
@@ -931,7 +932,7 @@ func TestPatchPodInPlace_PodGoneDuringResize_NoError(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("expected NotFound on a vanished pod to be a no-op, got: %v", err)
 	}
 	if evictionCalled {
@@ -1265,7 +1266,7 @@ func TestRecyclePods_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
 	// would have to wait readyTimeout * 3 — but the deadline below would
 	// catch that long before the standard `go test` timeout.
 	start := time.Now()
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
@@ -1371,7 +1372,7 @@ func TestRecyclePods_InPlaceInvalidFallback_WaitsForReplacement(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 
@@ -1424,7 +1425,7 @@ func TestRecyclePods_DefaultOrderIsAlphabetical(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	want := []string{"a", "b", "c"}
@@ -1477,7 +1478,7 @@ func TestRecyclePods_CrashLoopBackOffAbortsLoop(t *testing.T) {
 	// Expect a non-nil error (the abort) and exactly one eviction (the first
 	// pod) — the loop must NOT continue to evict pod "b" while a peer is
 	// crashlooping.
-	err := p.RecyclePods(context.Background(), "default", sel, recs)
+	err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs)
 	if err == nil {
 		t.Fatal("expected error surfacing CrashLoopBackOff abort, got nil")
 	}
@@ -1521,7 +1522,7 @@ func TestRecyclePods_HPAScaleDownDoesNotStallEvictionLoop(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	// Both pods should be evicted in order — the wait between them must not
@@ -1567,11 +1568,169 @@ func TestRecyclePods_TimesOutWhenReplacementMissing(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	err := p.RecyclePods(context.Background(), "default", sel, recs)
+	err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs)
 	if err == nil {
 		t.Fatal("expected timeout error when replacement never appears, got nil")
 	}
 	if len(evicted) != 1 {
 		t.Errorf("expected exactly one eviction before timeout halted the loop, got %d (%v)", len(evicted), evicted)
+	}
+}
+
+// replicaSetOwnedPod is a builder for Deployment/Rollout-style pods: the
+// controller ownerRef points at an intermediate ReplicaSet, whose own
+// controller ownerRef identifies the top-level workload.
+func replicaSetOwnedPod(name, rsName string, requests corev1.ResourceList) *corev1.Pod {
+	p := runningPod(name, requests)
+	p.UID = types.UID("uid-" + name)
+	controller := true
+	p.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "apps/v1",
+		Kind:       "ReplicaSet",
+		Name:       rsName,
+		UID:        types.UID("uid-" + rsName),
+		Controller: &controller,
+	}}
+	return p
+}
+
+// replicaSetOwnedBy is a builder for ReplicaSets controlled by a Deployment
+// with the given name and UID.
+func replicaSetOwnedBy(name, deployName string, deployUID types.UID) *appsv1.ReplicaSet {
+	controller := true
+	return &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      name,
+			UID:       types.UID("uid-" + name),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       deployName,
+				UID:        deployUID,
+				Controller: &controller,
+			}},
+		},
+	}
+}
+
+// TestRecyclePods_Eviction_SkipsPodsNotOwnedByTarget verifies the ownership
+// filter on the eviction path: only pods whose ownerRef chain resolves to
+// the target Deployment (pod → ReplicaSet → Deployment) are evicted. A bare
+// debug pod carrying the same labels and a pod owned by a different
+// Deployment's ReplicaSet with an overlapping selector are left untouched —
+// the opt-in contract is per-workload. Also verifies the ReplicaSet→owner
+// lookup is memoized per recycle pass (one GET per distinct ReplicaSet, not
+// one per pod).
+func TestRecyclePods_Eviction_SkipsPodsNotOwnedByTarget(t *testing.T) {
+	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
+	owned1 := replicaSetOwnedPod("owned-1", "web-abc", stale)
+	owned2 := replicaSetOwnedPod("owned-2", "web-abc", stale)
+	foreign := replicaSetOwnedPod("zz-foreign", "other-abc", stale)
+	bare := runningPod("zz-bare-debug", stale)
+
+	targetRS := replicaSetOwnedBy("web-abc", "web", "dep-uid")
+	otherRS := replicaSetOwnedBy("other-abc", "other", "other-dep-uid")
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = appsv1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evicted []string
+	rsGets := 0
+	funcs := evictionInterceptor(&evicted)
+	funcs.Get = func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*appsv1.ReplicaSet); ok {
+			rsGets++
+		}
+		return cl.Get(ctx, key, obj, opts...)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(owned1, owned2, foreign, bare, targetRS, otherRS).
+		WithInterceptorFuncs(funcs).
+		Build()
+
+	p := New(c, false /* eviction path */, testEvictionOpts()...)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+	target := TargetWorkload{Kind: "Deployment", Name: "web", UID: "dep-uid"}
+
+	if err := p.RecyclePods(context.Background(), target, "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	want := []string{"owned-1", "owned-2"}
+	if len(evicted) != len(want) || evicted[0] != want[0] || evicted[1] != want[1] {
+		t.Errorf("expected only owned pods evicted in order %v, got %v", want, evicted)
+	}
+	// Two distinct ReplicaSets referenced by three pods: the per-pass memo
+	// must keep the GETs at two.
+	if rsGets != 2 {
+		t.Errorf("expected 2 ReplicaSet GETs (memoized per recycle pass), got %d", rsGets)
+	}
+
+	// The bystanders must still exist, untouched.
+	for _, name := range []string{"zz-bare-debug", "zz-foreign"} {
+		var got corev1.Pod
+		if err := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: name}, &got); err != nil {
+			t.Errorf("bystander pod %s should still exist: %v", name, err)
+		}
+	}
+}
+
+// TestRecyclePods_InPlace_SkipsPodsNotOwnedByTarget verifies the ownership
+// filter on the in-place path (shared pod listing with the eviction path):
+// a StatefulSet-owned pod whose controller ownerRef UID matches the target
+// is resized, while a bare pod and a pod owned by a different StatefulSet
+// with the same labels are not.
+func TestRecyclePods_InPlace_SkipsPodsNotOwnedByTarget(t *testing.T) {
+	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
+	owned := statefulSetPod("web-0", stale)
+	owned.OwnerReferences[0].UID = "sts-uid"
+	other := statefulSetPod("web2-0", stale)
+	other.OwnerReferences[0].Name = "web2"
+	other.OwnerReferences[0].UID = "other-sts-uid"
+	bare := runningPod("bare-debug", stale)
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = appsv1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var resized []string
+	var evictionCalled bool
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(owned, other, bare).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					resized = append(resized, obj.GetName())
+				}
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evictionCalled = true
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true /* in-place */)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+	target := TargetWorkload{Kind: "StatefulSet", Name: "web", UID: "sts-uid"}
+
+	if err := p.RecyclePods(context.Background(), target, "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if len(resized) != 1 || resized[0] != "web-0" {
+		t.Errorf("expected only the owned pod web-0 resized, got %v", resized)
+	}
+	if evictionCalled {
+		t.Error("no pod should be evicted on the in-place path")
 	}
 }

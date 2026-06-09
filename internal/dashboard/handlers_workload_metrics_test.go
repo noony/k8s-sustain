@@ -104,7 +104,7 @@ func TestHandleWorkloadRecommendations_AppliesOOMFloor(t *testing.T) {
 		memByContainer: promclient.ContainerValues{"app": 100 * mib},
 		// ...but the workload OOM'd and the kernel saw 200 MiB.
 		oomSignal: promclient.OOMSignal{
-			OOMCount:        1,
+			OOMCounts:       promclient.ContainerValues{"app": 1},
 			PeakMemoryBytes: promclient.ContainerValues{"app": 200 * mib},
 		},
 	}

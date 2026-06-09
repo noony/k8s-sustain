@@ -25,7 +25,7 @@ func TestBuildContainerRecs_CollectsHasDataAndSkipsRest(t *testing.T) {
 	containers := []corev1.Container{container("app"), container("nodata")}
 
 	recs := BuildContainerRecs(
-		containers, inputs, false,
+		containers, inputs,
 		autoscaler.Info{Kind: autoscaler.KindNone},
 		sustainv1alpha1.ResourcesConfigs{},
 		sustainv1alpha1.AutoscalerCoordination{},
@@ -60,7 +60,7 @@ func TestBuildContainerRecs_OnResultPerHasDataContainer(t *testing.T) {
 
 	var seen []string
 	recs := BuildContainerRecs(
-		containers, inputs, false,
+		containers, inputs,
 		autoscaler.Info{Kind: autoscaler.KindNone},
 		sustainv1alpha1.ResourcesConfigs{},
 		sustainv1alpha1.AutoscalerCoordination{},
@@ -103,10 +103,10 @@ func TestBuildContainerRecs_EnrichOOMDrivesMemoryFloor(t *testing.T) {
 	}
 	containers := []corev1.Container{container("app")}
 
-	// Baseline: recentOOM=false, no enrichment -> no memory emission (no usage,
+	// Baseline: no OOM counts, no enrichment -> no memory emission (no usage,
 	// no recent OOM, no live event).
 	base := BuildContainerRecs(
-		containers, inputs, false,
+		containers, inputs,
 		autoscaler.Info{Kind: autoscaler.KindNone},
 		sustainv1alpha1.ResourcesConfigs{},
 		sustainv1alpha1.AutoscalerCoordination{},
@@ -120,7 +120,7 @@ func TestBuildContainerRecs_EnrichOOMDrivesMemoryFloor(t *testing.T) {
 	// drives a floored memory recommendation.
 	var floorApplied bool
 	recs := BuildContainerRecs(
-		containers, inputs, false,
+		containers, inputs,
 		autoscaler.Info{Kind: autoscaler.KindNone},
 		sustainv1alpha1.ResourcesConfigs{},
 		sustainv1alpha1.AutoscalerCoordination{},
@@ -147,6 +147,87 @@ func TestBuildContainerRecs_EnrichOOMDrivesMemoryFloor(t *testing.T) {
 	}
 }
 
+// TestBuildContainerRecs_SiblingOOMDoesNotFloorInnocentContainer pins the
+// per-container OOM-recency scoping: when container "app" OOMed but its
+// sibling "side" did not, only app gets the peak floor. The sibling keeps its
+// pure percentile recommendation even though the (non-OOM-scoped) peak rule
+// reports a 24h high-water mark for it, and a third sibling with no usage
+// data gets NO memory recommendation via the OOM bypass.
+func TestBuildContainerRecs_SiblingOOMDoesNotFloorInnocentContainer(t *testing.T) {
+	inputs := &WorkloadInputs{
+		CPUPerPod: promclient.ContainerValues{},
+		MemPerPod: promclient.ContainerValues{
+			"app":  64 * float64(mebibyte),
+			"side": 50 * float64(mebibyte),
+		},
+		OOM: promclient.OOMSignal{
+			// Only app OOMed.
+			OOMCounts: promclient.ContainerValues{"app": 2},
+			// The peak rule is not OOM-scoped: every container has a 24h
+			// high-water mark, including the innocent siblings.
+			PeakMemoryBytes: promclient.ContainerValues{
+				"app":    200 * float64(mebibyte),
+				"side":   180 * float64(mebibyte),
+				"nodata": 150 * float64(mebibyte),
+			},
+			OOMLimitBytes: promclient.ContainerValues{},
+		},
+	}
+	containers := []corev1.Container{container("app"), container("side"), container("nodata")}
+
+	floorApplied := map[string]bool{}
+	recs := BuildContainerRecs(
+		containers, inputs,
+		autoscaler.Info{Kind: autoscaler.KindNone},
+		sustainv1alpha1.ResourcesConfigs{},
+		sustainv1alpha1.AutoscalerCoordination{},
+		BuildContainerRecsOptions{
+			OnResult: func(name string, res ContainerRecResult) {
+				floorApplied[name] = res.MemFloorApplied
+			},
+		},
+	)
+
+	app, ok := recs["app"]
+	if !ok || app.MemoryRequest == nil {
+		t.Fatalf("expected memory recommendation for OOMed container, got %v", recs)
+	}
+	if got := app.MemoryRequest.String(); got != "200Mi" {
+		t.Errorf("app: expected 200Mi (peak floor), got %s", got)
+	}
+	if !floorApplied["app"] {
+		t.Errorf("app: expected MemFloorApplied=true")
+	}
+
+	side, ok := recs["side"]
+	if !ok || side.MemoryRequest == nil {
+		t.Fatalf("expected percentile memory recommendation for sibling, got %v", recs)
+	}
+	if got := side.MemoryRequest.String(); got != "50Mi" {
+		t.Errorf("side: expected 50Mi (pure percentile, no sibling-OOM floor), got %s", got)
+	}
+	if floorApplied["side"] {
+		t.Errorf("side: floor must not apply to a container that did not OOM")
+	}
+
+	if _, ok := recs["nodata"]; ok {
+		t.Errorf("nodata: a container that did not OOM and has no usage must get no recommendation, got %v", recs["nodata"])
+	}
+}
+
+// TestWorkloadInputs_HasRecentOOM verifies the workload-level recency helper
+// (the age-gate bypass) fires when ANY container OOMed.
+func TestWorkloadInputs_HasRecentOOM(t *testing.T) {
+	none := &WorkloadInputs{}
+	if none.HasRecentOOM() {
+		t.Error("empty signal must not report recent OOM")
+	}
+	one := &WorkloadInputs{OOM: promclient.OOMSignal{OOMCounts: promclient.ContainerValues{"side": 1}}}
+	if !one.HasRecentOOM() {
+		t.Error("an OOM in any container must report recent OOM at workload level")
+	}
+}
+
 // TestBuildContainerRecs_LiveOOMWithoutAnchorEmitsNothing verifies a live OOM
 // event with no usable memory anchor (no usage samples, no peak, no OOM-time
 // limit) emits NO memory recommendation. Emitting would floor at the hard 1Mi
@@ -163,7 +244,7 @@ func TestBuildContainerRecs_LiveOOMWithoutAnchorEmitsNothing(t *testing.T) {
 	containers := []corev1.Container{container("app")}
 
 	recs := BuildContainerRecs(
-		containers, inputs, false,
+		containers, inputs,
 		autoscaler.Info{Kind: autoscaler.KindNone},
 		sustainv1alpha1.ResourcesConfigs{},
 		sustainv1alpha1.AutoscalerCoordination{},
@@ -195,7 +276,7 @@ func TestBuildContainerRecs_LiveOOMWithLimitAnchorEmits(t *testing.T) {
 	containers := []corev1.Container{container("app")}
 
 	recs := BuildContainerRecs(
-		containers, inputs, false,
+		containers, inputs,
 		autoscaler.Info{Kind: autoscaler.KindNone},
 		sustainv1alpha1.ResourcesConfigs{},
 		sustainv1alpha1.AutoscalerCoordination{},

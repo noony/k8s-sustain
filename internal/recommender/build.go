@@ -44,18 +44,21 @@ func ShouldSkipYoungWorkload(workloadCreated time.Time, recentOOM bool) bool {
 type WorkloadInputs struct {
 	CPUPerPod promclient.ContainerValues
 	MemPerPod promclient.ContainerValues
-	// OOM is the workload-level OOM signal from the past 24h. Empty when the
-	// query failed (fail-open) — callers should not block recommendations on
-	// missing OOM data.
+	// OOM is the workload's OOM signal from the past 24h, with per-container
+	// OOM counts. Empty when the query failed (fail-open) — callers should
+	// not block recommendations on missing OOM data.
 	OOM promclient.OOMSignal
 }
 
 // HasRecentOOM reports whether the workload has any recent OOM activity in
-// the Prometheus signal. Callers may OR this with their own in-process OOM
-// observations (e.g. the controller's live OOM watcher) before deciding
-// whether to bypass the workload-age gate.
+// the Prometheus signal, in ANY container. Callers may OR this with their own
+// in-process OOM observations (e.g. the controller's live OOM watcher) before
+// deciding whether to bypass the workload-age gate — a workload that OOMed
+// anywhere is not "too young to have data". Per-container OOM recency (which
+// drives the memory floor) is derived from OOM.OOMCounts in BuildContainerRecs
+// instead.
 func (w *WorkloadInputs) HasRecentOOM() bool {
-	return w.OOM.OOMCount > 0
+	return w.OOM.TotalOOMs() > 0
 }
 
 // FetchWorkloadInputs runs the Prometheus queries shared by the controller
@@ -176,9 +179,11 @@ type BuildContainerRecsOptions struct {
 // controller and the webhook. For each container it slices the per-pod inputs,
 // builds the OOM signal (NewOOMSignal, optionally enriched via
 // opts.EnrichOOM), computes the recommendation (ComputeContainerRec), and
-// collects the results with HasData. The recentOOM argument feeds the OOM
-// signal's Recent flag; callers OR their own OOM observations into it (the
-// controller adds live-OOM presence, the webhook passes inputs.HasRecentOOM()).
+// collects the results with HasData. Each container's OOM recency is derived
+// from inputs.OOM.OOMCounts — only containers that actually OOMed get the
+// memory floor, never innocent siblings. Callers fold their own per-container
+// OOM observations in via opts.EnrichOOM (the controller stamps LiveEventAt
+// for containers with a live OOM record, which is treated as recent).
 //
 // This is the single source of truth for skip/threshold semantics on both
 // injection paths — the workload-age gate (ShouldSkipYoungWorkload) is applied
@@ -187,7 +192,6 @@ type BuildContainerRecsOptions struct {
 func BuildContainerRecs(
 	containers []corev1.Container,
 	inputs *WorkloadInputs,
-	recentOOM bool,
 	autoInfo autoscaler.Info,
 	rsCfg sustainv1alpha1.ResourcesConfigs,
 	coordCfg sustainv1alpha1.AutoscalerCoordination,
@@ -199,6 +203,7 @@ func BuildContainerRecs(
 		memPerPod, hasMem := inputs.MemPerPod[c.Name]
 		_, hasPeak := inputs.OOM.PeakMemoryBytes[c.Name]
 
+		recentOOM := inputs.OOM.OOMCounts[c.Name] > 0
 		oom := NewOOMSignal(recentOOM, inputs.OOM.PeakMemoryBytes[c.Name], inputs.OOM.OOMLimitBytes[c.Name])
 		if opts.EnrichOOM != nil {
 			oom = opts.EnrichOOM(c.Name, oom)

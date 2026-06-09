@@ -495,9 +495,15 @@ prometheusRule:
         # takes the larger value. For a Deployment pod that OOMed N times the
         # restart path dominates (N > 1); for a Job pod the kill path provides
         # the 1 that the restart path can't see.
+        #
+        # The `container` label is kept through the outer sum so the OOM
+        # recency signal is per-container: the recommender only floors the
+        # memory of containers that actually OOMed, not innocent siblings in
+        # the same pod. Workload-level consumers re-aggregate with
+        # `sum by (namespace, owner_kind, owner_name)` at query time.
         - record: k8s_sustain:workload_oom_24h
           expr: |
-            sum by (namespace, owner_kind, owner_name) (
+            sum by (namespace, owner_kind, owner_name, container) (
               max by (namespace, pod, container) (
                 label_replace(
                   max by (namespace, pod, container) (

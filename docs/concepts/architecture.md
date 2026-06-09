@@ -58,7 +58,7 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
    - Detect autoscalers (HPA / KEDA `ScaledObject`) targeting the workload — read-only, no patches
    - Compute a per-container recommendation (see [Recommendation Pipeline](recommendation-pipeline.md))
    - If `--recommend-only` is set, log the recommendation and skip patching
-   - Recycle stale running pods: on k8s >= 1.31 via in-place resource patching (using the `/resize` subresource on k8s >= 1.33); on k8s < 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time
+   - Recycle stale running pods: on k8s >= 1.31 via in-place resource patching (using the `/resize` subresource on k8s >= 1.33); on k8s < 1.31 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time. Pods are listed by the workload's label selector and then filtered by **controller ownership**: a pod is only recycled when its ownerRef chain resolves to the target workload (directly for StatefulSet/DaemonSet, via the owning ReplicaSet for Deployment/Argo Rollout). Bare pods or pods of another workload with an overlapping selector are skipped and logged — the opt-in contract is per-workload
    - **CronJob exception:** the controller never mutates the CronJob spec and never evicts a job pod. On clusters that support in-place resize, currently-running job pods are resized via `pods/resize`; otherwise they finish on their existing resources and the next scheduled run picks up the new values from the webhook
    - Emit a `ResourcesUpdated` event on the workload object on success
    - On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a `ReconciliationRetryScheduled` warning event on the workload
@@ -75,7 +75,7 @@ When a container's `LastTerminationState.Terminated.Reason == "OOMKilled"` is ob
 - Captures the container's memory limit from the pod spec at that moment, so the recommender has a bump anchor even when Prometheus hasn't yet surfaced the OOM-time limit recording rule.
 - Enqueues the owning Policy for immediate reconcile via a `source.Channel` wired into the Policy reconciler's work queue.
 
-The recommender reads the cache during recommendation build: a hit sets the live OOM signal equivalent to the Prometheus `workload_oom_24h` flag and feeds the OOM-floor stage of the [Recommendation Pipeline](recommendation-pipeline.md#stages). The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.
+The recommender reads the cache during recommendation build: a hit sets the live OOM signal for that container only — equivalent to the per-container Prometheus `workload_oom_24h` recency signal — and feeds the OOM-floor stage of the [Recommendation Pipeline](recommendation-pipeline.md#stages). The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.
 
 **Operational notes.** The cache is in-memory and lives only for the lifetime of the controller process; on restart, the 24h Prometheus history (`k8s_sustain:workload_oom_24h`, `k8s_sustain:container_oom_limit_24h:bytes`) repopulates the floor on the next reconcile. Only pods carrying the `k8s.sustain.io/policy` annotation are watched, so cardinality is bounded by opted-in workloads. The watcher is leader-elected like other controllers — non-leaders idle.
 

@@ -11,6 +11,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // reconcileWorkload processes a single workload target: queries Prometheus,
@@ -113,8 +114,15 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		return err
 	}
 
+	// Identify the target so the patcher only touches pods owned by this
+	// workload — a bare pod or an overlapping selector from a workload that
+	// did not opt in must never be recycled.
+	tw := workload.TargetWorkload{Kind: t.Kind, Name: t.Name}
+	if t.Object != nil {
+		tw.UID = t.Object.GetUID()
+	}
 	logger.V(1).Info("recycling pods", "selector", sel.String())
-	if err := r.patcher.RecyclePods(ctx, t.Namespace, sel, recs); err != nil {
+	if err := r.patcher.RecyclePods(ctx, tw, t.Namespace, sel, recs); err != nil {
 		return r.handleStepError(ctx, t, "patch", "Pod recycle failed", err)
 	}
 

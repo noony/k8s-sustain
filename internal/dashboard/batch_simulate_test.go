@@ -275,7 +275,7 @@ func TestBatchSimulateAggregateSkipsRecsWithoutCurrentUsage(t *testing.T) {
 		cpuByOwner: map[string]promclient.ContainerValues{"wl-a": {"main": 0.2}},
 		memByOwner: map[string]promclient.ContainerValues{"wl-a": {"main": 200 * mib}},
 		oomByOwner: map[string]promclient.OOMSignal{
-			"wl-b": {OOMCount: 1, PeakMemoryBytes: promclient.ContainerValues{"main": 300 * mib}},
+			"wl-b": {OOMCounts: promclient.ContainerValues{"main": 1}, PeakMemoryBytes: promclient.ContainerValues{"main": 300 * mib}},
 		},
 	}
 	srv := newBatchSimulateServer(t, prom, 2)

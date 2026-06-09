@@ -259,7 +259,10 @@ func (s *Server) fetchWorkloadSignals(ctx context.Context, keys []string) map[st
 	if len(keys) == 0 {
 		return nil
 	}
-	oom, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricWorkloadOOM24h, "namespace", "owner_kind", "owner_name")
+	// The OOM rule is per-container; re-aggregate to workload level so one
+	// series per workload reaches the keyed map (otherwise a 0-count sibling
+	// container could overwrite an OOMed one).
+	oom, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("sum by (namespace, owner_kind, owner_name) (%s)", promclient.MetricWorkloadOOM24h), "namespace", "owner_kind", "owner_name")
 	drift, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("max by (namespace, owner_kind, owner_name) (abs(1 - %s))", promclient.MetricWorkloadDriftRatio), "namespace", "owner_kind", "owner_name")
 	blocked, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricWorkloadRetryState+" == 1", "namespace", "owner_kind", "owner_name")
 	autoscaler, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricAutoscalerPresent, "namespace", "owner_kind", "owner_name")

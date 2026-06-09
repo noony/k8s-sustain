@@ -17,15 +17,15 @@ import (
 //
 // Returned fields populated: CPURequest, MemoryRequest, CPUUsageCores,
 // MemoryUsageBytes. Limits and chart series are not computed here — callers
-// that need them layer that on top (see runSimulation). The OOM signal and
-// recentOOM flag are returned so simulate.go can reuse them when clamping
-// recommendation time-series.
+// that need them layer that on top (see runSimulation). The OOM signal is
+// returned so simulate.go can reuse it (per-container recency included) when
+// clamping recommendation time-series.
 func (s *Server) buildContainerRecommendations(
 	ctx context.Context,
 	namespace, kind, name string,
 	cpuCfg, memCfg sustainv1alpha1.ResourceRequestsConfig,
 	cpuWindow, memWindow string,
-) (map[string]simulationContainerResult, promclient.OOMSignal, bool, error) {
+) (map[string]simulationContainerResult, promclient.OOMSignal, error) {
 	cpuQuantile := recommender.PercentileQuantile(cpuCfg.Percentile)
 	memQuantile := recommender.PercentileQuantile(memCfg.Percentile)
 
@@ -73,13 +73,14 @@ func (s *Server) buildContainerRecommendations(
 		return nil
 	})
 	if err := g.Wait(); err != nil {
-		return nil, promclient.OOMSignal{}, false, err
+		return nil, promclient.OOMSignal{}, err
 	}
-	recentOOM := oomSignal.OOMCount > 0
 
 	// Include OOM peaks in the container set so a crash-looping container
 	// with no usage samples still gets a memory recommendation anchored on
-	// the kernel-observed peak.
+	// the kernel-observed peak. OOM recency is per-container: only containers
+	// that actually OOMed are added (and floored below) — a sibling's OOM
+	// never inflates an innocent container.
 	allContainers := make(map[string]struct{})
 	for n := range cpuValues {
 		allContainers[n] = struct{}{}
@@ -87,8 +88,8 @@ func (s *Server) buildContainerRecommendations(
 	for n := range memValues {
 		allContainers[n] = struct{}{}
 	}
-	if recentOOM {
-		for n := range oomSignal.PeakMemoryBytes {
+	for n := range oomSignal.PeakMemoryBytes {
+		if oomSignal.OOMCounts[n] > 0 {
 			allContainers[n] = struct{}{}
 		}
 	}
@@ -104,6 +105,7 @@ func (s *Server) buildContainerRecommendations(
 		}
 		memBytes, hasUsage := memValues[n]
 		_, hasPeak := oomSignal.PeakMemoryBytes[n]
+		recentOOM := oomSignal.OOMCounts[n] > 0
 		if hasUsage {
 			cr.MemoryUsageBytes = memBytes
 		}
@@ -116,5 +118,5 @@ func (s *Server) buildContainerRecommendations(
 		containers[n] = cr
 	}
 
-	return containers, oomSignal, recentOOM, nil
+	return containers, oomSignal, nil
 }

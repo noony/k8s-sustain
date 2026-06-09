@@ -312,7 +312,7 @@ The conjunction (`container_spec_memory_limit_bytes AND restart_changed AND last
 ### `k8s_sustain:workload_oom_24h`
 
 ```promql
-sum by (namespace, owner_kind, owner_name) (
+sum by (namespace, owner_kind, owner_name, container) (
   max by (namespace, pod, container) (
     label_replace(
       max by (namespace, pod, container) (
@@ -339,7 +339,7 @@ sum by (namespace, owner_kind, owner_name) (
 )
 ```
 
-OOMKilled events in the last 24h, aggregated to the workload. Two paths combined per (pod, container):
+OOMKilled events in the last 24h, per (workload, container). The `container` label is kept through the outer sum so the OOM recency signal is per-container: the recommender floors the memory of only the containers that actually OOMed — an innocent sidecar in the same pod keeps its pure percentile recommendation. Workload-level consumers (dashboard risk badge, attention queue, detail-page count, and the young-workload age-gate bypass) re-aggregate at query time with `sum by (namespace, owner_kind, owner_name)`. Two paths combined per (pod, container):
 
 - **`restarts` path** — counts OOMs as restart events (`increase(restarts_total)` filtered by last-terminated-reason). Accurate event count for restartable workloads (Deployment, StatefulSet, DaemonSet, Rollout) where the kubelet restarts the same container in place.
 - **`kill` path** — 0/1 indicator that the (pod, container) was OOMKilled at any point in the window. Catches one-shot Job/CronJob pods that fail once with `restartPolicy: Never` (or `backoffLimit: 0`) and never increment `restarts_total`.

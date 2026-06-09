@@ -31,6 +31,21 @@ tests:
           path: spec.groups[0].name
           value: k8s_sustain.workload_mapping
 
+  - it: keeps the container label in the OOM recency rule
+    set:
+      prometheusRule.enabled: true
+    asserts:
+      # spec.groups[6] is k8s_sustain.workload_signals; rules[2] is the OOM
+      # rule. The per-container grouping is load-bearing: the recommender
+      # floors only containers that actually OOMed, so dropping `container`
+      # from the sum would silently re-inflate innocent sidecars.
+      - equal:
+          path: spec.groups[6].rules[2].record
+          value: k8s_sustain:workload_oom_24h
+      - matchRegex:
+          path: spec.groups[6].rules[2].expr
+          pattern: 'sum by \(namespace, owner_kind, owner_name, container\)'
+
   - it: adds additionalLabels
     set:
       prometheusRule.enabled: true

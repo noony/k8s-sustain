@@ -51,11 +51,33 @@ func maxByContainer(inner string) string {
 	return fmt.Sprintf("max by (container) (%s)", inner)
 }
 
+// recordQueryFailure attributes a single failed query to the circuit breaker
+// using the same rules as QueryWorkloadOOMSignal. ctx must be the per-call
+// WithTimeout child the query ran under:
+//   - Genuine query error (ctx still live): a real Prometheus failure, counted.
+//   - Per-call timeout or parent cancellation (context.Cause is a context
+//     sentinel): counted, parity with QueryWorkloadOOMSignal's documented rules.
+//   - Collateral abort from an errgroup sibling failing (these queries run
+//     inside errgroups in recommender/build.go): counted ZERO times. The
+//     sibling's error propagates through the WithTimeout child as a NON-context
+//     cause, so the outage is attributed to the sibling — which already counted
+//     its own failure — not to Prometheus.
+func (c *Client) recordQueryFailure(ctx context.Context) {
+	if ctx.Err() == nil {
+		c.breaker.failure()
+		return
+	}
+	if cause := context.Cause(ctx); errors.Is(cause, context.DeadlineExceeded) || errors.Is(cause, context.Canceled) {
+		c.breaker.failure()
+	}
+}
+
 // execInstant runs an instant query through the circuit breaker: it gates on
-// breaker.allow(), applies the given per-call timeout, records failure/success,
-// and logs warnings — exactly the preamble the query methods used to inline.
-// On an open breaker it returns ErrCircuitOpen with a nil value; on a query
-// error it returns the raw API error (callers wrap it with their own prefix).
+// breaker.allow(), applies the given per-call timeout, records failure/success
+// (failures attributed via recordQueryFailure), and logs warnings — exactly the
+// preamble the query methods used to inline. On an open breaker it returns
+// ErrCircuitOpen with a nil value; on a query error it returns the raw API
+// error (callers wrap it with their own prefix).
 func (c *Client) execInstant(ctx context.Context, expr string, ts time.Time, timeout time.Duration) (model.Value, error) {
 	if !c.breaker.allow() {
 		return nil, ErrCircuitOpen
@@ -64,7 +86,7 @@ func (c *Client) execInstant(ctx context.Context, expr string, ts time.Time, tim
 	defer cancel()
 	v, warnings, err := c.api.Query(ctx, expr, ts)
 	if err != nil {
-		c.breaker.failure()
+		c.recordQueryFailure(ctx)
 		return nil, err
 	}
 	c.breaker.success()
@@ -75,13 +97,14 @@ func (c *Client) execInstant(ctx context.Context, expr string, ts time.Time, tim
 // runRange runs a range query through the circuit breaker without the
 // breaker.allow() gate, for callers that must parse durations or share a single
 // allow() gate before querying. It applies the per-call timeout, records
-// failure/success, and logs warnings — the same preamble execInstant inlines.
+// failure/success (failures attributed via recordQueryFailure), and logs
+// warnings — the same preamble execInstant inlines.
 func (c *Client) runRange(ctx context.Context, expr string, r prometheusv1.Range, timeout time.Duration) (model.Value, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	v, warnings, err := c.api.QueryRange(ctx, expr, r)
 	if err != nil {
-		c.breaker.failure()
+		c.recordQueryFailure(ctx)
 		return nil, err
 	}
 	c.breaker.success()
@@ -112,9 +135,9 @@ type Client struct {
 // Default circuit-breaker tuning: trip after 5 consecutive failures,
 // stay open for 30 seconds. Sized so a sustained Prometheus outage opens the
 // breaker within a couple of reconcile passes without over-counting a single
-// outage: each reconcile records a handful of failures (the CPU and memory
-// queries plus QueryWorkloadOOMSignal, which now coalesces its three probes to
-// at most one breaker failure per call — see QueryWorkloadOOMSignal), so a few
+// outage: every query path attributes at most one breaker failure per genuine
+// error or per-call timeout, and collateral errgroup-sibling cancellations
+// count zero (see recordQueryFailure and QueryWorkloadOOMSignal), so a few
 // stuck reconciles (each ≈ one queryTimeout long) reach the threshold.
 const (
 	defaultBreakerMaxFailures = 5
@@ -265,13 +288,28 @@ func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, 
 
 // OOMSignal carries the OOM context for a single workload over the past 24h.
 type OOMSignal struct {
-	OOMCount        float64
+	// OOMCounts is the per-container OOM event count over the past 24h.
+	// Per-container so the recommender only floors the memory of containers
+	// that actually OOMed — an innocent sidecar in the same pod keeps its
+	// pure percentile recommendation.
+	OOMCounts       ContainerValues
 	PeakMemoryBytes ContainerValues
 	// OOMLimitBytes is the cgroup memory limit observed at the moment a
 	// recent OOM event fired, per container. Used by the recommender as a
 	// bump anchor when peak working-set is unreliable (cgroup v2,
 	// sub-scrape spikes can hide the real high-water mark).
 	OOMLimitBytes ContainerValues
+}
+
+// TotalOOMs sums the per-container OOM counts into the workload-level count.
+// Used by consumers that need workload-level recency (e.g. the young-workload
+// age-gate bypass — a workload that OOMed anywhere is not too young to have data).
+func (s OOMSignal) TotalOOMs() float64 {
+	var total float64
+	for _, v := range s.OOMCounts {
+		total += v
+	}
+	return total
 }
 
 // recordOnce records at most one breaker failure across all probes of a single
@@ -286,9 +324,10 @@ func (c *Client) recordOnce(counted *atomic.Bool) {
 	}
 }
 
-// QueryWorkloadOOMSignal returns the recent OOM count (24h) and the peak
-// per-container memory working-set bytes observed alongside it. Used as a floor
-// signal: if a workload OOM'd, never recommend memory below max(peak, current).
+// QueryWorkloadOOMSignal returns the recent per-container OOM counts (24h) and
+// the peak per-container memory working-set bytes observed alongside them. Used
+// as a floor signal: if a container OOM'd, never recommend its memory below
+// max(peak, current).
 //
 // The three probes run concurrently under a shared per-call timeout, so several
 // can error at once. To keep the circuit breaker honest this method records AT
@@ -326,7 +365,7 @@ func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKin
 	now := time.Now()
 
 	selector := workloadSelector(namespace, ownerKind, ownerName)
-	oomExpr := fmt.Sprintf("sum(%s%s)", MetricWorkloadOOM24h, selector)
+	oomExpr := fmt.Sprintf("sum by (container) (%s%s)", MetricWorkloadOOM24h, selector)
 	// Use the dedicated peak rule (kernel high-water + OOM-scoped limit fallback).
 	// Working-set sampled at scrape interval misses sub-second spikes that
 	// trigger the kill — `container_memory_max_usage_bytes` (cgroup v1) and
@@ -342,9 +381,9 @@ func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKin
 	// Wait(). Each query keeps the same per-query breaker.success()/failure()
 	// and warning-logging semantics as the original sequential code.
 	var (
-		oomCount float64
-		peaks    = ContainerValues{}
-		limits   = ContainerValues{}
+		oomCounts = ContainerValues{}
+		peaks     = ContainerValues{}
+		limits    = ContainerValues{}
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	// recordProbeError counts a genuine independent probe error exactly once.
@@ -366,8 +405,8 @@ func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKin
 		}
 		c.breaker.success()
 		logWarnings(gctx, oomExpr, warnings)
-		if vec, ok := oomRes.(model.Vector); ok && len(vec) > 0 {
-			oomCount = float64(vec[0].Value)
+		if vec, ok := oomRes.(model.Vector); ok {
+			oomCounts = vectorToContainerValues(vec)
 		}
 		return nil
 	})
@@ -412,7 +451,7 @@ func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKin
 		}
 		return OOMSignal{}, err
 	}
-	return OOMSignal{OOMCount: oomCount, PeakMemoryBytes: peaks, OOMLimitBytes: limits}, nil
+	return OOMSignal{OOMCounts: oomCounts, PeakMemoryBytes: peaks, OOMLimitBytes: limits}, nil
 }
 
 // OOMEvent represents a single OOM kill event for a container.

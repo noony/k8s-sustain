@@ -136,4 +136,4 @@ Per-workload (max across replicas — used for per-workload dashboard views):
 
 ### Workload signals (new)
 
-`k8s_sustain:workload_oom_24h`, `k8s_sustain:workload_drifted` (boolean: drift > 10%).
+`k8s_sustain:workload_oom_24h` (per-container OOM count, labels include `container`), `k8s_sustain:workload_drifted` (boolean: drift > 10%).

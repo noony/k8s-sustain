@@ -95,7 +95,10 @@ func (r *PolicyReconciler) listActiveJobsForCronJob(ctx context.Context, cj *bat
 }
 
 // listPodsForJob returns the pods owned by the given Job, scoped via the
-// canonical batch.kubernetes.io/job-name label.
+// canonical batch.kubernetes.io/job-name label and then confirmed by
+// controller ownerRef UID — the label alone is not proof of ownership (a
+// bare pod can carry it), mirroring the UID check listActiveJobsForCronJob
+// applies to the Jobs themselves.
 func (r *PolicyReconciler) listPodsForJob(ctx context.Context, job *batchv1.Job) ([]corev1.Pod, error) {
 	var list corev1.PodList
 	if err := r.List(ctx, &list,
@@ -104,7 +107,17 @@ func (r *PolicyReconciler) listPodsForJob(ctx context.Context, job *batchv1.Job)
 	); err != nil {
 		return nil, err
 	}
-	return list.Items, nil
+	out := make([]corev1.Pod, 0, len(list.Items))
+	for i := range list.Items {
+		pod := &list.Items[i]
+		if !workload.IsOwnedBy(pod.OwnerReferences, job.UID) {
+			log.FromContext(ctx).Info("skipping pod carrying job-name label but not owned by job",
+				"pod", pod.Name, "namespace", pod.Namespace, "job", job.Name)
+			continue
+		}
+		out = append(out, *pod)
+	}
+	return out, nil
 }
 
 // jobIsTerminal reports whether the Job has reached a terminal state

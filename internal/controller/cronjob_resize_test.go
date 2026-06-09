@@ -109,14 +109,17 @@ func TestListActiveJobsForCronJob_FiltersOwnerAndState(t *testing.T) {
 }
 
 // TestListPodsForJob_LabelSelector verifies the canonical
-// batch.kubernetes.io/job-name label is used to enumerate a Job's pods.
+// batch.kubernetes.io/job-name label is used to enumerate a Job's pods, and
+// that label-matching pods without a controller ownerRef to the Job (e.g. a
+// bare pod carrying a forged label) are filtered out.
 func TestListPodsForJob_LabelSelector(t *testing.T) {
-	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "j1"}}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "j1", UID: "j1-uid"}}
 	matching := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "p1",
-			Labels:    map[string]string{jobPodNameLabel: "j1"},
+			Namespace:       "default",
+			Name:            "p1",
+			Labels:          map[string]string{jobPodNameLabel: "j1"},
+			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "j1-uid", Kind: "Job", Name: "j1"}},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
@@ -127,7 +130,15 @@ func TestListPodsForJob_LabelSelector(t *testing.T) {
 			Labels:    map[string]string{jobPodNameLabel: "different"},
 		},
 	}
-	r := makeReconciler(t, job, matching, wrongJob)
+	unowned := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "p3",
+			Labels:    map[string]string{jobPodNameLabel: "j1"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	r := makeReconciler(t, job, matching, wrongJob, unowned)
 
 	got, err := r.listPodsForJob(context.Background(), job)
 	if err != nil {
@@ -171,14 +182,16 @@ func TestResizeCronJobPods_NeverPatchesCronJob(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       "default",
 			Name:            "nightly-1",
+			UID:             "job-uid",
 			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "cj-uid", Kind: "CronJob"}},
 		},
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "nightly-1-abc",
-			Labels:    map[string]string{jobPodNameLabel: "nightly-1"},
+			Namespace:       "default",
+			Name:            "nightly-1-abc",
+			Labels:          map[string]string{jobPodNameLabel: "nightly-1"},
+			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "job-uid", Kind: "Job", Name: "nightly-1"}},
 		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
 			Name: "app",
@@ -255,14 +268,16 @@ func TestResizeCronJobPods_ReturnsZeroWhenNothingResized(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       "default",
 			Name:            "nightly-1",
+			UID:             "job-uid",
 			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "cj-uid", Kind: "CronJob"}},
 		},
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "nightly-1-abc",
-			Labels:    map[string]string{jobPodNameLabel: "nightly-1"},
+			Namespace:       "default",
+			Name:            "nightly-1-abc",
+			Labels:          map[string]string{jobPodNameLabel: "nightly-1"},
+			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "job-uid", Kind: "Job", Name: "nightly-1"}},
 		},
 		Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},

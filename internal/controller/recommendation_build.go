@@ -35,6 +35,10 @@ func (r *PolicyReconciler) buildRecommendations(
 	if r.LiveOOM.Enabled() {
 		liveOOMs = r.LiveOOM.Source.RecentByWorkload(ns, ownerKind, ownerName, r.LiveOOM.EffectiveMaxAge())
 	}
+	// Workload-level recency: only feeds the age-gate bypass below. The
+	// per-container memory floor uses per-container recency (OOMCounts /
+	// LiveEventAt) inside BuildContainerRecs, so a sibling's OOM never floors
+	// an innocent container.
 	recentOOM := inputs.HasRecentOOM() || len(liveOOMs) > 0
 
 	// Skip recommendation when the workload itself is too young to have
@@ -58,7 +62,7 @@ func (r *PolicyReconciler) buildRecommendations(
 	// in sequence (no concurrency), so EnrichOOM looks the record up once and
 	// OnResult reuses it — avoiding a second map lookup per container.
 	var liveRec *oomwatch.OOMRecord
-	recs := recommender.BuildContainerRecs(containers, inputs, recentOOM, autoInfo, rsCfg, coordCfg,
+	recs := recommender.BuildContainerRecs(containers, inputs, autoInfo, rsCfg, coordCfg,
 		recommender.BuildContainerRecsOptions{
 			// Construct the per-container OOM context: prometheus signal + any
 			// live OOM observation, with a fallback to the cache-captured cgroup

@@ -34,7 +34,7 @@ func TestAllWorkloadsIncludesRiskDriftHPA(t *testing.T) {
 	srv := newTestServerWithDeployment(t, "default", "web")
 	srv.PromClient = &fakePromClient{
 		byLabels: map[string]map[string]float64{
-			"k8s_sustain:workload_oom_24h": {"default|Deployment|web": 2},
+			"sum by (namespace, owner_kind, owner_name) (k8s_sustain:workload_oom_24h)":              {"default|Deployment|web": 2},
 			"max by (namespace, owner_kind, owner_name) (abs(1 - k8s_sustain_workload_drift_ratio))": {"default|Deployment|web": 0.6},
 			"k8s_sustain_workload_retry_state == 1":                                                  {},
 			"k8s_sustain_autoscaler_present":                                                         {"default|Deployment|web": 1},

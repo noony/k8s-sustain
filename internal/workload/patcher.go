@@ -127,10 +127,24 @@ func New(c client.Client, inPlace bool, opts ...Option) *Patcher {
 // rejects an in-place patch (feature gate disabled).
 func (p *Patcher) InPlace() bool { return p.inPlace.Load() }
 
+// TargetWorkload identifies the workload whose pods are being recycled.
+// RecyclePods uses the UID to drop pods that merely match the label selector
+// but are not owned by the workload (bare debug pods, or a second workload
+// with an overlapping selector that did not opt in via the policy
+// annotation). Kind and Name are used for logging only. An empty UID
+// disables the ownership check.
+type TargetWorkload struct {
+	Kind string
+	Name string
+	UID  types.UID
+}
+
 // RecyclePods drives running pods matching the given selector toward the
-// recommended resources. This is the only public entry point for pod recycling.
-func (p *Patcher) RecyclePods(ctx context.Context, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation) error {
-	return p.recyclePods(ctx, namespace, selector, recs)
+// recommended resources, skipping pods whose controller ownerRef chain does
+// not resolve to the target workload. This is the only public entry point
+// for pod recycling.
+func (p *Patcher) RecyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation) error {
+	return p.recyclePods(ctx, target, namespace, selector, recs)
 }
 
 // ResizePodsInPlace resizes the given pods in place, never falling back to
@@ -263,7 +277,12 @@ func (p *Patcher) resizePodInPlaceWith(ctx context.Context, pod *corev1.Pod, rec
 // For StatefulSets pods are processed in descending ordinal order so we
 // don't violate the ordinal invariant (e.g. evict pod-1 before pod-0 is
 // running again).
-func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation) error {
+//
+// Pods matching the selector but not owned by the target workload are
+// skipped: the opt-in contract is per-workload (annotation on the pod
+// template), so a bystander pod that merely shares the labels must never be
+// resized or evicted.
+func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation) error {
 	logger := log.FromContext(ctx).WithValues("namespace", namespace, "selector", selector.String())
 
 	var podList corev1.PodList
@@ -279,13 +298,31 @@ func (p *Patcher) recyclePods(ctx context.Context, namespace string, selector kl
 	}
 	logger.V(1).Info("listed pods for recycle", "count", len(podList.Items), "strategy", strategy)
 
-	// Build a stable ordering of pod pointers. For StatefulSets, descending
-	// ordinal — matches the StatefulSet controller's update sequence. For
-	// everything else, alphabetical by name keeps reconciles deterministic
-	// across runs (helpful for tests, logs, and rate-limited evictions).
-	pods := make([]*corev1.Pod, len(podList.Items))
+	// Keep only pods whose controller ownerRef chain resolves to the target
+	// workload. StatefulSet/DaemonSet/Job pods reference the workload
+	// directly; Deployment/Rollout pods go through an intermediate
+	// ReplicaSet, memoized in rsOwned so each ReplicaSet costs at most one
+	// GET per recycle pass. Then build a stable ordering of pod pointers:
+	// for StatefulSets, descending ordinal — matches the StatefulSet
+	// controller's update sequence; for everything else, alphabetical by
+	// name keeps reconciles deterministic across runs (helpful for tests,
+	// logs, and rate-limited evictions).
+	rsOwned := map[string]bool{}
+	pods := make([]*corev1.Pod, 0, len(podList.Items))
 	for i := range podList.Items {
-		pods[i] = &podList.Items[i]
+		pod := &podList.Items[i]
+		if target.UID != "" {
+			owned, err := PodOwnedByWorkload(ctx, p.client, pod, target.UID, rsOwned)
+			if err != nil {
+				return fmt.Errorf("resolving owner of pod %s: %w", pod.Name, err)
+			}
+			if !owned {
+				logger.Info("skipping pod matching selector but not owned by target workload",
+					"pod", pod.Name, "targetKind", target.Kind, "targetName", target.Name)
+				continue
+			}
+		}
+		pods = append(pods, pod)
 	}
 	sortPodsForRecycle(pods)
 

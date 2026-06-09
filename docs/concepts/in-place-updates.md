@@ -22,6 +22,8 @@ INFO  InPlacePodVerticalScaling support  enabled=true   server=v1.33.2
 INFO  InPlacePodVerticalScaling support  enabled=false  server=v1.30.5
 ```
 
+In both modes the patcher lists pods by the workload's label selector and then drops any pod whose controller ownerRef chain does not resolve to the target workload (directly for StatefulSet/DaemonSet pods, via the owning ReplicaSet for Deployment/Argo Rollout pods). A bare debug pod carrying the same labels, or a pod belonging to another workload with an overlapping selector, is never resized or evicted — the skip is logged so overlapping selectors are easy to diagnose.
+
 When `Ongoing` mode is active and `inPlace=true`, the patcher walks each running pod and:
 
 1. Reads `pod.status.resize` (kubelet's report on the previous resize attempt):
@@ -46,7 +48,7 @@ On any cluster where `inPlace=false` (auto-detected as < 1.31, or runtime-flippe
 - 429 responses (PodDisruptionBudget blocking eviction) are logged and skipped — the next reconcile cycle will retry.
 - The workload controller (Deployment / StatefulSet / etc.) replaces the evicted pod from the updated template; the webhook injects the latest recommendation into the replacement at admission time.
 
-CronJobs are special-cased: the controller never mutates the CronJob spec (which would cause GitOps drift) and never evicts a job pod (which would kill the run). On clusters that support in-place resize, currently-running job pods are resized via the `pods/resize` subresource using the same machinery as Deployments — including for `restartPolicy: Never`/`OnFailure` pods on k8s ≥ 1.35. If the cluster does not support in-place resize, the running pod is left untouched and the next scheduled run picks up the new resources from the webhook.
+CronJobs are special-cased: the controller never mutates the CronJob spec (which would cause GitOps drift) and never evicts a job pod (which would kill the run). Job pods are enumerated via the `batch.kubernetes.io/job-name` label and confirmed by controller ownerRef back to the Job (which is itself ownerRef-checked against the CronJob), so a bystander pod carrying the label is never touched. On clusters that support in-place resize, currently-running job pods are resized via the `pods/resize` subresource using the same machinery as Deployments — including for `restartPolicy: Never`/`OnFailure` pods on k8s ≥ 1.35. If the cluster does not support in-place resize, the running pod is left untouched and the next scheduled run picks up the new resources from the webhook.
 
 ## Caveats
 

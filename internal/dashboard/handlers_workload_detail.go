@@ -70,7 +70,9 @@ func (s *Server) lookupUpdateMode(ctx context.Context, namespace, kind, name str
 }
 
 func (s *Server) fillDetailPrometheusSignals(ctx context.Context, resp *workloadDetailResponse, namespace, kind, name string) {
-	oomExpr := fmt.Sprintf(`%s{namespace=%q,owner_kind=%q,owner_name=%q}`, promclient.MetricWorkloadOOM24h, namespace, kind, name)
+	// The OOM rule is per-container; sum across containers for the
+	// workload-level 24h count shown on the detail page.
+	oomExpr := fmt.Sprintf(`sum(%s{namespace=%q,owner_kind=%q,owner_name=%q})`, promclient.MetricWorkloadOOM24h, namespace, kind, name)
 	if v, _ := s.PromClient.QueryInstant(ctx, oomExpr); v > 0 {
 		resp.OOM24h = int(v)
 	}

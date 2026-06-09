@@ -73,7 +73,7 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, req simulateRequest
 	// Chart time range (top-level Window controls what's displayed on graphs)
 	timeRange := recommender.ResourceWindow(req.Window)
 
-	containers, oomSignal, recentOOM, err := s.buildContainerRecommendations(
+	containers, oomSignal, err := s.buildContainerRecommendations(
 		ctx,
 		req.Namespace, req.OwnerKind, req.OwnerName,
 		cpuCfg, memCfg, cpuWindow, memWindow,
@@ -135,7 +135,7 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, req simulateRequest
 	memRecSeries, _ := s.PromClient.QueryMemoryRecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, memQuantile, memWindow, timeRange, step)
 
 	cpuRecSeries = applyCPUClampingToSeries(cpuRecSeries, cpuCfg)
-	memRecSeries = applyMemoryClampingToSeries(memRecSeries, memCfg, oomSignal, recentOOM)
+	memRecSeries = applyMemoryClampingToSeries(memRecSeries, memCfg, oomSignal)
 
 	initContainers := initContainerNamesFromEntry(entry)
 
@@ -176,16 +176,17 @@ func applyCPUClampingToSeries(series promclient.ContainerTimeSeries, cfg sustain
 
 // applyMemoryClampingToSeries is the memory counterpart of
 // applyCPUClampingToSeries. The OOM-aware floor (max(peak, oomLimit × BumpFactor))
-// is applied per container so the chart line tracks what the controller would
-// actually apply.
-func applyMemoryClampingToSeries(series promclient.ContainerTimeSeries, cfg sustainv1alpha1.ResourceRequestsConfig, oomSignal promclient.OOMSignal, recentOOM bool) promclient.ContainerTimeSeries {
+// is applied per container — recency included, so only the series of containers
+// that actually OOMed get floored — tracking what the controller would actually
+// apply.
+func applyMemoryClampingToSeries(series promclient.ContainerTimeSeries, cfg sustainv1alpha1.ResourceRequestsConfig, oomSignal promclient.OOMSignal) promclient.ContainerTimeSeries {
 	if series == nil {
 		return nil
 	}
 	result := make(promclient.ContainerTimeSeries, len(series))
 	for name, points := range series {
 		clamped := make([]promclient.TimeValue, len(points))
-		oom := recommender.NewOOMSignal(recentOOM, oomSignal.PeakMemoryBytes[name], oomSignal.OOMLimitBytes[name])
+		oom := recommender.NewOOMSignal(oomSignal.OOMCounts[name] > 0, oomSignal.PeakMemoryBytes[name], oomSignal.OOMLimitBytes[name])
 		for i, p := range points {
 			var v float64
 			if qty := recommender.ComputeMemoryRequestWithOOM(p.Value, oom, cfg); qty != nil {

@@ -370,9 +370,10 @@ func (h *Handler) buildRecommendations(
 
 	coordCfg := policy.Spec.RightSizing.AutoscalerCoordination
 	// The webhook has no live OOM watcher and emits no per-container metrics, so
-	// it passes no hooks — the shared loop runs with the Prometheus-only signal.
+	// it passes no hooks — the shared loop runs with the Prometheus-only signal
+	// (per-container OOM recency comes from inputs.OOM.OOMCounts).
 	recs := recommender.BuildContainerRecs(
-		containers, inputs, inputs.HasRecentOOM(), autoInfo, rsCfg, coordCfg,
+		containers, inputs, autoInfo, rsCfg, coordCfg,
 		recommender.BuildContainerRecsOptions{},
 	)
 	return recs, nil

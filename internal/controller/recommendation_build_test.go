@@ -10,8 +10,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/oomwatch"
 )
 
 func TestFactorRatio_GuardsAgainstNaN(t *testing.T) {
@@ -102,7 +104,7 @@ func TestBuildRecommendations_RecentOOMBypassesHistoryGate(t *testing.T) {
 			// 3 samples — below the 12-sample floor (CrashLoop reality).
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"3"]}]}}`))
 		case strings.Contains(q, "workload_oom_24h"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"5"]}]}}`))
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"5"]}]}}`))
 		case strings.Contains(q, "container_peak_memory_24h:bytes"):
 			// Peak working-set witness from the OOM signal: 80Mi.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
@@ -161,7 +163,7 @@ func TestBuildRecommendations_RecentOOMRaisesMemoryFloor(t *testing.T) {
 		case strings.Contains(q, "count_over_time"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"168"]}]}}`))
 		case strings.Contains(q, "workload_oom_24h"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"2"]}]}}`))
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"2"]}]}}`))
 		case strings.Contains(q, "container_peak_memory_24h:bytes"):
 			// Peak working-set witness for the OOM signal: 800Mi.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
@@ -239,7 +241,7 @@ func TestBuildRecommendations_OOMTimeLimitBumpsBeyondLimit(t *testing.T) {
 		case strings.Contains(q, "count_over_time"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"168"]}]}}`))
 		case strings.Contains(q, "workload_oom_24h"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"9"]}]}}`))
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"9"]}]}}`))
 		case strings.Contains(q, "container_peak_memory_24h:bytes"):
 			// Peak underreports — cgroup v2 sub-scrape spike missed.
 			// 36Mi, well below the 96Mi limit the kernel killed at.
@@ -283,6 +285,199 @@ func TestBuildRecommendations_OOMTimeLimitBumpsBeyondLimit(t *testing.T) {
 	// Bare minimum: must be above the 96Mi limit the kernel killed at.
 	if rec.MemoryRequest.Cmp(resource.MustParse("96Mi")) <= 0 {
 		t.Errorf("expected memory > 96Mi (bump above OOM-time limit), got %s — recommendation would re-OOM", rec.MemoryRequest)
+	}
+}
+
+// TestBuildRecommendations_SiblingOOMDoesNotFloorInnocentContainer pins the
+// per-container OOM scoping end to end: container "app" OOMed but its sidecar
+// "side" did not. The OOM recording rule keeps the container label, so only
+// app gets the peak floor; the sidecar keeps its pure percentile value even
+// though the (non-OOM-scoped) peak rule reports a 24h high-water mark for it.
+func TestBuildRecommendations_SiblingOOMDoesNotFloorInnocentContainer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "workload_oom_24h"):
+			// Only app OOMed.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"2"]}
+			]}}`))
+		case strings.Contains(q, "container_peak_memory_24h:bytes"):
+			// The peak rule is NOT OOM-scoped: both containers have a 24h
+			// high-water mark well above their percentile.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"838860800"]},
+				{"metric":{"container":"side"},"value":[0,"629145600"]}
+			]}}`))
+		case strings.Contains(q, "workload_max_pod_cpu"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"0.1"]},
+				{"metric":{"container":"side"},"value":[0,"0.05"]}
+			]}}`))
+		case strings.Contains(q, "workload_max_pod_memory"):
+			// Percentile says 100Mi for both.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"104857600"]},
+				{"metric":{"container":"side"},"value":[0,"104857600"]}
+			]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	policy := policyForReconcileWorkload(t, "p")
+	containers := []corev1.Container{{Name: "app"}, {Name: "side"}}
+
+	sideFloorBefore := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "side")
+
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+
+	app, ok := recs["app"]
+	if !ok || app.MemoryRequest == nil {
+		t.Fatalf("expected memory recommendation for OOMed container, got %v", recs)
+	}
+	if app.MemoryRequest.Cmp(resource.MustParse("800Mi")) != 0 {
+		t.Errorf("app: expected 800Mi (peak floor), got %s", app.MemoryRequest)
+	}
+
+	side, ok := recs["side"]
+	if !ok || side.MemoryRequest == nil {
+		t.Fatalf("expected percentile memory recommendation for sidecar, got %v", recs)
+	}
+	if side.MemoryRequest.Cmp(resource.MustParse("100Mi")) != 0 {
+		t.Errorf("side: expected 100Mi (pure percentile, sibling OOM must not floor it), got %s", side.MemoryRequest)
+	}
+
+	sideFloorAfter := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "side")
+	if sideFloorAfter != sideFloorBefore {
+		t.Errorf("side: oom_floor_applied counter must not increment for an innocent sibling, delta=%v", sideFloorAfter-sideFloorBefore)
+	}
+}
+
+// TestBuildRecommendations_YoungWorkload_SiblingOOMBypassesAgeGate verifies
+// the age-gate bypass stays workload-level: any container's OOM (here, "app")
+// unblocks the too-young skip so the crash-looping container can get a
+// recommendation immediately.
+func TestBuildRecommendations_YoungWorkload_SiblingOOMBypassesAgeGate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "workload_oom_24h"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"1"]}
+			]}}`))
+		case strings.Contains(q, "container_peak_memory_24h:bytes"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"83886080"]}
+			]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	policy := policyForReconcileWorkload(t, "p")
+	containers := []corev1.Container{{Name: "app"}, {Name: "side"}}
+
+	// 1 minute old — under the 10-minute gate, but app's OOM bypasses it.
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	rec, ok := recs["app"]
+	if !ok || rec.MemoryRequest == nil {
+		t.Fatalf("expected OOM-anchored recommendation despite young workload, got %v", recs)
+	}
+	if _, ok := recs["side"]; ok {
+		t.Errorf("side: no usage and no OOM must yield no recommendation, got %v", recs["side"])
+	}
+}
+
+// fakeOOMSource is a canned oomwatch.Source for live-OOM tests.
+type fakeOOMSource struct {
+	records map[string]*oomwatch.OOMRecord
+}
+
+func (f *fakeOOMSource) Recent(_, _, _, container string, _ time.Duration) *oomwatch.OOMRecord {
+	return f.records[container]
+}
+
+func (f *fakeOOMSource) RecentByWorkload(_, _, _ string, _ time.Duration) map[string]*oomwatch.OOMRecord {
+	return f.records
+}
+
+// TestBuildRecommendations_LiveOOMFloorsOnlyOOMedContainer verifies the live
+// OOM watcher merge stays per-container: a live OOM record for "app" floors
+// app's memory (bump above the captured cgroup limit) while the sidecar keeps
+// its percentile recommendation.
+func TestBuildRecommendations_LiveOOMFloorsOnlyOOMedContainer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "workload_max_pod_cpu"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"0.1"]},
+				{"metric":{"container":"side"},"value":[0,"0.05"]}
+			]}}`))
+		case strings.Contains(q, "workload_max_pod_memory"):
+			// Percentile says 100Mi for both.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"104857600"]},
+				{"metric":{"container":"side"},"value":[0,"104857600"]}
+			]}}`))
+		default:
+			// No Prometheus OOM signal yet — the live watcher is ahead of it.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	r.LiveOOM = LiveOOMConfig{
+		Source: &fakeOOMSource{records: map[string]*oomwatch.OOMRecord{
+			"app": {
+				Container:     "app",
+				TerminatedAt:  time.Now().Add(-10 * time.Second),
+				OOMLimitBytes: 209715200, // 200Mi cgroup limit at kill time
+			},
+		}},
+		TriggerCh: make(chan event.GenericEvent),
+	}
+	policy := policyForReconcileWorkload(t, "p")
+	containers := []corev1.Container{{Name: "app"}, {Name: "side"}}
+
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+
+	app, ok := recs["app"]
+	if !ok || app.MemoryRequest == nil {
+		t.Fatalf("expected memory recommendation for live-OOMed container, got %v", recs)
+	}
+	// Floor = 200Mi × 1.20 bump = 240Mi.
+	if app.MemoryRequest.Cmp(resource.MustParse("200Mi")) <= 0 {
+		t.Errorf("app: expected bump above the 200Mi OOM-time limit, got %s", app.MemoryRequest)
+	}
+
+	side, ok := recs["side"]
+	if !ok || side.MemoryRequest == nil {
+		t.Fatalf("expected percentile memory recommendation for sidecar, got %v", recs)
+	}
+	if side.MemoryRequest.Cmp(resource.MustParse("100Mi")) != 0 {
+		t.Errorf("side: expected 100Mi (live OOM on sibling must not floor it), got %s", side.MemoryRequest)
 	}
 }
 

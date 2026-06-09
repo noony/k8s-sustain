@@ -161,7 +161,9 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		recordErr(err)
 	})
 	wg.Go(func() {
-		v, err := collectAttention(ctx, s.PromClient, promclient.MetricWorkloadOOM24h+" > 0", "OOM")
+		// The OOM rule is per-container; re-aggregate to workload level so
+		// each at-risk workload yields exactly one attention row.
+		v, err := collectAttention(ctx, s.PromClient, fmt.Sprintf("sum by (namespace, owner_kind, owner_name) (%s) > 0", promclient.MetricWorkloadOOM24h), "OOM")
 		riskRows = v
 		recordErr(err)
 	})

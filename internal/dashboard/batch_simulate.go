@@ -189,7 +189,7 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, name string, policy *sustainv1alpha1.Policy) (map[string]simulationContainerResult, error) {
 	cpuCfg := policy.Spec.RightSizing.ResourcesConfigs.CPU
 	memCfg := policy.Spec.RightSizing.ResourcesConfigs.Memory
-	containers, _, _, err := s.buildContainerRecommendations(ctx,
+	containers, _, err := s.buildContainerRecommendations(ctx,
 		namespace, kind, name,
 		cpuCfg.Requests, memCfg.Requests,
 		recommender.ResourceWindow(cpuCfg.Window), recommender.ResourceWindow(memCfg.Window),

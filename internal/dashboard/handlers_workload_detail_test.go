@@ -10,7 +10,7 @@ func TestHandleWorkloadDetailReturnsSnapshot(t *testing.T) {
 	srv := newTestServerWithDeployment(t, "default", "web")
 	srv.PromClient = &fakePromClient{
 		instant: map[string]float64{
-			"k8s_sustain:workload_oom_24h{namespace=\"default\",owner_kind=\"Deployment\",owner_name=\"web\"}": 1,
+			"sum(k8s_sustain:workload_oom_24h{namespace=\"default\",owner_kind=\"Deployment\",owner_name=\"web\"})": 1,
 		},
 		byLabels: map[string]map[string]float64{
 			`k8s_sustain_coordination_factor{namespace="default",owner_kind="Deployment",owner_name="web"}`: {

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 func TestQueryInstantReturnsScalarFromVector(t *testing.T) {
@@ -584,7 +586,13 @@ func TestQueryWorkloadOOMSignal_ReturnsCountAndPeak(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.Contains(q, "workload_oom_24h"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"3"]}]}}`))
+			if !strings.Contains(q, "sum by (container)") {
+				t.Errorf("oom probe must aggregate per container with `sum by (container)`, got %q", q)
+			}
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"3"]},
+				{"metric":{"container":"sidecar"},"value":[0,"1"]}
+			]}}`))
 		case strings.Contains(q, "container_peak_memory_24h:bytes"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"209715200"]}]}}`))
 		case strings.Contains(q, "container_oom_limit_24h:bytes"):
@@ -600,8 +608,11 @@ func TestQueryWorkloadOOMSignal_ReturnsCountAndPeak(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryWorkloadOOMSignal: %v", err)
 	}
-	if sig.OOMCount != 3 {
-		t.Errorf("OOMCount: got %v want 3", sig.OOMCount)
+	if sig.OOMCounts["app"] != 3 || sig.OOMCounts["sidecar"] != 1 {
+		t.Errorf("OOMCounts: got %v want app=3 sidecar=1", sig.OOMCounts)
+	}
+	if sig.TotalOOMs() != 4 {
+		t.Errorf("TotalOOMs: got %v want 4", sig.TotalOOMs())
 	}
 	if sig.PeakMemoryBytes["app"] != 209715200 {
 		t.Errorf("peak[app]: got %v want 209715200", sig.PeakMemoryBytes["app"])
@@ -627,8 +638,11 @@ func TestQueryWorkloadOOMSignal_NoOOMReturnsZeroCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryWorkloadOOMSignal: %v", err)
 	}
-	if sig.OOMCount != 0 {
-		t.Errorf("expected 0 OOM count, got %v", sig.OOMCount)
+	if sig.TotalOOMs() != 0 {
+		t.Errorf("expected 0 total OOM count, got %v", sig.TotalOOMs())
+	}
+	if len(sig.OOMCounts) != 0 {
+		t.Errorf("expected empty OOM count map, got %v", sig.OOMCounts)
 	}
 	if len(sig.PeakMemoryBytes) != 0 {
 		t.Errorf("expected empty peak map, got %v", sig.PeakMemoryBytes)
@@ -779,6 +793,189 @@ func TestQueryWorkloadOOMSignal_OuterSiblingCancelCountsZero(t *testing.T) {
 	}
 	if got := breakerFailures(c); got != 0 {
 		t.Fatalf("expected 0 breaker failures for outer-sibling collateral cancellation, got %d", got)
+	}
+}
+
+// TestExecInstant_GenuineErrorCountsOne asserts that a genuine Prometheus
+// error (server 500, per-call context still live) on the execInstant path
+// records exactly one breaker failure — unchanged from the old behaviour.
+func TestExecInstant_GenuineErrorCountsOne(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"status":"error","errorType":"internal","error":"boom"}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	c.breaker = newBreaker(10, time.Minute)
+
+	_, err := c.QueryWorkloadCPUByContainer(context.Background(), "ns", "Deployment", "web", 0.9, "7d")
+	if err == nil {
+		t.Fatal("expected an error from the failing query")
+	}
+	if got := breakerFailures(c); got != 1 {
+		t.Fatalf("expected exactly 1 breaker failure for a genuine query error, got %d", got)
+	}
+}
+
+// TestExecInstant_PerCallTimeoutCountsOne asserts that the per-call
+// queryTimeout deadline firing (a genuinely stalled Prometheus) on the
+// execInstant path still records one breaker failure — the cause is
+// context.DeadlineExceeded, a real failure attributable to Prometheus.
+func TestExecInstant_PerCallTimeoutCountsOne(t *testing.T) {
+	server, release := hangingOOMServer(t)
+	defer server.Close()
+	defer close(release)
+
+	c, _ := New(server.URL, WithQueryTimeout(50*time.Millisecond))
+	c.breaker = newBreaker(10, time.Minute)
+
+	_, err := c.QueryWorkloadCPUByContainer(context.Background(), "ns", "Deployment", "web", 0.9, "7d")
+	if err == nil {
+		t.Fatal("expected an error from the per-call timeout")
+	}
+	if got := breakerFailures(c); got != 1 {
+		t.Fatalf("expected exactly 1 breaker failure for a per-call timeout, got %d", got)
+	}
+}
+
+// TestExecInstant_OuterSiblingCancelCountsZero asserts that when an errgroup
+// sibling fails (these queries run inside the FetchWorkloadInputs errgroup in
+// recommender/build.go), the collateral cancellation — whose cause is a
+// NON-context error propagated through the WithTimeout child — records ZERO
+// breaker failures on the execInstant path. The outage belongs to the sibling,
+// which already counted its own failure. Before the fix every error counted,
+// so one Prometheus outage recorded 2-3 failures per reconcile.
+func TestExecInstant_OuterSiblingCancelCountsZero(t *testing.T) {
+	server, release := hangingOOMServer(t)
+	defer server.Close()
+	defer close(release)
+
+	c, _ := New(server.URL)
+	c.breaker = newBreaker(10, time.Minute)
+
+	siblingErr := errors.New("errgroup sibling failed")
+	ctx, cancelCause := context.WithCancelCause(context.Background())
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancelCause(siblingErr)
+	}()
+	defer cancelCause(nil)
+
+	_, err := c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "web", 0.9, "7d")
+	if err == nil {
+		t.Fatal("expected an error from the sibling cancellation")
+	}
+	if got := breakerFailures(c); got != 0 {
+		t.Fatalf("expected 0 breaker failures for sibling collateral cancellation, got %d", got)
+	}
+}
+
+// TestRunRange_GenuineErrorCountsOne is the runRange-path twin of
+// TestExecInstant_GenuineErrorCountsOne.
+func TestRunRange_GenuineErrorCountsOne(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"status":"error","errorType":"internal","error":"boom"}`))
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	c.breaker = newBreaker(10, time.Minute)
+
+	_, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	if err == nil {
+		t.Fatal("expected an error from the failing range query")
+	}
+	if got := breakerFailures(c); got != 1 {
+		t.Fatalf("expected exactly 1 breaker failure for a genuine range-query error, got %d", got)
+	}
+}
+
+// TestRunRange_PerCallTimeoutCountsOne is the runRange-path twin of
+// TestExecInstant_PerCallTimeoutCountsOne.
+func TestRunRange_PerCallTimeoutCountsOne(t *testing.T) {
+	server, release := hangingOOMServer(t)
+	defer server.Close()
+	defer close(release)
+
+	c, _ := New(server.URL, WithQueryTimeout(50*time.Millisecond))
+	c.breaker = newBreaker(10, time.Minute)
+
+	_, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	if err == nil {
+		t.Fatal("expected an error from the per-call timeout")
+	}
+	if got := breakerFailures(c); got != 1 {
+		t.Fatalf("expected exactly 1 breaker failure for a range-query timeout, got %d", got)
+	}
+}
+
+// TestRunRange_OuterSiblingCancelCountsZero is the runRange-path twin of
+// TestExecInstant_OuterSiblingCancelCountsZero.
+func TestRunRange_OuterSiblingCancelCountsZero(t *testing.T) {
+	server, release := hangingOOMServer(t)
+	defer server.Close()
+	defer close(release)
+
+	c, _ := New(server.URL)
+	c.breaker = newBreaker(10, time.Minute)
+
+	siblingErr := errors.New("errgroup sibling failed")
+	ctx, cancelCause := context.WithCancelCause(context.Background())
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancelCause(siblingErr)
+	}()
+	defer cancelCause(nil)
+
+	_, err := c.QueryCPURangeByContainer(ctx, "ns", "Deployment", "web", "1h", "1m")
+	if err == nil {
+		t.Fatal("expected an error from the sibling cancellation")
+	}
+	if got := breakerFailures(c); got != 0 {
+		t.Fatalf("expected 0 breaker failures for sibling collateral cancellation, got %d", got)
+	}
+}
+
+// TestErrgroupSiblings_SingleOutageCountsOnce reproduces the FetchWorkloadInputs
+// shape (recommender/build.go): two queries share an errgroup, one genuinely
+// fails (500) and the sibling hangs until the group cancels it. The genuine
+// failure counts one breaker failure; the cancelled sibling counts zero —
+// before the fix the sibling's context.Canceled also counted, so one outage
+// recorded a failure per in-flight query.
+func TestErrgroupSiblings_SingleOutageCountsOnce(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		switch {
+		case strings.Contains(r.Form.Get("query"), "workload_max_pod_cpu"):
+			// The genuine, independent failure.
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"status":"error","errorType":"internal","error":"boom"}`))
+		default:
+			// Sibling query: block until the errgroup cancels gctx.
+			<-r.Context().Done()
+		}
+	}))
+	defer server.Close()
+
+	c, _ := New(server.URL)
+	c.breaker = newBreaker(10, time.Minute)
+
+	g, gctx := errgroup.WithContext(context.Background())
+	g.Go(func() error {
+		_, err := c.QueryWorkloadCPUByContainer(gctx, "ns", "Deployment", "web", 0.9, "7d")
+		return err
+	})
+	g.Go(func() error {
+		_, err := c.QueryWorkloadMemoryByContainer(gctx, "ns", "Deployment", "web", 0.9, "7d")
+		return err
+	})
+	if err := g.Wait(); err == nil {
+		t.Fatal("expected an error from the failing cpu query")
+	}
+	if got := breakerFailures(c); got != 1 {
+		t.Fatalf("expected exactly 1 breaker failure for a single outage across errgroup siblings, got %d", got)
 	}
 }
 
