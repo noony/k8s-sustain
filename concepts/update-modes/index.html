@@ -1481,18 +1481,18 @@
 <li>The webhook intercepts <code>Pod CREATE</code> requests for pods that carry the policy annotation</li>
 <li>Unlike OnCreate mode, the webhook always injects the latest recommendation — even if the container already has a CPU request — ensuring new pods never start with stale resources</li>
 </ul>
-<p><strong>Ongoing reconciliation (controller) on clusters without in-place update support (k8s &lt; 1.31):</strong></p>
+<p><strong>Ongoing reconciliation (controller) on clusters without in-place update support (k8s &lt; 1.33):</strong></p>
 <ol>
 <li>Each non-terminal pod (Running or Pending) with stale resources is evicted via the Eviction API. Staleness is detected on both requests and limits — a recommendation that only changes a limit still triggers a recycle. Evicting Pending pods unblocks workloads stuck unschedulable because their original request was too large; the webhook re-injects the smaller recommendation on the replacement.</li>
 <li>The workload controller (Deployment/StatefulSet/DaemonSet) creates replacement pods</li>
 <li>The webhook injects the latest recommendations into the new pods at creation time</li>
 <li>PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle</li>
 </ol>
-<p><strong>Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.31):</strong></p>
+<p><strong>Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.33):</strong></p>
 <ol>
 <li>Controller patches each running, non-terminating pod's <code>spec.containers[*].resources</code> directly</li>
 <li>The kubelet applies the new resources without restarting the container</li>
-<li>If the kubelet reports <code>Infeasible</code> (node cannot satisfy the request), the pod is evicted as a fallback</li>
+<li>If the kubelet reports <code>Infeasible</code> (node cannot satisfy the request) or <code>Error</code> (actuating the accepted resize failed), the pod is evicted as a fallback</li>
 <li>If the kubelet reports <code>Deferred</code>, the resize is pending kubelet-side conditions and no action is taken</li>
 </ol>
 <p>See <a href="../in-place-updates/">In-Place Updates</a> for details.</p>
@@ -1500,10 +1500,10 @@
 <ul>
 <li>Long-running workloads that accumulate meaningful usage history</li>
 <li>Situations where you want resources to track actual usage over time</li>
-<li>Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.31)</li>
+<li>Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.33)</li>
 </ul>
-<p><strong>Note:</strong> The controller never patches workload templates (Deployment, StatefulSet, CronJob, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s &lt; 1.31), pods are replaced via PDB-respecting eviction, which causes pod restarts.</p>
-<p><strong>CronJob exception:</strong> for <code>cronJob: Ongoing</code>, eviction is <em>never</em> used — evicting a Job pod would kill the run. Currently-running job pods are resized in place when the cluster supports it (k8s ≥ 1.31, with full coverage of <code>restartPolicy: Never</code>/<code>OnFailure</code> on k8s ≥ 1.35); otherwise they are left to finish on their original resources and the next scheduled run picks up the new values from the webhook. The CronJob spec itself is never modified, so GitOps tools see no drift.</p>
+<p><strong>Note:</strong> The controller never patches workload templates (Deployment, StatefulSet, CronJob, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s &lt; 1.33), pods are replaced via PDB-respecting eviction, which causes pod restarts.</p>
+<p><strong>CronJob exception:</strong> for <code>cronJob: Ongoing</code>, eviction is <em>never</em> used — evicting a Job pod would kill the run. Currently-running job pods are resized in place when the cluster supports it (k8s ≥ 1.33, with full coverage of <code>restartPolicy: Never</code>/<code>OnFailure</code> on k8s ≥ 1.35); otherwise they are left to finish on their original resources and the next scheduled run picks up the new values from the webhook. The CronJob spec itself is never modified, so GitOps tools see no drift.</p>
 <hr />
 <h2 id="choosing-a-mode">Choosing a mode<a class="headerlink" href="#choosing-a-mode" title="Permanent link">&para;</a></h2>
 <table>
@@ -1523,7 +1523,7 @@
 <td><code>OnCreate</code> — only affects future pods</td>
 </tr>
 <tr>
-<td>Existing workloads, k8s ≥ 1.31</td>
+<td>Existing workloads, k8s ≥ 1.33</td>
 <td><code>Ongoing</code> — in-place updates, zero restarts</td>
 </tr>
 <tr>
@@ -1532,7 +1532,7 @@
 </tr>
 <tr>
 <td>StatefulSets with persistent state</td>
-<td><code>Ongoing</code> + k8s ≥ 1.31, or <code>OnCreate</code></td>
+<td><code>Ongoing</code> + k8s ≥ 1.33, or <code>OnCreate</code></td>
 </tr>
 <tr>
 <td>DaemonSets</td>

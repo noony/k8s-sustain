@@ -1591,7 +1591,7 @@
 <p>These two outputs differ — that is expected, since the webhook mutates pods but never the workload spec.</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>No <code>ignoreDifferences</code> needed.</strong> k8s-sustain never patches workload specs. The webhook intercepts <code>Pod CREATE</code> admission and injects resources into the resulting pod manifest; the controller recycles stale pods (in-place on Kubernetes 1.31+, eviction on older versions). Argo CD tracks workload specs, so there is no diff to ignore.</li>
+<li><strong>No <code>ignoreDifferences</code> needed.</strong> k8s-sustain never patches workload specs. The webhook intercepts <code>Pod CREATE</code> admission and injects resources into the resulting pod manifest; the controller recycles stale pods (in-place on Kubernetes 1.33+, eviction on older versions). Argo CD tracks workload specs, so there is no diff to ignore.</li>
 <li><strong><code>selfHeal: true</code> is safe.</strong> Since Argo CD never sees a diff caused by k8s-sustain, it has nothing to revert.</li>
 <li><strong>Argo Rollouts.</strong> If you use Argo Rollouts (<code>Rollout</code> objects) instead of native Deployments, see the <a href="../argo-rollouts/">Argo Rollouts guide</a>.</li>
 </ul>

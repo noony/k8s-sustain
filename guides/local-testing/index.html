@@ -1264,6 +1264,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#qos-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      qos-change
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1695,6 +1704,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#qos-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      qos-change
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1868,7 +1886,7 @@ the interaction between right-sizing and the HPA.</p>
 </ul>
 <p><strong>Expected:</strong> All three containers receive recommendations
 (<code>kubectl get wlrec -n scenario-init-containers -o yaml</code>). Drift in <code>app</code> or
-<code>log-shipper</code> triggers a pod recycle (in-place on k8s ≥ 1.32, eviction
+<code>log-shipper</code> triggers a pod recycle (in-place on k8s ≥ 1.33, eviction
 otherwise). Drift in <code>migrate</code> does <strong>not</strong> trigger recycle — it has already
 exited; the new requests land via webhook injection on the next pod creation.</p>
 <p>Inspect the <code>container_kind</code> label on emitted gauges:</p>
@@ -1950,7 +1968,7 @@ oversized requests (<code>500m / 256Mi</code>) and ~<code>200m / ~100Mi</code> o
 <p><strong>Expected:</strong></p>
 <ul>
 <li>After <code>WINDOW + reconcile_interval</code> the controller recycles all three
-  pods. On Kubernetes ≥ 1.31 this is in-place via <code>/resize</code>; on older
+  pods. On Kubernetes ≥ 1.33 this is in-place via <code>/resize</code>; on older
   versions it is eviction.</li>
 <li>In the eviction path, pods are evicted in <strong>descending ordinal order</strong>:
   <code>web-2 → web-1 → web-0</code>, matching the StatefulSet controller's update
@@ -1998,15 +2016,50 @@ container, Kubernetes restarts it, and the cycle repeats.</p>
 <a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>/api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">&#39;k8s_sustain_oom_floor_applied_total&#39;</span>
 </code></pre></div>
+<h3 id="qos-change"><code>qos-change</code><a class="headerlink" href="#qos-change" title="Permanent link">&para;</a></h3>
+<p>3-replica Deployment whose containers start as <strong>Guaranteed QoS</strong> —
+<code>requests == limits</code> for both CPU (<code>500m</code>) and memory (<code>256Mi</code>) — with
+~<code>200m / 100Mi</code> of actual load per pod, protected by a PodDisruptionBudget
+with <code>minAvailable: 2</code>. The policy removes the CPU limit (<code>noLimit: true</code>)
+and sets a 1.5× memory limit ratio, so the recommendation breaks the
+<code>requests == limits</code> equality: applying it would flip the pods to
+Burstable, which Kubernetes forbids through the <code>/resize</code> subresource.</p>
+<p><strong>Expected (k8s ≥ 1.33):</strong></p>
+<ul>
+<li>Each in-place resize is rejected as <code>Invalid</code> by the API server (QoS
+  class change). This is a <em>per-pod</em> rejection — in-place mode stays
+  enabled for every other workload.</li>
+<li>The controller falls back to <strong>eviction</strong>: pods are replaced (new
+  name/UID) rather than resized, one at a time — after each eviction the
+  recycle loop waits for the replacement to become Ready before evicting
+  the next pod, so the PDB's <code>minAvailable: 2</code> holds throughout. An
+  eviction blocked by the PDB (429) is skipped and retried on the next
+  reconcile.</li>
+<li>The replacement pods run <code>Burstable</code> with CPU request ~<code>220m</code> (no limit)
+  and memory request ~<code>110Mi</code> (limit ~<code>165Mi</code>).</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Guaranteed before the recycle, Burstable after</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-qos-change<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{range .items[*]}{.metadata.name}{&quot;: &quot;}{.status.qosClass}{&quot;\n&quot;}{end}&#39;</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># the per-pod Invalid rejection and the eviction fallback</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>deploy/k8s-sustain-controller<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;rejected as invalid|falling back to eviction&#39;</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="c1"># PDB status during the recycle: disruptionsAllowed flips between 1 and 0,</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="c1"># at least 2 pods stay Ready</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pdb<span class="w"> </span>-n<span class="w"> </span>scenario-qos-change<span class="w"> </span>stress<span class="w"> </span>-o<span class="w"> </span>wide
+</code></pre></div>
+<p>On clusters without in-place support (&lt; 1.33) the scenario still converges —
+stale pods are evicted directly — but the interesting branch (the <code>Invalid</code>
+rejection on <code>/resize</code>) is never exercised.</p>
 <h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
 <p><code>make test-scenario-status</code> prints a table:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
 </code></pre></div>
 <p>The dashboard remains the richer source of truth — start a port-forward
 and open <code>http://localhost:8090</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
 </code></pre></div>
 <h2 id="adding-a-new-scenario">Adding a new scenario<a class="headerlink" href="#adding-a-new-scenario" title="Permanent link">&para;</a></h2>
 <p>See <code>hack/scenarios/README.md</code>.</p>

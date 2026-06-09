@@ -1615,7 +1615,7 @@
 <li>The annotation must be in <code>spec.jobTemplate.spec.template.metadata.annotations</code>.</li>
 </ol>
 <h3 id="ongoing-mode-for-cronjobs">Ongoing mode for CronJobs<a class="headerlink" href="#ongoing-mode-for-cronjobs" title="Permanent link">&para;</a></h3>
-<p><code>Ongoing</code> mode resizes <strong>currently running</strong> job pods in place using the Kubernetes <code>pods/resize</code> subresource (requires <code>InPlacePodVerticalScaling</code> — GA on k8s ≥ 1.33; works for <code>restartPolicy: Never</code>/<code>OnFailure</code> on k8s ≥ 1.35). The CronJob spec itself is <strong>never modified</strong>, so GitOps tools (Argo CD, Flux) see no drift. Future runs continue to pick up the latest resources from the webhook at admission.</p>
+<p><code>Ongoing</code> mode resizes <strong>currently running</strong> job pods in place using the Kubernetes <code>pods/resize</code> subresource (requires k8s ≥ 1.33, where <code>InPlacePodVerticalScaling</code> is on by default; works for <code>restartPolicy: Never</code>/<code>OnFailure</code> on k8s ≥ 1.35). The CronJob spec itself is <strong>never modified</strong>, so GitOps tools (Argo CD, Flux) see no drift. Future runs continue to pick up the latest resources from the webhook at admission.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">spec</span><span class="p">:</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
@@ -1626,7 +1626,7 @@
 <ul>
 <li>For CronJobs whose pods finish within seconds (e.g. <code>* * * * *</code> health pings), <code>Ongoing</code> is essentially equivalent to <code>OnCreate</code> — pods complete before any reconcile pass would touch them. The cost of running <code>Ongoing</code> is one extra Job/Pod list per reconcile.</li>
 <li>For long-running runs (daily ETL, batch training, hour-long backfills), <code>Ongoing</code> can correct an under- or over-provisioned pod mid-run without restarting the container.</li>
-<li>On clusters where <code>InPlacePodVerticalScaling</code> is unavailable or the kubelet reports the resize as <code>Infeasible</code>, the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook.</li>
+<li>On clusters below k8s 1.33, or when the kubelet reports the resize as <code>Infeasible</code> or <code>Error</code>, or the API server rejects the resize for that pod (e.g. it would change the QoS class), the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook. The <code>ResourcesUpdated</code> event only counts pods whose resize the API server actually accepted.</li>
 <li>The controller never patches the <code>CronJob</code> or <code>Job</code> object, so RBAC for <code>batch/cronjobs</code> and <code>batch/jobs</code> is read-only.</li>
 </ul>
 <h3 id="collecting-enough-history">Collecting enough history<a class="headerlink" href="#collecting-enough-history" title="Permanent link">&para;</a></h3>

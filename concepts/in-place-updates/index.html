@@ -1444,64 +1444,54 @@
 
 
 <h1 id="in-place-updates">In-Place Updates<a class="headerlink" href="#in-place-updates" title="Permanent link">&para;</a></h1>
-<p>Kubernetes 1.27 introduced the <code>InPlacePodVerticalScaling</code> feature gate (alpha), which became beta (on by default) in Kubernetes 1.31 and GA in Kubernetes 1.33. It allows changing a pod's resource requests and limits <strong>without restarting the container</strong>.</p>
-<p>k8s-sustain auto-detects whether the cluster supports the feature and chooses the appropriate code path. There is <strong>no minimum k8s version for k8s-sustain itself</strong> — clusters too old for in-place resize fall back transparently to PDB-respecting eviction.</p>
+<p>Kubernetes 1.27 introduced the <code>InPlacePodVerticalScaling</code> feature gate (alpha), which became beta (on by default) in Kubernetes 1.33 together with the <code>pods/resize</code> subresource as the only supported way to mutate pod resources. It allows changing a pod's resource requests and limits <strong>without restarting the container</strong>.</p>
+<p>k8s-sustain auto-detects whether the cluster supports the feature and chooses the appropriate code path. There is <strong>no minimum k8s version for k8s-sustain itself</strong> — clusters below 1.33 fall back transparently to PDB-respecting eviction.</p>
 <h2 id="version-matrix">Version matrix<a class="headerlink" href="#version-matrix" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
 <th>k8s version</th>
-<th>Feature gate</th>
-<th>Resize API used</th>
+<th>Feature state</th>
 <th>k8s-sustain behaviour</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>≤ 1.26</strong></td>
-<td><em>none</em> (feature didn't exist)</td>
-<td><em>n/a</em></td>
-<td>Eviction-only. Stale pods evicted via the Eviction API; webhook re-injects on replacement.</td>
+<td><strong>≤ 1.32</strong></td>
+<td>Feature absent, or alpha gate off by default; no stable <code>/resize</code> subresource</td>
+<td>Detected at startup as <code>inPlace=false</code> → eviction path. Stale pods evicted via the Eviction API; webhook re-injects on replacement.</td>
 </tr>
 <tr>
-<td><strong>1.27 – 1.30 (alpha)</strong></td>
-<td><code>--feature-gates=InPlacePodVerticalScaling=true</code> required on apiserver + kubelet</td>
-<td>Direct pod patch (<code>PATCH /api/v1/.../pods/&lt;name&gt;</code>)</td>
-<td>Detected at startup as <code>inPlace=false</code> (the controller treats &lt; 1.31 as not-supported) → eviction path.</td>
-</tr>
-<tr>
-<td><strong>1.31 – 1.32 (beta)</strong></td>
-<td>On by default</td>
-<td>Direct pod patch (no <code>/resize</code> subresource yet)</td>
-<td><code>inPlace=true</code>. <code>/resize</code> subresource returns 404 → patcher falls back to direct pod patch within the same call.</td>
-</tr>
-<tr>
-<td><strong>1.33+ (GA)</strong></td>
-<td>Always on</td>
-<td><code>/resize</code> subresource (<code>PATCH /api/v1/.../pods/&lt;name&gt;/resize</code>)</td>
-<td><code>inPlace=true</code>. <code>/resize</code> is the primary path; sidecar (restartable init) resize attempted as a separate /resize call.</td>
+<td><strong>1.33+</strong></td>
+<td>On by default; <code>/resize</code> subresource (<code>PATCH /api/v1/.../pods/&lt;name&gt;/resize</code>)</td>
+<td><code>inPlace=true</code>. All resizes go through <code>/resize</code>; sidecar (restartable init) resize attempted as a separate <code>/resize</code> call.</td>
 </tr>
 </tbody>
 </table>
 <h2 id="how-the-runtime-path-is-chosen">How the runtime path is chosen<a class="headerlink" href="#how-the-runtime-path-is-chosen" title="Permanent link">&para;</a></h2>
-<p>At controller startup the discovery API is queried and <code>major.minor</code> is compared against <code>1.31</code>. The result lives on <code>Patcher.inPlace</code>:</p>
+<p>At controller startup the discovery API is queried and <code>major.minor</code> is compared against <code>1.33</code>. The result lives on <code>Patcher.inPlace</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>INFO  InPlacePodVerticalScaling support  enabled=true   server=v1.33.2
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>INFO  InPlacePodVerticalScaling support  enabled=false  server=v1.30.5
 </code></pre></div>
 <p>In both modes the patcher lists pods by the workload's label selector and then drops any pod whose controller ownerRef chain does not resolve to the target workload (directly for StatefulSet/DaemonSet pods, via the owning ReplicaSet for Deployment/Argo Rollout pods). A bare debug pod carrying the same labels, or a pod belonging to another workload with an overlapping selector, is never resized or evicted — the skip is logged so overlapping selectors are easy to diagnose.</p>
 <p>When <code>Ongoing</code> mode is active and <code>inPlace=true</code>, the patcher walks each running pod and:</p>
 <ol>
-<li>Reads <code>pod.status.resize</code> (kubelet's report on the previous resize attempt):</li>
-<li><strong><code>Infeasible</code></strong> — the node cannot satisfy the request. The pod is evicted so the scheduler can place the replacement elsewhere; the webhook injects the new resources into the replacement.</li>
-<li><strong><code>Deferred</code></strong> — the kubelet accepted the request but is waiting on conditions (e.g. memory decrease that requires container restart). Skipped; the kubelet will apply it without further intervention.</li>
-<li><strong><code>InProgress</code> / unset</strong> — proceeds with the patch.</li>
-<li>Issues <code>PATCH /api/v1/.../pods/&lt;name&gt;/resize</code> (k8s 1.33+).</li>
-<li>If the API server returns <code>NotFound</code> for the subresource (k8s 1.31–1.32), the same call is retried as a direct pod patch.</li>
-<li>If the API server returns <code>Invalid</code> (the feature gate is off — possible on a 1.31+ cluster with custom flags), the patcher flips <code>inPlace=false</code> for the rest of the reconcile cycle and falls back to eviction. The flip is per-process, so the next reconcile re-attempts in-place if the gate has been re-enabled meanwhile.</li>
+<li>Compares the pod spec against the current recommendation.</li>
+<li><strong>Spec differs</strong> — a resize is submitted with the new values, even if a previous resize is still pending. The kubelet re-evaluates pending resizes against the new desired state, so a recommendation that has since been lowered can succeed where the old one was infeasible.</li>
+<li><strong>Spec already at target</strong> — the kubelet's verdict on the staged resize decides, read from the <code>PodResizePending</code> and <code>PodResizeInProgress</code> pod conditions:<ul>
+<li><strong><code>Infeasible</code></strong> — the node cannot satisfy the request: the spec carries the target resources but they never landed. The pod is evicted (unconditionally — the spec matching the recommendation must not be mistaken for "already resized") so the scheduler can place the replacement elsewhere; the webhook injects the new resources into the replacement.</li>
+<li><strong><code>Error</code></strong> (reported on the <code>PodResizeInProgress</code> condition, kubelet ≥ 1.34) — the kubelet accepted the resize but failed while actuating it, and does not retry on its own. Same eviction fallback as <code>Infeasible</code>, so the pod doesn't run on its old allocation forever while the spec claims the target.</li>
+<li><strong><code>Deferred</code></strong> — the kubelet accepted the request but is waiting on conditions (e.g. room freed by another pod terminating). Skipped; the kubelet will apply it without further intervention.</li>
+<li><strong>No pending resize</strong> — the pod is at target; nothing to do. An unrecognized future verdict is logged and left to the kubelet.</li>
+</ul>
+</li>
+<li>Issues <code>PATCH /api/v1/.../pods/&lt;name&gt;/resize</code>.</li>
+<li>An <code>Invalid</code> rejection is a <em>per-pod</em> validation failure — the subresource being served means the feature is available (the resize would change the pod's QoS class, decrease a memory limit with a <code>NotRequired</code> resize policy, …). Only that pod falls back to eviction (the webhook re-injects on the replacement); in-place stays enabled for every other pod.</li>
+<li>A <code>NotFound</code> response means the pod disappeared between listing and patching; it is skipped without error.</li>
 </ol>
-<p>Sidecar (restartable init) containers are resized in a <strong>separate</strong> <code>/resize</code> call so a sidecar rejection on older clusters cannot block the regular-container resize. Failures on the sidecar call are logged and ignored — new requests will land at next pod creation via webhook injection.</p>
+<p>Sidecar (restartable init) containers are resized in a <strong>separate</strong> <code>/resize</code> call so a sidecar rejection (their resize needs feature gates beyond <code>InPlacePodVerticalScaling</code>) cannot block the regular-container resize. Failures on the sidecar call are logged and ignored — new requests will land at next pod creation via webhook injection.</p>
 <h2 id="eviction-fallback">Eviction fallback<a class="headerlink" href="#eviction-fallback" title="Permanent link">&para;</a></h2>
-<p>On any cluster where <code>inPlace=false</code> (auto-detected as &lt; 1.31, or runtime-flipped on Invalid):</p>
+<p>On any cluster where <code>inPlace=false</code> (auto-detected as &lt; 1.33):</p>
 <ul>
 <li>Stale pods are evicted <strong>one at a time</strong> via the Eviction API. After each eviction the patcher waits for the workload's selector to become <strong>quiescent</strong> — the evicted pod is gone and no peer is <code>Pending</code> or <code>Running</code>-but-<code>NotReady</code> — before evicting the next pod. This caps the disruption to (at most) one pod per workload at a time and avoids stampeding a workload with many stale pods.</li>
 <li>The quiescence check uses pod state, not a frozen Ready-count baseline, so it handles HPA scale-down naturally: if the autoscaler decides not to provision a replacement for an evicted pod, the remaining peers stay Ready and the wait returns immediately.</li>
@@ -1520,11 +1510,13 @@
 <li><strong>VPA conflicts.</strong> Running Vertical Pod Autoscaler alongside k8s-sustain on the same pods produces conflicting patches. Use the <code>k8s.sustain.io/policy</code> annotation to opt workloads in selectively, and exclude those workloads from VPA targets.</li>
 <li><strong>Resize status inspection:</strong></li>
 </ul>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.resize}&#39;</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.containerStatuses[*].resources}&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># pending-resize verdict lives in pod conditions</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.conditions[?(@.type==&quot;PodResizePending&quot;)]}&#39;</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># actual resources currently allocated to the containers</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.containerStatuses[*].resources}&#39;</span>
 </code></pre></div>
 <h2 id="disabling-in-place-updates">Disabling in-place updates<a class="headerlink" href="#disabling-in-place-updates" title="Permanent link">&para;</a></h2>
-<p>To force eviction-based behaviour even on supported clusters (e.g. while validating a new k8s version), the feature can be disabled at runtime via the <code>Invalid</code>-rejection fallback path: scale the controller to zero, ensure the cluster's <code>InPlacePodVerticalScaling</code> feature gate is off, and restart. This is not yet exposed as a Helm value — file an issue if you need a clean toggle.</p>
+<p>There is currently no toggle to force eviction-based behaviour on a supported cluster: the mode follows the detected server version. File an issue if you need a clean toggle.</p>
 
 
 
