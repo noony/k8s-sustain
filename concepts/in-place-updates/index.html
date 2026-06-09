@@ -1488,6 +1488,7 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>INFO  InPlacePodVerticalScaling support  enabled=true   server=v1.33.2
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>INFO  InPlacePodVerticalScaling support  enabled=false  server=v1.30.5
 </code></pre></div>
+<p>In both modes the patcher lists pods by the workload's label selector and then drops any pod whose controller ownerRef chain does not resolve to the target workload (directly for StatefulSet/DaemonSet pods, via the owning ReplicaSet for Deployment/Argo Rollout pods). A bare debug pod carrying the same labels, or a pod belonging to another workload with an overlapping selector, is never resized or evicted — the skip is logged so overlapping selectors are easy to diagnose.</p>
 <p>When <code>Ongoing</code> mode is active and <code>inPlace=true</code>, the patcher walks each running pod and:</p>
 <ol>
 <li>Reads <code>pod.status.resize</code> (kubelet's report on the previous resize attempt):</li>
@@ -1510,7 +1511,7 @@
 <li>429 responses (PodDisruptionBudget blocking eviction) are logged and skipped — the next reconcile cycle will retry.</li>
 <li>The workload controller (Deployment / StatefulSet / etc.) replaces the evicted pod from the updated template; the webhook injects the latest recommendation into the replacement at admission time.</li>
 </ul>
-<p>CronJobs are special-cased: the controller never mutates the CronJob spec (which would cause GitOps drift) and never evicts a job pod (which would kill the run). On clusters that support in-place resize, currently-running job pods are resized via the <code>pods/resize</code> subresource using the same machinery as Deployments — including for <code>restartPolicy: Never</code>/<code>OnFailure</code> pods on k8s ≥ 1.35. If the cluster does not support in-place resize, the running pod is left untouched and the next scheduled run picks up the new resources from the webhook.</p>
+<p>CronJobs are special-cased: the controller never mutates the CronJob spec (which would cause GitOps drift) and never evicts a job pod (which would kill the run). Job pods are enumerated via the <code>batch.kubernetes.io/job-name</code> label and confirmed by controller ownerRef back to the Job (which is itself ownerRef-checked against the CronJob), so a bystander pod carrying the label is never touched. On clusters that support in-place resize, currently-running job pods are resized via the <code>pods/resize</code> subresource using the same machinery as Deployments — including for <code>restartPolicy: Never</code>/<code>OnFailure</code> pods on k8s ≥ 1.35. If the cluster does not support in-place resize, the running pod is left untouched and the next scheduled run picks up the new resources from the webhook.</p>
 <h2 id="caveats">Caveats<a class="headerlink" href="#caveats" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Memory shrink may force restart.</strong> When a memory request is <strong>lowered</strong>, some kubelet versions return <code>Deferred</code> until the next container start because the cgroup cannot shrink while the workload is using more than the new limit. k8s-sustain accepts this — the new value lands on the next pod restart, no recycling needed.</li>
