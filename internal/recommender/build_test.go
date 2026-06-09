@@ -146,3 +146,72 @@ func TestBuildContainerRecs_EnrichOOMDrivesMemoryFloor(t *testing.T) {
 		t.Fatalf("expected 200Mi memory request from peak floor, got %s", got)
 	}
 }
+
+// TestBuildContainerRecs_LiveOOMWithoutAnchorEmitsNothing verifies a live OOM
+// event with no usable memory anchor (no usage samples, no peak, no OOM-time
+// limit) emits NO memory recommendation. Emitting would floor at the hard 1Mi
+// minimum and guarantee the next OOM for a crash-looping container.
+func TestBuildContainerRecs_LiveOOMWithoutAnchorEmitsNothing(t *testing.T) {
+	inputs := &WorkloadInputs{
+		CPUPerPod: promclient.ContainerValues{},
+		MemPerPod: promclient.ContainerValues{},
+		OOM: promclient.OOMSignal{
+			PeakMemoryBytes: promclient.ContainerValues{},
+			OOMLimitBytes:   promclient.ContainerValues{},
+		},
+	}
+	containers := []corev1.Container{container("app")}
+
+	recs := BuildContainerRecs(
+		containers, inputs, false,
+		autoscaler.Info{Kind: autoscaler.KindNone},
+		sustainv1alpha1.ResourcesConfigs{},
+		sustainv1alpha1.AutoscalerCoordination{},
+		BuildContainerRecsOptions{
+			EnrichOOM: func(name string, sig OOMSignal) OOMSignal {
+				sig.LiveEventAt = time.Now()
+				return sig
+			},
+		},
+	)
+	if _, ok := recs["app"]; ok {
+		t.Fatalf("live OOM with zero anchor must not emit a recommendation, got %v", recs)
+	}
+}
+
+// TestBuildContainerRecs_LiveOOMWithLimitAnchorEmits verifies a live OOM event
+// whose only anchor is the OOM-time cgroup limit (e.g. captured by the live
+// watcher before Prometheus surfaces it) still drives a bumped memory
+// recommendation: 100Mi limit × 1.20 bump = 120Mi.
+func TestBuildContainerRecs_LiveOOMWithLimitAnchorEmits(t *testing.T) {
+	inputs := &WorkloadInputs{
+		CPUPerPod: promclient.ContainerValues{},
+		MemPerPod: promclient.ContainerValues{},
+		OOM: promclient.OOMSignal{
+			PeakMemoryBytes: promclient.ContainerValues{},
+			OOMLimitBytes:   promclient.ContainerValues{},
+		},
+	}
+	containers := []corev1.Container{container("app")}
+
+	recs := BuildContainerRecs(
+		containers, inputs, false,
+		autoscaler.Info{Kind: autoscaler.KindNone},
+		sustainv1alpha1.ResourcesConfigs{},
+		sustainv1alpha1.AutoscalerCoordination{},
+		BuildContainerRecsOptions{
+			EnrichOOM: func(name string, sig OOMSignal) OOMSignal {
+				sig.LiveEventAt = time.Now()
+				sig.OOMTimeLimitBytes = 100 * float64(mebibyte)
+				return sig
+			},
+		},
+	)
+	rec, ok := recs["app"]
+	if !ok || rec.MemoryRequest == nil {
+		t.Fatalf("expected memory recommendation from live-OOM limit anchor, got %v", recs)
+	}
+	if got := rec.MemoryRequest.String(); got != "120Mi" {
+		t.Fatalf("expected 120Mi (100Mi × 1.20 bump), got %s", got)
+	}
+}

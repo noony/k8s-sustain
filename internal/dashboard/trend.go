@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 
@@ -35,7 +34,6 @@ func (s *Server) handleSummaryTrend(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=60")
 
 	// "Original request" only exists for policy-managed workloads. Usage and
 	// current-request recording rules are cluster-wide (any pod with an owner
@@ -55,25 +53,40 @@ func (s *Server) handleSummaryTrend(w http.ResponseWriter, r *http.Request) {
 	memUsageScoped := scoped(promclient.MetricWorkloadMemoryUsageBytes, promclient.MetricWorkloadTemplateMemoryBytes)
 	memRequestScoped := scoped(promclient.MetricContainerMemoryRequestsByWorkloadBytes, promclient.MetricWorkloadTemplateMemoryBytes)
 
+	// Track failed queries so a full Prometheus outage surfaces as a 503
+	// instead of a 200 with empty series (indistinguishable from "no data").
+	// Partial failures still return the series that succeeded, mirroring
+	// handleSummary's graceful degradation.
+	const trendQueryCount = 6
+	queryErrs := 0
+	queryRangeOrEmpty := func(expr string) []promclient.TimeValue {
+		v, err := s.PromClient.QueryRange(r.Context(), expr, window, step)
+		if err != nil {
+			s.Logger.Error(err, "summary trend query failed", "expr", expr)
+			queryErrs++
+		}
+		if v == nil {
+			return []promclient.TimeValue{}
+		}
+		return v
+	}
+
 	resp := trendResponse{
 		CPU: trendSeries{
-			Usage:           s.queryRangeOrEmpty(r.Context(), cpuUsageScoped, window, step),
-			Request:         s.queryRangeOrEmpty(r.Context(), cpuRequestScoped, window, step),
-			OriginalRequest: s.queryRangeOrEmpty(r.Context(), fmt.Sprintf("sum(%s)", promclient.MetricWorkloadTemplateCPUCores), window, step),
+			Usage:           queryRangeOrEmpty(cpuUsageScoped),
+			Request:         queryRangeOrEmpty(cpuRequestScoped),
+			OriginalRequest: queryRangeOrEmpty(fmt.Sprintf("sum(%s)", promclient.MetricWorkloadTemplateCPUCores)),
 		},
 		Memory: trendSeries{
-			Usage:           s.queryRangeOrEmpty(r.Context(), memUsageScoped, window, step),
-			Request:         s.queryRangeOrEmpty(r.Context(), memRequestScoped, window, step),
-			OriginalRequest: s.queryRangeOrEmpty(r.Context(), fmt.Sprintf("sum(%s)", promclient.MetricWorkloadTemplateMemoryBytes), window, step),
+			Usage:           queryRangeOrEmpty(memUsageScoped),
+			Request:         queryRangeOrEmpty(memRequestScoped),
+			OriginalRequest: queryRangeOrEmpty(fmt.Sprintf("sum(%s)", promclient.MetricWorkloadTemplateMemoryBytes)),
 		},
 	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func (s *Server) queryRangeOrEmpty(ctx context.Context, expr, window, step string) []promclient.TimeValue {
-	v, _ := s.PromClient.QueryRange(ctx, expr, window, step)
-	if v == nil {
-		return []promclient.TimeValue{}
+	if queryErrs == trendQueryCount {
+		writeError(w, http.StatusServiceUnavailable, "prometheus unavailable: all trend queries failed")
+		return
 	}
-	return v
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	writeJSON(w, http.StatusOK, resp)
 }

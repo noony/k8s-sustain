@@ -391,10 +391,11 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 // Returns:
 //
 //	(true,  nil) — patch applied successfully
-//	(false, nil) — API server rejected the patch as Invalid
-//	               (InPlacePodVerticalScaling feature gate off); in-place is
-//	               disabled for the rest of this process and the pod has been
-//	               reverted to base. The caller decides whether to evict.
+//	(false, nil) — patch not applied: either the API server rejected it as
+//	               Invalid (InPlacePodVerticalScaling feature gate off;
+//	               in-place is disabled for the rest of this process and the
+//	               pod has been reverted to base), or the pod no longer
+//	               exists. The caller decides whether to evict.
 //	(false, err) — unrecoverable patch failure
 func (p *Patcher) submitInPlaceResize(ctx context.Context, pod, base *corev1.Pod) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
@@ -404,6 +405,13 @@ func (p *Patcher) submitInPlaceResize(ctx context.Context, pod, base *corev1.Pod
 	if apierrors.IsNotFound(err) {
 		logger.V(1).Info("/resize subresource not available, falling back to direct pod patch", "err", err.Error())
 		err = p.client.Patch(ctx, pod, client.MergeFrom(base))
+		if apierrors.IsNotFound(err) {
+			// Pod deleted between List and patch — mirror evictPod's
+			// NotFound handling and treat it as a no-op instead of
+			// surfacing a reconcile error.
+			logger.Info("pod gone before in-place resize, skipping")
+			return false, nil
+		}
 	}
 	if apierrors.IsInvalid(err) {
 		logger.Info("in-place pod resource patch rejected, feature gate likely disabled")
@@ -757,8 +765,14 @@ func applyRecsFiltered(in []corev1.Container, recs map[string]ContainerRecommend
 	if len(in) == 0 {
 		return in, false
 	}
+	// Deep copy each element: a shallow copy would share the ResourceList
+	// maps with the input slice, so applyRecToContainer would mutate the
+	// caller's pod spec in place — leaking e.g. sidecar changes into the
+	// regular-container /resize patch that diffs against the original spec.
 	out := make([]corev1.Container, len(in))
-	copy(out, in)
+	for i := range in {
+		out[i] = *in[i].DeepCopy()
+	}
 	changed := false
 	for i := range out {
 		if accept != nil && !accept(out[i]) {
@@ -772,43 +786,55 @@ func applyRecsFiltered(in []corev1.Container, recs map[string]ContainerRecommend
 }
 
 // applyRecToContainer applies a single recommendation to one container in
-// place, returning whether anything changed. A nil/zero rec is a no-op.
+// place, returning whether any value actually changed. A nil/zero rec is a
+// no-op, and so is a rec the container already satisfies — the comparison
+// mirrors ContainerMatches (numeric, unset reads as zero), so the in-place
+// resize path skips pods that are already at the recommended size instead of
+// submitting empty patches every reconcile.
 func applyRecToContainer(c *corev1.Container, rec ContainerRecommendation) bool {
-	if rec.CPURequest == nil && rec.MemoryRequest == nil &&
-		rec.CPULimit == nil && rec.MemoryLimit == nil &&
-		!rec.RemoveCPULimit && !rec.RemoveMemoryLimit {
-		return false
-	}
-	if c.Resources.Requests == nil {
-		c.Resources.Requests = corev1.ResourceList{}
-	}
-	if c.Resources.Limits == nil {
-		c.Resources.Limits = corev1.ResourceList{}
-	}
-	changed := false
-	if rec.CPURequest != nil {
-		c.Resources.Requests[corev1.ResourceCPU] = *rec.CPURequest
+	changed := setQuantity(&c.Resources.Requests, corev1.ResourceCPU, rec.CPURequest)
+	if applyLimit(&c.Resources.Limits, corev1.ResourceCPU, rec.CPULimit, rec.RemoveCPULimit) {
 		changed = true
 	}
-	switch {
-	case rec.RemoveCPULimit:
-		delete(c.Resources.Limits, corev1.ResourceCPU)
-		changed = true
-	case rec.CPULimit != nil:
-		c.Resources.Limits[corev1.ResourceCPU] = *rec.CPULimit
+	if setQuantity(&c.Resources.Requests, corev1.ResourceMemory, rec.MemoryRequest) {
 		changed = true
 	}
-	if rec.MemoryRequest != nil {
-		c.Resources.Requests[corev1.ResourceMemory] = *rec.MemoryRequest
-		changed = true
-	}
-	switch {
-	case rec.RemoveMemoryLimit:
-		delete(c.Resources.Limits, corev1.ResourceMemory)
-		changed = true
-	case rec.MemoryLimit != nil:
-		c.Resources.Limits[corev1.ResourceMemory] = *rec.MemoryLimit
+	if applyLimit(&c.Resources.Limits, corev1.ResourceMemory, rec.MemoryLimit, rec.RemoveMemoryLimit) {
 		changed = true
 	}
 	return changed
+}
+
+// setQuantity sets list[name] = *q, returning whether the value changed. A nil
+// q means "leave this dimension alone". An absent key compares as a zero
+// Quantity, matching requestMatches/limitMatches in match.go. The map is
+// allocated lazily so an all-no-op rec leaves nil maps untouched.
+func setQuantity(list *corev1.ResourceList, name corev1.ResourceName, q *resource.Quantity) bool {
+	if q == nil {
+		return false
+	}
+	if cur := (*list)[name]; cur.Cmp(*q) == 0 {
+		return false
+	}
+	if *list == nil {
+		*list = corev1.ResourceList{}
+	}
+	(*list)[name] = *q
+	return true
+}
+
+// applyLimit applies the limit dimension of a rec: remove=true deletes the
+// entry (a change only when a non-zero limit was present, mirroring
+// limitMatches), otherwise it defers to setQuantity. remove takes precedence
+// over a non-nil limit.
+func applyLimit(list *corev1.ResourceList, name corev1.ResourceName, q *resource.Quantity, remove bool) bool {
+	if !remove {
+		return setQuantity(list, name, q)
+	}
+	cur, ok := (*list)[name]
+	if !ok {
+		return false
+	}
+	delete(*list, name)
+	return !cur.IsZero()
 }

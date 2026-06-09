@@ -10,6 +10,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -238,5 +239,81 @@ func TestBatchSimulateDispatchesAllWhenUnderCapacity(t *testing.T) {
 		if w.Error != "" {
 			t.Fatalf("workload %s/%s carried unexpected error: %s", w.Namespace, w.Name, w.Error)
 		}
+	}
+}
+
+// usageBatchPromClient returns per-owner canned usage and OOM signals so the
+// aggregate-savings test can mix containers with and without current usage.
+type usageBatchPromClient struct {
+	fakePromClient
+	cpuByOwner map[string]promclient.ContainerValues
+	memByOwner map[string]promclient.ContainerValues
+	oomByOwner map[string]promclient.OOMSignal
+}
+
+func (f *usageBatchPromClient) QueryCPUByContainer(_ context.Context, _, _, ownerName string, _ float64, _ string) (promclient.ContainerValues, error) {
+	return f.cpuByOwner[ownerName], nil
+}
+
+func (f *usageBatchPromClient) QueryMemoryByContainer(_ context.Context, _, _, ownerName string, _ float64, _ string) (promclient.ContainerValues, error) {
+	return f.memByOwner[ownerName], nil
+}
+
+func (f *usageBatchPromClient) QueryWorkloadOOMSignal(_ context.Context, _, _, ownerName string) (promclient.OOMSignal, error) {
+	return f.oomByOwner[ownerName], nil
+}
+
+// TestBatchSimulateAggregateSkipsRecsWithoutCurrentUsage pins the savings
+// aggregate fix: a recommendation whose current usage was excluded (usage <= 0,
+// e.g. an OOM-peak-only container) must not be added to the recommended total,
+// otherwise SavingsPercent is deflated or flips negative.
+func TestBatchSimulateAggregateSkipsRecsWithoutCurrentUsage(t *testing.T) {
+	const mib = 1 << 20
+	prom := &usageBatchPromClient{
+		// wl-a has real usage; wl-b only has an OOM peak, so it gets a memory
+		// recommendation but contributes nothing to the current total.
+		cpuByOwner: map[string]promclient.ContainerValues{"wl-a": {"main": 0.2}},
+		memByOwner: map[string]promclient.ContainerValues{"wl-a": {"main": 200 * mib}},
+		oomByOwner: map[string]promclient.OOMSignal{
+			"wl-b": {OOMCount: 1, PeakMemoryBytes: promclient.ContainerValues{"main": 300 * mib}},
+		},
+	}
+	srv := newBatchSimulateServer(t, prom, 2)
+
+	rec := httptest.NewRecorder()
+	srv.handlePolicyBatchSimulate(rec, httptest.NewRequest(http.MethodGet, "/api/policies/p/batch-simulate", nil), "p")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp batchSimulateResponse
+	decodeEnvelopeData(t, rec.Body, &resp)
+
+	// Recompute the expected aggregate from the per-container rows: only
+	// recommendations whose current value was counted may contribute.
+	var wantMemRec int64
+	var sawExcludedRec bool
+	for _, wl := range resp.Workloads {
+		for _, c := range wl.Containers {
+			if c.RecommendedMemory == "" {
+				continue
+			}
+			if c.CurrentMemory == "" {
+				sawExcludedRec = true
+				continue
+			}
+			q, err := resource.ParseQuantity(c.RecommendedMemory)
+			if err != nil {
+				t.Fatalf("parse recommended memory %q: %v", c.RecommendedMemory, err)
+			}
+			wantMemRec += q.MilliValue()
+		}
+	}
+	if !sawExcludedRec {
+		t.Fatal("fixture broken: expected a recommendation without current usage (wl-b)")
+	}
+	if resp.Memory.RecommendedMillis != wantMemRec {
+		t.Errorf("memory.recommendedMillis = %d, want %d (recs without counted usage must be excluded)",
+			resp.Memory.RecommendedMillis, wantMemRec)
 	}
 }

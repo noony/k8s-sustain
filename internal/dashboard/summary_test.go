@@ -163,13 +163,17 @@ func TestHandleSummaryHeadroomAttentionPolicies(t *testing.T) {
 		byLabel: map[string]map[string]float64{
 			"k8s_sustain:cluster_cpu_headroom_breakdown":    {"used": 0.4, "idle": 0.3, "free": 0.3},
 			"k8s_sustain:cluster_memory_headroom_breakdown": {"used": 0.5, "idle": 0.2, "free": 0.3},
-			"k8s_sustain:workload_oom_24h > 0":              {"checkout": 3, "api": 1},
-			"k8s_sustain:workload_drifted == 1":             {"web": 1},
-			"k8s_sustain_workload_retry_state == 1":         {"worker": 1},
 			"k8s_sustain_policy_workload_count":             {"prod-policy": 7},
 			"k8s_sustain:policy_cpu_savings_cores":          {"prod-policy": 1.5},
 			"k8s_sustain:policy_memory_savings_bytes":       {"prod-policy": 2048},
 			"k8s_sustain_policy_at_risk_count":              {"prod-policy": 2},
+		},
+		// Attention queries are keyed by the full namespace|kind|name triple so
+		// rows carry the click-through identity.
+		byLabels: map[string]map[string]float64{
+			"k8s_sustain:workload_oom_24h > 0":      {"shop|Deployment|checkout": 3, "prod|StatefulSet|api": 1},
+			"k8s_sustain:workload_drifted == 1":     {"prod|Deployment|web": 1},
+			"k8s_sustain_workload_retry_state == 1": {"prod|Deployment|worker": 1},
 		},
 	}
 	srv := &Server{
@@ -204,9 +208,13 @@ func TestHandleSummaryHeadroomAttentionPolicies(t *testing.T) {
 	if risk[0].Signal != "OOM" {
 		t.Errorf("attention.risk[0].Signal = %q, want OOM", risk[0].Signal)
 	}
-	// Deterministic order: highest value first ("checkout" = 3).
-	if risk[0].Name != "checkout" {
-		t.Errorf("attention.risk[0].Name = %q, want checkout (highest value)", risk[0].Name)
+	// Deterministic order: highest value first ("checkout" = 3). Namespace and
+	// Kind must be populated so the UI can link to /workloads/{ns}/{kind}/{name}.
+	if risk[0].Namespace != "shop" || risk[0].Kind != "Deployment" || risk[0].Name != "checkout" {
+		t.Errorf("attention.risk[0] = %+v, want shop/Deployment/checkout (highest value)", risk[0])
+	}
+	if risk[1].Namespace != "prod" || risk[1].Kind != "StatefulSet" || risk[1].Name != "api" {
+		t.Errorf("attention.risk[1] = %+v, want prod/StatefulSet/api", risk[1])
 	}
 
 	if len(got.Policies) != 1 || got.Policies[0].Name != "prod-policy" {

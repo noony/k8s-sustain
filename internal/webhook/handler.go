@@ -41,8 +41,8 @@ const maxPolicyNameLen = 253
 // without per-call deadlines, one slow apiserver round-trip could eat the
 // whole budget and leave Prometheus / cache fallback paths no time to run.
 //
-// 2s is a generous bound for cached etcd reads through the controller-runtime
-// client (which uses an informer cache by default). Set high enough to absorb
+// 2s is a generous bound for direct apiserver reads through the uncached
+// controller-runtime client (built with client.New). Set high enough to absorb
 // a brief apiserver hiccup, low enough to leave room for the Prometheus path
 // and the AdmissionReview encode/decode on either side.
 const apiCallTimeout = 2 * time.Second

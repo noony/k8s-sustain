@@ -85,8 +85,6 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Cache-Control", "public, max-age=30")
-
 	ctx := r.Context()
 	var list sustainv1alpha1.PolicyList
 	if err := s.K8sClient.List(ctx, &list); err != nil {
@@ -100,6 +98,7 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 	for _, p := range list.Items {
 		items = append(items, policyListItemFor(p, rollups))
 	}
+	w.Header().Set("Cache-Control", "public, max-age=30")
 	writeJSON(w, http.StatusOK, items)
 }
 
@@ -107,7 +106,7 @@ func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name
 	ctx := r.Context()
 	policy := &sustainv1alpha1.Policy{}
 	if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: name}, policy); err != nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("policy %q not found: %v", name, err))
+		writeK8sGetError(w, err, fmt.Sprintf("policy %q: %v", name, err))
 		return
 	}
 

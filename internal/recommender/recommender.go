@@ -27,8 +27,7 @@ const (
 const DefaultOOMBumpFactor = 1.20
 
 // NewOOMSignal builds an OOMSignal with DefaultOOMBumpFactor pre-set.
-// Callers that need LiveEventAt or CurrentRequestBytes set those fields on
-// the returned value directly.
+// Callers that need LiveEventAt set it on the returned value directly.
 func NewOOMSignal(recent bool, peakBytes, oomLimitBytes float64) OOMSignal {
 	return OOMSignal{
 		Recent:            recent,
@@ -126,12 +125,12 @@ func ComputeMemoryRequest(rawBytes float64, cfg sustainv1alpha1.ResourceRequests
 //     fired. Always available (it's the limit the kernel killed at), and the
 //     BumpFactor multiplier pushes the recommendation above it.
 //
-// CurrentRequestBytes is intentionally NOT a floor: doing so would compound
-// the previous reco's already-headroomed value on each reconcile, causing the
-// limit to grow by `(1 + headroom)` per cycle even after the workload fits.
-// The OOM-time-limit anchor avoids this because it only refreshes when a NEW
-// OOM event fires; once the workload fits after a bump, no new OOM events
-// occur and the recorded limit stays at the pre-bump value.
+// The container's current request is intentionally NOT a floor: it would
+// compound the previous reco's already-headroomed value on each reconcile,
+// causing the limit to grow by `(1 + headroom)` per cycle even after the
+// workload fits. The OOM-time-limit anchor avoids this because it only
+// refreshes when a NEW OOM event fires; once the workload fits after a bump,
+// no new OOM events occur and the recorded limit stays at the pre-bump value.
 // To enforce a hard "never go below X", use cfg.MinAllowed.
 //
 // LiveEventAt is non-zero when an in-memory OOM observation (from the
@@ -140,12 +139,11 @@ func ComputeMemoryRequest(rawBytes float64, cfg sustainv1alpha1.ResourceRequests
 // so a freshly-observed kill drives a bump without waiting for the recording
 // rule to surface it.
 type OOMSignal struct {
-	Recent              bool
-	PeakBytes           float64
-	OOMTimeLimitBytes   float64
-	BumpFactor          float64
-	CurrentRequestBytes float64
-	LiveEventAt         time.Time
+	Recent            bool
+	PeakBytes         float64
+	OOMTimeLimitBytes float64
+	BumpFactor        float64
+	LiveEventAt       time.Time
 }
 
 // ComputeMemoryRequestWithOOM is ComputeMemoryRequest with an OOM-aware floor.
@@ -162,10 +160,10 @@ func ComputeMemoryRequestWithOOM(rawBytes float64, signal OOMSignal, cfg sustain
 // controller to emit a metric when the floor is applied.
 //
 // floorApplied is true only when the floor actually drove the final returned
-// quantity: floor must beat the raw percentile AND MaxAllowed must not have
-// clamped the result below the floor's (headroomed, MiB-rounded) value. If
-// MaxAllowed clamps below the floor, the user override produced the value and
-// floorApplied is false.
+// quantity: floor must beat the raw percentile AND no MinAllowed/MaxAllowed
+// clamp may have replaced the floor's (headroomed, MiB-rounded) value. If a
+// clamp moved the result (MaxAllowed below the floor, or MinAllowed above
+// it), the user override produced the value and floorApplied is false.
 func ComputeMemoryRequestWithOOMFloorReport(rawBytes float64, signal OOMSignal, cfg sustainv1alpha1.ResourceRequestsConfig) (*resource.Quantity, bool) {
 	if cfg.KeepRequest {
 		return nil, false
@@ -189,12 +187,13 @@ func ComputeMemoryRequestWithOOMFloorReport(rawBytes float64, signal OOMSignal, 
 	if !floorWins {
 		return finalQty, false
 	}
-	// Floor beat the raw percentile, but MaxAllowed may still have clamped
-	// the result below the floor-derived value. Recompute the unclamped
+	// Floor beat the raw percentile, but a MinAllowed/MaxAllowed clamp may
+	// still have replaced the floor-derived value. Recompute the unclamped
 	// floor-with-headroom quantity and only report floorApplied when the
-	// final quantity is at least that value.
+	// final quantity is exactly that value — anything else means a user
+	// override drove the result.
 	floorQty := ComputeMemoryRequest(effective, sustainv1alpha1.ResourceRequestsConfig{Headroom: cfg.Headroom})
-	floorApplied := finalQty != nil && floorQty != nil && finalQty.Cmp(*floorQty) >= 0
+	floorApplied := finalQty != nil && floorQty != nil && finalQty.Cmp(*floorQty) == 0
 	return finalQty, floorApplied
 }
 
@@ -212,21 +211,31 @@ func ComputeLimit(request *resource.Quantity, currentRequest, currentLimit *reso
 		return LimitResult{Quantity: &q}
 	}
 	if cfg.RequestsLimitsRatio != nil {
-		q := resource.NewMilliQuantity(
-			int64(math.Ceil(float64(request.MilliValue())**cfg.RequestsLimitsRatio)),
-			request.Format,
-		)
-		return LimitResult{Quantity: q}
+		return LimitResult{Quantity: scaleByRatio(request, *cfg.RequestsLimitsRatio)}
 	}
 	if cfg.KeepLimitRequestRatio && currentRequest != nil && currentLimit != nil && !currentRequest.IsZero() {
 		ratio := float64(currentLimit.MilliValue()) / float64(currentRequest.MilliValue())
-		q := resource.NewMilliQuantity(
-			int64(math.Ceil(float64(request.MilliValue())*ratio)),
-			request.Format,
-		)
-		return LimitResult{Quantity: q}
+		return LimitResult{Quantity: scaleByRatio(request, ratio)}
 	}
 	return LimitResult{}
+}
+
+// scaleByRatio multiplies request by ratio, rounding up. Memory quantities
+// (BinarySI) are scaled in whole bytes — milli math would carry float64
+// representation error into fractional-byte limits (e.g. 100Mi * 1.1 →
+// 115343360001 milli-bytes), which Kubernetes warns about in pod specs.
+// CPU keeps millivalue precision.
+func scaleByRatio(request *resource.Quantity, ratio float64) *resource.Quantity {
+	if request.Format == resource.BinarySI {
+		return resource.NewQuantity(
+			int64(math.Ceil(float64(request.Value())*ratio)),
+			request.Format,
+		)
+	}
+	return resource.NewMilliQuantity(
+		int64(math.Ceil(float64(request.MilliValue())*ratio)),
+		request.Format,
+	)
 }
 
 func clampQuantity(qty *resource.Quantity, min, max *resource.Quantity) {

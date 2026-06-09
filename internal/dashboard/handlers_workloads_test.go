@@ -1,8 +1,11 @@
 package dashboard
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -10,7 +13,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
@@ -128,6 +133,78 @@ func TestAllWorkloadsIncludesStandaloneJobButSkipsCronJobOwned(t *testing.T) {
 	got := resp.Items[0]
 	if got.Kind != "Job" || got.Name != "oneshot" || got.Namespace != "scenario-job" {
 		t.Fatalf("unexpected item: %+v", got)
+	}
+}
+
+// TestAllWorkloadsNamespaceFilterKeepsFacets pins the facet fix: filtering by
+// namespace (or kind) must not collapse the namespace/kind dropdowns to the
+// filtered subset — they are derived from the full, unfiltered list.
+func TestAllWorkloadsNamespaceFilterKeepsFacets(t *testing.T) {
+	dA := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-a", Name: "web"}}
+	dB := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-b", Name: "api"}}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-b", Name: "oneshot"}}
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(dA, dB, job).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rec := httptest.NewRecorder()
+	srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads?namespace=ns-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	var resp struct {
+		Items []struct {
+			Namespace string `json:"namespace"`
+		} `json:"items"`
+		Total      int      `json:"total"`
+		Namespaces []string `json:"namespaces"`
+		Kinds      []string `json:"kinds"`
+	}
+	decodeEnvelopeData(t, rec.Body, &resp)
+	if resp.Total != 1 || len(resp.Items) != 1 || resp.Items[0].Namespace != "ns-a" {
+		t.Fatalf("expected only ns-a items, got %+v", resp)
+	}
+	if !slices.Contains(resp.Namespaces, "ns-a") || !slices.Contains(resp.Namespaces, "ns-b") {
+		t.Errorf("namespaces facet = %v, want both ns-a and ns-b", resp.Namespaces)
+	}
+	if !slices.Contains(resp.Kinds, "Deployment") || !slices.Contains(resp.Kinds, "Job") {
+		t.Errorf("kinds facet = %v, want Deployment and Job", resp.Kinds)
+	}
+}
+
+// TestPolicyWorkloadsMissingPolicyIs404WithoutCacheControl pins two error-path
+// contracts at once: a missing policy is a 404 (not a 500), and error
+// responses must not carry Cache-Control — intermediaries could otherwise pin
+// a transient failure for the success max-age.
+func TestPolicyWorkloadsMissingPolicyIs404WithoutCacheControl(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rec := httptest.NewRecorder()
+	srv.handlePolicyWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/policies/ghost/workloads", nil), "ghost")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "" {
+		t.Errorf("Cache-Control = %q, want empty on error responses", got)
+	}
+}
+
+// TestPolicyWorkloadsAPIServerErrorIs500 verifies that a non-NotFound Get
+// failure (apiserver outage, RBAC, timeout) is reported as a 500, not
+// disguised as a 404.
+func TestPolicyWorkloadsAPIServerErrorIs500(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(Scheme()).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+				return errors.New("apiserver is down")
+			},
+		}).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rec := httptest.NewRecorder()
+	srv.handlePolicyWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/policies/p/workloads", nil), "p")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

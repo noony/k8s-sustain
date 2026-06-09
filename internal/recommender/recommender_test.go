@@ -173,29 +173,17 @@ func TestComputeMemoryRequestWithOOM(t *testing.T) {
 			wantQty:  "100Mi",
 		},
 		{
-			// Floor = peak. Headroom is applied once to peak; current_request
-			// is NOT a floor (would otherwise compound across reconciles).
+			// Floor = peak. Headroom is applied once to peak.
 			name:     "recent oom raises floor to peak",
 			rawBytes: 50 * float64(mib),
-			signal:   OOMSignal{Recent: true, PeakBytes: 200 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+			signal:   OOMSignal{Recent: true, PeakBytes: 200 * float64(mib)},
 			cfg:      sustainv1alpha1.ResourceRequestsConfig{},
 			wantQty:  "200Mi",
 		},
 		{
-			// current_request is intentionally NOT a floor: the previous reco's
-			// already-headroomed value would otherwise multiply on each
-			// reconcile, causing runaway growth even after the workload fits.
-			// MinAllowed is the proper way to enforce "never shrink below X".
-			name:     "current_request is not a floor (no runaway)",
-			rawBytes: 50 * float64(mib),
-			signal:   OOMSignal{Recent: true, PeakBytes: 80 * float64(mib), CurrentRequestBytes: 150 * float64(mib)},
-			cfg:      sustainv1alpha1.ResourceRequestsConfig{},
-			wantQty:  "80Mi",
-		},
-		{
 			name:     "recent oom raw above floor wins",
 			rawBytes: 300 * float64(mib),
-			signal:   OOMSignal{Recent: true, PeakBytes: 100 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+			signal:   OOMSignal{Recent: true, PeakBytes: 100 * float64(mib)},
 			cfg:      sustainv1alpha1.ResourceRequestsConfig{},
 			wantQty:  "300Mi",
 		},
@@ -204,21 +192,21 @@ func TestComputeMemoryRequestWithOOM(t *testing.T) {
 			// raw=50Mi → 60Mi; peak=100Mi → 120Mi; max(60, 120) = 120Mi.
 			name:     "recent oom headroom applied to peak",
 			rawBytes: 50 * float64(mib),
-			signal:   OOMSignal{Recent: true, PeakBytes: 100 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+			signal:   OOMSignal{Recent: true, PeakBytes: 100 * float64(mib)},
 			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](20)},
 			wantQty:  "120Mi",
 		},
 		{
 			name:     "max allowed wins over oom floor",
 			rawBytes: 50 * float64(mib),
-			signal:   OOMSignal{Recent: true, PeakBytes: 500 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+			signal:   OOMSignal{Recent: true, PeakBytes: 500 * float64(mib)},
 			cfg:      sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("256Mi")},
 			wantQty:  "256Mi",
 		},
 		{
 			name:     "keep request returns nil even with recent oom",
 			rawBytes: 50 * float64(mib),
-			signal:   OOMSignal{Recent: true, PeakBytes: 200 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+			signal:   OOMSignal{Recent: true, PeakBytes: 200 * float64(mib)},
 			cfg:      sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true},
 			wantNil:  true,
 		},
@@ -291,7 +279,7 @@ func TestComputeMemoryRequestWithOOM_FloorAppliedFlag(t *testing.T) {
 	// Floor wins
 	q, applied := ComputeMemoryRequestWithOOMFloorReport(
 		50*float64(mib),
-		OOMSignal{Recent: true, PeakBytes: 200 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+		OOMSignal{Recent: true, PeakBytes: 200 * float64(mib)},
 		sustainv1alpha1.ResourceRequestsConfig{},
 	)
 	if !applied {
@@ -300,7 +288,7 @@ func TestComputeMemoryRequestWithOOM_FloorAppliedFlag(t *testing.T) {
 	// Raw wins
 	_, applied = ComputeMemoryRequestWithOOMFloorReport(
 		400*float64(mib),
-		OOMSignal{Recent: true, PeakBytes: 200 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+		OOMSignal{Recent: true, PeakBytes: 200 * float64(mib)},
 		sustainv1alpha1.ResourceRequestsConfig{},
 	)
 	if applied {
@@ -321,7 +309,7 @@ func TestComputeMemoryRequestWithOOM_FloorAppliedFlag(t *testing.T) {
 	// case from TestComputeMemoryRequestWithOOM.
 	q, applied = ComputeMemoryRequestWithOOMFloorReport(
 		50*float64(mib),
-		OOMSignal{Recent: true, PeakBytes: 500 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+		OOMSignal{Recent: true, PeakBytes: 500 * float64(mib)},
 		sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("256Mi")},
 	)
 	if applied {
@@ -330,11 +318,22 @@ func TestComputeMemoryRequestWithOOM_FloorAppliedFlag(t *testing.T) {
 	// Floor wins with no MaxAllowed clamp: floorApplied must be true.
 	q, applied = ComputeMemoryRequestWithOOMFloorReport(
 		50*float64(mib),
-		OOMSignal{Recent: true, PeakBytes: 500 * float64(mib), CurrentRequestBytes: 100 * float64(mib)},
+		OOMSignal{Recent: true, PeakBytes: 500 * float64(mib)},
 		sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("1Gi")},
 	)
 	if !applied {
 		t.Errorf("expected floor applied when MaxAllowed is above floor (q=%s)", q)
+	}
+	// MinAllowed above the floor: the user's MinAllowed produced the final
+	// value, not the floor, so floorApplied must be false even though the
+	// floor beat the raw percentile.
+	q, applied = ComputeMemoryRequestWithOOMFloorReport(
+		50*float64(mib),
+		OOMSignal{Recent: true, PeakBytes: 200 * float64(mib)},
+		sustainv1alpha1.ResourceRequestsConfig{MinAllowed: qtyp("512Mi")},
+	)
+	if applied {
+		t.Errorf("expected floor NOT applied when MinAllowed exceeds floor (q=%s)", q)
 	}
 }
 
@@ -408,6 +407,41 @@ func TestComputeLimit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Memory ratio limits must be whole bytes: milli math on 100Mi × 1.1 carries
+// float64 representation error into a fractional-byte limit (115343360001m)
+// that Kubernetes warns about. The byte path rounds up to whole bytes.
+func TestComputeLimit_MemoryRatioWholeBytes(t *testing.T) {
+	request := qtyp("100Mi")
+
+	t.Run("fixed ratio 1.1", func(t *testing.T) {
+		got := ComputeLimit(request, nil, nil, sustainv1alpha1.ResourceLimitsConfig{RequestsLimitsRatio: ptr.To(1.1)})
+		if got.Quantity == nil {
+			t.Fatal("expected non-nil Quantity")
+		}
+		if got.Quantity.MilliValue()%1000 != 0 {
+			t.Errorf("expected whole-byte limit, got %s", got.Quantity)
+		}
+		// ceil(104857600 * 1.1) = 115343361 bytes (1 byte over 110Mi from
+		// float64 rounding — whole bytes, never fractional).
+		if v, want := got.Quantity.Value(), int64(115343361); v != want {
+			t.Errorf("got %d bytes, want %d", v, want)
+		}
+	})
+
+	t.Run("keep limit-to-request ratio 1.1", func(t *testing.T) {
+		got := ComputeLimit(request, qtyp("100Mi"), qtyp("110Mi"), sustainv1alpha1.ResourceLimitsConfig{KeepLimitRequestRatio: true})
+		if got.Quantity == nil {
+			t.Fatal("expected non-nil Quantity")
+		}
+		if got.Quantity.MilliValue()%1000 != 0 {
+			t.Errorf("expected whole-byte limit, got %s", got.Quantity)
+		}
+		if v, want := got.Quantity.Value(), int64(115343361); v != want {
+			t.Errorf("got %d bytes, want %d", v, want)
+		}
+	})
 }
 
 // --- helpers ---

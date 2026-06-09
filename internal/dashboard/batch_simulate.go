@@ -58,12 +58,11 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Cache-Control", "public, max-age=60")
 	ctx := r.Context()
 
 	policy := &sustainv1alpha1.Policy{}
 	if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: policyName}, policy); err != nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("policy %q not found: %v", policyName, err))
+		writeK8sGetError(w, err, fmt.Sprintf("policy %q: %v", policyName, err))
 		return
 	}
 
@@ -140,11 +139,15 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 				bcr.RecommendedCPU = rec.CPURequest
 				bcr.RecommendedMemory = rec.MemoryRequest
 
+				// Only fold a recommendation into the aggregate when its
+				// current usage was counted too — otherwise the totals compare
+				// different container sets and the savings percent is deflated
+				// (or flips negative).
 				if rec.CPURequest != "" {
 					if q, err := resource.ParseQuantity(rec.CPURequest); err == nil {
 						cpuRec := q.MilliValue()
-						totalCPURec += cpuRec
 						if cpuCurr > 0 {
+							totalCPURec += cpuRec
 							bcr.CPUDeltaPercent = deltaPercent(cpuCurr, cpuRec)
 						}
 					}
@@ -152,8 +155,8 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 				if rec.MemoryRequest != "" {
 					if q, err := resource.ParseQuantity(rec.MemoryRequest); err == nil {
 						memRec := q.MilliValue()
-						totalMemRec += memRec
 						if memCurr > 0 {
+							totalMemRec += memRec
 							bcr.MemDeltaPercent = deltaPercent(memCurr, memRec)
 						}
 					}
@@ -175,6 +178,7 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 		resp.Workloads = []workloadBatchResult{}
 	}
 
+	w.Header().Set("Cache-Control", "public, max-age=60")
 	writeJSON(w, http.StatusOK, resp)
 }
 

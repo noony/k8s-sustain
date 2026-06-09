@@ -69,6 +69,23 @@ func TestApplyOverhead_Memory(t *testing.T) {
 	}
 }
 
+func TestApplyOverhead_MemoryWholeBytes(t *testing.T) {
+	// 110/70 is not byte-exact: 100Mi × 110 / 70 = 164776228.57... bytes.
+	// Milli math would emit a fractional-byte quantity (164776228572m) that
+	// Kubernetes warns about; the byte path must round up to whole bytes.
+	in := resource.MustParse("100Mi")
+	out := ApplyOverhead(&in, 70)
+	if out == nil {
+		t.Fatal("expected non-nil quantity")
+	}
+	if out.MilliValue()%1000 != 0 {
+		t.Errorf("expected whole-byte quantity, got %s", out)
+	}
+	if got, want := out.Value(), int64(164776229); got != want {
+		t.Errorf("got %d, want %d", got, want)
+	}
+}
+
 func TestApplyOverhead_Nil(t *testing.T) {
 	out := ApplyOverhead(nil, 70)
 	if out != nil {

@@ -2,6 +2,7 @@ package workload
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -739,20 +740,28 @@ func TestPatchPodInPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
 	_ = policyv1.AddToScheme(scheme)
 
 	var regularResizeOK, sidecarResizeAttempted, evicted bool
+	var firstPatchBody string
 	resizeCalls := 0
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(stale).
 		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, obj client.Object, patch client.Patch, _ ...client.SubResourcePatchOption) error {
 				if sub != "resize" {
 					return nil
 				}
 				resizeCalls++
 				switch resizeCalls {
 				case 1:
-					// First call = regular containers. Succeed.
+					// First call = regular containers. Succeed, and capture the
+					// patch body so the test can assert the sidecar changes did
+					// not leak into it (they must stay in the second, isolated
+					// call — otherwise a cluster rejecting sidecar resize would
+					// 422 the regular-container patch too).
 					regularResizeOK = true
+					if data, err := patch.Data(obj); err == nil {
+						firstPatchBody = string(data)
+					}
 					return nil
 				default:
 					// Second call = sidecars. Older clusters reject this.
@@ -787,6 +796,9 @@ func TestPatchPodInPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
 	}
 	if evicted {
 		t.Error("sidecar rejection should NOT cascade to eviction of the whole pod")
+	}
+	if firstPatchBody == "" || strings.Contains(firstPatchBody, "initContainers") {
+		t.Errorf("regular-container /resize patch must not carry initContainer changes, got body: %q", firstPatchBody)
 	}
 }
 
@@ -829,6 +841,104 @@ func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
 	}
 	if resizeCalled || evictionCalled {
 		t.Errorf("expected no-op when resize Deferred (resize=%v, eviction=%v)", resizeCalled, evictionCalled)
+	}
+}
+
+// TestPatchPodInPlace_AlreadyAtTarget_NoPatch verifies that a pod whose
+// containers already carry the recommended resources triggers no /resize (or
+// direct pod) patch at all: applyRecToContainer compares before setting, so
+// the "pod already at target" short-circuit holds on every reconcile instead
+// of submitting an empty patch each cycle.
+func TestPatchPodInPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
+	fresh := runningPod("fresh", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var resizeCalled, podPatchCalled, evictionCalled bool
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(fresh).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					resizeCalled = true
+				}
+				return nil
+			},
+			Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+				podPatchCalled = true
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evictionCalled = true
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if resizeCalled || podPatchCalled || evictionCalled {
+		t.Errorf("expected zero patches for pod already at target (resize=%v, patch=%v, eviction=%v)",
+			resizeCalled, podPatchCalled, evictionCalled)
+	}
+}
+
+// TestPatchPodInPlace_PodGoneDuringResize_NoError verifies that a pod deleted
+// between List and patch is skipped as a no-op: both the /resize subresource
+// and the direct-pod-patch fallback return NotFound, which must not surface as
+// a reconcile error, trigger an eviction, or disable in-place mode.
+func TestPatchPodInPlace_PodGoneDuringResize_NoError(t *testing.T) {
+	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evictionCalled bool
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(stale).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					return apierrors.NewNotFound(corev1.Resource("pods"), "stale")
+				}
+				return nil
+			},
+			Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+				return apierrors.NewNotFound(corev1.Resource("pods"), "stale")
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evictionCalled = true
+				}
+				return nil
+			},
+		}).
+		Build()
+
+	p := New(c, true)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), "default", sel, recs); err != nil {
+		t.Fatalf("expected NotFound on a vanished pod to be a no-op, got: %v", err)
+	}
+	if evictionCalled {
+		t.Error("did not expect eviction for a pod that no longer exists")
+	}
+	if !p.InPlace() {
+		t.Error("NotFound must not disable in-place mode")
 	}
 }
 

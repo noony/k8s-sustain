@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,21 @@ func TestWlrName(t *testing.T) {
 	}
 	if got := wlrName("StatefulSet", "db"); got != "statefulset-db" {
 		t.Errorf("wlrName StatefulSet/db = %q", got)
+	}
+}
+
+// TestWlrName_LongNameTruncatedWithHash verifies names exceeding the 253-char
+// object-name limit are truncated with a stable hash suffix. The expected
+// literal is duplicated in the webhook package test — both copies of wlrName
+// must produce it, or controller and webhook disagree on the cache key.
+func TestWlrName_LongNameTruncatedWithHash(t *testing.T) {
+	want := "deployment-" + strings.Repeat("a", 231) + "-55335e7810"
+	got := wlrName("Deployment", strings.Repeat("a", 260))
+	if got != want {
+		t.Errorf("wlrName long input = %q, want %q", got, want)
+	}
+	if len(got) > 253 {
+		t.Errorf("wlrName long input length = %d, want <= 253", len(got))
 	}
 }
 
@@ -140,6 +156,32 @@ func TestUpsertWorkloadRecommendation_NoOpWhenUnchanged(t *testing.T) {
 	}
 	if second.ResourceVersion != rvBefore {
 		t.Errorf("expected no etcd write on identical recommendation, resourceVersion bumped from %s to %s", rvBefore, second.ResourceVersion)
+	}
+}
+
+// TestUpsertWorkloadRecommendation_RefreshesStaleObservedAt verifies that an
+// equivalent recommendation still triggers a status write once ObservedAt is
+// older than wlrRefreshInterval — otherwise stable workloads would freeze
+// ObservedAt and the webhook would reject the cache as stale (>30m) exactly
+// when the Prometheus-outage fallback is needed.
+func TestUpsertWorkloadRecommendation_RefreshesStaleObservedAt(t *testing.T) {
+	r := reconcilerForCache(t)
+	cpu := resource.MustParse("250m")
+	tgt := &workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web"}
+	recs := map[string]workload.ContainerRecommendation{"app": {CPURequest: &cpu}}
+
+	past := metav1.NewTime(time.Now().Add(-2 * wlrRefreshInterval))
+	r.upsertWorkloadRecommendation(context.Background(), tgt, "p", recs, past)
+
+	now := metav1.Now()
+	r.upsertWorkloadRecommendation(context.Background(), tgt, "p", recs, now)
+
+	var got sustainv1alpha1.WorkloadRecommendation
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !got.Status.ObservedAt.After(past.Time) {
+		t.Errorf("expected ObservedAt refreshed past %v, got %v", past, got.Status.ObservedAt)
 	}
 }
 

@@ -272,7 +272,11 @@ func readHeadroom(ctx context.Context, p PromQuerier, expr string) (headroomBrea
 
 func collectAttention(ctx context.Context, p PromQuerier, expr, signal string) ([]attentionRow, error) {
 	rows := []attentionRow{}
-	bySeries, err := p.QueryByLabel(ctx, expr, "owner_name")
+	// Key by the full namespace|kind|name triple (the workloadKey format) so
+	// identically-named workloads in different namespaces stay distinct and
+	// each row carries everything the UI's /workloads/{ns}/{kind}/{name}
+	// click-through link needs.
+	bySeries, err := p.QueryByLabels(ctx, expr, "namespace", "owner_kind", "owner_name")
 	if err != nil {
 		return rows, err
 	}
@@ -280,18 +284,19 @@ func collectAttention(ctx context.Context, p PromQuerier, expr, signal string) (
 		return rows, nil
 	}
 	// Sort deterministically: descending by value, ties broken alphabetically.
-	names := slices.Collect(maps.Keys(bySeries))
-	slices.SortFunc(names, func(a, b string) int {
+	keys := slices.Collect(maps.Keys(bySeries))
+	slices.SortFunc(keys, func(a, b string) int {
 		if c := cmp.Compare(bySeries[b], bySeries[a]); c != 0 {
 			return c
 		}
 		return cmp.Compare(a, b)
 	})
-	if len(names) > 10 {
-		names = names[:10]
+	if len(keys) > 10 {
+		keys = keys[:10]
 	}
-	for _, name := range names {
-		rows = append(rows, attentionRow{Name: name, Signal: signal})
+	for _, key := range keys {
+		ns, kind, name := splitWorkloadKey(key)
+		rows = append(rows, attentionRow{Namespace: ns, Kind: kind, Name: name, Signal: signal})
 	}
 	return rows, nil
 }

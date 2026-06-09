@@ -148,7 +148,7 @@ Click any workload to view its detail page.
 
 The simulator lets you test "what-if" scenarios:
 
-1. Select a **workload target** (namespace, kind, name). The kind picker now includes **Argo Rollout** alongside Deployment, StatefulSet, and DaemonSet.
+1. Select a **workload target** (namespace, kind, name). The kind picker covers Deployment, StatefulSet, DaemonSet, CronJob, and standalone Job, plus **Argo Rollout**.
 2. Choose a **time range** (1h to 30 days) — controls how much history is displayed on the charts.
 3. Optionally, use the **Load from policy** dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window, and limits strategy) from an existing policy — useful as a starting point before tweaking values.
 4. Adjust **CPU and Memory parameters** independently:
@@ -250,6 +250,8 @@ Responses are gzip-encoded when the request advertises `Accept-Encoding: gzip` (
 ### Routing and methods
 
 Routes use Go 1.22 method-specific patterns, so the wrong HTTP verb returns `405 Method Not Allowed` with an `Allow` header listing the supported method(s). Path parameters (`{name}`, `{namespace}`, `{kind}`) are URL-decoded by the standard library.
+
+An `/api/*` path that matches no registered route returns the JSON 404 error envelope (it is never rewritten to the SPA's `index.html`). Endpoints that fetch a single Kubernetes object return 404 only when the object is actually missing; any other API-server failure surfaces as a 500. `/api/summary/trend` returns `503 Service Unavailable` when every Prometheus query fails (a full outage), while partial failures still return the series that succeeded.
 
 ### Validation
 

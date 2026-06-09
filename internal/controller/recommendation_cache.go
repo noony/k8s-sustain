@@ -2,8 +2,11 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -16,13 +19,34 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
+// maxWLRNameLength is the Kubernetes object-name limit (DNS subdomain).
+const maxWLRNameLength = 253
+
 // wlrName builds the WorkloadRecommendation object name for a workload target.
 // Format: "<lowercase-kind>-<name>". Two workloads of different kinds with the
 // same name (e.g. a Deployment "web" and a StatefulSet "web") get distinct
-// recommendation objects within the same namespace.
+// recommendation objects within the same namespace. Names that would exceed
+// the 253-char object-name limit are truncated with a short stable hash of
+// the full name appended, keeping them valid and deterministic. Mirrored in
+// internal/webhook — both copies must stay byte-identical (kept in sync via
+// tests) or the fallback contract breaks silently.
 func wlrName(kind, name string) string {
-	return fmt.Sprintf("%s-%s", strings.ToLower(kind), name)
+	n := fmt.Sprintf("%s-%s", strings.ToLower(kind), name)
+	if len(n) <= maxWLRNameLength {
+		return n
+	}
+	sum := sha256.Sum256([]byte(n))
+	hash := hex.EncodeToString(sum[:])[:10]
+	return n[:maxWLRNameLength-len(hash)-1] + "-" + hash
 }
+
+// wlrRefreshInterval bounds how long an unchanged WorkloadRecommendation
+// status may keep its old ObservedAt before the controller rewrites it just
+// to bump the timestamp. Must stay well under the webhook's
+// DefaultCacheStaleness (30m): without the periodic bump, stable workloads
+// would freeze ObservedAt at their last value change and the webhook would
+// reject the cache as stale — exactly the workloads the fallback protects.
+const wlrRefreshInterval = 10 * time.Minute
 
 // wlrPolicyLabel labels each WorkloadRecommendation with the Policy that
 // produced it. Used to scope sweep/cleanup list calls server-side instead of
@@ -107,8 +131,10 @@ func (r *PolicyReconciler) upsertWorkloadRecommendation(
 		existing = *patched
 	}
 
-	if statusEquivalent(existing.Status, desired) {
-		// No-op: same recommendation as last time. Skip the etcd write.
+	if statusEquivalent(existing.Status, desired) &&
+		now.Sub(existing.Status.ObservedAt.Time) < wlrRefreshInterval {
+		// No-op: same recommendation as last time and ObservedAt is still
+		// fresh enough for the webhook fallback. Skip the etcd write.
 		return
 	}
 

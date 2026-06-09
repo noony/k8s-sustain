@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -78,5 +79,29 @@ func TestCORS_AllowList(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("unlisted origin: Access-Control-Allow-Origin = %q, want empty", got)
+	}
+}
+
+// TestUnmatchedAPIPathReturnsJSON404 pins the SPA-fallback fix: an /api/* path
+// that matches no registered route must return the JSON 404 error envelope,
+// not index.html with a 200.
+func TestUnmatchedAPIPathReturnsJSON404(t *testing.T) {
+	srv := &Server{Logger: testLogger(t)}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/no-such-endpoint", nil)
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	var env ErrorEnvelope
+	if err := json.NewDecoder(rec.Body).Decode(&env); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if env.Error.Code != ErrCodeNotFound {
+		t.Errorf("error.code = %q, want %q", env.Error.Code, ErrCodeNotFound)
 	}
 }

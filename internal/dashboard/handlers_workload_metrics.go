@@ -28,26 +28,25 @@ type recommendationResult struct {
 func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
 	ctx := r.Context()
 
-	w.Header().Set("Cache-Control", "public, max-age=60")
-
 	// Fetch the workload entry once: it supplies the policy annotation here and
 	// is threaded into runSimulationWithEntry below so the simulation does not
 	// re-Get the same object.
 	entry, err := s.getWorkloadEntry(ctx, namespace, kind, name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("workload not found: %v", err))
+		writeK8sGetError(w, err, fmt.Sprintf("workload %s/%s/%s: %v", namespace, kind, name, err))
 		return
 	}
 	policyName := entry.PolicyAnnotation()
 
 	if policyName == "" {
+		w.Header().Set("Cache-Control", "public, max-age=60")
 		writeJSON(w, http.StatusOK, recommendationResult{Automated: false})
 		return
 	}
 
 	policy := &sustainv1alpha1.Policy{}
 	if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: policyName}, policy); err != nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("policy %q not found: %v", policyName, err))
+		writeK8sGetError(w, err, fmt.Sprintf("policy %q: %v", policyName, err))
 		return
 	}
 
@@ -63,6 +62,7 @@ func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	w.Header().Set("Cache-Control", "public, max-age=60")
 	writeJSON(w, http.StatusOK, recommendationResult{
 		Automated:          true,
 		PolicyName:         policyName,
@@ -137,8 +137,6 @@ func buildSimulateRequestFromPolicy(q url.Values, policy *sustainv1alpha1.Policy
 // ---- Workload metrics ----
 
 func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
-	w.Header().Set("Cache-Control", "public, max-age=60")
-
 	q := r.URL.Query()
 	window, perr := parseDurationParam(q, "168h")
 	if perr != nil {
@@ -207,6 +205,7 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	resources := containerResourcesFromEntry(entry)
 	initContainers := initContainerNamesFromEntry(entry)
 
+	w.Header().Set("Cache-Control", "public, max-age=60")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cpu":            cpuSeries,
 		"memory":         memSeries,

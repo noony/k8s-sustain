@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -84,6 +85,80 @@ func TestLoadWebhookConfig_RoundTripsBoundFlags(t *testing.T) {
 	}
 	if cfg.TLSKeyFile != "/tls/tls.key" {
 		t.Errorf("TLSKeyFile = %q, want /tls/tls.key (default)", cfg.TLSKeyFile)
+	}
+}
+
+// TestStringSlice_EnvOverride verifies that string-slice flags can be
+// overridden via environment variable using the same comma-separated syntax
+// as --flag=a,b. Viper hands env values back as a single raw string (and
+// GetStringSlice splits strings on whitespace, not commas), so getStringSlice
+// has to do the comma splitting itself.
+func TestStringSlice_EnvOverride(t *testing.T) {
+	tests := []struct {
+		name   string
+		envVal string
+		want   []string
+	}{
+		{name: "comma separated", envVal: "kube-system,monitoring", want: []string{"kube-system", "monitoring"}},
+		{name: "comma separated with spaces", envVal: "kube-system, monitoring", want: []string{"kube-system", "monitoring"}},
+		{name: "single value", envVal: "kube-system", want: []string{"kube-system"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(viper.Reset)
+			viper.Reset()
+
+			cmd := &cobra.Command{Use: "start"}
+			BindControllerFlags(cmd)
+
+			t.Setenv("K8SSUSTAIN_EXCLUDED_NAMESPACES", tc.envVal)
+			InitViper()
+
+			got := LoadControllerConfig().ExcludedNamespaces
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("ExcludedNamespaces = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestStringSlice_EnvOverride_SubcommandKey covers the dotted-key variant
+// (webhook.excluded-namespaces) of the comma-separated env override.
+func TestStringSlice_EnvOverride_SubcommandKey(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	cmd := &cobra.Command{Use: "webhook"}
+	BindWebhookFlags(cmd)
+
+	t.Setenv("K8SSUSTAIN_WEBHOOK_EXCLUDED_NAMESPACES", "kube-system,monitoring")
+	InitViper()
+
+	got := LoadWebhookConfig().ExcludedNamespaces
+	want := []string{"kube-system", "monitoring"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ExcludedNamespaces = %v, want %v", got, want)
+	}
+}
+
+// TestStringSlice_FlagStillWorks ensures the comma-splitting env fix does not
+// regress the flag path, which already parses CSV via pflag.
+func TestStringSlice_FlagStillWorks(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	cmd := &cobra.Command{Use: "start"}
+	BindControllerFlags(cmd)
+	if err := cmd.Flags().Set("excluded-namespaces", "kube-system,monitoring"); err != nil {
+		t.Fatalf("setting flag: %v", err)
+	}
+	InitViper()
+
+	got := LoadControllerConfig().ExcludedNamespaces
+	want := []string{"kube-system", "monitoring"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ExcludedNamespaces = %v, want %v", got, want)
 	}
 }
 

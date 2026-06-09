@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,21 @@ func TestWlrName_MatchesController(t *testing.T) {
 	// fallback contract silently.
 	if got := wlrName("Deployment", "web"); got != "deployment-web" {
 		t.Errorf("wlrName Deployment/web = %q", got)
+	}
+}
+
+// TestWlrName_LongNameMatchesController verifies the truncate-and-hash path
+// for names exceeding the 253-char object-name limit. The expected literal is
+// duplicated in the controller package test — both copies of wlrName must
+// produce it, or controller and webhook disagree on the cache key.
+func TestWlrName_LongNameMatchesController(t *testing.T) {
+	want := "deployment-" + strings.Repeat("a", 231) + "-55335e7810"
+	got := wlrName("Deployment", strings.Repeat("a", 260))
+	if got != want {
+		t.Errorf("wlrName long input = %q, want %q", got, want)
+	}
+	if len(got) > 253 {
+		t.Errorf("wlrName long input length = %d, want <= 253", len(got))
 	}
 }
 

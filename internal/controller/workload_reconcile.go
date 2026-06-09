@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -87,14 +88,20 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	// pods directly; new scheduled runs always pick up the latest resources
 	// from the webhook at admission time.
 	if t.Kind == "CronJob" {
-		if err := r.resizeCronJobPods(ctx, t, recs); err != nil {
+		resized, err := r.resizeCronJobPods(ctx, t, recs)
+		if err != nil {
 			return r.handleStepError(ctx, t, "resize", "CronJob pod resize failed", err)
 		}
 		r.recordStepSuccess(t)
-		changed := changedContainers(containers, recs)
-		if len(changed) > 0 {
-			r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
-				"in-place resized cronjob pods for containers: %v", changed)
+		// Only report an update when pods were actually resized — the
+		// JobTemplate is never mutated, so changedContainers alone would
+		// fire on every reconcile.
+		if resized > 0 {
+			changed := changedContainers(containers, recs)
+			if len(changed) > 0 {
+				r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
+					"in-place resized cronjob pods for containers: %v", changed)
+			}
 		}
 		return nil
 	}
@@ -135,6 +142,15 @@ func (r *PolicyReconciler) handleStepError(ctx context.Context, t *workloadTarge
 	if !isTransientError(err) {
 		r.retries.remove(t.key())
 		EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
+		// Context cancellation is graceful shutdown, not a misconfiguration —
+		// don't spam events/logs on the way out.
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			// Permanent errors (e.g. 403 from missing RBAC) are never retried,
+			// so surface them loudly — otherwise they fail invisibly forever.
+			r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, "ReconciliationFailed", "ReconciliationFailed",
+				"%s: %v. Permanent error, not retrying", msg, err)
+			log.FromContext(ctx).Error(err, msg+", permanent error, not retrying", "phase", phase)
+		}
 		return nil
 	}
 	r.retries.recordFailure(t.key())

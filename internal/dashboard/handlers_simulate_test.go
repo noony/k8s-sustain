@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // TestHandleSimulate_RejectsNonPost verifies the handler rejects GET/PUT/etc.
@@ -66,15 +68,37 @@ func TestHandleSimulate_RejectsMissingOwnerName(t *testing.T) {
 // like "Rollout" or "Pod" are bounced before any expensive work happens.
 func TestHandleSimulate_RejectsInvalidOwnerKind(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
-	body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Pod", OwnerName: "x"})
+	for _, kind := range []string{"Pod", "Rollout"} {
+		t.Run(kind, func(t *testing.T) {
+			body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: kind, OwnerName: "x"})
+			req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
+			rec := httptest.NewRecorder()
+			srv.handleSimulate(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", rec.Code)
+			}
+			if !strings.Contains(rec.Body.String(), "ownerKind") {
+				t.Errorf("expected 'ownerKind' in body, got %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestHandleSimulate_AcceptsJob pins Job as a simulatable kind — it is in
+// supportedWorkloadKinds and handled by the simulation pipeline, so the
+// validator must not bounce it with a 400.
+func TestHandleSimulate_AcceptsJob(t *testing.T) {
+	srv := &Server{
+		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		PromClient: &fakePromClient{},
+		Logger:     testLogger(t),
+	}
+	body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Job", OwnerName: "oneshot"})
 	req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
 	rec := httptest.NewRecorder()
 	srv.handleSimulate(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "ownerKind") {
-		t.Errorf("expected 'ownerKind' in body, got %s", rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

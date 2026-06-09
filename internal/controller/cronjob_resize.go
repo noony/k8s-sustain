@@ -22,28 +22,32 @@ const jobPodNameLabel = "batch.kubernetes.io/job-name"
 // pods are never evicted — short-lived job runs must finish on their own.
 // New scheduled runs pick up the latest resources from the webhook at
 // admission time.
-func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTarget, recs map[string]workload.ContainerRecommendation) error {
+//
+// Returns the number of pods actually resized so the caller can suppress
+// the ResourcesUpdated event when nothing was touched (no active pods, or
+// in-place resize unsupported on this cluster).
+func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTarget, recs map[string]workload.ContainerRecommendation) (int, error) {
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 
 	cj, ok := t.Object.(*batchv1.CronJob)
 	if !ok {
-		return fmt.Errorf("cronjob target carries unexpected object type %T", t.Object)
+		return 0, fmt.Errorf("cronjob target carries unexpected object type %T", t.Object)
 	}
 
 	jobs, err := r.listActiveJobsForCronJob(ctx, cj)
 	if err != nil {
-		return fmt.Errorf("listing jobs for cronjob: %w", err)
+		return 0, fmt.Errorf("listing jobs for cronjob: %w", err)
 	}
 	if len(jobs) == 0 {
 		logger.V(1).Info("no active jobs for cronjob; nothing to resize (next run will pick up new resources via webhook)")
-		return nil
+		return 0, nil
 	}
 
 	var pods []*corev1.Pod
 	for i := range jobs {
 		jobPods, err := r.listPodsForJob(ctx, &jobs[i])
 		if err != nil {
-			return fmt.Errorf("listing pods for job %s: %w", jobs[i].Name, err)
+			return 0, fmt.Errorf("listing pods for job %s: %w", jobs[i].Name, err)
 		}
 		for j := range jobPods {
 			pods = append(pods, &jobPods[j])
@@ -51,7 +55,22 @@ func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTar
 	}
 
 	logger.V(1).Info("resizing cronjob pods", "jobs", len(jobs), "pods", len(pods))
-	return r.patcher.ResizePodsInPlace(ctx, pods, recs)
+	if err := r.patcher.ResizePodsInPlace(ctx, pods, recs); err != nil {
+		return 0, err
+	}
+	// Checked after the call: the patcher flips InPlace to false at runtime
+	// if the API server rejects the resize (feature gate disabled), in which
+	// case nothing was resized.
+	if !r.patcher.InPlace() {
+		return 0, nil
+	}
+	resized := 0
+	for _, pod := range pods {
+		if pod.DeletionTimestamp == nil && pod.Status.Phase == corev1.PodRunning {
+			resized++
+		}
+	}
+	return resized, nil
 }
 
 // listActiveJobsForCronJob returns the Jobs in the CronJob's namespace that

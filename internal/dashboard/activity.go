@@ -48,7 +48,6 @@ func (s *Server) handleSummaryActivity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=15")
 	limit, perr := parseActivityLimit(r.URL.Query().Get("limit"))
 	if perr != nil {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
@@ -79,6 +78,7 @@ func (s *Server) handleSummaryActivity(w http.ResponseWriter, r *http.Request) {
 	if len(items) > limit {
 		items = items[:limit]
 	}
+	w.Header().Set("Cache-Control", "public, max-age=15")
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 

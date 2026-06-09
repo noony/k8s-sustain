@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +19,25 @@ type recordingPromClient struct {
 	fakePromClient
 	mu    sync.Mutex
 	exprs []string
+}
+
+// failingRangePromClient fails QueryRange for every expression containing one
+// of failSubstrings (or all expressions when the list is empty).
+type failingRangePromClient struct {
+	fakePromClient
+	failSubstrings []string
+}
+
+func (f *failingRangePromClient) QueryRange(_ context.Context, expr, _, _ string) ([]promclient.TimeValue, error) {
+	if len(f.failSubstrings) == 0 {
+		return nil, errors.New("prom unreachable")
+	}
+	for _, sub := range f.failSubstrings {
+		if strings.Contains(expr, sub) {
+			return nil, errors.New("prom unreachable")
+		}
+	}
+	return []promclient.TimeValue{{Timestamp: time.Unix(1, 0), Value: 1}}, nil
 }
 
 func (r *recordingPromClient) QueryRange(_ context.Context, expr, _, _ string) ([]promclient.TimeValue, error) {
@@ -83,5 +103,41 @@ func TestHandleSummaryTrendReturnsUsageRequestOriginalForCPUAndMemory(t *testing
 		if !seen {
 			t.Errorf("expected %s query not issued; got %v", m.name, prom.exprs)
 		}
+	}
+}
+
+// TestHandleSummaryTrendAllQueriesFailReturns503 pins the outage contract: when
+// every Prometheus query fails, the handler must not return a 200 with empty
+// series (indistinguishable from a cluster with no data).
+func TestHandleSummaryTrendAllQueriesFailReturns503(t *testing.T) {
+	srv := &Server{PromClient: &failingRangePromClient{}, Logger: testLogger(t)}
+	rec := httptest.NewRecorder()
+	srv.handleSummaryTrend(rec, httptest.NewRequest(http.MethodGet, "/api/summary/trend", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "" {
+		t.Errorf("Cache-Control = %q, want empty on error responses", got)
+	}
+}
+
+// TestHandleSummaryTrendPartialFailureStillReturnsData verifies graceful
+// degradation: if only some queries fail, the surviving series are served.
+func TestHandleSummaryTrendPartialFailureStillReturnsData(t *testing.T) {
+	// Fail only the CPU template-scoped queries; memory queries succeed.
+	prom := &failingRangePromClient{failSubstrings: []string{"template_cpu_cores"}}
+	srv := &Server{PromClient: prom, Logger: testLogger(t)}
+	rec := httptest.NewRecorder()
+	srv.handleSummaryTrend(rec, httptest.NewRequest(http.MethodGet, "/api/summary/trend", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp trendResponse
+	decodeEnvelopeData(t, rec.Body, &resp)
+	if len(resp.Memory.Usage) == 0 {
+		t.Errorf("memory.usage empty, want surviving series on partial failure")
+	}
+	if len(resp.CPU.OriginalRequest) != 0 {
+		t.Errorf("cpu.originalRequest = %v, want empty for failed query", resp.CPU.OriginalRequest)
 	}
 }

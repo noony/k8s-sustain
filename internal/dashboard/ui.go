@@ -13,6 +13,13 @@ import (
 var uiFS embed.FS
 
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
+	// An unmatched /api/* path is a missing endpoint, not a SPA route: return
+	// the JSON 404 envelope instead of index.html with a 200.
+	if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
 	sub, err := fs.Sub(uiFS, "ui/dist")
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

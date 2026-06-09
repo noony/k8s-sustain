@@ -75,9 +75,9 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ownerName is required")
 		return
 	}
-	validKinds := map[string]bool{"Deployment": true, "StatefulSet": true, "DaemonSet": true, "CronJob": true}
+	validKinds := map[string]bool{"Deployment": true, "StatefulSet": true, "DaemonSet": true, "CronJob": true, "Job": true}
 	if !validKinds[req.OwnerKind] {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid ownerKind %q: must be one of Deployment, StatefulSet, DaemonSet, CronJob", req.OwnerKind))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid ownerKind %q: must be one of Deployment, StatefulSet, DaemonSet, CronJob, Job", req.OwnerKind))
 		return
 	}
 

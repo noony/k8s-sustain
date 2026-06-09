@@ -39,11 +39,9 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 
 	policy := &sustainv1alpha1.Policy{}
 	if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: policyName}, policy); err != nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("policy %q not found: %v", policyName, err))
+		writeK8sGetError(w, err, fmt.Sprintf("policy %q: %v", policyName, err))
 		return
 	}
-
-	w.Header().Set("Cache-Control", "public, max-age=30")
 
 	q := r.URL.Query()
 	nsFilter := q.Get("namespace")
@@ -68,6 +66,7 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 	total := len(workloads)
 	start, end := paginateRange(total, page, pageSize)
 
+	w.Header().Set("Cache-Control", "public, max-age=30")
 	writeJSON(w, http.StatusOK, paginatedWorkloads{
 		Items:      workloads[start:end],
 		Total:      total,
@@ -235,8 +234,6 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Cache-Control", "public, max-age=30")
-
 	ctx := r.Context()
 	filters, perr := parseAllWorkloadFilters(r.URL.Query())
 	if perr != nil {
@@ -244,10 +241,17 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workloads := s.collectAllWorkloads(ctx, filters)
-	applyAllWorkloadSignals(ctx, s, workloads)
+	workloads := s.collectAllWorkloads(ctx)
 
+	// Namespace/kind dropdowns are derived from the full, unfiltered list so
+	// picking one value doesn't collapse the other options (mirrors
+	// handlePolicyWorkloads).
 	namespaces, kinds := uniqueNamespacesAndKinds(workloads)
+
+	// Narrow by namespace/kind before the signal decoration so that work only
+	// covers the rows we may return.
+	workloads = filterByNamespaceAndKind(workloads, filters)
+	applyAllWorkloadSignals(ctx, s, workloads)
 
 	// Filters that depend on signal data run after decoration.
 	workloads = applyAllWorkloadFilters(workloads, filters)
@@ -256,6 +260,7 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	total := len(workloads)
 	start, end := paginateRange(total, filters.page, filters.pageSize)
 
+	w.Header().Set("Cache-Control", "public, max-age=30")
 	writeJSON(w, http.StatusOK, paginatedAllWorkloads{
 		Items:      workloads[start:end],
 		Total:      total,
@@ -267,22 +272,13 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// collectAllWorkloads lists workloads across every kind allowed by the kind
-// filter, optionally narrowed to a namespace at the API-server level.
-func (s *Server) collectAllWorkloads(ctx context.Context, f allWorkloadFilters) []allWorkloadSummary {
-	var listOpts []client.ListOption
-	if f.namespace != "" {
-		listOpts = append(listOpts, client.InNamespace(f.namespace))
-	}
-
-	kinds := supportedWorkloadKinds
-	if f.kind != "" {
-		kinds = []string{f.kind}
-	}
-
+// collectAllWorkloads lists workloads of every supported kind, cluster-wide.
+// Namespace/kind narrowing happens in the handler after the facet sets are
+// derived, so the dropdowns always reflect the full population.
+func (s *Server) collectAllWorkloads(ctx context.Context) []allWorkloadSummary {
 	out := []allWorkloadSummary{}
-	for _, kind := range kinds {
-		entries, err := s.listWorkloadsOfKind(ctx, kind, listOpts...)
+	for _, kind := range supportedWorkloadKinds {
+		entries, err := s.listWorkloadsOfKind(ctx, kind)
 		if err != nil {
 			s.Logger.Error(err, "failed to list workloads", "kind", kind)
 			continue
@@ -329,6 +325,19 @@ func uniqueNamespacesAndKinds(workloads []allWorkloadSummary) (namespaces, kinds
 		kinds = append(kinds, k)
 	}
 	return
+}
+
+// filterByNamespaceAndKind applies the identity filters that don't depend on
+// signal decoration. Kept separate from applyAllWorkloadFilters so the rows
+// passed to the (potentially expensive) signal queries are already narrowed.
+func filterByNamespaceAndKind(workloads []allWorkloadSummary, f allWorkloadFilters) []allWorkloadSummary {
+	if f.namespace != "" {
+		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.Namespace == f.namespace })
+	}
+	if f.kind != "" {
+		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.Kind == f.kind })
+	}
+	return workloads
 }
 
 func applyAllWorkloadFilters(workloads []allWorkloadSummary, f allWorkloadFilters) []allWorkloadSummary {

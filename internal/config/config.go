@@ -104,6 +104,28 @@ func RecommendOnly() bool {
 	return viper.GetBool("recommend-only")
 }
 
+// getStringSlice reads a string-slice key, accepting comma-separated values
+// from environment variables. Viper hands env values back as a single raw
+// string, and GetStringSlice splits strings on whitespace — so
+// K8SSUSTAIN_EXCLUDED_NAMESPACES=kube-system,monitoring would surface as the
+// single bogus element "kube-system,monitoring". Detect the raw-string case
+// and split on commas (trimming spaces) so env overrides behave exactly like
+// --flag=a,b. Flag- and config-file-backed values arrive as slices and pass
+// through to GetStringSlice unchanged.
+func getStringSlice(key string) []string {
+	raw, ok := viper.Get(key).(string)
+	if !ok {
+		return viper.GetStringSlice(key)
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 // --- Controller (start) flags ------------------------------------------------
 
 // BindControllerFlags registers flags for the "start" subcommand.
@@ -147,7 +169,7 @@ func LoadControllerConfig() ControllerConfig {
 		LogLevel:                  viper.GetString("log-level"),
 		PrometheusAddress:         viper.GetString("prometheus-address"),
 		ReconcileInterval:         viper.GetDuration("reconcile-interval"),
-		ExcludedNamespaces:        viper.GetStringSlice("excluded-namespaces"),
+		ExcludedNamespaces:        getStringSlice("excluded-namespaces"),
 		ConcurrencyLimit:          viper.GetInt("concurrency-limit"),
 		RecommendOnly:             RecommendOnly(),
 		RecycleReplacementTimeout: viper.GetDuration("recycle-replacement-timeout"),
@@ -190,7 +212,7 @@ func LoadWebhookConfig() WebhookConfig {
 		PrometheusAddress:  viper.GetString("webhook.prometheus-address"),
 		LogLevel:           viper.GetString("webhook.log-level"),
 		RecommendOnly:      RecommendOnly(),
-		ExcludedNamespaces: viper.GetStringSlice("webhook.excluded-namespaces"),
+		ExcludedNamespaces: getStringSlice("webhook.excluded-namespaces"),
 	}
 }
 
@@ -220,6 +242,6 @@ func LoadDashboardConfig() DashboardConfig {
 		BindAddress:        viper.GetString("dashboard.bind-address"),
 		PrometheusAddress:  viper.GetString("dashboard.prometheus-address"),
 		LogLevel:           viper.GetString("dashboard.log-level"),
-		CORSAllowedOrigins: viper.GetStringSlice("dashboard.cors-allowed-origins"),
+		CORSAllowedOrigins: getStringSlice("dashboard.cors-allowed-origins"),
 	}
 }

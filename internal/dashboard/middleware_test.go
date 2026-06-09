@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
+
 	"github.com/noony/k8s-sustain/internal/httpx"
 )
 
@@ -213,6 +215,31 @@ func TestCORS_VaryOriginNotSetWhenNoAllowlist(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestTelemetry_AccessLogCarriesRequestID pins the middleware ordering fix:
+// withRequestID must sit outside withTelemetry, otherwise the access-log line
+// is emitted before the request ID lands on the context and always logs
+// requestId="".
+func TestTelemetry_AccessLogCarriesRequestID(t *testing.T) {
+	var lines []string
+	log := funcr.New(func(_, args string) { lines = append(lines, args) }, funcr.Options{Verbosity: 1})
+	srv := &Server{Logger: log}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.Header.Set(httpx.RequestIDHeader, "test-rid-123")
+	srv.Handler().ServeHTTP(rec, req)
+
+	for _, line := range lines {
+		if strings.Contains(line, "http request") {
+			if !strings.Contains(line, "test-rid-123") {
+				t.Fatalf("access log line missing request ID: %s", line)
+			}
+			return
+		}
+	}
+	t.Fatalf("no access log line emitted; lines=%v", lines)
 }
 
 // TestTelemetry_UnknownPathLabelsAsUnknown is the cardinality fix: any

@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -169,6 +170,16 @@ func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name str
 // namespaces stay distinct.
 func workloadKey(namespace, kind, name string) string {
 	return namespace + "|" + kind + "|" + name
+}
+
+// splitWorkloadKey is the inverse of workloadKey. Missing components come
+// back empty; any extra "|" separators stay in the name component.
+func splitWorkloadKey(key string) (namespace, kind, name string) {
+	parts := strings.SplitN(key, "|", 3)
+	for len(parts) < 3 {
+		parts = append(parts, "")
+	}
+	return parts[0], parts[1], parts[2]
 }
 
 // paginateRange clamps page/pageSize into a valid [start, end) slice index

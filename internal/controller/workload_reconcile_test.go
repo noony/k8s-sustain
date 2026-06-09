@@ -2,14 +2,19 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 )
@@ -112,6 +117,47 @@ func TestReconcileWorkload_TransientPromError_RecordsRetry(t *testing.T) {
 	state := r.retries.getState(tgt.key())
 	if state.attempts < 1 {
 		t.Errorf("expected retry tracker to record at least 1 attempt, got %d", state.attempts)
+	}
+}
+
+// TestHandleStepError_NonTransient_EmitsWarningEventAndReturnsNil verifies a
+// permanent error (e.g. 403 from missing RBAC) is surfaced via a Warning
+// event instead of being silently swallowed, while still returning nil so
+// retry semantics are unchanged.
+func TestHandleStepError_NonTransient_EmitsWarningEventAndReturnsNil(t *testing.T) {
+	rec := events.NewFakeRecorder(10)
+	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
+	tgt := deploymentTarget("default", "web")
+
+	permErr := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "web-pod", errors.New("rbac missing"))
+	if err := r.handleStepError(context.Background(), tgt, "patch", "Pod recycle failed", permErr); err != nil {
+		t.Fatalf("non-transient error must return nil (no retry), got %v", err)
+	}
+
+	select {
+	case e := <-rec.Events:
+		if !strings.Contains(e, "Warning") || !strings.Contains(e, "ReconciliationFailed") {
+			t.Errorf("expected Warning ReconciliationFailed event, got %q", e)
+		}
+	default:
+		t.Error("expected a Warning event for non-transient error, got none")
+	}
+}
+
+// TestHandleStepError_ContextCanceled_StaysSilent verifies graceful-shutdown
+// cancellation does not produce a ReconciliationFailed event.
+func TestHandleStepError_ContextCanceled_StaysSilent(t *testing.T) {
+	rec := events.NewFakeRecorder(10)
+	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
+	tgt := deploymentTarget("default", "web")
+
+	if err := r.handleStepError(context.Background(), tgt, "patch", "Pod recycle failed", context.Canceled); err != nil {
+		t.Fatalf("context cancellation must return nil, got %v", err)
+	}
+	select {
+	case e := <-rec.Events:
+		t.Errorf("expected no event for context cancellation, got %q", e)
+	default:
 	}
 }
 

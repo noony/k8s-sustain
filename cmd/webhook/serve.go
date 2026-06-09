@@ -96,17 +96,18 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 	})
 
 	// Shared HTTP stack: request-ID correlation, panic recovery, telemetry,
-	// matching what the dashboard exposes. Order matters — telemetry needs
-	// to wrap recovery so a recovered request is still observed.
+	// matching what the dashboard exposes. Order matters — request-ID sits
+	// outermost so telemetry/recovery log a populated requestId, and
+	// telemetry wraps recovery so a recovered request is still observed.
 	//
 	// Route labels are derived via DefaultRouteLabeler so the histogram and
 	// panic counter only ever see the registered patterns (/mutate, /metrics,
 	// /healthz). Without that, an attacker hitting bogus URLs would blow up
 	// Prometheus label cardinality on the webhook the same way it would on
 	// the dashboard.
-	wrapped := httpx.WithTelemetry(
+	wrapped := httpx.WithRequestID(httpx.WithTelemetry(
 		httpx.WithRecovery(
-			httpx.WithRequestID(mux),
+			mux,
 			log,
 			func(path string) { whhandler.PanicTotal.WithLabelValues(path).Inc() },
 			httpx.DefaultRouteLabeler,
@@ -116,7 +117,7 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 			whhandler.RequestDuration.WithLabelValues(path, status).Observe(dur.Seconds())
 		},
 		httpx.DefaultRouteLabeler,
-	)
+	))
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	// Hardened timeouts come from httpx.NewServer's shared defaults

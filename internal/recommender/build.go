@@ -232,10 +232,12 @@ func BuildContainerRecs(
 // and limit derivation. HasData=false means neither CPU nor memory had enough
 // signal to emit a recommendation — the caller should skip the container.
 //
-// Memory is emitted when EITHER usage samples are present OR the caller
-// supplies an OOM context (recent OOM with peak data, or a live OOM event).
+// Memory is emitted when EITHER usage samples are present OR a recent/live
+// OOM comes with a positive anchor (kernel-observed peak or OOM-time limit).
 // This lets crash-looping containers — which can't accumulate usage samples
-// — still receive a recommendation anchored on the kernel-observed peak.
+// — still receive a recommendation anchored on real data. An OOM event with
+// no anchor at all emits nothing: the only possible output would be the hard
+// 1Mi minimum, which would guarantee the next OOM.
 func ComputeContainerRec(in ContainerInputs) ContainerRecResult {
 	var rec workload.ContainerRecommendation
 	hasData := false
@@ -247,15 +249,11 @@ func ComputeContainerRec(in ContainerInputs) ContainerRecResult {
 	}
 
 	recent := in.OOM.Recent || !in.OOM.LiveEventAt.IsZero()
-	hasLive := !in.OOM.LiveEventAt.IsZero()
-	emitMem := in.HasMemUsage || (recent && in.HasOOMPeak) || hasLive
+	emitMem := in.HasMemUsage || (recent && (in.HasOOMPeak || in.OOM.OOMTimeLimitBytes > 0))
 	if emitMem {
 		var perPod float64
 		if in.HasMemUsage {
 			perPod = in.MemPerPod
-		}
-		if cur := in.Container.Resources.Requests.Memory(); cur != nil && !cur.IsZero() {
-			in.OOM.CurrentRequestBytes = float64(cur.Value())
 		}
 		rec.MemoryRequest, floorApplied = ComputeMemoryRequestWithOOMFloorReport(perPod, in.OOM, in.RsCfg.Memory.Requests)
 		hasData = true

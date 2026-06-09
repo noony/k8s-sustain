@@ -29,9 +29,10 @@ const (
 // Returns qty unchanged (a deep copy) when target_pct <= 0 (no HPA target),
 // or nil when qty is nil. target_pct is clamped to [1, 99] before division.
 //
-// Math is in millivalues for CPU precision; memory quantities use the same
-// scaling and round up to the next milli-byte (the result is then turned
-// back into a Quantity that callers can compare to MaxAllowed clamps).
+// Math is in millivalues for CPU precision; memory quantities (BinarySI)
+// are scaled in whole bytes and rounded up to the next byte — milli math
+// would produce fractional-byte quantities whenever 110/target isn't
+// byte-exact, and Kubernetes warns on fractional byte values in pod specs.
 //
 // Exported so callers (the controller) can compute overhead-only ratios for
 // observability without re-running the full ApplyCoordination pipeline.
@@ -48,6 +49,10 @@ func ApplyOverhead(qty *resource.Quantity, targetPct int32) *resource.Quantity {
 	}
 	if targetPct > overheadTargetMax {
 		targetPct = overheadTargetMax
+	}
+	if qty.Format == resource.BinarySI {
+		raw := float64(qty.Value()) * float64(overheadSafetyMarginPct) / float64(targetPct)
+		return resource.NewQuantity(int64(math.Ceil(raw)), qty.Format)
 	}
 	raw := float64(qty.MilliValue()) * float64(overheadSafetyMarginPct) / float64(targetPct)
 	return resource.NewMilliQuantity(int64(math.Ceil(raw)), qty.Format)

@@ -127,7 +127,9 @@ func (s *Server) Handler() http.Handler {
 	// Embedded UI catch-all.
 	mux.HandleFunc("/", s.handleUI)
 
-	return s.withTelemetry(s.withRecovery(s.withCORS(s.withRequestID(s.withGzip(mux)))))
+	// Request-ID assignment must sit outermost so the telemetry and recovery
+	// middlewares (which log the request ID) see a populated context.
+	return s.withRequestID(s.withTelemetry(s.withRecovery(s.withCORS(s.withGzip(mux)))))
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {

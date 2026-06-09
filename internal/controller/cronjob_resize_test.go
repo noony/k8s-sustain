@@ -223,7 +223,8 @@ func TestResizeCronJobPods_NeverPatchesCronJob(t *testing.T) {
 	recs := map[string]workload.ContainerRecommendation{
 		"app": {CPURequest: qty("250m"), MemoryRequest: qty("128Mi")},
 	}
-	if err := r.resizeCronJobPods(context.Background(), &target, recs); err != nil {
+	resized, err := r.resizeCronJobPods(context.Background(), &target, recs)
+	if err != nil {
 		t.Fatalf("resizeCronJobPods: %v", err)
 	}
 
@@ -235,5 +236,61 @@ func TestResizeCronJobPods_NeverPatchesCronJob(t *testing.T) {
 	}
 	if evicted {
 		t.Error("controller must never evict cronjob pods")
+	}
+	if resized != 1 {
+		t.Errorf("resized count = %d, want 1", resized)
+	}
+}
+
+// TestResizeCronJobPods_ReturnsZeroWhenNothingResized verifies the resized
+// count is 0 when there are no active jobs or when in-place resize is
+// unsupported — the caller relies on this to suppress the misleading
+// ResourcesUpdated event (the JobTemplate is never mutated).
+func TestResizeCronJobPods_ReturnsZeroWhenNothingResized(t *testing.T) {
+	cj := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nightly", UID: "cj-uid"},
+		Spec:       batchv1.CronJobSpec{Schedule: "* * * * *"},
+	}
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:       "default",
+			Name:            "nightly-1",
+			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "cj-uid", Kind: "CronJob"}},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "nightly-1-abc",
+			Labels:    map[string]string{jobPodNameLabel: "nightly-1"},
+		},
+		Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	recs := map[string]workload.ContainerRecommendation{
+		"app": {CPURequest: qty("250m")},
+	}
+
+	// No active jobs at all.
+	r := makeReconciler(t, cj)
+	r.patcher = workload.New(r.Client, true /* in-place */)
+	target := cronJobToTarget(cj)
+	resized, err := r.resizeCronJobPods(context.Background(), &target, recs)
+	if err != nil {
+		t.Fatalf("resizeCronJobPods (no jobs): %v", err)
+	}
+	if resized != 0 {
+		t.Errorf("resized count with no active jobs = %d, want 0", resized)
+	}
+
+	// Active running pod, but the cluster doesn't support in-place resize.
+	r = makeReconciler(t, cj, job, pod)
+	r.patcher = workload.New(r.Client, false /* no in-place */)
+	resized, err = r.resizeCronJobPods(context.Background(), &target, recs)
+	if err != nil {
+		t.Fatalf("resizeCronJobPods (no in-place): %v", err)
+	}
+	if resized != 0 {
+		t.Errorf("resized count without in-place support = %d, want 0", resized)
 	}
 }

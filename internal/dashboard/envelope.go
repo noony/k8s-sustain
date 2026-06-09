@@ -3,6 +3,8 @@ package dashboard
 import (
 	"net/http"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"github.com/noony/k8s-sustain/internal/httpx"
 )
 
@@ -35,4 +37,15 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 func writeFieldError(w http.ResponseWriter, status int, msg, field string) {
 	httpx.WriteFieldError(w, status, msg, field)
+}
+
+// writeK8sGetError maps a failed API-server Get onto an HTTP status: a missing
+// object is a 404, anything else (timeout, RBAC, transport failure) is a 500
+// so an upstream outage isn't misreported as "not found".
+func writeK8sGetError(w http.ResponseWriter, err error, msg string) {
+	if apierrors.IsNotFound(err) {
+		writeError(w, http.StatusNotFound, msg)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, msg)
 }

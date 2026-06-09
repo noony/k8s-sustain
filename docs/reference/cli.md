@@ -66,6 +66,9 @@ K8SSUSTAIN_LOG_LEVEL=debug k8s-sustain start
 # Subcommand-scoped flag (dashboard.bind-address, webhook.prometheus-address)
 K8SSUSTAIN_DASHBOARD_BIND_ADDRESS=:9999 k8s-sustain dashboard
 K8SSUSTAIN_WEBHOOK_PROMETHEUS_ADDRESS=http://prom.example:9090 k8s-sustain webhook
+
+# List-valued flag — comma-separated, same syntax as --excluded-namespaces=a,b
+K8SSUSTAIN_EXCLUDED_NAMESPACES=kube-system,monitoring k8s-sustain start
 ```
 
 ### Log verbosity
