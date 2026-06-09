@@ -132,7 +132,7 @@ Practical implications:
 
 - For CronJobs whose pods finish within seconds (e.g. `* * * * *` health pings), `Ongoing` is essentially equivalent to `OnCreate` — pods complete before any reconcile pass would touch them. The cost of running `Ongoing` is one extra Job/Pod list per reconcile.
 - For long-running runs (daily ETL, batch training, hour-long backfills), `Ongoing` can correct an under- or over-provisioned pod mid-run without restarting the container.
-- On clusters where `InPlacePodVerticalScaling` is unavailable or the kubelet reports the resize as `Infeasible`, the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook.
+- On clusters where `InPlacePodVerticalScaling` is unavailable, or the kubelet reports the resize as `Infeasible` or `Error`, or the API server rejects the resize for that pod (e.g. it would change the QoS class), the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook. The `ResourcesUpdated` event only counts pods whose resize the API server actually accepted.
 - The controller never patches the `CronJob` or `Job` object, so RBAC for `batch/cronjobs` and `batch/jobs` is read-only.
 
 ### Collecting enough history

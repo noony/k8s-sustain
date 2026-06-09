@@ -23,9 +23,10 @@ const jobPodNameLabel = "batch.kubernetes.io/job-name"
 // New scheduled runs pick up the latest resources from the webhook at
 // admission time.
 //
-// Returns the number of pods actually resized so the caller can suppress
-// the ResourcesUpdated event when nothing was touched (no active pods, or
-// in-place resize unsupported on this cluster).
+// Returns the number of pods whose resize the API server actually accepted,
+// so the caller can suppress the ResourcesUpdated event when nothing was
+// touched (no active pods, in-place resize unsupported on this cluster, or
+// every resize rejected/skipped).
 func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTarget, recs map[string]workload.ContainerRecommendation) (int, error) {
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 
@@ -55,20 +56,9 @@ func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTar
 	}
 
 	logger.V(1).Info("resizing cronjob pods", "jobs", len(jobs), "pods", len(pods))
-	if err := r.patcher.ResizePodsInPlace(ctx, pods, recs); err != nil {
+	resized, err := r.patcher.ResizePodsInPlace(ctx, pods, recs)
+	if err != nil {
 		return 0, err
-	}
-	// Checked after the call: the patcher flips InPlace to false at runtime
-	// if the API server rejects the resize (feature gate disabled), in which
-	// case nothing was resized.
-	if !r.patcher.InPlace() {
-		return 0, nil
-	}
-	resized := 0
-	for _, pod := range pods {
-		if pod.DeletionTimestamp == nil && pod.Status.Phase == corev1.PodRunning {
-			resized++
-		}
 	}
 	return resized, nil
 }

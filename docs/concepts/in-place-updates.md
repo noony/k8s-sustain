@@ -26,13 +26,18 @@ In both modes the patcher lists pods by the workload's label selector and then d
 
 When `Ongoing` mode is active and `inPlace=true`, the patcher walks each running pod and:
 
-1. Reads `pod.status.resize` (kubelet's report on the previous resize attempt):
-   - **`Infeasible`** — the node cannot satisfy the request. The pod is evicted so the scheduler can place the replacement elsewhere; the webhook injects the new resources into the replacement.
-   - **`Deferred`** — the kubelet accepted the request but is waiting on conditions (e.g. memory decrease that requires container restart). Skipped; the kubelet will apply it without further intervention.
-   - **`InProgress` / unset** — proceeds with the patch.
+1. Compares the pod spec against the current recommendation.
+   - **Spec differs** — a resize is submitted with the new values, even if a previous resize is still pending. The kubelet re-evaluates pending resizes against the new desired state, so a recommendation that has since been lowered can succeed where the old one was infeasible.
+   - **Spec already at target** — the kubelet's verdict on the staged resize decides. On k8s ≥ 1.33 the verdict is read from the `PodResizePending` and `PodResizeInProgress` pod conditions; on 1.31–1.32 from the (since-deprecated) `pod.status.resize` field. Both are consulted, so detection works across the full supported range:
+     - **`Infeasible`** — the node cannot satisfy the request: the spec carries the target resources but they never landed. The pod is evicted (unconditionally — the spec matching the recommendation must not be mistaken for "already resized") so the scheduler can place the replacement elsewhere; the webhook injects the new resources into the replacement.
+     - **`Error`** (reported on the `PodResizeInProgress` condition, kubelet ≥ 1.34) — the kubelet accepted the resize but failed while actuating it, and does not retry on its own. Same eviction fallback as `Infeasible`, so the pod doesn't run on its old allocation forever while the spec claims the target.
+     - **`Deferred`** — the kubelet accepted the request but is waiting on conditions (e.g. room freed by another pod terminating). Skipped; the kubelet will apply it without further intervention.
+     - **No pending resize** — the pod is at target; nothing to do. An unrecognized future verdict is logged and left to the kubelet.
 2. Issues `PATCH /api/v1/.../pods/<name>/resize` (k8s 1.33+).
 3. If the API server returns `NotFound` for the subresource (k8s 1.31–1.32), the same call is retried as a direct pod patch.
-4. If the API server returns `Invalid` (the feature gate is off — possible on a 1.31+ cluster with custom flags), the patcher flips `inPlace=false` for the rest of the reconcile cycle and falls back to eviction. The flip is per-process, so the next reconcile re-attempts in-place if the gate has been re-enabled meanwhile.
+4. `Invalid` rejections are interpreted per path:
+   - **On the `/resize` subresource** — the subresource being served means the feature is available, so `Invalid` is a *per-pod* validation failure (the resize would change the pod's QoS class, decrease a memory limit with a `NotRequired` resize policy, …). Only that pod falls back to eviction (the webhook re-injects on the replacement); in-place stays enabled for every other pod.
+   - **On the direct pod patch** (1.31–1.32) — resource mutation is only accepted there when the `InPlacePodVerticalScaling` gate is on, so `Invalid` means the gate is off cluster-wide. The patcher flips `inPlace=false` for the rest of the process and falls back to eviction. The flip is per-process, so a restart re-attempts in-place if the gate has been re-enabled meanwhile.
 
 Sidecar (restartable init) containers are resized in a **separate** `/resize` call so a sidecar rejection on older clusters cannot block the regular-container resize. Failures on the sidecar call are logged and ignored — new requests will land at next pod creation via webhook injection.
 
@@ -59,7 +64,11 @@ CronJobs are special-cased: the controller never mutates the CronJob spec (which
 - **Resize status inspection:**
 
   ```bash
+  # k8s ≥ 1.33: pending-resize verdict lives in pod conditions
+  kubectl get pod my-pod -o jsonpath='{.status.conditions[?(@.type=="PodResizePending")]}'
+  # k8s 1.31–1.32: deprecated status field
   kubectl get pod my-pod -o jsonpath='{.status.resize}'
+  # actual resources currently allocated to the containers
   kubectl get pod my-pod -o jsonpath='{.status.containerStatuses[*].resources}'
   ```
 

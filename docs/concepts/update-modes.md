@@ -59,7 +59,7 @@ spec:
 
 1. Controller patches each running, non-terminating pod's `spec.containers[*].resources` directly
 2. The kubelet applies the new resources without restarting the container
-3. If the kubelet reports `Infeasible` (node cannot satisfy the request), the pod is evicted as a fallback
+3. If the kubelet reports `Infeasible` (node cannot satisfy the request) or `Error` (actuating the accepted resize failed), the pod is evicted as a fallback
 4. If the kubelet reports `Deferred`, the resize is pending kubelet-side conditions and no action is taken
 
 See [In-Place Updates](in-place-updates.md) for details.

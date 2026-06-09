@@ -6,6 +6,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -307,5 +308,66 @@ func TestResizeCronJobPods_ReturnsZeroWhenNothingResized(t *testing.T) {
 	}
 	if resized != 0 {
 		t.Errorf("resized count without in-place support = %d, want 0", resized)
+	}
+}
+
+// TestResizeCronJobPods_PerPodInvalidNotCounted verifies that a Running pod
+// whose /resize was rejected as Invalid (per-pod validation failure, e.g. a
+// QoS class change) is not counted as resized — otherwise the caller emits a
+// ResourcesUpdated event for a resize that never happened.
+func TestResizeCronJobPods_PerPodInvalidNotCounted(t *testing.T) {
+	cj := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nightly", UID: "cj-uid"},
+		Spec:       batchv1.CronJobSpec{Schedule: "* * * * *"},
+	}
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:       "default",
+			Name:            "nightly-1",
+			UID:             "job-uid",
+			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "cj-uid", Kind: "CronJob"}},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:       "default",
+			Name:            "nightly-1-abc",
+			Labels:          map[string]string{jobPodNameLabel: "nightly-1"},
+			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "job-uid", Kind: "Job", Name: "nightly-1"}},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
+			},
+		}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+
+	r := makeReconciler(t, cj, job, pod)
+	r.Client = fake.NewClientBuilder().
+		WithScheme(r.Scheme).
+		WithObjects(cj, job, pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), obj.GetName(), nil)
+				}
+				return nil
+			},
+		}).
+		Build()
+	r.patcher = workload.New(r.Client, true /* in-place */)
+
+	target := cronJobToTarget(cj)
+	recs := map[string]workload.ContainerRecommendation{
+		"app": {CPURequest: qty("250m")},
+	}
+	resized, err := r.resizeCronJobPods(context.Background(), &target, recs)
+	if err != nil {
+		t.Fatalf("resizeCronJobPods: %v", err)
+	}
+	if resized != 0 {
+		t.Errorf("resized count = %d, want 0 (the pod's resize was rejected)", resized)
 	}
 }
