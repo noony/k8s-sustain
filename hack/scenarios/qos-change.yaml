@@ -1,0 +1,142 @@
+# scenario: qos-change
+# expected: All 3 pods start as Guaranteed QoS (requests == limits for CPU
+# and memory). The policy removes the CPU limit and sets a 1.5x memory limit
+# ratio, so the recommendation breaks requests == limits — applying it would
+# flip the pods to Burstable. Kubernetes forbids a QoS class change through
+# the /resize subresource, so on k8s >= 1.33 each in-place attempt is
+# rejected as Invalid and the controller falls back to eviction: pods are
+# REPLACED (new name/UID), not resized, and the webhook injects the new
+# resources into the replacements, which come up Burstable with cpu ~220m
+# (no limit) and memory ~110Mi (limit ~165Mi).
+#
+# A PodDisruptionBudget (minAvailable: 2) caps the disruption: the recycle
+# loop evicts one pod at a time and waits for the replacement to become
+# Ready before the next eviction, so at least 2 pods stay available
+# throughout. An eviction blocked by the PDB (429) is skipped and retried on
+# the next reconcile.
+#
+# Verify the QoS class flips on the replacement pods:
+#   kubectl get pod -n scenario-qos-change -l app=stress \
+#     -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.qosClass}{"\n"}{end}'
+# Verify the per-pod Invalid rejection and the eviction fallback in the logs:
+#   kubectl logs -n k8s-sustain deploy/k8s-sustain-controller \
+#     | grep -E 'rejected as invalid|falling back to eviction'
+# Verify the PDB was honored during the recycle (disruptionsAllowed never
+# exceeds 1, and at least 2 pods stay Ready):
+#   kubectl get pdb -n scenario-qos-change stress -o wide
+#   kubectl get pods -n scenario-qos-change -w
+# In-place mode must stay enabled for other workloads (the rejection is
+# per-pod): run another scenario (e.g. steady) alongside and confirm its pod
+# is resized without a restart.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scenario-qos-change
+  labels:
+    k8s-sustain.io/scenario: qos-change
+---
+apiVersion: k8s.sustain.io/v1alpha1
+kind: Policy
+metadata:
+  name: scenario-qos-change
+spec:
+  selector:
+    namespaces: [scenario-qos-change]
+  rightSizing:
+    update:
+      types:
+        deployment: Ongoing
+    resourcesConfigs:
+      cpu:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 10
+        limits:
+          noLimit: true
+      memory:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 15
+        limits:
+          requestsLimitsRatio: 1.5
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen
+  namespace: scenario-qos-change
+data:
+  loadgen.py: |
+    import os, time
+    duty = float(os.environ.get('LOAD_DUTY', '0.2'))
+    mem_mb = int(os.environ.get('LOAD_MEM_MB', '50'))
+    buf = bytearray(mem_mb * 1024 * 1024)
+    for i in range(0, len(buf), 4096):
+        buf[i] = 1
+    period = 0.1
+    on = period * duty
+    off = period - on
+    while True:
+        s = time.monotonic()
+        while time.monotonic() - s < on:
+            pass
+        if off > 0:
+            time.sleep(off)
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: stress
+  namespace: scenario-qos-change
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: stress
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stress
+  namespace: scenario-qos-change
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: stress
+  template:
+    metadata:
+      labels:
+        app: stress
+      annotations:
+        k8s.sustain.io/policy: scenario-qos-change
+    spec:
+      containers:
+      - name: stress
+        image: python:3.12-alpine
+        command: ["python3", "/loadgen/loadgen.py"]
+        env:
+          - name: LOAD_DUTY
+            value: "0.20"   # ~200m of one core
+          - name: LOAD_MEM_MB
+            value: "100"
+        volumeMounts:
+          - name: loadgen
+            mountPath: /loadgen
+        # requests == limits on both resources -> Guaranteed QoS. The policy
+        # above produces a recommendation that breaks this equality, forcing
+        # the QoS-change rejection on /resize.
+        resources:
+          requests:
+            cpu: 500m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+      volumes:
+        - name: loadgen
+          configMap:
+            name: loadgen
