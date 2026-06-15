@@ -1967,6 +1967,10 @@ same-origin policy when two trusted origins share the same upstream cache).</p>
 <p>Then access it via port-forward:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>svc/&lt;release&gt;-k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
 </code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Authenticate before exposing it</p>
+<p>The dashboard has <strong>no built-in authentication</strong>. It listens on a <code>ClusterIP</code> Service, so it stays cluster-internal until you add an Ingress/Gateway. When you expose it beyond <code>kubectl port-forward</code>, never expose it directly — front it with an identity-aware proxy such as <strong>Cloudflare Access</strong>, <code>oauth2-proxy</code>, or an authenticating Ingress (OIDC/SSO, mTLS). See <a href="../../concepts/workload-recommendations/#hardening-options">Hardening options</a>.</p>
+</div>
 <h2 id="using-the-dashboard">Using the Dashboard<a class="headerlink" href="#using-the-dashboard" title="Permanent link">&para;</a></h2>
 <h3 id="overview-page">Overview Page<a class="headerlink" href="#overview-page" title="Permanent link">&para;</a></h3>
 <p>The overview is organised as a vertical "Story Flow" with six bands, each answering a specific operator question — from "what am I saving?" down to "what just happened?".</p>
@@ -2122,7 +2126,7 @@ same-origin policy when two trusted origins share the same upstream cache).</p>
 <tbody>
 <tr>
 <td><code>dashboard.enabled</code></td>
-<td><code>false</code></td>
+<td><code>true</code></td>
 <td>Enable the dashboard deployment</td>
 </tr>
 <tr>

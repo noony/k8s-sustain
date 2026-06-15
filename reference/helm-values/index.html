@@ -1550,6 +1550,11 @@
 <td><code>""</code></td>
 <td>Prometheus server URL, shared by all components. Leave empty to auto-detect the bundled subchart service.</td>
 </tr>
+<tr>
+<td><code>excludedNamespaces</code></td>
+<td><code>[]</code></td>
+<td>Extra namespaces to exclude from k8s-sustain entirely — the controller never recycles pods there and the webhook never mutates them (the release namespace, <code>kube-system</code>, and <code>kube-public</code> are always excluded)</td>
+</tr>
 </tbody>
 </table>
 <hr />
@@ -1584,6 +1589,11 @@
 <td>Enable leader election</td>
 </tr>
 <tr>
+<td><code>controller.reconcileInterval</code></td>
+<td><code>5m</code></td>
+<td>How often each matched Policy is re-evaluated (Prometheus re-queried, recommendations refreshed, stale pods recycled)</td>
+</tr>
+<tr>
 <td><code>controller.concurrencyLimit</code></td>
 <td><code>5</code></td>
 <td>Maximum number of workloads processed in parallel per reconcile cycle</td>
@@ -1595,7 +1605,7 @@
 </tr>
 <tr>
 <td><code>controller.logLevel</code></td>
-<td><code>debug</code></td>
+<td><code>error</code></td>
 <td>Log level</td>
 </tr>
 <tr>
@@ -1697,18 +1707,13 @@
 </tr>
 <tr>
 <td><code>webhook.logLevel</code></td>
-<td><code>debug</code></td>
+<td><code>error</code></td>
 <td>Log level</td>
 </tr>
 <tr>
 <td><code>webhook.failurePolicy</code></td>
 <td><code>Ignore</code></td>
 <td><code>Ignore</code> or <code>Fail</code></td>
-</tr>
-<tr>
-<td><code>webhook.excludedNamespaces</code></td>
-<td><code>[]</code></td>
-<td>Extra namespaces to exclude from webhook interception (the release namespace, <code>kube-system</code>, and <code>kube-public</code> are always excluded)</td>
 </tr>
 <tr>
 <td><code>webhook.tlsSecretName</code></td>
@@ -1794,7 +1799,7 @@
 <tbody>
 <tr>
 <td><code>dashboard.enabled</code></td>
-<td><code>false</code></td>
+<td><code>true</code></td>
 <td>Deploy the dashboard</td>
 </tr>
 <tr>
@@ -1809,7 +1814,7 @@
 </tr>
 <tr>
 <td><code>dashboard.logLevel</code></td>
-<td><code>debug</code></td>
+<td><code>error</code></td>
 <td>Log level</td>
 </tr>
 <tr>
