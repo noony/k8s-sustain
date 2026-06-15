@@ -18,6 +18,12 @@ recommendOnly: false
 # Example: http://prometheus.monitoring.svc:9090
 prometheusAddress: ""
 
+# Extra namespaces to exclude from k8s-sustain entirely, shared by both the
+# controller (never recycles pods there) and the webhook (never mutates pods
+# there, and the namespace is dropped from the mutating webhook's selector).
+# The release namespace and kube-system / kube-public are always excluded.
+excludedNamespaces: []
+
 controller:
   replicaCount: 1
   # Bind addresses (":port" or "host:port") — single source of truth for the
@@ -28,6 +34,9 @@ controller:
   # Lease name for leader election. Override when running multiple operator
   # installs side-by-side in the same cluster.
   leaderElectionID: ""
+  # How often each matched Policy is re-evaluated (Prometheus re-queried,
+  # recommendations refreshed, stale pods recycled).
+  reconcileInterval: 5m
   concurrencyLimit: 5
   # When the controller falls back to eviction-based recycling (k8s < 1.33),
   # it waits this long for the workload
@@ -37,7 +46,7 @@ controller:
   # cold start. Setting it too low produces false-positive aborts during
   # normal scale-up.
   recycleReplacementTimeout: 5m
-  logLevel: debug
+  logLevel: error
   service:
     type: ClusterIP
     port: 8080
@@ -77,6 +86,149 @@ controller:
     # Prometheus operator's `serviceMonitorSelector` in clusters with multiple
     # Prometheus instances (e.g. {release: kube-prometheus-stack}).
     additionalLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  # Annotations to add to the service account (e.g. for IRSA, Workload Identity).
+  annotations: {}
+
+# Install the CRD as part of the chart.
+# Set to false if you manage CRDs separately.
+installCRDs: true
+
+# Admission webhook — intercepts Pod CREATE and injects resources for OnCreate policies.
+webhook:
+  enabled: true
+  # Number of webhook server replicas. ≥2 recommended for production HA.
+  replicaCount: 1
+  port: 9443
+  logLevel: error
+  # failurePolicy controls what happens when the webhook is unreachable.
+  # "Ignore" (default) lets pods through; "Fail" blocks them.
+  failurePolicy: Ignore
+  # Name of the Secret containing tls.crt and tls.key for the webhook server.
+  # Created automatically by cert-manager when certManager.enabled=true.
+  tlsSecretName: k8s-sustain-webhook-tls
+  # caBundle is the base64-encoded CA certificate used by the API server to
+  # verify the webhook TLS cert. Required when certManager.enabled=false.
+  caBundle: ""
+  certManager:
+    # Set to true to create a cert-manager Certificate and inject the CA bundle
+    # automatically via the cert-manager.io/inject-ca-from annotation.
+    enabled: false
+    # Create a self-signed Issuer in the release namespace.
+    # Set to false if you want to use your own Issuer/ClusterIssuer (configure issuerRef below).
+    createIssuer: true
+    issuerRef:
+      # Only used when createIssuer is false.
+      name: ""
+      kind: Issuer
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  # Probe timings. The probe endpoints (path/port/scheme) are fixed by the chart.
+  livenessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+  # ServiceMonitor for the webhook /metrics endpoint (cert expiry gauge etc.).
+  # Only useful when running the Prometheus Operator (e.g. kube-prometheus-stack).
+  # Not needed when using the bundled prometheus subchart, which scrapes the
+  # webhook via its own scrape config.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    # Same as controller.serviceMonitor.additionalLabels — use to match a
+    # specific Prometheus operator's serviceMonitorSelector.
+    additionalLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Expose the dahboard service via ingress
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: dashboard.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+
+# -- Expose the dahboard service via gateway-api HTTPRoute
+httpRoute:
+  # HTTPRoute enabled.
+  enabled: false
+  # HTTPRoute annotations.
+  annotations: {}
+  # Which Gateways this Route is attached to.
+  parentRefs:
+  - name: gateway
+    sectionName: http
+    # namespace: default
+  # Hostnames matching HTTP header.
+  hostnames:
+  - dashboard.local
+  # List of rules and filters applied.
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+
+# Dashboard — web UI for policy exploration, workload metrics, and simulation.
+dashboard:
+  enabled: true
+  replicaCount: 1
+  # Server bind address (":port" or "host:port") — single source of truth for
+  # the listener: the container port and probes derive from its port part.
+  bindAddress: ":8090"
+  logLevel: error
+  # Allowed CORS origins. Empty (default) is same-origin only — the safe choice.
+  # Add a list of trusted origins (e.g. ["https://grafana.example.com"]) to embed
+  # the dashboard in another tool. Use ["*"] to allow all origins (not recommended).
+  corsAllowedOrigins: []
+  service:
+    type: ClusterIP
+    port: 8090
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  # Probe timings. The probe endpoints (path/port) are fixed by the chart and
+  # derive from bindAddress above.
+  livenessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 3
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -573,152 +725,6 @@ prometheusRule:
             max by (namespace, owner_kind, owner_name, container) (
               k8s_sustain:container_memory_by_workload:bytes
             )
-
-serviceAccount:
-  create: true
-  name: ""
-  # Annotations to add to the service account (e.g. for IRSA, Workload Identity).
-  annotations: {}
-
-# Install the CRD as part of the chart.
-# Set to false if you manage CRDs separately.
-installCRDs: true
-
-# Admission webhook — intercepts Pod CREATE and injects resources for OnCreate policies.
-webhook:
-  enabled: true
-  # Number of webhook server replicas. ≥2 recommended for production HA.
-  replicaCount: 1
-  port: 9443
-  logLevel: debug
-  # failurePolicy controls what happens when the webhook is unreachable.
-  # "Ignore" (default) lets pods through; "Fail" blocks them.
-  failurePolicy: Ignore
-  # Extra namespaces to exclude from webhook interception (in addition to the
-  # release namespace and kube-system / kube-public which are always excluded).
-  excludedNamespaces: []
-  # Name of the Secret containing tls.crt and tls.key for the webhook server.
-  # Created automatically by cert-manager when certManager.enabled=true.
-  tlsSecretName: k8s-sustain-webhook-tls
-  # caBundle is the base64-encoded CA certificate used by the API server to
-  # verify the webhook TLS cert. Required when certManager.enabled=false.
-  caBundle: ""
-  certManager:
-    # Set to true to create a cert-manager Certificate and inject the CA bundle
-    # automatically via the cert-manager.io/inject-ca-from annotation.
-    enabled: false
-    # Create a self-signed Issuer in the release namespace.
-    # Set to false if you want to use your own Issuer/ClusterIssuer (configure issuerRef below).
-    createIssuer: true
-    issuerRef:
-      # Only used when createIssuer is false.
-      name: ""
-      kind: Issuer
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      memory: 256Mi
-  # Probe timings. The probe endpoints (path/port/scheme) are fixed by the chart.
-  livenessProbe:
-    initialDelaySeconds: 10
-    periodSeconds: 10
-    timeoutSeconds: 1
-    successThreshold: 1
-    failureThreshold: 3
-  readinessProbe:
-    initialDelaySeconds: 10
-    periodSeconds: 10
-    timeoutSeconds: 1
-    successThreshold: 1
-    failureThreshold: 3
-  # ServiceMonitor for the webhook /metrics endpoint (cert expiry gauge etc.).
-  # Only useful when running the Prometheus Operator (e.g. kube-prometheus-stack).
-  # Not needed when using the bundled prometheus subchart, which scrapes the
-  # webhook via its own scrape config.
-  serviceMonitor:
-    enabled: false
-    interval: 30s
-    scrapeTimeout: 10s
-    # Same as controller.serviceMonitor.additionalLabels — use to match a
-    # specific Prometheus operator's serviceMonitorSelector.
-    additionalLabels: {}
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-
-# -- Expose the dahboard service via ingress
-ingress:
-  enabled: false
-  className: ""
-  annotations: {}
-  hosts:
-    - host: dashboard.local
-      paths:
-        - path: /
-          pathType: ImplementationSpecific
-  tls: []
-
-# -- Expose the dahboard service via gateway-api HTTPRoute
-httpRoute:
-  # HTTPRoute enabled.
-  enabled: false
-  # HTTPRoute annotations.
-  annotations: {}
-  # Which Gateways this Route is attached to.
-  parentRefs:
-  - name: gateway
-    sectionName: http
-    # namespace: default
-  # Hostnames matching HTTP header.
-  hostnames:
-  - dashboard.local
-  # List of rules and filters applied.
-  rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /
-
-# Dashboard — web UI for policy exploration, workload metrics, and simulation.
-dashboard:
-  enabled: false
-  replicaCount: 1
-  # Server bind address (":port" or "host:port") — single source of truth for
-  # the listener: the container port and probes derive from its port part.
-  bindAddress: ":8090"
-  logLevel: debug
-  # Allowed CORS origins. Empty (default) is same-origin only — the safe choice.
-  # Add a list of trusted origins (e.g. ["https://grafana.example.com"]) to embed
-  # the dashboard in another tool. Use ["*"] to allow all origins (not recommended).
-  corsAllowedOrigins: []
-  service:
-    type: ClusterIP
-    port: 8090
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      memory: 256Mi
-  # Probe timings. The probe endpoints (path/port) are fixed by the chart and
-  # derive from bindAddress above.
-  livenessProbe:
-    initialDelaySeconds: 10
-    periodSeconds: 10
-    timeoutSeconds: 1
-    successThreshold: 1
-    failureThreshold: 3
-  readinessProbe:
-    initialDelaySeconds: 10
-    periodSeconds: 10
-    timeoutSeconds: 1
-    successThreshold: 1
-    failureThreshold: 3
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
 
 # prometheus subchart — https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus
 

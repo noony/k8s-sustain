@@ -69,8 +69,10 @@ test-kind-up: ## Bring up kind cluster with cert-manager + metrics-server, build
 		--set image.tag=$(lastword $(subst :, ,$(TEST_IMG))) \
 		--set image.pullPolicy=Never \
 		--set webhook.certManager.enabled=true \
-		--set dashboard.enabled=true \
 		--set controller.reconcileInterval=$(RECONCILE) \
+		--set controller.logLevel=debug \
+		--set webhook.logLevel=debug \
+		--set dashboard.logLevel=debug \
 		--wait --timeout 5m
 	@echo
 	@echo "Cluster ready. Open the dashboard with:"
@@ -86,8 +88,10 @@ test-kind-down: ## Delete the kind cluster
 test-reboot: ## delete all screnarios, recommendations, prom ... etc and reinstall all stack
 	$(call check_context)
 	$(MAKE) test-scenario-clean
-	kubectl get policies.k8s.sustain.io --no-headers | awk '{print $$1}' | xargs kubectl delete policies.k8s.sustain.io
-	helm delete k8s-sustain --namespace k8s-sustain
+	@if kubectl get crd policies.k8s.sustain.io >/dev/null 2>&1; then \
+		kubectl get policies.k8s.sustain.io --no-headers | awk '{print $$1}' | xargs --no-run-if-empty kubectl delete policies.k8s.sustain.io; \
+	fi
+	helm delete k8s-sustain --namespace k8s-sustain --ignore-not-found
 	sleep 10
 	$(MAKE) test-kind-up
 
@@ -114,7 +118,9 @@ test-scenario-clean: ## Delete every scenario-* namespace and its policy
 	@for s in $(SCENARIOS); do \
 		echo "==> deleting scenario $$s"; \
 		kubectl delete namespace scenario-$$s --ignore-not-found --wait=false; \
-		kubectl delete policy.k8s.sustain.io scenario-$$s --ignore-not-found; \
+		if kubectl get crd policies.k8s.sustain.io >/dev/null 2>&1; then \
+			kubectl delete policy.k8s.sustain.io scenario-$$s --ignore-not-found; \
+		fi; \
 	done
 
 .PHONY: test-scenario-logs

@@ -70,6 +70,9 @@ Then access it via port-forward:
 kubectl port-forward svc/<release>-k8s-sustain-dashboard 8090:8090
 ```
 
+!!! warning "Authenticate before exposing it"
+    The dashboard has **no built-in authentication**. It listens on a `ClusterIP` Service, so it stays cluster-internal until you add an Ingress/Gateway. When you expose it beyond `kubectl port-forward`, never expose it directly — front it with an identity-aware proxy such as **Cloudflare Access**, `oauth2-proxy`, or an authenticating Ingress (OIDC/SSO, mTLS). See [Hardening options](../concepts/workload-recommendations.md#hardening-options).
+
 ## Using the Dashboard
 
 ### Overview Page
@@ -261,7 +264,7 @@ Query parameters are validated strictly. Unknown enum values (`?risk=foo`, `?aut
 
 | Key                              | Default                    | Description                              |
 |----------------------------------|----------------------------|------------------------------------------|
-| `dashboard.enabled`              | `false`                    | Enable the dashboard deployment          |
+| `dashboard.enabled`              | `true`                     | Enable the dashboard deployment          |
 | `dashboard.replicaCount`         | `1`                        | Number of dashboard replicas             |
 | `dashboard.bindAddress`          | `:8090`                    | Server bind address (`:port` or `host:port`); the container port derives from its port part |
 | `dashboard.logLevel`             | `info`                     | Log level                                |

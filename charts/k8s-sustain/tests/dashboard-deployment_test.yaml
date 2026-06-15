@@ -5,14 +5,14 @@ release:
   name: k8s-sustain
   namespace: k8s-sustain
 tests:
-  - it: renders nothing by default
+  - it: renders nothing when disabled
+    set:
+      dashboard.enabled: false
     asserts:
       - hasDocuments:
           count: 0
 
-  - it: renders the dashboard deployment when enabled
-    set:
-      dashboard.enabled: true
+  - it: renders the dashboard deployment by default
     asserts:
       - hasDocuments:
           count: 1
@@ -58,7 +58,7 @@ tests:
             - dashboard
             - --bind-address=:8090
             - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
-            - --log-level=debug
+            - --log-level=error
 
   - it: adds the CORS flag only when origins are configured
     set:

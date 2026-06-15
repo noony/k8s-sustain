@@ -14,6 +14,7 @@
 | `fullnameOverride` | `""` | Override the full release name |
 | `recommendOnly` | `false` | Compute recommendations without recycling or mutating pods (dry-run mode) |
 | `prometheusAddress` | `""` | Prometheus server URL, shared by all components. Leave empty to auto-detect the bundled subchart service. |
+| `excludedNamespaces` | `[]` | Extra namespaces to exclude from k8s-sustain entirely — the controller never recycles pods there and the webhook never mutates them (the release namespace, `kube-system`, and `kube-public` are always excluded) |
 
 ---
 
@@ -25,9 +26,10 @@
 | `controller.metricsBindAddress` | `:8080` | Metrics endpoint address (`:port` or `host:port`); the metrics container port derives from its port part |
 | `controller.healthProbeBindAddress` | `:8081` | Health probe address (`:port` or `host:port`); the health container port derives from its port part |
 | `controller.leaderElect` | `true` | Enable leader election |
+| `controller.reconcileInterval` | `5m` | How often each matched Policy is re-evaluated (Prometheus re-queried, recommendations refreshed, stale pods recycled) |
 | `controller.concurrencyLimit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
 | `controller.recycleReplacementTimeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where Karpenter / cluster-autoscaler node provisioning regularly takes longer. |
-| `controller.logLevel` | `debug` | Log level |
+| `controller.logLevel` | `error` | Log level |
 | `controller.service.type` | `ClusterIP` | Service type for the metrics endpoint |
 | `controller.service.port` | `8080` | Service port |
 | `controller.service.annotations` | `{}` | Extra annotations for the metrics Service (the chart already adds `prometheus.io/scrape`, `prometheus.io/port`, and `prometheus.io/path`) |
@@ -77,9 +79,8 @@ controller:
 | `webhook.enabled` | `true` | Deploy the admission webhook |
 | `webhook.replicaCount` | `1` | Webhook replicas (≥2 recommended for production) |
 | `webhook.port` | `9443` | HTTPS server port |
-| `webhook.logLevel` | `debug` | Log level |
+| `webhook.logLevel` | `error` | Log level |
 | `webhook.failurePolicy` | `Ignore` | `Ignore` or `Fail` |
-| `webhook.excludedNamespaces` | `[]` | Extra namespaces to exclude from webhook interception (the release namespace, `kube-system`, and `kube-public` are always excluded) |
 | `webhook.tlsSecretName` | `k8s-sustain-webhook-tls` | TLS secret name |
 | `webhook.caBundle` | `""` | Base64-encoded CA cert (required when `certManager.enabled=false`) |
 | `webhook.certManager.enabled` | `false` | Create a cert-manager `Certificate` resource |
@@ -111,10 +112,10 @@ webhook:
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `dashboard.enabled` | `false` | Deploy the dashboard |
+| `dashboard.enabled` | `true` | Deploy the dashboard |
 | `dashboard.replicaCount` | `1` | Dashboard replicas |
 | `dashboard.bindAddress` | `:8090` | Server bind address (`:port` or `host:port`); the container port derives from its port part |
-| `dashboard.logLevel` | `debug` | Log level |
+| `dashboard.logLevel` | `error` | Log level |
 | `dashboard.corsAllowedOrigins` | `[]` | Allowed CORS origins. Empty = same-origin only (the safe default). Set to `["https://your-grafana"]` to embed the dashboard cross-origin, or `["*"]` to allow all (not recommended). |
 | `dashboard.service.type` | `ClusterIP` | Service type |
 | `dashboard.service.port` | `8090` | Service port |

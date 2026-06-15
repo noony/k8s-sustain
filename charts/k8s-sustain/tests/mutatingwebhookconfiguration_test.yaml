@@ -64,9 +64,9 @@ tests:
                 - kube-system
                 - kube-public
 
-  - it: appends webhook.excludedNamespaces to the namespace selector
+  - it: appends excludedNamespaces to the namespace selector
     set:
-      webhook.excludedNamespaces: [team-a, team-b]
+      excludedNamespaces: [team-a, team-b]
     asserts:
       - equal:
           path: webhooks[0].namespaceSelector.matchExpressions[0].values

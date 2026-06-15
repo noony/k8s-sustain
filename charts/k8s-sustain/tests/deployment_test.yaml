@@ -69,9 +69,10 @@ tests:
             - --health-probe-bind-address=:8081
             - --leader-elect=true
             - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
-            - --log-level=debug
+            - --log-level=error
             - --excluded-namespaces=k8s-sustain,kube-system,kube-public
             - --concurrency-limit=5
+            - --reconcile-interval=5m
             - --recycle-replacement-timeout=5m
 
   - it: enforces the restricted security contexts
@@ -239,9 +240,9 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --prometheus-address=http://localhost:9090
 
-  - it: appends webhook.excludedNamespaces to the built-in exclusions
+  - it: appends excludedNamespaces to the built-in exclusions
     set:
-      webhook.excludedNamespaces: [team-a, team-b]
+      excludedNamespaces: [team-a, team-b]
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args

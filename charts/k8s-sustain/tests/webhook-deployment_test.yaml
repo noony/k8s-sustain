@@ -51,7 +51,7 @@ tests:
             - webhook
             - --port=9443
             - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
-            - --log-level=debug
+            - --log-level=error
             - --tls-cert-file=/tls/tls.crt
             - --tls-key-file=/tls/tls.key
             - --excluded-namespaces=k8s-sustain,kube-system,kube-public
@@ -182,9 +182,9 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --recommend-only=true
 
-  - it: appends webhook.excludedNamespaces to the built-in exclusions
+  - it: appends excludedNamespaces to the built-in exclusions
     set:
-      webhook.excludedNamespaces: [team-a]
+      excludedNamespaces: [team-a]
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args

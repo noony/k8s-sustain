@@ -5,7 +5,9 @@ release:
   name: k8s-sustain
   namespace: k8s-sustain
 tests:
-  - it: renders the controller ClusterRole and binding by default
+  - it: renders only the controller ClusterRole and binding when the dashboard is disabled
+    set:
+      dashboard.enabled: false
     asserts:
       - hasDocuments:
           count: 2

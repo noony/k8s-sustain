@@ -30,6 +30,7 @@
         { "format": "uri", "pattern": "^https?://.+" }
       ]
     },
+    "excludedNamespaces": { "type": "array", "items": { "type": "string" } },
     "controller": {
       "type": "object",
       "additionalProperties": true,
@@ -39,8 +40,9 @@
         "healthProbeBindAddress": { "type": "string", "pattern": ":[0-9]+$" },
         "leaderElect": { "type": "boolean" },
         "leaderElectionID": { "type": "string" },
+        "reconcileInterval": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
         "concurrencyLimit": { "type": "integer", "minimum": 1, "maximum": 100 },
-        "recycleReplacementTimeout": { "type": "string", "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)$" },
+        "recycleReplacementTimeout": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
         "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0, "maximum": 600 },
         "service": {
@@ -53,6 +55,8 @@
           }
         },
         "resources": { "$ref": "#/definitions/resources" },
+        "livenessProbe": { "$ref": "#/definitions/probe" },
+        "readinessProbe": { "$ref": "#/definitions/probe" },
         "serviceMonitor": {
           "type": "object",
           "additionalProperties": false,
@@ -88,7 +92,6 @@
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
         "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0, "maximum": 600 },
         "failurePolicy": { "type": "string", "enum": ["Ignore", "Fail"] },
-        "excludedNamespaces": { "type": "array", "items": { "type": "string" } },
         "tlsSecretName": { "type": "string", "minLength": 1 },
         "caBundle": { "type": "string" },
         "certManager": {
@@ -108,6 +111,8 @@
           }
         },
         "resources": { "$ref": "#/definitions/resources" },
+        "livenessProbe": { "$ref": "#/definitions/probe" },
+        "readinessProbe": { "$ref": "#/definitions/probe" },
         "serviceMonitor": {
           "type": "object",
           "additionalProperties": false,
@@ -121,6 +126,58 @@
         "nodeSelector": { "type": "object" },
         "tolerations": { "type": "array" },
         "affinity": { "type": "object" }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "annotations": { "type": "object" },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "host": { "type": "string" },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": { "type": "string" },
+                    "pathType": { "type": "string", "enum": ["Exact", "Prefix", "ImplementationSpecific"] }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tls": { "type": "array" }
+      }
+    },
+    "httpRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "annotations": { "type": "object" },
+        "parentRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "sectionName": { "type": "string" },
+              "namespace": { "type": "string" }
+            }
+          }
+        },
+        "hostnames": { "type": "array", "items": { "type": "string" } },
+        "rules": { "type": "array" }
       }
     },
     "prometheusRule": {
@@ -152,6 +209,8 @@
           }
         },
         "resources": { "$ref": "#/definitions/resources" },
+        "livenessProbe": { "$ref": "#/definitions/probe" },
+        "readinessProbe": { "$ref": "#/definitions/probe" },
         "nodeSelector": { "type": "object" },
         "tolerations": { "type": "array" },
         "affinity": { "type": "object" }
@@ -167,6 +226,17 @@
     }
   },
   "definitions": {
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "successThreshold": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      }
+    },
     "resources": {
       "type": "object",
       "additionalProperties": false,

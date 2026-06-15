@@ -48,6 +48,7 @@ tests:
 
   - it: ignores dashboard replicas while the dashboard is disabled
     set:
+      dashboard.enabled: false
       dashboard.replicaCount: 2
     asserts:
       - hasDocuments:
