@@ -237,7 +237,7 @@ func TestResizeCronJobPods_NeverPatchesCronJob(t *testing.T) {
 	recs := map[string]workload.ContainerRecommendation{
 		"app": {CPURequest: qty("250m"), MemoryRequest: qty("128Mi")},
 	}
-	resized, err := r.resizeCronJobPods(context.Background(), &target, recs)
+	resized, err := r.resizeCronJobPods(context.Background(), &target, recs, workload.Tolerance{}, nil)
 	if err != nil {
 		t.Fatalf("resizeCronJobPods: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestResizeCronJobPods_ReturnsZeroWhenNothingResized(t *testing.T) {
 	r := makeReconciler(t, cj)
 	r.patcher = workload.New(r.Client, true /* in-place */)
 	target := cronJobToTarget(cj)
-	resized, err := r.resizeCronJobPods(context.Background(), &target, recs)
+	resized, err := r.resizeCronJobPods(context.Background(), &target, recs, workload.Tolerance{}, nil)
 	if err != nil {
 		t.Fatalf("resizeCronJobPods (no jobs): %v", err)
 	}
@@ -302,7 +302,7 @@ func TestResizeCronJobPods_ReturnsZeroWhenNothingResized(t *testing.T) {
 	// Active running pod, but the cluster doesn't support in-place resize.
 	r = makeReconciler(t, cj, job, pod)
 	r.patcher = workload.New(r.Client, false /* no in-place */)
-	resized, err = r.resizeCronJobPods(context.Background(), &target, recs)
+	resized, err = r.resizeCronJobPods(context.Background(), &target, recs, workload.Tolerance{}, nil)
 	if err != nil {
 		t.Fatalf("resizeCronJobPods (no in-place): %v", err)
 	}
@@ -363,7 +363,7 @@ func TestResizeCronJobPods_PerPodInvalidNotCounted(t *testing.T) {
 	recs := map[string]workload.ContainerRecommendation{
 		"app": {CPURequest: qty("250m")},
 	}
-	resized, err := r.resizeCronJobPods(context.Background(), &target, recs)
+	resized, err := r.resizeCronJobPods(context.Background(), &target, recs, workload.Tolerance{}, nil)
 	if err != nil {
 		t.Fatalf("resizeCronJobPods: %v", err)
 	}

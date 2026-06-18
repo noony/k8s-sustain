@@ -31,6 +31,45 @@ type ContainerRecommendation struct {
 	RemoveMemoryLimit bool
 }
 
+// RecycleOption configures a RecyclePods / ResizePodsInPlace call.
+type RecycleOption func(*recycleOptions)
+
+type recycleOptions struct {
+	tol     Tolerance
+	observe func(resource string)
+}
+
+func newRecycleOptions(opts []RecycleOption) recycleOptions {
+	var o recycleOptions
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o
+}
+
+// WithTolerance suppresses pod recycling for resource decreases below the given
+// per-resource bands. The zero Tolerance (the default when this option is
+// omitted) disables suppression entirely.
+func WithTolerance(tol Tolerance) RecycleOption {
+	return func(o *recycleOptions) { o.tol = tol }
+}
+
+// WithSuppressionObserver registers a callback invoked once per resource
+// ("cpu"/"memory") for each pod whose decrease in that resource was suppressed
+// by the tolerance. Used by the controller to emit a metric.
+func WithSuppressionObserver(fn func(resource string)) RecycleOption {
+	return func(o *recycleOptions) { o.observe = fn }
+}
+
+// podContainers returns a pod's regular + init containers as one slice, for
+// per-pod tolerance evaluation.
+func podContainers(pod *corev1.Pod) []corev1.Container {
+	out := make([]corev1.Container, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
+	out = append(out, pod.Spec.Containers...)
+	out = append(out, pod.Spec.InitContainers...)
+	return out
+}
+
 // Patcher recycles pods of Kubernetes workloads so they pick up the latest
 // resource recommendations (injected by the admission webhook at pod creation).
 //
@@ -136,8 +175,8 @@ type TargetWorkload struct {
 // recommended resources, skipping pods whose controller ownerRef chain does
 // not resolve to the target workload. This is the only public entry point
 // for pod recycling.
-func (p *Patcher) RecyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation) error {
-	return p.recyclePods(ctx, target, namespace, selector, recs)
+func (p *Patcher) RecyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation, opts ...RecycleOption) error {
+	return p.recyclePods(ctx, target, namespace, selector, recs, newRecycleOptions(opts))
 }
 
 // ResizePodsInPlace resizes the given pods in place, never falling back to
@@ -152,7 +191,8 @@ func (p *Patcher) RecyclePods(ctx context.Context, target TargetWorkload, namesp
 //
 // The caller is responsible for filtering out pods that should not be touched
 // (e.g. pods owned by Completed/Failed Jobs).
-func (p *Patcher) ResizePodsInPlace(ctx context.Context, pods []*corev1.Pod, recs map[string]ContainerRecommendation) (int, error) {
+func (p *Patcher) ResizePodsInPlace(ctx context.Context, pods []*corev1.Pod, recs map[string]ContainerRecommendation, opts ...RecycleOption) (int, error) {
+	o := newRecycleOptions(opts)
 	logger := log.FromContext(ctx)
 	if !p.inPlace {
 		logger.V(1).Info("in-place resize disabled on this cluster; deferring to next pod creation via webhook")
@@ -170,7 +210,13 @@ func (p *Patcher) ResizePodsInPlace(ctx context.Context, pods []*corev1.Pod, rec
 			skipped++
 			continue
 		}
-		applied, err := p.resizePodInPlaceNoEvict(ctx, pod, recs)
+		// Clamp per-pod: a pod's containers may carry different current
+		// allocations than their siblings (e.g. a partially-applied prior
+		// resize), so the downsize threshold must be evaluated against this
+		// pod's actual resources, not the workload template.
+		podRecs := ClampRecsToTolerance(podContainers(pod), recs, o.tol)
+		observeSuppressed(recs, podRecs, o.observe)
+		applied, err := p.resizePodInPlaceNoEvict(ctx, pod, podRecs)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
 		}
@@ -349,7 +395,7 @@ func (p *Patcher) resizePodInPlaceWith(ctx context.Context, pod *corev1.Pod, rec
 // skipped: the opt-in contract is per-workload (annotation on the pod
 // template), so a bystander pod that merely shares the labels must never be
 // resized or evicted.
-func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation) error {
+func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation, o recycleOptions) error {
 	logger := log.FromContext(ctx).WithValues("namespace", namespace, "selector", selector.String())
 
 	var podList corev1.PodList
@@ -419,6 +465,12 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 			skipped++
 			continue
 		}
+		// Clamp per-pod: a pod's containers may carry different current
+		// allocations than their siblings (e.g. a partially-applied prior
+		// resize), so the downsize threshold must be evaluated against this
+		// pod's actual resources, not the workload template.
+		podRecs := ClampRecsToTolerance(podContainers(pod), recs, o.tol)
+		observeSuppressed(recs, podRecs, o.observe)
 		var (
 			evicted bool
 			err     error
@@ -430,11 +482,11 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 			// does, the outer loop must run the same throttle/wait the
 			// pure-eviction branch uses below — otherwise the first
 			// fallback eviction skips the wait entirely.
-			evicted, err = p.patchPodInPlace(ctx, pod, recs)
+			evicted, err = p.patchPodInPlace(ctx, pod, podRecs)
 		} else {
 			// Eviction path: evict, then wait for the replacement before
 			// moving on so we don't take down the whole workload at once.
-			evicted, err = p.evictPod(ctx, pod, recs)
+			evicted, err = p.evictPod(ctx, pod, podRecs)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))

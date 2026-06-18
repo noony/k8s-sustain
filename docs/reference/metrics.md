@@ -54,6 +54,9 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 | `k8s_sustain_autoscaler_present`        | gauge   | `namespace`, `owner_kind`, `owner_name`, `kind` |
 | `k8s_sustain_autoscaler_target_configured` | gauge | `namespace`, `owner_kind`, `owner_name`, `kind`, `resource` |
 | `k8s_sustain_coordination_factor`       | gauge   | `namespace`, `owner_kind`, `owner_name`, `resource`, `kind` |
+| `k8s_sustain_recycle_suppressed_total`  | counter | `namespace`, `owner_kind`, `owner_name`, `resource` |
+
+`k8s_sustain_recycle_suppressed_total` counts resource decreases that the controller declined to apply because they fell below the policy's [`downsizeThreshold`](policy.md#cpudownsizethreshold--memorydownsizethreshold). It is incremented once per resource (`cpu`/`memory`) per pod processed in a reconcile, so a sustained non-zero rate means a workload keeps recommending small downsizes that are being held back to avoid churn. Increases are never suppressed and never counted here.
 
 #### `k8s_sustain_workload_drift_ratio`
 

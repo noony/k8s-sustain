@@ -323,3 +323,12 @@ func TestEmitWorkloadFromRecs_EmptyRecsIsNoOp(t *testing.T) {
 		t.Errorf("expected no series emitted for empty recs, got %d", got)
 	}
 }
+
+func TestEmitRecycleSuppressed(t *testing.T) {
+	before := testutil.ToFloat64(recycleSuppressedTotal.WithLabelValues("ns", "Deployment", "web", "cpu"))
+	EmitRecycleSuppressed("ns", "Deployment", "web", "cpu")
+	after := testutil.ToFloat64(recycleSuppressedTotal.WithLabelValues("ns", "Deployment", "web", "cpu"))
+	if after-before != 1 {
+		t.Fatalf("counter not incremented: before=%v after=%v", before, after)
+	}
+}

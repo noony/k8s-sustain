@@ -86,6 +86,28 @@ type ResourceConfig struct {
 	// Limits configures how resource limits are derived from requests.
 	// +optional
 	Limits ResourceLimitsConfig `json:"limits,omitempty"`
+	// DownsizeThreshold suppresses pod recycling for resource DECREASES smaller
+	// than max(percent% of current, minDecrease). Increases always apply
+	// immediately. Defaults apply when unset (percent 5; minDecrease 10m for
+	// CPU, 15Mi for memory). Set both percent and minDecrease to 0 to disable.
+	// +optional
+	DownsizeThreshold *DownsizeThreshold `json:"downsizeThreshold,omitempty"`
+}
+
+// DownsizeThreshold gates whether a resource DECREASE is large enough to justify
+// recycling a pod. A decrease is applied only when it meets or exceeds
+// max(Percent% of the current value, MinDecrease). Increases are never gated.
+type DownsizeThreshold struct {
+	// Percent is the minimum decrease as a percentage of the current value.
+	// Defaults to 5 when unset.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	Percent *int32 `json:"percent,omitempty"`
+	// MinDecrease is the minimum decrease as an absolute quantity. Defaults to
+	// 10m (CPU) or 15Mi (memory) when unset.
+	// +optional
+	MinDecrease *resource.Quantity `json:"minDecrease,omitempty"`
 }
 
 // ResourcesConfigs groups CPU and memory recommendation configs.

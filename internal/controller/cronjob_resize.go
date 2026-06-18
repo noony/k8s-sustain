@@ -27,7 +27,7 @@ const jobPodNameLabel = "batch.kubernetes.io/job-name"
 // so the caller can suppress the ResourcesUpdated event when nothing was
 // touched (no active pods, in-place resize unsupported on this cluster, or
 // every resize rejected/skipped).
-func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTarget, recs map[string]workload.ContainerRecommendation) (int, error) {
+func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTarget, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance, observe func(resource string)) (int, error) {
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 
 	cj, ok := t.Object.(*batchv1.CronJob)
@@ -56,7 +56,8 @@ func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTar
 	}
 
 	logger.V(1).Info("resizing cronjob pods", "jobs", len(jobs), "pods", len(pods))
-	resized, err := r.patcher.ResizePodsInPlace(ctx, pods, recs)
+	resized, err := r.patcher.ResizePodsInPlace(ctx, pods, recs,
+		workload.WithTolerance(tol), workload.WithSuppressionObserver(observe))
 	if err != nil {
 		return 0, err
 	}

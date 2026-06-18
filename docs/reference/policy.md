@@ -42,6 +42,9 @@ spec:
           maxAllowed: 4000m
         limits:
           keepLimitRequestRatio: true
+        downsizeThreshold:
+          percent: 5
+          minDecrease: 10m
       memory:
         window: 168h
         requests:
@@ -51,6 +54,9 @@ spec:
           maxAllowed: 8Gi
         limits:
           equalsToRequest: true
+        downsizeThreshold:
+          percent: 5
+          minDecrease: 15Mi
 ```
 
 ---
@@ -175,6 +181,25 @@ At most one of the following fields may be set (enforced by CRD validation). If 
 | `equalsToRequest` | bool | Set the limit equal to the new request (Guaranteed QoS) |
 | `noLimit` | bool | Remove the limit entirely |
 | `requestsLimitsRatio` | float64 | Set limit = request × ratio (e.g. `1.5` sets limit to 150% of request). Must be `>= 1`. |
+
+#### `cpu.downsizeThreshold` / `memory.downsizeThreshold`
+
+Suppresses pod recycling for resource **decreases** that are too small to be
+worth the disruption. **Increases always apply immediately** (under-provisioning
+risks OOM kills and CPU throttling). A decrease is applied only when it meets or
+exceeds `max(percent% × current, minDecrease)`.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `percent` | int32 | `5` | Minimum decrease as a percentage of the current value. Range `0`–`100`. |
+| `minDecrease` | Quantity | `10m` (CPU) / `15Mi` (memory) | Minimum decrease as an absolute quantity. Dominates the band at small workload sizes, so tiny pods are not recycled to reclaim a few millicores / MiB. |
+
+Set both `percent: 0` and `minDecrease: "0"` to disable suppression for that
+resource (every decrease is applied, as before this feature existed).
+
+The threshold gates only the controller's recycling of **running** pods. The
+admission webhook always injects the exact recommendation at pod creation — a
+new pod has nothing to disrupt.
 
 ---
 

@@ -64,7 +64,7 @@ func TestChangedContainers_DetectsRequestAndLimitDrift(t *testing.T) {
 		// no-rec intentionally absent
 	}
 
-	got := changedContainers(containers, recs)
+	got := changedContainers(containers, recs, workload.Tolerance{})
 	if len(got) != 1 || got[0] != "drift-cpu" {
 		t.Errorf("expected ['drift-cpu'], got %v", got)
 	}

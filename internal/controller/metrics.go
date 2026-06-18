@@ -116,6 +116,11 @@ var (
 		Name: "k8s_sustain_oom_cache_entries",
 		Help: "Current number of distinct workload+container entries in the OOM watch cache.",
 	})
+
+	recycleSuppressedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "k8s_sustain_recycle_suppressed_total",
+		Help: "Resource decreases not applied because they fell below the policy's downsizeThreshold, by resource. Counted once per resource per pod processed per reconcile.",
+	}, []string{"namespace", "owner_kind", "owner_name", "resource"})
 )
 
 func init() {
@@ -140,6 +145,7 @@ func init() {
 		oomObservedTotal,
 		oomReactionLatencySeconds,
 		oomCacheEntries,
+		recycleSuppressedTotal,
 	)
 }
 
@@ -157,4 +163,10 @@ func EmitOOMReactionLatency(namespace, ownerKind, ownerName string, seconds floa
 // SetOOMCacheEntries sets the current cache size gauge.
 func SetOOMCacheEntries(n int) {
 	oomCacheEntries.Set(float64(n))
+}
+
+// EmitRecycleSuppressed increments the counter for a resource decrease that the
+// downsize threshold held back on a workload.
+func EmitRecycleSuppressed(namespace, ownerKind, ownerName, resource string) {
+	recycleSuppressedTotal.WithLabelValues(namespace, ownerKind, ownerName, resource).Inc()
 }

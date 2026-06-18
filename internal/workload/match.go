@@ -73,3 +73,120 @@ func limitMatches(current *resource.Quantity, rec *resource.Quantity, remove boo
 	}
 	return current.Cmp(*rec) == 0
 }
+
+// DefaultDownsizePercent is the default percent used to compute the relative
+// component of the downsize threshold band when a Policy does not configure one.
+const DefaultDownsizePercent int32 = 5
+
+// Default absolute floors of the downsize threshold band, per resource.
+var (
+	DefaultCPUDownsizeFloor    = resource.MustParse("10m")
+	DefaultMemoryDownsizeFloor = resource.MustParse("15Mi")
+)
+
+// Tolerance carries the per-resource asymmetric downsize bands. The zero value
+// disables suppression (band 0 => every decrease is acted on).
+type Tolerance struct {
+	CPUPercent int32
+	CPUFloor   resource.Quantity
+	MemPercent int32
+	MemFloor   resource.Quantity
+}
+
+// withinDecrease reports whether rec is a DECREASE from current that is smaller
+// than the band max(percent% of current, floor) and should therefore be left
+// alone. A nil rec, an increase, or an exact match return false — those are
+// handled unchanged downstream (nil = leave alone; increase/equal flow through
+// ContainerMatches as today).
+//
+// Arithmetic is in milli-units (MilliValue) so CPU (millicores) and memory
+// (milli-bytes) share one code path. percent is divided into current first to
+// keep the multiplication well clear of int64 overflow for realistic sizes.
+func withinDecrease(current, rec *resource.Quantity, percent int32, floor resource.Quantity) bool {
+	if rec == nil {
+		return false
+	}
+	delta := current.MilliValue() - rec.MilliValue()
+	if delta <= 0 {
+		return false // increase or exact match
+	}
+	// /100 before *percent keeps the product clear of int64 overflow; it rounds
+	// the band down by sub-percent amounts, which errs toward acting (the floor
+	// rescues small workloads where the rounding would otherwise bite).
+	band := current.MilliValue() / 100 * int64(percent)
+	if fm := floor.MilliValue(); fm > band {
+		band = fm
+	}
+	return delta < band
+}
+
+// clampDecreaseToTolerance returns a copy of rec in which each dimension that is
+// a sub-threshold decrease vs current is cleared to nil ("leave alone").
+// Increases and above-threshold decreases pass through unchanged; limit
+// removals are always significant and never cleared. Both ContainerMatches and
+// applyRecToContainer treat the cleared (nil) dimensions as no-ops, so this is
+// the single enforcement point for the asymmetric downsize threshold.
+func clampDecreaseToTolerance(current corev1.ResourceRequirements, rec ContainerRecommendation, tol Tolerance) ContainerRecommendation {
+	out := rec
+	if withinDecrease(current.Requests.Cpu(), out.CPURequest, tol.CPUPercent, tol.CPUFloor) {
+		out.CPURequest = nil
+	}
+	if !out.RemoveCPULimit && withinDecrease(current.Limits.Cpu(), out.CPULimit, tol.CPUPercent, tol.CPUFloor) {
+		out.CPULimit = nil
+	}
+	if withinDecrease(current.Requests.Memory(), out.MemoryRequest, tol.MemPercent, tol.MemFloor) {
+		out.MemoryRequest = nil
+	}
+	if !out.RemoveMemoryLimit && withinDecrease(current.Limits.Memory(), out.MemoryLimit, tol.MemPercent, tol.MemFloor) {
+		out.MemoryLimit = nil
+	}
+	return out
+}
+
+// ClampRecsToTolerance applies clampDecreaseToTolerance to every recommendation
+// whose container is present in current, keyed by container name. Recs whose
+// container is not found pass through unchanged (tolerance can't be evaluated
+// without a current value). The input map is never mutated.
+func ClampRecsToTolerance(current []corev1.Container, recs map[string]ContainerRecommendation, tol Tolerance) map[string]ContainerRecommendation {
+	if len(recs) == 0 {
+		return recs
+	}
+	byName := make(map[string]corev1.Container, len(current))
+	for _, c := range current {
+		byName[c.Name] = c
+	}
+	out := make(map[string]ContainerRecommendation, len(recs))
+	for name, rec := range recs {
+		if c, ok := byName[name]; ok {
+			out[name] = clampDecreaseToTolerance(c.Resources, rec, tol)
+		} else {
+			out[name] = rec
+		}
+	}
+	return out
+}
+
+// reportSuppressed calls observe("cpu") and/or observe("memory") once each for
+// any dimension present in orig but cleared in clamped. observe may be nil.
+func reportSuppressed(orig, clamped ContainerRecommendation, observe func(resource string)) {
+	if observe == nil {
+		return
+	}
+	if (orig.CPURequest != nil && clamped.CPURequest == nil) || (orig.CPULimit != nil && clamped.CPULimit == nil) {
+		observe("cpu")
+	}
+	if (orig.MemoryRequest != nil && clamped.MemoryRequest == nil) || (orig.MemoryLimit != nil && clamped.MemoryLimit == nil) {
+		observe("memory")
+	}
+}
+
+// observeSuppressed reports every dimension cleared between orig and clamped
+// (same keys) through observe. observe may be nil.
+func observeSuppressed(orig, clamped map[string]ContainerRecommendation, observe func(resource string)) {
+	if observe == nil {
+		return
+	}
+	for name, o := range orig {
+		reportSuppressed(o, clamped[name], observe)
+	}
+}

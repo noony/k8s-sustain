@@ -137,7 +137,7 @@ func BindControllerFlags(cmd *cobra.Command) {
 	bindString(flags, "leader-election-id", "leader-election-id", "k8s-sustain-leader-election", "Lease name for leader election. Override when running multiple operator installs in the same cluster.")
 	bindString(flags, "log-level", "log-level", "info", "Log level (debug, info, warn, error)")
 	bindString(flags, "prometheus-address", "prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
-	bindDuration(flags, "reconcile-interval", "reconcile-interval", 1*time.Minute, "How often policies are re-evaluated")
+	bindDuration(flags, "reconcile-interval", "reconcile-interval", 5*time.Minute, "How often policies are re-evaluated")
 	bindStringSlice(flags, "excluded-namespaces", "excluded-namespaces", nil, "Namespaces the reconciler should never touch")
 	bindInt(flags, "concurrency-limit", "concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
 	bindDuration(flags, "recycle-replacement-timeout", "recycle-replacement-timeout", 5*time.Minute,

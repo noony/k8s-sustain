@@ -2111,3 +2111,146 @@ func TestRecyclePods_InPlace_SkipsPodsNotOwnedByTarget(t *testing.T) {
 		t.Error("no pod should be evicted on the in-place path")
 	}
 }
+
+func TestRecyclePods_SuppressesSmallDecrease(t *testing.T) {
+	// Pod at 1000m CPU. Rec 995m (-5m) is below the band max(50m,10m)=50m.
+	pod := runningPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m")})
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+	var evicted []string
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).
+		WithInterceptorFuncs(evictionInterceptor(&evicted)).Build()
+	p := New(c, false, testEvictionOpts()...)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("995m")}}
+
+	var observed []string
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
+		WithTolerance(tol5),
+		WithSuppressionObserver(func(r string) { observed = append(observed, r) })); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if len(evicted) != 0 {
+		t.Fatalf("sub-threshold decrease must not evict, got %v", evicted)
+	}
+	// The suppressed decrease must be reported to the observer — the controller's
+	// metric depends on it firing.
+	if len(observed) != 1 || observed[0] != "cpu" {
+		t.Fatalf("expected observer to report [cpu], got %v", observed)
+	}
+}
+
+func TestRecyclePods_AppliesIncrease(t *testing.T) {
+	pod := runningPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m")})
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+	var evicted []string
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).
+		WithInterceptorFuncs(evictionInterceptor(&evicted)).Build()
+	p := New(c, false, testEvictionOpts()...)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("1010m")}}
+
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
+		WithTolerance(tol5)); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if len(evicted) != 1 {
+		t.Fatalf("increase must recycle, got %v", evicted)
+	}
+}
+
+// TestResizePodsInPlace_SuppressesSmallDecrease verifies the in-place path
+// honours the downsize tolerance: a sub-threshold decrease must not produce a
+// /resize patch, and the suppression must be reported to the observer.
+func TestResizePodsInPlace_SuppressesSmallDecrease(t *testing.T) {
+	// Pod at 1000m CPU. Rec 995m (-5m) is below the band max(50m,10m)=50m.
+	pod := runningPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m")})
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+	var resizeCalled bool
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					resizeCalled = true
+				}
+				return nil
+			},
+		}).Build()
+	p := New(c, true)
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("995m")}}
+
+	var observed []string
+	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{pod}, recs,
+		WithTolerance(tol5),
+		WithSuppressionObserver(func(r string) { observed = append(observed, r) }))
+	if err != nil {
+		t.Fatalf("ResizePodsInPlace: %v", err)
+	}
+	if resizeCalled {
+		t.Error("sub-threshold decrease must not trigger an in-place resize")
+	}
+	if resized != 0 {
+		t.Errorf("resized count = %d, want 0", resized)
+	}
+	if len(observed) != 1 || observed[0] != "cpu" {
+		t.Fatalf("expected observer to report [cpu], got %v", observed)
+	}
+}
+
+// TestResizePodsInPlace_MixedRecAppliesCrossingDimensionOnly verifies per-dimension
+// tolerance end-to-end: when CPU crosses the threshold but memory does not, the
+// /resize patch carries the new CPU request and leaves memory at its current
+// value, and only memory is reported suppressed.
+func TestResizePodsInPlace_MixedRecAppliesCrossingDimensionOnly(t *testing.T) {
+	// current CPU 1000m, memory 1Gi (1024Mi).
+	// rec CPU 900m: delta 100m >= band max(50m,10m)=50m -> applied.
+	// rec memory 1000Mi: delta 24Mi < band max(51Mi,15Mi)=51Mi -> suppressed (kept 1Gi).
+	pod := runningPod("p", corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("1000m"),
+		corev1.ResourceMemory: resource.MustParse("1Gi"),
+	})
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+	var patched *corev1.Pod
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					patched = obj.(*corev1.Pod).DeepCopy()
+				}
+				return nil
+			},
+		}).Build()
+	p := New(c, true)
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("900m"), MemoryRequest: qtyp("1000Mi")}}
+
+	var observed []string
+	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{pod}, recs,
+		WithTolerance(tol5),
+		WithSuppressionObserver(func(r string) { observed = append(observed, r) }))
+	if err != nil {
+		t.Fatalf("ResizePodsInPlace: %v", err)
+	}
+	if resized != 1 {
+		t.Fatalf("resized count = %d, want 1 (CPU crosses threshold)", resized)
+	}
+	if patched == nil {
+		t.Fatal("expected a /resize patch carrying the CPU change")
+	}
+	got := patched.Spec.Containers[0].Resources.Requests
+	if got.Cpu().Cmp(resource.MustParse("900m")) != 0 {
+		t.Errorf("CPU request = %s, want 900m (the crossing dimension is applied)", got.Cpu().String())
+	}
+	if got.Memory().Cmp(resource.MustParse("1Gi")) != 0 {
+		t.Errorf("memory request = %s, want 1Gi unchanged (sub-threshold decrease suppressed)", got.Memory().String())
+	}
+	if len(observed) != 1 || observed[0] != "memory" {
+		t.Fatalf("expected observer to report [memory] only, got %v", observed)
+	}
+}

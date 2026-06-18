@@ -77,6 +77,31 @@ spec:
                       cpu:
                         description: CPU holds the recommendation config for CPU resources.
                         properties:
+                          downsizeThreshold:
+                            description: |-
+                              DownsizeThreshold suppresses pod recycling for resource DECREASES smaller
+                              than max(percent% of current, minDecrease). Increases always apply
+                              immediately. Defaults apply when unset (percent 5; minDecrease 10m for
+                              CPU, 15Mi for memory). Set both percent and minDecrease to 0 to disable.
+                            properties:
+                              minDecrease:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  MinDecrease is the minimum decrease as an absolute quantity. Defaults to
+                                  10m (CPU) or 15Mi (memory) when unset.
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              percent:
+                                description: |-
+                                  Percent is the minimum decrease as a percentage of the current value.
+                                  Defaults to 5 when unset.
+                                format: int32
+                                maximum: 100
+                                minimum: 0
+                                type: integer
+                            type: object
                           limits:
                             description: Limits configures how resource limits are
                               derived from requests.
@@ -176,6 +201,31 @@ spec:
                         description: Memory holds the recommendation config for memory
                           resources.
                         properties:
+                          downsizeThreshold:
+                            description: |-
+                              DownsizeThreshold suppresses pod recycling for resource DECREASES smaller
+                              than max(percent% of current, minDecrease). Increases always apply
+                              immediately. Defaults apply when unset (percent 5; minDecrease 10m for
+                              CPU, 15Mi for memory). Set both percent and minDecrease to 0 to disable.
+                            properties:
+                              minDecrease:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  MinDecrease is the minimum decrease as an absolute quantity. Defaults to
+                                  10m (CPU) or 15Mi (memory) when unset.
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              percent:
+                                description: |-
+                                  Percent is the minimum decrease as a percentage of the current value.
+                                  Defaults to 5 when unset.
+                                format: int32
+                                maximum: 100
+                                minimum: 0
+                                type: integer
+                            type: object
                           limits:
                             description: Limits configures how resource limits are
                               derived from requests.

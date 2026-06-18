@@ -27,6 +27,10 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 	excludeInit := policy.Spec.RightSizing.ExcludeInitContainers
+	tol := buildTolerance(policy.Spec.RightSizing.ResourcesConfigs)
+	suppressionObserver := func(resource string) {
+		EmitRecycleSuppressed(t.Namespace, t.Kind, t.Name, resource)
+	}
 	containers, initNames := t.recommendableContainers(excludeInit)
 	logger.V(1).Info("reconciling workload",
 		"containers", len(t.Containers),
@@ -89,7 +93,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	// pods directly; new scheduled runs always pick up the latest resources
 	// from the webhook at admission time.
 	if t.Kind == "CronJob" {
-		resized, err := r.resizeCronJobPods(ctx, t, recs)
+		resized, err := r.resizeCronJobPods(ctx, t, recs, tol, suppressionObserver)
 		if err != nil {
 			return r.handleStepError(ctx, t, "resize", "CronJob pod resize failed", err)
 		}
@@ -98,7 +102,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		// JobTemplate is never mutated, so changedContainers alone would
 		// fire on every reconcile.
 		if resized > 0 {
-			changed := changedContainers(containers, recs)
+			changed := changedContainers(containers, recs, tol)
 			if len(changed) > 0 {
 				r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
 					"in-place resized cronjob pods for containers: %v", changed)
@@ -122,14 +126,18 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		tw.UID = t.Object.GetUID()
 	}
 	logger.V(1).Info("recycling pods", "selector", sel.String())
-	if err := r.patcher.RecyclePods(ctx, tw, t.Namespace, sel, recs); err != nil {
+	if err := r.patcher.RecyclePods(ctx, tw, t.Namespace, sel, recs, workload.WithTolerance(tol), workload.WithSuppressionObserver(suppressionObserver)); err != nil {
 		return r.handleStepError(ctx, t, "patch", "Pod recycle failed", err)
 	}
 
 	r.recordStepSuccess(t)
 
-	// Only report containers whose resources actually changed vs. the current spec.
-	changed := changedContainers(containers, recs)
+	// Only report containers whose resources changed vs. the pod-template spec,
+	// honouring the same downsize tolerance the patcher applies. This is a
+	// best-effort approximation for the event: the patcher decides per live pod
+	// (against each pod's actual resources), so in rollout edge cases the event
+	// list can differ slightly from what was recycled.
+	changed := changedContainers(containers, recs, tol)
 	if len(changed) == 0 {
 		logger.V(1).Info("recommendations match current resources, no event emitted")
 		return nil

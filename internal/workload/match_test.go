@@ -162,6 +162,111 @@ func TestContainerMatches(t *testing.T) {
 	}
 }
 
+// reqsRR builds a ResourceRequirements from request/limit strings; empty string
+// means "leave that key unset".
+func reqsRR(cpuReq, memReq, cpuLim, memLim string) corev1.ResourceRequirements {
+	r := corev1.ResourceRequirements{Requests: corev1.ResourceList{}, Limits: corev1.ResourceList{}}
+	if cpuReq != "" {
+		r.Requests[corev1.ResourceCPU] = resource.MustParse(cpuReq)
+	}
+	if memReq != "" {
+		r.Requests[corev1.ResourceMemory] = resource.MustParse(memReq)
+	}
+	if cpuLim != "" {
+		r.Limits[corev1.ResourceCPU] = resource.MustParse(cpuLim)
+	}
+	if memLim != "" {
+		r.Limits[corev1.ResourceMemory] = resource.MustParse(memLim)
+	}
+	return r
+}
+
+// tol5 is the default-shaped tolerance: 5% with 10m CPU / 15Mi memory floors.
+var tol5 = Tolerance{CPUPercent: 5, CPUFloor: resource.MustParse("10m"), MemPercent: 5, MemFloor: resource.MustParse("15Mi")}
+
+func assertQtyEq(t *testing.T, field string, want, got *resource.Quantity) {
+	t.Helper()
+	switch {
+	case want == nil && got == nil:
+	case want == nil && got != nil:
+		t.Fatalf("%s: want nil (cleared), got %s", field, got.String())
+	case want != nil && got == nil:
+		t.Fatalf("%s: want %s, got nil", field, want.String())
+	case want.Cmp(*got) != 0:
+		t.Fatalf("%s: want %s, got %s", field, want.String(), got.String())
+	}
+}
+
+func TestClampDecreaseToTolerance(t *testing.T) {
+	tests := []struct {
+		name       string
+		current    corev1.ResourceRequirements
+		rec        ContainerRecommendation
+		tol        Tolerance
+		wantCPUReq *resource.Quantity // nil => expect cleared
+		wantMemReq *resource.Quantity
+	}{
+		{name: "cpu increase always kept", current: reqsRR("100m", "", "", ""), rec: ContainerRecommendation{CPURequest: qtyp("110m")}, tol: tol5, wantCPUReq: qtyp("110m")},
+		{name: "cpu small decrease below percent and floor cleared", current: reqsRR("1000m", "", "", ""), rec: ContainerRecommendation{CPURequest: qtyp("995m")}, tol: tol5, wantCPUReq: nil},
+		{name: "cpu decrease above percent kept", current: reqsRR("1000m", "", "", ""), rec: ContainerRecommendation{CPURequest: qtyp("900m")}, tol: tol5, wantCPUReq: qtyp("900m")},
+		{name: "cpu tiny absolute decrease below floor cleared", current: reqsRR("4m", "", "", ""), rec: ContainerRecommendation{CPURequest: qtyp("2m")}, tol: tol5, wantCPUReq: nil},
+		{name: "memory decrease below 15Mi floor cleared", current: reqsRR("", "100Mi", "", ""), rec: ContainerRecommendation{MemoryRequest: qtyp("90Mi")}, tol: tol5, wantMemReq: nil},
+		{name: "memory decrease above floor kept", current: reqsRR("", "100Mi", "", ""), rec: ContainerRecommendation{MemoryRequest: qtyp("80Mi")}, tol: tol5, wantMemReq: qtyp("80Mi")},
+		{name: "memory large workload percent dominates kept", current: reqsRR("", "2Gi", "", ""), rec: ContainerRecommendation{MemoryRequest: qtyp("1900Mi")}, tol: tol5, wantMemReq: qtyp("1900Mi")},
+		{name: "zero tolerance keeps every decrease", current: reqsRR("1000m", "", "", ""), rec: ContainerRecommendation{CPURequest: qtyp("999m")}, tol: Tolerance{}, wantCPUReq: qtyp("999m")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := clampDecreaseToTolerance(tc.current, tc.rec, tc.tol)
+			assertQtyEq(t, "cpuReq", tc.wantCPUReq, got.CPURequest)
+			if tc.wantMemReq != nil || tc.rec.MemoryRequest != nil {
+				assertQtyEq(t, "memReq", tc.wantMemReq, got.MemoryRequest)
+			}
+		})
+	}
+}
+
+func TestClampLimitRemovalAlwaysKept(t *testing.T) {
+	cur := reqsRR("", "", "200m", "256Mi")
+	rec := ContainerRecommendation{RemoveCPULimit: true, RemoveMemoryLimit: true}
+	got := clampDecreaseToTolerance(cur, rec, tol5)
+	if !got.RemoveCPULimit {
+		t.Fatal("cpu limit removal must never be suppressed")
+	}
+	if !got.RemoveMemoryLimit {
+		t.Fatal("memory limit removal must never be suppressed")
+	}
+}
+
+func TestClampRecsToTolerance(t *testing.T) {
+	containers := []corev1.Container{{Name: "app", Resources: reqsRR("1000m", "", "", "")}}
+
+	t.Run("clamps matched container and passes through unmatched", func(t *testing.T) {
+		recs := map[string]ContainerRecommendation{
+			"app":     {CPURequest: qtyp("995m")}, // sub-threshold decrease -> cleared
+			"sidecar": {CPURequest: qtyp("3m")},   // no current -> passes through unchanged
+		}
+		got := ClampRecsToTolerance(containers, recs, tol5)
+		if got["app"].CPURequest != nil {
+			t.Fatalf("app: want cleared, got %s", got["app"].CPURequest.String())
+		}
+		if got["sidecar"].CPURequest == nil || got["sidecar"].CPURequest.Cmp(resource.MustParse("3m")) != 0 {
+			t.Fatalf("sidecar: want 3m passthrough, got %v", got["sidecar"].CPURequest)
+		}
+		// input map must not be mutated
+		if recs["app"].CPURequest == nil {
+			t.Fatal("input recs map was mutated")
+		}
+	})
+
+	t.Run("empty recs returns same map", func(t *testing.T) {
+		recs := map[string]ContainerRecommendation{}
+		if got := ClampRecsToTolerance(containers, recs, tol5); len(got) != 0 {
+			t.Fatalf("want empty, got %d entries", len(got))
+		}
+	})
+}
+
 // TestChangedContainers-style coverage for a missing container is exercised in
 // the controller package; ContainerMatches itself only sees a container that
 // exists, so "missing container" is handled by the caller mapping. We assert

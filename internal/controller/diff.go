@@ -15,7 +15,8 @@ import (
 // whether an apply is a no-op. Keeping a single source of truth prevents the
 // two sides from disagreeing (one recycling while the other skips, causing
 // churn). See workload.ContainerMatches for the zero/unset semantics.
-func changedContainers(current []corev1.Container, recs map[string]workload.ContainerRecommendation) []string {
+func changedContainers(current []corev1.Container, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance) []string {
+	recs = workload.ClampRecsToTolerance(current, recs, tol)
 	byName := make(map[string]corev1.Container, len(current))
 	for _, c := range current {
 		byName[c.Name] = c
