@@ -1867,8 +1867,14 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 <td>gauge</td>
 <td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>resource</code>, <code>kind</code></td>
 </tr>
+<tr>
+<td><code>k8s_sustain_recycle_suppressed_total</code></td>
+<td>counter</td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>resource</code></td>
+</tr>
 </tbody>
 </table>
+<p><code>k8s_sustain_recycle_suppressed_total</code> counts resource decreases that the controller declined to apply because they fell below the policy's <a href="../policy/#cpudownsizethreshold--memorydownsizethreshold"><code>downsizeThreshold</code></a>. It is incremented once per resource (<code>cpu</code>/<code>memory</code>) per pod processed in a reconcile, so a sustained non-zero rate means a workload keeps recommending small downsizes that are being held back to avoid churn. Increases are never suppressed and never counted here.</p>
 <h4 id="k8s_sustain_workload_drift_ratio"><code>k8s_sustain_workload_drift_ratio</code><a class="headerlink" href="#k8s_sustain_workload_drift_ratio" title="Permanent link">&para;</a></h4>
 <p>Largest drift ratio (recommended / current) across the workload's containers, per resource. <code>1.0</code> means no drift; <code>&gt; 1.0</code> means under-provisioned (recommendation higher than current); <code>&lt; 1.0</code> means over-provisioned. The controller pre-aggregates with <code>max(abs(1 - ratio))</code> across containers at emit time so this gauge stays one series per (workload, resource) — i.e. constant cardinality regardless of how many containers a pod has. The signed ratio is preserved (not the absolute value) so consumers can still distinguish over- from under-provisioning.</p>
 <h4 id="k8s_sustain_autoscaler_target_configured"><code>k8s_sustain_autoscaler_target_configured</code><a class="headerlink" href="#k8s_sustain_autoscaler_target_configured" title="Permanent link">&para;</a></h4>
