@@ -17,6 +17,7 @@ import (
 	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
 	"github.com/noony/k8s-sustain/internal/logging"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/version"
 )
 
 func init() {
@@ -66,6 +67,6 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 	}
 
 	httpSrv := srv.NewHTTPServer(cfg.BindAddress)
-	log.Info("Starting dashboard server", "addr", cfg.BindAddress)
+	log.Info("Starting dashboard server", "version", version.Version, "addr", cfg.BindAddress)
 	return httpx.ListenAndServeWithShutdown(httpSrv, log, "dashboard", 10*time.Second, httpSrv.ListenAndServe)
 }

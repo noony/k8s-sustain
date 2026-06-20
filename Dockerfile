@@ -8,6 +8,9 @@ RUN npm run build
 FROM --platform=$BUILDPLATFORM golang:1.26.4-alpine AS builder
 ARG TARGETOS
 ARG TARGETARCH
+# VERSION is embedded into the binary so `k8s-sustain version` and the startup
+# log report the release tag. Defaults to "dev" for local builds.
+ARG VERSION=dev
 WORKDIR /workspace
 
 COPY go.mod go.sum ./
@@ -16,7 +19,9 @@ RUN go mod download
 COPY . .
 COPY --from=ui-builder /workspace/internal/dashboard/ui/dist internal/dashboard/ui/dist
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -a -trimpath -ldflags="-s -w" -o k8s-sustain .
+    go build -a -trimpath \
+    -ldflags="-s -w -X github.com/noony/k8s-sustain/internal/version.Version=${VERSION}" \
+    -o k8s-sustain .
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /

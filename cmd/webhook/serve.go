@@ -21,6 +21,7 @@ import (
 	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
 	"github.com/noony/k8s-sustain/internal/logging"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/version"
 	whhandler "github.com/noony/k8s-sustain/internal/webhook"
 )
 
@@ -136,7 +137,7 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	log.Info("Starting webhook server", "addr", addr, "certFile", cfg.TLSCertFile)
+	log.Info("Starting webhook server", "version", version.Version, "addr", addr, "certFile", cfg.TLSCertFile)
 
 	watcherCtx, stopWatcher := context.WithCancel(context.Background())
 	defer stopWatcher()

@@ -2,7 +2,7 @@
 
 # CLI Reference
 
-The `k8s-sustain` binary exposes three subcommands. All are packaged in the same container image.
+The `k8s-sustain` binary exposes three operational subcommands — `start`, `webhook`, and `dashboard` — plus a `version` helper. All are packaged in the same container image.
 
 ## Global flags
 
@@ -162,3 +162,18 @@ k8s-sustain dashboard [flags]
 | `/healthz` | `:8090` | Returns `200 OK` — used as liveness/readiness probe |
 
 See the [Dashboard guide](../guides/dashboard.md) for full usage instructions.
+
+---
+
+## `k8s-sustain version`
+
+Prints the build-time version string and exits. Release builds embed the git tag via `-ldflags`; local and untagged builds report `dev`. The same value is logged at startup by every subcommand and is also available through the global `--version` flag.
+
+```text
+k8s-sustain version
+```
+
+```bash
+# confirm which version is running in-cluster
+kubectl exec deploy/k8s-sustain -n k8s-sustain -- /k8s-sustain version
+```

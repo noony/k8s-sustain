@@ -22,6 +22,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/logging"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/version"
 )
 
 func init() {
@@ -41,6 +42,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 	log := logging.Setup(cfg.LogLevel, "setup")
 
 	log.Info("Starting k8s-sustain operator",
+		"version", version.Version,
 		"metricsAddr", cfg.MetricsBindAddress,
 		"healthAddr", cfg.HealthProbeBindAddress,
 		"leaderElect", cfg.LeaderElect,
