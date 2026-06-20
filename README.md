@@ -1,7 +1,3 @@
-## :warning: Warning :warning:
-
-**It's still in development, please don't install / test it until first release, thanks !**
-
 # k8s-sustain
 
 Kubernetes operator that automatically right-sizes workload resource requests and limits using historical Prometheus metrics — no manual tuning, no wasted cloud spend.
