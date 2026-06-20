@@ -187,6 +187,10 @@ export interface ChartOpts {
   yFormat: (v: number) => string
   annotations?: ChartAnnotation[]
   extraSeries?: ExtraSeries[]
+  // Fill the area under the primary series. Defaults to true. Set false for
+  // comparison charts (e.g. the overview Savings trend) where a shaded
+  // background under the baseline series adds noise rather than meaning.
+  fill?: boolean
   oomEvents?: { timestamp: string; pod?: string }[]
   onZoomComplete?: (chart: Chart) => void
   // When set, breaks the line at gaps wider than ~1.5× this step. Used to
@@ -268,7 +272,7 @@ export function createTimeSeriesChart(
         grad.addColorStop(1, softFill(opts.color, 0))
         return grad
       },
-      fill: true,
+      fill: opts.fill !== false,
       borderWidth: 1.75,
       pointRadius: 0,
       pointHoverRadius: 4,
@@ -342,6 +346,16 @@ export function createTimeSeriesChart(
           boxPadding: 6,
           usePointStyle: true,
           callbacks: {
+            // Fill the tooltip's circle with the series color. The main
+            // dataset's backgroundColor is a gradient function (the area
+            // fill), so without this the swatch renders hollow/wrong; use
+            // the line color for both fill and ring instead.
+            labelColor: (ctx: any) => ({
+              borderColor: ctx.dataset.borderColor,
+              backgroundColor: ctx.dataset.borderColor,
+              borderWidth: 0,
+              borderRadius: 4,
+            }),
             label: (ctx: any) =>
               ctx.dataset.label + ': ' + opts.yFormat(ctx.parsed.y) + ' ' + opts.unit,
           },

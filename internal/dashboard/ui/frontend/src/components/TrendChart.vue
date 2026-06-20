@@ -30,6 +30,9 @@ function render() {
       yFormat: props.yFormat ?? ((v) => v.toFixed(2)),
       extraSeries: extra,
       annotations: [],
+      // No shaded area under the baseline "Original request" series; the
+      // overview trend compares lines, so a filled background just adds noise.
+      fill: false,
     })
   } catch {
     // jsdom lacks canvas getContext('2d'); swallow so component still mounts in tests
