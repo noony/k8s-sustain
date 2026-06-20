@@ -1354,6 +1354,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#k8s-sustain-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s-sustain version
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1623,6 +1632,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#k8s-sustain-version" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s-sustain version
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1644,7 +1662,7 @@
 <!-- Source of truth: internal/config/config.go -->
 
 <h1 id="cli-reference">CLI Reference<a class="headerlink" href="#cli-reference" title="Permanent link">&para;</a></h1>
-<p>The <code>k8s-sustain</code> binary exposes three subcommands. All are packaged in the same container image.</p>
+<p>The <code>k8s-sustain</code> binary exposes three operational subcommands — <code>start</code>, <code>webhook</code>, and <code>dashboard</code> — plus a <code>version</code> helper. All are packaged in the same container image.</p>
 <h2 id="global-flags">Global flags<a class="headerlink" href="#global-flags" title="Permanent link">&para;</a></h2>
 <p>These flags are available on every subcommand.</p>
 <table>
@@ -1938,6 +1956,14 @@
 </tbody>
 </table>
 <p>See the <a href="../../guides/dashboard/">Dashboard guide</a> for full usage instructions.</p>
+<hr />
+<h2 id="k8s-sustain-version"><code>k8s-sustain version</code><a class="headerlink" href="#k8s-sustain-version" title="Permanent link">&para;</a></h2>
+<p>Prints the build-time version string and exits. Release builds embed the git tag via <code>-ldflags</code>; local and untagged builds report <code>dev</code>. The same value is logged at startup by every subcommand and is also available through the global <code>--version</code> flag.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>k8s-sustain version
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># confirm which version is running in-cluster</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>deploy/k8s-sustain<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>--<span class="w"> </span>/k8s-sustain<span class="w"> </span>version
+</code></pre></div>
 
 
 
