@@ -9,7 +9,7 @@ k8s-sustain includes a built-in web dashboard for exploring policies, viewing wo
 - **Workload Detail** — Status snapshot (mode, last recycle, drift, OOM 24h), risk and HPA badges, blocked-state diagnostics, copy-as-YAML, and interactive CPU/memory charts with sliding-window recommendation, historical requests/limits, and OOM markers.
 - **Policies** — 4-card stat strip (total policies, active workloads, CPU & memory savings) plus per-policy effectiveness columns.
 - **Policy Detail** — Effectiveness time-series, view-as-YAML modal, Datadog-style time range picker, and matched workloads with risk/drift columns.
-- **Policy Simulator** — Tweak percentile, headroom, min/max, and limits strategy; supports Argo Rollouts; shows projected savings impact; exports results as YAML, CSV, or Helm `--set` overrides.
+- **Policy Simulator** — Tweak percentile, headroom, min/max, and limits strategy; supports Argo Rollouts; shows projected savings impact.
 - **Health Checks** — The `/healthz` endpoint verifies Prometheus connectivity for reliable readiness probes.
 - **Request Logging** — Structured HTTP access logs for debugging and observability.
 
@@ -183,14 +183,6 @@ The results show:
 - Computed recommendation per container (CPU/memory request, and CPU/memory limit when a limits strategy is selected; `— removed —` is rendered when `noLimit` is active)
 - A **savings impact band** that summarises the projected CPU and memory delta as both a percentage change and an absolute saving (cores / bytes), so you can immediately see whether the candidate parameters reduce or increase footprint
 - Time-series charts with a **sliding-window recommendation line** (red) that shows how the recommendation would have evolved at each point in time, **historical request** (amber stepped), and **current limit** (orange) overlaid on historical usage
-
-#### Exporting Results
-
-After running a simulation, use the export buttons to download recommendations:
-
-- **YAML** — Downloads a Kubernetes resource patch you can apply with `kubectl apply -f`
-- **CSV** — Downloads a spreadsheet-compatible file with per-container recommendations
-- **Helm export** — Generates a block of `--set` overrides (or values-file fragment) you can copy/paste into a Helm install/upgrade command, mapping the simulated requests/limits onto the workload's container paths
 
 ## Development
 

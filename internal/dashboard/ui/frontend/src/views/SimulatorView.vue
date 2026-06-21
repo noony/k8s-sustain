@@ -9,13 +9,7 @@ import {
   type RecommendationContainer,
   type ResourceLimitsConfig,
 } from '../lib/api'
-import {
-  parseCPUQuantity,
-  parseMemoryQuantity,
-  parseStepToMs,
-  downloadFile,
-  formatBytes,
-} from '../lib/format'
+import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs, formatBytes } from '../lib/format'
 import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
@@ -457,56 +451,6 @@ function renderCharts(data: SimulationResult) {
   })
 }
 
-function exportYAML() {
-  if (!simData.value) return
-  const containers = Object.entries(simData.value.containers)
-  const resourceLines = containers
-    .map(([cname, rec]) => {
-      const parts = [`        - name: ${cname}\n          resources:\n            requests:`]
-      if (rec.cpuRequest) parts.push(`              cpu: "${rec.cpuRequest}"`)
-      if (rec.memoryRequest) parts.push(`              memory: "${rec.memoryRequest}"`)
-      if (rec.cpuLimit || rec.memoryLimit) {
-        parts.push(`            limits:`)
-        if (rec.cpuLimit) parts.push(`              cpu: "${rec.cpuLimit}"`)
-        if (rec.memoryLimit) parts.push(`              memory: "${rec.memoryLimit}"`)
-      }
-      return parts.join('\n')
-    })
-    .join('\n')
-
-  const yaml = `# k8s-sustain simulation recommendation
-# Workload: ${simNs.value}/${simKind.value}/${simName.value}
-# Window: ${range.value.kind === 'relative' ? range.value.window : `${new Date(range.value.fromTs * 1000).toISOString()}–${new Date(range.value.toTs * 1000).toISOString()}`} | CPU P${cpuPct.value}+${cpuHr.value}% | Mem P${memPct.value}+${memHr.value}%
-apiVersion: apps/v1
-kind: ${simKind.value}
-metadata:
-  name: ${simName.value}
-  namespace: ${simNs.value}
-spec:
-  template:
-    spec:
-      containers:
-${resourceLines}
-`
-  downloadFile(simName.value + '-recommendations.yaml', yaml, 'text/yaml')
-}
-
-function exportCSV() {
-  if (!simData.value) return
-  const rows = [['Container', 'CPU Request', 'Memory Request', 'CPU Limit', 'Memory Limit']]
-  for (const [name, rec] of Object.entries(simData.value.containers)) {
-    rows.push([
-      name,
-      rec.cpuRequest || '',
-      rec.memoryRequest || '',
-      rec.cpuLimit || '',
-      rec.memoryLimit || '',
-    ])
-  }
-  const csv = rows.map((r) => r.join(',')).join('\n')
-  downloadFile(simName.value + '-recommendations.csv', csv, 'text/csv')
-}
-
 function cpuDeltaSummary(): string {
   if (!simData.value) return '-'
   let curMillis = 0,
@@ -561,23 +505,6 @@ function memDeltaTone(): 'positive' | 'danger' | 'neutral' {
   if (recBytes < curBytes) return 'positive'
   if (recBytes > curBytes) return 'danger'
   return 'neutral'
-}
-
-function exportHelmValues() {
-  if (!simData.value) return
-  const lines: string[] = ['resources:']
-  for (const [cname, rec] of Object.entries(simData.value.containers)) {
-    lines.push(`  ${cname}:`)
-    lines.push(`    requests:`)
-    if (rec.cpuRequest) lines.push(`      cpu: "${rec.cpuRequest}"`)
-    if (rec.memoryRequest) lines.push(`      memory: "${rec.memoryRequest}"`)
-    if (rec.cpuLimit || rec.memoryLimit) {
-      lines.push(`    limits:`)
-      if (rec.cpuLimit) lines.push(`      cpu: "${rec.cpuLimit}"`)
-      if (rec.memoryLimit) lines.push(`      memory: "${rec.memoryLimit}"`)
-    }
-  }
-  downloadFile(simName.value + '-values.yaml', lines.join('\n') + '\n', 'text/yaml')
 }
 
 async function trySample() {
@@ -933,51 +860,6 @@ onUnmounted(() => {
       <div class="card">
         <div class="card-header">
           <h2>Simulation Results</h2>
-          <div class="row">
-            <button class="btn btn-secondary" @click="exportYAML" title="Download as YAML patch">
-              <svg
-                viewBox="0 0 24 24"
-                width="14"
-                height="14"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
-              YAML
-            </button>
-            <button class="btn btn-secondary" @click="exportCSV" title="Download as CSV">
-              <svg
-                viewBox="0 0 24 24"
-                width="14"
-                height="14"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
-              CSV
-            </button>
-            <button
-              class="btn btn-secondary"
-              @click="exportHelmValues"
-              title="Download as Helm values"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="14"
-                height="14"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
-              </svg>
-              Helm values
-            </button>
-          </div>
         </div>
         <div v-if="simAllContainers().length > 0" class="rec-grid">
           <div
