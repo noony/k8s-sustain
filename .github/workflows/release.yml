@@ -59,6 +59,14 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
 
+      - name: Build chart dependencies
+        # The prometheus subchart tarball is gitignored, so it is absent in a
+        # fresh checkout. `dependency build` fetches the version locked in
+        # Chart.lock before packaging.
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm dependency build charts/k8s-sustain
+
       - name: Package charts
         run: |
           helm package charts/k8s-sustain --version "${GITHUB_REF_NAME#v}" --app-version "${GITHUB_REF_NAME#v}"
