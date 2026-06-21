@@ -1202,21 +1202,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Policy Simulator">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#exporting-results" class="md-nav__link">
-    <span class="md-ellipsis">
-      Exporting Results
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
         
       </ul>
@@ -1738,21 +1723,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Policy Simulator">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#exporting-results" class="md-nav__link">
-    <span class="md-ellipsis">
-      Exporting Results
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
         
       </ul>
@@ -1913,7 +1883,7 @@
 <li><strong>Workload Detail</strong> — Status snapshot (mode, last recycle, drift, OOM 24h), risk and HPA badges, blocked-state diagnostics, copy-as-YAML, and interactive CPU/memory charts with sliding-window recommendation, historical requests/limits, and OOM markers.</li>
 <li><strong>Policies</strong> — 4-card stat strip (total policies, active workloads, CPU &amp; memory savings) plus per-policy effectiveness columns.</li>
 <li><strong>Policy Detail</strong> — Effectiveness time-series, view-as-YAML modal, Datadog-style time range picker, and matched workloads with risk/drift columns.</li>
-<li><strong>Policy Simulator</strong> — Tweak percentile, headroom, min/max, and limits strategy; supports Argo Rollouts; shows projected savings impact; exports results as YAML, CSV, or Helm <code>--set</code> overrides.</li>
+<li><strong>Policy Simulator</strong> — Tweak percentile, headroom, min/max, and limits strategy; supports Argo Rollouts; shows projected savings impact.</li>
 <li><strong>Health Checks</strong> — The <code>/healthz</code> endpoint verifies Prometheus connectivity for reliable readiness probes.</li>
 <li><strong>Request Logging</strong> — Structured HTTP access logs for debugging and observability.</li>
 </ul>
@@ -2081,13 +2051,6 @@ Past 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 
 <li>Computed recommendation per container (CPU/memory request, and CPU/memory limit when a limits strategy is selected; <code>— removed —</code> is rendered when <code>noLimit</code> is active)</li>
 <li>A <strong>savings impact band</strong> that summarises the projected CPU and memory delta as both a percentage change and an absolute saving (cores / bytes), so you can immediately see whether the candidate parameters reduce or increase footprint</li>
 <li>Time-series charts with a <strong>sliding-window recommendation line</strong> (red) that shows how the recommendation would have evolved at each point in time, <strong>historical request</strong> (amber stepped), and <strong>current limit</strong> (orange) overlaid on historical usage</li>
-</ul>
-<h4 id="exporting-results">Exporting Results<a class="headerlink" href="#exporting-results" title="Permanent link">&para;</a></h4>
-<p>After running a simulation, use the export buttons to download recommendations:</p>
-<ul>
-<li><strong>YAML</strong> — Downloads a Kubernetes resource patch you can apply with <code>kubectl apply -f</code></li>
-<li><strong>CSV</strong> — Downloads a spreadsheet-compatible file with per-container recommendations</li>
-<li><strong>Helm export</strong> — Generates a block of <code>--set</code> overrides (or values-file fragment) you can copy/paste into a Helm install/upgrade command, mapping the simulated requests/limits onto the workload's container paths</li>
 </ul>
 <h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">&para;</a></h2>
 <p>The dashboard frontend is a Vue 3 + TypeScript SPA built with Vite, located in <code>internal/dashboard/ui/frontend/</code>. The compiled output goes to <code>internal/dashboard/ui/dist/</code> and is embedded into the Go binary via <code>go:embed</code>.</p>
