@@ -67,6 +67,8 @@ jobs:
       - name: Upload chart to release
         uses: softprops/action-gh-release@v3
         with:
+          # Tags containing a hyphen (e.g. v0.1.0-rc.1) are SemVer prereleases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: "*.tgz"
 
   gh-release:
@@ -106,6 +108,8 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
+          # Tags containing a hyphen (e.g. v0.1.0-rc.1) are SemVer prereleases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
             bin/k8s-sustain-*
