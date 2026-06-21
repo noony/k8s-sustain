@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,9 @@ type fakePromClient struct {
 	// OOM signal returned by QueryWorkloadOOMSignal (zero value = no OOM).
 	oomSignal promclient.OOMSignal
 
+	// mu guards the captured* fields, which handleSummary writes from
+	// multiple goroutines concurrently (e.g. two sparkline QueryRange calls).
+	mu sync.Mutex
 	// capturedCPURange records the last TimeRange passed to QueryCPURangeByContainer.
 	capturedCPURange promclient.TimeRange
 	// capturedRange records the last TimeRange passed to QueryRange.
@@ -67,7 +71,9 @@ func (f *fakePromClient) QueryByLabels(_ context.Context, expr string, _ ...stri
 }
 
 func (f *fakePromClient) QueryRange(_ context.Context, _ string, tr promclient.TimeRange, _ string) ([]promclient.TimeValue, error) {
+	f.mu.Lock()
 	f.capturedRange = tr
+	f.mu.Unlock()
 	return nil, nil
 }
 
@@ -85,7 +91,9 @@ func (f *fakePromClient) QueryMemoryByContainer(_ context.Context, _, _, _ strin
 }
 
 func (f *fakePromClient) QueryCPURangeByContainer(_ context.Context, _, _, _ string, r promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
+	f.mu.Lock()
 	f.capturedCPURange = r
+	f.mu.Unlock()
 	return promclient.ContainerTimeSeries{}, nil
 }
 
@@ -110,7 +118,9 @@ func (f *fakePromClient) QueryMemoryLimitRangeByContainer(_ context.Context, _, 
 }
 
 func (f *fakePromClient) QueryCPURecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, r promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
+	f.mu.Lock()
 	f.capturedRecRange = r
+	f.mu.Unlock()
 	return promclient.ContainerTimeSeries{}, nil
 }
 
