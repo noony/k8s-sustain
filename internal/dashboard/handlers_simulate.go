@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -30,6 +31,8 @@ type simulateRequest struct {
 	OwnerName string `json:"ownerName"`
 	Window    string `json:"window"`
 	Step      string `json:"step"`
+	FromTs    int64  `json:"fromTs,omitempty"`
+	ToTs      int64  `json:"toTs,omitempty"`
 
 	CPU    simulateResourceConfig `json:"cpu"`
 	Memory simulateResourceConfig `json:"memory"`
@@ -102,6 +105,17 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	if err := validateSimulateResource(req.Memory, "memory"); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	if req.FromTs != 0 || req.ToTs != 0 {
+		if req.FromTs == 0 || req.ToTs == 0 {
+			writeError(w, http.StatusBadRequest, "fromTs and toTs must both be set")
+			return
+		}
+		if perr := validateAbsoluteRange(req.FromTs, req.ToTs, time.Now()); perr != nil {
+			writeError(w, http.StatusBadRequest, perr.Msg)
+			return
+		}
 	}
 
 	result, err := s.runSimulation(r.Context(), req)

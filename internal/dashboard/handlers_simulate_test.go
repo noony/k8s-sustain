@@ -164,6 +164,87 @@ func TestHandleSimulate_RejectsOutOfRangePercentile(t *testing.T) {
 	}
 }
 
+// TestSimulateRejectsInvalidAbsoluteRange covers the POST /api/simulate
+// validation of fromTs/toTs pairs added in validateAbsoluteRange.
+func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
+	// from >= to must yield 400
+	t.Run("from_equals_to", func(t *testing.T) {
+		srv := &Server{Logger: testLogger(t)}
+		body := mustJSON(t, simulateRequest{
+			Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
+			FromTs: 1718000000, ToTs: 1718000000,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
+		rec := httptest.NewRecorder()
+		srv.handleSimulate(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("from==to: status = %d, want 400", rec.Code)
+		}
+	})
+
+	t.Run("from_after_to", func(t *testing.T) {
+		srv := &Server{Logger: testLogger(t)}
+		body := mustJSON(t, simulateRequest{
+			Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
+			FromTs: 1718003600, ToTs: 1718000000,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
+		rec := httptest.NewRecorder()
+		srv.handleSimulate(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("from>to: status = %d, want 400", rec.Code)
+		}
+	})
+
+	// only one of fromTs/toTs set must yield 400
+	t.Run("only_from_set", func(t *testing.T) {
+		srv := &Server{Logger: testLogger(t)}
+		body := mustJSON(t, simulateRequest{
+			Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
+			FromTs: 1718000000,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
+		rec := httptest.NewRecorder()
+		srv.handleSimulate(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("only fromTs: status = %d, want 400", rec.Code)
+		}
+	})
+
+	t.Run("only_to_set", func(t *testing.T) {
+		srv := &Server{Logger: testLogger(t)}
+		body := mustJSON(t, simulateRequest{
+			Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
+			ToTs: 1718003600,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
+		rec := httptest.NewRecorder()
+		srv.handleSimulate(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("only toTs: status = %d, want 400", rec.Code)
+		}
+	})
+
+	// valid fromTs < toTs (recent, not too far in future) must NOT be rejected
+	t.Run("valid_range_passes_validation", func(t *testing.T) {
+		srv := &Server{
+			K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+			PromClient: &fakePromClient{},
+			Logger:     testLogger(t),
+		}
+		body := mustJSON(t, simulateRequest{
+			Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
+			FromTs: 1718000000, ToTs: 1718003600,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
+		rec := httptest.NewRecorder()
+		srv.handleSimulate(rec, req)
+		if rec.Code == http.StatusBadRequest {
+			t.Errorf("valid range: got 400, body=%s", rec.Body.String())
+		}
+	})
+}
+
 func mustJSON(t *testing.T, v any) *bytes.Reader {
 	t.Helper()
 	b, err := json.Marshal(v)

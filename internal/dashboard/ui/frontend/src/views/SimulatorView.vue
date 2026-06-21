@@ -2,8 +2,6 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import {
   api,
-  defaultTimeRange,
-  getTimeRangeStep,
   type PolicySummary,
   type PolicySpec,
   type SimulationResult,
@@ -18,15 +16,17 @@ import {
   downloadFile,
   formatBytes,
 } from '../lib/format'
+import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
   destroyAllCharts,
-  syncZoom,
-  resetZoom,
+  zoomedRangeSeconds,
   type ExtraSeries,
   type ChartAnnotation,
 } from '../lib/chart'
-import TimeRangeSelector from '../components/TimeRangeSelector.vue'
+import TimeRangePicker from '../components/TimeRangePicker.vue'
+import { useTimeRange } from '../composables/useTimeRange'
+import { simulateRangeBody, DEFAULT_RANGE, type TimeRange } from '../lib/timerange'
 import DurationCombobox from '../components/DurationCombobox.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
 import KpiCard from '../components/KpiCard.vue'
@@ -46,9 +46,9 @@ const props = defineProps<{
 const simNs = ref(props.namespace || '')
 const simKind = ref(props.kind || 'Deployment')
 const simName = ref(props.name || '')
-const timeRange = ref(defaultTimeRange)
-const cpuWindow = ref(defaultTimeRange)
-const memWindow = ref(defaultTimeRange)
+const { range } = useTimeRange()
+const cpuWindow = ref('168h')
+const memWindow = ref('168h')
 const cpuPct = ref(95)
 const cpuHr = ref(0)
 const cpuMin = ref('')
@@ -318,8 +318,7 @@ async function runSimulation() {
     namespace: simNs.value,
     ownerKind: simKind.value,
     ownerName: simName.value,
-    window: timeRange.value,
-    step: getTimeRangeStep(timeRange.value),
+    ...simulateRangeBody(range.value, Date.now()),
     cpu: { percentile: cpuPct.value, headroom: cpuHr.value, window: cpuWindow.value },
     memory: { percentile: memPct.value, headroom: memHr.value, window: memWindow.value },
   }
@@ -366,7 +365,7 @@ function renderCharts(data: SimulationResult) {
   const simMemReq = data.memoryRequests || {}
   const simCpuRec = data.cpuRecommendations || {}
   const simMemRec = data.memoryRecommendations || {}
-  const stepMs = parseStepToMs(getTimeRangeStep(timeRange.value))
+  const stepMs = parseStepToMs(simulateRangeBody(range.value, Date.now()).step)
 
   containers.forEach((cname) => {
     const res = simResources[cname] || {}
@@ -408,7 +407,7 @@ function renderCharts(data: SimulationResult) {
         yFormat: (v) => v.toFixed(3),
         annotations: cpuAnnotations,
         extraSeries: cpuExtra,
-        onZoomComplete: syncZoom,
+        onZoomComplete: onChartZoom,
         stepMs,
       })
     }
@@ -451,7 +450,7 @@ function renderCharts(data: SimulationResult) {
         yFormat: (v) => v.toFixed(0),
         annotations: memAnnotations,
         extraSeries: memExtra,
-        onZoomComplete: syncZoom,
+        onZoomComplete: onChartZoom,
         stepMs,
       })
     }
@@ -477,7 +476,7 @@ function exportYAML() {
 
   const yaml = `# k8s-sustain simulation recommendation
 # Workload: ${simNs.value}/${simKind.value}/${simName.value}
-# Window: ${timeRange.value} | CPU P${cpuPct.value}+${cpuHr.value}% | Mem P${memPct.value}+${memHr.value}%
+# Window: ${range.value.kind === 'relative' ? range.value.window : `${new Date(range.value.fromTs * 1000).toISOString()}–${new Date(range.value.toTs * 1000).toISOString()}`} | CPU P${cpuPct.value}+${cpuHr.value}% | Mem P${memPct.value}+${memHr.value}%
 apiVersion: apps/v1
 kind: ${simKind.value}
 metadata:
@@ -600,7 +599,7 @@ watch(
     simNs,
     simKind,
     simName,
-    timeRange,
+    range,
     cpuWindow,
     memWindow,
     cpuPct,
@@ -618,6 +617,21 @@ watch(
   ],
   scheduleSimulation,
 )
+
+// Drag-to-zoom sets the shared range to the selected window — updating the URL
+// + picker and re-running the simulation at finer resolution. The previous
+// (relative) range is kept so "Reset zoom" restores it.
+const prevRange = ref<TimeRange | null>(null)
+function onChartZoom(chart: Chart) {
+  const z = zoomedRangeSeconds(chart)
+  if (!z) return
+  if (range.value.kind === 'relative') prevRange.value = range.value
+  range.value = { kind: 'absolute', fromTs: z.fromTs, toTs: z.toTs }
+}
+function resetRange() {
+  range.value = prevRange.value ?? DEFAULT_RANGE
+  prevRange.value = null
+}
 
 onMounted(async () => {
   await Promise.all([loadPolicies(), loadWorkloads()])
@@ -1021,7 +1035,7 @@ onUnmounted(() => {
           <span id="charts-time-range-label" class="charts-toolbar-control-label">
             Time range
           </span>
-          <TimeRangeSelector v-model="timeRange" />
+          <TimeRangePicker v-model="range" />
         </div>
       </div>
       <div v-for="cname in simRegularContainerNames()" :key="cname" class="card">
@@ -1032,32 +1046,28 @@ onUnmounted(() => {
         </div>
         <div class="chart-grid">
           <div>
-            <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
-              CPU Usage + Recommendation
-            </h3>
-            <div class="chart-wrapper">
-              <button
-                class="reset-zoom-btn"
-                :id="'rz-simcpu-' + cname"
-                @click="resetZoom('simcpu-' + cname)"
-              >
+            <div class="chart-head">
+              <h3 style="font-size: 13px; color: var(--text-dim); margin: 0">
+                CPU Usage + Recommendation
+              </h3>
+              <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
                 Reset zoom
               </button>
+            </div>
+            <div class="chart-wrapper">
               <div class="chart-container"><canvas :id="'simcpu-' + cname"></canvas></div>
             </div>
           </div>
           <div>
-            <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
-              Memory Usage + Recommendation
-            </h3>
-            <div class="chart-wrapper">
-              <button
-                class="reset-zoom-btn"
-                :id="'rz-simmem-' + cname"
-                @click="resetZoom('simmem-' + cname)"
-              >
+            <div class="chart-head">
+              <h3 style="font-size: 13px; color: var(--text-dim); margin: 0">
+                Memory Usage + Recommendation
+              </h3>
+              <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
                 Reset zoom
               </button>
+            </div>
+            <div class="chart-wrapper">
               <div class="chart-container"><canvas :id="'simmem-' + cname"></canvas></div>
             </div>
           </div>
@@ -1075,32 +1085,28 @@ onUnmounted(() => {
           </div>
           <div class="chart-grid">
             <div>
-              <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
-                CPU Usage + Recommendation
-              </h3>
-              <div class="chart-wrapper">
-                <button
-                  class="reset-zoom-btn"
-                  :id="'rz-simcpu-' + cname"
-                  @click="resetZoom('simcpu-' + cname)"
-                >
+              <div class="chart-head">
+                <h3 style="font-size: 13px; color: var(--text-dim); margin: 0">
+                  CPU Usage + Recommendation
+                </h3>
+                <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
                   Reset zoom
                 </button>
+              </div>
+              <div class="chart-wrapper">
                 <div class="chart-container"><canvas :id="'simcpu-' + cname"></canvas></div>
               </div>
             </div>
             <div>
-              <h3 style="font-size: 13px; color: var(--text-dim); margin-bottom: 8px">
-                Memory Usage + Recommendation
-              </h3>
-              <div class="chart-wrapper">
-                <button
-                  class="reset-zoom-btn"
-                  :id="'rz-simmem-' + cname"
-                  @click="resetZoom('simmem-' + cname)"
-                >
+              <div class="chart-head">
+                <h3 style="font-size: 13px; color: var(--text-dim); margin: 0">
+                  Memory Usage + Recommendation
+                </h3>
+                <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
                   Reset zoom
                 </button>
+              </div>
+              <div class="chart-wrapper">
                 <div class="chart-container"><canvas :id="'simmem-' + cname"></canvas></div>
               </div>
             </div>

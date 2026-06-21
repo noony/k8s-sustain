@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -111,7 +112,7 @@ func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name
 	}
 
 	q := r.URL.Query()
-	window, perr := parseDurationParam(q, "30d")
+	tr, perr := parseTimeRange(q, "30d", time.Now())
 	if perr != nil {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return
@@ -121,9 +122,8 @@ func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return
 	}
-
-	cpuSeries, _ := s.PromClient.QueryRange(ctx, fmt.Sprintf(`%s{policy=%q}`, promclient.MetricPolicyCPUSavingsCores, name), window, step)
-	memSeries, _ := s.PromClient.QueryRange(ctx, fmt.Sprintf(`%s{policy=%q}`, promclient.MetricPolicyMemorySavingsBytes, name), window, step)
+	cpuSeries, _ := s.PromClient.QueryRange(ctx, fmt.Sprintf(`%s{policy=%q}`, promclient.MetricPolicyCPUSavingsCores, name), tr, step)
+	memSeries, _ := s.PromClient.QueryRange(ctx, fmt.Sprintf(`%s{policy=%q}`, promclient.MetricPolicyMemorySavingsBytes, name), tr, step)
 	if cpuSeries == nil {
 		cpuSeries = []promclient.TimeValue{}
 	}

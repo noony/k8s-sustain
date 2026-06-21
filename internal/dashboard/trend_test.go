@@ -28,7 +28,7 @@ type failingRangePromClient struct {
 	failSubstrings []string
 }
 
-func (f *failingRangePromClient) QueryRange(_ context.Context, expr, _, _ string) ([]promclient.TimeValue, error) {
+func (f *failingRangePromClient) QueryRange(_ context.Context, expr string, _ promclient.TimeRange, _ string) ([]promclient.TimeValue, error) {
 	if len(f.failSubstrings) == 0 {
 		return nil, errors.New("prom unreachable")
 	}
@@ -40,7 +40,7 @@ func (f *failingRangePromClient) QueryRange(_ context.Context, expr, _, _ string
 	return []promclient.TimeValue{{Timestamp: time.Unix(1, 0), Value: 1}}, nil
 }
 
-func (r *recordingPromClient) QueryRange(_ context.Context, expr, _, _ string) ([]promclient.TimeValue, error) {
+func (r *recordingPromClient) QueryRange(_ context.Context, expr string, _ promclient.TimeRange, _ string) ([]promclient.TimeValue, error) {
 	r.mu.Lock()
 	r.exprs = append(r.exprs, expr)
 	r.mu.Unlock()
@@ -104,6 +104,52 @@ func TestHandleSummaryTrendReturnsUsageRequestOriginalForCPUAndMemory(t *testing
 			t.Errorf("expected %s query not issued; got %v", m.name, prom.exprs)
 		}
 	}
+}
+
+// TestHandleSummaryTrendAbsoluteRange verifies that ?from=&to= epoch seconds are
+// forwarded to QueryRange as an absolute TimeRange.
+func TestHandleSummaryTrendAbsoluteRange(t *testing.T) {
+	const wantFrom = int64(1718000000)
+	const wantTo = int64(1718003600)
+
+	var capturedRange promclient.TimeRange
+	prom := &recordingCapturingPromClient{
+		onQueryRange: func(tr promclient.TimeRange) {
+			capturedRange = tr
+		},
+	}
+	srv := &Server{PromClient: prom, Logger: testLogger(t)}
+	req := httptest.NewRequest(http.MethodGet, "/api/summary/trend?from=1718000000&to=1718003600&step=1h", nil)
+	rec := httptest.NewRecorder()
+	srv.handleSummaryTrend(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body=%s", rec.Code, rec.Body.String())
+	}
+	if capturedRange.Start.Unix() != wantFrom {
+		t.Errorf("Start.Unix() = %d, want %d", capturedRange.Start.Unix(), wantFrom)
+	}
+	if capturedRange.End.Unix() != wantTo {
+		t.Errorf("End.Unix() = %d, want %d", capturedRange.End.Unix(), wantTo)
+	}
+}
+
+// recordingCapturingPromClient is like recordingPromClient but also calls an
+// onQueryRange hook so tests can capture the TimeRange argument.
+type recordingCapturingPromClient struct {
+	fakePromClient
+	mu           sync.Mutex
+	exprs        []string
+	onQueryRange func(promclient.TimeRange)
+}
+
+func (r *recordingCapturingPromClient) QueryRange(_ context.Context, expr string, tr promclient.TimeRange, _ string) ([]promclient.TimeValue, error) {
+	r.mu.Lock()
+	r.exprs = append(r.exprs, expr)
+	r.mu.Unlock()
+	if r.onQueryRange != nil {
+		r.onQueryRange(tr)
+	}
+	return []promclient.TimeValue{{Timestamp: time.Unix(1, 0), Value: 1}}, nil
 }
 
 // TestHandleSummaryTrendAllQueriesFailReturns503 pins the outage contract: when

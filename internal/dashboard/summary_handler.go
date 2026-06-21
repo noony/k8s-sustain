@@ -131,12 +131,14 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		recordErr(err)
 	})
 	wg.Go(func() {
-		v, err := sparklinePoints(ctx, s.PromClient, promclient.MetricClusterCPUSavingsCores, "168h", "30m")
+		sparkTR, _ := promclient.TimeRangeFromWindow("168h", time.Now())
+		v, err := sparklinePoints(ctx, s.PromClient, promclient.MetricClusterCPUSavingsCores, sparkTR, "30m")
 		resp.KPI.CPUSpark7d = v
 		recordErr(err)
 	})
 	wg.Go(func() {
-		v, err := sparklinePoints(ctx, s.PromClient, promclient.MetricClusterMemorySavingsBytes, "168h", "30m")
+		sparkTR, _ := promclient.TimeRangeFromWindow("168h", time.Now())
+		v, err := sparklinePoints(ctx, s.PromClient, promclient.MetricClusterMemorySavingsBytes, sparkTR, "30m")
 		resp.KPI.MemSpark7d = v
 		recordErr(err)
 	})
@@ -249,8 +251,8 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func sparklinePoints(ctx context.Context, p PromQuerier, expr, window, step string) ([]float64, error) {
-	pts, err := p.QueryRange(ctx, expr, window, step)
+func sparklinePoints(ctx context.Context, p PromQuerier, expr string, r promclient.TimeRange, step string) ([]float64, error) {
+	pts, err := p.QueryRange(ctx, expr, r, step)
 	if err != nil {
 		return []float64{}, err
 	}

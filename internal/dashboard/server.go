@@ -27,22 +27,22 @@ type PromQuerier interface {
 
 	// Generic helpers used by /api/summary.
 	QueryInstant(ctx context.Context, expr string) (float64, error)
-	QueryRange(ctx context.Context, expr, window, step string) ([]promclient.TimeValue, error)
+	QueryRange(ctx context.Context, expr string, r promclient.TimeRange, step string) ([]promclient.TimeValue, error)
 	QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error)
 	QueryByLabels(ctx context.Context, query string, labels ...string) (map[string]float64, error)
 
 	// Per-workload helpers used by /api/workloads/* and /api/simulate.
 	QueryCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
 	QueryMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
-	QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
-	QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
-	QueryCPURequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
-	QueryMemoryRequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
-	QueryCPULimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
-	QueryMemoryLimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (promclient.ContainerTimeSeries, error)
-	QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName, window, step string) ([]promclient.OOMEvent, error)
+	QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryCPURequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryMemoryRequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryCPULimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryMemoryLimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) ([]promclient.OOMEvent, error)
 	QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKind, ownerName string) (promclient.OOMSignal, error)
 }
 

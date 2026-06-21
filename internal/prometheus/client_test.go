@@ -90,8 +90,10 @@ func TestQueryRangeReturnsTimeValues(t *testing.T) {
 	}))
 	defer server.Close()
 
+	now := time.Now()
+	tr := TimeRange{Start: now.Add(-5 * time.Minute), End: now}
 	c, _ := New(server.URL)
-	out, err := c.QueryRange(context.Background(), "anything", "5m", "1m")
+	out, err := c.QueryRange(context.Background(), "anything", tr, "1m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,8 +261,10 @@ func TestQueryCPURangeByContainer_ReturnsTimeSeries(t *testing.T) {
 	}))
 	defer server.Close()
 
+	now := time.Now()
+	tr := TimeRange{Start: now.Add(-5 * time.Minute), End: now}
 	c, _ := New(server.URL)
-	got, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", "5m", "1m")
+	got, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
 	if err != nil {
 		t.Fatalf("QueryCPURangeByContainer: %v", err)
 	}
@@ -275,18 +279,17 @@ func TestQueryCPURangeByContainer_ReturnsTimeSeries(t *testing.T) {
 	}
 }
 
-func TestQueryCPURangeByContainer_BadWindow(t *testing.T) {
+func TestQueryCPURangeByContainer_BadStep(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
 	}))
 	defer server.Close()
 
+	now := time.Now()
+	tr := TimeRange{Start: now.Add(-5 * time.Minute), End: now}
 	c, _ := New(server.URL)
-	if _, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", "not-a-duration", "1m"); err == nil {
-		t.Fatal("expected error for malformed window")
-	}
-	if _, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", "5m", "nope"); err == nil {
+	if _, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "nope"); err == nil {
 		t.Fatal("expected error for malformed step")
 	}
 }
@@ -304,8 +307,10 @@ func TestQueryMemoryRangeByContainer_HappyPath(t *testing.T) {
 		]}}`))
 	}))
 	defer server.Close()
+	now := time.Now()
+	tr := TimeRange{Start: now.Add(-5 * time.Minute), End: now}
 	c, _ := New(server.URL)
-	got, err := c.QueryMemoryRangeByContainer(context.Background(), "ns", "Deployment", "web", "5m", "1m")
+	got, err := c.QueryMemoryRangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
 	if err != nil {
 		t.Fatalf("QueryMemoryRangeByContainer: %v", err)
 	}
@@ -315,15 +320,17 @@ func TestQueryMemoryRangeByContainer_HappyPath(t *testing.T) {
 }
 
 func TestQueryRequestRange_UsesMaxByContainer(t *testing.T) {
+	now := time.Now()
+	tr := TimeRange{Start: now.Add(-5 * time.Minute), End: now}
 	for _, fn := range []func(server string) error{
 		func(addr string) error {
 			c, _ := New(addr)
-			_, err := c.QueryCPURequestRangeByContainer(context.Background(), "ns", "Deployment", "web", "5m", "1m")
+			_, err := c.QueryCPURequestRangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
 			return err
 		},
 		func(addr string) error {
 			c, _ := New(addr)
-			_, err := c.QueryMemoryRequestRangeByContainer(context.Background(), "ns", "Deployment", "web", "5m", "1m")
+			_, err := c.QueryMemoryRequestRangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
 			return err
 		},
 	} {
@@ -354,8 +361,10 @@ func TestQueryRecommendationRange_AppliesQuantileOverWindow(t *testing.T) {
 	}))
 	defer server.Close()
 
+	now := time.Now()
+	tr := TimeRange{Start: now.Add(-24 * time.Hour), End: now}
 	c, _ := New(server.URL)
-	if _, err := c.QueryCPURecommendationRangeByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h", "24h", "1h"); err != nil {
+	if _, err := c.QueryCPURecommendationRangeByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h", tr, "1h"); err != nil {
 		t.Fatalf("QueryCPURecommendationRangeByContainer: %v", err)
 	}
 	if !strings.Contains(query, "quantile_over_time(0.95") {
@@ -377,7 +386,7 @@ func TestQueryOOMKillEvents_FiltersZeroSamplesAndEmptyContainer(t *testing.T) {
 	defer server.Close()
 
 	c, _ := New(server.URL)
-	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", TimeRange{Start: time.Now().Add(-time.Hour), End: time.Now()}, "1m")
 	if err != nil {
 		t.Fatalf("QueryOOMKillEvents: %v", err)
 	}
@@ -440,7 +449,7 @@ func TestQueryOOMKillEvents_Dedup(t *testing.T) {
 			defer server.Close()
 
 			c, _ := New(server.URL)
-			events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+			events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", TimeRange{Start: time.Now().Add(-time.Hour), End: time.Now()}, "1m")
 			if err != nil {
 				t.Fatalf("QueryOOMKillEvents: %v", err)
 			}
@@ -463,7 +472,7 @@ func TestQueryOOMKillEvents_DistinctPodsNotDeduped(t *testing.T) {
 	defer server.Close()
 
 	c, _ := New(server.URL)
-	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", TimeRange{Start: time.Now().Add(-time.Hour), End: time.Now()}, "1m")
 	if err != nil {
 		t.Fatalf("QueryOOMKillEvents: %v", err)
 	}
@@ -495,7 +504,7 @@ func TestQueryOOMKillEvents_QueryDropsScrapeTargetLabels(t *testing.T) {
 	defer server.Close()
 
 	c, _ := New(server.URL)
-	if _, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m"); err != nil {
+	if _, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", TimeRange{Start: time.Now().Add(-time.Hour), End: time.Now()}, "1m"); err != nil {
 		t.Fatalf("QueryOOMKillEvents: %v", err)
 	}
 }
@@ -507,7 +516,7 @@ func TestQueryOOMKillEvents_ServerErrorIsNonFatal(t *testing.T) {
 	defer server.Close()
 
 	c, _ := New(server.URL)
-	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", TimeRange{Start: time.Now().Add(-time.Hour), End: time.Now()}, "1m")
 	// Documented contract: this method returns (nil, nil) on error so a missing
 	// kube-state-metrics doesn't break dashboard rendering.
 	if err != nil {
@@ -539,7 +548,7 @@ func TestQueryOOMKillEvents_CrashLoopCountsEachRestart(t *testing.T) {
 	defer server.Close()
 
 	c, _ := New(server.URL)
-	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", TimeRange{Start: time.Now().Add(-time.Hour), End: time.Now()}, "1m")
 	if err != nil {
 		t.Fatalf("QueryOOMKillEvents: %v", err)
 	}
@@ -560,7 +569,7 @@ func TestQueryOOMKillEvents_HistoricalOOMEmits(t *testing.T) {
 	defer server.Close()
 
 	c, _ := New(server.URL)
-	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", TimeRange{Start: time.Now().Add(-time.Hour), End: time.Now()}, "1m")
 	if err != nil {
 		t.Fatalf("QueryOOMKillEvents: %v", err)
 	}
@@ -880,10 +889,12 @@ func TestRunRange_GenuineErrorCountsOne(t *testing.T) {
 	}))
 	defer server.Close()
 
+	now := time.Now()
+	tr := TimeRange{Start: now.Add(-time.Hour), End: now}
 	c, _ := New(server.URL)
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	_, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
 	if err == nil {
 		t.Fatal("expected an error from the failing range query")
 	}
@@ -899,10 +910,12 @@ func TestRunRange_PerCallTimeoutCountsOne(t *testing.T) {
 	defer server.Close()
 	defer close(release)
 
+	now := time.Now()
+	tr := TimeRange{Start: now.Add(-time.Hour), End: now}
 	c, _ := New(server.URL, WithQueryTimeout(50*time.Millisecond))
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", "1h", "1m")
+	_, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
 	if err == nil {
 		t.Fatal("expected an error from the per-call timeout")
 	}
@@ -929,7 +942,9 @@ func TestRunRange_OuterSiblingCancelCountsZero(t *testing.T) {
 	}()
 	defer cancelCause(nil)
 
-	_, err := c.QueryCPURangeByContainer(ctx, "ns", "Deployment", "web", "1h", "1m")
+	now := time.Now()
+	tr := TimeRange{Start: now.Add(-time.Hour), End: now}
+	_, err := c.QueryCPURangeByContainer(ctx, "ns", "Deployment", "web", tr, "1m")
 	if err == nil {
 		t.Fatal("expected an error from the sibling cancellation")
 	}

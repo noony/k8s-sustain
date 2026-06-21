@@ -33,6 +33,13 @@ type fakePromClient struct {
 	memByContainer promclient.ContainerValues
 	// OOM signal returned by QueryWorkloadOOMSignal (zero value = no OOM).
 	oomSignal promclient.OOMSignal
+
+	// capturedCPURange records the last TimeRange passed to QueryCPURangeByContainer.
+	capturedCPURange promclient.TimeRange
+	// capturedRange records the last TimeRange passed to QueryRange.
+	capturedRange promclient.TimeRange
+	// capturedRecRange records the last TimeRange passed to QueryCPURecommendationRangeByContainer.
+	capturedRecRange promclient.TimeRange
 }
 
 func (f *fakePromClient) QueryInstant(_ context.Context, expr string) (float64, error) {
@@ -59,7 +66,8 @@ func (f *fakePromClient) QueryByLabels(_ context.Context, expr string, _ ...stri
 	return map[string]float64{}, nil
 }
 
-func (f *fakePromClient) QueryRange(_ context.Context, _, _, _ string) ([]promclient.TimeValue, error) {
+func (f *fakePromClient) QueryRange(_ context.Context, _ string, tr promclient.TimeRange, _ string) ([]promclient.TimeValue, error) {
+	f.capturedRange = tr
 	return nil, nil
 }
 
@@ -76,39 +84,41 @@ func (f *fakePromClient) QueryMemoryByContainer(_ context.Context, _, _, _ strin
 	return promclient.ContainerValues{}, nil
 }
 
-func (f *fakePromClient) QueryCPURangeByContainer(_ context.Context, _, _, _, _, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *fakePromClient) QueryCPURangeByContainer(_ context.Context, _, _, _ string, r promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
+	f.capturedCPURange = r
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *fakePromClient) QueryMemoryRangeByContainer(_ context.Context, _, _, _, _, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *fakePromClient) QueryMemoryRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *fakePromClient) QueryCPURequestRangeByContainer(_ context.Context, _, _, _, _, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *fakePromClient) QueryCPURequestRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *fakePromClient) QueryMemoryRequestRangeByContainer(_ context.Context, _, _, _, _, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *fakePromClient) QueryMemoryRequestRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *fakePromClient) QueryCPULimitRangeByContainer(_ context.Context, _, _, _, _, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *fakePromClient) QueryCPULimitRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *fakePromClient) QueryMemoryLimitRangeByContainer(_ context.Context, _, _, _, _, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *fakePromClient) QueryMemoryLimitRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *fakePromClient) QueryCPURecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _, _, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *fakePromClient) QueryCPURecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, r promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
+	f.capturedRecRange = r
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *fakePromClient) QueryMemoryRecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _, _, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *fakePromClient) QueryMemoryRecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *fakePromClient) QueryOOMKillEvents(_ context.Context, _, _, _, _, _ string) ([]promclient.OOMEvent, error) {
+func (f *fakePromClient) QueryOOMKillEvents(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) ([]promclient.OOMEvent, error) {
 	return nil, nil
 }
 

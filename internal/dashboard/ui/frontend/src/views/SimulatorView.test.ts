@@ -7,7 +7,7 @@ vi.mock('../lib/api', async (o) => ({ ...((await o()) as object), api: vi.fn() }
 describe('SimulatorView', () => {
   it('renders form with Rollout option', async () => {
     ;(api.api as any).mockResolvedValue([])
-    const w = mount(SimulatorView, { global: { stubs: ['TimeRangeSelector'] } })
+    const w = mount(SimulatorView, { global: { stubs: ['TimeRangePicker'] } })
     await flushPromises()
     expect(w.html()).toContain('<option value="Rollout">')
   })

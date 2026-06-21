@@ -13,9 +13,9 @@ const router = createRouter({
 describe('WorkloadDetailView', () => {
   it('renders status snapshot', async () => {
     ;(api.api as any).mockImplementation((path: string) => {
-      if (path.endsWith('/metrics?window=168h&step=10m'))
+      if (path.endsWith('/metrics?window=1w&step=20m'))
         return Promise.resolve({ cpu: {}, memory: {} })
-      if (path.endsWith('/recommendations?window=168h&step=10m'))
+      if (path.endsWith('/recommendations?window=1w&step=20m'))
         return Promise.resolve({ automated: false })
       if (path.match(/\/api\/workloads\/[^/]+\/[^/]+\/[^/]+$/))
         return Promise.resolve({
@@ -30,7 +30,7 @@ describe('WorkloadDetailView', () => {
       props: { namespace: 'a', kind: 'Deployment', name: 'web' },
       global: {
         plugins: [router],
-        stubs: ['TimeRangeSelector', 'TrendChart'],
+        stubs: ['TimeRangePicker', 'TrendChart'],
       },
     })
     await flushPromises()

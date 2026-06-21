@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -70,8 +71,17 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, req simulateRequest
 	cpuWindow := recommender.ResourceWindow(cpuWindowStr)
 	memWindow := recommender.ResourceWindow(memWindowStr)
 
-	// Chart time range (top-level Window controls what's displayed on graphs)
-	timeRange := recommender.ResourceWindow(req.Window)
+	// Chart time range: use absolute from/to if provided, else derive from Window.
+	var tr promclient.TimeRange
+	var err error
+	if req.FromTs > 0 && req.ToTs > 0 {
+		tr = promclient.TimeRange{Start: time.Unix(req.FromTs, 0), End: time.Unix(req.ToTs, 0)}
+	} else {
+		tr, err = promclient.TimeRangeFromWindow(recommender.ResourceWindow(req.Window), time.Now())
+		if err != nil {
+			return nil, fmt.Errorf("resolve chart window: %w", err)
+		}
+	}
 
 	containers, oomSignal, err := s.buildContainerRecommendations(
 		ctx,
@@ -87,11 +97,11 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, req simulateRequest
 	if step == "" {
 		step = "5m"
 	}
-	cpuSeries, err := s.PromClient.QueryCPURangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, timeRange, step)
+	cpuSeries, err := s.PromClient.QueryCPURangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, tr, step)
 	if err != nil {
 		return nil, fmt.Errorf("cpu range query: %w", err)
 	}
-	memSeries, err := s.PromClient.QueryMemoryRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, timeRange, step)
+	memSeries, err := s.PromClient.QueryMemoryRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, tr, step)
 	if err != nil {
 		return nil, fmt.Errorf("memory range query: %w", err)
 	}
@@ -127,12 +137,12 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, req simulateRequest
 	}
 
 	// Fetch historical resource request time-series (best-effort, use chart time range)
-	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, timeRange, step)
-	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, timeRange, step)
+	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, tr, step)
+	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, tr, step)
 
 	// Sliding-window recommendation time-series
-	cpuRecSeries, _ := s.PromClient.QueryCPURecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, cpuQuantile, cpuWindow, timeRange, step)
-	memRecSeries, _ := s.PromClient.QueryMemoryRecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, memQuantile, memWindow, timeRange, step)
+	cpuRecSeries, _ := s.PromClient.QueryCPURecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, cpuQuantile, cpuWindow, tr, step)
+	memRecSeries, _ := s.PromClient.QueryMemoryRecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, memQuantile, memWindow, tr, step)
 
 	cpuRecSeries = applyCPUClampingToSeries(cpuRecSeries, cpuCfg)
 	memRecSeries = applyMemoryClampingToSeries(memRecSeries, memCfg, oomSignal)

@@ -71,7 +71,7 @@ func (f *blockingBatchPromClient) QueryInstant(context.Context, string) (float64
 	return 0, nil
 }
 
-func (f *blockingBatchPromClient) QueryRange(context.Context, string, string, string) ([]promclient.TimeValue, error) {
+func (f *blockingBatchPromClient) QueryRange(_ context.Context, _ string, _ promclient.TimeRange, _ string) ([]promclient.TimeValue, error) {
 	return nil, nil
 }
 
@@ -87,39 +87,39 @@ func (f *blockingBatchPromClient) QueryMemoryByContainer(context.Context, string
 	return promclient.ContainerValues{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryCPURangeByContainer(context.Context, string, string, string, string, string) (promclient.ContainerTimeSeries, error) {
+func (f *blockingBatchPromClient) QueryCPURangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryMemoryRangeByContainer(context.Context, string, string, string, string, string) (promclient.ContainerTimeSeries, error) {
+func (f *blockingBatchPromClient) QueryMemoryRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryCPURequestRangeByContainer(context.Context, string, string, string, string, string) (promclient.ContainerTimeSeries, error) {
+func (f *blockingBatchPromClient) QueryCPURequestRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryMemoryRequestRangeByContainer(context.Context, string, string, string, string, string) (promclient.ContainerTimeSeries, error) {
+func (f *blockingBatchPromClient) QueryMemoryRequestRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryCPULimitRangeByContainer(context.Context, string, string, string, string, string) (promclient.ContainerTimeSeries, error) {
+func (f *blockingBatchPromClient) QueryCPULimitRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryMemoryLimitRangeByContainer(context.Context, string, string, string, string, string) (promclient.ContainerTimeSeries, error) {
+func (f *blockingBatchPromClient) QueryMemoryLimitRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryCPURecommendationRangeByContainer(context.Context, string, string, string, float64, string, string, string) (promclient.ContainerTimeSeries, error) {
+func (f *blockingBatchPromClient) QueryCPURecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryMemoryRecommendationRangeByContainer(context.Context, string, string, string, float64, string, string, string) (promclient.ContainerTimeSeries, error) {
+func (f *blockingBatchPromClient) QueryMemoryRecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryOOMKillEvents(context.Context, string, string, string, string, string) ([]promclient.OOMEvent, error) {
+func (f *blockingBatchPromClient) QueryOOMKillEvents(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) ([]promclient.OOMEvent, error) {
 	return nil, nil
 }
 

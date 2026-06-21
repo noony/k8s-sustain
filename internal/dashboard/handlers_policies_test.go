@@ -47,3 +47,25 @@ func TestHandlePolicyDetailIncludesEffectivenessSeries(t *testing.T) {
 		t.Fatal("expected effectivenessSeries in payload")
 	}
 }
+
+// TestHandlePolicyDetailAbsoluteRange verifies that ?from=&to= epoch seconds are
+// forwarded to QueryRange as an absolute TimeRange.
+func TestHandlePolicyDetailAbsoluteRange(t *testing.T) {
+	const wantFrom = int64(1718000000)
+	const wantTo = int64(1718003600)
+
+	fp := &fakePromClient{}
+	srv := newTestServerWithPolicy(t, "p")
+	srv.PromClient = fp
+	rec := httptest.NewRecorder()
+	srv.handlePolicyDetail(rec, httptest.NewRequest(http.MethodGet, "/api/policies/p?from=1718000000&to=1718003600", nil), "p")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body=%s", rec.Code, rec.Body.String())
+	}
+	if fp.capturedRange.Start.Unix() != wantFrom {
+		t.Errorf("Start.Unix() = %d, want %d", fp.capturedRange.Start.Unix(), wantFrom)
+	}
+	if fp.capturedRange.End.Unix() != wantTo {
+		t.Errorf("End.Unix() = %d, want %d", fp.capturedRange.End.Unix(), wantTo)
+	}
+}

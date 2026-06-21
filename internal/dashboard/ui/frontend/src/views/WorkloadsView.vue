@@ -46,7 +46,7 @@ function load() {
   list.run()
 }
 
-const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh(load)
+useAutoRefresh(load)
 
 onMounted(load)
 watch([nsFilter, kindFilter, automatedFilter, page], load)
@@ -119,18 +119,7 @@ const hasFilters = computed(
   />
   <ErrorState v-else-if="list.error.value" :message="list.error.value" @retry="load" />
   <template v-else-if="list.data.value">
-    <PageHeader title="Workloads" subtitle="All workloads across the cluster">
-      <template #actions>
-        <label class="auto-refresh">
-          <input
-            type="checkbox"
-            :checked="autoRefresh"
-            @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
-          />
-          Auto-refresh (30s)
-        </label>
-      </template>
-    </PageHeader>
+    <PageHeader title="Workloads" subtitle="All workloads across the cluster"> </PageHeader>
 
     <div class="stats-row">
       <div class="stat-card">

@@ -219,10 +219,53 @@ func TestHandleWorkloadMetrics_ReturnsAllKeys(t *testing.T) {
 	}
 }
 
+func TestRecommendationsAbsoluteRange(t *testing.T) {
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
+	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d, policy).Build()
+	prom := &fakePromClient{}
+	srv := &Server{K8sClient: c, PromClient: prom, Logger: testLogger(t)}
+
+	rec := httptest.NewRecorder()
+	srv.handleWorkloadRecommendations(rec,
+		httptest.NewRequest(http.MethodGet, "/api/workloads/default/Deployment/web/recommendations?from=1718000000&to=1718003600&step=5m", nil),
+		"default", "Deployment", "web")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	got := prom.capturedRecRange
+	if got.Start.Unix() != 1718000000 || got.End.Unix() != 1718003600 {
+		t.Errorf("recommendation range = [%d,%d], want [1718000000,1718003600]",
+			got.Start.Unix(), got.End.Unix())
+	}
+}
+
 func mapKeys(m map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestWorkloadMetricsAbsoluteRange(t *testing.T) {
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d).Build()
+	prom := &fakePromClient{}
+	srv := &Server{K8sClient: c, PromClient: prom, Logger: testLogger(t)}
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/workloads/default/Deployment/web/metrics?from=1718000000&to=1718003600&step=5m", nil)
+	rec := httptest.NewRecorder()
+	srv.handleWorkloadMetrics(rec, req, "default", "Deployment", "web")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	gotCPU := prom.capturedCPURange
+	if gotCPU.Start.Unix() != 1718000000 || gotCPU.End.Unix() != 1718003600 {
+		t.Errorf("range = [%d,%d], want [1718000000,1718003600]", gotCPU.Start.Unix(), gotCPU.End.Unix())
+	}
 }

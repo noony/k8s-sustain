@@ -229,61 +229,61 @@ type TimeValue struct {
 type ContainerTimeSeries map[string][]TimeValue
 
 // QueryCPURangeByContainer returns per-container CPU usage time-series (cores)
-// over the specified window with the given step resolution.
-func (c *Client) QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
+// over the specified range with the given step resolution.
+func (c *Client) QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := avgByContainer(MetricContainerCPUUsageByWorkloadRate1m + workloadSelector(namespace, ownerKind, ownerName))
-	return c.queryRangeByContainer(ctx, expr, window, step)
+	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
 // QueryMemoryRangeByContainer returns per-container memory working set time-series (bytes)
-// over the specified window with the given step resolution.
-func (c *Client) QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
+// over the specified range with the given step resolution.
+func (c *Client) QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := avgByContainer(MetricContainerMemoryByWorkloadBytes + workloadSelector(namespace, ownerKind, ownerName))
-	return c.queryRangeByContainer(ctx, expr, window, step)
+	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
 // QueryCPURequestRangeByContainer returns per-container CPU request time-series (cores).
-func (c *Client) QueryCPURequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
-	return c.queryMaxByContainerForWorkload(ctx, MetricContainerCPURequestsByWorkloadCores, namespace, ownerKind, ownerName, window, step)
+func (c *Client) QueryCPURequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
+	return c.queryMaxByContainerForWorkload(ctx, MetricContainerCPURequestsByWorkloadCores, namespace, ownerKind, ownerName, r, step)
 }
 
 // QueryMemoryRequestRangeByContainer returns per-container memory request time-series (bytes).
-func (c *Client) QueryMemoryRequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
-	return c.queryMaxByContainerForWorkload(ctx, MetricContainerMemoryRequestsByWorkloadBytes, namespace, ownerKind, ownerName, window, step)
+func (c *Client) QueryMemoryRequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
+	return c.queryMaxByContainerForWorkload(ctx, MetricContainerMemoryRequestsByWorkloadBytes, namespace, ownerKind, ownerName, r, step)
 }
 
 // QueryCPULimitRangeByContainer returns per-container CPU limit time-series (cores).
 // Reads the per-pod cgroup limit (which the webhook updates on pod creation),
 // not the workload spec — the dashboard needs the value pods are actually
 // running with.
-func (c *Client) QueryCPULimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
-	return c.queryMaxByContainerForWorkload(ctx, MetricContainerCPULimitsByWorkloadCores, namespace, ownerKind, ownerName, window, step)
+func (c *Client) QueryCPULimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
+	return c.queryMaxByContainerForWorkload(ctx, MetricContainerCPULimitsByWorkloadCores, namespace, ownerKind, ownerName, r, step)
 }
 
 // QueryMemoryLimitRangeByContainer returns per-container memory limit time-series (bytes).
-func (c *Client) QueryMemoryLimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
-	return c.queryMaxByContainerForWorkload(ctx, MetricContainerMemoryLimitsByWorkloadBytes, namespace, ownerKind, ownerName, window, step)
+func (c *Client) QueryMemoryLimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
+	return c.queryMaxByContainerForWorkload(ctx, MetricContainerMemoryLimitsByWorkloadBytes, namespace, ownerKind, ownerName, r, step)
 }
 
 // queryMaxByContainerForWorkload runs `max by (container) (<rule>{workload labels})`
 // against a recording rule and returns the per-container time-series.
-func (c *Client) queryMaxByContainerForWorkload(ctx context.Context, ruleName, namespace, ownerKind, ownerName, window, step string) (ContainerTimeSeries, error) {
+func (c *Client) queryMaxByContainerForWorkload(ctx context.Context, ruleName, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := maxByContainer(ruleName + workloadSelector(namespace, ownerKind, ownerName))
-	return c.queryRangeByContainer(ctx, expr, window, step)
+	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
 // QueryCPURecommendationRangeByContainer returns per-container sliding-window CPU recommendation
-// time-series (cores) — at each step, the quantile is computed over the trailing window.
-func (c *Client) QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (ContainerTimeSeries, error) {
+// time-series (cores) — at each step, the quantile is computed over the trailing recWindow.
+func (c *Client) QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerCPUUsageByWorkloadRate1m, workloadSelector(namespace, ownerKind, ownerName), recWindow))
-	return c.queryRangeByContainer(ctx, expr, timeRange, step)
+	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
 // QueryMemoryRecommendationRangeByContainer returns per-container sliding-window memory recommendation
-// time-series (bytes) — at each step, the quantile is computed over the trailing window.
-func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow, timeRange, step string) (ContainerTimeSeries, error) {
+// time-series (bytes) — at each step, the quantile is computed over the trailing recWindow.
+func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerMemoryByWorkloadBytes, workloadSelector(namespace, ownerKind, ownerName), recWindow))
-	return c.queryRangeByContainer(ctx, expr, timeRange, step)
+	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
 // OOMSignal carries the OOM context for a single workload over the past 24h.
@@ -461,18 +461,14 @@ type OOMEvent struct {
 	Pod       string    `json:"pod"`
 }
 
-// QueryOOMKillEvents returns OOM kill events for a workload over the specified window.
+// QueryOOMKillEvents returns OOM kill events for a workload over the specified range.
 // Uses kube_pod_container_status_restarts_total joined with
 // kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} to detect
 // restart events caused by OOM kills.
-func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName, window, step string) ([]OOMEvent, error) {
+func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) ([]OOMEvent, error) {
 	stepDur, err := model.ParseDuration(step)
 	if err != nil {
 		return nil, fmt.Errorf("parsing step %q: %w", step, err)
-	}
-	windowDur, err := model.ParseDuration(window)
-	if err != nil {
-		return nil, fmt.Errorf("parsing window %q: %w", window, err)
 	}
 
 	// `increase()` needs ≥2 samples inside its lookback range to return anything.
@@ -520,12 +516,9 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		return nil, nil
 	}
 
-	end := time.Now()
-	start := end.Add(-time.Duration(windowDur))
-
 	result, err := c.runRange(ctx, expr, prometheusv1.Range{
-		Start: start,
-		End:   end,
+		Start: r.Start,
+		End:   r.End,
 		Step:  time.Duration(stepDur),
 	}, c.queryTimeout)
 	if err != nil {
@@ -574,26 +567,19 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 	return events, nil
 }
 
-func (c *Client) queryRangeByContainer(ctx context.Context, expr, window, step string) (ContainerTimeSeries, error) {
+func (c *Client) queryRangeByContainer(ctx context.Context, expr string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	if !c.breaker.allow() {
 		return nil, ErrCircuitOpen
 	}
 
-	windowDur, err := model.ParseDuration(window)
-	if err != nil {
-		return nil, fmt.Errorf("parsing window %q: %w", window, err)
-	}
 	stepDur, err := model.ParseDuration(step)
 	if err != nil {
 		return nil, fmt.Errorf("parsing step %q: %w", step, err)
 	}
 
-	end := time.Now()
-	start := end.Add(-time.Duration(windowDur))
-
 	result, err := c.runRange(ctx, expr, prometheusv1.Range{
-		Start: start,
-		End:   end,
+		Start: r.Start,
+		End:   r.End,
 		Step:  time.Duration(stepDur),
 	}, c.queryTimeout)
 	if err != nil {
@@ -683,21 +669,16 @@ func (c *Client) QueryInstant(ctx context.Context, expr string) (float64, error)
 
 // QueryRange runs a range query for a single series and returns its time-stamped
 // values. If the query produces multiple series, only the first is returned.
-func (c *Client) QueryRange(ctx context.Context, expr, window, step string) ([]TimeValue, error) {
+func (c *Client) QueryRange(ctx context.Context, expr string, r TimeRange, step string) ([]TimeValue, error) {
 	if !c.breaker.allow() {
 		return nil, ErrCircuitOpen
-	}
-	end := time.Now()
-	dur, err := model.ParseDuration(window)
-	if err != nil {
-		return nil, fmt.Errorf("parse window %q: %w", window, err)
 	}
 	stp, err := model.ParseDuration(step)
 	if err != nil {
 		return nil, fmt.Errorf("parse step %q: %w", step, err)
 	}
-	r := prometheusv1.Range{Start: end.Add(-time.Duration(dur)), End: end, Step: time.Duration(stp)}
-	v, err := c.runRange(ctx, expr, r, dashboardQueryTimeout)
+	pr := prometheusv1.Range{Start: r.Start, End: r.End, Step: time.Duration(stp)}
+	v, err := c.runRange(ctx, expr, pr, dashboardQueryTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("range query %q: %w", expr, err)
 	}

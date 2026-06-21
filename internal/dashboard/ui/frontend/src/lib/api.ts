@@ -62,13 +62,6 @@ export const timeRangeOptions: TimeRangeOption[] = [
   { label: '30d', window: '720h', step: '20m' },
 ]
 
-export const defaultTimeRange = '168h'
-
-export function getTimeRangeStep(window: string): string {
-  const opt = timeRangeOptions.find((o) => o.window === window)
-  return opt ? opt.step : '5m'
-}
-
 // --- Types ---
 
 export interface Condition {
@@ -278,7 +271,9 @@ export interface SimulateRequest {
   namespace: string
   ownerKind: string
   ownerName: string
-  window: string
+  window?: string
+  fromTs?: number
+  toTs?: number
   step: string
   cpu: SimulateResourceConfig
   memory: SimulateResourceConfig

@@ -3,7 +3,6 @@ import { onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   api,
-  getTimeRangeStep,
   type SummaryV2,
   type TrendData,
   type AttentionRow,
@@ -13,28 +12,28 @@ import {
 } from '../lib/api'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useApi } from '../composables/useApi'
-import { usePrometheusTime } from '../composables/usePrometheusTime'
+import { useTimeRange } from '../composables/useTimeRange'
 import KpiCard from '../components/KpiCard.vue'
 import HeadroomBar from '../components/HeadroomBar.vue'
 import AttentionQueue from '../components/AttentionQueue.vue'
 import TrendChart from '../components/TrendChart.vue'
-import TimeRangeSelector from '../components/TimeRangeSelector.vue'
+import TimeRangePicker from '../components/TimeRangePicker.vue'
 import EventList from '../components/EventList.vue'
 import PageHeader from '../components/PageHeader.vue'
 import LoadingState from '../components/LoadingState.vue'
 import ErrorState from '../components/ErrorState.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { formatBytes } from '../lib/format'
+import { rangeQueryParams } from '../lib/timerange'
 
 const router = useRouter()
-const { window: timeWindow } = usePrometheusTime('168h')
+const { range } = useTimeRange()
 
 const summary = useApi<SummaryV2>(() => api<SummaryV2>('/api/summary'))
-const trend = useApi<TrendData>(() =>
-  api<TrendData>(
-    `/api/summary/trend?window=${timeWindow.value}&step=${getTimeRangeStep(timeWindow.value)}`,
-  ),
-)
+const trend = useApi<TrendData>(() => {
+  const p = new URLSearchParams(rangeQueryParams(range.value, Date.now()))
+  return api<TrendData>(`/api/summary/trend?${p.toString()}`)
+})
 const activity = useApi<{ items: ActivityItem[] }>(() =>
   api<{ items: ActivityItem[] }>('/api/summary/activity?limit=20'),
 )
@@ -51,12 +50,15 @@ const coordinatedCount = computed(() => {
   return items.filter((w) => w.coordinationFactors?.enabled).length
 })
 
-const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh(loadAll)
+useAutoRefresh(() => {
+  // relative ranges re-anchor to now on each tick; absolute ranges are fixed
+  if (range.value.kind === 'relative') loadAll()
+})
 
 onMounted(loadAll)
 
-watch(timeWindow, () => {
-  trend.run()
+watch(range, () => {
+  loadAll()
 })
 
 function gotoFiltered(state: string) {
@@ -99,18 +101,7 @@ function memTrendSeries() {
   />
   <ErrorState v-else-if="summary.error.value" :message="summary.error.value" @retry="loadAll" />
   <template v-else-if="summary.data.value">
-    <PageHeader title="Overview" subtitle="Cluster-wide right-sizing impact and attention queue">
-      <template #actions>
-        <label class="auto-refresh">
-          <input
-            type="checkbox"
-            :checked="autoRefresh"
-            @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
-          />
-          Auto-refresh (30s)
-        </label>
-      </template>
-    </PageHeader>
+    <PageHeader title="Overview" subtitle="Cluster-wide right-sizing impact and attention queue" />
 
     <!-- Band 1: KPI strip -->
     <div class="stats-row">
@@ -158,7 +149,7 @@ function memTrendSeries() {
     <div class="card">
       <div class="card-header">
         <h2>Savings</h2>
-        <TimeRangeSelector v-model="timeWindow" />
+        <TimeRangePicker v-model="range" />
       </div>
       <div class="chart-grid">
         <div>

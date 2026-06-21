@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -131,6 +133,12 @@ func buildSimulateRequestFromPolicy(q url.Values, policy *sustainv1alpha1.Policy
 		v := memCfg.Requests.MaxAllowed.String()
 		req.Memory.MaxAllowed = &v
 	}
+	if v := q.Get("from"); v != "" {
+		req.FromTs, _ = strconv.ParseInt(v, 10, 64)
+	}
+	if v := q.Get("to"); v != "" {
+		req.ToTs, _ = strconv.ParseInt(v, 10, 64)
+	}
 	return req, nil
 }
 
@@ -138,7 +146,7 @@ func buildSimulateRequestFromPolicy(q url.Values, policy *sustainv1alpha1.Policy
 
 func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
 	q := r.URL.Query()
-	window, perr := parseDurationParam(q, "168h")
+	tr, perr := parseTimeRange(q, "168h", time.Now())
 	if perr != nil {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return
@@ -163,25 +171,25 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	)
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		cpuSeries, cpuErr = s.PromClient.QueryCPURangeByContainer(ctx, namespace, kind, name, window, step)
+		cpuSeries, cpuErr = s.PromClient.QueryCPURangeByContainer(ctx, namespace, kind, name, tr, step)
 	})
 	wg.Go(func() {
-		memSeries, memErr = s.PromClient.QueryMemoryRangeByContainer(ctx, namespace, kind, name, window, step)
+		memSeries, memErr = s.PromClient.QueryMemoryRangeByContainer(ctx, namespace, kind, name, tr, step)
 	})
 	wg.Go(func() {
-		oomEvents, _ = s.PromClient.QueryOOMKillEvents(ctx, namespace, kind, name, window, step)
+		oomEvents, _ = s.PromClient.QueryOOMKillEvents(ctx, namespace, kind, name, tr, step)
 	})
 	wg.Go(func() {
-		cpuRequests, _ = s.PromClient.QueryCPURequestRangeByContainer(ctx, namespace, kind, name, window, step)
+		cpuRequests, _ = s.PromClient.QueryCPURequestRangeByContainer(ctx, namespace, kind, name, tr, step)
 	})
 	wg.Go(func() {
-		memRequests, _ = s.PromClient.QueryMemoryRequestRangeByContainer(ctx, namespace, kind, name, window, step)
+		memRequests, _ = s.PromClient.QueryMemoryRequestRangeByContainer(ctx, namespace, kind, name, tr, step)
 	})
 	wg.Go(func() {
-		cpuLimits, _ = s.PromClient.QueryCPULimitRangeByContainer(ctx, namespace, kind, name, window, step)
+		cpuLimits, _ = s.PromClient.QueryCPULimitRangeByContainer(ctx, namespace, kind, name, tr, step)
 	})
 	wg.Go(func() {
-		memLimits, _ = s.PromClient.QueryMemoryLimitRangeByContainer(ctx, namespace, kind, name, window, step)
+		memLimits, _ = s.PromClient.QueryMemoryLimitRangeByContainer(ctx, namespace, kind, name, tr, step)
 	})
 	wg.Wait()
 

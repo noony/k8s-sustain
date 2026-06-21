@@ -3,6 +3,7 @@ package dashboard
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
@@ -24,7 +25,7 @@ func (s *Server) handleSummaryTrend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	window, perr := parseDurationParam(q, "30d")
+	tr, perr := parseTimeRange(q, "30d", time.Now())
 	if perr != nil {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return
@@ -60,7 +61,7 @@ func (s *Server) handleSummaryTrend(w http.ResponseWriter, r *http.Request) {
 	const trendQueryCount = 6
 	queryErrs := 0
 	queryRangeOrEmpty := func(expr string) []promclient.TimeValue {
-		v, err := s.PromClient.QueryRange(r.Context(), expr, window, step)
+		v, err := s.PromClient.QueryRange(r.Context(), expr, tr, step)
 		if err != nil {
 			s.Logger.Error(err, "summary trend query failed", "expr", expr)
 			queryErrs++

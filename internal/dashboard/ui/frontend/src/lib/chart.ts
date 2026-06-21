@@ -459,15 +459,15 @@ export function showResetZoomBtn(canvasId: string, show: boolean) {
   if (btn) btn.style.display = show ? 'block' : 'none'
 }
 
-export function syncZoom(sourceChart: Chart) {
-  const id = sourceChart.canvas.id
-  const pairId = pairedCanvasId(id)
-  if (!pairId || !chartInstances[pairId]) return
-  const pair = chartInstances[pairId]
-  const srcScale = sourceChart.scales.x
-  ;(pair as any).zoomScale('x', { min: srcScale.min, max: srcScale.max }, 'none')
-  showResetZoomBtn(id, true)
-  showResetZoomBtn(pairId, true)
+// Read the visible x-axis window (epoch seconds) from a chart after a
+// drag-to-zoom. Returns null if the scale isn't a sensible time window yet.
+export function zoomedRangeSeconds(chart: Chart): { fromTs: number; toTs: number } | null {
+  const x = chart.scales.x
+  if (!x) return null
+  const min = Number(x.min)
+  const max = Number(x.max)
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min >= max) return null
+  return { fromTs: Math.floor(min / 1000), toTs: Math.ceil(max / 1000) }
 }
 
 export function resetZoom(canvasId: string) {

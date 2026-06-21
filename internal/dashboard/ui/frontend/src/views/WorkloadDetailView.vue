@@ -3,8 +3,6 @@ import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   api,
-  defaultTimeRange,
-  getTimeRangeStep,
   type MetricsData,
   type RecommendationsData,
   type RecommendationContainer,
@@ -12,18 +10,20 @@ import {
   type CoordinationFactors,
 } from '../lib/api'
 import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs, timeAgo } from '../lib/format'
+import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
   destroyAllCharts,
-  syncZoom,
-  resetZoom,
+  zoomedRangeSeconds,
   groupOOMEventsByContainer,
   type ExtraSeries,
   type ChartAnnotation,
 } from '../lib/chart'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useApi } from '../composables/useApi'
-import TimeRangeSelector from '../components/TimeRangeSelector.vue'
+import { useTimeRange } from '../composables/useTimeRange'
+import { rangeQueryParams, DEFAULT_RANGE, type TimeRange } from '../lib/timerange'
+import TimeRangePicker from '../components/TimeRangePicker.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
 import KpiCard from '../components/KpiCard.vue'
 import RiskBadge from '../components/RiskBadge.vue'
@@ -39,9 +39,9 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
+const { range } = useTimeRange()
 const loading = ref(true)
 const error = ref('')
-const timeRange = ref(defaultTimeRange)
 const metrics = ref<MetricsData | null>(null)
 const recs = ref<RecommendationsData | null>(null)
 
@@ -50,14 +50,14 @@ const snapshot = useApi<WorkloadDetailSnapshot>(() =>
 )
 
 async function load() {
-  const step = getTimeRangeStep(timeRange.value)
+  const p = new URLSearchParams(rangeQueryParams(range.value, Date.now()))
   try {
     const [m, r] = await Promise.all([
       api<MetricsData>(
-        `/api/workloads/${props.namespace}/${props.kind}/${props.name}/metrics?window=${timeRange.value}&step=${step}`,
+        `/api/workloads/${props.namespace}/${props.kind}/${props.name}/metrics?${p.toString()}`,
       ),
       api<RecommendationsData>(
-        `/api/workloads/${props.namespace}/${props.kind}/${props.name}/recommendations?window=${timeRange.value}&step=${step}`,
+        `/api/workloads/${props.namespace}/${props.kind}/${props.name}/recommendations?${p.toString()}`,
       ),
       snapshot.run(),
     ])
@@ -73,16 +73,37 @@ async function load() {
   }
 }
 
-const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh(load)
+useAutoRefresh(() => {
+  if (range.value.kind === 'relative') {
+    destroyAllCharts()
+    load()
+  }
+})
 
 onMounted(load)
 onUnmounted(destroyAllCharts)
 
-watch(timeRange, () => {
-  loading.value = true
-  destroyAllCharts()
+watch(range, () => {
+  // Refetch in place. Don't flip `loading` — that unmounts the charts and
+  // collapses the page, which scrolls the viewport to the top on every zoom.
+  // renderCharts() swaps the canvases once the new data arrives.
   load()
 })
+
+// Drag-to-zoom on any chart sets the shared range to the selected window,
+// which updates the URL + picker and refetches every chart at finer
+// resolution. The previous (relative) range is kept so "Reset zoom" restores it.
+const prevRange = ref<TimeRange | null>(null)
+function onChartZoom(chart: Chart) {
+  const z = zoomedRangeSeconds(chart)
+  if (!z) return
+  if (range.value.kind === 'relative') prevRange.value = range.value
+  range.value = { kind: 'absolute', fromTs: z.fromTs, toTs: z.toTs }
+}
+function resetRange() {
+  range.value = prevRange.value ?? DEFAULT_RANGE
+  prevRange.value = null
+}
 
 function containers(): string[] {
   const s = new Set<string>()
@@ -141,7 +162,7 @@ function renderCharts() {
   const cpuRecSeries = recs.value?.cpuRecommendations || {}
   const memRecSeries = recs.value?.memoryRecommendations || {}
   const ooms = oomByContainer()
-  const stepMs = parseStepToMs(getTimeRangeStep(timeRange.value))
+  const stepMs = parseStepToMs(rangeQueryParams(range.value, Date.now()).step)
 
   containers().forEach((cname) => {
     const res = resources[cname] || {}
@@ -196,7 +217,7 @@ function renderCharts() {
         yFormat: (v) => v.toFixed(3),
         annotations: cpuAnnotations,
         extraSeries: cpuExtra,
-        onZoomComplete: syncZoom,
+        onZoomComplete: onChartZoom,
         stepMs,
       })
     }
@@ -253,7 +274,7 @@ function renderCharts() {
         annotations: memAnnotations,
         extraSeries: memExtra,
         oomEvents: ooms[cname] || [],
-        onZoomComplete: syncZoom,
+        onZoomComplete: onChartZoom,
         stepMs,
       })
     }
@@ -332,15 +353,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         >
       </template>
       <template #actions>
-        <TimeRangeSelector v-model="timeRange" />
-        <label class="auto-refresh">
-          <input
-            type="checkbox"
-            :checked="autoRefresh"
-            @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
-          />
-          Auto-refresh (30s)
-        </label>
+        <TimeRangePicker v-model="range" />
       </template>
     </PageHeader>
 
@@ -427,36 +440,32 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       </div>
       <div class="chart-grid">
         <div>
-          <div class="section-label">CPU Usage (cores)</div>
-          <div class="chart-wrapper">
-            <button
-              class="reset-zoom-btn"
-              :id="'rz-cpu-' + cname"
-              @click="resetZoom('cpu-' + cname)"
-            >
+          <div class="chart-head">
+            <div class="section-label">CPU Usage (cores)</div>
+            <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
               Reset zoom
             </button>
+          </div>
+          <div class="chart-wrapper">
             <div class="chart-container"><canvas :id="'cpu-' + cname"></canvas></div>
           </div>
         </div>
         <div>
-          <div class="section-label" style="display: inline-flex; align-items: center">
-            Memory Usage (MiB)
-            <span v-if="(oomByContainer()[cname] || []).length > 0" class="oom-legend">
-              <span class="oom-marker"></span>
-              {{ oomByContainer()[cname].length }} OOM kill{{
-                oomByContainer()[cname].length > 1 ? 's' : ''
-              }}
-            </span>
-          </div>
-          <div class="chart-wrapper">
-            <button
-              class="reset-zoom-btn"
-              :id="'rz-mem-' + cname"
-              @click="resetZoom('mem-' + cname)"
-            >
+          <div class="chart-head">
+            <div class="section-label" style="display: inline-flex; align-items: center">
+              Memory Usage (MiB)
+              <span v-if="(oomByContainer()[cname] || []).length > 0" class="oom-legend">
+                <span class="oom-marker"></span>
+                {{ oomByContainer()[cname].length }} OOM kill{{
+                  oomByContainer()[cname].length > 1 ? 's' : ''
+                }}
+              </span>
+            </div>
+            <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
               Reset zoom
             </button>
+          </div>
+          <div class="chart-wrapper">
             <div class="chart-container"><canvas :id="'mem-' + cname"></canvas></div>
           </div>
         </div>
@@ -475,36 +484,32 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         </div>
         <div class="chart-grid">
           <div>
-            <div class="section-label">CPU Usage (cores)</div>
-            <div class="chart-wrapper">
-              <button
-                class="reset-zoom-btn"
-                :id="'rz-cpu-' + cname"
-                @click="resetZoom('cpu-' + cname)"
-              >
+            <div class="chart-head">
+              <div class="section-label">CPU Usage (cores)</div>
+              <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
                 Reset zoom
               </button>
+            </div>
+            <div class="chart-wrapper">
               <div class="chart-container"><canvas :id="'cpu-' + cname"></canvas></div>
             </div>
           </div>
           <div>
-            <div class="section-label" style="display: inline-flex; align-items: center">
-              Memory Usage (MiB)
-              <span v-if="(oomByContainer()[cname] || []).length > 0" class="oom-legend">
-                <span class="oom-marker"></span>
-                {{ oomByContainer()[cname].length }} OOM kill{{
-                  oomByContainer()[cname].length > 1 ? 's' : ''
-                }}
-              </span>
-            </div>
-            <div class="chart-wrapper">
-              <button
-                class="reset-zoom-btn"
-                :id="'rz-mem-' + cname"
-                @click="resetZoom('mem-' + cname)"
-              >
+            <div class="chart-head">
+              <div class="section-label" style="display: inline-flex; align-items: center">
+                Memory Usage (MiB)
+                <span v-if="(oomByContainer()[cname] || []).length > 0" class="oom-legend">
+                  <span class="oom-marker"></span>
+                  {{ oomByContainer()[cname].length }} OOM kill{{
+                    oomByContainer()[cname].length > 1 ? 's' : ''
+                  }}
+                </span>
+              </div>
+              <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
                 Reset zoom
               </button>
+            </div>
+            <div class="chart-wrapper">
               <div class="chart-container"><canvas :id="'mem-' + cname"></canvas></div>
             </div>
           </div>

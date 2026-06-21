@@ -8,7 +8,7 @@ k8s-sustain includes a built-in web dashboard for exploring policies, viewing wo
 - **Workloads** — Cluster-wide list with risk/drift/autoscaler columns, plus filters for namespace, kind, risk state, and autoscaler presence.
 - **Workload Detail** — Status snapshot (mode, last recycle, drift, OOM 24h), risk and HPA badges, blocked-state diagnostics, copy-as-YAML, and interactive CPU/memory charts with sliding-window recommendation, historical requests/limits, and OOM markers.
 - **Policies** — 4-card stat strip (total policies, active workloads, CPU & memory savings) plus per-policy effectiveness columns.
-- **Policy Detail** — Effectiveness time-series, view-as-YAML modal, time range selector, and matched workloads with risk/drift columns.
+- **Policy Detail** — Effectiveness time-series, view-as-YAML modal, Datadog-style time range picker, and matched workloads with risk/drift columns.
 - **Policy Simulator** — Tweak percentile, headroom, min/max, and limits strategy; supports Argo Rollouts; shows projected savings impact; exports results as YAML, CSV, or Helm `--set` overrides.
 - **Health Checks** — The `/healthz` endpoint verifies Prometheus connectivity for reliable readiness probes.
 - **Request Logging** — Structured HTTP access logs for debugging and observability.
@@ -75,17 +75,32 @@ kubectl port-forward svc/<release>-k8s-sustain-dashboard 8090:8090
 
 ## Using the Dashboard
 
+### Time Range and Auto-refresh
+
+Every view in the dashboard — Overview, Workload Detail, Policy Detail, and Simulator — shares the same **time range picker** in the top-right corner.
+
+**Relative presets** re-anchor to "now" on every load and refresh:
+Past 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 1 Month.
+
+**Absolute range** — click "Select from calendar…" to open a month calendar. Click a start day then an end day to select the span (click days in any order — they sort automatically; a single day selects that whole day), navigate months with the ‹ › arrows, and set the **From** and **To** times of day with the time fields below the grid. The current day is highlighted, and future days are disabled (there is no data ahead of now); an end that lands in the future is clamped back to the present. Click **Apply** to commit. Absolute ranges stay fixed regardless of when you load the page.
+
+The picker displays dates in the browser's **local timezone** (for display only; all API calls use UTC epoch seconds).
+
+**Shareable URLs** — the selected range is encoded in the URL as `from_ts`/`to_ts` (epoch seconds). Relative presets also carry a `window` hint so the URL re-anchors to "now" on reload. Copying and sharing a URL reproduces the same view: relative = latest window; absolute = exact frozen range.
+
+**Auto-refresh** — the dashboard refreshes automatically every 60 seconds while the browser tab is visible. It pauses when the tab is backgrounded or hidden, and resumes when you return. There is no manual toggle. Relative ranges re-anchor to "now" on each refresh; absolute ranges stay fixed.
+
 ### Overview Page
 
 The overview is organised as a vertical "Story Flow" with six bands, each answering a specific operator question — from "what am I saving?" down to "what just happened?".
 
 1. **KPI strip** — Headline savings cards for CPU (cores) and memory (bytes), each showing the absolute saving, the savings ratio versus current requests, and a sparkline of the last 24h. Two complementary cards count workloads currently **at risk** (drift exceeds the policy threshold) and **drifted** (request differs from the latest recommendation).
-2. **Savings** — A single card splits CPU and memory side-by-side, each plotting three lines over the selected window so you can see the savings story directly:
+2. **Savings** — A single card splits CPU and memory side-by-side, each plotting three lines over the selected time range so you can see the savings story directly:
     - **Usage** — actual measured working set (memory) or CPU rate, summed across containers in policy-managed workloads.
     - **Current request** — the request currently set on running pods, post-injection.
     - **Original request** — the user's pod-template request before k8s-sustain rewrote it (`k8s_sustain_workload_template_*`).
 
-    All three lines are scoped to managed workloads (those covered by a Policy) so they are directly comparable — usage and current-request queries are filtered with `and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*` so unmanaged pods don't inflate them. The card has its own time-range selector. The gap between *original* and *current request* is the realised saving; the gap between *current request* and *usage* is the remaining headroom.
+    All three lines are scoped to managed workloads (those covered by a Policy) so they are directly comparable — usage and current-request queries are filtered with `and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*` so unmanaged pods don't inflate them. The gap between *original* and *current request* is the realised saving; the gap between *current request* and *usage* is the remaining headroom.
 3. **Headroom breakdown** — A stacked horizontal bar for CPU and memory split into `used`, `idle`, and `free` segments, sourced from the `k8s_sustain:cluster_cpu_headroom_breakdown` and `..._memory_headroom_breakdown` recording rules.
 4. **Attention queue** — Three grouped lists: **At risk** (workloads exceeding the drift threshold), **Drifted** (request out-of-date with respect to the recommendation), and **Blocked** (workloads where the controller is in an exponential-backoff retry state). Each row links to the workload detail page.
 5. **Policy effectiveness** — Per-policy rollup with the matched workload count, projected CPU/memory savings, and the count of at-risk workloads, so you can spot policies that need tuning.
@@ -112,7 +127,7 @@ Shows a comprehensive view of a single workload:
 - **CPU and Memory charts** — Interactive time-series with a sliding-window recommendation line overlaid (for automated workloads). The recommendation evolves over time, showing how it would have been computed at each point using the policy's configured window and parameters, rather than a flat line.
 - **Open in Simulator** — Jump to the simulator with the workload pre-filled.
 
-A **time range selector** in the top-right lets you choose how much history to display: 1h, 4h, 12h, 1 day, 3 days, 7 days (default), or 30 days. The step resolution adjusts automatically for each range. You can also **drag to zoom** on any chart to focus on a specific time window — click and drag horizontally to select the region of interest. Zooming on a CPU chart automatically applies the same time range to the corresponding memory chart, and vice versa. A **Reset zoom** button appears in the top-right corner of each chart to return to the original view (resetting one also resets its paired chart). Panning is supported after zooming, and pinch-to-zoom works on touch devices. Each chart overlays the workload's **historical resource request** (amber dashed stepped line) and **limit** (orange dashed line) so you can see how actual usage compares to configured resources over time. The request line reflects real changes (e.g. from k8s-sustain patching or manual edits) rather than a flat snapshot. If historical request data is not available in Prometheus, the dashboard falls back to a static line from the current workload spec. If the workload is automated, the **recommendation** line (red dashed) is also shown.
+A **time range picker** in the top-right controls how much history to display. It offers relative presets — Past 5 Minutes, 15m, 30m, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 1 Month — and a "Select from calendar…" option for an absolute From→To range. The picker shows the browser's local timezone (display only). The step resolution adjusts automatically for each range. You can also **drag to zoom** on any chart to focus on a specific time window — click and drag horizontally to select the region of interest. Zooming sets the shared time range to the selected window: the URL, the time range picker, and every chart on the page all update together, and the data is re-fetched at a finer step resolution for the zoomed span. Because the zoom becomes the active (absolute) range, a **Reset zoom** button appears next to each chart's title while zoomed — click it to return to the previous range. Each chart overlays the workload's **historical resource request** (amber dashed stepped line) and **limit** (orange dashed line) so you can see how actual usage compares to configured resources over time. The request line reflects real changes (e.g. from k8s-sustain patching or manual edits) rather than a flat snapshot. If historical request data is not available in Prometheus, the dashboard falls back to a static line from the current workload spec. If the workload is automated, the **recommendation** line (red dashed) is also shown.
 
 Usage, request, limit, and recommendation lines all **break across gaps** where no metric samples were emitted (e.g. between CronJob runs, while a workload is scaled to zero, or after pod deletion). The chart inserts an explicit gap whenever the spacing between consecutive samples exceeds ~1.5× the query step, so a continuous line never implies activity that wasn't there.
 
@@ -120,7 +135,7 @@ Memory charts also display **OOM kill events** as red vertical markers with a co
 
 When a container has OOM'd in the last 24h, that container's displayed **memory recommendation** is floored at `max(kernel high-water peak, OOM-time cgroup limit × 1.20)` (containers that did not OOM keep their pure percentile line, even when a sibling in the same pod OOMed) (same `OOM floor` step described in [Recommendation pipeline](../concepts/recommendation-pipeline.md)), so what the dashboard's recommendation card and chart line show matches what the controller would actually apply — including the bump anchor that takes over when the kernel peak underreports on cgroup v2.
 
-Enable **Auto-refresh** to keep data current.
+The dashboard **auto-refreshes every 60 seconds** while the browser tab is visible; it pauses automatically when the tab is backgrounded or hidden. Relative presets re-anchor to "now" on each refresh so they always show the latest window; absolute ranges stay fixed.
 
 ### Policies Page
 
@@ -140,10 +155,10 @@ Shows the full configuration for both CPU and memory, plus the matched workloads
 - **Configuration card** — Per-resource (CPU and memory) cards display **window**, **percentile**, **headroom**, **min**/**max allowed**, **keepRequest** flag, and the active **limits** strategy (`equalsToRequest`, `keepLimit`, `keepLimitRequestRatio`, `noLimit`, or `requestsLimitsRatio`). Underneath, a meta row shows the **update mode** badges for all supported workload kinds (Deploy, STS, DS, CJ, Job, Argo Rollout), the **eviction** policy (`ignoreAutoscalerSafeToEvictAnnotations`), the **excludeInitContainers** flag, and the **autoscaler coordination** state (enabled / `replicaBudgetAnchor`).
 - **Selector card** — Lists the policy's `spec.selector` (target namespaces and any `matchLabels` / `matchExpressions`) so you can immediately see which workloads it scopes to.
 - **Effectiveness card** — A dedicated band with two time-series charts (CPU and memory) showing how this policy's savings have evolved over the selected time range.
-- **TimeRangeSelector** — A range picker (1h to 30 days) drives the Effectiveness charts, matching the selector used elsewhere in the dashboard.
+- **Time range picker** — The Datadog-style popover (relative presets: 5m to 1 Month; or an absolute From→To calendar range) drives the Effectiveness charts. The browser's local timezone is shown for display purposes. The selected range is encoded in the URL as `from_ts`/`to_ts` (epoch seconds); relative presets also carry a `window` hint so they re-anchor to "now" on reload. Copying the URL reproduces the same view — relative ranges show the latest window, absolute ranges show the exact frozen range.
 - **View as YAML modal** — Renders the entire `Policy` resource (sanitised of managed fields) inside a modal with a copy button — handy for sharing or storing in version control.
 - **Matched workloads table** — Each row now shows **Risk** and **Drift %** columns alongside the existing namespace/kind/name and current resource requests, so you can prioritise which workloads to investigate from inside the policy view.
-- **Namespace filter**, **pagination** (50 per page), and **auto-refresh** controls remain unchanged.
+- **Namespace filter** and **pagination** (50 per page) remain unchanged.
 
 Click any workload to view its detail page.
 
@@ -152,7 +167,7 @@ Click any workload to view its detail page.
 The simulator lets you test "what-if" scenarios:
 
 1. Select a **workload target** (namespace, kind, name). The kind picker covers Deployment, StatefulSet, DaemonSet, CronJob, and standalone Job, plus **Argo Rollout**.
-2. Choose a **time range** (1h to 30 days) — controls how much history is displayed on the charts.
+2. Choose a **time range** via the time range picker — relative presets or an absolute From→To calendar range — controls how much history is displayed on the charts.
 3. Optionally, use the **Load from policy** dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window, and limits strategy) from an existing policy — useful as a starting point before tweaking values.
 4. Adjust **CPU and Memory parameters** independently:
     - Window (1h to 30 days) — the lookback period used to compute the recommendation, matching the Policy CRD structure. This is independent of the chart time range.

@@ -5,6 +5,9 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"time"
+
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 // paramError lets handlers map a parse failure to the request field it came
@@ -103,4 +106,58 @@ func parseStepParam(q url.Values, def string) (string, *paramError) {
 		return "", badParam("step", "invalid step %q: must be a Prometheus duration (e.g. 30s, 5m, 1h)", v)
 	}
 	return v, nil
+}
+
+const maxSpanSeconds = int64(366 * 24 * 60 * 60)
+
+// validateAbsoluteRange enforces from<to, a near-future upper bound on to,
+// and a maximum span. Returns a *paramError (field "from"/"to") on failure.
+func validateAbsoluteRange(from, to int64, now time.Time) *paramError {
+	if from >= to {
+		return badParam("from", "from (%d) must be before to (%d)", from, to)
+	}
+	if to > now.Add(time.Hour).Unix() {
+		return badParam("to", "to is too far in the future")
+	}
+	if to-from > maxSpanSeconds {
+		return badParam("from", "range too large (max 366d)")
+	}
+	return nil
+}
+
+// parseTimeRange resolves an absolute from/to (epoch seconds) range, or falls
+// back to the relative ?window= (default defWindow). from/to win when present.
+// Rules when from/to are supplied: both must be present, integer epoch seconds,
+// from < to, to ≤ now+1h, and span ≤ 366 days.
+func parseTimeRange(q url.Values, defWindow string, now time.Time) (promclient.TimeRange, *paramError) {
+	fromStr, toStr := q.Get("from"), q.Get("to")
+	if fromStr == "" && toStr == "" {
+		window, perr := parseDurationParam(q, defWindow)
+		if perr != nil {
+			return promclient.TimeRange{}, perr
+		}
+		tr, err := promclient.TimeRangeFromWindow(window, now)
+		if err != nil {
+			return promclient.TimeRange{}, badParam("window", "%v", err)
+		}
+		return tr, nil
+	}
+	if fromStr == "" {
+		return promclient.TimeRange{}, badParam("from", "from is required when to is supplied")
+	}
+	if toStr == "" {
+		return promclient.TimeRange{}, badParam("to", "to is required when from is supplied")
+	}
+	from, err := strconv.ParseInt(fromStr, 10, 64)
+	if err != nil {
+		return promclient.TimeRange{}, badParam("from", "invalid from %q: must be epoch seconds", fromStr)
+	}
+	to, err := strconv.ParseInt(toStr, 10, 64)
+	if err != nil {
+		return promclient.TimeRange{}, badParam("to", "invalid to %q: must be epoch seconds", toStr)
+	}
+	if perr := validateAbsoluteRange(from, to, now); perr != nil {
+		return promclient.TimeRange{}, perr
+	}
+	return promclient.TimeRange{Start: time.Unix(from, 0).UTC(), End: time.Unix(to, 0).UTC()}, nil
 }

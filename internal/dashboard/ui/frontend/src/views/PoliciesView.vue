@@ -29,7 +29,7 @@ async function load() {
   }
 }
 
-const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh(load)
+useAutoRefresh(load)
 
 onMounted(load)
 
@@ -56,18 +56,7 @@ function updateTypeBadges(update?: Record<string, string>): string {
   <LoadingState v-if="loading" variant="kpi" message="Loading policies…" />
   <ErrorState v-else-if="error" :message="error" @retry="load" />
   <template v-else>
-    <PageHeader title="Policies" subtitle="All right-sizing policies in your cluster">
-      <template #actions>
-        <label class="auto-refresh">
-          <input
-            type="checkbox"
-            :checked="autoRefresh"
-            @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
-          />
-          Auto-refresh (30s)
-        </label>
-      </template>
-    </PageHeader>
+    <PageHeader title="Policies" subtitle="All right-sizing policies in your cluster"> </PageHeader>
 
     <EmptyState
       v-if="policies.length === 0"

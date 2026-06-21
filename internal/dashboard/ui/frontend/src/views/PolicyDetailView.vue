@@ -1,21 +1,17 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import {
-  api,
-  getTimeRangeStep,
-  type PolicySpec,
-  type PolicyWorkloadsData,
-  type BatchSimulateData,
-} from '../lib/api'
+import { api, type PolicySpec, type PolicyWorkloadsData, type BatchSimulateData } from '../lib/api'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
+import { useTimeRange } from '../composables/useTimeRange'
 import { useSorting } from '../composables/useSorting'
 import { formatBytes } from '../lib/format'
+import { rangeQueryParams } from '../lib/timerange'
 import StatusBadge from '../components/StatusBadge.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
 import RiskBadge from '../components/RiskBadge.vue'
 import TrendChart from '../components/TrendChart.vue'
-import TimeRangeSelector from '../components/TimeRangeSelector.vue'
+import TimeRangePicker from '../components/TimeRangePicker.vue'
 import YamlPreviewModal from '../components/YamlPreviewModal.vue'
 import PageHeader from '../components/PageHeader.vue'
 import LoadingState from '../components/LoadingState.vue'
@@ -34,21 +30,21 @@ const page = ref(1)
 const batchLoading = ref(false)
 const batchData = ref<BatchSimulateData | null>(null)
 const batchError = ref('')
-const timeWindow = ref('168h')
+const { range } = useTimeRange()
 const yamlOpen = ref(false)
 
 const { sort, sortArrow, applySorting } = useSorting('policyWorkloads')
 
 async function load() {
   try {
-    const step = getTimeRangeStep(timeWindow.value)
-    const [p, w] = await Promise.all([
-      api<PolicySpec>(`/api/policies/${props.name}?window=${timeWindow.value}&step=${step}`),
+    const p = new URLSearchParams(rangeQueryParams(range.value, Date.now()))
+    const [pol, w] = await Promise.all([
+      api<PolicySpec>(`/api/policies/${props.name}?${p.toString()}`),
       api<PolicyWorkloadsData>(
         `/api/policies/${props.name}/workloads?page=${page.value}&pageSize=50${nsFilter.value ? '&namespace=' + encodeURIComponent(nsFilter.value) : ''}`,
       ),
     ])
-    policy.value = p
+    policy.value = pol
     workloadData.value = w
     error.value = ''
   } catch (e: any) {
@@ -58,10 +54,12 @@ async function load() {
   }
 }
 
-const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh(load)
+useAutoRefresh(() => {
+  if (range.value.kind === 'relative') load()
+})
 
 onMounted(load)
-watch([nsFilter, page, timeWindow], load)
+watch([nsFilter, page, range], load)
 
 function rs() {
   return policy.value?.spec?.rightSizing?.resourcesConfigs || {}
@@ -172,15 +170,7 @@ function renderYaml(p: typeof policy.value): string {
 
     <PageHeader :title="name" subtitle="Policy configuration and matched workloads">
       <template #actions>
-        <TimeRangeSelector v-model="timeWindow" />
-        <label class="auto-refresh">
-          <input
-            type="checkbox"
-            :checked="autoRefresh"
-            @change="toggleAutoRefresh(($event.target as HTMLInputElement).checked)"
-          />
-          Auto-refresh (30s)
-        </label>
+        <TimeRangePicker v-model="range" />
       </template>
     </PageHeader>
 
@@ -357,7 +347,7 @@ function renderYaml(p: typeof policy.value): string {
     <div class="card">
       <div class="card-header">
         <h2>Effectiveness over time</h2>
-        <TimeRangeSelector v-model="timeWindow" />
+        <TimeRangePicker v-model="range" />
       </div>
       <TrendChart
         v-if="effectivenessSeries().length"
