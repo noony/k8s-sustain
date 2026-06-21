@@ -59,8 +59,10 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
 
-      - name: Package chart
-        run: helm package charts/k8s-sustain --version "${GITHUB_REF_NAME#v}" --app-version "${GITHUB_REF_NAME#v}"
+      - name: Package charts
+        run: |
+          helm package charts/k8s-sustain --version "${GITHUB_REF_NAME#v}" --app-version "${GITHUB_REF_NAME#v}"
+          helm package charts/k8s-sustain-policies --version "${GITHUB_REF_NAME#v}" --app-version "${GITHUB_REF_NAME#v}"
 
       - name: Upload chart to release
         uses: softprops/action-gh-release@v3

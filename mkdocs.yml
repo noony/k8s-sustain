@@ -81,6 +81,7 @@ nav:
       - Operations:
           - Dashboard: guides/dashboard.md
           - Local testing: guides/local-testing.md
+          - Managing policies with Helm: guides/managing-policies-with-helm.md
   - Reference:
       - Policy CRD: reference/policy.md
       - Annotation: reference/annotation.md

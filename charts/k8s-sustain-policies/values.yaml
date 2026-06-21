@@ -1,0 +1,15 @@
+# Each item becomes one cluster-scoped Policy.
+# `spec` maps 1:1 to the Policy CRD spec and is rendered verbatim via toYaml.
+policies: []
+#  - name: staging-rightsizing      # required -> metadata.name (verbatim)
+#    labels: {}                     # optional -> merged into metadata.labels
+#    annotations: {}                # optional -> metadata.annotations
+#    spec:                          # required -> spec: passed through unchanged
+#      selector:
+#        namespaces: [staging]
+#      rightSizing:
+#        update:
+#          types: { deployment: Ongoing }
+#        resourcesConfigs:
+#          cpu:    { requests: { percentile: 95, headroom: 10 } }
+#          memory: { requests: { percentile: 95, headroom: 20 } }

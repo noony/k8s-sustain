@@ -1,0 +1,6 @@
+apiVersion: v2
+name: k8s-sustain-policies
+description: Render k8s-sustain Policy objects declaratively for GitOps rollout.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

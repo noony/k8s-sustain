@@ -1,0 +1,18 @@
+{{- range $p := .Values.policies }}
+---
+apiVersion: k8s.sustain.io/v1alpha1
+kind: Policy
+metadata:
+  name: {{ $p.name }}
+  labels:
+    {{- include "k8s-sustain-policies.labels" $ | nindent 4 }}
+    {{- with $p.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $p.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- toYaml $p.spec | nindent 2 }}
+{{- end }}

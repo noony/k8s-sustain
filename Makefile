@@ -63,14 +63,17 @@ helm-deps: ## Fetch Helm chart dependencies
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
 	helm dependency build charts/k8s-sustain
 
-helm-lint: helm-deps ## Lint Helm chart
+helm-lint: helm-deps ## Lint Helm charts
 	helm lint charts/k8s-sustain
+	helm lint charts/k8s-sustain-policies
 
 helm-template: helm-deps ## Render Helm chart templates
 	helm template k8s-sustain charts/k8s-sustain
+	helm template k8s-sustain-policies charts/k8s-sustain-policies
 
 helm-unittest: helm-deps ## Run Helm chart unit tests (requires the helm-unittest plugin)
 	helm unittest charts/k8s-sustain
+	helm unittest charts/k8s-sustain-policies
 
 port-forward: port-forward-stop ## Port-forward dashboard ($(DASHBOARD_PORT)) and Prometheus ($(PROMETHEUS_PORT)) in the background
 	@mkdir -p .port-forward

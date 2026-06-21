@@ -1,0 +1,15 @@
+{{- if .Values.policies }}
+Release {{ .Release.Name }} rendered {{ len .Values.policies }} k8s-sustain Policy object(s):
+{{ range $p := .Values.policies }}  - {{ $p.name }}
+{{ end }}
+NOTE: Policy objects are cluster-scoped and their names are used verbatim.
+Ensure names are unique across ALL releases to avoid collisions.
+
+This chart does not install the k8s-sustain CRDs; install the k8s-sustain
+operator chart first. Verify the policies with:
+
+  kubectl get policies.k8s.sustain.io
+{{- else }}
+No policies were defined. Set `.Values.policies` in your values file to render
+Policy objects. See the chart's values.yaml for the expected shape.
+{{- end }}

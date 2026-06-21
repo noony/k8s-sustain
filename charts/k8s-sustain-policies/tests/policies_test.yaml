@@ -1,0 +1,93 @@
+suite: policies
+templates:
+  - templates/policies.yaml
+release:
+  name: my-policies
+  namespace: k8s-sustain
+tests:
+  - it: renders nothing when the list is empty
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a single Policy with passthrough spec
+    set:
+      policies:
+        - name: staging-rightsizing
+          spec:
+            selector:
+              namespaces: [staging]
+            rightSizing:
+              update:
+                types:
+                  deployment: Ongoing
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Policy
+      - equal:
+          path: apiVersion
+          value: k8s.sustain.io/v1alpha1
+      - equal:
+          path: metadata.name
+          value: staging-rightsizing
+      - equal:
+          path: spec.selector.namespaces[0]
+          value: staging
+      - equal:
+          path: spec.rightSizing.update.types.deployment
+          value: Ongoing
+      - isSubset:
+          path: metadata.labels
+          content:
+            app.kubernetes.io/managed-by: Helm
+            app.kubernetes.io/instance: my-policies
+
+  - it: renders one document per policy
+    set:
+      policies:
+        - name: policy-a
+          spec:
+            selector: {}
+        - name: policy-b
+          spec:
+            selector: {}
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: policy-a
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: policy-b
+        documentIndex: 1
+
+  - it: merges custom labels and annotations into metadata
+    set:
+      policies:
+        - name: labelled
+          labels:
+            team: platform
+          annotations:
+            argocd.argoproj.io/sync-wave: "1"
+          spec:
+            selector: {}
+    asserts:
+      - isSubset:
+          path: metadata.labels
+          content:
+            team: platform
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-wave"]
+          value: "1"
+
+  - it: rejects a policy missing the required name
+    set:
+      policies:
+        - spec:
+            selector: {}
+    asserts:
+      - failedTemplate: {}

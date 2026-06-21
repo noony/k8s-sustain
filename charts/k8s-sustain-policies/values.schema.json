@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "spec"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "labels": { "type": "object" },
+          "annotations": { "type": "object" },
+          "spec": { "type": "object" }
+        }
+      }
+    }
+  }
+}
