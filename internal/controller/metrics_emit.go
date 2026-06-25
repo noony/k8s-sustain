@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"math"
+
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 
@@ -57,14 +59,14 @@ func EmitWorkloadMetrics(w WorkloadMetrics) {
 	for _, c := range w.Containers {
 		if c.HasCPU && c.CurrentCPUCores > 0 && !c.CPUAtFloor {
 			r := c.RecommendedCPUCores / c.CurrentCPUCores
-			if !haveCPUDrift || absF(1-r) > absF(1-cpuDrift) {
+			if !haveCPUDrift || math.Abs(1-r) > math.Abs(1-cpuDrift) {
 				cpuDrift = r
 				haveCPUDrift = true
 			}
 		}
 		if c.HasMemory && c.CurrentMemoryBytes > 0 && !c.MemoryAtFloor {
 			r := c.RecommendedMemoryBytes / c.CurrentMemoryBytes
-			if !haveMemDrift || absF(1-r) > absF(1-memDrift) {
+			if !haveMemDrift || math.Abs(1-r) > math.Abs(1-memDrift) {
 				memDrift = r
 				haveMemDrift = true
 			}
@@ -111,13 +113,6 @@ func EmitWorkloadMetrics(w WorkloadMetrics) {
 			templateMemoryBytes.DeleteLabelValues(w.Namespace, w.Kind, w.Name, c.Name, kind, w.Policy)
 		}
 	}
-}
-
-func absF(f float64) float64 {
-	if f < 0 {
-		return -f
-	}
-	return f
 }
 
 // EmitRetryState marks a workload as blocked (state=1) for the given reason.

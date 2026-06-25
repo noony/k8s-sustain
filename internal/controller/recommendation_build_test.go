@@ -31,15 +31,6 @@ func TestFactorRatio_GuardsAgainstNaN(t *testing.T) {
 	}
 }
 
-func TestQuantityString(t *testing.T) {
-	if quantityString(nil) != "<nil>" {
-		t.Error("nil should stringify as '<nil>'")
-	}
-	if quantityString(qty("100m")) != "100m" {
-		t.Errorf("100m formatted unexpectedly: %s", quantityString(qty("100m")))
-	}
-}
-
 // TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter verifies that a
 // workload created less than minWorkloadAge ago is skipped — the CPU rate
 // hasn't stabilized yet, so the percentile would floor to ~0 and trigger an

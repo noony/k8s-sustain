@@ -21,8 +21,7 @@ import (
 // larger SPA + API responses are never truncated. The webhook serves tiny
 // AdmissionReview JSON well within this budget, and its real deadline is still
 // enforced upstream by the apiserver's MutatingWebhookConfiguration timeout,
-// so the wider value is safe for it too. Callers that genuinely need a
-// different value for a specific field can override it via an Option.
+// so the wider value is safe for it too.
 const (
 	defaultReadHeaderTimeout = 5 * time.Second
 	defaultReadTimeout       = 15 * time.Second
@@ -30,40 +29,14 @@ const (
 	defaultIdleTimeout       = 60 * time.Second
 )
 
-// Option mutates an *http.Server during NewServer construction. It follows the
-// same functional-options idiom used by internal/prometheus and
-// internal/workload so the package style stays consistent.
-type Option func(*http.Server)
-
-// WithReadHeaderTimeout overrides the default ReadHeaderTimeout.
-func WithReadHeaderTimeout(d time.Duration) Option {
-	return func(s *http.Server) { s.ReadHeaderTimeout = d }
-}
-
-// WithReadTimeout overrides the default ReadTimeout.
-func WithReadTimeout(d time.Duration) Option {
-	return func(s *http.Server) { s.ReadTimeout = d }
-}
-
-// WithWriteTimeout overrides the default WriteTimeout.
-func WithWriteTimeout(d time.Duration) Option {
-	return func(s *http.Server) { s.WriteTimeout = d }
-}
-
-// WithIdleTimeout overrides the default IdleTimeout.
-func WithIdleTimeout(d time.Duration) Option {
-	return func(s *http.Server) { s.IdleTimeout = d }
-}
-
 // NewServer builds an *http.Server bound to addr with handler installed and
-// the hardened timeout defaults above applied to every timeout field. Pass
-// Options to override individual fields; pass none to get the shared defaults.
+// the hardened timeout defaults above applied to every timeout field.
 //
 // The caller still owns ListenAndServe / Shutdown (see
 // ListenAndServeWithShutdown) and any TLSConfig wiring — NewServer only
 // centralizes construction and timeout hardening, not the listen lifecycle.
-func NewServer(addr string, handler http.Handler, opts ...Option) *http.Server {
-	srv := &http.Server{
+func NewServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: defaultReadHeaderTimeout,
@@ -71,10 +44,6 @@ func NewServer(addr string, handler http.Handler, opts ...Option) *http.Server {
 		WriteTimeout:      defaultWriteTimeout,
 		IdleTimeout:       defaultIdleTimeout,
 	}
-	for _, opt := range opts {
-		opt(srv)
-	}
-	return srv
 }
 
 // ListenAndServeWithShutdown runs listen in a goroutine and blocks until

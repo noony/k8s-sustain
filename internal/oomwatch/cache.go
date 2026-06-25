@@ -109,31 +109,6 @@ func (c *Cache) Record(key Key, record OOMRecord) bool {
 	return true
 }
 
-// Recent returns the latest record for the given identity that is younger
-// than maxAge, or nil. The freshness window is caller-supplied because the
-// recommender may legitimately care about a longer or shorter horizon than
-// the cache's retention TTL.
-func (c *Cache) Recent(ns, kind, name, container string, maxAge time.Duration) *OOMRecord {
-	key := Key{Namespace: ns, OwnerKind: kind, OwnerName: name, Container: container}
-	now := time.Now()
-
-	c.mu.RLock()
-	entry, ok := c.entries[key]
-	c.mu.RUnlock()
-	if !ok {
-		return nil
-	}
-	if now.Sub(entry.ObservedAt) > c.ttl {
-		c.deleteIfStale(key, now)
-		return nil
-	}
-	if now.Sub(entry.ObservedAt) > maxAge {
-		return nil
-	}
-	rec := entry
-	return &rec
-}
-
 // RecentByWorkload returns a per-container map of fresh records for the given
 // workload identity. The map is always non-nil so callers can range over it
 // without a nil check; an empty map means "no fresh observations".
@@ -278,8 +253,8 @@ func (c *Cache) deleteEntryLocked(key Key) {
 	c.removeIndexLocked(key)
 }
 
-// deleteIfStaleLocked is the shared lazy-eviction primitive used by Recent,
-// RecentByWorkload, and sweep. The re-check under the write lock handles the
+// deleteIfStaleLocked is the shared lazy-eviction primitive used by
+// RecentByWorkload and sweep. The re-check under the write lock handles the
 // TOCTOU window where a concurrent Record refreshed the entry between the
 // initial RLock read and the Lock upgrade.
 func (c *Cache) deleteIfStaleLocked(key Key, now time.Time) {
@@ -290,10 +265,4 @@ func (c *Cache) deleteIfStaleLocked(key Key, now time.Time) {
 	if now.Sub(entry.ObservedAt) > c.ttl {
 		c.deleteEntryLocked(key)
 	}
-}
-
-func (c *Cache) deleteIfStale(key Key, now time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.deleteIfStaleLocked(key, now)
 }

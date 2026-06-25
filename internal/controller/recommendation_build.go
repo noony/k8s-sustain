@@ -135,10 +135,3 @@ func emitCoordinationFactors(
 			factorRatio(adjusted.MemoryRequest, base.MemoryRequest))
 	}
 }
-
-func quantityString(q *resource.Quantity) string {
-	if q == nil {
-		return "<nil>"
-	}
-	return q.String()
-}

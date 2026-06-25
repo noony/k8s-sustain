@@ -166,27 +166,21 @@ func ClampRecsToTolerance(current []corev1.Container, recs map[string]ContainerR
 	return out
 }
 
-// reportSuppressed calls observe("cpu") and/or observe("memory") once each for
-// any dimension present in orig but cleared in clamped. observe may be nil.
-func reportSuppressed(orig, clamped ContainerRecommendation, observe func(resource string)) {
-	if observe == nil {
-		return
-	}
-	if (orig.CPURequest != nil && clamped.CPURequest == nil) || (orig.CPULimit != nil && clamped.CPULimit == nil) {
-		observe("cpu")
-	}
-	if (orig.MemoryRequest != nil && clamped.MemoryRequest == nil) || (orig.MemoryLimit != nil && clamped.MemoryLimit == nil) {
-		observe("memory")
-	}
-}
-
 // observeSuppressed reports every dimension cleared between orig and clamped
-// (same keys) through observe. observe may be nil.
+// (same keys) through observe — observe("cpu") and/or observe("memory") once
+// each for any dimension present in orig but cleared in clamped. observe may be
+// nil.
 func observeSuppressed(orig, clamped map[string]ContainerRecommendation, observe func(resource string)) {
 	if observe == nil {
 		return
 	}
 	for name, o := range orig {
-		reportSuppressed(o, clamped[name], observe)
+		c := clamped[name]
+		if (o.CPURequest != nil && c.CPURequest == nil) || (o.CPULimit != nil && c.CPULimit == nil) {
+			observe("cpu")
+		}
+		if (o.MemoryRequest != nil && c.MemoryRequest == nil) || (o.MemoryLimit != nil && c.MemoryLimit == nil) {
+			observe("memory")
+		}
 	}
 }

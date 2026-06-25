@@ -787,12 +787,9 @@ func isProgressing(pod *corev1.Pod) bool {
 // included — a sidecar crashloop is just as fatal to the pod's usefulness
 // as a regular container crashloop.
 func hasCrashLoopBackOff(pod *corev1.Pod) bool {
-	if containersCrashing(pod.Status.ContainerStatuses) ||
+	return containersCrashing(pod.Status.ContainerStatuses) ||
 		containersCrashing(pod.Status.InitContainerStatuses) ||
-		containersCrashing(pod.Status.EphemeralContainerStatuses) {
-		return true
-	}
-	return false
+		containersCrashing(pod.Status.EphemeralContainerStatuses)
 }
 
 func containersCrashing(cs []corev1.ContainerStatus) bool {

@@ -58,9 +58,6 @@ type OOMRecord struct {
 // Source is the read-only API consumed by the recommender. It returns recent
 // OOM observations for a given workload or container, filtered by maxAge.
 type Source interface {
-	// Recent returns the most recent record for (ns, kind, name, container)
-	// that is younger than maxAge, or nil if none.
-	Recent(ns, kind, name, container string, maxAge time.Duration) *OOMRecord
 	// RecentByWorkload returns all per-container records for a workload that
 	// are younger than maxAge. Returns an empty map when there is nothing.
 	RecentByWorkload(ns, kind, name string, maxAge time.Duration) map[string]*OOMRecord

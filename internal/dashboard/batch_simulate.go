@@ -206,13 +206,6 @@ func deltaPercent(current, recommended int64) float64 {
 	return math.Round((float64(recommended-current)/float64(current)*100)*10) / 10
 }
 
-func abs64(x int64) int64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
 func buildSavingsAggregate(current, recommended int64, resourceType string) savingsAggregate {
 	savings := current - recommended
 	var pct float64
@@ -226,6 +219,6 @@ func buildSavingsAggregate(current, recommended int64, resourceType string) savi
 		SavingsPercent:       pct,
 		CurrentFormatted:     formatQuantity(current, resourceType),
 		RecommendedFormatted: formatQuantity(recommended, resourceType),
-		SavingsFormatted:     formatQuantity(abs64(savings), resourceType),
+		SavingsFormatted:     formatQuantity(max(savings, -savings), resourceType),
 	}
 }

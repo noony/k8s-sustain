@@ -96,7 +96,8 @@ type jsonPatch struct {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logger := log.FromContext(r.Context())
 
-	httpx.LimitRequestBody(w, r, maxAdmissionBodyBytes)
+	// Reject an oversized AdmissionReview before it lands in memory.
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdmissionBodyBytes)
 
 	var review admissionv1.AdmissionReview
 	if err := json.NewDecoder(r.Body).Decode(&review); err != nil {

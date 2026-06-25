@@ -131,13 +131,14 @@ func TestRecordEvictsOldestAtCap(t *testing.T) {
 	if c.Size() != 2 {
 		t.Fatalf("Size() after cap eviction = %d, want 2", c.Size())
 	}
-	if got := c.Recent("default", "Deployment", "app", "a", time.Hour); got != nil {
-		t.Errorf("oldest entry still present after eviction: %+v", got)
+	fresh := c.RecentByWorkload("default", "Deployment", "app", time.Hour)
+	if _, ok := fresh["a"]; ok {
+		t.Errorf("oldest entry still present after eviction")
 	}
-	if got := c.Recent("default", "Deployment", "app", "b", time.Hour); got == nil {
+	if _, ok := fresh["b"]; !ok {
 		t.Errorf("middle entry missing after eviction")
 	}
-	if got := c.Recent("default", "Deployment", "app", "c", time.Hour); got == nil {
+	if _, ok := fresh["c"]; !ok {
 		t.Errorf("newest entry missing after eviction")
 	}
 }
@@ -179,14 +180,7 @@ func TestSecondaryIndexCleanupOnEviction(t *testing.T) {
 	}
 }
 
-func TestRecentUnknownKey(t *testing.T) {
-	c := NewCache(time.Minute)
-	if got := c.Recent("ns", "Deployment", "app", "web", time.Minute); got != nil {
-		t.Fatalf("Recent on empty cache returned %+v, want nil", got)
-	}
-}
-
-func TestRecentStaleByMaxAge(t *testing.T) {
+func TestRecentByWorkloadStaleByMaxAge(t *testing.T) {
 	c := NewCache(time.Hour)
 	key := makeKey("web")
 	rec := makeRecord(1, time.Now())
@@ -194,47 +188,32 @@ func TestRecentStaleByMaxAge(t *testing.T) {
 	c.Record(key, rec)
 
 	// maxAge < age -> filtered out, but ttl > age -> still present in map.
-	if got := c.Recent(key.Namespace, key.OwnerKind, key.OwnerName, key.Container, time.Minute); got != nil {
-		t.Fatalf("Recent returned stale entry: %+v", got)
+	if got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Minute); len(got) != 0 {
+		t.Fatalf("RecentByWorkload returned stale entry: %+v", got)
 	}
 	if c.Size() != 1 {
 		t.Fatalf("maxAge filter must not evict; size=%d", c.Size())
 	}
 
 	// maxAge > age -> returned.
-	if got := c.Recent(key.Namespace, key.OwnerKind, key.OwnerName, key.Container, 10*time.Minute); got == nil {
-		t.Fatalf("Recent did not return fresh entry")
+	if got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, 10*time.Minute); len(got) == 0 {
+		t.Fatalf("RecentByWorkload did not return fresh entry")
 	}
 }
 
-func TestRecentLazyEvictionOnTTL(t *testing.T) {
-	c := NewCache(time.Second)
-	key := makeKey("web")
-	rec := makeRecord(1, time.Now())
-	rec.ObservedAt = time.Now().Add(-time.Hour)
-	c.Record(key, rec)
-
-	if got := c.Recent(key.Namespace, key.OwnerKind, key.OwnerName, key.Container, time.Hour); got != nil {
-		t.Fatalf("stale entry should be evicted, got %+v", got)
-	}
-	if c.Size() != 0 {
-		t.Fatalf("lazy eviction did not run; size=%d", c.Size())
-	}
-}
-
-func TestRecentReturnsCopy(t *testing.T) {
+func TestRecentByWorkloadReturnsCopy(t *testing.T) {
 	c := NewCache(time.Minute)
 	key := makeKey("web")
 	c.Record(key, makeRecord(1, time.Now()))
 
-	got := c.Recent(key.Namespace, key.OwnerKind, key.OwnerName, key.Container, time.Minute)
-	if got == nil {
+	got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Minute)
+	if got[key.Container] == nil {
 		t.Fatalf("expected record")
 	}
-	got.RestartCount = 999
+	got[key.Container].RestartCount = 999
 
-	got2 := c.Recent(key.Namespace, key.OwnerKind, key.OwnerName, key.Container, time.Minute)
-	if got2.RestartCount == 999 {
+	got2 := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Minute)
+	if got2[key.Container].RestartCount == 999 {
 		t.Fatalf("mutation through returned pointer leaked into cache")
 	}
 }
@@ -293,10 +272,11 @@ func TestSweepEviction(t *testing.T) {
 	if c.Size() != 1 {
 		t.Fatalf("after sweep size=%d, want 1", c.Size())
 	}
-	if got := c.Recent("default", "Deployment", "app", "fresh", time.Minute); got == nil {
+	survivors := c.RecentByWorkload("default", "Deployment", "app", time.Minute)
+	if _, ok := survivors["fresh"]; !ok {
 		t.Fatalf("fresh entry should survive sweep")
 	}
-	if got := c.Recent("default", "Deployment", "app", "stale", time.Minute); got != nil {
+	if _, ok := survivors["stale"]; ok {
 		t.Fatalf("stale entry should be evicted")
 	}
 }
@@ -380,7 +360,6 @@ func TestConcurrentAccess(t *testing.T) {
 		})
 		wg.Go(func() {
 			for i := range perWorker {
-				_ = c.Recent("ns", "Deployment", fmt.Sprintf("app-%d", i%4), fmt.Sprintf("c-%d", i%8), time.Minute)
 				_ = c.RecentByWorkload("ns", "Deployment", fmt.Sprintf("app-%d", i%4), time.Minute)
 				_ = c.Size()
 			}

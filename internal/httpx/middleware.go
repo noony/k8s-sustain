@@ -41,6 +41,17 @@ func DefaultRouteLabeler(r *http.Request) string {
 	return r.Pattern
 }
 
+// routeLabel resolves the low-cardinality route label for r, normalizing a nil
+// labeler or an empty result to "unknown" so metric labels stay bounded.
+func routeLabel(r *http.Request, labelRoute RouteLabeler) string {
+	if labelRoute != nil {
+		if v := labelRoute(r); v != "" {
+			return v
+		}
+	}
+	return "unknown"
+}
+
 // WithRequestID accepts an inbound X-Request-Id (so a frontend can stitch
 // together its own correlation chain) or generates one. The value is then
 // available three ways:
@@ -92,13 +103,7 @@ func WithRecovery(next http.Handler, logger logr.Logger, count PanicCounter, lab
 				"stack", string(debug.Stack()),
 			)
 			if count != nil {
-				label := "unknown"
-				if labelRoute != nil {
-					if v := labelRoute(r); v != "" {
-						label = v
-					}
-				}
-				count(label)
+				count(routeLabel(r, labelRoute))
 			}
 			WriteError(w, http.StatusInternalServerError, "internal error")
 		}()
@@ -144,13 +149,7 @@ func WithTelemetry(next http.Handler, logger logr.Logger, observe LatencyObserve
 		next.ServeHTTP(rw, r)
 		dur := time.Since(start)
 		if observe != nil {
-			label := "unknown"
-			if labelRoute != nil {
-				if v := labelRoute(r); v != "" {
-					label = v
-				}
-			}
-			observe(label, http.StatusText(rw.statusCode), dur)
+			observe(routeLabel(r, labelRoute), http.StatusText(rw.statusCode), dur)
 		}
 		logger.V(1).Info(
 			"http request",
@@ -162,11 +161,4 @@ func WithTelemetry(next http.Handler, logger logr.Logger, observe LatencyObserve
 			"remote", r.RemoteAddr,
 		)
 	})
-}
-
-// LimitRequestBody installs an http.MaxBytesReader on r.Body. Apply at the
-// entry of any handler that decodes a request body so an oversized payload
-// is rejected before it lands in memory.
-func LimitRequestBody(w http.ResponseWriter, r *http.Request, maxBytes int64) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 }
