@@ -540,6 +540,10 @@ tbody tr:last-child td {
   background: var(--yellow-soft);
   color: var(--yellow);
 }
+.kind-Rollout {
+  background: var(--green-soft);
+  color: var(--green);
+}
 .kind-CronJob {
   background: var(--blue-soft);
   color: var(--blue);

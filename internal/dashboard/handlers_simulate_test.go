@@ -65,10 +65,10 @@ func TestHandleSimulate_RejectsMissingOwnerName(t *testing.T) {
 }
 
 // TestHandleSimulate_RejectsInvalidOwnerKind verifies that unsupported kinds
-// like "Rollout" or "Pod" are bounced before any expensive work happens.
+// like "Pod" or "ReplicaSet" are bounced before any expensive work happens.
 func TestHandleSimulate_RejectsInvalidOwnerKind(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
-	for _, kind := range []string{"Pod", "Rollout"} {
+	for _, kind := range []string{"Pod", "ReplicaSet"} {
 		t.Run(kind, func(t *testing.T) {
 			body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: kind, OwnerName: "x"})
 			req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
@@ -94,6 +94,24 @@ func TestHandleSimulate_AcceptsJob(t *testing.T) {
 		Logger:     testLogger(t),
 	}
 	body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Job", OwnerName: "oneshot"})
+	req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
+	rec := httptest.NewRecorder()
+	srv.handleSimulate(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleSimulate_AcceptsRollout pins Argo Rollout as a simulatable kind —
+// the controller right-sizes Rollouts, so the dashboard validator must not
+// bounce it with a 400.
+func TestHandleSimulate_AcceptsRollout(t *testing.T) {
+	srv := &Server{
+		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		PromClient: &fakePromClient{},
+		Logger:     testLogger(t),
+	}
+	body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Rollout", OwnerName: "web"})
 	req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
 	rec := httptest.NewRecorder()
 	srv.handleSimulate(rec, req)

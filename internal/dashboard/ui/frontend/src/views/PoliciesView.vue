@@ -47,6 +47,7 @@ function updateTypeBadges(update?: Record<string, string>): string {
   if (update.deployment) types.push(`Deploy:${update.deployment}`)
   if (update.statefulSet) types.push(`STS:${update.statefulSet}`)
   if (update.daemonSet) types.push(`DS:${update.daemonSet}`)
+  if (update.argoRollout) types.push(`Rollout:${update.argoRollout}`)
   if (update.cronJob) types.push(`CJ:${update.cronJob}`)
   return types.join(', ') || '-'
 }

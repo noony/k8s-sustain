@@ -210,7 +210,7 @@ func parseAllWorkloadFilters(q url.Values) (allWorkloadFilters, *paramError) {
 		search:    strings.ToLower(q.Get("search")),
 	}
 	var perr *paramError
-	if f.kind, perr = parseEnumParam(q, "kind", []string{"Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job"}); perr != nil {
+	if f.kind, perr = parseEnumParam(q, "kind", supportedWorkloadKinds); perr != nil {
 		return f, perr
 	}
 	if f.automated, perr = parseBoolParam(q, "automated"); perr != nil {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -51,6 +52,7 @@ var dashboardScheme = runtime.NewScheme()
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(dashboardScheme))
 	utilruntime.Must(sustainv1alpha1.AddToScheme(dashboardScheme))
+	utilruntime.Must(rolloutsv1alpha1.AddToScheme(dashboardScheme))
 }
 
 // Scheme returns the runtime scheme with all needed types registered.

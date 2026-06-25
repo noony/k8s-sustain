@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -18,7 +19,7 @@ import (
 
 // supportedWorkloadKinds is the canonical ordering used by responses that
 // iterate over every workload kind the dashboard recognises.
-var supportedWorkloadKinds = []string{"Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job"}
+var supportedWorkloadKinds = []string{"Deployment", "StatefulSet", "DaemonSet", "Rollout", "CronJob", "Job"}
 
 // containerStatus and coordinationFactors are referenced by multiple handler
 // files; their definitions are kept here as the workload-shaped shared types.
@@ -109,6 +110,17 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 			out[i] = workloadEntry{Namespace: ds.Namespace, Name: ds.Name, Template: &ds.Spec.Template, OwnerRefs: ds.OwnerReferences}
 		}
 		return out, nil
+	case "Rollout":
+		var list rolloutsv1alpha1.RolloutList
+		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
+			return nil, err
+		}
+		out := make([]workloadEntry, len(list.Items))
+		for i := range list.Items {
+			r := &list.Items[i]
+			out[i] = workloadEntry{Namespace: r.Namespace, Name: r.Name, Template: &r.Spec.Template, OwnerRefs: r.OwnerReferences}
+		}
+		return out, nil
 	case "CronJob":
 		var list batchv1.CronJobList
 		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
@@ -151,6 +163,8 @@ func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name str
 		obj = &appsv1.StatefulSet{}
 	case "DaemonSet":
 		obj = &appsv1.DaemonSet{}
+	case "Rollout":
+		obj = &rolloutsv1alpha1.Rollout{}
 	case "CronJob":
 		obj = &batchv1.CronJob{}
 	case "Job":
@@ -160,6 +174,11 @@ func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name str
 	}
 	if err := s.K8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, obj); err != nil {
 		return workloadEntry{}, err
+	}
+	// workload.PodTemplateOf intentionally doesn't depend on the rollouts API,
+	// so pull the Rollout's pod template directly here.
+	if r, ok := obj.(*rolloutsv1alpha1.Rollout); ok {
+		return workloadEntry{Namespace: r.Namespace, Name: r.Name, Template: &r.Spec.Template, OwnerRefs: r.OwnerReferences}, nil
 	}
 	tmpl, refs, _, _ := workload.PodTemplateOf(obj)
 	return workloadEntry{Namespace: obj.GetNamespace(), Name: obj.GetName(), Template: tmpl, OwnerRefs: refs}, nil
