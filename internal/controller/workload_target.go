@@ -82,10 +82,20 @@ func rolloutToTarget(r *rolloutsv1alpha1.Rollout) workloadTarget {
 
 // cronJobToTarget builds a workloadTarget from a CronJob. The opt-in policy
 // annotation lives on the JobTemplate's pod template, matching the convention
-// used for other kinds. Selector is left nil — CronJob reconciliation patches
-// the JobTemplate directly and never lists/recycles pods.
+// used for other kinds. Selector is left nil — CronJob reconciliation resizes
+// the running job pods in place (enumerated via the job-name label) and never
+// recycles/evicts them or mutates the CronJob spec.
 func cronJobToTarget(c *batchv1.CronJob) workloadTarget {
 	return newTargetFromTemplate(c, "CronJob", &c.Spec.JobTemplate.Spec.Template, nil)
+}
+
+// jobToTarget builds a workloadTarget from a standalone Job. The opt-in policy
+// annotation lives on the Job's pod template, matching every other kind.
+// Selector is left nil — the Job resize path enumerates pods via the
+// batch.kubernetes.io/job-name label, never the workload selector, and never
+// recycles/evicts (job runs finish on their own).
+func jobToTarget(j *batchv1.Job) workloadTarget {
+	return newTargetFromTemplate(j, "Job", &j.Spec.Template, nil)
 }
 
 // filterTargets returns targets that match the given policy: the workload's

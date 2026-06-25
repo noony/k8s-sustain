@@ -4,7 +4,9 @@ k8s-sustain right-sizes both standalone `Job`s and scheduled `CronJob`s. Because
 
 ## Standalone Jobs
 
-A standalone `Job` (not created by a CronJob) runs once. The webhook resolves `Pod → Job` directly and injects resources at admission. `OnCreate` is the typical mode; `Ongoing` is allowed but rarely useful for short-lived jobs.
+A standalone `Job` (not created by a CronJob) runs once. The webhook resolves `Pod → Job` directly and injects resources at admission. `OnCreate` is the typical mode and the natural fit for short-lived jobs.
+
+`Ongoing` additionally lets the **controller** resize a Job's **currently running** pods in place via the `pods/resize` subresource (requires k8s ≥ 1.35, since standalone Jobs always run with `restartPolicy: Never`/`OnFailure`, whose in-place resize landed in 1.35), without evicting them or mutating the Job spec. Because a standalone Job has no "next run", in-place resize is the only way to correct an already-running pod — so `Ongoing` is worthwhile for **long-running** Jobs (batch processing, ML training, migrations) and a no-op for jobs that finish within seconds. On clusters without in-place support the running pod is left untouched. Jobs owned by a CronJob are never picked up by this path; they are resized through their owning CronJob instead.
 
 ```yaml
 apiVersion: batch/v1

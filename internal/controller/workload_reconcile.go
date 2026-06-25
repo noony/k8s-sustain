@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -93,22 +94,20 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	// pods directly; new scheduled runs always pick up the latest resources
 	// from the webhook at admission time.
 	if t.Kind == "CronJob" {
-		resized, err := r.resizeCronJobPods(ctx, t, recs, tol, suppressionObserver)
-		if err != nil {
-			return r.handleStepError(ctx, t, "resize", "CronJob pod resize failed", err)
-		}
-		r.recordStepSuccess(t)
-		// Only report an update when pods were actually resized — the
-		// JobTemplate is never mutated, so changedContainers alone would
-		// fire on every reconcile.
-		if resized > 0 {
-			changed := changedContainers(containers, recs, tol)
-			if len(changed) > 0 {
-				r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
-					"in-place resized cronjob pods for containers: %v", changed)
-			}
-		}
-		return nil
+		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, func() (int, error) {
+			return r.resizeCronJobPods(ctx, t, recs, tol, suppressionObserver)
+		})
+	}
+
+	// Standalone Job: never mutate the Job spec and never evict job pods
+	// (killing them discards in-flight work). A standalone Job has no next
+	// run, so resizing the running pod in place is the only way to correct it
+	// after creation. CronJob-owned Jobs never reach here — the listing path
+	// excludes them and the CronJob branch above handles them.
+	if t.Kind == "Job" {
+		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, func() (int, error) {
+			return r.resizeJobPods(ctx, t, recs, tol, suppressionObserver)
+		})
 	}
 
 	sel, err := metav1.LabelSelectorAsSelector(t.Selector)
@@ -146,6 +145,28 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		"Updated resources for containers: %v", changed)
 	logger.Info("workload resources updated", "containers", changed)
 
+	return nil
+}
+
+// resizeInPlaceTarget runs the reconcile tail shared by the CronJob and
+// standalone Job paths. Both resize their currently-running pods in place and
+// never evict them or mutate the workload spec, so the only kind-specific part
+// is the pod enumeration + resize, supplied as resizeFn (it returns the number
+// of pods the API server actually resized). The ResourcesUpdated event is only
+// emitted when at least one pod was resized — the workload spec is never
+// mutated, so changedContainers alone would fire on every reconcile.
+func (r *PolicyReconciler) resizeInPlaceTarget(ctx context.Context, t *workloadTarget, containers []corev1.Container, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance, resizeFn func() (int, error)) error {
+	resized, err := resizeFn()
+	if err != nil {
+		return r.handleStepError(ctx, t, "resize", t.Kind+" pod resize failed", err)
+	}
+	r.recordStepSuccess(t)
+	if resized > 0 {
+		if changed := changedContainers(containers, recs, tol); len(changed) > 0 {
+			r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
+				"in-place resized %s pods for containers: %v", strings.ToLower(t.Kind), changed)
+		}
+	}
 	return nil
 }
 

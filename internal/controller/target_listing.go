@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // collectTargets lists workloads of all enabled kinds and returns matching targets.
@@ -26,7 +27,8 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		"statefulset", types.StatefulSet,
 		"daemonset", types.DaemonSet,
 		"argoRollout", types.ArgoRollout,
-		"cronjob", types.CronJob)
+		"cronjob", types.CronJob,
+		"job", types.Job)
 
 	if types.Deployment != nil && *types.Deployment == sustainv1alpha1.UpdateModeOngoing {
 		t, err := r.listDeploymentTargets(ctx, namespaces)
@@ -70,6 +72,15 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 			return nil, fmt.Errorf("listing cronjobs: %w", err)
 		}
 		logger.V(1).Info("listed cronjobs", "count", len(t))
+		targets = append(targets, t...)
+	}
+
+	if types.Job != nil && *types.Job == sustainv1alpha1.UpdateModeOngoing {
+		t, err := r.listJobTargets(ctx, namespaces)
+		if err != nil {
+			return nil, fmt.Errorf("listing jobs: %w", err)
+		}
+		logger.V(1).Info("listed jobs", "count", len(t))
 		targets = append(targets, t...)
 	}
 
@@ -156,14 +167,37 @@ func (r *PolicyReconciler) listRolloutTargets(ctx context.Context, namespaces []
 }
 
 // listCronJobTargets lists CronJobs, scoped to namespaces if provided.
-// CronJob targets carry the JobTemplate's pod spec; reconcile patches the
-// JobTemplate in place rather than recycling pods (jobs run to completion).
+// CronJob targets carry the JobTemplate's pod spec; reconcile resizes the
+// currently-running job pods in place rather than recycling them or mutating
+// the CronJob spec (jobs run to completion).
 func (r *PolicyReconciler) listCronJobTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
 	return listKindTargets(ctx, r.Client, namespaces,
 		func() *batchv1.CronJobList { return &batchv1.CronJobList{} },
 		func(l *batchv1.CronJobList, out *[]workloadTarget) {
 			for i := range l.Items {
 				*out = append(*out, cronJobToTarget(&l.Items[i]))
+			}
+		})
+}
+
+// listJobTargets lists standalone Jobs, scoped to namespaces if provided.
+// Jobs owned by a CronJob are skipped (the CronJob path resizes their pods,
+// so listing them here would double-process), as are terminal Jobs (Complete
+// or Failed — no running pods to resize). Like CronJobs, the Job spec is never
+// mutated; reconcile resizes the running pods in place.
+func (r *PolicyReconciler) listJobTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+	return listKindTargets(ctx, r.Client, namespaces,
+		func() *batchv1.JobList { return &batchv1.JobList{} },
+		func(l *batchv1.JobList, out *[]workloadTarget) {
+			for i := range l.Items {
+				j := &l.Items[i]
+				if workload.IsOwnedByKind(j.OwnerReferences, "CronJob") {
+					continue
+				}
+				if jobIsTerminal(j) {
+					continue
+				}
+				*out = append(*out, jobToTarget(j))
 			}
 		})
 }

@@ -74,6 +74,8 @@ See [In-Place Updates](in-place-updates.md) for details.
 
 **CronJob exception:** for `cronJob: Ongoing`, eviction is *never* used — evicting a Job pod would kill the run. Currently-running job pods are resized in place when the cluster supports it (k8s ≥ 1.33, with full coverage of `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35); otherwise they are left to finish on their original resources and the next scheduled run picks up the new values from the webhook. The CronJob spec itself is never modified, so GitOps tools see no drift.
 
+**Standalone Job exception:** `job: Ongoing` behaves the same way — the controller resizes a standalone Job's currently-running pods in place and never evicts them (which would discard in-flight work) or mutates the Job spec. Because a standalone Job has no next run, in-place resize is the only post-creation correction, so `Ongoing` is worthwhile only for **long-running** Jobs and requires k8s ≥ 1.35 (standalone Jobs always run with `restartPolicy: Never`/`OnFailure`). On clusters without in-place support the running pod is left untouched. Jobs owned by a CronJob are handled by the CronJob path above, not this one.
+
 ---
 
 ## Choosing a mode
@@ -84,6 +86,8 @@ See [In-Place Updates](in-place-updates.md) for details.
 | Existing workloads, must avoid downtime | `OnCreate` — only affects future pods |
 | Existing workloads, k8s ≥ 1.33 | `Ongoing` — in-place updates, zero restarts |
 | CronJob pods (ephemeral per-run) | `OnCreate` — each run gets fresh recommendations |
+| Long-running standalone Jobs (k8s ≥ 1.35) | `Ongoing` — resizes the running pod in place mid-run |
+| Short-lived standalone Jobs | `OnCreate` — pods finish before a reconcile would touch them |
 | StatefulSets with persistent state | `Ongoing` + k8s ≥ 1.33, or `OnCreate` |
 | DaemonSets | `Ongoing` (rolling update is DaemonSet's normal behaviour) |
 | Argo Rollouts | `Ongoing` or `OnCreate` — works like Deployments with canary/blue-green strategies |
