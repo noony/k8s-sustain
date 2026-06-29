@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.3
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6.4.0
         with:
           go-version-file: go.mod
 
@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.3
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6.4.0
         with:
           go-version-file: go.mod
 
@@ -92,7 +92,7 @@ jobs:
           cache: npm
           cache-dependency-path: internal/dashboard/ui/frontend/package-lock.json
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6.4.0
         with:
           go-version-file: go.mod
 
