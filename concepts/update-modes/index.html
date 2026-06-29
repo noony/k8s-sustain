@@ -1546,6 +1546,7 @@
 </ul>
 <p><strong>Note:</strong> The controller never patches workload templates (Deployment, StatefulSet, CronJob, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s &lt; 1.33), pods are replaced via PDB-respecting eviction, which causes pod restarts.</p>
 <p><strong>CronJob exception:</strong> for <code>cronJob: Ongoing</code>, eviction is <em>never</em> used — evicting a Job pod would kill the run. Currently-running job pods are resized in place when the cluster supports it (k8s ≥ 1.33, with full coverage of <code>restartPolicy: Never</code>/<code>OnFailure</code> on k8s ≥ 1.35); otherwise they are left to finish on their original resources and the next scheduled run picks up the new values from the webhook. The CronJob spec itself is never modified, so GitOps tools see no drift.</p>
+<p><strong>Standalone Job exception:</strong> <code>job: Ongoing</code> behaves the same way — the controller resizes a standalone Job's currently-running pods in place and never evicts them (which would discard in-flight work) or mutates the Job spec. Because a standalone Job has no next run, in-place resize is the only post-creation correction, so <code>Ongoing</code> is worthwhile only for <strong>long-running</strong> Jobs and requires k8s ≥ 1.35 (standalone Jobs always run with <code>restartPolicy: Never</code>/<code>OnFailure</code>). On clusters without in-place support the running pod is left untouched. Jobs owned by a CronJob are handled by the CronJob path above, not this one.</p>
 <hr />
 <h2 id="choosing-a-mode">Choosing a mode<a class="headerlink" href="#choosing-a-mode" title="Permanent link">&para;</a></h2>
 <table>
@@ -1571,6 +1572,14 @@
 <tr>
 <td>CronJob pods (ephemeral per-run)</td>
 <td><code>OnCreate</code> — each run gets fresh recommendations</td>
+</tr>
+<tr>
+<td>Long-running standalone Jobs (k8s ≥ 1.35)</td>
+<td><code>Ongoing</code> — resizes the running pod in place mid-run</td>
+</tr>
+<tr>
+<td>Short-lived standalone Jobs</td>
+<td><code>OnCreate</code> — pods finish before a reconcile would touch them</td>
 </tr>
 <tr>
 <td>StatefulSets with persistent state</td>
