@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v6.0.3
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6.2.0
         with:
           python-version: 3.x
       - name: Cache pip packages
@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v6.0.3
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6.2.0
         with:
           python-version: 3.x
       - name: Cache pip packages
