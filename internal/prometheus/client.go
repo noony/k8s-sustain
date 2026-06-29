@@ -397,45 +397,27 @@ func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKin
 			c.recordOnce(&counted)
 		}
 	}
-	g.Go(func() error {
-		oomRes, warnings, err := c.api.Query(gctx, oomExpr, now)
-		if err != nil {
-			recordProbeError()
-			return fmt.Errorf("prometheus oom probe %q: %w", oomExpr, err)
+	// queryProbe builds a goroutine that runs one probe query, attributes its
+	// error exactly once, logs warnings, and stores the parsed vector into
+	// target. The three probes differ only by expression, label, and target.
+	queryProbe := func(expr, label string, target *ContainerValues) func() error {
+		return func() error {
+			res, warnings, err := c.api.Query(gctx, expr, now)
+			if err != nil {
+				recordProbeError()
+				return fmt.Errorf("prometheus %s probe %q: %w", label, expr, err)
+			}
+			c.breaker.success()
+			logWarnings(gctx, expr, warnings)
+			if vec, ok := res.(model.Vector); ok {
+				*target = vectorToContainerValues(vec)
+			}
+			return nil
 		}
-		c.breaker.success()
-		logWarnings(gctx, oomExpr, warnings)
-		if vec, ok := oomRes.(model.Vector); ok {
-			oomCounts = vectorToContainerValues(vec)
-		}
-		return nil
-	})
-	g.Go(func() error {
-		peakRes, warnings, err := c.api.Query(gctx, peakExpr, now)
-		if err != nil {
-			recordProbeError()
-			return fmt.Errorf("prometheus peak probe %q: %w", peakExpr, err)
-		}
-		c.breaker.success()
-		logWarnings(gctx, peakExpr, warnings)
-		if vec, ok := peakRes.(model.Vector); ok {
-			peaks = vectorToContainerValues(vec)
-		}
-		return nil
-	})
-	g.Go(func() error {
-		limitRes, warnings, err := c.api.Query(gctx, limitExpr, now)
-		if err != nil {
-			recordProbeError()
-			return fmt.Errorf("prometheus oom-limit probe %q: %w", limitExpr, err)
-		}
-		c.breaker.success()
-		logWarnings(gctx, limitExpr, warnings)
-		if vec, ok := limitRes.(model.Vector); ok {
-			limits = vectorToContainerValues(vec)
-		}
-		return nil
-	})
+	}
+	g.Go(queryProbe(oomExpr, "oom", &oomCounts))
+	g.Go(queryProbe(peakExpr, "peak", &peaks))
+	g.Go(queryProbe(limitExpr, "oom-limit", &limits))
 
 	if err := g.Wait(); err != nil {
 		// A cancellation-driven abort (shared deadline, parent cancel, or an
@@ -625,13 +607,19 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
+// wrapQueryErr passes ErrCircuitOpen through unchanged so callers can detect an
+// open breaker; any other error is wrapped as `<prefix> "<expr>": <err>`.
+func wrapQueryErr(prefix, expr string, err error) error {
+	if errors.Is(err, ErrCircuitOpen) {
+		return err
+	}
+	return fmt.Errorf("%s %q: %w", prefix, expr, err)
+}
+
 func (c *Client) queryByContainer(ctx context.Context, expr string) (ContainerValues, error) {
 	result, err := c.execInstant(ctx, expr, time.Now(), c.queryTimeout)
 	if err != nil {
-		if errors.Is(err, ErrCircuitOpen) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("prometheus query %q: %w", expr, err)
+		return nil, wrapQueryErr("prometheus query", expr, err)
 	}
 
 	vector, ok := result.(model.Vector)
@@ -649,10 +637,7 @@ const dashboardQueryTimeout = 10 * time.Second
 func (c *Client) QueryInstant(ctx context.Context, expr string) (float64, error) {
 	v, err := c.execInstant(ctx, expr, time.Now(), dashboardQueryTimeout)
 	if err != nil {
-		if errors.Is(err, ErrCircuitOpen) {
-			return 0, err
-		}
-		return 0, fmt.Errorf("instant query %q: %w", expr, err)
+		return 0, wrapQueryErr("instant query", expr, err)
 	}
 	switch typed := v.(type) {
 	case model.Vector:
@@ -698,10 +683,7 @@ func (c *Client) QueryRange(ctx context.Context, expr string, r TimeRange, step 
 func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error) {
 	v, err := c.execInstant(ctx, expr, time.Now(), dashboardQueryTimeout)
 	if err != nil {
-		if errors.Is(err, ErrCircuitOpen) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("by-label query %q: %w", expr, err)
+		return nil, wrapQueryErr("by-label query", expr, err)
 	}
 	vec, ok := v.(model.Vector)
 	if !ok {
@@ -724,10 +706,7 @@ func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[stri
 func (c *Client) QueryByLabels(ctx context.Context, query string, labels ...string) (map[string]float64, error) {
 	v, err := c.execInstant(ctx, query, time.Now(), dashboardQueryTimeout)
 	if err != nil {
-		if errors.Is(err, ErrCircuitOpen) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("by-labels query %q: %w", query, err)
+		return nil, wrapQueryErr("by-labels query", query, err)
 	}
 	vec, ok := v.(model.Vector)
 	if !ok {

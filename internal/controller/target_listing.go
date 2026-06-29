@@ -30,57 +30,27 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		"cronjob", types.CronJob,
 		"job", types.Job)
 
-	if types.Deployment != nil && *types.Deployment == sustainv1alpha1.UpdateModeOngoing {
-		t, err := r.listDeploymentTargets(ctx, namespaces)
-		if err != nil {
-			return nil, fmt.Errorf("listing deployments: %w", err)
-		}
-		logger.V(1).Info("listed deployments", "count", len(t))
-		targets = append(targets, t...)
+	kinds := []struct {
+		mode *sustainv1alpha1.UpdateMode
+		name string
+		list func(context.Context, []string) ([]workloadTarget, error)
+	}{
+		{types.Deployment, "deployments", r.listDeploymentTargets},
+		{types.StatefulSet, "statefulsets", r.listStatefulSetTargets},
+		{types.DaemonSet, "daemonsets", r.listDaemonSetTargets},
+		{types.ArgoRollout, "rollouts", r.listRolloutTargets},
+		{types.CronJob, "cronjobs", r.listCronJobTargets},
+		{types.Job, "jobs", r.listJobTargets},
 	}
-
-	if types.StatefulSet != nil && *types.StatefulSet == sustainv1alpha1.UpdateModeOngoing {
-		t, err := r.listStatefulSetTargets(ctx, namespaces)
-		if err != nil {
-			return nil, fmt.Errorf("listing statefulsets: %w", err)
+	for _, k := range kinds {
+		if k.mode == nil || *k.mode != sustainv1alpha1.UpdateModeOngoing {
+			continue
 		}
-		logger.V(1).Info("listed statefulsets", "count", len(t))
-		targets = append(targets, t...)
-	}
-
-	if types.DaemonSet != nil && *types.DaemonSet == sustainv1alpha1.UpdateModeOngoing {
-		t, err := r.listDaemonSetTargets(ctx, namespaces)
+		t, err := k.list(ctx, namespaces)
 		if err != nil {
-			return nil, fmt.Errorf("listing daemonsets: %w", err)
+			return nil, fmt.Errorf("listing %s: %w", k.name, err)
 		}
-		logger.V(1).Info("listed daemonsets", "count", len(t))
-		targets = append(targets, t...)
-	}
-
-	if types.ArgoRollout != nil && *types.ArgoRollout == sustainv1alpha1.UpdateModeOngoing {
-		t, err := r.listRolloutTargets(ctx, namespaces)
-		if err != nil {
-			return nil, fmt.Errorf("listing rollouts: %w", err)
-		}
-		logger.V(1).Info("listed argo rollouts", "count", len(t))
-		targets = append(targets, t...)
-	}
-
-	if types.CronJob != nil && *types.CronJob == sustainv1alpha1.UpdateModeOngoing {
-		t, err := r.listCronJobTargets(ctx, namespaces)
-		if err != nil {
-			return nil, fmt.Errorf("listing cronjobs: %w", err)
-		}
-		logger.V(1).Info("listed cronjobs", "count", len(t))
-		targets = append(targets, t...)
-	}
-
-	if types.Job != nil && *types.Job == sustainv1alpha1.UpdateModeOngoing {
-		t, err := r.listJobTargets(ctx, namespaces)
-		if err != nil {
-			return nil, fmt.Errorf("listing jobs: %w", err)
-		}
-		logger.V(1).Info("listed jobs", "count", len(t))
+		logger.V(1).Info("listed workloads", "kind", k.name, "count", len(t))
 		targets = append(targets, t...)
 	}
 

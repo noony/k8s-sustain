@@ -256,17 +256,9 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	// Always inject the latest recommendation regardless of mode.
 	// The workload is annotated with a policy — the intent is to apply it.
 	filtered := make(map[string]workload.ContainerRecommendation)
-	for _, c := range pod.Spec.Containers {
-		if rec, ok := recs[c.Name]; ok {
-			filtered[c.Name] = rec
-		}
-	}
+	addMatchingRecs(filtered, pod.Spec.Containers, recs)
 	if !policy.Spec.RightSizing.ExcludeInitContainers {
-		for _, c := range pod.Spec.InitContainers {
-			if rec, ok := recs[c.Name]; ok {
-				filtered[c.Name] = rec
-			}
-		}
+		addMatchingRecs(filtered, pod.Spec.InitContainers, recs)
 	}
 	if len(filtered) == 0 {
 		logger.V(1).Info("no recommendations match pod containers, allowing without injection",
@@ -378,6 +370,16 @@ func (h *Handler) buildRecommendations(
 		recommender.BuildContainerRecsOptions{},
 	)
 	return recs, nil
+}
+
+// addMatchingRecs copies into dst the recommendations whose container name
+// appears in containers, leaving non-matching recommendations out.
+func addMatchingRecs(dst map[string]workload.ContainerRecommendation, containers []corev1.Container, recs map[string]workload.ContainerRecommendation) {
+	for _, c := range containers {
+		if rec, ok := recs[c.Name]; ok {
+			dst[c.Name] = rec
+		}
+	}
 }
 
 // buildPatches generates an RFC 6902 JSON Patch that sets resources on the

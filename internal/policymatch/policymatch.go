@@ -67,8 +67,5 @@ func SelectorOK(ls *metav1.LabelSelector) (labels.Selector, error) {
 }
 
 func namespaceAllowed(allowed []string, namespace string) bool {
-	if len(allowed) == 0 {
-		return true
-	}
-	return slices.Contains(allowed, namespace)
+	return len(allowed) == 0 || slices.Contains(allowed, namespace)
 }

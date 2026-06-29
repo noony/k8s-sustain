@@ -213,6 +213,43 @@ func Detect(ctx context.Context, c client.Client, namespace, workloadKind, workl
 // lookupHPA lists HPAs in the namespace and returns the first one whose
 // scaleTargetRef matches (kind, name), or nil if none does. It mirrors the
 // per-item extraction in indexHPAs so Detect and Snapshot.Lookup agree.
+// hpaInfo converts an HPA into an autoscaler Info, defaulting MinReplicas to 1
+// when unset (matching the Kubernetes HPA default).
+func hpaInfo(hpa *autoscalingv2.HorizontalPodAutoscaler) Info {
+	var minR int32 = 1
+	if hpa.Spec.MinReplicas != nil {
+		minR = *hpa.Spec.MinReplicas
+	}
+	targets, unknown := extractHPATargets(hpa.Spec.Metrics)
+	return Info{
+		Kind:              KindHPA,
+		Namespace:         hpa.Namespace,
+		Name:              hpa.Name,
+		MinReplicas:       minR,
+		MaxReplicas:       hpa.Spec.MaxReplicas,
+		CurrentReplicas:   hpa.Status.CurrentReplicas,
+		ConfiguredTargets: targets,
+		HasUnknownTrigger: unknown,
+	}
+}
+
+// scaledObjectInfo converts a KEDA ScaledObject (with its already-extracted
+// spec map) into an autoscaler Info.
+func scaledObjectInfo(so *unstructured.Unstructured, spec map[string]any) Info {
+	status, _ := so.Object["status"].(map[string]any)
+	targets, unknown := extractScaledObjectTriggers(spec["triggers"])
+	return Info{
+		Kind:              KindKEDA,
+		Namespace:         so.GetNamespace(),
+		Name:              so.GetName(),
+		MinReplicas:       int32Or(spec["minReplicaCount"], 1),
+		MaxReplicas:       int32Or(spec["maxReplicaCount"], 0),
+		CurrentReplicas:   int32Or(status["currentReplicas"], 0),
+		ConfiguredTargets: targets,
+		HasUnknownTrigger: unknown,
+	}
+}
+
 func lookupHPA(ctx context.Context, c client.Client, namespace, workloadKind, workloadName string) (*Info, error) {
 	var list autoscalingv2.HorizontalPodAutoscalerList
 	if err := c.List(ctx, &list, client.InNamespace(namespace)); err != nil {
@@ -223,21 +260,8 @@ func lookupHPA(ctx context.Context, c client.Client, namespace, workloadKind, wo
 		if hpa.Spec.ScaleTargetRef.Kind != workloadKind || hpa.Spec.ScaleTargetRef.Name != workloadName {
 			continue
 		}
-		var minR int32 = 1
-		if hpa.Spec.MinReplicas != nil {
-			minR = *hpa.Spec.MinReplicas
-		}
-		targets, unknown := extractHPATargets(hpa.Spec.Metrics)
-		return &Info{
-			Kind:              KindHPA,
-			Namespace:         hpa.Namespace,
-			Name:              hpa.Name,
-			MinReplicas:       minR,
-			MaxReplicas:       hpa.Spec.MaxReplicas,
-			CurrentReplicas:   hpa.Status.CurrentReplicas,
-			ConfiguredTargets: targets,
-			HasUnknownTrigger: unknown,
-		}, nil
+		info := hpaInfo(hpa)
+		return &info, nil
 	}
 	return nil, nil
 }
@@ -269,21 +293,8 @@ func lookupScaledObject(ctx context.Context, c client.Client, namespace, workloa
 		if str(ref["kind"]) != workloadKind || str(ref["name"]) != workloadName {
 			continue
 		}
-		minR := int32Or(spec["minReplicaCount"], 1)
-		maxR := int32Or(spec["maxReplicaCount"], 0)
-		status, _ := so.Object["status"].(map[string]any)
-		curR := int32Or(status["currentReplicas"], 0)
-		targets, unknown := extractScaledObjectTriggers(spec["triggers"])
-		return &Info{
-			Kind:              KindKEDA,
-			Namespace:         so.GetNamespace(),
-			Name:              so.GetName(),
-			MinReplicas:       minR,
-			MaxReplicas:       maxR,
-			CurrentReplicas:   curR,
-			ConfiguredTargets: targets,
-			HasUnknownTrigger: unknown,
-		}, nil
+		info := scaledObjectInfo(so, spec)
+		return &info, nil
 	}
 	return nil, nil
 }
@@ -303,21 +314,7 @@ func indexHPAs(ctx context.Context, c client.Client, namespace string) (map[targ
 		if _, exists := out[key]; exists {
 			continue
 		}
-		var minR int32 = 1
-		if hpa.Spec.MinReplicas != nil {
-			minR = *hpa.Spec.MinReplicas
-		}
-		targets, unknown := extractHPATargets(hpa.Spec.Metrics)
-		out[key] = Info{
-			Kind:              KindHPA,
-			Namespace:         hpa.Namespace,
-			Name:              hpa.Name,
-			MinReplicas:       minR,
-			MaxReplicas:       hpa.Spec.MaxReplicas,
-			CurrentReplicas:   hpa.Status.CurrentReplicas,
-			ConfiguredTargets: targets,
-			HasUnknownTrigger: unknown,
-		}
+		out[key] = hpaInfo(hpa)
 	}
 	return out, nil
 }
@@ -381,21 +378,7 @@ func indexScaledObjects(ctx context.Context, c client.Client, namespace string) 
 		if _, exists := out[key]; exists {
 			continue
 		}
-		minR := int32Or(spec["minReplicaCount"], 1)
-		maxR := int32Or(spec["maxReplicaCount"], 0)
-		status, _ := so.Object["status"].(map[string]any)
-		curR := int32Or(status["currentReplicas"], 0)
-		targets, unknown := extractScaledObjectTriggers(spec["triggers"])
-		out[key] = Info{
-			Kind:              KindKEDA,
-			Namespace:         so.GetNamespace(),
-			Name:              so.GetName(),
-			MinReplicas:       minR,
-			MaxReplicas:       maxR,
-			CurrentReplicas:   curR,
-			ConfiguredTargets: targets,
-			HasUnknownTrigger: unknown,
-		}
+		out[key] = scaledObjectInfo(so, spec)
 	}
 	return out, nil
 }

@@ -793,12 +793,9 @@ func hasCrashLoopBackOff(pod *corev1.Pod) bool {
 }
 
 func containersCrashing(cs []corev1.ContainerStatus) bool {
-	for _, c := range cs {
-		if c.State.Waiting != nil && c.State.Waiting.Reason == "CrashLoopBackOff" {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(cs, func(c corev1.ContainerStatus) bool {
+		return c.State.Waiting != nil && c.State.Waiting.Reason == "CrashLoopBackOff"
+	})
 }
 
 // isPodReady mirrors the k8s.io/kubernetes podutil helper: the pod is Ready
@@ -807,12 +804,9 @@ func isPodReady(pod *corev1.Pod) bool {
 	if pod.Status.Phase != corev1.PodRunning {
 		return false
 	}
-	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.PodReady {
-			return c.Status == corev1.ConditionTrue
-		}
-	}
-	return false
+	return slices.ContainsFunc(pod.Status.Conditions, func(c corev1.PodCondition) bool {
+		return c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue
+	})
 }
 
 // sortPodsForRecycle imposes a deterministic order on the eviction loop. For

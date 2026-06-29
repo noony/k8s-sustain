@@ -88,13 +88,9 @@ var gzipWriterPool = sync.Pool{
 // by http.ServeContent for a fresh index.html reload) makes the browser
 // surface ERR_CONTENT_DECODING_FAILED.
 func passthroughStatus(status int) bool {
-	if status == http.StatusNoContent || status == http.StatusNotModified {
-		return true
-	}
-	if status >= 100 && status < 200 {
-		return true
-	}
-	return false
+	return status == http.StatusNoContent ||
+		status == http.StatusNotModified ||
+		(status >= 100 && status < 200)
 }
 
 // alreadyCompressedType reports whether a Content-Type is for a payload

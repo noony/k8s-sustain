@@ -43,11 +43,8 @@ func changedContainers(current []corev1.Container, recs map[string]workload.Cont
 func quantityEqual(a *resource.Quantity, b *resource.Quantity) bool {
 	aZero := a == nil || a.IsZero()
 	bZero := b == nil || b.IsZero()
-	if aZero && bZero {
-		return true
-	}
-	if aZero != bZero {
-		return false
+	if aZero || bZero {
+		return aZero == bZero
 	}
 	return a.Cmp(*b) == 0
 }

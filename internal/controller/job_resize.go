@@ -42,9 +42,9 @@ func (r *PolicyReconciler) resizeJobPods(ctx context.Context, t *workloadTarget,
 		return 0, nil
 	}
 
-	pods := make([]*corev1.Pod, 0, len(jobPods))
+	pods := make([]*corev1.Pod, len(jobPods))
 	for i := range jobPods {
-		pods = append(pods, &jobPods[i])
+		pods[i] = &jobPods[i]
 	}
 
 	logger.V(1).Info("resizing job pods", "pods", len(pods))
