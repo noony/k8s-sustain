@@ -75,6 +75,7 @@ nav:
           - DaemonSets: guides/daemonsets.md
           - Jobs & CronJobs: guides/jobs-and-cronjobs.md
           - Argo Rollouts: guides/argo-rollouts.md
+          - Standalone Pods & Grouping: guides/standalone-pods-and-grouping.md
       - Integrations:
           - Argo CD: guides/argocd.md
           - KEDA: guides/keda.md

@@ -28,6 +28,14 @@ type workloadTarget struct {
 	// to evaluate Policy.Spec.Selector.LabelSelector.
 	Labels map[string]string
 	Object client.Object
+	// IdentityKind and IdentityName are the kind/name used for Prometheus
+	// queries and WorkloadRecommendation naming. Equal to Kind/Name unless
+	// the pod template carries a valid k8s.sustain.io/owner-name annotation
+	// (api/v1alpha1.OwnerNameAnnotation), in which case they reflect the
+	// override. Kind/Name themselves always stay the real object identity —
+	// used for key(), recycling (Selector/Object), and event/log attribution.
+	IdentityKind string
+	IdentityName string
 }
 
 // key returns a unique identifier for this workload target, used as the retry map key.
@@ -49,17 +57,20 @@ func (w *workloadTarget) recommendableContainers(excludeInit bool) ([]corev1.Con
 // not handle Argo Rollouts).
 func newTargetFromTemplate(obj client.Object, kind string, tmpl *corev1.PodTemplateSpec, selector *metav1.LabelSelector) workloadTarget {
 	t := workloadTarget{
-		Kind:      kind,
-		Name:      obj.GetName(),
-		Namespace: obj.GetNamespace(),
-		Selector:  selector,
-		Labels:    obj.GetLabels(),
-		Object:    obj,
+		Kind:         kind,
+		Name:         obj.GetName(),
+		Namespace:    obj.GetNamespace(),
+		Selector:     selector,
+		Labels:       obj.GetLabels(),
+		Object:       obj,
+		IdentityKind: kind,
+		IdentityName: obj.GetName(),
 	}
 	if tmpl != nil {
 		t.PolicyName = tmpl.Annotations[sustainv1alpha1.PolicyAnnotation]
 		t.Containers = tmpl.Spec.Containers
 		t.InitContainers = tmpl.Spec.InitContainers
+		t.IdentityKind, t.IdentityName = workload.ApplyOwnerNameOverride(kind, obj.GetName(), tmpl.Annotations)
 	}
 	return t
 }

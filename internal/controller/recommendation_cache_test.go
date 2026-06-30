@@ -41,6 +41,45 @@ func TestWlrName_LongNameTruncatedWithHash(t *testing.T) {
 	}
 }
 
+// TestUpsertWorkloadRecommendation_UsesIdentityOverride verifies that when a
+// target's IdentityKind/IdentityName differ from its real Kind/Name (the
+// owner-name grouping override), the WorkloadRecommendation is named and
+// spec'd using the override, not the real object identity.
+func TestUpsertWorkloadRecommendation_UsesIdentityOverride(t *testing.T) {
+	r := reconcilerForCache(t)
+	target := &workloadTarget{
+		Kind: "Deployment", Name: "app-blue", Namespace: "prod",
+		IdentityKind: "Deployment", IdentityName: "app",
+	}
+	recs := map[string]workload.ContainerRecommendation{
+		"app": {CPURequest: qtyp("100m"), MemoryRequest: qtyp("64Mi")},
+	}
+	r.upsertWorkloadRecommendation(context.Background(), target, "my-policy", recs, metav1.Now())
+
+	var wlr sustainv1alpha1.WorkloadRecommendation
+	key := types.NamespacedName{Namespace: "prod", Name: "deployment-app"}
+	if err := r.Get(context.Background(), key, &wlr); err != nil {
+		t.Fatalf("expected WorkloadRecommendation %v to exist, got: %v", key, err)
+	}
+	if wlr.Spec.WorkloadRef.Kind != "Deployment" || wlr.Spec.WorkloadRef.Name != "app" {
+		t.Errorf("WorkloadRef = %s/%s, want Deployment/app (overridden identity)",
+			wlr.Spec.WorkloadRef.Kind, wlr.Spec.WorkloadRef.Name)
+	}
+
+	var notWanted sustainv1alpha1.WorkloadRecommendation
+	notWantedKey := types.NamespacedName{Namespace: "prod", Name: "deployment-app-blue"}
+	if err := r.Get(context.Background(), notWantedKey, &notWanted); err == nil {
+		t.Errorf("did not expect a WorkloadRecommendation keyed by the real name %v", notWantedKey)
+	}
+}
+
+// qtyp parses a resource.Quantity string and returns a pointer to it, for
+// building ContainerRecommendation literals in tests.
+func qtyp(s string) *resource.Quantity {
+	q := resource.MustParse(s)
+	return &q
+}
+
 // reconcilerForCache builds a PolicyReconciler with WLR scheme registered.
 func reconcilerForCache(t *testing.T, objs ...runtime.Object) *PolicyReconciler {
 	t.Helper()
@@ -65,7 +104,7 @@ func TestUpsertWorkloadRecommendation_CreatesObjectOnFirstCall(t *testing.T) {
 	now := metav1.Now()
 
 	r.upsertWorkloadRecommendation(context.Background(),
-		&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web"},
+		&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"},
 		"p",
 		map[string]workload.ContainerRecommendation{
 			"app": {CPURequest: &cpu, MemoryRequest: &mem},
@@ -104,7 +143,7 @@ func TestUpsertWorkloadRecommendation_PersistsRemoveFlags(t *testing.T) {
 	mem := resource.MustParse("128Mi")
 
 	r.upsertWorkloadRecommendation(context.Background(),
-		&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web"},
+		&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"},
 		"p",
 		map[string]workload.ContainerRecommendation{
 			"app": {
@@ -137,7 +176,7 @@ func TestUpsertWorkloadRecommendation_NoOpWhenUnchanged(t *testing.T) {
 	r := reconcilerForCache(t)
 	cpu := resource.MustParse("250m")
 	mem := resource.MustParse("128Mi")
-	tgt := &workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web"}
+	tgt := &workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}
 	recs := map[string]workload.ContainerRecommendation{
 		"app": {CPURequest: &cpu, MemoryRequest: &mem},
 	}
@@ -167,7 +206,7 @@ func TestUpsertWorkloadRecommendation_NoOpWhenUnchanged(t *testing.T) {
 func TestUpsertWorkloadRecommendation_RefreshesStaleObservedAt(t *testing.T) {
 	r := reconcilerForCache(t)
 	cpu := resource.MustParse("250m")
-	tgt := &workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web"}
+	tgt := &workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}
 	recs := map[string]workload.ContainerRecommendation{"app": {CPURequest: &cpu}}
 
 	past := metav1.NewTime(time.Now().Add(-2 * wlrRefreshInterval))
@@ -191,7 +230,7 @@ func TestUpsertWorkloadRecommendation_UpdatesOnChange(t *testing.T) {
 	r := reconcilerForCache(t)
 	cpu1 := resource.MustParse("250m")
 	cpu2 := resource.MustParse("500m")
-	tgt := &workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web"}
+	tgt := &workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}
 
 	r.upsertWorkloadRecommendation(context.Background(), tgt, "p",
 		map[string]workload.ContainerRecommendation{"app": {CPURequest: &cpu1}}, metav1.Now())
@@ -243,7 +282,7 @@ func TestSweepWorkloadRecommendations_RemovesOrphans(t *testing.T) {
 	}
 	r := reconcilerForCache(t, live, orphan, otherPolicy)
 
-	targets := []workloadTarget{{Kind: "Deployment", Namespace: "default", Name: "live"}}
+	targets := []workloadTarget{{Kind: "Deployment", Namespace: "default", Name: "live", IdentityKind: "Deployment", IdentityName: "live"}}
 	r.sweepWorkloadRecommendations(context.Background(), "p", targets)
 
 	// live: present
@@ -258,6 +297,31 @@ func TestSweepWorkloadRecommendations_RemovesOrphans(t *testing.T) {
 	// other-policy: untouched
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-foreign"}, &sustainv1alpha1.WorkloadRecommendation{}); err != nil {
 		t.Errorf("foreign-policy entry should remain, got error: %v", err)
+	}
+}
+
+// TestSweepWorkloadRecommendations_KeepsOverriddenIdentitySharedByTwoTargets
+// verifies sweep does not delete a WorkloadRecommendation that two different
+// real targets (e.g. app-blue and app-green) both write to via the same
+// owner-name override — sweep's "wanted" set must be keyed by the override
+// identity, not each target's real identity.
+func TestSweepWorkloadRecommendations_KeepsOverriddenIdentitySharedByTwoTargets(t *testing.T) {
+	r := reconcilerForCache(t)
+	targets := []workloadTarget{
+		{Kind: "Deployment", Name: "app-blue", Namespace: "prod", IdentityKind: "Deployment", IdentityName: "app", PolicyName: "my-policy"},
+		{Kind: "Deployment", Name: "app-green", Namespace: "prod", IdentityKind: "Deployment", IdentityName: "app", PolicyName: "my-policy"},
+	}
+	recs := map[string]workload.ContainerRecommendation{"app": {CPURequest: qtyp("100m")}}
+	for i := range targets {
+		r.upsertWorkloadRecommendation(context.Background(), &targets[i], "my-policy", recs, metav1.Now())
+	}
+
+	r.sweepWorkloadRecommendations(context.Background(), "my-policy", targets)
+
+	var wlr sustainv1alpha1.WorkloadRecommendation
+	key := types.NamespacedName{Namespace: "prod", Name: "deployment-app"}
+	if err := r.Get(context.Background(), key, &wlr); err != nil {
+		t.Fatalf("expected shared WorkloadRecommendation %v to survive sweep, got: %v", key, err)
 	}
 }
 

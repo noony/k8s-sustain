@@ -116,6 +116,14 @@ func (b *podBuilder) noAnnotation() *podBuilder {
 	return b
 }
 
+func (b *podBuilder) annotation(key, value string) *podBuilder {
+	if b.pod.Annotations == nil {
+		b.pod.Annotations = map[string]string{}
+	}
+	b.pod.Annotations[key] = value
+	return b
+}
+
 func (b *podBuilder) owner(kind, name string) *podBuilder {
 	ctrl := true
 	b.pod.OwnerReferences = append(b.pod.OwnerReferences, metav1.OwnerReference{
@@ -441,6 +449,59 @@ func TestReconcile_OrphanPodSkipped(t *testing.T) {
 
 	if got := len(sink.snapshot()); got != 0 {
 		t.Errorf("sink calls = %d, want 0", got)
+	}
+}
+
+// TestReconcile_OwnerNameOverride_BarePod verifies a bare pod (no controller
+// owner) with a valid owner-name annotation is recorded under kind "Pod" with
+// the annotation value as name, instead of being skipped as an orphan.
+func TestReconcile_OwnerNameOverride_BarePod(t *testing.T) {
+	pod := newPod("etl-daily-run-1").
+		annotation(sustainv1alpha1.OwnerNameAnnotation, "etl-daily").
+		container("main", "256Mi").
+		statusOOM("main", time.Now(), 1).
+		build()
+
+	sch := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod).Build()
+	sink := &stubSink{}
+
+	reconcile(t, c, sink, nil, pod, time.Now())
+
+	calls := sink.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("sink calls = %d, want 1", len(calls))
+	}
+	wantKey := Key{Namespace: "default", OwnerKind: "Pod", OwnerName: "etl-daily", Container: "main"}
+	if calls[0].Key != wantKey {
+		t.Errorf("key = %#v, want %#v", calls[0].Key, wantKey)
+	}
+}
+
+// TestReconcile_OwnerNameOverride_OwnedPod verifies a pod with a real
+// controller owner and a valid owner-name annotation is recorded under the
+// real kind but the overridden name.
+func TestReconcile_OwnerNameOverride_OwnedPod(t *testing.T) {
+	pod := newPod("app-blue-xyz").
+		owner("StatefulSet", "app-blue").
+		annotation(sustainv1alpha1.OwnerNameAnnotation, "app").
+		container("main", "256Mi").
+		statusOOM("main", time.Now(), 1).
+		build()
+
+	sch := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod).Build()
+	sink := &stubSink{}
+
+	reconcile(t, c, sink, nil, pod, time.Now())
+
+	calls := sink.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("sink calls = %d, want 1", len(calls))
+	}
+	wantKey := Key{Namespace: "default", OwnerKind: "StatefulSet", OwnerName: "app", Container: "main"}
+	if calls[0].Key != wantKey {
+		t.Errorf("key = %#v, want %#v", calls[0].Key, wantKey)
 	}
 }
 

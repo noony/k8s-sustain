@@ -58,7 +58,7 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	if t.Object != nil {
 		workloadCreated = t.Object.GetCreationTimestamp().Time
 	}
-	recs, err := r.buildRecommendations(ctx, policy, t.Namespace, t.Kind, t.Name, containers, autoInfo, workloadCreated)
+	recs, err := r.buildRecommendations(ctx, policy, t.Namespace, t.IdentityKind, t.IdentityName, containers, autoInfo, workloadCreated)
 	if err != nil {
 		return r.handleStepError(ctx, t, "prometheus", "Prometheus query failed", err)
 	}
@@ -84,6 +84,17 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 
 	if r.RecommendOnly {
 		logger.Info("recommend-only: computed recommendations", "recommendations", recs)
+		r.recordStepSuccess(t)
+		return nil
+	}
+
+	// Bare-pod identities (Kind == "Pod") have no controller owner that could
+	// recreate an evicted/resized pod — recycling never applies, in any
+	// UpdateMode. This is a permanent, unconditional exception, not a mode
+	// check: the recommendation above is still computed and cached (the
+	// webhook's Prometheus-outage fallback still benefits), but this is the
+	// only kind that stops here rather than dispatching to a recycle path.
+	if t.Kind == "Pod" {
 		r.recordStepSuccess(t)
 		return nil
 	}

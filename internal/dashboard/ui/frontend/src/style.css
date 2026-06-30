@@ -552,6 +552,10 @@ tbody tr:last-child td {
   background: var(--purple-soft);
   color: var(--purple);
 }
+.kind-Pod {
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
 
 /* Charts */
 .chart-grid {

@@ -42,6 +42,53 @@ func TestDeploymentToTarget(t *testing.T) {
 	}
 }
 
+func TestDeploymentToTarget_OwnerNameOverride(t *testing.T) {
+	d := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-blue", Namespace: "prod"},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "app-blue"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						sustainv1alpha1.PolicyAnnotation:    "my-policy",
+						sustainv1alpha1.OwnerNameAnnotation: "app",
+					},
+				},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+			},
+		},
+	}
+
+	target := deploymentToTarget(d)
+	if target.Kind != "Deployment" || target.Name != "app-blue" {
+		t.Errorf("real identity changed: Kind=%s Name=%s, want Deployment/app-blue", target.Kind, target.Name)
+	}
+	if target.IdentityKind != "Deployment" || target.IdentityName != "app" {
+		t.Errorf("override identity = %s/%s, want Deployment/app", target.IdentityKind, target.IdentityName)
+	}
+	if target.key() != "Deployment/prod/app-blue" {
+		t.Errorf("key() = %q, want the REAL identity key, got override leaking into key()", target.key())
+	}
+}
+
+func TestDeploymentToTarget_NoOverride_IdentityMatchesReal(t *testing.T) {
+	d := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod"},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "my-policy"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+			},
+		},
+	}
+	target := deploymentToTarget(d)
+	if target.IdentityKind != target.Kind || target.IdentityName != target.Name {
+		t.Errorf("no annotation set: identity (%s/%s) should equal real (%s/%s)",
+			target.IdentityKind, target.IdentityName, target.Kind, target.Name)
+	}
+}
+
 func TestStatefulSetToTarget(t *testing.T) {
 	s := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "prod"},

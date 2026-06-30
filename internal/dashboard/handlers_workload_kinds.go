@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -18,8 +21,10 @@ import (
 )
 
 // supportedWorkloadKinds is the canonical ordering used by responses that
-// iterate over every workload kind the dashboard recognises.
-var supportedWorkloadKinds = []string{"Deployment", "StatefulSet", "DaemonSet", "Rollout", "CronJob", "Job"}
+// iterate over every workload kind the dashboard recognises. "Pod" identifies
+// bare-pod identities formed via api/v1alpha1.OwnerNameAnnotation — see
+// workload.GroupBarePods.
+var supportedWorkloadKinds = []string{"Deployment", "StatefulSet", "DaemonSet", "Rollout", "CronJob", "Job", "Pod"}
 
 // containerStatus and coordinationFactors are referenced by multiple handler
 // files; their definitions are kept here as the workload-shaped shared types.
@@ -43,11 +48,24 @@ type coordinationFactors struct {
 // workloadEntry is the kind-agnostic view of a workload object: just the
 // identity and the pod template that owns its resource decisions. Handlers
 // consume it instead of branching on the concrete Kubernetes type.
+//
+// Name is the resolved identity (the k8s.sustain.io/owner-name override
+// value when the pod template carries a valid one, otherwise the object's
+// real Kubernetes name) — see groupEntriesByIdentity. This is deliberate:
+// Prometheus and the WorkloadRecommendation are keyed by the same resolved
+// identity (internal/workload.ApplyOwnerNameOverride), so addressing,
+// listing, and signal lookups all need to agree on it, not the real object
+// name, or recommendations/risk/drift would silently fail to match for any
+// overridden workload.
 type workloadEntry struct {
 	Namespace string
 	Name      string
 	Template  *corev1.PodTemplateSpec
 	OwnerRefs []metav1.OwnerReference
+	// CreationTimestamp is read by groupEntriesByIdentity to pick the most
+	// recently created object as the representative when multiple real
+	// objects share one overridden identity. Unused once grouping is done.
+	CreationTimestamp time.Time
 }
 
 func (e workloadEntry) PolicyAnnotation() string {
@@ -75,6 +93,12 @@ func (e workloadEntry) InitContainers() []corev1.Container {
 // kind-agnostic entries. For "Job" it skips Jobs spawned by a CronJob — those
 // appear under their owning CronJob row, and metrics attribute their pods to
 // owner_kind=CronJob.
+//
+// Every kind except "Pod" goes through groupEntriesByIdentity: real objects
+// whose pod template carries a k8s.sustain.io/owner-name override collapse
+// onto one entry named by the override (see workloadEntry.Name), matching
+// what Prometheus/WorkloadRecommendation already key by. "Pod" doesn't need
+// the extra pass — workload.GroupBarePods already produces final identities.
 func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...client.ListOption) ([]workloadEntry, error) {
 	switch kind {
 	case "Deployment":
@@ -85,9 +109,9 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		out := make([]workloadEntry, len(list.Items))
 		for i := range list.Items {
 			d := &list.Items[i]
-			out[i] = workloadEntry{Namespace: d.Namespace, Name: d.Name, Template: &d.Spec.Template, OwnerRefs: d.OwnerReferences}
+			out[i] = workloadEntry{Namespace: d.Namespace, Name: d.Name, Template: &d.Spec.Template, OwnerRefs: d.OwnerReferences, CreationTimestamp: d.CreationTimestamp.Time}
 		}
-		return out, nil
+		return groupEntriesByIdentity(out, kind), nil
 	case "StatefulSet":
 		var list appsv1.StatefulSetList
 		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
@@ -96,9 +120,9 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		out := make([]workloadEntry, len(list.Items))
 		for i := range list.Items {
 			st := &list.Items[i]
-			out[i] = workloadEntry{Namespace: st.Namespace, Name: st.Name, Template: &st.Spec.Template, OwnerRefs: st.OwnerReferences}
+			out[i] = workloadEntry{Namespace: st.Namespace, Name: st.Name, Template: &st.Spec.Template, OwnerRefs: st.OwnerReferences, CreationTimestamp: st.CreationTimestamp.Time}
 		}
-		return out, nil
+		return groupEntriesByIdentity(out, kind), nil
 	case "DaemonSet":
 		var list appsv1.DaemonSetList
 		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
@@ -107,9 +131,9 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		out := make([]workloadEntry, len(list.Items))
 		for i := range list.Items {
 			ds := &list.Items[i]
-			out[i] = workloadEntry{Namespace: ds.Namespace, Name: ds.Name, Template: &ds.Spec.Template, OwnerRefs: ds.OwnerReferences}
+			out[i] = workloadEntry{Namespace: ds.Namespace, Name: ds.Name, Template: &ds.Spec.Template, OwnerRefs: ds.OwnerReferences, CreationTimestamp: ds.CreationTimestamp.Time}
 		}
-		return out, nil
+		return groupEntriesByIdentity(out, kind), nil
 	case "Rollout":
 		var list rolloutsv1alpha1.RolloutList
 		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
@@ -118,9 +142,9 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		out := make([]workloadEntry, len(list.Items))
 		for i := range list.Items {
 			r := &list.Items[i]
-			out[i] = workloadEntry{Namespace: r.Namespace, Name: r.Name, Template: &r.Spec.Template, OwnerRefs: r.OwnerReferences}
+			out[i] = workloadEntry{Namespace: r.Namespace, Name: r.Name, Template: &r.Spec.Template, OwnerRefs: r.OwnerReferences, CreationTimestamp: r.CreationTimestamp.Time}
 		}
-		return out, nil
+		return groupEntriesByIdentity(out, kind), nil
 	case "CronJob":
 		var list batchv1.CronJobList
 		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
@@ -129,9 +153,9 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		out := make([]workloadEntry, len(list.Items))
 		for i := range list.Items {
 			cj := &list.Items[i]
-			out[i] = workloadEntry{Namespace: cj.Namespace, Name: cj.Name, Template: &cj.Spec.JobTemplate.Spec.Template, OwnerRefs: cj.OwnerReferences}
+			out[i] = workloadEntry{Namespace: cj.Namespace, Name: cj.Name, Template: &cj.Spec.JobTemplate.Spec.Template, OwnerRefs: cj.OwnerReferences, CreationTimestamp: cj.CreationTimestamp.Time}
 		}
-		return out, nil
+		return groupEntriesByIdentity(out, kind), nil
 	case "Job":
 		var list batchv1.JobList
 		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
@@ -143,7 +167,18 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 			if workload.IsOwnedByKind(j.OwnerReferences, "CronJob") {
 				continue
 			}
-			out = append(out, workloadEntry{Namespace: j.Namespace, Name: j.Name, Template: &j.Spec.Template, OwnerRefs: j.OwnerReferences})
+			out = append(out, workloadEntry{Namespace: j.Namespace, Name: j.Name, Template: &j.Spec.Template, OwnerRefs: j.OwnerReferences, CreationTimestamp: j.CreationTimestamp.Time})
+		}
+		return groupEntriesByIdentity(out, kind), nil
+	case "Pod":
+		var list corev1.PodList
+		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
+			return nil, err
+		}
+		groups := workload.GroupBarePods(list.Items)
+		out := make([]workloadEntry, len(groups))
+		for i, g := range groups {
+			out[i] = workloadEntry{Namespace: g.Namespace, Name: g.Name, Template: barePodGroupTemplate(g)}
 		}
 		return out, nil
 	default:
@@ -151,37 +186,104 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 	}
 }
 
-// getWorkloadEntry fetches a single workload by name and returns it as a
-// workloadEntry. Used wherever a handler needs the pod template, container
-// list, or policy annotation for one specific object.
-func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name string) (workloadEntry, error) {
-	var obj client.Object
-	switch kind {
-	case "Deployment":
-		obj = &appsv1.Deployment{}
-	case "StatefulSet":
-		obj = &appsv1.StatefulSet{}
-	case "DaemonSet":
-		obj = &appsv1.DaemonSet{}
-	case "Rollout":
-		obj = &rolloutsv1alpha1.Rollout{}
-	case "CronJob":
-		obj = &batchv1.CronJob{}
-	case "Job":
-		obj = &batchv1.Job{}
-	default:
-		return workloadEntry{}, fmt.Errorf("unsupported kind %q", kind)
+// groupEntriesByIdentity collapses entries whose pod template carries the
+// same k8s.sustain.io/owner-name override onto one entry, keeping the most
+// recently created one as the representative (its Template/OwnerRefs are
+// what gets displayed) and renaming it to the resolved identity. Entries
+// without a valid override pass through unchanged — their own name is
+// already their identity. kind is the real declared kind (e.g. "Deployment"),
+// passed to workload.ApplyOwnerNameOverride; since it's never empty here, the
+// override never changes kind, only name.
+//
+// Order of the returned slice follows first-seen identity, for stable
+// pagination across calls against an unchanged object set.
+func groupEntriesByIdentity(entries []workloadEntry, kind string) []workloadEntry {
+	best := make(map[string]workloadEntry, len(entries))
+	var order []string
+	for _, e := range entries {
+		var annotations map[string]string
+		if e.Template != nil {
+			annotations = e.Template.Annotations
+		}
+		_, identity := workload.ApplyOwnerNameOverride(kind, e.Name, annotations)
+		cur, seen := best[identity]
+		if !seen || e.CreationTimestamp.After(cur.CreationTimestamp) {
+			if !seen {
+				order = append(order, identity)
+			}
+			e.Name = identity
+			best[identity] = e
+		}
 	}
-	if err := s.K8sClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, obj); err != nil {
+	out := make([]workloadEntry, 0, len(order))
+	for _, identity := range order {
+		out = append(out, best[identity])
+	}
+	return out
+}
+
+// barePodGroupTemplate synthesizes the PodTemplateSpec workloadEntry expects
+// for a bare-pod group: containers/init-containers come from the group's
+// representative pod (the most recently created one), and annotations/labels
+// (read by workloadEntry.PolicyAnnotation and the policy-selector label match)
+// come from the same pod. There is no real pod template for a bare pod — this
+// exists purely so "Pod" can reuse workloadEntry's existing accessors instead
+// of every caller branching on kind.
+func barePodGroupTemplate(g workload.BarePodGroup) *corev1.PodTemplateSpec {
+	tmpl := &corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{Containers: g.Containers, InitContainers: g.InitContainers},
+	}
+	if g.Representative != nil {
+		tmpl.Annotations = g.Representative.Annotations
+		tmpl.Labels = g.Representative.Labels
+	}
+	return tmpl
+}
+
+// getWorkloadEntry fetches a single workload by its resolved identity name
+// and returns it as a workloadEntry. Used wherever a handler needs the pod
+// template, container list, or policy annotation for one specific entry.
+//
+// This cannot be a direct client.Get by name: when a pod template carries a
+// k8s.sustain.io/owner-name override, `name` is the override value, not any
+// real object's Kubernetes name (there may be no object actually named
+// that — e.g. two real Deployments grouped under one shared identity). So
+// this lists every object of kind in the namespace (via listWorkloadsOfKind,
+// which already applies the same override resolution) and finds the entry
+// whose resolved Name matches.
+func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name string) (workloadEntry, error) {
+	entries, err := s.listWorkloadsOfKind(ctx, kind, client.InNamespace(namespace))
+	if err != nil {
 		return workloadEntry{}, err
 	}
-	// workload.PodTemplateOf intentionally doesn't depend on the rollouts API,
-	// so pull the Rollout's pod template directly here.
-	if r, ok := obj.(*rolloutsv1alpha1.Rollout); ok {
-		return workloadEntry{Namespace: r.Namespace, Name: r.Name, Template: &r.Spec.Template, OwnerRefs: r.OwnerReferences}, nil
+	for _, e := range entries {
+		if e.Name == name {
+			return e, nil
+		}
 	}
-	tmpl, refs, _, _ := workload.PodTemplateOf(obj)
-	return workloadEntry{Namespace: obj.GetNamespace(), Name: obj.GetName(), Template: tmpl, OwnerRefs: refs}, nil
+	return workloadEntry{}, apierrors.NewNotFound(groupResourceForKind(kind), name)
+}
+
+// groupResourceForKind maps a dashboard workload kind to the GroupResource
+// used to build a NotFound error, since getWorkloadEntry no longer performs
+// a typed client.Get that would otherwise supply one automatically.
+func groupResourceForKind(kind string) schema.GroupResource {
+	switch kind {
+	case "Deployment":
+		return schema.GroupResource{Group: "apps", Resource: "deployments"}
+	case "StatefulSet":
+		return schema.GroupResource{Group: "apps", Resource: "statefulsets"}
+	case "DaemonSet":
+		return schema.GroupResource{Group: "apps", Resource: "daemonsets"}
+	case "Rollout":
+		return schema.GroupResource{Group: "argoproj.io", Resource: "rollouts"}
+	case "CronJob":
+		return schema.GroupResource{Group: "batch", Resource: "cronjobs"}
+	case "Job":
+		return schema.GroupResource{Group: "batch", Resource: "jobs"}
+	default:
+		return corev1.Resource("pods")
+	}
 }
 
 // workloadKey assembles the "namespace|kind|name" key used to address a

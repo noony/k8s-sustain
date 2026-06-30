@@ -21,9 +21,12 @@ type WorkloadRecommendationSpec struct {
 }
 
 // WorkloadReference uniquely identifies a workload within the cluster.
-// Kind is one of: Deployment, StatefulSet, DaemonSet, CronJob, Job, Rollout.
+// Kind is one of: Deployment, StatefulSet, DaemonSet, CronJob, Job, Rollout,
+// Pod. Pod identifies a bare-pod identity formed via
+// api/v1alpha1.OwnerNameAnnotation (see workload.GroupBarePods) — Name is the
+// owner-name annotation value, not a real Kubernetes object name.
 type WorkloadReference struct {
-	// +kubebuilder:validation:Enum=Deployment;StatefulSet;DaemonSet;CronJob;Job;Rollout
+	// +kubebuilder:validation:Enum=Deployment;StatefulSet;DaemonSet;CronJob;Job;Rollout;Pod
 	Kind string `json:"kind"`
 	// +kubebuilder:validation:MinLength=1
 	Namespace string `json:"namespace"`

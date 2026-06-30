@@ -114,6 +114,11 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 		logger.V(1).Info("owner resolution failed; falling back to immediate controller",
 			"kind", ownerKind, "name", ownerName, "err", err)
 	}
+	// Keep the live-OOM cache key consistent with the identity the
+	// controller/webhook query Prometheus and the WorkloadRecommendation
+	// under — otherwise an overridden identity's live OOM signal is cached
+	// under the real owner and never found by RecentByWorkload lookups.
+	ownerKind, ownerName = workload.ApplyOwnerNameOverride(ownerKind, ownerName, pod.GetAnnotations())
 	if ownerKind == "" {
 		return ctrl.Result{}, nil
 	}

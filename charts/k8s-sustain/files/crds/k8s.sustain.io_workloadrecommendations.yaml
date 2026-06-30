@@ -83,6 +83,7 @@ spec:
                     - CronJob
                     - Job
                     - Rollout
+                    - Pod
                     type: string
                   name:
                     minLength: 1

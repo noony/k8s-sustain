@@ -378,6 +378,19 @@ spec:
                             - OnCreate
                             - Ongoing
                             type: string
+                          pod:
+                            description: |-
+                              Pod targets bare pods that opt in via OwnerNameAnnotation (no controller
+                              owner — e.g. Airflow's KubernetesPodOperator). OnCreate injects
+                              resources at admission like every other kind. Ongoing computes and
+                              caches a recommendation the same as any kind, but NEVER recycles the
+                              pod: there is no controller that could recreate it after an eviction
+                              or in-place resize, so the "Ongoing" half of the contract that applies
+                              to every other kind does not apply here.
+                            enum:
+                            - OnCreate
+                            - Ongoing
+                            type: string
                           statefulSet:
                             description: UpdateMode defines how resources are updated
                               on a given workload type.

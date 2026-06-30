@@ -46,6 +46,32 @@ tests:
           path: spec.groups[6].rules[2].expr
           pattern: 'sum by \(namespace, owner_kind, owner_name, container\)'
 
+  - it: adds the owner-name override rule to workload_mapping with the four base rules unless-guarded
+    set:
+      prometheusRule.enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 6
+      - equal:
+          path: spec.groups[0].rules[4].record
+          value: k8s_sustain:pod_owner_kind_internal
+      - matchRegex:
+          path: spec.groups[0].rules[4].expr
+          pattern: 'kube_pod_owner\{'
+      - equal:
+          path: spec.groups[0].rules[5].record
+          value: k8s_sustain:pod_workload
+      - matchRegex:
+          path: spec.groups[0].rules[5].expr
+          pattern: 'kube_pod_labels\{label_k8s_sustain_io_owner_name!=""\}'
+      - matchRegex:
+          path: spec.groups[0].rules[5].expr
+          pattern: 'k8s_sustain:pod_owner_kind_internal'
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: 'unless on\(namespace, pod\) kube_pod_labels\{label_k8s_sustain_io_owner_name!=""\}'
+
   - it: adds additionalLabels
     set:
       prometheusRule.enabled: true

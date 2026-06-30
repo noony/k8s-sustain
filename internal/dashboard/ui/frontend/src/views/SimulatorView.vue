@@ -602,7 +602,9 @@ onUnmounted(() => {
           <option value="StatefulSet">StatefulSet</option>
           <option value="DaemonSet">DaemonSet</option>
           <option value="CronJob">CronJob</option>
+          <option value="Job">Job</option>
           <option value="Rollout">Rollout</option>
+          <option value="Pod">Pod</option>
         </select>
       </div>
       <div class="form-group">

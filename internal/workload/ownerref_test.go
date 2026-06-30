@@ -80,3 +80,72 @@ func TestPodOwnedByWorkload(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyOwnerNameOverride(t *testing.T) {
+	tests := []struct {
+		name        string
+		kind        string
+		inputName   string
+		annotations map[string]string
+		wantKind    string
+		wantName    string
+	}{
+		{
+			name:        "no annotation leaves kind and name unchanged",
+			kind:        "Deployment",
+			inputName:   "web",
+			annotations: nil,
+			wantKind:    "Deployment",
+			wantName:    "web",
+		},
+		{
+			name:        "valid annotation with empty kind defaults to Pod",
+			kind:        "",
+			inputName:   "",
+			annotations: map[string]string{"k8s.sustain.io/owner-name": "etl-daily"},
+			wantKind:    "Pod",
+			wantName:    "etl-daily",
+		},
+		{
+			name:        "valid annotation with real kind keeps kind, overrides name",
+			kind:        "Deployment",
+			inputName:   "app-blue",
+			annotations: map[string]string{"k8s.sustain.io/owner-name": "app"},
+			wantKind:    "Deployment",
+			wantName:    "app",
+		},
+		{
+			name:        "invalid label value (uppercase, slash) leaves kind and name unchanged",
+			kind:        "Deployment",
+			inputName:   "app-blue",
+			annotations: map[string]string{"k8s.sustain.io/owner-name": "Invalid/Value"},
+			wantKind:    "Deployment",
+			wantName:    "app-blue",
+		},
+		{
+			name:        "invalid label value (too long) leaves kind and name unchanged",
+			kind:        "",
+			inputName:   "",
+			annotations: map[string]string{"k8s.sustain.io/owner-name": "a-value-that-is-way-too-long-to-ever-be-a-valid-kubernetes-label-value"},
+			wantKind:    "",
+			wantName:    "",
+		},
+		{
+			name:        "empty-string annotation value leaves kind and name unchanged",
+			kind:        "Deployment",
+			inputName:   "app-blue",
+			annotations: map[string]string{"k8s.sustain.io/owner-name": ""},
+			wantKind:    "Deployment",
+			wantName:    "app-blue",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotKind, gotName := ApplyOwnerNameOverride(tt.kind, tt.inputName, tt.annotations)
+			if gotKind != tt.wantKind || gotName != tt.wantName {
+				t.Errorf("ApplyOwnerNameOverride(%q, %q, %v) = (%q, %q), want (%q, %q)",
+					tt.kind, tt.inputName, tt.annotations, gotKind, gotName, tt.wantKind, tt.wantName)
+			}
+		})
+	}
+}

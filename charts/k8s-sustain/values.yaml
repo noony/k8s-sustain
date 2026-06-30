@@ -259,9 +259,135 @@ prometheusRule:
         # those pods only appear with owner_kind=CronJob (see CronJob rule
         # below). Without this exclusion the same pod would carry two
         # pod_workload series, breaking group_left joins downstream.
+        #
+        # `unless on(namespace,pod) kube_pod_labels{...owner-name...}` drops
+        # this rule's row for any pod carrying a valid owner-name override —
+        # the dedicated override rule below is the only source of truth for
+        # those pods, so they never end up with two conflicting owner_name
+        # values feeding the same (namespace,pod) key downstream.
         - record: k8s_sustain:pod_workload
           expr: |
-            max by (namespace, pod, owner_kind, owner_name) (
+            (
+              max by (namespace, pod, owner_kind, owner_name) (
+                kube_pod_owner{
+                  owner_kind=~"StatefulSet|DaemonSet|Job",
+                  owner_is_controller="true"
+                }
+                unless on(namespace, pod)
+                (
+                  label_replace(
+                    kube_pod_owner{owner_kind="Job", owner_is_controller="true"},
+                    "job_name", "$1", "owner_name", "(.*)"
+                  )
+                  * on(namespace, job_name) group_left
+                  max by (namespace, job_name) (
+                    kube_job_owner{owner_kind="CronJob", owner_is_controller="true"}
+                  )
+                )
+              )
+            )
+            unless on(namespace, pod) kube_pod_labels{label_k8s_sustain_io_owner_name!=""}
+        # Map pod → CronJob by resolving Job → CronJob via kube_job_owner.
+        # Mirrors the ReplicaSet → Deployment pattern: rename owner_name (Job)
+        # to job_name, clear owner labels, then group_left from kube_job_owner.
+        - record: k8s_sustain:pod_workload
+          expr: |
+            (
+              max by (namespace, pod, owner_kind, owner_name) (
+                label_replace(
+                  label_replace(
+                    label_replace(
+                      max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
+                        kube_pod_owner{owner_kind="Job", owner_is_controller="true"}
+                      ),
+                      "job_name", "$1", "owner_name", "(.*)"
+                    ),
+                    "owner_kind", "", "owner_kind", ".*"
+                  ),
+                  "owner_name", "", "owner_name", ".*"
+                )
+                * on(namespace, job_name) group_left(owner_kind, owner_name)
+                max by (namespace, job_name, owner_kind, owner_name) (
+                  kube_job_owner{owner_kind="CronJob", owner_is_controller="true"}
+                )
+              )
+            )
+            unless on(namespace, pod) kube_pod_labels{label_k8s_sustain_io_owner_name!=""}
+        # Map pod → Deployment by resolving ReplicaSet → Deployment.
+        # Renames owner_name (RS name) → replicaset and clears conflicting labels
+        # so group_left can inject owner_kind/owner_name from kube_replicaset_owner.
+        # Both sides are deduplicated with max by() to handle multiple
+        # kube-state-metrics instances producing duplicate series.
+        - record: k8s_sustain:pod_workload
+          expr: |
+            (
+              max by (namespace, pod, owner_kind, owner_name) (
+                label_replace(
+                  label_replace(
+                    label_replace(
+                      max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
+                        kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"}
+                      ),
+                      "replicaset", "$1", "owner_name", "(.*)"
+                    ),
+                    "owner_kind", "", "owner_kind", ".*"
+                  ),
+                  "owner_name", "", "owner_name", ".*"
+                )
+                * on(namespace, replicaset) group_left(owner_kind, owner_name)
+                max by (namespace, replicaset, owner_kind, owner_name) (
+                  kube_replicaset_owner{owner_kind="Deployment", owner_is_controller="true"}
+                )
+              )
+            )
+            unless on(namespace, pod) kube_pod_labels{label_k8s_sustain_io_owner_name!=""}
+        # Argo Rollouts: Pod → ReplicaSet → Rollout
+        - record: k8s_sustain:pod_workload
+          expr: |
+            (
+              max by (namespace, pod, owner_kind, owner_name) (
+                label_replace(
+                  label_replace(
+                    label_replace(
+                      max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
+                        kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"}
+                      ),
+                      "replicaset", "$1", "owner_name", "(.*)"
+                    ),
+                    "owner_kind", "", "owner_kind", ".*"
+                  ),
+                  "owner_name", "", "owner_name", ".*"
+                )
+                * on(namespace, replicaset) group_left(owner_kind, owner_name)
+                max by (namespace, replicaset, owner_kind, owner_name) (
+                  kube_replicaset_owner{owner_kind="Rollout", owner_is_controller="true"}
+                )
+              )
+            )
+            unless on(namespace, pod) kube_pod_labels{label_k8s_sustain_io_owner_name!=""}
+        # Internal-only: pod → owner_kind for every pod with a REAL controller
+        # owner (StatefulSet/DaemonSet/Job direct, Job→CronJob, ReplicaSet→
+        # Deployment, ReplicaSet→Rollout) — the SAME four resolution paths as
+        # the rules above, but WITHOUT their label-based `unless` exclusion.
+        #
+        # Why this duplication exists (do not "simplify" it away): the four
+        # rules above deliberately exclude any pod carrying the
+        # k8s.sustain.io/owner-name override label, so that
+        # k8s_sustain:pod_workload has exactly one row per pod. That means
+        # k8s_sustain:pod_workload has NO row at all for label-bearing pods,
+        # so it cannot be used to answer "what is this pod's REAL owner_kind,
+        # if any?" — which the owner-name override rule below needs, to tell
+        # apart a Deployment pod using the override for blue/green-style
+        # grouping (owner_kind must stay Deployment) from a bare pod with no
+        # real owner using the override (owner_kind must become the literal
+        # "Pod"). This rule is that unguarded, always-populated answer.
+        # Prometheus recording rules have no "compute X, then branch on X"
+        # primitive across rules other than chaining through a materialized
+        # intermediate series like this one, so some duplication of the join
+        # logic above is unavoidable.
+        - record: k8s_sustain:pod_owner_kind_internal
+          expr: |
+            max by (namespace, pod, owner_kind) (
               kube_pod_owner{
                 owner_kind=~"StatefulSet|DaemonSet|Job",
                 owner_is_controller="true"
@@ -278,73 +404,86 @@ prometheusRule:
                 )
               )
             )
-        # Map pod → CronJob by resolving Job → CronJob via kube_job_owner.
-        # Mirrors the ReplicaSet → Deployment pattern: rename owner_name (Job)
-        # to job_name, clear owner labels, then group_left from kube_job_owner.
-        - record: k8s_sustain:pod_workload
-          expr: |
-            max by (namespace, pod, owner_kind, owner_name) (
+            or
+            max by (namespace, pod, owner_kind) (
               label_replace(
                 label_replace(
-                  label_replace(
-                    max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
-                      kube_pod_owner{owner_kind="Job", owner_is_controller="true"}
-                    ),
-                    "job_name", "$1", "owner_name", "(.*)"
+                  max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
+                    kube_pod_owner{owner_kind="Job", owner_is_controller="true"}
                   ),
-                  "owner_kind", "", "owner_kind", ".*"
+                  "job_name", "$1", "owner_name", "(.*)"
                 ),
-                "owner_name", "", "owner_name", ".*"
+                "owner_kind", "", "owner_kind", ".*"
               )
-              * on(namespace, job_name) group_left(owner_kind, owner_name)
-              max by (namespace, job_name, owner_kind, owner_name) (
+              * on(namespace, job_name) group_left(owner_kind)
+              max by (namespace, job_name, owner_kind) (
                 kube_job_owner{owner_kind="CronJob", owner_is_controller="true"}
               )
             )
-        # Map pod → Deployment by resolving ReplicaSet → Deployment.
-        # Renames owner_name (RS name) → replicaset and clears conflicting labels
-        # so group_left can inject owner_kind/owner_name from kube_replicaset_owner.
-        # Both sides are deduplicated with max by() to handle multiple
-        # kube-state-metrics instances producing duplicate series.
-        - record: k8s_sustain:pod_workload
-          expr: |
-            max by (namespace, pod, owner_kind, owner_name) (
+            or
+            max by (namespace, pod, owner_kind) (
               label_replace(
                 label_replace(
-                  label_replace(
-                    max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
-                      kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"}
-                    ),
-                    "replicaset", "$1", "owner_name", "(.*)"
+                  max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
+                    kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"}
                   ),
-                  "owner_kind", "", "owner_kind", ".*"
+                  "replicaset", "$1", "owner_name", "(.*)"
                 ),
-                "owner_name", "", "owner_name", ".*"
+                "owner_kind", "", "owner_kind", ".*"
               )
-              * on(namespace, replicaset) group_left(owner_kind, owner_name)
-              max by (namespace, replicaset, owner_kind, owner_name) (
+              * on(namespace, replicaset) group_left(owner_kind)
+              max by (namespace, replicaset, owner_kind) (
                 kube_replicaset_owner{owner_kind="Deployment", owner_is_controller="true"}
               )
             )
-        # Argo Rollouts: Pod → ReplicaSet → Rollout
-        - record: k8s_sustain:pod_workload
-          expr: |
-            max by (namespace, pod, owner_kind, owner_name) (
+            or
+            max by (namespace, pod, owner_kind) (
               label_replace(
                 label_replace(
-                  label_replace(
-                    max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
-                      kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"}
-                    ),
-                    "replicaset", "$1", "owner_name", "(.*)"
+                  max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
+                    kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"}
                   ),
-                  "owner_kind", "", "owner_kind", ".*"
+                  "replicaset", "$1", "owner_name", "(.*)"
                 ),
-                "owner_name", "", "owner_name", ".*"
+                "owner_kind", "", "owner_kind", ".*"
               )
-              * on(namespace, replicaset) group_left(owner_kind, owner_name)
-              max by (namespace, replicaset, owner_kind, owner_name) (
+              * on(namespace, replicaset) group_left(owner_kind)
+              max by (namespace, replicaset, owner_kind) (
                 kube_replicaset_owner{owner_kind="Rollout", owner_is_controller="true"}
+              )
+            )
+        # Owner-name override (api/v1alpha1.OwnerNameAnnotation): the webhook
+        # mirrors a valid annotation onto a pod label at admission (see
+        # internal/webhook), which kube-state-metrics exposes here as
+        # kube_pod_labels (metricLabelsAllowlist, configured above). owner_name
+        # becomes the label value. owner_kind becomes the REAL kind when the
+        # pod has one — joined from k8s_sustain:pod_owner_kind_internal above,
+        # which (unlike k8s_sustain:pod_workload) is NOT guarded by the
+        # label-based `unless` and therefore still has a row for these pods —
+        # or the literal "Pod" when it doesn't (no real controller owner).
+        # Both branches below must use that same unguarded source: testing
+        # "does this pod have a real owner" against k8s_sustain:pod_workload
+        # would always say "no" for label-bearing pods (they're excluded from
+        # it by construction), making the check meaningless.
+        - record: k8s_sustain:pod_workload
+          expr: |
+            (
+              label_replace(
+                kube_pod_labels{label_k8s_sustain_io_owner_name!=""}
+                * on(namespace, pod) group_left(owner_kind)
+                max by (namespace, pod, owner_kind) (k8s_sustain:pod_owner_kind_internal),
+                "owner_name", "$1", "label_k8s_sustain_io_owner_name", "(.*)"
+              )
+            )
+            or
+            (
+              label_replace(
+                label_replace(
+                  kube_pod_labels{label_k8s_sustain_io_owner_name!=""}
+                  unless on(namespace, pod) k8s_sustain:pod_owner_kind_internal,
+                  "owner_name", "$1", "label_k8s_sustain_io_owner_name", "(.*)"
+                ),
+                "owner_kind", "Pod", "", ""
               )
             )
     - name: k8s_sustain.cpu_rates
@@ -742,6 +881,13 @@ prometheus:
   # Required: kube-state-metrics provides pod→workload mapping labels.
   kube-state-metrics:
     enabled: true
+    # Exposes the owner-name override annotation as kube_pod_labels so the
+    # k8s_sustain.workload_mapping recording rules can fold it into
+    # k8s_sustain:pod_workload (see api/v1alpha1.OwnerNameAnnotation). Without
+    # this, kube-state-metrics never emits the label series at all, and the
+    # metric_relabel_configs keep-list below would have nothing to keep.
+    metricLabelsAllowlist:
+      - "pods=[k8s.sustain.io/owner-name]"
 
   server:
     retention: 15d
@@ -869,7 +1015,7 @@ prometheus:
       metric_relabel_configs:
         - action: keep
           source_labels: [__name__]
-          regex: "kube_pod_owner|kube_job_owner|kube_replicaset_owner|kube_pod_container_resource_requests|kube_pod_container_resource_limits|kube_pod_init_container_resource_requests|kube_pod_init_container_resource_limits|kube_pod_container_status_restarts_total|kube_pod_container_status_last_terminated_reason|kube_node_status_allocatable"
+          regex: "kube_pod_owner|kube_job_owner|kube_replicaset_owner|kube_pod_labels|kube_pod_container_resource_requests|kube_pod_container_resource_limits|kube_pod_init_container_resource_requests|kube_pod_init_container_resource_limits|kube_pod_container_status_restarts_total|kube_pod_container_status_last_terminated_reason|kube_node_status_allocatable"
         - action: labeldrop
           regex: "container_id|host_ip|id|image_id|image_spec|internal_ip|pod_ip|provider_id|system_uuid|uid|unit"
 

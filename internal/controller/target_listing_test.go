@@ -3,10 +3,13 @@ package controller
 import (
 	"context"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
@@ -286,5 +289,122 @@ func TestCollectTargets_OnCreateModeIsSkippedByController(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("expected 0 targets in OnCreate mode, got %d", len(got))
+	}
+}
+
+func TestListBarePodTargets_GroupsByNamespaceAndOwnerName(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Hour)
+
+	podA1 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "airflow", Name: "etl-run-1", CreationTimestamp: metav1.NewTime(older),
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "p",
+				sustainv1alpha1.OwnerNameAnnotation: "etl-daily",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "old-container"}}},
+	}
+	podA2 := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "airflow", Name: "etl-run-2", CreationTimestamp: metav1.NewTime(newer),
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "p",
+				sustainv1alpha1.OwnerNameAnnotation: "etl-daily",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "new-container"}}},
+	}
+	// Same owner-name, different namespace — must NOT collapse with podA1/podA2.
+	podB := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "airflow-staging", Name: "etl-run-1", CreationTimestamp: metav1.NewTime(older),
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "p",
+				sustainv1alpha1.OwnerNameAnnotation: "etl-daily",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(podA1, podA2, podB).Build()
+	r := &PolicyReconciler{Client: fc}
+
+	targets, err := r.listBarePodTargets(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("listBarePodTargets: %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("expected 2 targets (one per namespace), got %d: %+v", len(targets), targets)
+	}
+	for _, target := range targets {
+		if target.Kind != "Pod" || target.IdentityKind != "Pod" {
+			t.Errorf("Kind/IdentityKind = %s/%s, want Pod/Pod", target.Kind, target.IdentityKind)
+		}
+		if target.Name != "etl-daily" || target.IdentityName != "etl-daily" {
+			t.Errorf("Name/IdentityName = %s/%s, want etl-daily/etl-daily", target.Name, target.IdentityName)
+		}
+		if target.Namespace == "airflow" {
+			if len(target.Containers) != 1 || target.Containers[0].Name != "new-container" {
+				t.Errorf("expected the more recently created pod's container, got %+v", target.Containers)
+			}
+		}
+	}
+}
+
+func TestListBarePodTargets_NoOwnerNameAnnotation_NotDiscovered(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "standalone",
+			Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	r := &PolicyReconciler{Client: fc}
+
+	targets, err := r.listBarePodTargets(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("listBarePodTargets: %v", err)
+	}
+	if len(targets) != 0 {
+		t.Errorf("expected 0 targets for a pod with no owner-name annotation, got %d", len(targets))
+	}
+}
+
+func TestListBarePodTargets_OwnedPod_NotDiscovered(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	ctrlBool := true
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "owned",
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "p",
+				sustainv1alpha1.OwnerNameAnnotation: "etl-daily",
+			},
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Job", Name: "etl-daily-job", Controller: &ctrlBool}},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
+	r := &PolicyReconciler{Client: fc}
+
+	targets, err := r.listBarePodTargets(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("listBarePodTargets: %v", err)
+	}
+	if len(targets) != 0 {
+		t.Errorf("expected 0 targets for an owned pod (handled by listJobTargets instead), got %d", len(targets))
 	}
 }

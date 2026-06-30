@@ -12,6 +12,21 @@ const (
 	//
 	// Example: k8s.sustain.io/policy: my-rightsizing-policy
 	PolicyAnnotation = "k8s.sustain.io/policy"
+
+	// OwnerNameAnnotation overrides the workload identity (used for Prometheus
+	// queries and WorkloadRecommendation naming) that would otherwise be
+	// derived from a pod's ownerReferences chain. Two uses: (1) a bare pod
+	// with no controller owner (e.g. Airflow's KubernetesPodOperator) sets
+	// this to get treated as kind "Pod" with the given name; (2) a pod with a
+	// real owner sets this to group multiple workloads (e.g. blue/green
+	// Deployments) under one shared identity, while still keeping its real
+	// kind. The same string is reused as a Kubernetes LABEL key once the
+	// admission webhook mirrors it onto the pod (see internal/webhook) — so
+	// the value must validate as a label value (RFC 1123, <=63 chars), not
+	// just an annotation value.
+	//
+	// Example: k8s.sustain.io/owner-name: etl-daily
+	OwnerNameAnnotation = "k8s.sustain.io/owner-name"
 )
 
 // UpdateMode defines how resources are updated on a given workload type.
@@ -187,6 +202,16 @@ type UpdateTypes struct {
 	// +optional
 	// +kubebuilder:validation:Enum=OnCreate;Ongoing
 	ArgoRollout *UpdateMode `json:"argoRollout,omitempty"`
+	// +optional
+	// +kubebuilder:validation:Enum=OnCreate;Ongoing
+	// Pod targets bare pods that opt in via OwnerNameAnnotation (no controller
+	// owner — e.g. Airflow's KubernetesPodOperator). OnCreate injects
+	// resources at admission like every other kind. Ongoing computes and
+	// caches a recommendation the same as any kind, but NEVER recycles the
+	// pod: there is no controller that could recreate it after an eviction
+	// or in-place resize, so the "Ongoing" half of the contract that applies
+	// to every other kind does not apply here.
+	Pod *UpdateMode `json:"pod,omitempty"`
 }
 
 // ModeForKind returns the update mode configured for the given workload
@@ -208,6 +233,8 @@ func (t UpdateTypes) ModeForKind(kind string) *UpdateMode {
 		return t.Job
 	case "Rollout":
 		return t.ArgoRollout
+	case "Pod":
+		return t.Pod
 	}
 	return nil
 }

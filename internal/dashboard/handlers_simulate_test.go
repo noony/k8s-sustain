@@ -65,10 +65,12 @@ func TestHandleSimulate_RejectsMissingOwnerName(t *testing.T) {
 }
 
 // TestHandleSimulate_RejectsInvalidOwnerKind verifies that unsupported kinds
-// like "Pod" or "ReplicaSet" are bounced before any expensive work happens.
+// like "ReplicaSet" are bounced before any expensive work happens. "Pod" is a
+// supported kind (see TestHandleSimulate_AcceptsPod) — it identifies a
+// bare-pod identity formed via api/v1alpha1.OwnerNameAnnotation.
 func TestHandleSimulate_RejectsInvalidOwnerKind(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
-	for _, kind := range []string{"Pod", "ReplicaSet"} {
+	for _, kind := range []string{"ReplicaSet"} {
 		t.Run(kind, func(t *testing.T) {
 			body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: kind, OwnerName: "x"})
 			req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
@@ -112,6 +114,26 @@ func TestHandleSimulate_AcceptsRollout(t *testing.T) {
 		Logger:     testLogger(t),
 	}
 	body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Rollout", OwnerName: "web"})
+	req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
+	rec := httptest.NewRecorder()
+	srv.handleSimulate(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleSimulate_AcceptsPod pins "Pod" as a simulatable kind — bare pods
+// opted in via api/v1alpha1.OwnerNameAnnotation are a supported workload
+// identity, so the validator must not bounce it with a 400. OwnerName here is
+// the owner-name annotation value, not a real pod name; no pods need to exist
+// for the request to validate and reach the simulation pipeline.
+func TestHandleSimulate_AcceptsPod(t *testing.T) {
+	srv := &Server{
+		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		PromClient: &fakePromClient{},
+		Logger:     testLogger(t),
+	}
+	body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Pod", OwnerName: "etl-daily"})
 	req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
 	rec := httptest.NewRecorder()
 	srv.handleSimulate(rec, req)

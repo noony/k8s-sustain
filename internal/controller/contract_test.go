@@ -76,7 +76,7 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 	wantCPU := resource.MustParse("250m")
 	wantMem := resource.MustParse("128Mi")
 	r.upsertWorkloadRecommendation(context.Background(),
-		&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web"},
+		&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"},
 		policy.Name,
 		map[string]workload.ContainerRecommendation{
 			"app": {CPURequest: &wantCPU, MemoryRequest: &wantMem},
@@ -179,7 +179,7 @@ func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 	wantCPU := resource.MustParse("250m")
 	stale := metav1.NewTime(time.Now().Add(-2 * 24 * time.Hour))
 	r.upsertWorkloadRecommendation(context.Background(),
-		&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web"},
+		&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"},
 		policy.Name,
 		map[string]workload.ContainerRecommendation{
 			"app": {CPURequest: &wantCPU},

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	admissionv1 "k8s.io/api/admission/v1"
@@ -90,6 +91,23 @@ type jsonPatch struct {
 	Op    string          `json:"op"`
 	Path  string          `json:"path"`
 	Value json.RawMessage `json:"value,omitempty"`
+}
+
+// allowWithLabelPatch returns an allow response carrying only the
+// owner-name label-mirror patch (if any) — used by every early-return path
+// from owner resolution onward, so a valid owner-name annotation always
+// reaches Prometheus via kube-state-metrics even when the rest of admission
+// has nothing else to inject.
+func allowWithLabelPatch(labelPatch *jsonPatch) *admissionv1.AdmissionResponse {
+	if labelPatch == nil {
+		return &admissionv1.AdmissionResponse{Allowed: true}
+	}
+	b, err := json.Marshal([]jsonPatch{*labelPatch})
+	if err != nil {
+		return &admissionv1.AdmissionResponse{Allowed: true}
+	}
+	pt := admissionv1.PatchTypeJSONPatch
+	return &admissionv1.AdmissionResponse{Allowed: true, Patch: b, PatchType: &pt}
 }
 
 // ServeHTTP implements http.Handler.
@@ -196,16 +214,43 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allow
 	}
 
+	// Mirror a valid owner-name annotation onto a pod label so kube-state-metrics
+	// (configured with metricLabelsAllowlist — see charts/k8s-sustain/values.yaml)
+	// can expose it as kube_pod_labels for the recording rules to pick up.
+	// Computed once, used by every return below from here on — independent of
+	// RecommendOnly: the label is the only mechanism that makes the override
+	// visible to Prometheus, and RecommendOnly's "never mutates the pod"
+	// contract is about resources/limits, not this metadata label.
+	var labelPatch *jsonPatch
+	if v, ok := pod.Annotations[sustainv1alpha1.OwnerNameAnnotation]; ok && len(apivalidation.IsValidLabelValue(v)) == 0 {
+		if pod.Labels[sustainv1alpha1.OwnerNameAnnotation] != v {
+			if pod.Labels == nil {
+				if valJSON, mErr := json.Marshal(map[string]string{sustainv1alpha1.OwnerNameAnnotation: v}); mErr != nil {
+					logger.Error(mErr, "failed to marshal owner-name label patch")
+				} else {
+					labelPatch = &jsonPatch{Op: "add", Path: "/metadata/labels", Value: valJSON}
+				}
+			} else {
+				if valJSON, mErr := json.Marshal(v); mErr != nil {
+					logger.Error(mErr, "failed to marshal owner-name label patch")
+				} else {
+					labelPatch = &jsonPatch{Op: "add", Path: "/metadata/labels/" + strings.ReplaceAll(sustainv1alpha1.OwnerNameAnnotation, "/", "~1"), Value: valJSON}
+				}
+			}
+		}
+	}
+
 	ownerCtx, ownerCancel := context.WithTimeout(ctx, 2*apiCallTimeout)
 	ownerKind, ownerName, err := workload.ResolvePodOwner(ownerCtx, h.Client, &pod)
 	ownerCancel()
 	if err != nil {
 		logger.Error(err, "failed to resolve owner kind")
-		return allow
+		return allowWithLabelPatch(labelPatch)
 	}
+	ownerKind, ownerName = workload.ApplyOwnerNameOverride(ownerKind, ownerName, pod.Annotations)
 	if ownerKind == "" {
 		logger.V(1).Info("standalone pod (no controller owner), skipping injection")
-		return allow // standalone pod — no workload type to determine mode
+		return allowWithLabelPatch(labelPatch) // standalone pod — no workload type to determine mode
 	}
 	logger = logger.WithValues("ownerKind", ownerKind, "ownerName", ownerName)
 	logger.V(1).Info("resolved pod owner")
@@ -216,7 +261,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	mode := policy.Spec.RightSizing.Update.Types.ModeForKind(ownerKind)
 	if mode == nil {
 		logger.V(1).Info("policy does not configure this workload kind, skipping")
-		return allow
+		return allowWithLabelPatch(labelPatch)
 	}
 	logger.V(1).Info("policy configured for workload kind", "mode", *mode)
 
@@ -238,7 +283,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		cacheCancel()
 		if cacheErr != nil {
 			logger.Error(cacheErr, "failed to read cached WorkloadRecommendation; falling open")
-			return allow
+			return allowWithLabelPatch(labelPatch)
 		}
 		if cached == nil {
 			if errors.Is(err, promclient.ErrCircuitOpen) {
@@ -246,7 +291,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 			} else {
 				logger.Error(err, "failed to build recommendations and no fresh cache; allowing pod with template resources")
 			}
-			return allow
+			return allowWithLabelPatch(labelPatch)
 		}
 		logger.Info("prometheus unavailable; serving cached recommendation",
 			"containers", len(cached), "promErr", err.Error())
@@ -263,7 +308,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	if len(filtered) == 0 {
 		logger.V(1).Info("no recommendations match pod containers, allowing without injection",
 			"podContainers", len(pod.Spec.Containers), "podInitContainers", len(pod.Spec.InitContainers), "recommendations", len(recs))
-		return allow
+		return allowWithLabelPatch(labelPatch)
 	}
 
 	// RecommendOnly records the recommendation but never mutates the pod, so
@@ -272,15 +317,17 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	// pod-create hot path when the result is discarded.
 	if h.RecommendOnly {
 		logger.Info("recommend-only: would inject resources", "containers", len(filtered), "recommendations", filtered)
-		return allow
+		return allowWithLabelPatch(labelPatch)
 	}
 
-	patchBytes, err := buildPatches(&pod, filtered)
+	patchBytes, err := buildPatches(&pod, filtered, labelPatch)
 	if err != nil {
 		logger.Error(err, "failed to build JSON patches")
-		return allow
+		return allowWithLabelPatch(labelPatch)
 	}
 	if patchBytes == nil {
+		// Safe as plain allow: buildPatches folds labelPatch into patches, so
+		// patchBytes is only nil when labelPatch was also nil.
 		logger.V(1).Info("no patch needed (recommendations match current pod spec)")
 		return allow
 	}
@@ -383,10 +430,14 @@ func addMatchingRecs(dst map[string]workload.ContainerRecommendation, containers
 }
 
 // buildPatches generates an RFC 6902 JSON Patch that sets resources on the
-// containers (and init containers) listed in recs. Uses "add" which replaces
-// any existing value at the path.
-func buildPatches(pod *corev1.Pod, recs map[string]workload.ContainerRecommendation) ([]byte, error) {
+// containers (and init containers) listed in recs, plus the owner-name
+// label-mirror patch when present. Uses "add" which replaces any existing
+// value at the path.
+func buildPatches(pod *corev1.Pod, recs map[string]workload.ContainerRecommendation, labelPatch *jsonPatch) ([]byte, error) {
 	var patches []jsonPatch
+	if labelPatch != nil {
+		patches = append(patches, *labelPatch)
+	}
 
 	addPatches, err := patchesForContainers(pod.Spec.Containers, recs, "/spec/containers")
 	if err != nil {

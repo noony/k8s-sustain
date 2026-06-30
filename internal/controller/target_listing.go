@@ -7,6 +7,7 @@ import (
 	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -28,7 +29,8 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		"daemonset", types.DaemonSet,
 		"argoRollout", types.ArgoRollout,
 		"cronjob", types.CronJob,
-		"job", types.Job)
+		"job", types.Job,
+		"pod", types.Pod)
 
 	kinds := []struct {
 		mode *sustainv1alpha1.UpdateMode
@@ -41,6 +43,7 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		{types.ArgoRollout, "rollouts", r.listRolloutTargets},
 		{types.CronJob, "cronjobs", r.listCronJobTargets},
 		{types.Job, "jobs", r.listJobTargets},
+		{types.Pod, "pods", r.listBarePodTargets},
 	}
 	for _, k := range kinds {
 		if k.mode == nil || *k.mode != sustainv1alpha1.UpdateModeOngoing {
@@ -168,6 +171,39 @@ func (r *PolicyReconciler) listJobTargets(ctx context.Context, namespaces []stri
 					continue
 				}
 				*out = append(*out, jobToTarget(j))
+			}
+		})
+}
+
+// listBarePodTargets discovers pods with no controller owner that opt into
+// owner-name-based identity grouping (api/v1alpha1.OwnerNameAnnotation).
+// Unlike every other kind, the policy and owner-name annotations live
+// directly on the Pod — there is no pod template to read them from. Pods
+// sharing the same (namespace, owner-name) collapse into one workloadTarget,
+// per the spec's namespace-scoping rule (cross-namespace grouping is out of
+// scope — kube_pod_labels joins are namespace-scoped too).
+//
+// The grouping itself is workload.GroupBarePods, shared with the dashboard's
+// listWorkloadsOfKind/getWorkloadEntry so the namespace+owner-name rule and
+// the most-recently-created-pod-wins tie-break have exactly one
+// implementation.
+func (r *PolicyReconciler) listBarePodTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+	return listKindTargets(ctx, r.Client, namespaces,
+		func() *corev1.PodList { return &corev1.PodList{} },
+		func(l *corev1.PodList, out *[]workloadTarget) {
+			for _, g := range workload.GroupBarePods(l.Items) {
+				*out = append(*out, workloadTarget{
+					Kind:           "Pod",
+					IdentityKind:   "Pod",
+					Name:           g.Name,
+					IdentityName:   g.Name,
+					Namespace:      g.Namespace,
+					PolicyName:     g.PolicyName,
+					Labels:         g.Labels,
+					Containers:     g.Containers,
+					InitContainers: g.InitContainers,
+					Object:         g.Representative,
+				})
 			}
 		})
 }

@@ -263,6 +263,90 @@ oversized requests (`500m / 256Mi`) and ~`200m / ~100Mi` of actual load.
   done
   ```
 
+### `custom-name`
+
+Single Deployment named `stress`, same shape as `steady` (`500m / 256Mi`
+requests, ~`200m / ~100Mi` actual usage), but its pod template carries
+`k8s.sustain.io/owner-name: renamed-app` — overriding its
+Prometheus/recommendation identity to `Deployment/renamed-app`. Validates the
+identity-rename override (see
+[Standalone Pods & Identity Grouping](standalone-pods-and-grouping.md)): the
+Deployment's own name is never used for Prometheus queries or the
+`WorkloadRecommendation`.
+
+**Expected:**
+
+- The pod is admitted with the webhook-mirrored label. Confirm:
+
+  ```bash
+  kubectl get pods -n scenario-custom-name --show-labels | grep k8s.sustain.io/owner-name
+  ```
+
+- The `WorkloadRecommendation` is named by the override identity
+  (`deployment-renamed-app`), not by the Deployment's own name
+  (`deployment-stress` never exists):
+
+  ```bash
+  kubectl get workloadrecommendation -n scenario-custom-name
+  ```
+
+- After `WINDOW + reconcile_interval`, CPU request drops to ~`220m` and
+  memory to ~`110Mi` (identical target to `steady`, since the load profile
+  and `resourcesConfigs` match) — and the recommendation is only queryable
+  under the renamed identity:
+
+  ```bash
+  kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090 &
+  curl -s localhost:8090/api/workloads/scenario-custom-name/Deployment/renamed-app/recommendations
+  ```
+
+- `status.sh`'s generic table queries recommendations by the Deployment's own
+  name (`stress`), which the override deliberately bypasses, so `custom-name`
+  is not included in it; use the commands above instead.
+
+### `bare-pod`
+
+A standalone `Pod` — no Deployment, no `ownerReferences` at all — simulating
+Airflow's `KubernetesPodOperator`, which by default launches a Pod directly
+with no parent Job. The policy and `k8s.sustain.io/owner-name: etl-daily`
+annotations live directly on the Pod (there's no pod template for a bare pod
+to carry them on). The Policy sets `rightSizing.update.types.pod: Ongoing`.
+Initial requests are deliberately oversized at `500m / 256Mi`; actual usage
+is the same ~`200m / ~100Mi` profile as `steady`.
+
+**Expected:**
+
+- The pod is admitted with the webhook-mirrored label. Confirm:
+
+  ```bash
+  kubectl get pod -n scenario-bare-pod etl-daily-run-1 --show-labels | grep k8s.sustain.io/owner-name
+  ```
+
+- **The pod's own resources never change**, no matter how long it runs — this
+  is the core invariant `Ongoing` guarantees for `Pod`-kind targets: there is
+  no controller that could recreate this pod after an eviction or in-place
+  resize, so recycling is permanently skipped, regardless of `UpdateMode`:
+
+  ```bash
+  kubectl get pod -n scenario-bare-pod etl-daily-run-1 \
+    -o jsonpath='{.spec.containers[0].resources.requests}{"\n"}'
+  # always 500m / 256Mi, even after many reconcile cycles
+  ```
+
+- The controller still computes and caches a `WorkloadRecommendation`
+  (`pod-etl-daily`) from the pod's actual usage after `WINDOW +
+  reconcile_interval` — useful for the webhook's Prometheus-outage fallback
+  on a later pod sharing this `owner-name` (e.g. the next Airflow DAG run):
+
+  ```bash
+  kubectl get workloadrecommendation -n scenario-bare-pod
+  kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090 &
+  curl -s localhost:8090/api/workloads/scenario-bare-pod/Pod/etl-daily/recommendations
+  ```
+
+- Not in `status.sh`'s generic table (it assumes a Deployment per scenario);
+  use the commands above instead.
+
 ### `oom-kill`
 
 Single-container Deployment that quietly holds ~30Mi for 60 s, then attempts

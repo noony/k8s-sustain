@@ -11,8 +11,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	apivalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
 // IsOwnedBy reports whether refs contains a controller ownerReference with
@@ -157,4 +160,29 @@ func GetWorkloadCreationTime(ctx context.Context, c client.Client, kind, ns, nam
 		return time.Time{}
 	}
 	return obj.GetCreationTimestamp().Time
+}
+
+// ApplyOwnerNameOverride applies the k8s.sustain.io/owner-name annotation
+// override to a resolved (kind, name) pair. The annotation doubles as a
+// Kubernetes label value once the webhook mirrors it onto the pod (see
+// internal/webhook), so it is validated against label-value rules
+// (RFC 1123, <=63 chars) — stricter than PolicyAnnotation's DNS-1123-subdomain
+// check. An absent, empty, or invalid annotation leaves kind and name
+// unchanged. Empty is treated the same as absent because the Prometheus
+// recording rules (kube_pod_labels{label_k8s_sustain_io_owner_name!=""})
+// never produce an override row for an empty label value — Go and
+// Prometheus must agree on whether the override "applies".
+//
+// When valid: name becomes the annotation value. kind becomes the input kind
+// when non-empty (an owned workload grouping itself under a shared identity)
+// or "Pod" when empty (no real controller owner — a bare pod).
+func ApplyOwnerNameOverride(kind, name string, annotations map[string]string) (string, string) {
+	v, ok := annotations[sustainv1alpha1.OwnerNameAnnotation]
+	if !ok || v == "" || len(apivalidation.IsValidLabelValue(v)) != 0 {
+		return kind, name
+	}
+	if kind == "" {
+		return "Pod", v
+	}
+	return kind, v
 }

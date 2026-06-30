@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -188,7 +189,7 @@ func TestBuildPatches_EmptyRecs(t *testing.T) {
 		},
 	}
 	recs := map[string]workload.ContainerRecommendation{}
-	result, err := buildPatches(pod, recs)
+	result, err := buildPatches(pod, recs, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -213,7 +214,7 @@ func TestBuildPatches_SetsResources(t *testing.T) {
 		},
 	}
 
-	result, err := buildPatches(pod, recs)
+	result, err := buildPatches(pod, recs, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -250,7 +251,7 @@ func TestBuildPatches_MultipleContainers(t *testing.T) {
 		"sidecar": {CPURequest: qtyp("50m")},
 	}
 
-	result, err := buildPatches(pod, recs)
+	result, err := buildPatches(pod, recs, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -277,7 +278,7 @@ func TestBuildPatches_SkipsUnmatchedContainer(t *testing.T) {
 		"app": {CPURequest: qtyp("100m")},
 	}
 
-	result, err := buildPatches(pod, recs)
+	result, err := buildPatches(pod, recs, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -308,7 +309,7 @@ func TestBuildPatches_NameCollisionInitAndRegular(t *testing.T) {
 		"shared": {CPURequest: qtyp("123m"), MemoryRequest: qtyp("64Mi")},
 	}
 
-	result, err := buildPatches(pod, recs)
+	result, err := buildPatches(pod, recs, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -349,7 +350,7 @@ func TestBuildPatches_PatchesInitContainers(t *testing.T) {
 		"warm-cache": {CPURequest: qtyp("50m")},
 	}
 
-	result, err := buildPatches(pod, recs)
+	result, err := buildPatches(pod, recs, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -850,6 +851,208 @@ func TestAdmit_RecommendOnly_AllowsWithoutPatch(t *testing.T) {
 	}
 	if resp.Patch != nil {
 		t.Errorf("recommend-only must not patch, got %d bytes", len(resp.Patch))
+	}
+}
+
+// TestAdmit_BarePodWithOwnerName_InjectsAsPodKind verifies a pod with no
+// controller owner but a valid owner-name annotation is treated as kind
+// "Pod": it gets the label-mirror patch AND, when the policy configures
+// types.pod, a resource injection patch from Prometheus data queried under
+// the overridden identity.
+func TestAdmit_BarePodWithOwnerName_InjectsAsPodKind(t *testing.T) {
+	mode := sustainv1alpha1.UpdateModeOnCreate
+	policy := &sustainv1alpha1.Policy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p"},
+		Spec: sustainv1alpha1.PolicySpec{
+			RightSizing: sustainv1alpha1.RightSizingSpec{
+				Update: sustainv1alpha1.UpdateSpec{Types: sustainv1alpha1.UpdateTypes{Pod: &mode}},
+				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
+					CPU:    sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: ptr.To(int32(95))}},
+					Memory: sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: ptr.To(int32(95))}},
+				},
+			},
+		},
+	}
+	env := newAdmitEnv(t, policy)
+	defer env.close()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "etl-daily-run-1",
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "p",
+				sustainv1alpha1.OwnerNameAnnotation: "etl-daily",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch == nil {
+		t.Fatal("expected a patch (label mirror + resource injection)")
+	}
+	patchStr := string(resp.Patch)
+	if !strings.Contains(patchStr, `"/metadata/labels"`) && !strings.Contains(patchStr, `k8s.sustain.io~1owner-name`) {
+		t.Errorf("expected a label patch in %s", patchStr)
+	}
+	if !strings.Contains(patchStr, `"/spec/containers/0/resources"`) {
+		t.Errorf("expected a resource injection patch in %s", patchStr)
+	}
+}
+
+// TestAdmit_BarePodWithOwnerName_KindNotConfigured_LabelOnly verifies that
+// when the policy does not configure types.pod, a bare pod with a valid
+// owner-name annotation still gets the label mirror patch, but no resource
+// injection (mirrors TestAdmit_KindNotConfigured_AllowsWithoutPatch for every
+// other kind).
+func TestAdmit_BarePodWithOwnerName_KindNotConfigured_LabelOnly(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate) // only Deployment configured
+	env := newAdmitEnv(t, policy)
+	defer env.close()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "etl-daily-run-1",
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "p",
+				sustainv1alpha1.OwnerNameAnnotation: "etl-daily",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch == nil {
+		t.Fatal("expected the label-mirror patch even though types.pod is unconfigured")
+	}
+	patchStr := string(resp.Patch)
+	if strings.Contains(patchStr, "resources") {
+		t.Errorf("did not expect a resource injection patch, got %s", patchStr)
+	}
+}
+
+// TestAdmit_OwnedPodWithOwnerNameOverride_QueriesOverriddenIdentity verifies
+// that a pod with a real controller owner AND a valid owner-name annotation
+// still gets the label-mirror patch, and that the Prometheus query is issued
+// under the overridden name, not the real Deployment name.
+func TestAdmit_OwnedPodWithOwnerNameOverride_QueriesOverriddenIdentity(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	rs := deploymentReplicaSet("default", "app-blue-rs", "app-blue")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+
+	var sawQuery string
+	env.handler.PrometheusClient = nil // replaced below with a query-capturing server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		if strings.Contains(q, "owner_name=") {
+			sawQuery = q
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "workload_max_pod_cpu"):
+			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.1})))
+		case strings.Contains(q, "workload_max_pod_memory"):
+			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 64 * 1024 * 1024})))
+		default:
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+	defer server.Close()
+	pc, err := promclient.New(server.URL)
+	if err != nil {
+		t.Fatalf("prometheus client: %v", err)
+	}
+	env.handler.PrometheusClient = pc
+
+	pod := podWithRSOwner("default", "app-blue-rs-xyz", "app-blue-rs", "p")
+	pod.Annotations[sustainv1alpha1.OwnerNameAnnotation] = "app"
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if sawQuery == "" {
+		t.Fatal("expected a Prometheus query carrying owner_name")
+	}
+	if !strings.Contains(sawQuery, `owner_name="app"`) {
+		t.Errorf("expected query to use overridden owner_name=app, got: %s", sawQuery)
+	}
+	if strings.Contains(sawQuery, `owner_name="app-blue"`) {
+		t.Errorf("query must not use the real, non-overridden name: %s", sawQuery)
+	}
+}
+
+// TestAdmit_RecommendOnly_OwnerNameAnnotation_LabelPatchOnly verifies
+// RecommendOnly's "never mutates the pod" contract is scoped to
+// resources/limits: a valid owner-name annotation still produces the
+// label-mirror patch (the only mechanism that makes the override visible to
+// Prometheus), but never a resource-injection patch.
+func TestAdmit_RecommendOnly_OwnerNameAnnotation_LabelPatchOnly(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+	env.handler.RecommendOnly = true
+
+	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
+	pod.Annotations[sustainv1alpha1.OwnerNameAnnotation] = "app"
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch == nil {
+		t.Fatal("expected the owner-name label-mirror patch even under RecommendOnly")
+	}
+	var patches []jsonPatch
+	if err := json.Unmarshal(resp.Patch, &patches); err != nil {
+		t.Fatalf("unmarshal patch: %v", err)
+	}
+	if len(patches) != 1 {
+		t.Fatalf("expected exactly one patch (label mirror only, no resource injection), got %d: %v", len(patches), patches)
+	}
+	// The pod has nil Labels, so the mirror patch adds the whole map rather
+	// than a single nested key — see the pod.Labels == nil branch in admit().
+	if patches[0].Path != "/metadata/labels" {
+		t.Errorf("expected the label-mirror patch, got path %q", patches[0].Path)
+	}
+	for _, p := range patches {
+		if strings.Contains(p.Path, "/resources") {
+			t.Errorf("recommend-only must not inject resources, got patch at %q", p.Path)
+		}
+	}
+}
+
+// TestAdmit_InvalidOwnerNameLabelValue_NoLabelPatch verifies an owner-name
+// annotation value that fails Kubernetes label-value validation is treated
+// as absent: no label patch, today's owner-resolution behavior unchanged.
+func TestAdmit_InvalidOwnerNameLabelValue_NoLabelPatch(t *testing.T) {
+	env := newAdmitEnv(t, basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate))
+	defer env.close()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "standalone",
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "p",
+				sustainv1alpha1.OwnerNameAnnotation: "Invalid/Value",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch != nil {
+		t.Errorf("expected no patch for invalid owner-name value, got %d bytes", len(resp.Patch))
 	}
 }
 

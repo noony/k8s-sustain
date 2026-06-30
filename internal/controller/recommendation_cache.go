@@ -76,7 +76,7 @@ func (r *PolicyReconciler) upsertWorkloadRecommendation(
 		return
 	}
 
-	key := types.NamespacedName{Namespace: t.Namespace, Name: wlrName(t.Kind, t.Name)}
+	key := types.NamespacedName{Namespace: t.Namespace, Name: wlrName(t.IdentityKind, t.IdentityName)}
 	var existing sustainv1alpha1.WorkloadRecommendation
 	err := r.Get(ctx, key, &existing)
 	if apierrors.IsNotFound(err) {
@@ -88,7 +88,7 @@ func (r *PolicyReconciler) upsertWorkloadRecommendation(
 			},
 			Spec: sustainv1alpha1.WorkloadRecommendationSpec{
 				WorkloadRef: sustainv1alpha1.WorkloadReference{
-					Kind: t.Kind, Namespace: t.Namespace, Name: t.Name,
+					Kind: t.IdentityKind, Namespace: t.Namespace, Name: t.IdentityName,
 				},
 				Policy: policyName,
 			},
@@ -109,15 +109,15 @@ func (r *PolicyReconciler) upsertWorkloadRecommendation(
 
 	// Sync spec.workloadRef + policy + sweep label if drifted. Also backfills
 	// the label on WLRs created before label-based sweeping was introduced.
-	specChanged := existing.Spec.WorkloadRef.Kind != t.Kind ||
+	specChanged := existing.Spec.WorkloadRef.Kind != t.IdentityKind ||
 		existing.Spec.WorkloadRef.Namespace != t.Namespace ||
-		existing.Spec.WorkloadRef.Name != t.Name ||
+		existing.Spec.WorkloadRef.Name != t.IdentityName ||
 		existing.Spec.Policy != policyName
 	labelChanged := existing.Labels[wlrPolicyLabel] != policyName
 	if specChanged || labelChanged {
 		patched := existing.DeepCopy()
 		patched.Spec.WorkloadRef = sustainv1alpha1.WorkloadReference{
-			Kind: t.Kind, Namespace: t.Namespace, Name: t.Name,
+			Kind: t.IdentityKind, Namespace: t.Namespace, Name: t.IdentityName,
 		}
 		patched.Spec.Policy = policyName
 		if patched.Labels == nil {
@@ -216,7 +216,7 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 	wanted := make(map[string]struct{}, len(targets))
 	for i := range targets {
 		t := &targets[i]
-		wanted[t.Namespace+"/"+wlrName(t.Kind, t.Name)] = struct{}{}
+		wanted[t.Namespace+"/"+wlrName(t.IdentityKind, t.IdentityName)] = struct{}{}
 	}
 
 	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger,
