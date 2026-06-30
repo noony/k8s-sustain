@@ -2157,9 +2157,13 @@ is the same ~<code>200m / ~100Mi</code> profile as <code>steady</code>.</p>
 </code></pre></div>
 <ul>
 <li>The controller still computes and caches a <code>WorkloadRecommendation</code>
-  (<code>pod-etl-daily</code>) from the pod's actual usage after <code>WINDOW +
-  reconcile_interval</code> — useful for the webhook's Prometheus-outage fallback
-  on a later pod sharing this <code>owner-name</code> (e.g. the next Airflow DAG run):</li>
+  (<code>pod-etl-daily</code>) from the pod's actual usage — useful for the webhook's
+  Prometheus-outage fallback on a later pod sharing this <code>owner-name</code> (e.g.
+  the next Airflow DAG run). Unlike every other kind, this doesn't wait out
+  the 10-minute <code>MinWorkloadAge</code> gate: that gate exists to avoid a
+  too-young percentile triggering an immediate bad recycle, which can't
+  happen for a kind that never recycles, so it's bypassed for <code>Pod</code>. Expect
+  it within a couple of reconcile cycles, not 10+ minutes:</li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>workloadrecommendation<span class="w"> </span>-n<span class="w"> </span>scenario-bare-pod
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090<span class="w"> </span><span class="p">&amp;</span>
