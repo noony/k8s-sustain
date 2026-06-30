@@ -46,10 +46,14 @@ func (r *PolicyReconciler) buildRecommendations(
 	// sample-count question — the latter punishes workloads with intrinsically
 	// sparse signal (e.g. a daily CronJob), since percentile queries handle
 	// absent samples correctly but a count-based gate sees the same sparsity
-	// as "no history". EXCEPTION: a recent OOM bypasses the gate so a
+	// as "no history". EXCEPTION 1: a recent OOM bypasses the gate so a
 	// crash-looping container can still get a memory recommendation from the
-	// OOM peak below.
-	if recommender.ShouldSkipYoungWorkload(workloadCreated, recentOOM) {
+	// OOM peak below. EXCEPTION 2: "Pod"-kind targets (bare pods opted in via
+	// k8s.sustain.io/owner-name) never recycle — the gate's stated purpose,
+	// avoiding a near-zero percentile that floors to the hard minimum and
+	// triggers an immediate bad recycle, cannot occur for a kind that never
+	// recycles at all, so the gate doesn't apply to it.
+	if ownerKind != "Pod" && recommender.ShouldSkipYoungWorkload(workloadCreated, recentOOM) {
 		recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "workload_too_young").Inc()
 		logger.Info("skipping recommendation: workload too young",
 			"age", time.Since(workloadCreated), "minAge", recommender.MinWorkloadAge)

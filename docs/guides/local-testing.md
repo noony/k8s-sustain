@@ -334,9 +334,13 @@ is the same ~`200m / ~100Mi` profile as `steady`.
   ```
 
 - The controller still computes and caches a `WorkloadRecommendation`
-  (`pod-etl-daily`) from the pod's actual usage after `WINDOW +
-  reconcile_interval` — useful for the webhook's Prometheus-outage fallback
-  on a later pod sharing this `owner-name` (e.g. the next Airflow DAG run):
+  (`pod-etl-daily`) from the pod's actual usage — useful for the webhook's
+  Prometheus-outage fallback on a later pod sharing this `owner-name` (e.g.
+  the next Airflow DAG run). Unlike every other kind, this doesn't wait out
+  the 10-minute `MinWorkloadAge` gate: that gate exists to avoid a
+  too-young percentile triggering an immediate bad recycle, which can't
+  happen for a kind that never recycles, so it's bypassed for `Pod`. Expect
+  it within a couple of reconcile cycles, not 10+ minutes:
 
   ```bash
   kubectl get workloadrecommendation -n scenario-bare-pod

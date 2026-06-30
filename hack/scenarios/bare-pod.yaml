@@ -12,7 +12,10 @@
 # this owner-name), but the pod's own resources stay frozen at their initial
 # (deliberately oversized) values forever.
 #
-# Expected after WINDOW + reconcile_interval:
+# Expected, within a couple of reconcile cycles (no need to wait out the
+# 10-minute MinWorkloadAge gate — it's bypassed for Pod-kind targets, since
+# they never recycle, so the gate's purpose of avoiding an immediate bad
+# recycle from a too-young percentile cannot apply to them):
 #   - the pod's own resources are UNCHANGED from 500m / 256Mi below — no
 #     recycle ever happens for Pod kind, regardless of how oversized it is.
 #   - a WorkloadRecommendation named "pod-etl-daily" exists, computed from

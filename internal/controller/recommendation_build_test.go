@@ -53,6 +53,33 @@ func TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter(t *testing.T) {
 	}
 }
 
+// TestBuildRecommendations_PodKind_BypassesYoungWorkloadGate verifies that
+// the age gate does not apply to "Pod"-kind targets (bare pods opted in via
+// k8s.sustain.io/owner-name): a Pod-kind target never recycles, so the
+// gate's stated purpose — avoiding a near-zero percentile that floors to the
+// hard minimum and triggers an immediate bad recycle — cannot occur for it.
+func TestBuildRecommendations_PodKind_BypassesYoungWorkloadGate(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	policy := policyForReconcileWorkload(t, "p")
+	containers := []corev1.Container{{Name: "app"}}
+
+	// 1 minute old — well under the 10-minute gate that DOES apply to every
+	// other kind (see TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter).
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Pod", "etl-daily", containers, autoscaler.Info{}, time.Now().Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	if len(recs) == 0 {
+		t.Fatal("expected non-empty recommendations for a young Pod-kind target — the age gate must not apply to it")
+	}
+	if rec := recs["app"]; rec.CPURequest == nil {
+		t.Error("expected CPU recommendation, got nil")
+	}
+}
+
 // TestBuildRecommendations_SparseSignal_StillProducesRecommendation verifies
 // that a workload with only a few samples in the policy window (e.g. a daily
 // CronJob with a 2d window) still gets a recommendation as long as it's old

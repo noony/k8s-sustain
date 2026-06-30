@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
@@ -947,13 +948,23 @@ func TestAdmit_OwnedPodWithOwnerNameOverride_QueriesOverriddenIdentity(t *testin
 	env := newAdmitEnv(t, policy, rs)
 	defer env.close()
 
-	var sawQuery string
+	// buildRecommendations fires the CPU and memory Prometheus queries
+	// concurrently (errgroup), so the mock server's handler runs on multiple
+	// goroutines at once — sawQuery must be guarded, not a bare string, or
+	// -race flags a write-write race even though the test never needed more
+	// than "the most recent query seen".
+	var (
+		mu       sync.Mutex
+		sawQuery string
+	)
 	env.handler.PrometheusClient = nil // replaced below with a query-capturing server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		q := r.Form.Get("query")
 		if strings.Contains(q, "owner_name=") {
+			mu.Lock()
 			sawQuery = q
+			mu.Unlock()
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -978,14 +989,17 @@ func TestAdmit_OwnedPodWithOwnerNameOverride_QueriesOverriddenIdentity(t *testin
 	if !resp.Allowed {
 		t.Fatal("expected allow")
 	}
-	if sawQuery == "" {
+	mu.Lock()
+	got := sawQuery
+	mu.Unlock()
+	if got == "" {
 		t.Fatal("expected a Prometheus query carrying owner_name")
 	}
-	if !strings.Contains(sawQuery, `owner_name="app"`) {
-		t.Errorf("expected query to use overridden owner_name=app, got: %s", sawQuery)
+	if !strings.Contains(got, `owner_name="app"`) {
+		t.Errorf("expected query to use overridden owner_name=app, got: %s", got)
 	}
-	if strings.Contains(sawQuery, `owner_name="app-blue"`) {
-		t.Errorf("query must not use the real, non-overridden name: %s", sawQuery)
+	if strings.Contains(got, `owner_name="app-blue"`) {
+		t.Errorf("query must not use the real, non-overridden name: %s", got)
 	}
 }
 
