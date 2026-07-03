@@ -16,7 +16,6 @@ import (
 
 type workloadDetailResponse struct {
 	UpdateMode          string                 `json:"updateMode,omitempty"`
-	LastRecycledAt      string                 `json:"lastRecycledAt,omitempty"`
 	DriftPercent        float64                `json:"driftPercent"`
 	OOM24h              int                    `json:"oom24h"`
 	Blocked             *workloadDetailBlocked `json:"blocked,omitempty"`

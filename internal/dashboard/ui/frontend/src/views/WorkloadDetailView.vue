@@ -9,7 +9,7 @@ import {
   type WorkloadDetailSnapshot,
   type CoordinationFactors,
 } from '../lib/api'
-import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs, timeAgo } from '../lib/format'
+import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs } from '../lib/format'
 import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
@@ -362,14 +362,6 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       <div class="card-header"><h2>Status</h2></div>
       <div class="stats-row">
         <KpiCard label="Mode" :value="snapshot.data.value?.updateMode || '-'" />
-        <KpiCard
-          label="Last recycled"
-          :value="
-            snapshot.data.value?.lastRecycledAt
-              ? timeAgo(snapshot.data.value.lastRecycledAt)
-              : 'never'
-          "
-        />
         <KpiCard
           label="Drift"
           :value="(snapshot.data.value?.driftPercent || 0).toFixed(1) + '%'"

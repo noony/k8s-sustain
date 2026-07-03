@@ -228,9 +228,6 @@ const hasFilters = computed(
                   Policy<span v-html="sortArrow('policyName')"></span>
                 </th>
                 <th>Containers</th>
-                <th class="sort-header" @click="sort('lastRecycledAt')">
-                  Last recycled<span v-html="sortArrow('lastRecycledAt')"></span>
-                </th>
               </tr>
             </thead>
             <tbody>
@@ -282,9 +279,6 @@ const hasFilters = computed(
                   ><span v-else>-</span>
                 </td>
                 <td data-label="Containers" class="text-dim">{{ w.containers.length }}</td>
-                <td data-label="Last recycled" class="text-dim">
-                  {{ w.lastRecycledAt ? timeAgo(w.lastRecycledAt) : '-' }}
-                </td>
               </tr>
             </tbody>
           </table>

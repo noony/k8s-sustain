@@ -404,7 +404,6 @@ export interface CoordinationFactors {
 
 export interface WorkloadDetailSnapshot {
   updateMode?: string
-  lastRecycledAt?: string
   driftPercent: number
   oom24h: number
   blocked?: { reason: string; attempts: number; nextRetryAt?: string; lastError?: string }
@@ -416,7 +415,6 @@ export interface WorkloadDetailSnapshot {
 export interface WorkloadItemV2 extends WorkloadItem {
   riskState: 'safe' | 'drifted' | 'at-risk' | 'blocked'
   driftPercent: number
-  lastRecycledAt?: string
   autoscalerPresent: boolean
   coordinationFactors?: CoordinationFactors
   active: boolean

@@ -21,7 +21,6 @@ type workloadSummary struct {
 	Containers          []containerStatus    `json:"containers"`
 	RiskState           string               `json:"riskState"` // safe | drifted | at-risk | blocked
 	DriftPercent        float64              `json:"driftPercent"`
-	LastRecycledAt      string               `json:"lastRecycledAt,omitempty"`
 	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
 	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
 	Active              bool                 `json:"active"`
@@ -198,7 +197,6 @@ type allWorkloadSummary struct {
 	PolicyName          string               `json:"policyName,omitempty"`
 	RiskState           string               `json:"riskState"` // safe | drifted | at-risk | blocked
 	DriftPercent        float64              `json:"driftPercent"`
-	LastRecycledAt      string               `json:"lastRecycledAt,omitempty"`
 	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
 	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
 	Active              bool                 `json:"active"`

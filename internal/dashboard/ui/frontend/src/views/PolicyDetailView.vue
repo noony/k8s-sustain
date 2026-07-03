@@ -129,16 +129,16 @@ function savingsClass(millis: number): string {
   return millis > 0 ? 'savings-positive' : millis < 0 ? 'savings-negative' : ''
 }
 
-function effectivenessSeries() {
-  const e = policy.value?.effectivenessSeries
-  if (!e) return []
-  const cpu = e.cpu || []
-  const mem = e.memory || []
-  if (cpu.length === 0 && mem.length === 0) return []
-  return [
-    { label: 'CPU saved', color: 'rgb(124, 58, 237)', points: cpu },
-    { label: 'Mem saved', color: 'rgb(6, 182, 212)', points: mem },
-  ]
+function cpuEffectivenessSeries() {
+  const cpu = policy.value?.effectivenessSeries?.cpu || []
+  if (cpu.length === 0) return []
+  return [{ label: 'CPU saved', color: 'rgb(124, 58, 237)', points: cpu }]
+}
+
+function memEffectivenessSeries() {
+  const mem = policy.value?.effectivenessSeries?.memory || []
+  if (mem.length === 0) return []
+  return [{ label: 'Mem saved', color: 'rgb(6, 182, 212)', points: mem }]
 }
 
 function modeBadges(): string {
@@ -349,12 +349,42 @@ function renderYaml(p: typeof policy.value): string {
         <h2>Effectiveness over time</h2>
         <TimeRangePicker v-model="range" />
       </div>
-      <TrendChart
-        v-if="effectivenessSeries().length"
-        :series="effectivenessSeries()"
-        unit=""
-        :height="220"
-      />
+      <div
+        v-if="cpuEffectivenessSeries().length || memEffectivenessSeries().length"
+        class="chart-grid"
+      >
+        <div>
+          <div class="section-label">CPU</div>
+          <TrendChart
+            v-if="cpuEffectivenessSeries().length"
+            :series="cpuEffectivenessSeries()"
+            unit=" cores"
+            :height="220"
+          />
+          <EmptyState
+            v-else
+            compact
+            icon="chart"
+            message="Insufficient data — check back in 24h."
+          />
+        </div>
+        <div>
+          <div class="section-label">Memory</div>
+          <TrendChart
+            v-if="memEffectivenessSeries().length"
+            :series="memEffectivenessSeries()"
+            unit=""
+            :height="220"
+            :y-format="formatBytes"
+          />
+          <EmptyState
+            v-else
+            compact
+            icon="chart"
+            message="Insufficient data — check back in 24h."
+          />
+        </div>
+      </div>
       <EmptyState v-else compact icon="chart" message="Insufficient data — check back in 24h." />
     </div>
 
