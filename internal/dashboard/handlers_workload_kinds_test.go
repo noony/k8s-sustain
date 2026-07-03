@@ -198,6 +198,38 @@ func TestListWorkloadsOfKind_Deployment_GroupingCollapsesToOneEntry(t *testing.T
 	}
 }
 
+// TestListWorkloadsOfKind_Deployment_SameNameDifferentNamespaces_BothListed
+// is the regression case for a real bug: groupEntriesByIdentity used to key
+// its dedup map by resolved identity alone, so same-named Deployments in
+// different namespaces (e.g. every hack/scenarios/*.yaml demo naming its
+// stress Deployment "stress") collided and all but the most recently created
+// one silently vanished from the cluster-wide listing — surfacing on the
+// dashboard as a bogus "Inactive" workload.
+func TestListWorkloadsOfKind_Deployment_SameNameDifferentNamespaces_BothListed(t *testing.T) {
+	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Hour)
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(
+		deploymentWithOwnerName("scenario-oom-kill", "stress", "", older),
+		deploymentWithOwnerName("scenario-steady", "stress", "", newer),
+	).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t)}
+
+	entries, err := srv.listWorkloadsOfKind(context.Background(), "Deployment")
+	if err != nil {
+		t.Fatalf("listWorkloadsOfKind: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries (one per namespace), got %d: %+v", len(entries), entries)
+	}
+	byNamespace := map[string]string{}
+	for _, e := range entries {
+		byNamespace[e.Namespace] = e.Name
+	}
+	if byNamespace["scenario-oom-kill"] != "stress" || byNamespace["scenario-steady"] != "stress" {
+		t.Errorf("entries = %+v, want a \"stress\" entry in both scenario-oom-kill and scenario-steady", entries)
+	}
+}
+
 // TestGetWorkloadEntry_FallsBackToRetainedWLR: the object is gone but a
 // retained WLR exists — detail endpoints must still resolve the workload.
 func TestGetWorkloadEntry_FallsBackToRetainedWLR(t *testing.T) {

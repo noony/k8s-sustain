@@ -197,6 +197,11 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 // passed to workload.ApplyOwnerNameOverride; since it's never empty here, the
 // override never changes kind, only name.
 //
+// Grouping is scoped per namespace (via workloadKey) so identically-named or
+// identically-overridden workloads in different namespaces never collapse
+// onto each other — only entries within the same namespace can share an
+// identity.
+//
 // Order of the returned slice follows first-seen identity, for stable
 // pagination across calls against an unchanged object set.
 func groupEntriesByIdentity(entries []workloadEntry, kind string) []workloadEntry {
@@ -208,18 +213,19 @@ func groupEntriesByIdentity(entries []workloadEntry, kind string) []workloadEntr
 			annotations = e.Template.Annotations
 		}
 		_, identity := workload.ApplyOwnerNameOverride(kind, e.Name, annotations)
-		cur, seen := best[identity]
+		key := workloadKey(e.Namespace, kind, identity)
+		cur, seen := best[key]
 		if !seen || e.CreationTimestamp.After(cur.CreationTimestamp) {
 			if !seen {
-				order = append(order, identity)
+				order = append(order, key)
 			}
 			e.Name = identity
-			best[identity] = e
+			best[key] = e
 		}
 	}
 	out := make([]workloadEntry, 0, len(order))
-	for _, identity := range order {
-		out = append(out, best[identity])
+	for _, key := range order {
+		out = append(out, best[key])
 	}
 	return out
 }
