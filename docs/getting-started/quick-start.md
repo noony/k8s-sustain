@@ -5,12 +5,13 @@ This guide creates a policy that right-sizes Deployments in a `staging` namespac
 ## 1. Install k8s-sustain
 
 ```bash
-helm repo add k8s-sustain https://noony.github.io/k8s-sustain
-helm repo update
-helm install k8s-sustain k8s-sustain/k8s-sustain \
+helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --namespace k8s-sustain \
   --create-namespace
 ```
+
+See [Installation](installation.md) for other install options (existing Prometheus, cert-manager, recommend-only mode).
 
 ## 2. Create a Policy
 

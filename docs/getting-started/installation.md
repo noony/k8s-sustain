@@ -2,19 +2,25 @@
 
 Install k8s-sustain into a cluster with Helm, optionally using a bundled Prometheus or pointing at an existing one.
 
-## Add the Helm repository
+Charts are published as OCI artifacts to GitHub Container Registry — no `helm repo add` needed. Pick a version from the [releases page](https://github.com/noony/k8s-sustain/releases) and pin it with `--version`:
 
 ```bash
-helm repo add k8s-sustain https://noony.github.io/k8s-sustain
-helm repo update
+helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
+  --namespace k8s-sustain \
+  --create-namespace
 ```
+
+!!! note "No version ranges"
+    OCI registries don't support the caret/tilde ranges a classic Helm repo does — `--version` must be an exact chart version (e.g. `0.4.0`).
 
 ## Install with bundled Prometheus
 
 The default installation deploys the controller, the admission webhook, and a [Prometheus](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) instance with the required recording rules pre-configured.
 
 ```bash
-helm install k8s-sustain k8s-sustain/k8s-sustain \
+helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --namespace k8s-sustain \
   --create-namespace
 ```
@@ -24,7 +30,8 @@ helm install k8s-sustain k8s-sustain/k8s-sustain \
 If you already have Prometheus running, disable the bundled instance and point k8s-sustain at yours:
 
 ```bash
-helm install k8s-sustain k8s-sustain/k8s-sustain \
+helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --namespace k8s-sustain \
   --create-namespace \
   --set prometheus.enabled=false \
@@ -41,7 +48,8 @@ helm install k8s-sustain k8s-sustain/k8s-sustain \
 If you only need `Ongoing` mode (no `OnCreate`), you can disable the webhook entirely. This removes the TLS certificate requirement.
 
 ```bash
-helm install k8s-sustain k8s-sustain/k8s-sustain \
+helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --namespace k8s-sustain \
   --create-namespace \
   --set webhook.enabled=false
@@ -52,7 +60,8 @@ helm install k8s-sustain k8s-sustain/k8s-sustain \
 Run k8s-sustain without applying any changes. Recommendations are logged as structured JSON but workloads and pods are never modified.
 
 ```bash
-helm install k8s-sustain k8s-sustain/k8s-sustain \
+helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --namespace k8s-sustain \
   --create-namespace \
   --set recommendOnly=true
@@ -61,7 +70,8 @@ helm install k8s-sustain k8s-sustain/k8s-sustain \
 Once you are satisfied with the logged recommendations, disable recommend-only mode:
 
 ```bash
-helm upgrade k8s-sustain k8s-sustain/k8s-sustain \
+helm upgrade k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --namespace k8s-sustain \
   --reuse-values \
   --set recommendOnly=false
@@ -72,7 +82,8 @@ helm upgrade k8s-sustain k8s-sustain/k8s-sustain \
 The chart creates a self-signed Issuer and Certificate automatically — just enable cert-manager:
 
 ```bash
-helm install k8s-sustain k8s-sustain/k8s-sustain \
+helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --namespace k8s-sustain \
   --create-namespace \
   --set webhook.certManager.enabled=true
@@ -108,9 +119,11 @@ kubectl logs -n k8s-sustain -l app.kubernetes.io/component=webhook
 
 ## Upgrading
 
+Bump `--version` to the new release and re-run `helm upgrade`:
+
 ```bash
-helm repo update
-helm upgrade k8s-sustain k8s-sustain/k8s-sustain \
+helm upgrade k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --namespace k8s-sustain \
   --reuse-values
 ```

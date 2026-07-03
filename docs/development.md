@@ -247,6 +247,8 @@ make docker-buildx IMG=ghcr.io/noony/k8s-sustain:dev    # builds + pushes linux/
 
 Override `PLATFORMS` to change the matrix, e.g. `PLATFORMS=linux/arm64 make docker-buildx`. CI (`.github/workflows/release.yml`) publishes both `linux/amd64` and `linux/arm64` automatically on tag pushes.
 
+The `helm` job in that same workflow also pushes both charts as OCI artifacts to `oci://ghcr.io/noony/helm-charts/<chart>`, in addition to attaching the packaged `.tgz` files to the GitHub release.
+
 ## Makefile targets
 
 | Target | Description |

@@ -79,6 +79,15 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: "*.tgz"
 
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push charts to GHCR
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          helm push "k8s-sustain-${VERSION}.tgz" oci://ghcr.io/noony/helm-charts
+          helm push "k8s-sustain-policies-${VERSION}.tgz" oci://ghcr.io/noony/helm-charts
+
   gh-release:
     runs-on: ubuntu-latest
     needs: docker

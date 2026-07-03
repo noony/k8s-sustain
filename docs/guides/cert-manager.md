@@ -20,7 +20,8 @@ helm install cert-manager jetstack/cert-manager \
 The chart creates a self-signed `Issuer` and `Certificate` automatically. No external Issuer is required:
 
 ```bash
-helm install k8s-sustain k8s-sustain/k8s-sustain \
+helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --namespace k8s-sustain \
   --create-namespace \
   --set webhook.certManager.enabled=true
@@ -33,7 +34,8 @@ This is the simplest approach and works for both development and production. The
 If you already have an Issuer or ClusterIssuer in the cluster (e.g. a corporate CA), disable the built-in one and point to yours:
 
 ```bash
-helm install k8s-sustain k8s-sustain/k8s-sustain \
+helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --namespace k8s-sustain \
   --create-namespace \
   --set webhook.certManager.enabled=true \
@@ -78,7 +80,8 @@ kubectl create secret tls k8s-sustain-webhook-tls \
 # Base64-encode the CA cert (use -b 0 on macOS instead of -w0)
 CA_BUNDLE=$(base64 -w0 tls.crt)
 
-helm install k8s-sustain k8s-sustain/k8s-sustain \
+helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --namespace k8s-sustain \
   --create-namespace \
   --set webhook.caBundle="${CA_BUNDLE}"

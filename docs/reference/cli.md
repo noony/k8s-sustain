@@ -129,7 +129,8 @@ The `MutatingWebhookConfiguration` is set to `failurePolicy: Ignore` by default.
 To change the failure policy:
 
 ```bash
-helm upgrade k8s-sustain k8s-sustain/k8s-sustain \
+helm upgrade k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --version <VERSION> \
   --reuse-values \
   --set webhook.failurePolicy=Fail
 ```
