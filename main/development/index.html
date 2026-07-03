@@ -2137,6 +2137,7 @@ what the harness does or deviate from it.</p>
 <a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>make<span class="w"> </span>docker-buildx<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>ghcr.io/noony/k8s-sustain:dev<span class="w">    </span><span class="c1"># builds + pushes linux/amd64 + linux/arm64</span>
 </code></pre></div>
 <p>Override <code>PLATFORMS</code> to change the matrix, e.g. <code>PLATFORMS=linux/arm64 make docker-buildx</code>. CI (<code>.github/workflows/release.yml</code>) publishes both <code>linux/amd64</code> and <code>linux/arm64</code> automatically on tag pushes.</p>
+<p>The <code>helm</code> job in that same workflow also pushes both charts as OCI artifacts to <code>oci://ghcr.io/noony/helm-charts/&lt;chart&gt;</code>, in addition to attaching the packaged <code>.tgz</code> files to the GitHub release.</p>
 <h2 id="makefile-targets">Makefile targets<a class="headerlink" href="#makefile-targets" title="Permanent link">&para;</a></h2>
 <table>
 <thead>

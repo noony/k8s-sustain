@@ -1549,12 +1549,12 @@
 <h1 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h1>
 <p>This guide creates a policy that right-sizes Deployments in a <code>staging</code> namespace using the p95 of the last 7 days of data.</p>
 <h2 id="1-install-k8s-sustain">1. Install k8s-sustain<a class="headerlink" href="#1-install-k8s-sustain" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>helm<span class="w"> </span>repo<span class="w"> </span>add<span class="w"> </span>k8s-sustain<span class="w"> </span>https://noony.github.io/k8s-sustain
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>helm<span class="w"> </span>repo<span class="w"> </span>update
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>k8s-sustain/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--create-namespace
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--create-namespace
 </code></pre></div>
+<p>See <a href="../installation/">Installation</a> for other install options (existing Prometheus, cert-manager, recommend-only mode).</p>
 <h2 id="2-create-a-policy">2. Create a Policy<a class="headerlink" href="#2-create-a-policy" title="Permanent link">&para;</a></h2>
 <div class="highlight"><span class="filename">staging-policy.yaml</span><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>

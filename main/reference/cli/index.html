@@ -1965,9 +1965,10 @@
 <h3 id="failure-policy">Failure policy<a class="headerlink" href="#failure-policy" title="Permanent link">&para;</a></h3>
 <p>The <code>MutatingWebhookConfiguration</code> is set to <code>failurePolicy: Ignore</code> by default. This means if the webhook is unreachable or returns an error, the pod is admitted unchanged. The controller will still apply <code>Ongoing</code> recommendations independently.</p>
 <p>To change the failure policy:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>k8s-sustain/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--set<span class="w"> </span>webhook.failurePolicy<span class="o">=</span>Fail
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--set<span class="w"> </span>webhook.failurePolicy<span class="o">=</span>Fail
 </code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Using <code>Fail</code> in production</p>
