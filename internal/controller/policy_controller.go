@@ -65,6 +65,13 @@ type PolicyReconciler struct {
 	// falls back to the patcher default.
 	RecycleReplacementTimeout time.Duration
 
+	// RecommendationRetention is how long a WorkloadRecommendation outlives a
+	// workload whose object has disappeared (ephemeral bare pods, deleted or
+	// terminal Jobs). The dashboard shows these as inactive rows. Zero
+	// disables retention: departed targets are swept on the next reconcile
+	// (after the fresh-write grace period).
+	RecommendationRetention time.Duration
+
 	// OrphanReapInterval bounds how often the manager scans for
 	// WorkloadRecommendation objects whose owning Policy no longer exists
 	// (strategy 2 cleanup). Zero falls back to 10 minutes.

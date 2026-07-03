@@ -88,6 +88,14 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		return nil
 	}
 
+	// OnCreate targets stop once the recommendation is computed and cached:
+	// the webhook injects resources at pod admission, and the controller
+	// must never recycle or resize running pods in this mode.
+	if t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate {
+		r.recordStepSuccess(t)
+		return nil
+	}
+
 	// Bare-pod identities (Kind == "Pod") have no controller owner that could
 	// recreate an evicted/resized pod — recycling never applies, in any
 	// UpdateMode. This is a permanent, unconditional exception, not a mode

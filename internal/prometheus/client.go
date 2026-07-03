@@ -213,6 +213,28 @@ func (c *Client) QueryWorkloadMemoryByContainer(ctx context.Context, namespace, 
 	return c.queryByContainer(ctx, expr)
 }
 
+// QueryWorkloadHistoryStart returns the timestamp of the oldest sample the
+// workload identity has within window, based on the
+// k8s_sustain:workload_max_pod_cpu:cores recording rule (the CPU
+// recommendation basis). Ephemeral identities — standalone Jobs re-created on
+// every run — have an object age that says nothing about how much usage
+// history has accumulated under the same (namespace, owner_kind, owner_name),
+// so the workload-age gate keys on this instead. Returns the zero time when
+// the identity has no samples in the window.
+func (c *Client) QueryWorkloadHistoryStart(ctx context.Context, namespace, ownerKind, ownerName, window string) (time.Time, error) {
+	expr := fmt.Sprintf("min(min_over_time(timestamp(%s%s)[%s:1m]))",
+		MetricWorkloadMaxPodCPUCores, workloadSelector(namespace, ownerKind, ownerName), window)
+	result, err := c.execInstant(ctx, expr, time.Now(), c.queryTimeout)
+	if err != nil {
+		return time.Time{}, wrapQueryErr("workload history start query", expr, err)
+	}
+	vector, ok := result.(model.Vector)
+	if !ok || len(vector) == 0 || vector[0].Value <= 0 {
+		return time.Time{}, nil
+	}
+	return time.Unix(int64(vector[0].Value), 0), nil
+}
+
 // TimeSeries holds a single time-series: metric labels plus timestamped values.
 type TimeSeries struct {
 	Labels map[string]string `json:"labels"`

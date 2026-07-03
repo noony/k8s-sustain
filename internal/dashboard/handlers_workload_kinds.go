@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -261,6 +263,9 @@ func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name str
 			return e, nil
 		}
 	}
+	if e, ok := s.inactiveWorkloadEntry(ctx, namespace, kind, name); ok {
+		return e, nil
+	}
 	return workloadEntry{}, apierrors.NewNotFound(groupResourceForKind(kind), name)
 }
 
@@ -284,6 +289,68 @@ func groupResourceForKind(kind string) schema.GroupResource {
 	default:
 		return corev1.Resource("pods")
 	}
+}
+
+// inactiveWorkloadEntry reconstructs a workloadEntry from a retained
+// WorkloadRecommendation so detail endpoints keep working for inactive
+// workloads the list links to. The synthesized template carries the policy
+// annotation and the observed container resources; the Prometheus-driven
+// panels (metrics, recommendations) work off identity and history, which
+// both outlive the object. ok is false when no matching WLR exists.
+func (s *Server) inactiveWorkloadEntry(ctx context.Context, namespace, kind, name string) (workloadEntry, bool) {
+	var list sustainv1alpha1.WorkloadRecommendationList
+	if err := s.K8sClient.List(ctx, &list, client.InNamespace(namespace)); err != nil {
+		s.Logger.Error(err, "failed to list WorkloadRecommendations for inactive fallback", "namespace", namespace)
+		return workloadEntry{}, false
+	}
+	for i := range list.Items {
+		wlr := &list.Items[i]
+		ref := wlr.Spec.WorkloadRef
+		if ref.Kind != kind || ref.Name != name || wlr.Spec.Policy == "" {
+			continue
+		}
+		var containers, initContainers []corev1.Container
+		for cname, res := range wlr.Status.ObservedResources {
+			c := corev1.Container{Name: cname, Resources: requirementsFromObserved(res)}
+			if res.Init {
+				initContainers = append(initContainers, c)
+			} else {
+				containers = append(containers, c)
+			}
+		}
+		sort.Slice(containers, func(a, b int) bool { return containers[a].Name < containers[b].Name })
+		sort.Slice(initContainers, func(a, b int) bool { return initContainers[a].Name < initContainers[b].Name })
+		return workloadEntry{
+			Namespace: namespace,
+			Name:      name,
+			Template: &corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: wlr.Spec.Policy},
+				},
+				Spec: corev1.PodSpec{Containers: containers, InitContainers: initContainers},
+			},
+		}, true
+	}
+	return workloadEntry{}, false
+}
+
+// requirementsFromObserved rebuilds ResourceRequirements from the snapshot.
+func requirementsFromObserved(res sustainv1alpha1.ObservedContainerResources) corev1.ResourceRequirements {
+	out := corev1.ResourceRequirements{}
+	set := func(dst *corev1.ResourceList, name corev1.ResourceName, q *resource.Quantity) {
+		if q == nil {
+			return
+		}
+		if *dst == nil {
+			*dst = corev1.ResourceList{}
+		}
+		(*dst)[name] = *q
+	}
+	set(&out.Requests, corev1.ResourceCPU, res.CPURequest)
+	set(&out.Requests, corev1.ResourceMemory, res.MemoryRequest)
+	set(&out.Limits, corev1.ResourceCPU, res.CPULimit)
+	set(&out.Limits, corev1.ResourceMemory, res.MemoryLimit)
+	return out
 }
 
 // workloadKey assembles the "namespace|kind|name" key used to address a

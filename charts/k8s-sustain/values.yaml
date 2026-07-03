@@ -46,6 +46,11 @@ controller:
   # cold start. Setting it too low produces false-positive aborts during
   # normal scale-up.
   recycleReplacementTimeout: 5m
+  # How long a WorkloadRecommendation outlives a workload whose object has
+  # disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs).
+  # The dashboard keeps showing these as "inactive" rows until the window
+  # lapses. Set to 0s to sweep them on the next reconcile instead.
+  recommendationRetention: 72h
   logLevel: error
   service:
     type: ClusterIP

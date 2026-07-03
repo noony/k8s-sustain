@@ -5,7 +5,7 @@ import { api, type PolicySpec, type PolicyWorkloadsData, type BatchSimulateData 
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useTimeRange } from '../composables/useTimeRange'
 import { useSorting } from '../composables/useSorting'
-import { formatBytes } from '../lib/format'
+import { formatBytes, timeAgo } from '../lib/format'
 import { rangeQueryParams } from '../lib/timerange'
 import StatusBadge from '../components/StatusBadge.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
@@ -413,7 +413,17 @@ function renderYaml(p: typeof policy.value): string {
                 <td>
                   <span class="kind-badge" :class="'kind-' + w.kind">{{ w.kind }}</span>
                 </td>
-                <td style="font-weight: 600">{{ w.name }}</td>
+                <td style="font-weight: 600">
+                  {{ w.name }}
+                  <span
+                    v-if="w.active === false"
+                    class="badge badge-dim gap-2"
+                    :title="w.lastSeenAt"
+                    >Inactive<template v-if="w.lastSeenAt">
+                      · last seen {{ timeAgo(w.lastSeenAt) }}</template
+                    ></span
+                  >
+                </td>
                 <td><RiskBadge :state="w.riskState" /></td>
                 <td>
                   <code v-if="w.driftPercent">{{ w.driftPercent.toFixed(1) }}%</code

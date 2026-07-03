@@ -51,6 +51,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		"reconcileInterval", cfg.ReconcileInterval,
 		"concurrencyLimit", cfg.ConcurrencyLimit,
 		"recommendOnly", cfg.RecommendOnly,
+		"recommendationRetention", cfg.RecommendationRetention,
 	)
 
 	promClient, err := promclient.New(cfg.PrometheusAddress)
@@ -123,6 +124,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		RecommendOnly:             cfg.RecommendOnly,
 		ConcurrencyLimit:          cfg.ConcurrencyLimit,
 		RecycleReplacementTimeout: cfg.RecycleReplacementTimeout,
+		RecommendationRetention:   cfg.RecommendationRetention,
 		LiveOOM: controller.LiveOOMConfig{
 			Source:    oomCache,
 			TriggerCh: triggerCh,

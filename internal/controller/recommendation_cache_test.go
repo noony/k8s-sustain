@@ -6,10 +6,15 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -84,6 +89,9 @@ func qtyp(s string) *resource.Quantity {
 func reconcilerForCache(t *testing.T, objs ...runtime.Object) *PolicyReconciler {
 	t.Helper()
 	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
 	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme: %v", err)
 	}
@@ -93,6 +101,37 @@ func reconcilerForCache(t *testing.T, objs ...runtime.Object) *PolicyReconciler 
 		WithRuntimeObjects(objs...).
 		Build()
 	return &PolicyReconciler{Client: c, Scheme: scheme}
+}
+
+// wlrFor builds a WorkloadRecommendation labeled for policyName whose target
+// is (kind, ns, name) and whose recommendation was last observed at observedAt.
+func wlrFor(policyName, ns, kind, name string, observedAt time.Time) *sustainv1alpha1.WorkloadRecommendation {
+	return &sustainv1alpha1.WorkloadRecommendation{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      wlrName(kind, name),
+			Labels:    map[string]string{wlrPolicyLabel: policyName},
+		},
+		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
+			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: kind, Namespace: ns, Name: name},
+			Policy:      policyName,
+		},
+		Status: sustainv1alpha1.WorkloadRecommendationStatus{
+			ObservedAt: metav1.NewTime(observedAt),
+			Containers: map[string]sustainv1alpha1.ContainerRecommendation{"main": {CPURequest: qtyp("100m")}},
+		},
+	}
+}
+
+// wlrExists reports whether the WLR named for (kind, name) in ns survives.
+func wlrExists(t *testing.T, r *PolicyReconciler, ns, kind, name string) bool {
+	t.Helper()
+	var wlr sustainv1alpha1.WorkloadRecommendation
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: wlrName(kind, name)}, &wlr)
+	if err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("get WLR: %v", err)
+	}
+	return err == nil
 }
 
 // TestUpsertWorkloadRecommendation_CreatesObjectOnFirstCall verifies the
@@ -325,33 +364,6 @@ func TestSweepWorkloadRecommendations_KeepsOverriddenIdentitySharedByTwoTargets(
 	}
 }
 
-// TestStatusEquivalent_DistinguishesSameValuesFromDifferentSources verifies
-// the equivalence check ignores ObservedAt but respects Source.
-func TestStatusEquivalent_DistinguishesSameValuesFromDifferentSources(t *testing.T) {
-	cpu := resource.MustParse("250m")
-	now := metav1.NewTime(time.Now())
-	later := metav1.NewTime(now.Add(time.Minute))
-
-	a := sustainv1alpha1.WorkloadRecommendationStatus{
-		ObservedAt: now,
-		Source:     "prometheus",
-		Containers: map[string]sustainv1alpha1.ContainerRecommendation{
-			"app": {CPURequest: &cpu},
-		},
-	}
-	b := a
-	b.ObservedAt = later
-	if !statusEquivalent(a, b) {
-		t.Error("differ only by ObservedAt → should be equivalent")
-	}
-
-	c := a
-	c.Source = "fallback"
-	if statusEquivalent(a, c) {
-		t.Error("different Source → should NOT be equivalent")
-	}
-}
-
 // TestDeleteAllRecommendationsForPolicy_DeletesAllForPolicy verifies the
 // strategy-1 cleanup path (called from the deletion branch of Reconcile)
 // removes every WLR for the named policy and leaves other policies' WLRs
@@ -472,5 +484,205 @@ func TestReconcile_PolicyDeletion_RemovesItsRecommendations(t *testing.T) {
 	}
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-c"}, &sustainv1alpha1.WorkloadRecommendation{}); err != nil {
 		t.Errorf("WLR for other policy should remain, got error: %v", err)
+	}
+}
+
+// TestUpsertWorkloadRecommendation_SnapshotsObservedResources verifies the
+// upsert records what the containers actually ran with, including the init
+// marker, so inactive dashboard rows can show current-vs-recommended after
+// the workload object is gone.
+func TestUpsertWorkloadRecommendation_SnapshotsObservedResources(t *testing.T) {
+	r := reconcilerForCache(t)
+	target := &workloadTarget{
+		Kind: "Pod", Name: "etl", Namespace: "airflow",
+		IdentityKind: "Pod", IdentityName: "etl",
+		Containers: []corev1.Container{{
+			Name: "main",
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+				Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+			},
+		}},
+		InitContainers: []corev1.Container{{Name: "init-db"}},
+	}
+	r.upsertWorkloadRecommendation(context.Background(), target, "p",
+		map[string]workload.ContainerRecommendation{"main": {CPURequest: qtyp("250m")}}, metav1.Now())
+
+	var wlr sustainv1alpha1.WorkloadRecommendation
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "airflow", Name: "pod-etl"}, &wlr); err != nil {
+		t.Fatalf("expected WLR to exist: %v", err)
+	}
+	obs := wlr.Status.ObservedResources
+	if len(obs) != 2 {
+		t.Fatalf("observedResources has %d entries, want 2 (main, init-db): %v", len(obs), obs)
+	}
+	main := obs["main"]
+	if main.Init {
+		t.Error("main wrongly marked Init")
+	}
+	if main.CPURequest == nil || main.CPURequest.String() != "500m" {
+		t.Errorf("main.CPURequest = %v, want 500m", main.CPURequest)
+	}
+	if main.MemoryLimit == nil || main.MemoryLimit.String() != "1Gi" {
+		t.Errorf("main.MemoryLimit = %v, want 1Gi", main.MemoryLimit)
+	}
+	if main.MemoryRequest != nil || main.CPULimit != nil {
+		t.Errorf("unset fields must stay nil: %+v", main)
+	}
+	if !obs["init-db"].Init {
+		t.Error("init-db must be marked Init")
+	}
+}
+
+// TestUpsertWorkloadRecommendation_RewritesWhenObservedResourcesChange
+// verifies that a change in the container's actual resources alone (same
+// recommendation) still triggers a status write — the equivalence check must
+// compare the snapshot, or inactive rows would show stale "current" values.
+func TestUpsertWorkloadRecommendation_RewritesWhenObservedResourcesChange(t *testing.T) {
+	r := reconcilerForCache(t)
+	recs := map[string]workload.ContainerRecommendation{"main": {CPURequest: qtyp("250m")}}
+	target := &workloadTarget{
+		Kind: "Deployment", Name: "web", Namespace: "default",
+		IdentityKind: "Deployment", IdentityName: "web",
+		Containers: []corev1.Container{{
+			Name: "main",
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+			},
+		}},
+	}
+	r.upsertWorkloadRecommendation(context.Background(), target, "p", recs, metav1.Now())
+
+	target.Containers[0].Resources.Requests[corev1.ResourceCPU] = resource.MustParse("750m")
+	r.upsertWorkloadRecommendation(context.Background(), target, "p", recs, metav1.Now())
+
+	var wlr sustainv1alpha1.WorkloadRecommendation
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &wlr); err != nil {
+		t.Fatalf("expected WLR: %v", err)
+	}
+	if got := wlr.Status.ObservedResources["main"].CPURequest; got == nil || got.String() != "750m" {
+		t.Errorf("snapshot not refreshed: CPURequest = %v, want 750m", got)
+	}
+}
+
+// TestSweep_RetainsDepartedWorkloadWithinRetention: the workload object is
+// gone and the recommendation is within retention — the WLR must survive so
+// the dashboard keeps showing the ephemeral workload.
+func TestSweep_RetainsDepartedWorkloadWithinRetention(t *testing.T) {
+	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "argocd-hook", time.Now().Add(-1*time.Hour)))
+	r.RecommendationRetention = 72 * time.Hour
+	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	if !wlrExists(t, r, "ci", "Job", "argocd-hook") {
+		t.Error("WLR for departed workload deleted within retention window")
+	}
+}
+
+// TestSweep_DeletesDepartedWorkloadPastRetention: recommendation older than
+// the retention window — swept.
+func TestSweep_DeletesDepartedWorkloadPastRetention(t *testing.T) {
+	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "argocd-hook", time.Now().Add(-80*time.Hour)))
+	r.RecommendationRetention = 72 * time.Hour
+	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	if wlrExists(t, r, "ci", "Job", "argocd-hook") {
+		t.Error("WLR past retention window survived the sweep")
+	}
+}
+
+// TestSweep_DeletesOptedOutWorkloadAfterGrace: the Deployment still exists
+// but left the target set (annotation removed / policy unmatched) — retention
+// must NOT apply once past the fresh-write grace.
+func TestSweep_DeletesOptedOutWorkloadAfterGrace(t *testing.T) {
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web"}}
+	r := reconcilerForCache(t, wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour)), dep)
+	r.RecommendationRetention = 72 * time.Hour
+	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	if wlrExists(t, r, "prod", "Deployment", "web") {
+		t.Error("WLR for opted-out (still existing) workload must be deleted")
+	}
+}
+
+// TestSweep_TerminalJobCountsAsGone: a Complete Job leaves the target set
+// while its object lingers until TTL/hook deletion. It did not opt out, so
+// its WLR must be retained.
+func TestSweep_TerminalJobCountsAsGone(t *testing.T) {
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ci", Name: "argocd-hook"},
+		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
+			Type: batchv1.JobComplete, Status: corev1.ConditionTrue,
+		}}},
+	}
+	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "argocd-hook", time.Now().Add(-1*time.Hour)), job)
+	r.RecommendationRetention = 72 * time.Hour
+	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	if !wlrExists(t, r, "ci", "Job", "argocd-hook") {
+		t.Error("WLR for terminal-but-present Job must be retained")
+	}
+}
+
+// TestSweep_BarePodIdentityAlwaysRetainedUntilExpiry: bare-pod refs carry the
+// owner-name value, not a real object name, so existence can't be checked —
+// they ride out the retention window unconditionally.
+func TestSweep_BarePodIdentityAlwaysRetainedUntilExpiry(t *testing.T) {
+	r := reconcilerForCache(t, wlrFor("p", "airflow", "Pod", "etl", time.Now().Add(-1*time.Hour)))
+	r.RecommendationRetention = 72 * time.Hour
+	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	if !wlrExists(t, r, "airflow", "Pod", "etl") {
+		t.Error("bare-pod WLR deleted within retention window")
+	}
+}
+
+// TestSweep_ZeroRetentionSweepsDepartedAfterGrace: retention disabled —
+// departed targets are swept once past the fresh-write grace (legacy
+// behavior, delayed at most 10 minutes).
+func TestSweep_ZeroRetentionSweepsDepartedAfterGrace(t *testing.T) {
+	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "argocd-hook", time.Now().Add(-1*time.Hour)))
+	r.RecommendationRetention = 0
+	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	if wlrExists(t, r, "ci", "Job", "argocd-hook") {
+		t.Error("retention=0 must sweep departed WLRs")
+	}
+}
+
+// TestSweep_GracePeriodProtectsFreshWrites: a WLR written moments ago (e.g.
+// by the webhook for a pod created after this cycle's target listing) must
+// never be swept — even with retention disabled and even when its workload
+// exists but is missing from the (stale) target list.
+func TestSweep_GracePeriodProtectsFreshWrites(t *testing.T) {
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "ci", Name: "argocd-hook"}}
+	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "argocd-hook", time.Now()), job)
+	r.RecommendationRetention = 0
+	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	if !wlrExists(t, r, "ci", "Job", "argocd-hook") {
+		t.Error("fresh WLR swept within grace period")
+	}
+}
+
+// TestSweep_GraceCoversFreshlyCreatedStatuslessWLR: the webhook Creates the
+// WLR before patching its status — between those calls ObservedAt is zero.
+// The grace period must key off CreationTimestamp too, or the sweep deletes
+// the record mid-write and a bare pod's only admission is lost forever.
+func TestSweep_GraceCoversFreshlyCreatedStatuslessWLR(t *testing.T) {
+	wlr := wlrFor("p", "airflow", "Pod", "etl", time.Time{})
+	wlr.Status = sustainv1alpha1.WorkloadRecommendationStatus{} // no status patch yet
+	// CreationTimestamp is stamped by the fake client at Create time; set it
+	// explicitly since WithRuntimeObjects bypasses Create defaulting.
+	wlr.CreationTimestamp = metav1.Now()
+	r := reconcilerForCache(t, wlr)
+	r.RecommendationRetention = 72 * time.Hour
+	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	if !wlrExists(t, r, "airflow", "Pod", "etl") {
+		t.Error("status-less freshly created WLR swept mid-write; grace must cover the Create→status-Patch window")
+	}
+}
+
+// TestSweep_KeepsWLROnExistenceCheckError: a transient GET error (here: a
+// kind whose scheme/CRD isn't registered, e.g. Argo Rollouts not installed)
+// must fail open — keep the WLR and let a later sweep decide.
+func TestSweep_KeepsWLROnExistenceCheckError(t *testing.T) {
+	r := reconcilerForCache(t, wlrFor("p", "prod", "Rollout", "canary", time.Now().Add(-1*time.Hour)))
+	r.RecommendationRetention = 72 * time.Hour
+	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	if !wlrExists(t, r, "prod", "Rollout", "canary") {
+		t.Error("WLR deleted despite existence-check error; must fail open")
 	}
 }

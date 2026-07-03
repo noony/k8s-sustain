@@ -2,16 +2,14 @@ package webhook
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -65,18 +63,6 @@ func (h *Handler) fetchCachedRecommendations(
 	return out, nil
 }
 
-// maxWLRNameLength is the Kubernetes object-name limit (DNS subdomain).
-const maxWLRNameLength = 253
-
-// wlrName mirrors the controller-side name generator. Kept in sync via tests.
-// Names that would exceed the 253-char object-name limit are truncated with a
-// short stable hash of the full name appended, identically to the controller.
-func wlrName(kind, name string) string {
-	n := fmt.Sprintf("%s-%s", strings.ToLower(kind), name)
-	if len(n) <= maxWLRNameLength {
-		return n
-	}
-	sum := sha256.Sum256([]byte(n))
-	hash := hex.EncodeToString(sum[:])[:10]
-	return n[:maxWLRNameLength-len(hash)-1] + "-" + hash
-}
+// wlrName delegates to the shared cache package — controller and webhook
+// must agree on WLR object names or the fallback contract breaks silently.
+func wlrName(kind, name string) string { return wlrcache.Name(kind, name) }

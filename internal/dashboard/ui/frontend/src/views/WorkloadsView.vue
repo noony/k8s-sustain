@@ -19,6 +19,7 @@ const router = useRouter()
 const nsFilter = ref('')
 const kindFilter = ref('')
 const automatedFilter = ref('')
+const activeFilter = ref('')
 const riskFilter = ref(String(route.query.risk || ''))
 const autoscalerFilter = ref(String(route.query.autoscaler || ''))
 const search = ref('')
@@ -32,6 +33,7 @@ function buildQs() {
   if (nsFilter.value) qs.set('namespace', nsFilter.value)
   if (kindFilter.value) qs.set('kind', kindFilter.value)
   if (automatedFilter.value) qs.set('automated', automatedFilter.value)
+  if (activeFilter.value) qs.set('active', activeFilter.value)
   if (riskFilter.value) qs.set('risk', riskFilter.value)
   if (autoscalerFilter.value) qs.set('autoscaler', autoscalerFilter.value)
   if (search.value) qs.set('search', search.value)
@@ -49,7 +51,7 @@ function load() {
 useAutoRefresh(load)
 
 onMounted(load)
-watch([nsFilter, kindFilter, automatedFilter, page], load)
+watch([nsFilter, kindFilter, automatedFilter, activeFilter, page], load)
 
 watch([riskFilter, autoscalerFilter], () => {
   router.replace({
@@ -93,6 +95,7 @@ function clearFilters() {
   nsFilter.value = ''
   kindFilter.value = ''
   automatedFilter.value = ''
+  activeFilter.value = ''
   riskFilter.value = ''
   autoscalerFilter.value = ''
   search.value = ''
@@ -105,6 +108,7 @@ const hasFilters = computed(
     nsFilter.value ||
     kindFilter.value ||
     automatedFilter.value ||
+    activeFilter.value ||
     riskFilter.value ||
     autoscalerFilter.value ||
     search.value,
@@ -159,6 +163,11 @@ const hasFilters = computed(
             <option value="">All status</option>
             <option value="true">Automated</option>
             <option value="false">Manual</option>
+          </select>
+          <select v-model="activeFilter" @change="page = 1">
+            <option value="">Any lifecycle</option>
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
           </select>
           <select v-model="riskFilter">
             <option value="">Any risk</option>
@@ -236,6 +245,14 @@ const hasFilters = computed(
                 </td>
                 <td data-label="Name" class="font-semibold">
                   {{ w.name }}
+                  <span
+                    v-if="w.active === false"
+                    class="badge badge-dim gap-2"
+                    :title="w.lastSeenAt"
+                    >Inactive<template v-if="w.lastSeenAt">
+                      · last seen {{ timeAgo(w.lastSeenAt) }}</template
+                    ></span
+                  >
                   <span v-if="w.autoscalerPresent" class="badge badge-blue gap-2">Autoscaler</span>
                   <span v-if="w.coordinationFactors?.enabled" class="badge badge-blue gap-2"
                     >Coordinated<template v-if="hasCoordinationFactors(w.coordinationFactors)">

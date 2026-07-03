@@ -3,6 +3,7 @@ package config
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -180,5 +181,17 @@ func TestLoadDashboardConfig_RoundTripsBoundFlags(t *testing.T) {
 	}
 	if cfg.LogLevel != "info" {
 		t.Errorf("LogLevel = %q, want info (default)", cfg.LogLevel)
+	}
+}
+
+// TestControllerConfig_RecommendationRetentionDefault verifies the flag
+// registers with its 72h default and threads into ControllerConfig.
+func TestControllerConfig_RecommendationRetentionDefault(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	cmd := &cobra.Command{}
+	BindControllerFlags(cmd)
+	if got := LoadControllerConfig().RecommendationRetention; got != 72*time.Hour {
+		t.Errorf("RecommendationRetention = %v, want 72h", got)
 	}
 }

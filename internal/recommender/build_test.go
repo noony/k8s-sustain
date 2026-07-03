@@ -1,6 +1,12 @@
 package recommender
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -294,5 +300,163 @@ func TestBuildContainerRecs_LiveOOMWithLimitAnchorEmits(t *testing.T) {
 	}
 	if got := rec.MemoryRequest.String(); got != "120Mi" {
 		t.Fatalf("expected 120Mi (100Mi × 1.20 bump), got %s", got)
+	}
+}
+
+// TestShouldSkipYoungWorkload covers the age gate, including the history-start
+// input: accumulated Prometheus history for the identity (e.g. prior runs of a
+// re-created standalone Job) makes the workload count as old even when the
+// object itself was just created. History can only make a workload look older,
+// never younger.
+func TestShouldSkipYoungWorkload(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-2 * MinWorkloadAge)
+	young := now.Add(-time.Minute)
+
+	cases := []struct {
+		name         string
+		created      time.Time
+		historyStart time.Time
+		recentOOM    bool
+		want         bool
+	}{
+		{"young object, no history", young, time.Time{}, false, true},
+		{"young object, old history", young, old, false, false},
+		{"young object, young history", young, now.Add(-2 * time.Minute), false, true},
+		{"old object, no history", old, time.Time{}, false, false},
+		{"old object, young history stays old", old, young, false, false},
+		{"young object, recent OOM bypasses", young, time.Time{}, true, false},
+		// Bare pods: the object age is unknown (zero), so the identity's
+		// history age is the only signal — young history gates, old history
+		// or no signal at all does not.
+		{"zero created, young history", time.Time{}, young, false, true},
+		{"zero created, old history", time.Time{}, old, false, false},
+		{"zero created, no history", time.Time{}, time.Time{}, false, false},
+		{"zero created, young history, recent OOM bypasses", time.Time{}, young, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ShouldSkipYoungWorkload(tc.created, tc.historyStart, tc.recentOOM); got != tc.want {
+				t.Errorf("ShouldSkipYoungWorkload(%v, %v, %v) = %v, want %v",
+					tc.created, tc.historyStart, tc.recentOOM, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgeForLog(t *testing.T) {
+	if got := AgeForLog(time.Time{}); got != "none" {
+		t.Errorf("AgeForLog(zero) = %q, want %q", got, "none")
+	}
+	got := AgeForLog(time.Now().Add(-30 * time.Minute))
+	if !strings.HasPrefix(got, "30m") {
+		t.Errorf("AgeForLog(30m ago) = %q, want ~30m duration string", got)
+	}
+}
+
+func TestHistoryLookback(t *testing.T) {
+	cases := map[string]string{
+		"10m":   "24h", // shorter than the floor → floored
+		"1h":    "24h",
+		"24h":   "24h",
+		"168h":  "168h", // longer than the floor → window wins
+		"7d":    "7d",   // prometheus duration units parse too
+		"bogus": "24h",  // unparseable → safe floor
+	}
+	for window, want := range cases {
+		if got := historyLookback(window); got != want {
+			t.Errorf("historyLookback(%q) = %q, want %q", window, got, want)
+		}
+	}
+}
+
+// TestFetchWorkloadInputs_HistoryStartForJobs verifies that the Job-kind fetch
+// issues the history-start query and surfaces its result, while other kinds
+// (whose object age is a faithful identity age) skip the extra query.
+func TestFetchWorkloadInputs_HistoryStartForJobs(t *testing.T) {
+	histStart := time.Now().Add(-25 * time.Minute).Truncate(time.Second)
+
+	var mu sync.Mutex
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		mu.Lock()
+		queries = append(queries, q)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(q, "timestamp(") {
+			fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"%d"]}]}}`, histStart.Unix())
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer server.Close()
+
+	pc, err := promclient.New(server.URL)
+	if err != nil {
+		t.Fatalf("prometheus client: %v", err)
+	}
+	p95 := int32(95)
+	rsCfg := sustainv1alpha1.ResourcesConfigs{
+		CPU:    sustainv1alpha1.ResourceConfig{Window: "1h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
+		Memory: sustainv1alpha1.ResourceConfig{Window: "1h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
+	}
+
+	inputs, err := FetchWorkloadInputs(context.Background(), pc, "ns", "Job", "oneshot", rsCfg)
+	if err != nil {
+		t.Fatalf("FetchWorkloadInputs(Job): %v", err)
+	}
+	if !inputs.HistoryStart.Equal(histStart) {
+		t.Errorf("HistoryStart = %v, want %v", inputs.HistoryStart, histStart)
+	}
+
+	// The lookback for the history-start query must be floored at 24h, not
+	// capped by the 1h CPU window: a lookback equal to the window would cap
+	// the observable history age at the window length, so short windows
+	// (≤ MinWorkloadAge) could never satisfy the gate.
+	mu.Lock()
+	var historyQueries []string
+	for _, q := range queries {
+		if strings.Contains(q, "timestamp(") {
+			historyQueries = append(historyQueries, q)
+		}
+	}
+	mu.Unlock()
+	if len(historyQueries) != 1 {
+		t.Fatalf("expected exactly 1 history-start query, got %d: %v", len(historyQueries), historyQueries)
+	}
+	if !strings.Contains(historyQueries[0], "[24h:") {
+		t.Errorf("history-start lookback not floored at 24h: %q", historyQueries[0])
+	}
+
+	// Bare pods are the other ephemeral identity: object age is meaningless
+	// (the annotated identity outlives any single pod), so the history-start
+	// query must run for Pod-kind too.
+	inputs, err = FetchWorkloadInputs(context.Background(), pc, "ns", "Pod", "etl-daily", rsCfg)
+	if err != nil {
+		t.Fatalf("FetchWorkloadInputs(Pod): %v", err)
+	}
+	if !inputs.HistoryStart.Equal(histStart) {
+		t.Errorf("Pod HistoryStart = %v, want %v", inputs.HistoryStart, histStart)
+	}
+
+	mu.Lock()
+	queries = nil
+	mu.Unlock()
+
+	inputs, err = FetchWorkloadInputs(context.Background(), pc, "ns", "Deployment", "web", rsCfg)
+	if err != nil {
+		t.Fatalf("FetchWorkloadInputs(Deployment): %v", err)
+	}
+	if !inputs.HistoryStart.IsZero() {
+		t.Errorf("Deployment HistoryStart = %v, want zero", inputs.HistoryStart)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, q := range queries {
+		if strings.Contains(q, "timestamp(") {
+			t.Errorf("Deployment fetch issued a history-start query: %q", q)
+		}
 	}
 }

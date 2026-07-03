@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	apivalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -24,6 +26,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/policymatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -268,6 +271,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	containers, _ := workload.MergeContainersForRecommendation(
 		pod.Spec.Containers, pod.Spec.InitContainers, policy.Spec.RightSizing.ExcludeInitContainers,
 	)
+	fromCache := false
 	recs, err := h.buildRecommendations(ctx, &policy, req.Namespace, ownerKind, ownerName, containers)
 	if err != nil {
 		// Prometheus failed (timeout, network, or circuit breaker open).
@@ -296,6 +300,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		logger.Info("prometheus unavailable; serving cached recommendation",
 			"containers", len(cached), "promErr", err.Error())
 		recs = cached
+		fromCache = true
 	}
 
 	// Always inject the latest recommendation regardless of mode.
@@ -309,6 +314,15 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		logger.V(1).Info("no recommendations match pod containers, allowing without injection",
 			"podContainers", len(pod.Spec.Containers), "podInitContainers", len(pod.Spec.InitContainers), "recommendations", len(recs))
 		return allowWithLabelPatch(labelPatch)
+	}
+
+	// Persist the fresh recommendation for ephemeral identities: bare pods
+	// and standalone Jobs may never be seen by a controller reconcile at
+	// all. Skipped when recs came from the cache fallback — re-writing
+	// served-from-cache data would refresh ObservedAt and make a dead
+	// workload look alive.
+	if !fromCache {
+		h.writeRecommendationCache(logger, req.Namespace, ownerKind, ownerName, policyName, &pod, filtered)
 	}
 
 	// RecommendOnly records the recommendation but never mutates the pod, so
@@ -401,10 +415,10 @@ func (h *Handler) buildRecommendations(
 		return nil, err
 	}
 
-	if recommender.ShouldSkipYoungWorkload(workloadCreated, inputs.HasRecentOOM()) {
+	if recommender.ShouldSkipYoungWorkload(workloadCreated, inputs.HistoryStart, inputs.HasRecentOOM()) {
 		recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "workload_too_young").Inc()
 		logger.Info("skipping injection: workload too young",
-			"age", time.Since(workloadCreated), "minAge", recommender.MinWorkloadAge)
+			"age", recommender.AgeForLog(workloadCreated), "historyAge", recommender.AgeForLog(inputs.HistoryStart), "minAge", recommender.MinWorkloadAge)
 		return map[string]workload.ContainerRecommendation{}, nil
 	}
 
@@ -455,6 +469,59 @@ func buildPatches(pod *corev1.Pod, recs map[string]workload.ContainerRecommendat
 		return nil, nil
 	}
 	return json.Marshal(patches)
+}
+
+// wlrWriteTimeout bounds the detached, asynchronous WorkloadRecommendation
+// write. Independent of the admission budget by design.
+const wlrWriteTimeout = 5 * time.Second
+
+// isEphemeralOwnerKind gates which identities the webhook persists WLRs for.
+// Bare pods and standalone Jobs can start and finish entirely between two
+// controller reconciles, so admission is the only moment anything observes
+// them. Every other kind is refreshed by the controller loop; writing those
+// here too would just double the write traffic on busy rollouts.
+func isEphemeralOwnerKind(kind string) bool {
+	return kind == "Pod" || kind == "Job"
+}
+
+// writeRecommendationCache persists recs as a WorkloadRecommendation without
+// blocking admission: the apiserver write runs in a goroutine on a detached
+// context — the AdmissionResponse must never wait on it. Best-effort: errors
+// are logged inside wlrcache.Upsert at V(1) and dropped.
+func (h *Handler) writeRecommendationCache(logger logr.Logger, ns, ownerKind, ownerName, policyName string, pod *corev1.Pod, recs map[string]workload.ContainerRecommendation) {
+	if !isEphemeralOwnerKind(ownerKind) {
+		return
+	}
+	// Snapshot what the pod will actually run with: this same admission
+	// injects the recommendation (unless RecommendOnly, where the pod keeps
+	// its template resources).
+	containers := pod.Spec.Containers
+	initContainers := pod.Spec.InitContainers
+	if !h.RecommendOnly {
+		containers = containersWithRecs(containers, recs)
+		initContainers = containersWithRecs(initContainers, recs)
+	}
+	observed := wlrcache.BuildObservedResources(containers, initContainers)
+	ref := sustainv1alpha1.WorkloadReference{Kind: ownerKind, Namespace: ns, Name: ownerName}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), wlrWriteTimeout)
+		defer cancel()
+		wlrcache.Upsert(log.IntoContext(ctx, logger), h.Client, ref, policyName, recs, observed, metav1.Now())
+	}()
+}
+
+// containersWithRecs returns copies of cs with the matching recommendations
+// applied, mirroring what buildPatches injects into the pod.
+func containersWithRecs(cs []corev1.Container, recs map[string]workload.ContainerRecommendation) []corev1.Container {
+	out := make([]corev1.Container, len(cs))
+	for i := range cs {
+		c := *cs[i].DeepCopy()
+		if rec, ok := recs[c.Name]; ok {
+			workload.ApplyRecommendation(&c, rec)
+		}
+		out[i] = c
+	}
+	return out
 }
 
 func patchesForContainers(cs []corev1.Container, recs map[string]workload.ContainerRecommendation, basePath string) ([]jsonPatch, error) {

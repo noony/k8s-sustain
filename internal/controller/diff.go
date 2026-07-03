@@ -37,7 +37,8 @@ func changedContainers(current []corev1.Container, recs map[string]workload.Cont
 
 // quantityEqual reports whether two stored recommendation quantities are
 // equal, treating a nil pointer and an explicit zero as the same "unset" value.
-// Used to compare two WorkloadRecommendation statuses (see statusEquivalent);
+// Used to compare two WorkloadRecommendation statuses (see
+// internal/wlrcache's own copy of this helper, used by its statusEquivalent);
 // for comparing a live container against a recommendation use
 // workload.ContainerMatches instead.
 func quantityEqual(a *resource.Quantity, b *resource.Quantity) bool {

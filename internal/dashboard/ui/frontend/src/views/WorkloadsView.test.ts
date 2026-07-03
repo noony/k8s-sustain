@@ -38,4 +38,33 @@ describe('WorkloadsView', () => {
     expect(w.text()).toContain('At risk')
     expect(w.text()).toContain('18.4')
   })
+
+  it('marks inactive rows with a badge and last-seen', async () => {
+    ;(api.api as any).mockResolvedValue({
+      items: [
+        {
+          namespace: 'airflow',
+          kind: 'Pod',
+          name: 'etl',
+          containers: [],
+          automated: true,
+          policyName: 'p',
+          riskState: 'safe',
+          driftPercent: 0,
+          autoscalerPresent: false,
+          active: false,
+          lastSeenAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+        },
+      ],
+      total: 1,
+      pageSize: 50,
+      namespaces: ['airflow'],
+      kinds: ['Pod'],
+      counts: { total: 1, automated: 1, manual: 0 },
+    })
+    const w = mount(WorkloadsView, { global: { plugins: [router] } })
+    await flushPromises()
+    expect(w.text()).toContain('Inactive')
+    expect(w.text()).toContain('last seen')
+  })
 })

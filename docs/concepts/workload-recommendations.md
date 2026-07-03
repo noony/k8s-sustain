@@ -16,6 +16,10 @@ The webhook needs three Prometheus queries (per-pod CPU percentile, per-pod memo
 
 1. **Write path (controller).** After every successful `reconcileWorkload`, the controller upserts a `WorkloadRecommendation` whose name is `<lowercase-kind>-<workload-name>` in the workload's namespace (names exceeding the 253-char object-name limit are truncated with a short stable hash suffix; controller and webhook compute the name identically). The `status.containers` map carries the same per-container CPU/memory request and limit values that the recycle path applied. Writes are skipped when the new recommendation is byte-identical to the previous one **and** `observedAt` is less than 10 minutes old, so etcd write amplification scales with *change*, not workload count. The 10-minute refresh bumps `observedAt` on stable workloads so the cache never looks older than the 30-minute staleness window to the webhook.
 
+   **Write path (webhook, ephemeral identities only).** Bare pods (`ownerKind: Pod`) and standalone Jobs (`ownerKind: Job`) can be created and deleted entirely between two controller reconciles, so the controller's write path above may never run for them. For these two kinds only, the webhook itself upserts the `WorkloadRecommendation` at admission time (via the same `internal/wlrcache` helper the controller uses), asynchronously and best-effort so the write never blocks the `AdmissionResponse`. `status.observedResources` snapshots what the pod actually runs with — the post-injection values, or the unmodified template when the policy is `RecommendOnly`. The webhook never performs this write when it served a recommendation from the cache fallback itself (Prometheus down), since re-writing served-from-cache data would refresh `observedAt` and make a dead workload look alive. Every other `ownerKind` (Deployment, StatefulSet, DaemonSet, CronJob, ArgoRollout, ...) is left to the controller's per-reconcile write, avoiding doubled write traffic on busy rollouts.
+
+   For both ephemeral kinds this write depends on the [workload-age gate](recommendation-pipeline.md#stages) keying on the *identity's* Prometheus history rather than an object's `CreationTimestamp`: every Job run re-creates the Job (always seconds old at admission), and a bare pod's identity has no workload object at all. The first-ever run has no history, produces no recommendation, and therefore triggers no webhook write; once the identity has ≥10 minutes of history, subsequent runs are injected and cached normally. Bare pods additionally get a controller-written `WorkloadRecommendation` on the next reconcile regardless of the gate (the controller never gates `Pod`-kind targets), so their cache entry can predate the webhook's first injection.
+
 2. **Read path (webhook).** When `buildRecommendations` returns *any* error — circuit-open, timeout, malformed Prometheus response — the webhook calls `fetchCachedRecommendations`. If a `WorkloadRecommendation` exists and its `status.observedAt` is within the staleness window (default **30 minutes**), the webhook injects from the cache instead of failing open.
 
 3. **GC path (controller).** Cleanup runs through three independent strategies so a `WorkloadRecommendation` cannot outlive its reason for existing:
@@ -57,6 +61,25 @@ The `removeCpuLimit` / `removeMemoryLimit` flags carry the explicit "strip the l
 
 The resource is namespaced and inherits namespace deletion semantics: removing the namespace removes every recommendation in it.
 
+## Who writes recommendations
+
+Two writers share the one write path described above: the controller (every reconcile, for both `Ongoing` and `OnCreate` targets) and the admission webhook (at pod creation, for ephemeral identities only — bare pods and standalone Jobs, which can start and finish entirely between two reconciles). See [Write path](#how-it-works) above for the split in detail; the short version is that the webhook's write never delays admission and never happens when it served the cache fallback, so a Prometheus outage can't make a dead workload look freshly observed.
+
+## Retention for ephemeral workloads
+
+By default a `WorkloadRecommendation` is garbage-collected as soon as its workload leaves the policy's target set — that's the per-cycle sweep described above. Ephemeral workloads need a different rule: a standalone pod that completed, a Job removed by `ttlSecondsAfterFinished` or an Argo CD hook deletion policy, or a Job that reached `Complete`/`Failed` all leave the target set the moment they finish, but their **object** may still exist (or may already be gone) with no further reconcile ever touching them again.
+
+The sweep tells the two cases apart:
+
+- **The workload object itself is gone** (deleted standalone pod, TTL/hook-deleted Job) **or is a Job in a terminal state** — the controller keeps the recommendation for the retention window (`--recommendation-retention` / `controller.recommendationRetention`, default `72h`) instead of deleting it immediately. The dashboard shows these as *inactive* workloads with a last-seen timestamp derived from `status.observedAt`. Set the retention to `0` to restore immediate cleanup.
+- **The workload object still exists but opted out** (annotation removed, policy no longer matching, namespace excluded) — it is swept immediately regardless of the retention setting; the retention window only protects workloads whose object is actually gone.
+
+Independently of the retention setting, recommendations observed within the last 10 minutes are never swept. This freshness grace protects a pod the webhook just wrote from a reconcile that built its target list moments earlier — without it, a pod admitted between the target listing and the sweep could look departed (or, for a Job, opted out) and be deleted seconds after being written.
+
+`status.observedResources` complements retention: it's a per-container snapshot of the requests/limits the workload actually ran with, captured at write time, so current-vs-recommended stays visible on the dashboard after the pod spec itself is gone.
+
+Bare-pod identities (`ownerKind: Pod`) can't be existence-checked — the workload reference's name is the `k8s.sustain.io/owner-name` value (or the pod name), not a real Kubernetes object name — so they always resolve as "gone" and ride out the full retention window rather than being swept as an opt-out.
+
 ## Outage behaviour
 
 - **Prometheus down, controller cache fresh (≤30m).** Webhook serves cached recommendations on every admission. Steady-state injection latency drops because no Prometheus call is made; admission stays fully functional.
@@ -76,7 +99,7 @@ The staleness window is set at `webhook.Handler.CacheStaleness` (default `Defaul
 
 ## RBAC
 
-The controller's ClusterRole grants `get;list;watch;create;update;patch;delete` on `workloadrecommendations` (and its `/status` subresource). The webhook reuses the controller ServiceAccount today, so the same rules cover read access. The dashboard ClusterRole (when enabled) has read-only access on the resource so operators can browse it from the UI.
+The controller's ClusterRole grants `get;list;watch;create;update;patch;delete` on `workloadrecommendations` (and its `/status` subresource). The webhook reuses the controller ServiceAccount today, so the same rules cover both its cache-fallback reads and its writes for ephemeral identities (see above). The dashboard ClusterRole (when enabled) has read-only access on the resource so operators can browse it from the UI.
 
 ### Why the grant is cluster-wide
 

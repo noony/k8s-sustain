@@ -52,11 +52,11 @@ The controller is a standard [controller-runtime](https://github.com/kubernetes-
 2. For each workload kind enabled in the policy (`deployment`, `statefulSet`, `daemonSet`, `argoRollout`, `cronJob`):
    - List all objects of that kind — scoped to the namespaces in `selector.namespaces` when specified, or cluster-wide otherwise
    - Filter by the `k8s.sustain.io/policy` annotation in the pod template
-   - Skip workloads with `OnCreate` mode (handled by the webhook)
    - Skip workloads in retry backoff from a previous transient failure
 3. Process matching workloads in parallel (bounded by `--concurrency-limit`, default 5):
    - Detect autoscalers (HPA / KEDA `ScaledObject`) targeting the workload — read-only, no patches
-   - Compute a per-container recommendation (see [Recommendation Pipeline](recommendation-pipeline.md))
+   - Compute a per-container recommendation (see [Recommendation Pipeline](recommendation-pipeline.md)) and cache it in a `WorkloadRecommendation` object, regardless of update mode — this keeps `OnCreate` workloads visible on the dashboard and gives the webhook a Prometheus-outage fallback
+   - `OnCreate`-mode workloads stop here: the recommendation is computed and cached, but never applied by the controller — resource injection at pod creation is the webhook's job
    - If `--recommend-only` is set, log the recommendation and skip patching
    - Recycle stale running pods: on k8s >= 1.33 via in-place resource patching through the `/resize` subresource; on k8s < 1.33 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time. Pods are listed by the workload's label selector and then filtered by **controller ownership**: a pod is only recycled when its ownerRef chain resolves to the target workload (directly for StatefulSet/DaemonSet, via the owning ReplicaSet for Deployment/Argo Rollout). Bare pods or pods of another workload with an overlapping selector are skipped and logged — the opt-in contract is per-workload
    - **CronJob exception:** the controller never mutates the CronJob spec and never evicts a job pod. On clusters that support in-place resize, currently-running job pods are resized via `pods/resize`; otherwise they finish on their existing resources and the next scheduled run picks up the new values from the webhook
@@ -103,6 +103,8 @@ The webhook is a [mutating admission webhook](https://kubernetes.io/docs/referen
 The webhook **fails open** (`failurePolicy: Ignore` by default) — if it is unreachable or returns an error, the pod is admitted unchanged. The controller will handle ongoing reconciliation regardless.
 
 **Latency budget.** The handler is bounded by a hard 4s deadline on the admission context (under the apiserver's 5s `MutatingWebhookConfiguration` timeout). Each Prometheus query has its own short 2s per-query timeout so a slow upstream cannot exhaust the budget for the cache-fallback path. If Prometheus is unavailable, the webhook serves the cached `WorkloadRecommendation` written by the controller; if the cache is missing or stale beyond `DefaultCacheStaleness` (30 min), the pod is admitted with its original template resources.
+
+**Ephemeral-identity cache writes.** For bare pods and standalone Jobs — workloads that can be created and deleted entirely between two controller reconciles — the webhook itself writes the `WorkloadRecommendation` after computing a fresh recommendation, in a detached goroutine so the write never blocks the `AdmissionResponse`. See [Workload Recommendations](workload-recommendations.md) for details.
 
 ## Dashboard (`k8s-sustain dashboard`)
 

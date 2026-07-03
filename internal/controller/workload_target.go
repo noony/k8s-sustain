@@ -36,6 +36,11 @@ type workloadTarget struct {
 	// used for key(), recycling (Selector/Object), and event/log attribution.
 	IdentityKind string
 	IdentityName string
+	// UpdateMode is the policy's per-kind mode this target was collected
+	// under. OnCreate targets get recommendations and WLR cache writes but
+	// are never recycled or resized — the webhook applies resources at pod
+	// admission.
+	UpdateMode sustainv1alpha1.UpdateMode
 }
 
 // key returns a unique identifier for this workload target, used as the retry map key.

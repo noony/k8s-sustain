@@ -1018,3 +1018,59 @@ func TestPing_Error(t *testing.T) {
 		t.Error("expected error on 500")
 	}
 }
+
+func TestQueryWorkloadHistoryStart(t *testing.T) {
+	var gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		gotQuery = r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status":"success",
+			"data":{"resultType":"vector","result":[
+				{"metric":{},"value":[0,"1783000000"]}
+			]}
+		}`))
+	}))
+	defer server.Close()
+
+	c, err := New(server.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got, err := c.QueryWorkloadHistoryStart(context.Background(), "scenario-job", "Job", "oneshot", "168h")
+	if err != nil {
+		t.Fatalf("QueryWorkloadHistoryStart: %v", err)
+	}
+	want := time.Unix(1783000000, 0)
+	if !got.Equal(want) {
+		t.Errorf("history start = %v, want %v", got, want)
+	}
+	for _, frag := range []string{"timestamp(", "workload_max_pod_cpu", `owner_kind="Job"`, `owner_name="oneshot"`, `namespace="scenario-job"`, "[168h:"} {
+		if !strings.Contains(gotQuery, frag) {
+			t.Errorf("query missing %q, got %q", frag, gotQuery)
+		}
+	}
+}
+
+func TestQueryWorkloadHistoryStart_NoDataReturnsZeroTime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer server.Close()
+
+	c, err := New(server.URL)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	got, err := c.QueryWorkloadHistoryStart(context.Background(), "ns", "Job", "oneshot", "1h")
+	if err != nil {
+		t.Fatalf("QueryWorkloadHistoryStart: %v", err)
+	}
+	if !got.IsZero() {
+		t.Errorf("expected zero time for empty result, got %v", got)
+	}
+}

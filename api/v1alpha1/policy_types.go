@@ -27,6 +27,11 @@ const (
 	//
 	// Example: k8s.sustain.io/owner-name: etl-daily
 	OwnerNameAnnotation = "k8s.sustain.io/owner-name"
+
+	// WLRPolicyLabel labels each WorkloadRecommendation with the Policy that
+	// produced it, so writers and consumers (controller, webhook, dashboard) can
+	// scope list calls server-side instead of post-filtering by spec.policy.
+	WLRPolicyLabel = "k8s.sustain.io/policy"
 )
 
 // UpdateMode defines how resources are updated on a given workload type.

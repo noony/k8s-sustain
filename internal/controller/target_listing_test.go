@@ -6,6 +6,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -266,10 +267,13 @@ func TestCollectTargets_RespectsUpdateModeAndExcludedNamespaces(t *testing.T) {
 	}
 }
 
-// TestCollectTargets_OnCreateModeIsSkippedByController verifies that workloads
-// configured for OnCreate-only mode are NOT returned by the controller — those
-// are handled by the webhook, not the recycle loop.
-func TestCollectTargets_OnCreateModeIsSkippedByController(t *testing.T) {
+// TestCollectTargets_OnCreateModeIsCollectedWithMode verifies that workloads
+// configured for OnCreate-only mode ARE now returned by the controller (so
+// reconcileWorkload can compute+cache a recommendation for them) but are
+// stamped with UpdateModeOnCreate so reconcileWorkload's mode gate can stop
+// before recycling/resizing — the webhook remains the only mutation path for
+// OnCreate.
+func TestCollectTargets_OnCreateModeIsCollectedWithMode(t *testing.T) {
 	onCreate := sustainv1alpha1.UpdateModeOnCreate
 	policy := &sustainv1alpha1.Policy{
 		ObjectMeta: metav1.ObjectMeta{Name: "p"},
@@ -287,8 +291,39 @@ func TestCollectTargets_OnCreateModeIsSkippedByController(t *testing.T) {
 	if err != nil {
 		t.Fatalf("collectTargets: %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("expected 0 targets in OnCreate mode, got %d", len(got))
+	if len(got) != 1 {
+		t.Fatalf("expected 1 target in OnCreate mode (collected for recommendation caching), got %d", len(got))
+	}
+	if got[0].UpdateMode != sustainv1alpha1.UpdateModeOnCreate {
+		t.Errorf("UpdateMode = %q, want OnCreate", got[0].UpdateMode)
+	}
+}
+
+// TestCollectTargets_IncludesOnCreateKindsWithMode verifies OnCreate-mode
+// kinds are collected (so they get recommendations + WLR cache writes) and
+// stamped with their mode.
+func TestCollectTargets_IncludesOnCreateKindsWithMode(t *testing.T) {
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "ci", Name: "hook"}}
+	job.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
+	job.Spec.Template.Spec.Containers = []corev1.Container{{Name: "main"}}
+
+	r := makeReconciler(t, job)
+
+	onCreate := sustainv1alpha1.UpdateModeOnCreate
+	policy := &sustainv1alpha1.Policy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p"},
+	}
+	policy.Spec.RightSizing.Update.Types.Job = &onCreate
+
+	targets, err := r.collectTargets(context.Background(), policy)
+	if err != nil {
+		t.Fatalf("collectTargets: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("got %d targets, want 1 (OnCreate Job must be collected)", len(targets))
+	}
+	if targets[0].UpdateMode != sustainv1alpha1.UpdateModeOnCreate {
+		t.Errorf("UpdateMode = %q, want OnCreate", targets[0].UpdateMode)
 	}
 }
 

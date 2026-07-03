@@ -53,10 +53,10 @@ func (r *PolicyReconciler) buildRecommendations(
 	// avoiding a near-zero percentile that floors to the hard minimum and
 	// triggers an immediate bad recycle, cannot occur for a kind that never
 	// recycles at all, so the gate doesn't apply to it.
-	if ownerKind != "Pod" && recommender.ShouldSkipYoungWorkload(workloadCreated, recentOOM) {
+	if ownerKind != "Pod" && recommender.ShouldSkipYoungWorkload(workloadCreated, inputs.HistoryStart, recentOOM) {
 		recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "workload_too_young").Inc()
 		logger.Info("skipping recommendation: workload too young",
-			"age", time.Since(workloadCreated), "minAge", recommender.MinWorkloadAge)
+			"age", recommender.AgeForLog(workloadCreated), "historyAge", recommender.AgeForLog(inputs.HistoryStart), "minAge", recommender.MinWorkloadAge)
 		return map[string]workload.ContainerRecommendation{}, nil
 	}
 

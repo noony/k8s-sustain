@@ -18,19 +18,14 @@ export function parseMemoryQuantity(str: string): number {
   return parseFloat(str)
 }
 
+import { format as formatDate, formatDistanceToNowStrict } from 'date-fns'
+
 export function timeAgo(dateStr?: string): string {
   if (!dateStr) return '-'
   const d = new Date(dateStr)
-  const diff = Date.now() - d.getTime()
-  const hours = Math.floor(diff / 3600000)
-  if (hours < 1) return 'just now'
-  if (hours < 24) return hours + 'h ago'
-  const days = Math.floor(hours / 24)
-  if (days < 30) return days + 'd ago'
-  return d.toLocaleDateString()
+  if (isNaN(d.getTime())) return '-'
+  return formatDistanceToNowStrict(d, { addSuffix: true })
 }
-
-import { format as formatDate } from 'date-fns'
 
 export function formatDateTime(dateStr?: string): string {
   if (!dateStr) return '-'

@@ -197,3 +197,37 @@ func TestListWorkloadsOfKind_Deployment_GroupingCollapsesToOneEntry(t *testing.T
 		t.Errorf("Containers() = %+v, want the more recently created Deployment's container (app-green)", e.Containers())
 	}
 }
+
+// TestGetWorkloadEntry_FallsBackToRetainedWLR: the object is gone but a
+// retained WLR exists — detail endpoints must still resolve the workload.
+func TestGetWorkloadEntry_FallsBackToRetainedWLR(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(Scheme()).
+		WithObjects(retainedWLR("p", "airflow", "Pod", "etl")).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t)}
+
+	e, err := srv.getWorkloadEntry(context.Background(), "airflow", "Pod", "etl")
+	if err != nil {
+		t.Fatalf("getWorkloadEntry: %v", err)
+	}
+	if e.PolicyAnnotation() != "p" {
+		t.Errorf("PolicyAnnotation = %q, want p", e.PolicyAnnotation())
+	}
+	cs := e.Containers()
+	if len(cs) != 1 || cs[0].Name != "main" {
+		t.Fatalf("containers = %+v, want [main]", cs)
+	}
+	if cpu := cs[0].Resources.Requests.Cpu().String(); cpu != "500m" {
+		t.Errorf("cpu request = %s, want 500m", cpu)
+	}
+}
+
+// TestGetWorkloadEntry_StillNotFoundWithoutWLR: nothing live, nothing
+// retained — the NotFound contract is preserved.
+func TestGetWorkloadEntry_StillNotFoundWithoutWLR(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t)}
+	_, err := srv.getWorkloadEntry(context.Background(), "airflow", "Pod", "missing")
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("err = %v, want NotFound", err)
+	}
+}

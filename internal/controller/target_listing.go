@@ -46,12 +46,15 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		{types.Pod, "pods", r.listBarePodTargets},
 	}
 	for _, k := range kinds {
-		if k.mode == nil || *k.mode != sustainv1alpha1.UpdateModeOngoing {
+		if k.mode == nil {
 			continue
 		}
 		t, err := k.list(ctx, namespaces)
 		if err != nil {
 			return nil, fmt.Errorf("listing %s: %w", k.name, err)
+		}
+		for i := range t {
+			t[i].UpdateMode = *k.mode
 		}
 		logger.V(1).Info("listed workloads", "kind", k.name, "count", len(t))
 		targets = append(targets, t...)

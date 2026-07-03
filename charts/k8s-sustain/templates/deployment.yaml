@@ -46,6 +46,7 @@ spec:
             - --concurrency-limit={{ .Values.controller.concurrencyLimit }}
             - --reconcile-interval={{ .Values.controller.reconcileInterval }}
             - --recycle-replacement-timeout={{ .Values.controller.recycleReplacementTimeout }}
+            - --recommendation-retention={{ .Values.controller.recommendationRetention }}
             {{- if .Values.recommendOnly }}
             - --recommend-only=true
             {{- end }}

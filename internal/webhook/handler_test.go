@@ -10,10 +10,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1339,5 +1341,130 @@ func TestAdmit_InvalidLabelSelector_FailsOpen(t *testing.T) {
 	}
 	if resp.Patch != nil {
 		t.Errorf("must not patch when selector is malformed, got %d bytes", len(resp.Patch))
+	}
+}
+
+// jobHistoryEnv builds a buildRecommendations fixture for a standalone Job
+// whose Job object was created moments ago. historyAge controls how old the
+// identity's Prometheus history is (zero = no history at all).
+func jobHistoryTestHandler(t *testing.T, historyAge time.Duration) (*Handler, func()) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		// Must match before the max_pod cases: the history-start expression
+		// wraps the same workload_max_pod_cpu rule in timestamp().
+		case strings.Contains(q, "timestamp("):
+			if historyAge == 0 {
+				_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+				return
+			}
+			fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"%d"]}]}}`, time.Now().Add(-historyAge).Unix())
+		case strings.Contains(q, "workload_max_pod_cpu"):
+			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.05})))
+		case strings.Contains(q, "workload_max_pod_memory"):
+			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 30 * 1024 * 1024})))
+		default:
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+
+	pc, err := promclient.New(server.URL)
+	if err != nil {
+		server.Close()
+		t.Fatalf("prometheus client: %v", err)
+	}
+
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Namespace:         "scenario-job",
+		Name:              "oneshot",
+		CreationTimestamp: metav1.Now(),
+	}}
+	fakeClient := fake.NewClientBuilder().WithObjects(job).Build()
+
+	return &Handler{Client: fakeClient, PrometheusClient: pc}, server.Close
+}
+
+func jobHistoryTestPolicy() *sustainv1alpha1.Policy {
+	p95 := int32(95)
+	return &sustainv1alpha1.Policy{
+		Spec: sustainv1alpha1.PolicySpec{
+			RightSizing: sustainv1alpha1.RightSizingSpec{
+				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
+					CPU:    sustainv1alpha1.ResourceConfig{Window: "1h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
+					Memory: sustainv1alpha1.ResourceConfig{Window: "1h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
+				},
+			},
+		},
+	}
+}
+
+// TestBuildRecommendations_YoungJobWithHistoryGetsRecommendation reproduces the
+// standalone-Job re-run: the Job object is seconds old (every run re-creates
+// it), but the identity has accumulated Prometheus history from earlier runs.
+// The age gate must key on the history age, not the object age, so the run
+// still receives a recommendation (and downstream, a WorkloadRecommendation).
+func TestBuildRecommendations_YoungJobWithHistoryGetsRecommendation(t *testing.T) {
+	h, closeServer := jobHistoryTestHandler(t, 25*time.Minute)
+	defer closeServer()
+
+	recs, err := h.buildRecommendations(context.Background(), jobHistoryTestPolicy(), "scenario-job", "Job", "oneshot", []corev1.Container{{Name: "app"}})
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	if _, ok := recs["app"]; !ok {
+		t.Fatalf("expected recommendation for young Job with %s of identity history, got %v", "25m", recs)
+	}
+}
+
+// TestBuildRecommendations_YoungJobWithoutHistorySkipped verifies the gate
+// still protects a genuinely first run: brand-new Job object and no identity
+// history in Prometheus → no recommendation.
+func TestBuildRecommendations_YoungJobWithoutHistorySkipped(t *testing.T) {
+	h, closeServer := jobHistoryTestHandler(t, 0)
+	defer closeServer()
+
+	recs, err := h.buildRecommendations(context.Background(), jobHistoryTestPolicy(), "scenario-job", "Job", "oneshot", []corev1.Container{{Name: "app"}})
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	if len(recs) != 0 {
+		t.Fatalf("expected no recommendation for first-ever Job run, got %v", recs)
+	}
+}
+
+// TestBuildRecommendations_BarePodYoungHistorySkipped covers the bare-pod
+// analogue of the Job case: the identity (k8s.sustain.io/owner-name) has only
+// a few minutes of Prometheus history — e.g. a re-run moments after a short
+// first run. The object age is unknown for Pod-kind, so the gate must key on
+// the history age alone and skip injection rather than recommend from
+// unstable early rate samples.
+func TestBuildRecommendations_BarePodYoungHistorySkipped(t *testing.T) {
+	h, closeServer := jobHistoryTestHandler(t, 3*time.Minute)
+	defer closeServer()
+
+	recs, err := h.buildRecommendations(context.Background(), jobHistoryTestPolicy(), "scenario-job", "Pod", "etl-daily", []corev1.Container{{Name: "app"}})
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	if len(recs) != 0 {
+		t.Fatalf("expected no recommendation for bare pod with 3m of identity history, got %v", recs)
+	}
+}
+
+// TestBuildRecommendations_BarePodOldHistoryGetsRecommendation verifies bare
+// pods with mature identity history keep getting webhook injections.
+func TestBuildRecommendations_BarePodOldHistoryGetsRecommendation(t *testing.T) {
+	h, closeServer := jobHistoryTestHandler(t, 25*time.Minute)
+	defer closeServer()
+
+	recs, err := h.buildRecommendations(context.Background(), jobHistoryTestPolicy(), "scenario-job", "Pod", "etl-daily", []corev1.Container{{Name: "app"}})
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	if _, ok := recs["app"]; !ok {
+		t.Fatalf("expected recommendation for bare pod with 25m of identity history, got %v", recs)
 	}
 }

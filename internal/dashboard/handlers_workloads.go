@@ -24,6 +24,8 @@ type workloadSummary struct {
 	LastRecycledAt      string               `json:"lastRecycledAt,omitempty"`
 	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
 	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
+	Active              bool                 `json:"active"`
+	LastSeenAt          string               `json:"lastSeenAt,omitempty"`
 }
 
 type paginatedWorkloads struct {
@@ -98,8 +100,32 @@ func (s *Server) listPolicyWorkloadRows(ctx context.Context, policy *sustainv1al
 				Kind:       kind,
 				Name:       e.Name,
 				Containers: containerStatuses(e.Containers(), e.InitContainers()),
+				Active:     true,
 			})
 		}
+	}
+
+	live := make(map[string]struct{}, len(out))
+	for _, w := range out {
+		live[workloadKey(w.Namespace, w.Kind, w.Name)] = struct{}{}
+	}
+	inactive, err := s.collectInactiveWorkloads(ctx, live,
+		client.MatchingLabels{sustainv1alpha1.WLRPolicyLabel: policyName})
+	if err != nil {
+		s.Logger.Error(err, "failed to list retained WorkloadRecommendations", "policy", policyName)
+		return out
+	}
+	for _, iw := range inactive {
+		if iw.PolicyName != policyName { // defensive vs label drift
+			continue
+		}
+		out = append(out, workloadSummary{
+			Namespace:  iw.Namespace,
+			Kind:       iw.Kind,
+			Name:       iw.Name,
+			Containers: iw.Containers,
+			LastSeenAt: iw.LastSeenAt,
+		})
 	}
 	return out
 }
@@ -175,6 +201,8 @@ type allWorkloadSummary struct {
 	LastRecycledAt      string               `json:"lastRecycledAt,omitempty"`
 	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
 	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
+	Active              bool                 `json:"active"`
+	LastSeenAt          string               `json:"lastSeenAt,omitempty"`
 }
 
 type paginatedAllWorkloads struct {
@@ -198,6 +226,7 @@ type allWorkloadFilters struct {
 	kind       string
 	search     string
 	automated  *bool
+	active     *bool
 	risk       string
 	autoscaler string
 	page       int
@@ -214,6 +243,9 @@ func parseAllWorkloadFilters(q url.Values) (allWorkloadFilters, *paramError) {
 		return f, perr
 	}
 	if f.automated, perr = parseBoolParam(q, "automated"); perr != nil {
+		return f, perr
+	}
+	if f.active, perr = parseBoolParam(q, "active"); perr != nil {
 		return f, perr
 	}
 	if f.risk, perr = parseEnumParam(q, "risk", []string{"safe", "drifted", "at-risk", "blocked"}); perr != nil {
@@ -292,8 +324,30 @@ func (s *Server) collectAllWorkloads(ctx context.Context) []allWorkloadSummary {
 				Containers: containerStatuses(e.Containers(), e.InitContainers()),
 				Automated:  policyName != "",
 				PolicyName: policyName,
+				Active:     true,
 			})
 		}
+	}
+
+	live := make(map[string]struct{}, len(out))
+	for _, w := range out {
+		live[workloadKey(w.Namespace, w.Kind, w.Name)] = struct{}{}
+	}
+	inactive, err := s.collectInactiveWorkloads(ctx, live)
+	if err != nil {
+		s.Logger.Error(err, "failed to list retained WorkloadRecommendations")
+		return out
+	}
+	for _, iw := range inactive {
+		out = append(out, allWorkloadSummary{
+			Namespace:  iw.Namespace,
+			Kind:       iw.Kind,
+			Name:       iw.Name,
+			Containers: iw.Containers,
+			Automated:  true,
+			PolicyName: iw.PolicyName,
+			LastSeenAt: iw.LastSeenAt,
+		})
 	}
 	return out
 }
@@ -344,6 +398,10 @@ func applyAllWorkloadFilters(workloads []allWorkloadSummary, f allWorkloadFilter
 	if f.automated != nil {
 		want := *f.automated
 		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.Automated == want })
+	}
+	if f.active != nil {
+		want := *f.active
+		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.Active == want })
 	}
 	if f.search != "" {
 		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool {

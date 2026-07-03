@@ -214,7 +214,15 @@ exercises only the webhook's `Pod → Job` resolution branch.
 **Expected:** First run starts with the original `500m / 256Mi` requests
 (no history yet). Re-apply the Job after `WINDOW` elapses — the second
 run's pod is webhook-injected with the percentile-based recommendation
-(~`60m / 35Mi`).
+(~`60m / 35Mi`), and the webhook upserts a `WorkloadRecommendation`
+(`job-oneshot`) for the identity.
+
+Note the re-applied Job object is only seconds old at admission — the
+10-minute workload-age gate passes because, for `Job`-kind workloads, it
+keys on the age of the identity's accumulated Prometheus history (from
+the first run) rather than the Job object's `CreationTimestamp`. The
+first run has no history, so it is skipped by the gate and leaves no
+`WorkloadRecommendation` behind.
 
 ```bash
 kubectl delete -f hack/scenarios/job.yaml
@@ -341,6 +349,11 @@ is the same ~`200m / ~100Mi` profile as `steady`.
   too-young percentile triggering an immediate bad recycle, which can't
   happen for a kind that never recycles, so it's bypassed for `Pod`. Expect
   it within a couple of reconcile cycles, not 10+ minutes:
+
+  (The *webhook* injection path is a different story: it gates on the
+  identity's history age, so a pod re-created under the same `owner-name`
+  within ~10 minutes of the identity's first samples keeps its template
+  resources instead of being injected from unstable early-rate data.)
 
   ```bash
   kubectl get workloadrecommendation -n scenario-bare-pod

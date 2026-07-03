@@ -5,7 +5,7 @@ k8s-sustain includes a built-in web dashboard for exploring policies, viewing wo
 ## Features
 
 - **Overview Story Flow** — Cluster summary covering savings KPIs, CPU and memory usage-vs-request trends, headroom breakdown, attention queue (at risk / drifted / blocked), policy effectiveness, and recent activity.
-- **Workloads** — Cluster-wide list with risk/drift/autoscaler columns, plus filters for namespace, kind, risk state, and autoscaler presence.
+- **Workloads** — Cluster-wide list with risk/drift/autoscaler columns, plus filters for namespace, kind, risk state, autoscaler presence, and lifecycle (active/inactive).
 - **Workload Detail** — Status snapshot (mode, last recycle, drift, OOM 24h), risk and HPA badges, blocked-state diagnostics, copy-as-YAML, and interactive CPU/memory charts with sliding-window recommendation, historical requests/limits, and OOM markers.
 - **Policies** — 4-card stat strip (total policies, active workloads, CPU & memory savings) plus per-policy effectiveness columns.
 - **Policy Detail** — Effectiveness time-series, view-as-YAML modal, Datadog-style time range picker, and matched workloads with risk/drift columns.
@@ -110,9 +110,10 @@ The overview is organised as a vertical "Story Flow" with six bands, each answer
 
 Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, standalone Jobs) across the cluster, regardless of whether it is governed by a policy. Jobs spawned by a CronJob are folded under their owning CronJob row to avoid double-counting.
 
-- **Filters** — Filter by namespace, kind, **risk state** (healthy, drifted, at risk, blocked), and **autoscaler presence** (with autoscaler / without autoscaler). The free-text name search remains.
+- **Filters** — Filter by namespace, kind, **risk state** (healthy, drifted, at risk, blocked), **autoscaler presence** (with autoscaler / without autoscaler), and **lifecycle** (Active / Inactive). The lifecycle filter defaults to "Any lifecycle", so inactive workloads are visible by default. The free-text name search remains.
 - **Columns** — A **Risk** badge summarises the workload's state at a glance, a **Drift %** column shows the gap between current request and recommendation, and an **Autoscaler** column indicates whether the workload is paired with an HPA or KEDA ScaledObject. The previous CPU/Memory request columns have been removed because the workload detail view now displays them in context.
 - **Status column** — Still shows whether the workload is **Automated** (has a sustain policy) or **Manual**, with a link to the policy when applicable.
+- **Inactive badge** — A workload with no recently discovered pods (retained for historical reporting rather than deleted) shows an **Inactive** badge next to its name, styled as "Inactive · last seen X ago". The same badge appears in the Policy Detail matched-workloads table. Inactive rows come from a `WorkloadRecommendation` whose underlying object is gone (a completed bare pod, a TTL/hook-deleted or terminal Job) rather than a live workload — the controller keeps that recommendation around for the retention window (`--recommendation-retention` / `controller.recommendationRetention`, default `72h`) so you can still review what it used to run with. Once the window lapses, the row disappears from the list on the next refresh.
 
 Click any workload to view its detail page.
 
@@ -126,6 +127,8 @@ Shows a comprehensive view of a single workload:
 - **Recommendations** — If automated, shows the computed CPU and memory recommendations per container.
 - **CPU and Memory charts** — Interactive time-series with a sliding-window recommendation line overlaid (for automated workloads). The recommendation evolves over time, showing how it would have been computed at each point using the policy's configured window and parameters, rather than a flat line.
 - **Open in Simulator** — Jump to the simulator with the workload pre-filled.
+
+Clicking through to an **inactive** workload's detail page still works: it resolves from the retained `WorkloadRecommendation` rather than a live workload object, so the recommendation and any Prometheus-backed usage history for the time range it was running remain visible even though the workload object itself is gone.
 
 A **time range picker** in the top-right controls how much history to display. It offers relative presets — Past 5 Minutes, 15m, 30m, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 1 Month — and a "Select from calendar…" option for an absolute From→To range. The picker shows the browser's local timezone (display only). The step resolution adjusts automatically for each range. You can also **drag to zoom** on any chart to focus on a specific time window — click and drag horizontally to select the region of interest. Zooming sets the shared time range to the selected window: the URL, the time range picker, and every chart on the page all update together, and the data is re-fetched at a finer step resolution for the zoomed span. Because the zoom becomes the active (absolute) range, a **Reset zoom** button appears next to each chart's title while zoomed — click it to return to the previous range. Each chart overlays the workload's **historical resource request** (amber dashed stepped line) and **limit** (orange dashed line) so you can see how actual usage compares to configured resources over time. The request line reflects real changes (e.g. from k8s-sustain patching or manual edits) rather than a flat snapshot. If historical request data is not available in Prometheus, the dashboard falls back to a static line from the current workload spec. If the workload is automated, the **recommendation** line (red dashed) is also shown.
 

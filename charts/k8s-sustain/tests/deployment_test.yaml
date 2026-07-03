@@ -74,6 +74,7 @@ tests:
             - --concurrency-limit=5
             - --reconcile-interval=5m
             - --recycle-replacement-timeout=5m
+            - --recommendation-retention=72h
 
   - it: enforces the restricted security contexts
     asserts:
@@ -247,6 +248,15 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --excluded-namespaces=k8s-sustain,kube-system,kube-public,team-a,team-b
+
+  - it: renders recommendation-retention from values
+    set:
+      controller:
+        recommendationRetention: 24h
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --recommendation-retention=24h
 
   - it: uses image.tag over the chart appVersion when set
     set:

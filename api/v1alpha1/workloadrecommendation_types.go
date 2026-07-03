@@ -52,6 +52,14 @@ type WorkloadRecommendationStatus struct {
 	// Containers maps container name → recommended resources.
 	// +optional
 	Containers map[string]ContainerRecommendation `json:"containers,omitempty"`
+
+	// ObservedResources maps container name → the requests/limits the
+	// container actually ran with, snapshotted each time the recommendation
+	// is written (by the controller from the pod template, by the webhook
+	// from the admitted pod). Lets the dashboard render current-vs-
+	// recommended for workloads whose objects no longer exist.
+	// +optional
+	ObservedResources map[string]ObservedContainerResources `json:"observedResources,omitempty"`
 }
 
 // ContainerRecommendation is the per-container recommended resource set.
@@ -74,6 +82,23 @@ type ContainerRecommendation struct {
 	RemoveCPULimit bool `json:"removeCpuLimit,omitempty"`
 	// +optional
 	RemoveMemoryLimit bool `json:"removeMemoryLimit,omitempty"`
+}
+
+// ObservedContainerResources is the requests/limits snapshot of one container
+// at the last observation. Nil quantities mean the container had no value set
+// for that field.
+type ObservedContainerResources struct {
+	// Init marks containers that come from the pod's initContainers list.
+	// +optional
+	Init bool `json:"init,omitempty"`
+	// +optional
+	CPURequest *resource.Quantity `json:"cpuRequest,omitempty"`
+	// +optional
+	MemoryRequest *resource.Quantity `json:"memoryRequest,omitempty"`
+	// +optional
+	CPULimit *resource.Quantity `json:"cpuLimit,omitempty"`
+	// +optional
+	MemoryLimit *resource.Quantity `json:"memoryLimit,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -265,3 +265,49 @@ func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
 		t.Errorf("expected attempts=0 on success, got %d", state.attempts)
 	}
 }
+
+// TestReconcileWorkload_OnCreateMode_CachesButNeverRecycles verifies the
+// OnCreate gate: the recommendation is computed and persisted as a WLR (the
+// dashboard/webhook need it) but no pod is recycled or resized — the webhook
+// is the only mutation path for OnCreate.
+func TestReconcileWorkload_OnCreateMode_CachesButNeverRecycles(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "web-pod",
+			Labels: map[string]string{"app": "web"},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
+			},
+		}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	r := reconcilerWithProm(t, server, true /* in-place */, pod)
+	tgt := deploymentTarget("default", "web")
+	tgt.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
+	policy := policyForReconcileWorkload(t, "p")
+
+	if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
+		t.Fatalf("reconcileWorkload: %v", err)
+	}
+
+	// Pod untouched.
+	var got corev1.Pod
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "web-pod"}, &got); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if cpu := got.Spec.Containers[0].Resources.Requests.Cpu().String(); cpu != "999m" {
+		t.Errorf("OnCreate must not resize pods; cpu request = %s, want 999m", cpu)
+	}
+
+	// WLR written.
+	var wlr sustainv1alpha1.WorkloadRecommendation
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &wlr); err != nil {
+		t.Fatalf("expected WLR to be cached for OnCreate target: %v", err)
+	}
+}

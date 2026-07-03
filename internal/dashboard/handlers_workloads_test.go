@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -237,5 +239,152 @@ func TestPolicyWorkloadsIncludesStandaloneJob(t *testing.T) {
 	decodeEnvelopeData(t, rec.Body, &resp)
 	if resp.Total != 1 || resp.Items[0].Kind != "Job" || resp.Items[0].Name != "oneshot" {
 		t.Fatalf("expected 1 standalone Job, got %+v", resp)
+	}
+}
+
+// retainedWLR builds a WorkloadRecommendation as the retention sweep leaves
+// it: labeled, policy set, observed resources snapshotted.
+func retainedWLR(policy, ns, kind, name string) *sustainv1alpha1.WorkloadRecommendation {
+	cpu := resource.MustParse("500m")
+	return &sustainv1alpha1.WorkloadRecommendation{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      strings.ToLower(kind) + "-" + name,
+			Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: policy},
+		},
+		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
+			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: kind, Namespace: ns, Name: name},
+			Policy:      policy,
+		},
+		Status: sustainv1alpha1.WorkloadRecommendationStatus{
+			ObservedAt: metav1.Now(),
+			ObservedResources: map[string]sustainv1alpha1.ObservedContainerResources{
+				"main": {CPURequest: &cpu},
+			},
+		},
+	}
+}
+
+// TestAllWorkloadsIncludesInactiveFromRetainedWLR: a retained WLR with no
+// live object becomes an inactive row with lastSeenAt and the observed
+// container resources.
+func TestAllWorkloadsIncludesInactiveFromRetainedWLR(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(Scheme()).
+		WithObjects(retainedWLR("p", "airflow", "Pod", "etl")).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rec := httptest.NewRecorder()
+	srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads", nil))
+
+	var resp struct {
+		Items []struct {
+			Namespace  string `json:"namespace"`
+			Kind       string `json:"kind"`
+			Name       string `json:"name"`
+			Active     bool   `json:"active"`
+			LastSeenAt string `json:"lastSeenAt"`
+			PolicyName string `json:"policyName"`
+			Automated  bool   `json:"automated"`
+			Containers []struct {
+				Name       string `json:"name"`
+				CPURequest string `json:"cpuRequest"`
+			} `json:"containers"`
+		} `json:"items"`
+	}
+	decodeEnvelopeData(t, rec.Body, &resp)
+	if len(resp.Items) != 1 {
+		t.Fatalf("got %d items, want 1 inactive row", len(resp.Items))
+	}
+	row := resp.Items[0]
+	if row.Active {
+		t.Error("row.Active = true, want false")
+	}
+	if row.Kind != "Pod" || row.Name != "etl" || row.Namespace != "airflow" {
+		t.Errorf("identity wrong: %+v", row)
+	}
+	if row.LastSeenAt == "" {
+		t.Error("lastSeenAt missing on inactive row")
+	}
+	if !row.Automated || row.PolicyName != "p" {
+		t.Errorf("policy fields wrong: %+v", row)
+	}
+	if len(row.Containers) != 1 || row.Containers[0].CPURequest != "500m" {
+		t.Errorf("observed containers wrong: %+v", row.Containers)
+	}
+}
+
+// TestAllWorkloadsLiveRowSuppressesWLRTwin: when the workload object still
+// exists, its WLR must NOT produce a duplicate row.
+func TestAllWorkloadsLiveRowSuppressesWLRTwin(t *testing.T) {
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web"}}
+	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
+	c := fake.NewClientBuilder().WithScheme(Scheme()).
+		WithObjects(d, retainedWLR("p", "prod", "Deployment", "web")).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rec := httptest.NewRecorder()
+	srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads", nil))
+	var resp struct {
+		Items []struct {
+			Active bool `json:"active"`
+		} `json:"items"`
+	}
+	decodeEnvelopeData(t, rec.Body, &resp)
+	if len(resp.Items) != 1 {
+		t.Fatalf("got %d items, want 1 (no WLR duplicate)", len(resp.Items))
+	}
+	if !resp.Items[0].Active {
+		t.Error("live row must have active=true")
+	}
+}
+
+// TestAllWorkloadsActiveFilter: ?active=false returns only inactive rows,
+// ?active=true only live ones.
+func TestAllWorkloadsActiveFilter(t *testing.T) {
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web"}}
+	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
+	c := fake.NewClientBuilder().WithScheme(Scheme()).
+		WithObjects(d, retainedWLR("p", "airflow", "Pod", "etl")).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	for query, wantName := range map[string]string{"false": "etl", "true": "web"} {
+		rec := httptest.NewRecorder()
+		srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads?active="+query, nil))
+		var resp struct {
+			Items []struct {
+				Name string `json:"name"`
+			} `json:"items"`
+		}
+		decodeEnvelopeData(t, rec.Body, &resp)
+		if len(resp.Items) != 1 || resp.Items[0].Name != wantName {
+			t.Errorf("active=%s: got %+v, want single row %q", query, resp.Items, wantName)
+		}
+	}
+}
+
+// TestPolicyWorkloadsIncludesInactiveScopedToPolicy: the policy-scoped list
+// only merges that policy's retained WLRs.
+func TestPolicyWorkloadsIncludesInactiveScopedToPolicy(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	onCreate := sustainv1alpha1.UpdateModeOnCreate
+	policy.Spec.RightSizing.Update.Types.Pod = &onCreate
+	c := fake.NewClientBuilder().WithScheme(Scheme()).
+		WithObjects(policy,
+			retainedWLR("p", "airflow", "Pod", "etl"),
+			retainedWLR("other", "airflow", "Pod", "other-etl")).
+		Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rec := httptest.NewRecorder()
+	srv.handlePolicyWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/policies/p/workloads", nil), "p")
+	var resp struct {
+		Items []struct {
+			Name   string `json:"name"`
+			Active bool   `json:"active"`
+		} `json:"items"`
+	}
+	decodeEnvelopeData(t, rec.Body, &resp)
+	if len(resp.Items) != 1 || resp.Items[0].Name != "etl" || resp.Items[0].Active {
+		t.Errorf("got %+v, want single inactive row etl", resp.Items)
 	}
 }

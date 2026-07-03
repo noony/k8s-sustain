@@ -20,6 +20,7 @@ spec:
 - The latest recommendation is always injected — the webhook overrides whatever the pod template currently specifies
 - Existing running pods are **not** affected — only newly created pods receive the recommendation
 - If the webhook is unavailable, the pod is admitted without resource injection (`failurePolicy: Ignore`)
+- The controller still computes a recommendation for `OnCreate` workloads on its regular reconcile cycle and caches it in a `WorkloadRecommendation` object — this keeps the workload visible on the dashboard and gives the webhook a fallback value during a Prometheus outage, but the controller **never** recycles, resizes, or otherwise mutates the workload in this mode
 
 **Best for:**
 

@@ -43,6 +43,7 @@
         "reconcileInterval": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
         "concurrencyLimit": { "type": "integer", "minimum": 1, "maximum": 100 },
         "recycleReplacementTimeout": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
+        "recommendationRetention": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
         "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0, "maximum": 600 },
         "service": {

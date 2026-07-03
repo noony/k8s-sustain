@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -29,12 +30,29 @@ const MinWorkloadAge = 10 * time.Minute
 
 // ShouldSkipYoungWorkload reports whether a workload is too young to have
 // produced stable rate samples and has no recent OOM to bypass the gate.
-// Returns false when workloadCreated is zero (unknown / age-gating disabled).
-func ShouldSkipYoungWorkload(workloadCreated time.Time, recentOOM bool) bool {
-	if recentOOM || workloadCreated.IsZero() {
+//
+// The effective birth is the earliest known signal among the workload
+// object's creation time and historyStart, the oldest Prometheus sample the
+// workload identity has (each zero when unknown or absent). The split
+// matters for ephemeral identities: a standalone Job is re-created on every
+// run, so its object is always seconds old at admission, and a bare pod's
+// object age is meaningless entirely (workloadCreated stays zero) — for
+// both, accumulated history under the same identity is what proves the
+// workload is old enough. When neither signal exists the gate is disabled:
+// with no object age and no history there is nothing to recommend from
+// anyway, so skipping would only mask the no-data outcome.
+func ShouldSkipYoungWorkload(workloadCreated, historyStart time.Time, recentOOM bool) bool {
+	if recentOOM {
 		return false
 	}
-	return time.Since(workloadCreated) < MinWorkloadAge
+	start := workloadCreated
+	if start.IsZero() || (!historyStart.IsZero() && historyStart.Before(start)) {
+		start = historyStart
+	}
+	if start.IsZero() {
+		return false
+	}
+	return time.Since(start) < MinWorkloadAge
 }
 
 // WorkloadInputs bundles the Prometheus query results needed to build
@@ -48,6 +66,15 @@ type WorkloadInputs struct {
 	// OOM counts. Empty when the query failed (fail-open) — callers should
 	// not block recommendations on missing OOM data.
 	OOM promclient.OOMSignal
+	// HistoryStart is the oldest sample the workload identity has in
+	// Prometheus within the CPU window floored at minHistoryLookback. Only
+	// fetched for the ephemeral identity kinds, Job and Pod (see
+	// FetchWorkloadInputs); zero for other kinds, when the identity has no
+	// history, or when the query failed (fail-open). Feeds the workload-age
+	// gate so re-created standalone Jobs and bare pods are aged by their
+	// accumulated history rather than a seconds-old (or non-existent)
+	// object.
+	HistoryStart time.Time
 }
 
 // HasRecentOOM reports whether the workload has any recent OOM activity in
@@ -59,6 +86,35 @@ type WorkloadInputs struct {
 // instead.
 func (w *WorkloadInputs) HasRecentOOM() bool {
 	return w.OOM.TotalOOMs() > 0
+}
+
+// AgeForLog renders an age for the too-young skip logs. Returns "none" for
+// the zero time — logging it directly would render as a meaningless epoch
+// offset (object age) or a near-MaxInt64 duration (history age).
+func AgeForLog(start time.Time) string {
+	if start.IsZero() {
+		return "none"
+	}
+	return time.Since(start).String()
+}
+
+// minHistoryLookback floors the range used to locate a Job identity's oldest
+// Prometheus sample. The gate asks "how old is this identity?", not "what
+// feeds the percentile?" — a lookback capped at the policy window would cap
+// the observable history age at the window length, so a window at or below
+// MinWorkloadAge could never satisfy the gate.
+const minHistoryLookback = 24 * time.Hour
+
+// historyLookback returns the CPU window floored at minHistoryLookback.
+// Unparseable windows fall back to the floor: worst case the gate sees
+// history a shorter window would have hidden, which only ever unblocks a
+// recommendation whose percentile query still decides on its own data.
+func historyLookback(window string) string {
+	d, err := model.ParseDuration(window)
+	if err != nil || time.Duration(d) < minHistoryLookback {
+		return "24h"
+	}
+	return window
 }
 
 // FetchWorkloadInputs runs the Prometheus queries shared by the controller
@@ -84,6 +140,7 @@ func FetchWorkloadInputs(
 	var (
 		cpuPerPod, memPerPod promclient.ContainerValues
 		oomSignal            promclient.OOMSignal
+		historyStart         time.Time
 	)
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -114,14 +171,33 @@ func FetchWorkloadInputs(
 		oomSignal = v
 		return nil
 	})
+	// Ephemeral identities need the history age for the workload-age gate:
+	// a Job object is re-created on every run, and a bare pod's identity
+	// (k8s.sustain.io/owner-name) has no object at all — in both cases the
+	// object age says nothing about how much usage history the identity has
+	// accumulated. Long-lived kinds (their object age IS the identity age)
+	// skip the extra query. Best-effort: on failure the gate falls back to
+	// the object age.
+	if ownerKind == "Job" || ownerKind == "Pod" {
+		g.Go(func() error {
+			v, err := pc.QueryWorkloadHistoryStart(gctx, ns, ownerKind, ownerName, historyLookback(cpuWindow))
+			if err != nil {
+				logger.V(1).Info("history start query failed; age gate falls back to object age", "err", err)
+				return nil
+			}
+			historyStart = v
+			return nil
+		})
+	}
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
 	return &WorkloadInputs{
-		CPUPerPod: cpuPerPod,
-		MemPerPod: memPerPod,
-		OOM:       oomSignal,
+		CPUPerPod:    cpuPerPod,
+		MemPerPod:    memPerPod,
+		OOM:          oomSignal,
+		HistoryStart: historyStart,
 	}, nil
 }
 

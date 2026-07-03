@@ -419,4 +419,6 @@ export interface WorkloadItemV2 extends WorkloadItem {
   lastRecycledAt?: string
   autoscalerPresent: boolean
   coordinationFactors?: CoordinationFactors
+  active: boolean
+  lastSeenAt?: string
 }

@@ -142,6 +142,8 @@ func BindControllerFlags(cmd *cobra.Command) {
 	bindInt(flags, "concurrency-limit", "concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
 	bindDuration(flags, "recycle-replacement-timeout", "recycle-replacement-timeout", 5*time.Minute,
 		"In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) takes several minutes.")
+	bindDuration(flags, "recommendation-retention", "recommendation-retention", 72*time.Hour,
+		"How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs). The dashboard shows these as inactive workloads. 0 sweeps them on the next reconcile.")
 }
 
 // ControllerConfig holds resolved configuration for the controller.
@@ -157,6 +159,7 @@ type ControllerConfig struct {
 	ConcurrencyLimit          int
 	RecommendOnly             bool
 	RecycleReplacementTimeout time.Duration
+	RecommendationRetention   time.Duration
 }
 
 // LoadControllerConfig reads the current Viper state and returns a ControllerConfig.
@@ -173,6 +176,7 @@ func LoadControllerConfig() ControllerConfig {
 		ConcurrencyLimit:          viper.GetInt("concurrency-limit"),
 		RecommendOnly:             RecommendOnly(),
 		RecycleReplacementTimeout: viper.GetDuration("recycle-replacement-timeout"),
+		RecommendationRetention:   viper.GetDuration("recommendation-retention"),
 	}
 }
 

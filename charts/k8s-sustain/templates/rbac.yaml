@@ -16,7 +16,10 @@ rules:
     resources: [policies/finalizers]
     verbs: [update]
   # WorkloadRecommendation CRD — controller writes the cache after each reconcile
-  # and sweeps stale entries. Webhook (read-only access) reuses this role's get/list/watch.
+  # and sweeps stale entries. Webhook shares this same ClusterRole/ServiceAccount
+  # and also writes: it persists recommendations for ephemeral identities (bare
+  # pods, standalone Jobs) at admission, since those can live and die entirely
+  # between two controller reconciles.
   - apiGroups: [k8s.sustain.io]
     resources: [workloadrecommendations]
     verbs: [get, list, watch, create, update, patch, delete]

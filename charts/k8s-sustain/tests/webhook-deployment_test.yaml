@@ -62,6 +62,15 @@ tests:
           path: spec.template.spec.serviceAccountName
           value: k8s-sustain
 
+  - it: webhook uses the overridden serviceAccount name
+    set:
+      serviceAccount:
+        name: custom-sa
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: custom-sa
+
   - it: mounts the TLS secret read-only
     asserts:
       - equal:

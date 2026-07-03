@@ -153,6 +153,49 @@ spec:
                   Prometheus. Consumers must check freshness before trusting the values.
                 format: date-time
                 type: string
+              observedResources:
+                additionalProperties:
+                  description: |-
+                    ObservedContainerResources is the requests/limits snapshot of one container
+                    at the last observation. Nil quantities mean the container had no value set
+                    for that field.
+                  properties:
+                    cpuLimit:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    cpuRequest:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    init:
+                      description: Init marks containers that come from the pod's
+                        initContainers list.
+                      type: boolean
+                    memoryLimit:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    memoryRequest:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                  type: object
+                description: |-
+                  ObservedResources maps container name → the requests/limits the
+                  container actually ran with, snapshotted each time the recommendation
+                  is written (by the controller from the pod template, by the webhook
+                  from the admitted pod). Lets the dashboard render current-vs-
+                  recommended for workloads whose objects no longer exist.
+                type: object
               source:
                 description: |-
                   Source describes where the recommendation came from on this update.

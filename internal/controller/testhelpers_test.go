@@ -249,10 +249,12 @@ func policyForReconcileWorkload(t *testing.T, name string) *sustainv1alpha1.Poli
 
 func deploymentTarget(ns, name string) *workloadTarget {
 	return &workloadTarget{
-		Kind:      "Deployment",
-		Name:      name,
-		Namespace: ns,
-		Selector:  &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+		Kind:         "Deployment",
+		Name:         name,
+		Namespace:    ns,
+		IdentityKind: "Deployment",
+		IdentityName: name,
+		Selector:     &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
 		Containers: []corev1.Container{{
 			Name: "app",
 			Resources: corev1.ResourceRequirements{

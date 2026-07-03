@@ -114,3 +114,12 @@ object backing it, the dashboard groups live pods by `(namespace,
 owner-name)` the same way the controller does (`workload.GroupBarePods`) —
 the most recently created pod in the group supplies the displayed
 containers and annotations.
+
+Because a bare pod like the Airflow example above can start and finish
+entirely between two controller reconciles, the webhook records its
+`WorkloadRecommendation` at admission time rather than waiting for the
+controller. Once the pod completes and is deleted, that recommendation
+stays visible on the dashboard as an **inactive** row for the retention
+window (`--recommendation-retention`, default `72h`) — see
+[Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads)
+— even though the pod never lived through a reconcile cycle.
