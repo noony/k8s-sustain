@@ -122,3 +122,27 @@ jobs:
           files: |
             bin/k8s-sustain-*
             bin/sha256sums.txt
+
+  docs:
+    runs-on: ubuntu-latest
+    # Prerelease tags (e.g. v0.1.0-rc.1) don't get a docs snapshot.
+    if: "!contains(github.ref_name, '-')"
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: 3.x
+
+      - name: Install dependencies
+        run: pip install -r requirements-docs.txt
+
+      - name: Deploy versioned docs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          VERSION="${GITHUB_REF_NAME#v}"
+          mike deploy --push --update-aliases "$VERSION" latest
+          mike set-default --push latest

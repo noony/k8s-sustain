@@ -92,3 +92,7 @@ nav:
       - Metrics: reference/metrics.md
       - Recording Rules: reference/recording-rules.md
   - Development: development.md
+
+extra:
+  version:
+    provider: mike

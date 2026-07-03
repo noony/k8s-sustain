@@ -64,5 +64,12 @@ jobs:
           path: ~/.cache/pip
       - name: Install dependencies
         run: pip install -r requirements-docs.txt
-      - name: Deploy to GitHub Pages
-        run: mkdocs gh-deploy --force
+      - name: Deploy versioned docs (main)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mike deploy --push --update-aliases main
+          # Only claim the site's default landing version if nothing has
+          # claimed it yet (i.e. before the first real release exists) — a
+          # real release's "latest" must always win over "main".
+          mike list | grep -q latest || mike set-default --push main
