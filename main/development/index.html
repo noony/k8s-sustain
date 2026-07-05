@@ -1574,6 +1574,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#release-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Release notes
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1869,6 +1878,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#release-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Release notes
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2138,6 +2156,8 @@ what the harness does or deviate from it.</p>
 </code></pre></div>
 <p>Override <code>PLATFORMS</code> to change the matrix, e.g. <code>PLATFORMS=linux/arm64 make docker-buildx</code>. CI (<code>.github/workflows/release.yml</code>) publishes both <code>linux/amd64</code> and <code>linux/arm64</code> automatically on tag pushes.</p>
 <p>The <code>helm</code> job in that same workflow also pushes both charts as OCI artifacts to <code>oci://ghcr.io/noony/helm-charts/&lt;chart&gt;</code>, in addition to attaching the packaged <code>.tgz</code> files to the GitHub release.</p>
+<h3 id="release-notes">Release notes<a class="headerlink" href="#release-notes" title="Permanent link">&para;</a></h3>
+<p>The <code>gh-release</code> job uses GitHub's automatic release notes (<code>generate_release_notes: true</code>), which are shaped by <code>.github/release.yml</code>. That file groups merged PRs into a "General" section and a "Dependencies" section (anything carrying the <code>dependencies</code> label, applied automatically by Dependabot), so a release isn't dominated by a long tail of dependency bumps. The <code>dependencies</code> exclusion on "General" makes the split independent of category order. PRs labeled <code>skip-changelog</code> are omitted from release notes entirely — apply that label manually (it isn't created by default: <code>gh label create skip-changelog --description "Exclude this PR from release notes" --color ededed</code>).</p>
 <h2 id="makefile-targets">Makefile targets<a class="headerlink" href="#makefile-targets" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
