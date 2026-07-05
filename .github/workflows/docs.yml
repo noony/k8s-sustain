@@ -50,6 +50,16 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [markdownlint, mkdocs-build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -73,3 +83,14 @@ jobs:
           # claimed it yet (i.e. before the first real release exists) — a
           # real release's "latest" must always win over "main".
           mike list | grep -q latest || mike set-default --push main
+      - name: Check out published gh-pages content
+        run: |
+          git fetch origin gh-pages
+          git worktree add "$RUNNER_TEMP/gh-pages-site" origin/gh-pages
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/gh-pages-site
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

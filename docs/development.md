@@ -326,6 +326,12 @@ pip install -r requirements-docs.txt
 mkdocs serve
 ```
 
+The live site is published through GitHub's Actions-based Pages deployment
+(`actions/upload-pages-artifact` + `actions/deploy-pages` at the end of the
+`deploy`/`docs` jobs above), not the legacy "deploy from a branch" mechanism —
+`gh-pages` is still where mike stores version history, but pushing to it no
+longer auto-triggers a site rebuild by itself.
+
 ## Contributing
 
 1. Fork the repository
