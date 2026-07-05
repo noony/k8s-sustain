@@ -1661,9 +1661,14 @@
 <td>How often each matched Policy is re-evaluated (Prometheus re-queried, recommendations refreshed, stale pods recycled)</td>
 </tr>
 <tr>
-<td><code>controller.concurrencyLimit</code></td>
+<td><code>controller.workloadConcurrencyLimit</code></td>
 <td><code>5</code></td>
 <td>Maximum number of workloads processed in parallel per reconcile cycle</td>
+</tr>
+<tr>
+<td><code>controller.policyConcurrencyLimit</code></td>
+<td><code>10</code></td>
+<td>Maximum number of Policy objects reconciled in parallel</td>
 </tr>
 <tr>
 <td><code>controller.recycleReplacementTimeout</code></td>

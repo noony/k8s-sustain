@@ -1814,9 +1814,14 @@
 <td>Comma-separated list of namespaces the reconciler should never touch</td>
 </tr>
 <tr>
-<td><code>--concurrency-limit</code></td>
+<td><code>--workload-concurrency-limit</code></td>
 <td><code>5</code></td>
 <td>Maximum number of workloads processed in parallel per reconcile cycle</td>
+</tr>
+<tr>
+<td><code>--policy-concurrency-limit</code></td>
+<td><code>10</code></td>
+<td>Maximum number of Policy objects reconciled in parallel</td>
 </tr>
 <tr>
 <td><code>--recycle-replacement-timeout</code></td>

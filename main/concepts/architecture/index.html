@@ -1618,14 +1618,14 @@
 </code></pre></div>
 <h2 id="controller-k8s-sustain-start">Controller (<code>k8s-sustain start</code>)<a class="headerlink" href="#controller-k8s-sustain-start" title="Permanent link">&para;</a></h2>
 <p>The controller is a standard <a href="https://github.com/kubernetes-sigs/controller-runtime">controller-runtime</a> reconciler that watches <code>Policy</code> objects.</p>
-<p><strong>Reconcile loop:</strong></p>
+<p><strong>Reconcile loop:</strong> (independent <code>Policy</code> objects reconcile in parallel too, bounded by <code>--policy-concurrency-limit</code>, default 10 — a separate knob from the per-workload fan-out in step 3 below)</p>
 <ol>
 <li>A <code>Policy</code> event is received (create / update / periodic requeue)</li>
 <li>For each workload kind enabled in the policy (<code>deployment</code>, <code>statefulSet</code>, <code>daemonSet</code>, <code>argoRollout</code>, <code>cronJob</code>):</li>
 <li>List all objects of that kind — scoped to the namespaces in <code>selector.namespaces</code> when specified, or cluster-wide otherwise</li>
 <li>Filter by the <code>k8s.sustain.io/policy</code> annotation in the pod template</li>
 <li>Skip workloads in retry backoff from a previous transient failure</li>
-<li>Process matching workloads in parallel (bounded by <code>--concurrency-limit</code>, default 5):</li>
+<li>Process matching workloads in parallel (bounded by <code>--workload-concurrency-limit</code>, default 5):</li>
 <li>Detect autoscalers (HPA / KEDA <code>ScaledObject</code>) targeting the workload — read-only, no patches</li>
 <li>Compute a per-container recommendation (see <a href="../recommendation-pipeline/">Recommendation Pipeline</a>) and cache it in a <code>WorkloadRecommendation</code> object, regardless of update mode — this keeps <code>OnCreate</code> workloads visible on the dashboard and gives the webhook a Prometheus-outage fallback</li>
 <li><code>OnCreate</code>-mode workloads stop here: the recommendation is computed and cached, but never applied by the controller — resource injection at pod creation is the webhook's job</li>
