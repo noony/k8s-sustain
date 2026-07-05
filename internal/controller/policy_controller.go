@@ -135,7 +135,7 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		r.WorkloadConcurrencyLimit = 5
 	}
 	if r.PolicyConcurrencyLimit <= 0 {
-		r.PolicyConcurrencyLimit = 1
+		r.PolicyConcurrencyLimit = 10
 	}
 	if err := mgr.Add(&orphanReaper{reconciler: r, interval: r.OrphanReapInterval}); err != nil {
 		return err
