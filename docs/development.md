@@ -249,6 +249,10 @@ Override `PLATFORMS` to change the matrix, e.g. `PLATFORMS=linux/arm64 make dock
 
 The `helm` job in that same workflow also pushes both charts as OCI artifacts to `oci://ghcr.io/noony/helm-charts/<chart>`, in addition to attaching the packaged `.tgz` files to the GitHub release.
 
+### Release notes
+
+The `gh-release` job uses GitHub's automatic release notes (`generate_release_notes: true`), which are shaped by `.github/release.yml`. That file groups merged PRs into a "General" section and a "Dependencies" section (anything carrying the `dependencies` label, applied automatically by Dependabot), so a release isn't dominated by a long tail of dependency bumps. The `dependencies` exclusion on "General" makes the split independent of category order. PRs labeled `skip-changelog` are omitted from release notes entirely — apply that label manually (it isn't created by default: `gh label create skip-changelog --description "Exclude this PR from release notes" --color ededed`).
+
 ## Makefile targets
 
 | Target | Description |
