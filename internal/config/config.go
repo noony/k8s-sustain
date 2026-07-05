@@ -139,7 +139,8 @@ func BindControllerFlags(cmd *cobra.Command) {
 	bindString(flags, "prometheus-address", "prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
 	bindDuration(flags, "reconcile-interval", "reconcile-interval", 5*time.Minute, "How often policies are re-evaluated")
 	bindStringSlice(flags, "excluded-namespaces", "excluded-namespaces", nil, "Namespaces the reconciler should never touch")
-	bindInt(flags, "concurrency-limit", "concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
+	bindInt(flags, "workload-concurrency-limit", "workload-concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
+	bindInt(flags, "policy-concurrency-limit", "policy-concurrency-limit", 10, "Maximum number of Policy objects reconciled in parallel")
 	bindDuration(flags, "recycle-replacement-timeout", "recycle-replacement-timeout", 5*time.Minute,
 		"In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) takes several minutes.")
 	bindDuration(flags, "recommendation-retention", "recommendation-retention", 72*time.Hour,
@@ -156,7 +157,8 @@ type ControllerConfig struct {
 	PrometheusAddress         string
 	ReconcileInterval         time.Duration
 	ExcludedNamespaces        []string
-	ConcurrencyLimit          int
+	WorkloadConcurrencyLimit  int
+	PolicyConcurrencyLimit    int
 	RecommendOnly             bool
 	RecycleReplacementTimeout time.Duration
 	RecommendationRetention   time.Duration
@@ -173,7 +175,8 @@ func LoadControllerConfig() ControllerConfig {
 		PrometheusAddress:         viper.GetString("prometheus-address"),
 		ReconcileInterval:         viper.GetDuration("reconcile-interval"),
 		ExcludedNamespaces:        getStringSlice("excluded-namespaces"),
-		ConcurrencyLimit:          viper.GetInt("concurrency-limit"),
+		WorkloadConcurrencyLimit:  viper.GetInt("workload-concurrency-limit"),
+		PolicyConcurrencyLimit:    viper.GetInt("policy-concurrency-limit"),
 		RecommendOnly:             RecommendOnly(),
 		RecycleReplacementTimeout: viper.GetDuration("recycle-replacement-timeout"),
 		RecommendationRetention:   viper.GetDuration("recommendation-retention"),

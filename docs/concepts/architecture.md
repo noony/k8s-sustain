@@ -46,14 +46,14 @@ k8s-sustain is split into three independent components that run as separate proc
 
 The controller is a standard [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) reconciler that watches `Policy` objects.
 
-**Reconcile loop:**
+**Reconcile loop:** (independent `Policy` objects reconcile in parallel too, bounded by `--policy-concurrency-limit`, default 10 — a separate knob from the per-workload fan-out in step 3 below)
 
 1. A `Policy` event is received (create / update / periodic requeue)
 2. For each workload kind enabled in the policy (`deployment`, `statefulSet`, `daemonSet`, `argoRollout`, `cronJob`):
    - List all objects of that kind — scoped to the namespaces in `selector.namespaces` when specified, or cluster-wide otherwise
    - Filter by the `k8s.sustain.io/policy` annotation in the pod template
    - Skip workloads in retry backoff from a previous transient failure
-3. Process matching workloads in parallel (bounded by `--concurrency-limit`, default 5):
+3. Process matching workloads in parallel (bounded by `--workload-concurrency-limit`, default 5):
    - Detect autoscalers (HPA / KEDA `ScaledObject`) targeting the workload — read-only, no patches
    - Compute a per-container recommendation (see [Recommendation Pipeline](recommendation-pipeline.md)) and cache it in a `WorkloadRecommendation` object, regardless of update mode — this keeps `OnCreate` workloads visible on the dashboard and gives the webhook a Prometheus-outage fallback
    - `OnCreate`-mode workloads stop here: the recommendation is computed and cached, but never applied by the controller — resource injection at pod creation is the webhook's job

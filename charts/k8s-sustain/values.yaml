@@ -37,7 +37,8 @@ controller:
   # How often each matched Policy is re-evaluated (Prometheus re-queried,
   # recommendations refreshed, stale pods recycled).
   reconcileInterval: 5m
-  concurrencyLimit: 5
+  workloadConcurrencyLimit: 5
+  policyConcurrencyLimit: 10
   # When the controller falls back to eviction-based recycling (k8s < 1.33),
   # it waits this long for the workload
   # controller to bring a replacement pod back to Ready before evicting the

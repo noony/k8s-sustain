@@ -27,7 +27,8 @@
 | `controller.healthProbeBindAddress` | `:8081` | Health probe address (`:port` or `host:port`); the health container port derives from its port part |
 | `controller.leaderElect` | `true` | Enable leader election |
 | `controller.reconcileInterval` | `5m` | How often each matched Policy is re-evaluated (Prometheus re-queried, recommendations refreshed, stale pods recycled) |
-| `controller.concurrencyLimit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
+| `controller.workloadConcurrencyLimit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
+| `controller.policyConcurrencyLimit` | `10` | Maximum number of Policy objects reconciled in parallel |
 | `controller.recycleReplacementTimeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where Karpenter / cluster-autoscaler node provisioning regularly takes longer. |
 | `controller.recommendationRetention` | `72h` | How long a WorkloadRecommendation outlives a workload whose object has disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs). The dashboard keeps showing these as "inactive" rows until the window lapses. Set to `0s` to sweep them on the next reconcile instead. |
 | `controller.logLevel` | `error` | Log level |

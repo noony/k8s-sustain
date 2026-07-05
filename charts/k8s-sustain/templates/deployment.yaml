@@ -43,7 +43,8 @@ spec:
             - --prometheus-address={{ include "k8s-sustain.prometheusAddress" . }}
             - --log-level={{ .Values.controller.logLevel }}
             - --excluded-namespaces={{ concat (list .Release.Namespace "kube-system" "kube-public") .Values.excludedNamespaces | join "," }}
-            - --concurrency-limit={{ .Values.controller.concurrencyLimit }}
+            - --workload-concurrency-limit={{ .Values.controller.workloadConcurrencyLimit }}
+            - --policy-concurrency-limit={{ .Values.controller.policyConcurrencyLimit }}
             - --reconcile-interval={{ .Values.controller.reconcileInterval }}
             - --recycle-replacement-timeout={{ .Values.controller.recycleReplacementTimeout }}
             - --recommendation-retention={{ .Values.controller.recommendationRetention }}

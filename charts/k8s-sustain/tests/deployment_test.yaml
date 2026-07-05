@@ -71,7 +71,8 @@ tests:
             - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
             - --excluded-namespaces=k8s-sustain,kube-system,kube-public
-            - --concurrency-limit=5
+            - --workload-concurrency-limit=5
+            - --policy-concurrency-limit=10
             - --reconcile-interval=5m
             - --recycle-replacement-timeout=5m
             - --recommendation-retention=72h

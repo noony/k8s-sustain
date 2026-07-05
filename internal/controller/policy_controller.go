@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -55,7 +56,16 @@ type PolicyReconciler struct {
 	InPlaceUpdates     bool
 	ExcludedNamespaces []string
 	RecommendOnly      bool
-	ConcurrencyLimit   int
+	// WorkloadConcurrencyLimit caps how many workloads a single Policy's
+	// Reconcile processes in parallel.
+	WorkloadConcurrencyLimit int
+	// PolicyConcurrencyLimit caps how many distinct Policy objects are
+	// reconciled in parallel. Concurrent Reconcile calls share only the
+	// mutex-protected retryTracker (already safe for concurrent access from
+	// the existing per-workload errgroup fan-out within a single Reconcile);
+	// autoscaler.NamespacedSnapshot is a fresh, non-shared instance built
+	// per Reconcile call, so it carries no cross-Policy sharing risk at all.
+	PolicyConcurrencyLimit int
 
 	// RecycleReplacementTimeout caps how long the patcher waits for a
 	// replacement pod to become Ready after an eviction. Must be generous
@@ -121,20 +131,25 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.patcher = workload.New(r.Client, r.InPlaceUpdates, patcherOpts...)
 	r.recorder = mgr.GetEventRecorder("k8s-sustain")
 	r.retries = newRetryTracker()
-	if r.ConcurrencyLimit <= 0 {
-		r.ConcurrencyLimit = 5
+	if r.WorkloadConcurrencyLimit <= 0 {
+		r.WorkloadConcurrencyLimit = 5
+	}
+	if r.PolicyConcurrencyLimit <= 0 {
+		r.PolicyConcurrencyLimit = 1
 	}
 	if err := mgr.Add(&orphanReaper{reconciler: r, interval: r.OrphanReapInterval}); err != nil {
 		return err
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
-		For(&sustainv1alpha1.Policy{})
+		For(&sustainv1alpha1.Policy{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.PolicyConcurrencyLimit})
 	if r.LiveOOM.Enabled() {
 		// The watcher feeds synthetic Policy GenericEvents (Name = policy
 		// annotation value). The map func turns each into a reconcile.Request,
 		// so an observed OOM enqueues the owning Policy immediately.
 		b = b.WatchesRawSource(
-			source.Channel(r.LiveOOM.TriggerCh,
+			source.Channel(
+				r.LiveOOM.TriggerCh,
 				handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
 					if obj == nil || obj.GetName() == "" {
 						return nil
@@ -208,7 +223,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Process targets in parallel with bounded concurrency.
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(r.ConcurrencyLimit)
+	g.SetLimit(r.WorkloadConcurrencyLimit)
 	var failCount atomic.Int32
 	var skipped atomic.Int32
 
@@ -238,7 +253,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		"targets", len(targets),
 		"skipped", skipped.Load(),
 		"failed", failCount.Load(),
-		"concurrency", r.ConcurrencyLimit)
+		"concurrency", r.WorkloadConcurrencyLimit)
 
 	// Per-policy rollup: total matched workloads and how many are blocked in retry.
 	keys := make([]string, 0, len(targets))

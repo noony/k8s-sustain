@@ -195,3 +195,29 @@ func TestControllerConfig_RecommendationRetentionDefault(t *testing.T) {
 		t.Errorf("RecommendationRetention = %v, want 72h", got)
 	}
 }
+
+// TestControllerConfig_PolicyConcurrencyLimitDefault verifies the flag
+// registers with its 10 default and threads into ControllerConfig.
+func TestControllerConfig_PolicyConcurrencyLimitDefault(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	cmd := &cobra.Command{}
+	BindControllerFlags(cmd)
+	if got := LoadControllerConfig().PolicyConcurrencyLimit; got != 10 {
+		t.Errorf("PolicyConcurrencyLimit = %d, want 10", got)
+	}
+}
+
+// TestControllerConfig_PolicyConcurrencyLimitEnvOverride verifies the flag can
+// be overridden via K8SSUSTAIN_POLICY_CONCURRENCY_LIMIT.
+func TestControllerConfig_PolicyConcurrencyLimitEnvOverride(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	cmd := &cobra.Command{}
+	BindControllerFlags(cmd)
+	t.Setenv("K8SSUSTAIN_POLICY_CONCURRENCY_LIMIT", "3")
+	InitViper()
+	if got := LoadControllerConfig().PolicyConcurrencyLimit; got != 3 {
+		t.Errorf("PolicyConcurrencyLimit = %d, want 3 (env override)", got)
+	}
+}

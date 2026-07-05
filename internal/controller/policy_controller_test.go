@@ -194,14 +194,14 @@ func TestReconcile_PartialFailure_SetsConditionAndRequeues(t *testing.T) {
 		Build()
 
 	r := &PolicyReconciler{
-		Client:            c,
-		Scheme:            scheme,
-		PrometheusClient:  pc,
-		ReconcileInterval: time.Hour,
-		ConcurrencyLimit:  1,
-		recorder:          events.NewFakeRecorder(100),
-		patcher:           workload.New(c, false),
-		retries:           newRetryTracker(),
+		Client:                   c,
+		Scheme:                   scheme,
+		PrometheusClient:         pc,
+		ReconcileInterval:        time.Hour,
+		WorkloadConcurrencyLimit: 1,
+		recorder:                 events.NewFakeRecorder(100),
+		patcher:                  workload.New(c, false),
+		retries:                  newRetryTracker(),
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})

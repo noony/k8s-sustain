@@ -41,7 +41,8 @@ func runStart(_ *cobra.Command, _ []string) error {
 	cfg := config.LoadControllerConfig()
 	log := logging.Setup(cfg.LogLevel, "setup")
 
-	log.Info("Starting k8s-sustain operator",
+	log.Info(
+		"Starting k8s-sustain operator",
 		"version", version.Version,
 		"metricsAddr", cfg.MetricsBindAddress,
 		"healthAddr", cfg.HealthProbeBindAddress,
@@ -49,7 +50,8 @@ func runStart(_ *cobra.Command, _ []string) error {
 		"leaderElectionID", cfg.LeaderElectionID,
 		"prometheusAddr", cfg.PrometheusAddress,
 		"reconcileInterval", cfg.ReconcileInterval,
-		"concurrencyLimit", cfg.ConcurrencyLimit,
+		"workloadConcurrencyLimit", cfg.WorkloadConcurrencyLimit,
+		"policyConcurrencyLimit", cfg.PolicyConcurrencyLimit,
 		"recommendOnly", cfg.RecommendOnly,
 		"recommendationRetention", cfg.RecommendationRetention,
 	)
@@ -122,7 +124,8 @@ func runStart(_ *cobra.Command, _ []string) error {
 		InPlaceUpdates:            inPlaceUpdates,
 		ExcludedNamespaces:        cfg.ExcludedNamespaces,
 		RecommendOnly:             cfg.RecommendOnly,
-		ConcurrencyLimit:          cfg.ConcurrencyLimit,
+		WorkloadConcurrencyLimit:  cfg.WorkloadConcurrencyLimit,
+		PolicyConcurrencyLimit:    cfg.PolicyConcurrencyLimit,
 		RecycleReplacementTimeout: cfg.RecycleReplacementTimeout,
 		RecommendationRetention:   cfg.RecommendationRetention,
 		LiveOOM: controller.LiveOOMConfig{

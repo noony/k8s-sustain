@@ -160,14 +160,14 @@ func reconcilerForPolicy(t *testing.T, policy *sustainv1alpha1.Policy, extra ...
 		Build()
 
 	r := &PolicyReconciler{
-		Client:            c,
-		Scheme:            scheme,
-		PrometheusClient:  pc,
-		ReconcileInterval: time.Hour,
-		ConcurrencyLimit:  1,
-		recorder:          events.NewFakeRecorder(100),
-		patcher:           workload.New(c, false),
-		retries:           newRetryTracker(),
+		Client:                   c,
+		Scheme:                   scheme,
+		PrometheusClient:         pc,
+		ReconcileInterval:        time.Hour,
+		WorkloadConcurrencyLimit: 1,
+		recorder:                 events.NewFakeRecorder(100),
+		patcher:                  workload.New(c, false),
+		retries:                  newRetryTracker(),
 	}
 	return r, server
 }
@@ -219,15 +219,15 @@ func reconcilerWithProm(t *testing.T, server *httptest.Server, inPlace bool, ext
 		Build()
 
 	return &PolicyReconciler{
-		Client:            c,
-		Scheme:            scheme,
-		PrometheusClient:  pc,
-		ReconcileInterval: time.Hour,
-		ConcurrencyLimit:  1,
-		InPlaceUpdates:    inPlace,
-		recorder:          events.NewFakeRecorder(100),
-		patcher:           workload.New(c, inPlace),
-		retries:           newRetryTracker(),
+		Client:                   c,
+		Scheme:                   scheme,
+		PrometheusClient:         pc,
+		ReconcileInterval:        time.Hour,
+		WorkloadConcurrencyLimit: 1,
+		InPlaceUpdates:           inPlace,
+		recorder:                 events.NewFakeRecorder(100),
+		patcher:                  workload.New(c, inPlace),
+		retries:                  newRetryTracker(),
 	}
 }
 

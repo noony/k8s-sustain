@@ -47,7 +47,8 @@ k8s-sustain start [flags]
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server used for metric queries |
 | `--reconcile-interval` | `5m` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces the reconciler should never touch |
-| `--concurrency-limit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
+| `--workload-concurrency-limit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
+| `--policy-concurrency-limit` | `10` | Maximum number of Policy objects reconciled in parallel |
 | `--recycle-replacement-timeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) regularly takes longer than the default. |
 | `--recommendation-retention` | `72h` | How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs). The dashboard shows these as inactive workloads. `0` sweeps them on the next reconcile. |
 
