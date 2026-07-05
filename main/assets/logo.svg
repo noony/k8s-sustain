@@ -1,0 +1,78 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="hexGrad" x1="220" y1="420" x2="804" y2="604" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7ED321"/>
+      <stop offset="100%" stop-color="#2F80ED"/>
+    </linearGradient>
+    <linearGradient id="ringGrad" x1="275" y1="512" x2="749" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7ED321"/>
+      <stop offset="100%" stop-color="#2F80ED"/>
+    </linearGradient>
+    <linearGradient id="leafGrad" x1="385" y1="650" x2="682" y2="370" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0B8F3A"/>
+      <stop offset="45%" stop-color="#38B44A"/>
+      <stop offset="100%" stop-color="#9AD91F"/>
+    </linearGradient>
+    <linearGradient id="veinGrad" x1="430" y1="640" x2="590" y2="470" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#046A31"/>
+      <stop offset="100%" stop-color="#0F8F3C"/>
+    </linearGradient>
+    <filter id="softGlow" x="120" y="120" width="784" height="784" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 0
+                                                      0 1 0 0 0
+                                                      0 0 1 0 0
+                                                      0 0 0 0.18 0"/>
+    </filter>
+  </defs>
+
+  <!-- transparent background -->
+
+  <!-- subtle glow -->
+  <g filter="url(#softGlow)">
+    <path d="M512 208L769.27 356.5L769.27 653.5L512 802L254.73 653.5L254.73 356.5L512 208Z" fill="url(#hexGrad)" opacity="0.25"/>
+  </g>
+
+  <!-- outer hexagon -->
+  <path d="M512 220L759.18 362.75V661.25L512 804L264.82 661.25V362.75L512 220Z"
+        stroke="url(#hexGrad)" stroke-width="18" stroke-linejoin="round" opacity="0.9"/>
+
+  <!-- kubernetes-inspired ring -->
+  <g opacity="0.62" stroke="url(#ringGrad)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="512" cy="512" r="206"/>
+    <!-- spokes -->
+    <line x1="512" y1="264" x2="512" y2="322"/>
+    <line x1="706.09" y1="357.79" x2="660.71" y2="394.07"/>
+    <line x1="754" y1="512" x2="696" y2="512"/>
+    <line x1="706.09" y1="666.21" x2="660.71" y2="629.93"/>
+    <line x1="512" y1="760" x2="512" y2="702"/>
+    <line x1="317.91" y1="666.21" x2="363.29" y2="629.93"/>
+    <line x1="270" y1="512" x2="328" y2="512"/>
+    <line x1="317.91" y1="357.79" x2="363.29" y2="394.07"/>
+    <!-- spoke endpoints -->
+    <circle cx="512" cy="264" r="9" fill="url(#ringGrad)" stroke="none"/>
+    <circle cx="706.09" cy="357.79" r="9" fill="url(#ringGrad)" stroke="none"/>
+    <circle cx="754" cy="512" r="9" fill="url(#ringGrad)" stroke="none"/>
+    <circle cx="706.09" cy="666.21" r="9" fill="url(#ringGrad)" stroke="none"/>
+    <circle cx="512" cy="760" r="9" fill="url(#ringGrad)" stroke="none"/>
+    <circle cx="317.91" cy="666.21" r="9" fill="url(#ringGrad)" stroke="none"/>
+    <circle cx="270" cy="512" r="9" fill="url(#ringGrad)" stroke="none"/>
+    <circle cx="317.91" cy="357.79" r="9" fill="url(#ringGrad)" stroke="none"/>
+  </g>
+
+  <!-- leaf shadow -->
+  <path d="M404 629C401 557 429 499 483 457C542 411 609 387 686 353C688 434 675 502 644 558C609 621 552 664 478 676C445 678 419 662 404 629Z"
+        fill="#000" opacity="0.12"/>
+
+  <!-- main leaf -->
+  <path d="M418 643C410 560 438 495 490 447C547 396 615 372 694 338C700 434 690 510 659 570C623 639 564 687 487 694C452 694 427 677 418 643Z"
+        fill="url(#leafGrad)"/>
+
+  <!-- leaf vein -->
+  <path d="M428 642C459 566 508 503 575 454C528 512 492 587 469 676C451 670 437 659 428 642Z"
+        fill="url(#veinGrad)"/>
+
+  <!-- highlight -->
+  <path d="M455 632C474 555 527 477 642 406C559 469 505 549 474 652C466 647 459 640 455 632Z"
+        fill="#B7F24A" opacity="0.85"/>
+</svg>
