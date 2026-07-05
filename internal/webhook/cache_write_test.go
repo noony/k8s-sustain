@@ -35,19 +35,22 @@ func qty(s string) *resource.Quantity {
 	return &q
 }
 
-// waitForWLR polls the fake client until the WLR appears (the write path is
-// asynchronous by design — admission must never wait on it).
+// waitForWLR polls the fake client until the WLR's status is populated. The
+// write path is asynchronous by design (admission must never wait on it) and
+// does a Create followed by a separate Status().Patch, so the object can
+// briefly exist with an empty Status — polling on existence alone races with
+// that patch and observes a nil ObservedResources.
 func waitForWLR(t *testing.T, c client.Client, ns, name string) *sustainv1alpha1.WorkloadRecommendation {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		var wlr sustainv1alpha1.WorkloadRecommendation
-		if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &wlr); err == nil {
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &wlr); err == nil && len(wlr.Status.ObservedResources) > 0 {
 			return &wlr
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("WorkloadRecommendation %s/%s never appeared", ns, name)
+	t.Fatalf("WorkloadRecommendation %s/%s status never populated", ns, name)
 	return nil
 }
 
