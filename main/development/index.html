@@ -2247,6 +2247,11 @@ site, not in a local <code>mkdocs serve</code>/<code>mkdocs build</code> preview
 <div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements-docs.txt
 <a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>mkdocs<span class="w"> </span>serve
 </code></pre></div>
+<p>The live site is published through GitHub's Actions-based Pages deployment
+(<code>actions/upload-pages-artifact</code> + <code>actions/deploy-pages</code> at the end of the
+<code>deploy</code>/<code>docs</code> jobs above), not the legacy "deploy from a branch" mechanism —
+<code>gh-pages</code> is still where mike stores version history, but pushing to it no
+longer auto-triggers a site rebuild by itself.</p>
 <h2 id="contributing">Contributing<a class="headerlink" href="#contributing" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Fork the repository</li>
