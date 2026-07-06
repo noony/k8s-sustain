@@ -133,7 +133,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Run gosec
-        uses: securego/gosec@5a2f0a6455f43d8ac8efaf1591ee0fb400dce662 # v2.27.1
+        uses: securego/gosec@9e6a9843d7a4a6e3e9a8539b02612c8a4aa3f889 # v2.27.1
         with:
           # -fmt=sarif so findings show up in the GitHub Security tab; the
           # job still fails on a non-zero exit if any HIGH/MED severity issue
