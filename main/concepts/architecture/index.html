@@ -1677,12 +1677,13 @@
 </ul>
 <p>It is read-only: it queries the Kubernetes API and Prometheus but never modifies any resources. See the <a href="../../guides/dashboard/">Dashboard guide</a> for details.</p>
 <h2 id="recommend-only-mode">Recommend-only mode<a class="headerlink" href="#recommend-only-mode" title="Permanent link">&para;</a></h2>
-<p>When <code>--recommend-only</code> is passed (or <code>recommendOnly: true</code> in the Helm values), all three components continue to operate normally — querying Prometheus, computing recommendations, resolving workloads — but <strong>no mutations are applied</strong>. Recommendations are emitted as structured JSON log lines at <code>info</code> level.</p>
+<p>When <code>--recommend-only</code> is passed (or <code>recommendOnly: true</code> in the Helm values), all three components continue to operate normally — querying Prometheus, computing recommendations, resolving workloads — but <strong>no mutations are applied</strong>. Recommendations are emitted as structured JSON log lines at <code>info</code> level. The same dry-run can be scoped to a single policy with <code>spec.rightSizing.recommendOnly: true</code>; the global flag remains a master switch that overrides every policy.</p>
 <p>This is useful for:</p>
 <ul>
 <li>Validating that k8s-sustain produces sensible recommendations before enabling active mode</li>
 <li>Auditing what changes would be made without risk</li>
 <li>Running k8s-sustain in a staging environment alongside existing resource settings</li>
+<li>Onboarding one policy in dry-run (<code>spec.rightSizing.recommendOnly</code>) while other policies actively apply</li>
 </ul>
 <h2 id="recommendation-pipeline">Recommendation pipeline<a class="headerlink" href="#recommendation-pipeline" title="Permanent link">&para;</a></h2>
 <p>See <a href="../recommendation-pipeline/">Recommendation Pipeline</a> for how recommendations are computed.</p>

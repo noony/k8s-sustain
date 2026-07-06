@@ -1623,10 +1623,10 @@
 </table>
 <hr />
 <h2 id="recommend-only-mode">Recommend-only mode<a class="headerlink" href="#recommend-only-mode" title="Permanent link">&para;</a></h2>
-<p>Independently of <code>OnCreate</code> or <code>Ongoing</code>, you can run k8s-sustain in <strong>recommend-only</strong> mode by passing <code>--recommend-only</code> or setting <code>recommendOnly: true</code> in the Helm values. In this mode:</p>
+<p>Independently of <code>OnCreate</code> or <code>Ongoing</code>, you can run in <strong>recommend-only</strong> mode at two scopes: globally, by passing <code>--recommend-only</code> (or <code>recommendOnly: true</code> in the Helm values), or per policy, by setting <code>spec.rightSizing.recommendOnly: true</code> on an individual <code>Policy</code>. The global flag is a master switch — when set, every policy is dry-run regardless of its own field. In this mode:</p>
 <ul>
 <li>The controller still reconciles and computes recommendations, but <strong>never recycles pods</strong></li>
-<li>The webhook still intercepts pod creation and computes recommendations, but <strong>never mutates the pod</strong></li>
+<li>The webhook still intercepts pod creation and computes recommendations, but <strong>never injects resources</strong> (only the owner-name metadata label mirror is still applied)</li>
 <li>Computed recommendations are logged as structured JSON at <code>info</code> level</li>
 </ul>
 <p>This is useful for validating recommendations before switching to active mode. See the <a href="../../reference/cli/">CLI reference</a> for details.</p>

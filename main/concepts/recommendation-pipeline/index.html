@@ -1551,7 +1551,7 @@ requests apply on next pod creation via webhook injection.</p>
 4. <strong>Headroom.</strong> Multiply by <code>(1 + headroom/100)</code> to add a safety buffer.
 5. <strong>Clamp.</strong> Floor to <code>minAllowed</code>, cap at <code>maxAllowed</code> (when set). <code>maxAllowed</code> always wins, including over the OOM floor.
 6. <strong>HPA overhead.</strong> When <code>autoscalerCoordination.enabled</code> and the workload is targeted by an HPA or KEDA <code>ScaledObject</code> on <code>averageUtilization</code>, multiply by <code>(100 / hpa_target_pct) × 1.10</code>. The clamps from step 5 are re-applied so explicit policy caps survive coordination.
-7. <strong>Replica-budget correction (CPU only).</strong> When <code>autoscalerCoordination.replicaBudgetAnchor</code> is set, multiply CPU request by <code>clamp(current_replicas / target_replicas, 0.5, 2.0)</code>, where <code>target_replicas = round(min + anchor × (max - min))</code>.
+7. <strong>Replica-budget correction (CPU only, controller only).</strong> When <code>autoscalerCoordination.replicaBudgetAnchor</code> is set, multiply CPU request by <code>clamp(current_replicas / target_replicas, 0.5, 2.0)</code>, where <code>target_replicas = round(min + anchor × (max - min))</code>. Unlike the other stages, this one never runs at webhook admission — see <a href="../autoscaler-coordination/">Autoscaler Coordination</a>.
 8. <strong>Limits derivation.</strong> Apply the <code>limits</code> strategy (<code>keepLimit</code> / <code>keepLimitRequestRatio</code> / <code>equalsToRequest</code> / <code>noLimit</code> / <code>requestsLimitsRatio</code>).</p>
 </li>
 </ol>

@@ -1754,6 +1754,7 @@
 </tbody>
 </table>
 <p>When <code>--recommend-only</code> is enabled, both the controller and the webhook still query Prometheus and compute recommendations as usual, but they <strong>never</strong> apply changes. Computed recommendations are emitted as structured log lines at <code>info</code> level, so you can inspect them before switching to active mode.</p>
+<p>For a dry-run scoped to a single policy instead of the whole installation, set <code>spec.rightSizing.recommendOnly: true</code> on that <code>Policy</code> — see the <a href="../policy/#specrightsizingrecommendonly">Policy reference</a>. The global flag always wins: when it is set, every policy is dry-run regardless of its own field.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># via flag</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>k8s-sustain<span class="w"> </span>start<span class="w"> </span>--recommend-only
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>

@@ -1621,6 +1621,7 @@ If you use the Prometheus Operator, enable <code>prometheusRule.enabled=true</co
 <a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--set<span class="w"> </span><span class="nv">recommendOnly</span><span class="o">=</span><span class="nb">false</span>
 </code></pre></div>
+<p>For a gradual rollout, you can also dry-run a single policy instead of the whole installation by setting <code>spec.rightSizing.recommendOnly: true</code> on that <code>Policy</code> — see the <a href="../../reference/policy/#specrightsizingrecommendonly">Policy reference</a>.</p>
 <h2 id="install-with-cert-manager-recommended-for-production">Install with cert-manager (recommended for production)<a class="headerlink" href="#install-with-cert-manager-recommended-for-production" title="Permanent link">&para;</a></h2>
 <p>The chart creates a self-signed Issuer and Certificate automatically — just enable cert-manager:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
