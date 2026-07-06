@@ -1,0 +1,2343 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Kubernetes operator for workload right-sizing and sustainability">
+      
+      
+      
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/0.1.0/guides/dashboard/">
+      
+      
+        <link rel="prev" href="../cert-manager/">
+      
+      
+        <link rel="next" href="../local-testing/">
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.27">
+    
+    
+      
+        <title>Dashboard - k8s-sustain</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.6543a935.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#dashboard" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="k8s-sustain" class="md-header__button md-logo" aria-label="k8s-sustain" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            k8s-sustain
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Dashboard
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12c0-2.42-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var media,input,key,value,palette=__md_get("__palette");if(palette&&palette.color){"(prefers-color-scheme)"===palette.color.media&&(media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']"),palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent"));for([key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/noony/k8s-sustain" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.5.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    noony/k8s-sustain
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/prerequisites/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../concepts/architecture/" class="md-tabs__link">
+          
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+  
+  
+    
+    
+      
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../deployments/" class="md-tabs__link">
+          
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/policy/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../development/" class="md-tabs__link">
+        
+  
+    
+  
+  Development
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="k8s-sustain" class="md-nav__button md-logo" aria-label="k8s-sustain" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    k8s-sustain
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/noony/k8s-sustain" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.5.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    noony/k8s-sustain
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/prerequisites/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Prerequisites
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quick-start/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quick Start
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Concepts
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/recommendation-pipeline/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Recommendation Pipeline
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/update-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Update Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/in-place-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    In-Place Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/autoscaler-coordination/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Autoscaler Coordination
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/node-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Node Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/workload-recommendations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Workload Recommendations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Workloads
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_1">
+            <span class="md-nav__icon md-icon"></span>
+            Workloads
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployments & StatefulSets
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../daemonsets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DaemonSets
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../jobs-and-cronjobs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Jobs & CronJobs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../argo-rollouts/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Argo Rollouts
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standalone-pods-and-grouping/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Standalone Pods & Grouping
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            Integrations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../argocd/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Argo CD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../keda/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    KEDA
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cert-manager/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    cert-manager (TLS)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    Operations
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            Operations
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Dashboard
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Dashboard
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Features
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running the Dashboard
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running the Dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#standalone-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      Standalone (CLI)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      CLI Flags
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#helm-chart" class="md-nav__link">
+    <span class="md-ellipsis">
+      Helm Chart
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#using-the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      Using the Dashboard
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Using the Dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#time-range-and-auto-refresh" class="md-nav__link">
+    <span class="md-ellipsis">
+      Time Range and Auto-refresh
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overview-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workloads-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workloads Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workload-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workload Detail
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policies-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policies Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policy Detail
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-simulator" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policy Simulator
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Development
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Development">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local-development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local development
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#building" class="md-nav__link">
+    <span class="md-ellipsis">
+      Building
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#no-metrics-data-available" class="md-nav__link">
+    <span class="md-ellipsis">
+      "No metrics data available"
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP API
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="HTTP API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#response-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Response envelope
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#request-correlation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Request correlation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compression" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compression
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#routing-and-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      Routing and methods
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#helm-values-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      Helm Values Reference
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../local-testing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Local testing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../managing-policies-with-helm/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Managing policies with Helm
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/policy/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Policy CRD
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/annotation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Annotation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/helm-values/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Helm Values
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/recording-rules/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Recording Rules
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Development
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Features
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running the Dashboard
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Running the Dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#standalone-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      Standalone (CLI)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cli-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      CLI Flags
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#helm-chart" class="md-nav__link">
+    <span class="md-ellipsis">
+      Helm Chart
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#using-the-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      Using the Dashboard
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Using the Dashboard">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#time-range-and-auto-refresh" class="md-nav__link">
+    <span class="md-ellipsis">
+      Time Range and Auto-refresh
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overview-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workloads-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workloads Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workload-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workload Detail
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policies-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policies Page
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policy Detail
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-simulator" class="md-nav__link">
+    <span class="md-ellipsis">
+      Policy Simulator
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Development
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Development">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local-development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local development
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#building" class="md-nav__link">
+    <span class="md-ellipsis">
+      Building
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#no-metrics-data-available" class="md-nav__link">
+    <span class="md-ellipsis">
+      "No metrics data available"
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP API
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="HTTP API">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#response-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Response envelope
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#request-correlation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Request correlation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compression" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compression
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#routing-and-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      Routing and methods
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#helm-values-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      Helm Values Reference
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+  
+
+
+<h1 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h1>
+<p>k8s-sustain includes a built-in web dashboard for exploring policies, viewing workload resource usage, and simulating policy changes before applying them.</p>
+<h2 id="features">Features<a class="headerlink" href="#features" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Overview Story Flow</strong> — Cluster summary covering savings KPIs, CPU and memory usage-vs-request trends, headroom breakdown, attention queue (at risk / drifted / blocked), policy effectiveness, and recent activity.</li>
+<li><strong>Workloads</strong> — Cluster-wide list with risk/drift/autoscaler columns, plus filters for namespace, kind, risk state, autoscaler presence, and lifecycle (active/inactive).</li>
+<li><strong>Workload Detail</strong> — Status snapshot (mode, last recycle, drift, OOM 24h), risk and HPA badges, blocked-state diagnostics, copy-as-YAML, and interactive CPU/memory charts with sliding-window recommendation, historical requests/limits, and OOM markers.</li>
+<li><strong>Policies</strong> — 4-card stat strip (total policies, active workloads, CPU &amp; memory savings) plus per-policy effectiveness columns.</li>
+<li><strong>Policy Detail</strong> — Effectiveness time-series, view-as-YAML modal, Datadog-style time range picker, and matched workloads with risk/drift columns.</li>
+<li><strong>Policy Simulator</strong> — Tweak percentile, headroom, min/max, and limits strategy; supports Argo Rollouts; shows projected savings impact.</li>
+<li><strong>Health Checks</strong> — The <code>/healthz</code> endpoint verifies Prometheus connectivity for reliable readiness probes.</li>
+<li><strong>Request Logging</strong> — Structured HTTP access logs for debugging and observability.</li>
+</ul>
+<h2 id="running-the-dashboard">Running the Dashboard<a class="headerlink" href="#running-the-dashboard" title="Permanent link">&para;</a></h2>
+<h3 id="standalone-cli">Standalone (CLI)<a class="headerlink" href="#standalone-cli" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>k8s-sustain<span class="w"> </span>dashboard<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--bind-address<span class="o">=</span>:8090<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--prometheus-address<span class="o">=</span>http://prometheus:9090
+</code></pre></div>
+<p>The dashboard is then available at <code>http://localhost:8090</code>.</p>
+<p>At startup, the dashboard validates Prometheus connectivity and logs a warning if it is unreachable.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The dashboard requires access to:</p>
+<ul>
+<li>A <strong>Kubernetes cluster</strong> (via kubeconfig or in-cluster config) to list policies and workloads</li>
+<li>A <strong>Prometheus server</strong> with the k8s-sustain recording rules to query metrics</li>
+</ul>
+</div>
+<h3 id="cli-flags">CLI Flags<a class="headerlink" href="#cli-flags" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--bind-address</code></td>
+<td><code>:8090</code></td>
+<td>Address the dashboard server listens on</td>
+</tr>
+<tr>
+<td><code>--prometheus-address</code></td>
+<td><code>http://localhost:9090</code></td>
+<td>Prometheus server URL</td>
+</tr>
+<tr>
+<td><code>--log-level</code></td>
+<td><code>info</code></td>
+<td>Log level (debug, info, warn, error)</td>
+</tr>
+<tr>
+<td><code>--cors-allowed-origins</code></td>
+<td><code>(empty — same-origin only)</code></td>
+<td>Allowed CORS origins (comma-separated). Use <code>*</code> to allow all (not recommended).</td>
+</tr>
+</tbody>
+</table>
+<p>When a request carries an <code>Origin</code> header and a CORS allowlist is configured,
+the dashboard appends <code>Vary: Origin</code> to the response. This prevents shared
+caches and CDNs from serving one origin's <code>Access-Control-Allow-Origin</code> header
+back to a different origin (which would otherwise break the browser's
+same-origin policy when two trusted origins share the same upstream cache).</p>
+<h3 id="helm-chart">Helm Chart<a class="headerlink" href="#helm-chart" title="Permanent link">&para;</a></h3>
+<p>Enable the dashboard in your Helm values:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">prometheusAddress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://prometheus.monitoring.svc:9090</span><span class="w">  </span><span class="c1"># only if using an external Prometheus</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">dashboard</span><span class="p">:</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">corsAllowedOrigins</span><span class="p">:</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;https://my-domain.example.com&quot;</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">service</span><span class="p">:</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ClusterIP</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8090</span>
+</code></pre></div>
+<p>Then access it via port-forward:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>svc/&lt;release&gt;-k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Authenticate before exposing it</p>
+<p>The dashboard has <strong>no built-in authentication</strong>. It listens on a <code>ClusterIP</code> Service, so it stays cluster-internal until you add an Ingress/Gateway. When you expose it beyond <code>kubectl port-forward</code>, never expose it directly — front it with an identity-aware proxy such as <strong>Cloudflare Access</strong>, <code>oauth2-proxy</code>, or an authenticating Ingress (OIDC/SSO, mTLS). See <a href="../../concepts/workload-recommendations/#hardening-options">Hardening options</a>.</p>
+</div>
+<h2 id="using-the-dashboard">Using the Dashboard<a class="headerlink" href="#using-the-dashboard" title="Permanent link">&para;</a></h2>
+<h3 id="time-range-and-auto-refresh">Time Range and Auto-refresh<a class="headerlink" href="#time-range-and-auto-refresh" title="Permanent link">&para;</a></h3>
+<p>Every view in the dashboard — Overview, Workload Detail, Policy Detail, and Simulator — shares the same <strong>time range picker</strong> in the top-right corner.</p>
+<p><strong>Relative presets</strong> re-anchor to "now" on every load and refresh:
+Past 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 1 Month.</p>
+<p><strong>Absolute range</strong> — click "Select from calendar…" to open a month calendar. Click a start day then an end day to select the span (click days in any order — they sort automatically; a single day selects that whole day), navigate months with the ‹ › arrows, and set the <strong>From</strong> and <strong>To</strong> times of day with the time fields below the grid. The current day is highlighted, and future days are disabled (there is no data ahead of now); an end that lands in the future is clamped back to the present. Click <strong>Apply</strong> to commit. Absolute ranges stay fixed regardless of when you load the page.</p>
+<p>The picker displays dates in the browser's <strong>local timezone</strong> (for display only; all API calls use UTC epoch seconds).</p>
+<p><strong>Shareable URLs</strong> — the selected range is encoded in the URL as <code>from_ts</code>/<code>to_ts</code> (epoch seconds). Relative presets also carry a <code>window</code> hint so the URL re-anchors to "now" on reload. Copying and sharing a URL reproduces the same view: relative = latest window; absolute = exact frozen range.</p>
+<p><strong>Auto-refresh</strong> — the dashboard refreshes automatically every 60 seconds while the browser tab is visible. It pauses when the tab is backgrounded or hidden, and resumes when you return. There is no manual toggle. Relative ranges re-anchor to "now" on each refresh; absolute ranges stay fixed.</p>
+<h3 id="overview-page">Overview Page<a class="headerlink" href="#overview-page" title="Permanent link">&para;</a></h3>
+<p>The overview is organised as a vertical "Story Flow" with six bands, each answering a specific operator question — from "what am I saving?" down to "what just happened?".</p>
+<ol>
+<li><strong>KPI strip</strong> — Headline savings cards for CPU (cores) and memory (bytes), each showing the absolute saving, the savings ratio versus current requests, and a sparkline of the last 24h. Two complementary cards count workloads currently <strong>at risk</strong> (drift exceeds the policy threshold) and <strong>drifted</strong> (request differs from the latest recommendation).</li>
+<li>
+<p><strong>Savings</strong> — A single card splits CPU and memory side-by-side, each plotting three lines over the selected time range so you can see the savings story directly:</p>
+<ul>
+<li><strong>Usage</strong> — actual measured working set (memory) or CPU rate, summed across containers in policy-managed workloads.</li>
+<li><strong>Current request</strong> — the request currently set on running pods, post-injection.</li>
+<li><strong>Original request</strong> — the user's pod-template request before k8s-sustain rewrote it (<code>k8s_sustain_workload_template_*</code>).</li>
+</ul>
+<p>All three lines are scoped to managed workloads (those covered by a Policy) so they are directly comparable — usage and current-request queries are filtered with <code>and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*</code> so unmanaged pods don't inflate them. The gap between <em>original</em> and <em>current request</em> is the realised saving; the gap between <em>current request</em> and <em>usage</em> is the remaining headroom.
+3. <strong>Headroom breakdown</strong> — A stacked horizontal bar for CPU and memory split into <code>used</code>, <code>idle</code>, and <code>free</code> segments, sourced from the <code>k8s_sustain:cluster_cpu_headroom_breakdown</code> and <code>..._memory_headroom_breakdown</code> recording rules.
+4. <strong>Attention queue</strong> — Three grouped lists: <strong>At risk</strong> (workloads exceeding the drift threshold), <strong>Drifted</strong> (request out-of-date with respect to the recommendation), and <strong>Blocked</strong> (workloads where the controller is in an exponential-backoff retry state). Each row links to the workload detail page.
+5. <strong>Policy effectiveness</strong> — Per-policy rollup with the matched workload count, projected CPU/memory savings, and the count of at-risk workloads, so you can spot policies that need tuning.
+6. <strong>Activity feed</strong> — Most recent reconcile and pod-recycle events from the controller, with timestamps and outcomes.</p>
+</li>
+</ol>
+<h3 id="workloads-page">Workloads Page<a class="headerlink" href="#workloads-page" title="Permanent link">&para;</a></h3>
+<p>Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, standalone Jobs) across the cluster, regardless of whether it is governed by a policy. Jobs spawned by a CronJob are folded under their owning CronJob row to avoid double-counting.</p>
+<ul>
+<li><strong>Filters</strong> — Filter by namespace, kind, <strong>risk state</strong> (healthy, drifted, at risk, blocked), <strong>autoscaler presence</strong> (with autoscaler / without autoscaler), and <strong>lifecycle</strong> (Active / Inactive). The lifecycle filter defaults to "Any lifecycle", so inactive workloads are visible by default. The free-text name search remains.</li>
+<li><strong>Columns</strong> — A <strong>Risk</strong> badge summarises the workload's state at a glance, a <strong>Drift %</strong> column shows the gap between current request and recommendation, and an <strong>Autoscaler</strong> column indicates whether the workload is paired with an HPA or KEDA ScaledObject. The previous CPU/Memory request columns have been removed because the workload detail view now displays them in context.</li>
+<li><strong>Status column</strong> — Still shows whether the workload is <strong>Automated</strong> (has a sustain policy) or <strong>Manual</strong>, with a link to the policy when applicable.</li>
+<li><strong>Inactive badge</strong> — A workload with no recently discovered pods (retained for historical reporting rather than deleted) shows an <strong>Inactive</strong> badge next to its name, styled as "Inactive · last seen X ago". The same badge appears in the Policy Detail matched-workloads table. Inactive rows come from a <code>WorkloadRecommendation</code> whose underlying object is gone (a completed bare pod, a TTL/hook-deleted or terminal Job) rather than a live workload — the controller keeps that recommendation around for the retention window (<code>--recommendation-retention</code> / <code>controller.recommendationRetention</code>, default <code>72h</code>) so you can still review what it used to run with. Once the window lapses, the row disappears from the list on the next refresh.</li>
+</ul>
+<p>Click any workload to view its detail page.</p>
+<h3 id="workload-detail">Workload Detail<a class="headerlink" href="#workload-detail" title="Permanent link">&para;</a></h3>
+<p>Shows a comprehensive view of a single workload:</p>
+<ul>
+<li><strong>Status snapshot band</strong> — A row of four KPI cards at the top of the page: <strong>Update mode</strong> (<code>OnCreate</code> / <code>Ongoing</code>), <strong>Last recycled</strong> (timestamp of the last controller-driven pod recycle), <strong>Drift</strong> (current request vs. recommendation as a percentage), and <strong>OOM (24h)</strong> (count of OOM kills observed in the last 24 hours).</li>
+<li><strong>Header badges</strong> — A <strong>Risk</strong> badge mirrors the value shown in the Workloads list. When the workload has a paired autoscaler (HPA or KEDA ScaledObject), an <strong>Autoscaler</strong> badge is shown.</li>
+<li><strong>Blocked card</strong> — Visible only when the controller has a retry record for this workload; surfaces the failure <strong>reason</strong>, the number of <strong>attempts</strong>, the <strong>next retry</strong> time, and the <strong>last error</strong> message. Hidden once retries clear.</li>
+<li><strong>Recommendations</strong> — If automated, shows the computed CPU and memory recommendations per container.</li>
+<li><strong>CPU and Memory charts</strong> — Interactive time-series with a sliding-window recommendation line overlaid (for automated workloads). The recommendation evolves over time, showing how it would have been computed at each point using the policy's configured window and parameters, rather than a flat line.</li>
+<li><strong>Open in Simulator</strong> — Jump to the simulator with the workload pre-filled.</li>
+</ul>
+<p>Clicking through to an <strong>inactive</strong> workload's detail page still works: it resolves from the retained <code>WorkloadRecommendation</code> rather than a live workload object, so the recommendation and any Prometheus-backed usage history for the time range it was running remain visible even though the workload object itself is gone.</p>
+<p>A <strong>time range picker</strong> in the top-right controls how much history to display. It offers relative presets — Past 5 Minutes, 15m, 30m, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 1 Month — and a "Select from calendar…" option for an absolute From→To range. The picker shows the browser's local timezone (display only). The step resolution adjusts automatically for each range. You can also <strong>drag to zoom</strong> on any chart to focus on a specific time window — click and drag horizontally to select the region of interest. Zooming sets the shared time range to the selected window: the URL, the time range picker, and every chart on the page all update together, and the data is re-fetched at a finer step resolution for the zoomed span. Because the zoom becomes the active (absolute) range, a <strong>Reset zoom</strong> button appears next to each chart's title while zoomed — click it to return to the previous range. Each chart overlays the workload's <strong>historical resource request</strong> (amber dashed stepped line) and <strong>limit</strong> (orange dashed line) so you can see how actual usage compares to configured resources over time. The request line reflects real changes (e.g. from k8s-sustain patching or manual edits) rather than a flat snapshot. If historical request data is not available in Prometheus, the dashboard falls back to a static line from the current workload spec. If the workload is automated, the <strong>recommendation</strong> line (red dashed) is also shown.</p>
+<p>Usage, request, limit, and recommendation lines all <strong>break across gaps</strong> where no metric samples were emitted (e.g. between CronJob runs, while a workload is scaled to zero, or after pod deletion). The chart inserts an explicit gap whenever the spacing between consecutive samples exceeds ~1.5× the query step, so a continuous line never implies activity that wasn't there.</p>
+<p>Memory charts also display <strong>OOM kill events</strong> as red vertical markers with a count badge in the chart header. These are detected via <code>kube_pod_container_status_restarts_total</code> correlated with <code>kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}</code>. If no kube-state-metrics is available, OOM markers are silently omitted.</p>
+<p>When a container has OOM'd in the last 24h, that container's displayed <strong>memory recommendation</strong> is floored at <code>max(kernel high-water peak, OOM-time cgroup limit × 1.20)</code> (containers that did not OOM keep their pure percentile line, even when a sibling in the same pod OOMed) (same <code>OOM floor</code> step described in <a href="../../concepts/recommendation-pipeline/">Recommendation pipeline</a>), so what the dashboard's recommendation card and chart line show matches what the controller would actually apply — including the bump anchor that takes over when the kernel peak underreports on cgroup v2.</p>
+<p>The dashboard <strong>auto-refreshes every 60 seconds</strong> while the browser tab is visible; it pauses automatically when the tab is backgrounded or hidden. Relative presets re-anchor to "now" on each refresh so they always show the latest window; absolute ranges stay fixed.</p>
+<h3 id="policies-page">Policies Page<a class="headerlink" href="#policies-page" title="Permanent link">&para;</a></h3>
+<p>The Policies page leads with a <strong>4-card stat strip</strong> summarising the cluster-wide picture:</p>
+<ul>
+<li><strong>Total policies</strong> — number of <code>Policy</code> resources in the cluster</li>
+<li><strong>Active workloads</strong> — total workloads currently matched by any policy</li>
+<li><strong>CPU savings</strong> — aggregated cluster-wide CPU saved (cores)</li>
+<li><strong>Memory savings</strong> — aggregated cluster-wide memory saved (bytes)</li>
+</ul>
+<p>Below the strip, the policy table replaces the previous Ready/Namespace columns with <strong>effectiveness columns</strong>: matched <strong>workload count</strong>, <strong>CPU savings</strong> and <strong>memory savings</strong> per policy, <strong>at-risk</strong> workload count, and <strong>last applied</strong> timestamp. The Ready status indicator is still shown alongside the policy name. Click any row to view the policy detail page.</p>
+<h3 id="policy-detail">Policy Detail<a class="headerlink" href="#policy-detail" title="Permanent link">&para;</a></h3>
+<p>Shows the full configuration for both CPU and memory, plus the matched workloads table.</p>
+<ul>
+<li><strong>Configuration card</strong> — Per-resource (CPU and memory) cards display <strong>window</strong>, <strong>percentile</strong>, <strong>headroom</strong>, <strong>min</strong>/<strong>max allowed</strong>, <strong>keepRequest</strong> flag, and the active <strong>limits</strong> strategy (<code>equalsToRequest</code>, <code>keepLimit</code>, <code>keepLimitRequestRatio</code>, <code>noLimit</code>, or <code>requestsLimitsRatio</code>). Underneath, a meta row shows the <strong>update mode</strong> badges for all supported workload kinds (Deploy, STS, DS, CJ, Job, Argo Rollout), the <strong>eviction</strong> policy (<code>ignoreAutoscalerSafeToEvictAnnotations</code>), the <strong>excludeInitContainers</strong> flag, and the <strong>autoscaler coordination</strong> state (enabled / <code>replicaBudgetAnchor</code>).</li>
+<li><strong>Selector card</strong> — Lists the policy's <code>spec.selector</code> (target namespaces and any <code>matchLabels</code> / <code>matchExpressions</code>) so you can immediately see which workloads it scopes to.</li>
+<li><strong>Effectiveness card</strong> — A dedicated band with two time-series charts (CPU and memory) showing how this policy's savings have evolved over the selected time range.</li>
+<li><strong>Time range picker</strong> — The Datadog-style popover (relative presets: 5m to 1 Month; or an absolute From→To calendar range) drives the Effectiveness charts. The browser's local timezone is shown for display purposes. The selected range is encoded in the URL as <code>from_ts</code>/<code>to_ts</code> (epoch seconds); relative presets also carry a <code>window</code> hint so they re-anchor to "now" on reload. Copying the URL reproduces the same view — relative ranges show the latest window, absolute ranges show the exact frozen range.</li>
+<li><strong>View as YAML modal</strong> — Renders the entire <code>Policy</code> resource (sanitised of managed fields) inside a modal with a copy button — handy for sharing or storing in version control.</li>
+<li><strong>Matched workloads table</strong> — Each row now shows <strong>Risk</strong> and <strong>Drift %</strong> columns alongside the existing namespace/kind/name and current resource requests, so you can prioritise which workloads to investigate from inside the policy view.</li>
+<li><strong>Namespace filter</strong> and <strong>pagination</strong> (50 per page) remain unchanged.</li>
+</ul>
+<p>Click any workload to view its detail page.</p>
+<h3 id="policy-simulator">Policy Simulator<a class="headerlink" href="#policy-simulator" title="Permanent link">&para;</a></h3>
+<p>The simulator lets you test "what-if" scenarios:</p>
+<ol>
+<li>Select a <strong>workload target</strong> (namespace, kind, name). The kind picker covers Deployment, StatefulSet, DaemonSet, CronJob, and standalone Job, plus <strong>Argo Rollout</strong>.</li>
+<li>Choose a <strong>time range</strong> via the time range picker — relative presets or an absolute From→To calendar range — controls how much history is displayed on the charts.</li>
+<li>Optionally, use the <strong>Load from policy</strong> dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window, and limits strategy) from an existing policy — useful as a starting point before tweaking values.</li>
+<li>Adjust <strong>CPU and Memory parameters</strong> independently:<ul>
+<li>Window (1h to 30 days) — the lookback period used to compute the recommendation, matching the Policy CRD structure. This is independent of the chart time range.</li>
+<li>Percentile (50th to 99th)</li>
+<li>Headroom percentage (0-100%)</li>
+<li>Min/Max allowed values</li>
+<li><strong>Limits strategy</strong> — pick one of <code>keepLimit</code> (default; existing pod limits stay unchanged), <code>noLimit</code>, <code>equalsToRequest</code>, <code>requestsLimitsRatio</code> (with a numeric multiplier), or <code>keepLimitRequestRatio</code>. Mirrors <code>spec.rightSizing.resourcesConfigs.&lt;resource&gt;.limits</code> on the Policy CRD.</li>
+</ul>
+</li>
+</ol>
+<p>The simulation runs automatically whenever any parameter changes (with a short debounce to avoid excessive queries). There is no manual "Run" button — results update live as you adjust sliders, change windows, or modify min/max values.</p>
+<p>The results show:</p>
+<ul>
+<li>Computed recommendation per container (CPU/memory request, and CPU/memory limit when a limits strategy is selected; <code>— removed —</code> is rendered when <code>noLimit</code> is active)</li>
+<li>A <strong>savings impact band</strong> that summarises the projected CPU and memory delta as both a percentage change and an absolute saving (cores / bytes), so you can immediately see whether the candidate parameters reduce or increase footprint</li>
+<li>Time-series charts with a <strong>sliding-window recommendation line</strong> (red) that shows how the recommendation would have evolved at each point in time, <strong>historical request</strong> (amber stepped), and <strong>current limit</strong> (orange) overlaid on historical usage</li>
+</ul>
+<h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">&para;</a></h2>
+<p>The dashboard frontend is a Vue 3 + TypeScript SPA built with Vite, located in <code>internal/dashboard/ui/frontend/</code>. The compiled output goes to <code>internal/dashboard/ui/dist/</code> and is embedded into the Go binary via <code>go:embed</code>.</p>
+<h3 id="local-development">Local development<a class="headerlink" href="#local-development" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">cd</span><span class="w"> </span>internal/dashboard/ui/frontend
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>npm<span class="w"> </span>install
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>npm<span class="w"> </span>run<span class="w"> </span>dev<span class="w">    </span><span class="c1"># starts Vite dev server with API proxy to localhost:8090</span>
+</code></pre></div>
+<p>Run the Go dashboard backend separately (<code>k8s-sustain dashboard --bind-address=:8090</code>), and access the Vite dev server (default <code>http://localhost:5173</code>).</p>
+<h3 id="building">Building<a class="headerlink" href="#building" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>build-ui<span class="w">   </span><span class="c1"># builds the frontend (npm ci + npm run build)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>make<span class="w"> </span>build<span class="w">      </span><span class="c1"># builds frontend then Go binary</span>
+</code></pre></div>
+<p>The Docker build automatically handles the frontend build in a separate stage.</p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<h3 id="no-metrics-data-available">"No metrics data available"<a class="headerlink" href="#no-metrics-data-available" title="Permanent link">&para;</a></h3>
+<p>This message appears when Prometheus returns no time-series data for the workload. Common causes:</p>
+<ul>
+<li><strong>Recording rules not loaded</strong> — k8s-sustain requires recording rules (<code>k8s_sustain:pod_workload</code>, <code>k8s_sustain:container_cpu_usage_by_workload:rate1m</code>, etc.). Verify they exist by querying <code>k8s_sustain:pod_workload</code> in Prometheus. If using the bundled Prometheus subchart, they are embedded automatically. If using an external Prometheus with the Prometheus Operator, set <code>prometheusRule.enabled=true</code> to deploy the recording rules as a <code>PrometheusRule</code> resource.</li>
+<li><strong>Duplicate kube-state-metrics instances</strong> — If multiple kube-state-metrics are scraped, the workload mapping rules can fail with "many-to-many matching not allowed". Either remove the duplicate kube-state-metrics or upgrade the chart (the recording rules deduplicate series automatically since v0.3).</li>
+<li><strong>Missing upstream metrics</strong> — The recording rules depend on <code>kube_pod_owner</code>, <code>kube_replicaset_owner</code>, <code>container_cpu_usage_seconds_total</code>, <code>container_memory_working_set_bytes</code>, and <code>kube_pod_container_resource_requests</code> (for historical request lines). Ensure kube-state-metrics and cAdvisor metrics are scraped.</li>
+</ul>
+<h2 id="http-api">HTTP API<a class="headerlink" href="#http-api" title="Permanent link">&para;</a></h2>
+<p>The dashboard backs every UI page with a small JSON API under <code>/api/</code>. The same endpoints are useful for ad-hoc scripts and integrations.</p>
+<h3 id="response-envelope">Response envelope<a class="headerlink" href="#response-envelope" title="Permanent link">&para;</a></h3>
+<p>Every successful response is wrapped:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;data&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;...&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;endpoint-specific payload&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;meta&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;requestId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a1b2c3d4e5f60718293a4b5c&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}</span>
+</code></pre></div>
+<p>Errors use a parallel shape:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;BAD_REQUEST&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;invalid pageSize \&quot;-1\&quot;: must be 1..200&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">&quot;field&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pageSize&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nt">&quot;requestId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a1b2c3d4e5f60718293a4b5c&quot;</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">}</span>
+</code></pre></div>
+<p>Error <code>code</code> values are stable: <code>BAD_REQUEST</code>, <code>NOT_FOUND</code>, <code>METHOD_NOT_ALLOWED</code>, <code>SERVICE_UNAVAILABLE</code>, <code>INTERNAL</code>. The <code>field</code> key is only present on 400 responses that can be attributed to a single request input (page, pageSize, kind, risk, autoscaler, automated, window, step, limit, …).</p>
+<h3 id="request-correlation">Request correlation<a class="headerlink" href="#request-correlation" title="Permanent link">&para;</a></h3>
+<p>Every request gets an <code>X-Request-Id</code> header on the response, generated server-side when the client doesn't supply one. The same value is included in <code>meta.requestId</code> (success) or <code>error.requestId</code> (failure) and emitted into structured logs, so an operator can grep a single request across UI report, backend logs, and Prometheus telemetry.</p>
+<p>Clients may forward their own value by sending <code>X-Request-Id: &lt;id&gt;</code> on the request — the dashboard echoes it back instead of generating a new one.</p>
+<h3 id="compression">Compression<a class="headerlink" href="#compression" title="Permanent link">&para;</a></h3>
+<p>Responses are gzip-encoded when the request advertises <code>Accept-Encoding: gzip</code> (browsers do this automatically; <code>curl --compressed</code> opts in). Large endpoints (<code>/api/workloads/.../metrics</code>, <code>/api/summary/trend</code>, <code>/api/policies/{name}/batch-simulate</code>) typically compress 5–10×.</p>
+<h3 id="routing-and-methods">Routing and methods<a class="headerlink" href="#routing-and-methods" title="Permanent link">&para;</a></h3>
+<p>Routes use Go 1.22 method-specific patterns, so the wrong HTTP verb returns <code>405 Method Not Allowed</code> with an <code>Allow</code> header listing the supported method(s). Path parameters (<code>{name}</code>, <code>{namespace}</code>, <code>{kind}</code>) are URL-decoded by the standard library.</p>
+<p>An <code>/api/*</code> path that matches no registered route returns the JSON 404 error envelope (it is never rewritten to the SPA's <code>index.html</code>). Endpoints that fetch a single Kubernetes object return 404 only when the object is actually missing; any other API-server failure surfaces as a 500. <code>/api/summary/trend</code> returns <code>503 Service Unavailable</code> when every Prometheus query fails (a full outage), while partial failures still return the series that succeeded.</p>
+<h3 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h3>
+<p>Query parameters are validated strictly. Unknown enum values (<code>?risk=foo</code>, <code>?autoscaler=maybe</code>, <code>?kind=Pod</code>) return 400 with the <code>field</code> set, instead of silently filtering out every workload. Likewise out-of-range integers (<code>?page=-1</code>, <code>?limit=10000</code>) and malformed durations (<code>?window=junk</code>) get a 400 pointing at the offending input.</p>
+<h2 id="helm-values-reference">Helm Values Reference<a class="headerlink" href="#helm-values-reference" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dashboard.enabled</code></td>
+<td><code>true</code></td>
+<td>Enable the dashboard deployment</td>
+</tr>
+<tr>
+<td><code>dashboard.replicaCount</code></td>
+<td><code>1</code></td>
+<td>Number of dashboard replicas</td>
+</tr>
+<tr>
+<td><code>dashboard.bindAddress</code></td>
+<td><code>:8090</code></td>
+<td>Server bind address (<code>:port</code> or <code>host:port</code>); the container port derives from its port part</td>
+</tr>
+<tr>
+<td><code>dashboard.logLevel</code></td>
+<td><code>info</code></td>
+<td>Log level</td>
+</tr>
+<tr>
+<td><code>dashboard.corsAllowedOrigins</code></td>
+<td><code>[]</code></td>
+<td>Allowed CORS origins. Empty = same-origin only.</td>
+</tr>
+<tr>
+<td><code>dashboard.service.type</code></td>
+<td><code>ClusterIP</code></td>
+<td>Service type</td>
+</tr>
+<tr>
+<td><code>dashboard.service.port</code></td>
+<td><code>8090</code></td>
+<td>Service port</td>
+</tr>
+<tr>
+<td><code>dashboard.resources</code></td>
+<td>10m CPU / 32-64Mi memory</td>
+<td>Pod resource requests/limits</td>
+</tr>
+<tr>
+<td><code>dashboard.nodeSelector</code></td>
+<td><code>{}</code></td>
+<td>Node selector</td>
+</tr>
+<tr>
+<td><code>dashboard.tolerations</code></td>
+<td><code>[]</code></td>
+<td>Tolerations</td>
+</tr>
+<tr>
+<td><code>dashboard.affinity</code></td>
+<td><code>{}</code></td>
+<td>Affinity rules</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var tab,labels=set.querySelector(".tabbed-labels");for(tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12Z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../cert-manager/" class="md-footer__link md-footer__link--prev" aria-label="Previous: cert-manager (TLS)">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                cert-manager (TLS)
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../local-testing/" class="md-footer__link md-footer__link--next" aria-label="Next: Local testing">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Local testing
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11H4Z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "navigation.footer", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.ad660dcc.min.js"></script>
+      
+    
+  </body>
+</html>
