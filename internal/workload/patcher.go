@@ -31,12 +31,20 @@ type ContainerRecommendation struct {
 	RemoveMemoryLimit bool
 }
 
+// SafeToEvictAnnotation is the cluster-autoscaler annotation that marks a
+// pod as not safe to evict. Matching cluster-autoscaler's own convention,
+// only the literal value "false" blocks eviction; absence or any other
+// value has no effect. In-place resizes are never gated by it — the
+// annotation is about disruption, and a resize does not disrupt the pod.
+const SafeToEvictAnnotation = "cluster-autoscaler.kubernetes.io/safe-to-evict"
+
 // RecycleOption configures a RecyclePods / ResizePodsInPlace call.
 type RecycleOption func(*recycleOptions)
 
 type recycleOptions struct {
-	tol     Tolerance
-	observe func(resource string)
+	tol               Tolerance
+	observe           func(resource string)
+	ignoreSafeToEvict bool
 }
 
 func newRecycleOptions(opts []RecycleOption) recycleOptions {
@@ -59,6 +67,15 @@ func WithTolerance(tol Tolerance) RecycleOption {
 // by the tolerance. Used by the controller to emit a metric.
 func WithSuppressionObserver(fn func(resource string)) RecycleOption {
 	return func(o *recycleOptions) { o.observe = fn }
+}
+
+// WithIgnoreSafeToEvictAnnotations disables the safe-to-evict gate: pods
+// annotated `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` are
+// evicted like any other pod. The default (option omitted or false) never
+// evicts such pods; they are skipped like a PDB-blocked eviction and
+// re-considered on the next reconcile.
+func WithIgnoreSafeToEvictAnnotations(ignore bool) RecycleOption {
+	return func(o *recycleOptions) { o.ignoreSafeToEvict = ignore }
 }
 
 // podContainers returns a pod's regular + init containers as one slice, for
@@ -482,11 +499,11 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 			// does, the outer loop must run the same throttle/wait the
 			// pure-eviction branch uses below — otherwise the first
 			// fallback eviction skips the wait entirely.
-			evicted, err = p.patchPodInPlace(ctx, pod, podRecs)
+			evicted, err = p.patchPodInPlace(ctx, pod, podRecs, o.ignoreSafeToEvict)
 		} else {
 			// Eviction path: evict, then wait for the replacement before
 			// moving on so we don't take down the whole workload at once.
-			evicted, err = p.evictPod(ctx, pod, podRecs)
+			evicted, err = p.evictPod(ctx, pod, podRecs, o.ignoreSafeToEvict)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
@@ -534,7 +551,7 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 // to an Eviction (Infeasible/Error verdict, or per-pod Invalid rejection)
 // and the caller must run the same throttle/wait the pure-eviction branch
 // uses, so the loop doesn't take down the whole workload at once.
-func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
+func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, ignoreSafeToEvict bool) (bool, error) {
 	_, evicted, err := p.resizePodInPlaceWith(ctx, pod, recs, unapplyStrategy{
 		unsatisfiableLog: "staged in-place resize cannot complete, falling back to eviction",
 		unappliedLog:     "falling back to eviction",
@@ -543,13 +560,15 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 		// elsewhere. submitEviction, not evictPod: the spec already matches
 		// the recommendation, so evictPod's staleness gate would skip it.
 		onUnsatisfiable: func(ctx context.Context, pod *corev1.Pod, verdict string) (bool, error) {
-			return p.submitEviction(ctx, pod, "in-place resize verdict "+verdict)
+			return p.submitEviction(ctx, pod, "in-place resize verdict "+verdict, ignoreSafeToEvict)
 		},
 		// API server rejected this pod's resize (per-pod validation
 		// failure, e.g. QoS class change): fall back to eviction so the
 		// webhook re-injects the new requests on the replacement. The
 		// sidecar resize is skipped — the replacement pod is on its way.
-		onUnapplied: p.evictPod,
+		onUnapplied: func(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
+			return p.evictPod(ctx, pod, recs, ignoreSafeToEvict)
+		},
 	})
 	return evicted, err
 }
@@ -635,14 +654,14 @@ func (p *Patcher) applySidecarResize(ctx context.Context, pod, base *corev1.Pod,
 // Eviction request; the caller should wait for the replacement before
 // continuing. evicted=false covers no-op cases (pod already fresh, gone, or
 // PDB-blocked) where no wait is required.
-func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
+func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, ignoreSafeToEvict bool) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
 	if !podIsStale(pod, recs) {
 		logger.V(1).Info("pod already running recommended resources, eviction skipped")
 		return false, nil // already running with the recommended resources
 	}
-	return p.submitEviction(ctx, pod, "stale resources")
+	return p.submitEviction(ctx, pod, "stale resources", ignoreSafeToEvict)
 }
 
 // submitEviction creates the Eviction without any staleness gate. Used
@@ -650,9 +669,20 @@ func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string
 // pod spec already matches the recommendation (the resize was accepted but
 // can't land on the node) and a spec-based staleness check would wrongly
 // skip the eviction. why is logged so operators can tell a staleness
-// eviction from a resize-fallback one.
-func (p *Patcher) submitEviction(ctx context.Context, pod *corev1.Pod, why string) (bool, error) {
+// eviction from a resize-fallback one. Pods annotated safe-to-evict=false
+// are skipped unless ignoreSafeToEvict is set — this is the single gate for
+// both eviction triggers.
+func (p *Patcher) submitEviction(ctx context.Context, pod *corev1.Pod, why string, ignoreSafeToEvict bool) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
+
+	if !ignoreSafeToEvict && pod.Annotations[SafeToEvictAnnotation] == "false" {
+		// Same contract as a PDB block: skip without error, no replacement
+		// wait; the pod is re-considered on the next reconcile.
+		logger.Info("eviction skipped: pod annotated safe-to-evict=false",
+			"reason", why,
+			"override", "spec.rightSizing.update.eviction.ignoreAutoscalerSafeToEvictAnnotations")
+		return false, nil
+	}
 
 	eviction := &policyv1.Eviction{
 		ObjectMeta: metav1.ObjectMeta{

@@ -603,6 +603,110 @@ func TestBuildRecommendations_AppliesAutoscalerCoordination(t *testing.T) {
 	}
 }
 
+// TestBuildRecommendations_SkipsReplicaCorrectionAtAdmission verifies the
+// webhook never applies the replica-budget correction: a pod admitted during
+// an HPA scale-out (CurrentReplicas transiently high) must get the
+// overhead-only request, not the replica-corrected one. The controller
+// applies the correction later on its reconcile cadence.
+func TestBuildRecommendations_SkipsReplicaCorrectionAtAdmission(t *testing.T) {
+	const baselineCores = 0.1 // 100m baseline (per-pod)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "workload_max_pod_cpu"):
+			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": baselineCores})))
+		default:
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+	defer server.Close()
+
+	pc, err := promclient.New(server.URL)
+	if err != nil {
+		t.Fatalf("prometheus client: %v", err)
+	}
+
+	scheme := runtime.NewScheme()
+	if err := autoscalingv2.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+
+	cpuTarget := int32(70)
+	minReplicas := int32(2)
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "my-app"},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "my-app"},
+			MinReplicas:    &minReplicas,
+			MaxReplicas:    10,
+			Metrics: []autoscalingv2.MetricSpec{{
+				Type: autoscalingv2.ResourceMetricSourceType,
+				Resource: &autoscalingv2.ResourceMetricSource{
+					Name: corev1.ResourceCPU,
+					Target: autoscalingv2.MetricTarget{
+						Type:               autoscalingv2.UtilizationMetricType,
+						AverageUtilization: &cpuTarget,
+					},
+				},
+			}},
+		},
+		// Mid-scale-out: 8 replicas vs the anchor target of 2. If the webhook
+		// applied the replica factor this would double the request (clamp 2.0).
+		Status: autoscalingv2.HorizontalPodAutoscalerStatus{CurrentReplicas: 8},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(hpa).Build()
+
+	h := &Handler{
+		Client:           fakeClient,
+		PrometheusClient: pc,
+	}
+
+	p95 := int32(95)
+	anchor := 0.0
+	policy := &sustainv1alpha1.Policy{
+		Spec: sustainv1alpha1.PolicySpec{
+			RightSizing: sustainv1alpha1.RightSizingSpec{
+				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
+					CPU: sustainv1alpha1.ResourceConfig{
+						Window:   "168h",
+						Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95},
+					},
+					Memory: sustainv1alpha1.ResourceConfig{
+						Window:   "168h",
+						Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95},
+					},
+				},
+				AutoscalerCoordination: sustainv1alpha1.AutoscalerCoordination{
+					Enabled:             true,
+					ReplicaBudgetAnchor: &anchor,
+				},
+			},
+		},
+	}
+
+	containers := []corev1.Container{{Name: "app"}}
+	recs, err := h.buildRecommendations(context.Background(), policy, "default", "Deployment", "my-app", containers)
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+
+	rec, ok := recs["app"]
+	if !ok {
+		t.Fatal("expected recommendation for container 'app'")
+	}
+	if rec.CPURequest == nil {
+		t.Fatal("CPURequest is nil")
+	}
+	// Overhead only: ceil(100 × 110 / 70) = 158m. With the replica factor it
+	// would be 316m — that must never appear at admission.
+	if rec.CPURequest.MilliValue() != 158 {
+		t.Errorf("CPURequest = %dm, want 158m (overhead only, no replica factor)", rec.CPURequest.MilliValue())
+	}
+}
+
 // admitTestEnv bundles the boilerplate for end-to-end admit() tests:
 // scheme, fake client, mock Prometheus, and a constructed Handler.
 type admitTestEnv struct {

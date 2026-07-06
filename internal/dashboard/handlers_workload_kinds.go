@@ -530,8 +530,9 @@ func assembleCoordinationFactors(byLabels map[string]float64) *coordinationFacto
 
 // fetchCoordinationFactors queries `k8s_sustain_coordination_factor` for one
 // workload and assembles a coordinationFactors payload describing the per-
-// resource overhead and replica correction factors that the controller and
-// webhook applied. Returns nil when no series exist for this workload.
+// resource overhead and replica correction factors the controller applied
+// (the webhook applies overhead only and emits no factor metrics). Returns
+// nil when no series exist for this workload.
 func (s *Server) fetchCoordinationFactors(ctx context.Context, namespace, kind, name string) *coordinationFactors {
 	expr := fmt.Sprintf(
 		`%s{namespace=%q,owner_kind=%q,owner_name=%q}`,

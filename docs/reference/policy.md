@@ -122,7 +122,7 @@ See [Update Modes](../concepts/update-modes.md) for the difference between `OnCr
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `ignoreAutoscalerSafeToEvictAnnotations` | bool | `false` | Skip the cluster-autoscaler `safe-to-evict` annotation check when restarting pods |
+| `ignoreAutoscalerSafeToEvictAnnotations` | bool | `false` | Evict pods even when annotated `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`. By default such pods are never evicted; in-place resizes are unaffected either way |
 
 ### `spec.rightSizing.autoscalerCoordination`
 

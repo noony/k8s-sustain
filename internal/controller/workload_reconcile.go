@@ -144,7 +144,11 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		tw.UID = t.Object.GetUID()
 	}
 	logger.V(1).Info("recycling pods", "selector", sel.String())
-	if err := r.patcher.RecyclePods(ctx, tw, t.Namespace, sel, recs, workload.WithTolerance(tol), workload.WithSuppressionObserver(suppressionObserver)); err != nil {
+	if err := r.patcher.RecyclePods(ctx, tw, t.Namespace, sel, recs,
+		workload.WithTolerance(tol),
+		workload.WithSuppressionObserver(suppressionObserver),
+		workload.WithIgnoreSafeToEvictAnnotations(policy.Spec.RightSizing.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations),
+	); err != nil {
 		return r.handleStepError(ctx, t, "patch", "Pod recycle failed", err)
 	}
 

@@ -101,6 +101,15 @@ anchor=0.10`:
 
 The clamp `[0.5, 2.0]` exists so a single reconcile can't catastrophically up- or down-size a pod. Steady-state convergence takes a few reconcile cycles, which is fine for a knob that's optimising for monthly cost rather than real-time response.
 
+**Applied by the controller only.** The webhook never applies the replica
+factor at pod admission: a pod created *during* an HPA scale-out would see a
+transiently high replica count and be admitted with up to 2× the intended
+CPU request — potentially triggering node scale-up before the fleet
+settles. Pods are admitted with overhead-only shaping; the controller
+applies the replica correction on its reconcile cadence (in-place resize or
+eviction), when replica counts reflect steady state. The overhead formula
+above is unaffected and applies on both paths.
+
 ## Detection rules
 
 - HPA matched by `scaleTargetRef`; `ScaledObject` by `spec.scaleTargetRef`.

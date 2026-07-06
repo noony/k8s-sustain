@@ -2254,3 +2254,140 @@ func TestResizePodsInPlace_MixedRecAppliesCrossingDimensionOnly(t *testing.T) {
 		t.Fatalf("expected observer to report [memory] only, got %v", observed)
 	}
 }
+
+// withSafeToEvictAnnotation stamps the cluster-autoscaler safe-to-evict
+// annotation on a pod.
+func withSafeToEvictAnnotation(pod *corev1.Pod, value string) *corev1.Pod {
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[SafeToEvictAnnotation] = value
+	return pod
+}
+
+// TestRecyclePods_SafeToEvictFalseBlocksEviction verifies that a stale pod
+// annotated safe-to-evict=false is skipped by default and the loop continues
+// to the next stale pod.
+func TestRecyclePods_SafeToEvictFalseBlocksEviction(t *testing.T) {
+	blocked := withSafeToEvictAnnotation(
+		runningPod("blocked", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}), "false")
+	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evicted []string
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(blocked, stale).
+		WithInterceptorFuncs(evictionInterceptor(&evicted)).
+		Build()
+
+	p := New(c, false, testEvictionOpts()...)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if len(evicted) != 1 || evicted[0] != "stale" {
+		t.Errorf("expected only 'stale' evicted (annotated pod skipped), got %v", evicted)
+	}
+}
+
+// TestRecyclePods_SafeToEvictIgnoredWhenOptionSet verifies the Policy
+// override: WithIgnoreSafeToEvictAnnotations(true) evicts annotated pods
+// like any other.
+func TestRecyclePods_SafeToEvictIgnoredWhenOptionSet(t *testing.T) {
+	blocked := withSafeToEvictAnnotation(
+		runningPod("blocked", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}), "false")
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evicted []string
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(blocked).
+		WithInterceptorFuncs(evictionInterceptor(&evicted)).
+		Build()
+
+	p := New(c, false, testEvictionOpts()...)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
+		WithIgnoreSafeToEvictAnnotations(true)); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if len(evicted) != 1 || evicted[0] != "blocked" {
+		t.Errorf("expected 'blocked' evicted with ignore option, got %v", evicted)
+	}
+}
+
+// TestRecyclePods_SafeToEvictNonFalseValueDoesNotBlock pins the convention:
+// only the literal value "false" blocks eviction (matching
+// cluster-autoscaler); "true" or garbage changes nothing.
+func TestRecyclePods_SafeToEvictNonFalseValueDoesNotBlock(t *testing.T) {
+	safeTrue := withSafeToEvictAnnotation(
+		runningPod("safe-true", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}), "true")
+	garbage := withSafeToEvictAnnotation(
+		runningPod("garbage", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}), "no")
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evicted []string
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(safeTrue, garbage).
+		WithInterceptorFuncs(evictionInterceptor(&evicted)).
+		Build()
+
+	p := New(c, false, testEvictionOpts()...)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if len(evicted) != 2 {
+		t.Errorf("expected both pods evicted (annotation not 'false'), got %v", evicted)
+	}
+}
+
+// TestPatchPodInPlace_InfeasibleFallbackHonorsSafeToEvict verifies the gate
+// covers the in-place path's eviction fallback too: an annotated pod whose
+// staged resize is Infeasible is left alone instead of being evicted.
+func TestPatchPodInPlace_InfeasibleFallbackHonorsSafeToEvict(t *testing.T) {
+	blocked := withSafeToEvictAnnotation(
+		withResizePendingCondition(
+			runningPod("blocked", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
+			corev1.PodReasonInfeasible,
+		), "false")
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evicted []string
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(blocked).
+		WithInterceptorFuncs(evictionInterceptor(&evicted)).
+		Build()
+
+	p := New(c, true /* in-place */, testEvictionOpts()...)
+	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+		t.Fatalf("RecyclePods: %v", err)
+	}
+	if len(evicted) != 0 {
+		t.Errorf("expected no eviction for annotated pod, got %v", evicted)
+	}
+}

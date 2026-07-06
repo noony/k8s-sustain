@@ -142,8 +142,11 @@ type ResourcesConfigs struct {
 
 // EvictionPolicy controls eviction-related behaviour during right-sizing.
 type EvictionPolicy struct {
-	// IgnoreAutoscalerSafeToEvictAnnotations skips the cluster-autoscaler safe-to-evict
-	// annotation check when restarting pods for right-sizing.
+	// IgnoreAutoscalerSafeToEvictAnnotations, when true, evicts pods during
+	// right-sizing even if they carry the cluster-autoscaler annotation
+	// `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`. By default
+	// (false) such pods are never evicted. Only the literal value "false"
+	// blocks; in-place resizes are unaffected by the annotation either way.
 	// +optional
 	IgnoreAutoscalerSafeToEvictAnnotations bool `json:"ignoreAutoscalerSafeToEvictAnnotations,omitempty"`
 }

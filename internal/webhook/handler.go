@@ -428,7 +428,13 @@ func (h *Handler) buildRecommendations(
 	// (per-container OOM recency comes from inputs.OOM.OOMCounts).
 	recs := recommender.BuildContainerRecs(
 		containers, inputs, autoInfo, rsCfg, coordCfg,
-		recommender.BuildContainerRecsOptions{},
+		recommender.BuildContainerRecsOptions{
+			// Admission can run mid-scale-out, when CurrentReplicas is
+			// transiently high — the replica factor would inflate burst pods
+			// by up to 2×. Overhead-only here; the controller applies the
+			// replica correction on its reconcile cadence.
+			DisableReplicaCorrection: true,
+		},
 	)
 	return recs, nil
 }

@@ -460,3 +460,40 @@ func TestFetchWorkloadInputs_HistoryStartForJobs(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildContainerRecs_DisableReplicaCorrection verifies the webhook-path
+// flag: with it set, the replica-budget correction is suppressed while the
+// overhead formula still applies; without it, the correction multiplies the
+// CPU request by clamp(current/target_replicas, 0.5, 2.0).
+func TestBuildContainerRecs_DisableReplicaCorrection(t *testing.T) {
+	inputs := &WorkloadInputs{
+		CPUPerPod: promclient.ContainerValues{"app": 0.1}, // 100m per pod
+		OOM:       promclient.OOMSignal{PeakMemoryBytes: promclient.ContainerValues{}, OOMLimitBytes: promclient.ContainerValues{}},
+	}
+	containers := []corev1.Container{container("app")}
+	anchor := 0.0 // target_replicas = minReplicas = 2
+	info := autoscaler.Info{
+		Kind:              autoscaler.KindHPA,
+		MinReplicas:       2,
+		MaxReplicas:       10,
+		CurrentReplicas:   8, // mid-scale-out: 4× the anchor target, factor clamps to 2.0
+		ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 80},
+	}
+	coord := sustainv1alpha1.AutoscalerCoordination{Enabled: true, ReplicaBudgetAnchor: &anchor}
+
+	// Controller path (flag unset): overhead ceil(100×110/80) = 138m, then
+	// replica factor 2.0 → 276m.
+	recs := BuildContainerRecs(containers, inputs, info,
+		sustainv1alpha1.ResourcesConfigs{}, coord, BuildContainerRecsOptions{})
+	if got := recs["app"].CPURequest.MilliValue(); got != 276 {
+		t.Errorf("with replica correction: CPURequest = %dm, want 276m", got)
+	}
+
+	// Webhook path (flag set): overhead only → 138m.
+	recs = BuildContainerRecs(containers, inputs, info,
+		sustainv1alpha1.ResourcesConfigs{}, coord,
+		BuildContainerRecsOptions{DisableReplicaCorrection: true})
+	if got := recs["app"].CPURequest.MilliValue(); got != 138 {
+		t.Errorf("with DisableReplicaCorrection: CPURequest = %dm, want 138m", got)
+	}
+}

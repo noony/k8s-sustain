@@ -249,6 +249,16 @@ type BuildContainerRecsOptions struct {
 	// returned map; mutating res.Rec there is not supported — store happens from
 	// the value returned by ComputeContainerRec.
 	OnResult func(name string, res ContainerRecResult)
+	// DisableReplicaCorrection suppresses the replica-budget correction
+	// (Policy replicaBudgetAnchor) for this call: BuildContainerRecs clears
+	// the anchor on its copy of the coordination config, so ApplyCoordination
+	// runs overhead-only. The webhook sets this — at admission time
+	// autoscaler.Info.CurrentReplicas is transiently high during an HPA
+	// scale-out, so an admission-time replica factor would inflate burst pods
+	// by up to the 2.0 clamp. The controller leaves it false and applies the
+	// correction on its reconcile cadence instead (in-place resize or
+	// eviction), where replica counts reflect steady state.
+	DisableReplicaCorrection bool
 }
 
 // BuildContainerRecs runs the per-container recommendation loop shared by the
@@ -273,6 +283,12 @@ func BuildContainerRecs(
 	coordCfg sustainv1alpha1.AutoscalerCoordination,
 	opts BuildContainerRecsOptions,
 ) map[string]workload.ContainerRecommendation {
+	if opts.DisableReplicaCorrection {
+		// coordCfg is a value copy; clearing the anchor here cannot mutate
+		// the caller's Policy object.
+		coordCfg.ReplicaBudgetAnchor = nil
+	}
+
 	recs := make(map[string]workload.ContainerRecommendation)
 	for _, c := range containers {
 		cpuPerPod, hasCPU := inputs.CPUPerPod[c.Name]
