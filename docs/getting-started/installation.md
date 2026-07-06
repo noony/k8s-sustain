@@ -77,6 +77,8 @@ helm upgrade k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
   --set recommendOnly=false
 ```
 
+For a gradual rollout, you can also dry-run a single policy instead of the whole installation by setting `spec.rightSizing.recommendOnly: true` on that `Policy` — see the [Policy reference](../reference/policy.md#specrightsizingrecommendonly).
+
 ## Install with cert-manager (recommended for production)
 
 The chart creates a self-signed Issuer and Certificate automatically — just enable cert-manager:

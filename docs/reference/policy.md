@@ -20,6 +20,7 @@ metadata:
   name: production-rightsizing
 spec:
   rightSizing:
+    recommendOnly: false        # set true to dry-run just this policy
     update:
       types:
         deployment: Ongoing
@@ -149,6 +150,16 @@ pod creation. The controller recycles pods only when a regular container or
 sidecar init container drifts from the recommendation; classic init containers
 have already exited when the pod is `Running`, so their drift is picked up on
 next pod creation rather than triggering an immediate recycle.
+
+### `spec.rightSizing.recommendOnly`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `recommendOnly` | bool | `false` | When `true`, this policy runs in dry-run: recommendations are still computed, exported as metrics and cached as `WorkloadRecommendation` objects, but the controller never recycles or resizes pods and the webhook never injects resources. ORed with the global `--recommend-only` flag — the flag is a master switch, so an explicit `false` here cannot override it. |
+
+Use this to onboard one team's workloads in dry-run while other policies
+actively right-size. Inspect the resulting recommendations with
+`kubectl get wlrec -A` before flipping the field to `false`.
 
 ### `spec.rightSizing.resourcesConfigs`
 

@@ -428,6 +428,53 @@ On clusters without in-place support (< 1.33) the scenario still converges —
 stale pods are evicted directly — but the interesting branch (the `Invalid`
 rejection on `/resize`) is never exercised.
 
+### `recommend-only`
+
+Clone of `steady` — same `500m / 256Mi` requests, same ~`200m / ~100Mi`
+load — but the Policy sets `spec.rightSizing.recommendOnly: true` (see the
+[Policy reference](../reference/policy.md#specrightsizingrecommendonly)).
+The update mode stays `deployment: Ongoing` on purpose: it is the
+`recommendOnly` field, not the mode, that suppresses the apply. Run
+`scenario-steady` alongside to watch a dry-run policy and an active one
+coexist.
+
+**Expected:**
+
+- A `WorkloadRecommendation` is computed and cached with the same
+  convergence target as `steady` (~`220m` / ~`110Mi`):
+
+  ```bash
+  kubectl get wlrec -n scenario-recommend-only deployment-stress -o yaml
+  ```
+
+- **The pod is never recycled**: same UID over time, requests stay
+  `500m/256Mi` indefinitely — in `make test-scenario-status` the
+  recommendation never converges with current and `RECYCLED` stays `no`:
+
+  ```bash
+  kubectl get pod -n scenario-recommend-only -l app=stress \
+    -o jsonpath='{.items[0].metadata.uid}{" "}{.items[0].spec.containers[0].resources.requests}{"\n"}'
+  ```
+
+- **The webhook does not inject either**: delete the pod (only after the
+  `WorkloadRecommendation` above exists — before that, the young-workload
+  gate would also leave the replacement unmutated and the check proves
+  nothing) and the replacement comes back with the template's `500m/256Mi`:
+
+  ```bash
+  kubectl delete pod -n scenario-recommend-only -l app=stress
+  # wait for the replacement, then re-run the jsonpath above: still 500m/256Mi
+  ```
+
+- The operator says why nothing happens — the controller logs
+  `recommend-only: computed recommendations` with `source=policy`, and the
+  webhook logs `recommend-only: would inject resources` on pod creation:
+
+  ```bash
+  kubectl logs -n k8s-sustain -l app.kubernetes.io/name=k8s-sustain --tail=500 \
+    | grep 'recommend-only'
+  ```
+
 ## Observability
 
 `make test-scenario-status` prints a table:

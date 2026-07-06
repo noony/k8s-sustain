@@ -8,6 +8,7 @@ policies: []
 #      selector:
 #        namespaces: [staging]
 #      rightSizing:
+#        recommendOnly: false     # optional: true dry-runs just this policy
 #        update:
 #          types: { deployment: Ongoing }
 #        resourcesConfigs:

@@ -82,8 +82,12 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	// recycle path.
 	r.upsertWorkloadRecommendation(ctx, t, policy.Name, recs, metav1.Now())
 
-	if r.RecommendOnly {
-		logger.Info("recommend-only: computed recommendations", "recommendations", recs)
+	if policy.EffectiveRecommendOnly(r.RecommendOnly) {
+		source := "policy"
+		if r.RecommendOnly {
+			source = "flag"
+		}
+		logger.Info("recommend-only: computed recommendations", "source", source, "recommendations", recs)
 		r.recordStepSuccess(t)
 		return nil
 	}

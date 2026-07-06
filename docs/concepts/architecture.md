@@ -118,13 +118,14 @@ It is read-only: it queries the Kubernetes API and Prometheus but never modifies
 
 ## Recommend-only mode
 
-When `--recommend-only` is passed (or `recommendOnly: true` in the Helm values), all three components continue to operate normally — querying Prometheus, computing recommendations, resolving workloads — but **no mutations are applied**. Recommendations are emitted as structured JSON log lines at `info` level.
+When `--recommend-only` is passed (or `recommendOnly: true` in the Helm values), all three components continue to operate normally — querying Prometheus, computing recommendations, resolving workloads — but **no mutations are applied**. Recommendations are emitted as structured JSON log lines at `info` level. The same dry-run can be scoped to a single policy with `spec.rightSizing.recommendOnly: true`; the global flag remains a master switch that overrides every policy.
 
 This is useful for:
 
 - Validating that k8s-sustain produces sensible recommendations before enabling active mode
 - Auditing what changes would be made without risk
 - Running k8s-sustain in a staging environment alongside existing resource settings
+- Onboarding one policy in dry-run (`spec.rightSizing.recommendOnly`) while other policies actively apply
 
 ## Recommendation pipeline
 

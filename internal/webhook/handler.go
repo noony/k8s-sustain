@@ -316,21 +316,30 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allowWithLabelPatch(labelPatch)
 	}
 
+	// Dry-run is the OR of the global flag and the policy's own
+	// spec.rightSizing.recommendOnly — computed once so the cache snapshot
+	// below and the short-circuit stay consistent.
+	recommendOnly := policy.EffectiveRecommendOnly(h.RecommendOnly)
+
 	// Persist the fresh recommendation for ephemeral identities: bare pods
 	// and standalone Jobs may never be seen by a controller reconcile at
 	// all. Skipped when recs came from the cache fallback — re-writing
 	// served-from-cache data would refresh ObservedAt and make a dead
 	// workload look alive.
 	if !fromCache {
-		h.writeRecommendationCache(logger, req.Namespace, ownerKind, ownerName, policyName, &pod, filtered)
+		h.writeRecommendationCache(logger, req.Namespace, ownerKind, ownerName, policyName, &pod, filtered, recommendOnly)
 	}
 
-	// RecommendOnly records the recommendation but never mutates the pod, so
+	// Recommend-only records the recommendation but never mutates the pod, so
 	// the response is always an allow with no patch. Short-circuit here to skip
 	// buildPatches' per-container DeepCopy + json.Marshal — wasted work on the
 	// pod-create hot path when the result is discarded.
-	if h.RecommendOnly {
-		logger.Info("recommend-only: would inject resources", "containers", len(filtered), "recommendations", filtered)
+	if recommendOnly {
+		source := "policy"
+		if h.RecommendOnly {
+			source = "flag"
+		}
+		logger.Info("recommend-only: would inject resources", "source", source, "containers", len(filtered), "recommendations", filtered)
 		return allowWithLabelPatch(labelPatch)
 	}
 
@@ -494,16 +503,16 @@ func isEphemeralOwnerKind(kind string) bool {
 // blocking admission: the apiserver write runs in a goroutine on a detached
 // context — the AdmissionResponse must never wait on it. Best-effort: errors
 // are logged inside wlrcache.Upsert at V(1) and dropped.
-func (h *Handler) writeRecommendationCache(logger logr.Logger, ns, ownerKind, ownerName, policyName string, pod *corev1.Pod, recs map[string]workload.ContainerRecommendation) {
+func (h *Handler) writeRecommendationCache(logger logr.Logger, ns, ownerKind, ownerName, policyName string, pod *corev1.Pod, recs map[string]workload.ContainerRecommendation, recommendOnly bool) {
 	if !isEphemeralOwnerKind(ownerKind) {
 		return
 	}
 	// Snapshot what the pod will actually run with: this same admission
-	// injects the recommendation (unless RecommendOnly, where the pod keeps
-	// its template resources).
+	// injects the recommendation (unless recommend-only — global flag or
+	// per-policy field — where the pod keeps its template resources).
 	containers := pod.Spec.Containers
 	initContainers := pod.Spec.InitContainers
-	if !h.RecommendOnly {
+	if !recommendOnly {
 		containers = containersWithRecs(containers, recs)
 		initContainers = containersWithRecs(initContainers, recs)
 	}

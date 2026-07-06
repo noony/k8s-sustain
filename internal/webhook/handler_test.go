@@ -753,7 +753,8 @@ func newAdmitEnv(t *testing.T, objs ...runtime.Object) *admitTestEnv {
 			objsTyped = append(objsTyped, co)
 		}
 	}
-	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objsTyped...).Build()
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objsTyped...).
+		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
 
 	return &admitTestEnv{
 		handler: &Handler{Client: fc, PrometheusClient: pc},
@@ -961,6 +962,26 @@ func TestAdmit_RecommendOnly_AllowsWithoutPatch(t *testing.T) {
 	}
 }
 
+// TestAdmit_PolicyRecommendOnly_AllowsWithoutPatch verifies that a Policy
+// with spec.rightSizing.recommendOnly=true is admitted without a resource
+// patch even though the handler's global RecommendOnly flag is off.
+func TestAdmit_PolicyRecommendOnly_AllowsWithoutPatch(t *testing.T) {
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	policy.Spec.RightSizing.RecommendOnly = true
+	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
+	env := newAdmitEnv(t, policy, rs)
+	defer env.close()
+
+	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch != nil {
+		t.Errorf("policy recommend-only must not patch, got %d bytes", len(resp.Patch))
+	}
+}
+
 // TestAdmit_BarePodWithOwnerName_InjectsAsPodKind verifies a pod with no
 // controller owner but a valid owner-name annotation is treated as kind
 // "Pod": it gets the label-mirror patch AND, when the policy configures
@@ -1007,6 +1028,70 @@ func TestAdmit_BarePodWithOwnerName_InjectsAsPodKind(t *testing.T) {
 	}
 	if !strings.Contains(patchStr, `"/spec/containers/0/resources"`) {
 		t.Errorf("expected a resource injection patch in %s", patchStr)
+	}
+}
+
+// TestAdmit_PolicyRecommendOnly_WLRSnapshotKeepsTemplateValues guards the
+// admit -> writeRecommendationCache wiring: admit must pass the EFFECTIVE
+// recommend-only value (global flag OR the policy's own
+// spec.rightSizing.recommendOnly) into the cache write, not h.RecommendOnly
+// directly. Here the handler's global flag stays false and only the policy
+// field is true, so if admit regressed to passing h.RecommendOnly the pod
+// would look "mutated" to the cache write and the WLR would snapshot the
+// (never-applied) recommendation instead of the template value.
+func TestAdmit_PolicyRecommendOnly_WLRSnapshotKeepsTemplateValues(t *testing.T) {
+	mode := sustainv1alpha1.UpdateModeOnCreate
+	policy := &sustainv1alpha1.Policy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p"},
+		Spec: sustainv1alpha1.PolicySpec{
+			RightSizing: sustainv1alpha1.RightSizingSpec{
+				Update: sustainv1alpha1.UpdateSpec{Types: sustainv1alpha1.UpdateTypes{Pod: &mode}},
+				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
+					CPU:    sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: ptr.To(int32(95))}},
+					Memory: sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: ptr.To(int32(95))}},
+				},
+				// Per-policy dry-run; the handler's global RecommendOnly stays
+				// false (checked below) so any effect here must come from this
+				// field, not the flag.
+				RecommendOnly: true,
+			},
+		},
+	}
+	env := newAdmitEnv(t, policy)
+	defer env.close()
+	if env.handler.RecommendOnly {
+		t.Fatal("test setup error: global RecommendOnly must be false")
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "etl-daily-run-1",
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "p",
+				sustainv1alpha1.OwnerNameAnnotation: "etl-daily",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("700m")},
+			},
+		}}},
+	}
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	if resp.Patch != nil && strings.Contains(string(resp.Patch), `"/spec/containers/0/resources"`) {
+		t.Errorf("policy recommend-only must not inject resources, got patch %s", resp.Patch)
+	}
+
+	wlr := waitForWLR(t, env.handler.Client, "default", "pod-etl-daily")
+	got := wlr.Status.ObservedResources["app"].CPURequest
+	if got == nil || got.String() != "700m" {
+		t.Errorf("observed cpu = %v, want 700m (template value) — admit must pass the effective "+
+			"recommend-only value, not h.RecommendOnly, into writeRecommendationCache", got)
 	}
 }
 

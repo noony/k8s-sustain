@@ -183,6 +183,14 @@ type RightSizingSpec struct {
 	// to false: init containers are recommended and resized like regular ones.
 	// +optional
 	ExcludeInitContainers bool `json:"excludeInitContainers,omitempty"`
+	// RecommendOnly, when true, puts every workload governed by this policy
+	// in dry-run: recommendations are still computed, exported as metrics and
+	// cached as WorkloadRecommendations, but the controller never recycles or
+	// resizes pods and the webhook never injects resources. ORed with the
+	// global --recommend-only flag — the flag is a master switch, so an
+	// explicit false here cannot override it.
+	// +optional
+	RecommendOnly bool `json:"recommendOnly,omitempty"`
 }
 
 // UpdateTypes defines the update mode for each supported workload kind.
@@ -245,6 +253,15 @@ func (t UpdateTypes) ModeForKind(kind string) *UpdateMode {
 		return t.Pod
 	}
 	return nil
+}
+
+// EffectiveRecommendOnly reports whether recommendations for this policy
+// must not be applied: the global --recommend-only flag is a master switch,
+// the per-policy spec.rightSizing.recommendOnly field opts a single Policy
+// into dry-run. Both injection paths (controller reconcile and admission
+// webhook) must gate on this — never on the flag or the field alone.
+func (p *Policy) EffectiveRecommendOnly(global bool) bool {
+	return global || p.Spec.RightSizing.RecommendOnly
 }
 
 // UpdateSpec defines which workload types are managed and how, plus eviction behaviour.

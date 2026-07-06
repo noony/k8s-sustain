@@ -104,6 +104,54 @@ func TestReconcileWorkload_RecommendOnly_DoesNotRecyclePods(t *testing.T) {
 	}
 }
 
+// TestReconcileWorkload_PolicyRecommendOnly_DoesNotRecyclePods verifies the
+// per-policy spec.rightSizing.recommendOnly field short-circuits the recycle
+// path exactly like the global flag, while the recommendation is still
+// computed and cached as a WorkloadRecommendation.
+func TestReconcileWorkload_PolicyRecommendOnly_DoesNotRecyclePods(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "web-pod",
+			Labels: map[string]string{"app": "web"},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
+			},
+		}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+
+	r := reconcilerWithProm(t, server, false, pod)
+	// Global flag stays false — only the policy opts into dry-run.
+	tgt := deploymentTarget("default", "web")
+	policy := policyForReconcileWorkload(t, "p")
+	policy.Spec.RightSizing.RecommendOnly = true
+
+	if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
+		t.Fatalf("reconcileWorkload: %v", err)
+	}
+
+	var got corev1.Pod
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "web-pod"}, &got); err != nil {
+		t.Fatalf("get pod: %v (policy recommend-only must not evict pods)", err)
+	}
+	if got.DeletionTimestamp != nil {
+		t.Error("policy recommend-only must not delete or evict pods")
+	}
+
+	// Compute-and-cache still happens: the WorkloadRecommendation upsert runs
+	// before the dry-run gate.
+	var wlr sustainv1alpha1.WorkloadRecommendation
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &wlr); err != nil {
+		t.Errorf("expected WorkloadRecommendation default/deployment-web to be upserted in dry-run: %v", err)
+	}
+}
+
 // TestReconcileWorkload_TransientPromError_RecordsRetry verifies that a 500
 // from Prometheus is treated as transient: the retry tracker records the
 // failure and reconcileWorkload returns the error so the caller can count it.

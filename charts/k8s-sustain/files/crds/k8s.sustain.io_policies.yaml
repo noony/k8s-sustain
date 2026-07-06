@@ -70,6 +70,15 @@ spec:
                       sidecar init containers) for any workload this policy targets. Defaults
                       to false: init containers are recommended and resized like regular ones.
                     type: boolean
+                  recommendOnly:
+                    description: |-
+                      RecommendOnly, when true, puts every workload governed by this policy
+                      in dry-run: recommendations are still computed, exported as metrics and
+                      cached as WorkloadRecommendations, but the controller never recycles or
+                      resizes pods and the webhook never injects resources. ORed with the
+                      global --recommend-only flag — the flag is a master switch, so an
+                      explicit false here cannot override it.
+                    type: boolean
                   resourcesConfigs:
                     description: ResourcesConfigs holds per-resource-dimension recommendation
                       configs.

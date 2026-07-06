@@ -63,7 +63,7 @@ func TestWriteRecommendationCache_PersistsBarePodIdentity(t *testing.T) {
 	h := &Handler{Client: c}
 	recs := map[string]workload.ContainerRecommendation{"main": {CPURequest: qty("250m")}}
 
-	h.writeRecommendationCache(logr.Discard(), "airflow", "Pod", "etl", "p", cacheWriteTestPod(), recs)
+	h.writeRecommendationCache(logr.Discard(), "airflow", "Pod", "etl", "p", cacheWriteTestPod(), recs, false)
 
 	wlr := waitForWLR(t, c, "airflow", "pod-etl")
 	if wlr.Spec.Policy != "p" || wlr.Spec.WorkloadRef.Kind != "Pod" || wlr.Spec.WorkloadRef.Name != "etl" {
@@ -84,10 +84,10 @@ func TestWriteRecommendationCache_PersistsBarePodIdentity(t *testing.T) {
 func TestWriteRecommendationCache_RecommendOnlySnapshotsTemplateValues(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
 		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
-	h := &Handler{Client: c, RecommendOnly: true}
+	h := &Handler{Client: c}
 	recs := map[string]workload.ContainerRecommendation{"main": {CPURequest: qty("250m")}}
 
-	h.writeRecommendationCache(logr.Discard(), "airflow", "Pod", "etl", "p", cacheWriteTestPod(), recs)
+	h.writeRecommendationCache(logr.Discard(), "airflow", "Pod", "etl", "p", cacheWriteTestPod(), recs, true)
 
 	wlr := waitForWLR(t, c, "airflow", "pod-etl")
 	if got := wlr.Status.ObservedResources["main"].CPURequest; got == nil || got.String() != "100m" {
@@ -105,7 +105,7 @@ func TestWriteRecommendationCache_SkipsNonEphemeralKinds(t *testing.T) {
 	h := &Handler{Client: c}
 	recs := map[string]workload.ContainerRecommendation{"main": {CPURequest: qty("250m")}}
 
-	h.writeRecommendationCache(logr.Discard(), "prod", "Deployment", "web", "p", cacheWriteTestPod(), recs)
+	h.writeRecommendationCache(logr.Discard(), "prod", "Deployment", "web", "p", cacheWriteTestPod(), recs, false)
 
 	var wlr sustainv1alpha1.WorkloadRecommendation
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "prod", Name: "deployment-web"}, &wlr); err == nil {

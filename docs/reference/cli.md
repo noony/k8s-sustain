@@ -15,6 +15,8 @@ These flags are available on every subcommand.
 
 When `--recommend-only` is enabled, both the controller and the webhook still query Prometheus and compute recommendations as usual, but they **never** apply changes. Computed recommendations are emitted as structured log lines at `info` level, so you can inspect them before switching to active mode.
 
+For a dry-run scoped to a single policy instead of the whole installation, set `spec.rightSizing.recommendOnly: true` on that `Policy` — see the [Policy reference](policy.md#specrightsizingrecommendonly). The global flag always wins: when it is set, every policy is dry-run regardless of its own field.
+
 ```bash
 # via flag
 k8s-sustain start --recommend-only

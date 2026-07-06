@@ -10,7 +10,7 @@
 #                         already been changed by the controller).
 set -euo pipefail
 
-SCENARIOS=(steady overprovisioned underprovisioned stepped hpa hpa-coordinated hpa-replica-anchor cronjob cronjob-long-running cronjob-overprovisioned job)
+SCENARIOS=(steady overprovisioned underprovisioned stepped hpa hpa-coordinated hpa-replica-anchor cronjob cronjob-long-running cronjob-overprovisioned job recommend-only)
 DASHBOARD_SVC=k8s-sustain-dashboard
 DASHBOARD_NS=k8s-sustain
 DASHBOARD_PORT=8090
