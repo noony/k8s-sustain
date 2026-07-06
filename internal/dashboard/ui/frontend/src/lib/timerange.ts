@@ -18,8 +18,7 @@ export const PRESETS: Preset[] = [
 ]
 
 export type TimeRange =
-  | { kind: 'relative'; window: string }
-  | { kind: 'absolute'; fromTs: number; toTs: number }
+  { kind: 'relative'; window: string } | { kind: 'absolute'; fromTs: number; toTs: number }
 
 export const DEFAULT_RANGE: TimeRange = { kind: 'relative', window: '1w' }
 

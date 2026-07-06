@@ -57,11 +57,7 @@ const memMax = ref('')
 // payload is always explicit (an unset limits field would be semantically
 // identical but introduces two synonyms in the UI).
 type LimitMode =
-  | 'keepLimit'
-  | 'noLimit'
-  | 'equalsToRequest'
-  | 'requestsLimitsRatio'
-  | 'keepLimitRequestRatio'
+  'keepLimit' | 'noLimit' | 'equalsToRequest' | 'requestsLimitsRatio' | 'keepLimitRequestRatio'
 const cpuLimitMode = ref<LimitMode>('keepLimit')
 const cpuLimitRatio = ref(1)
 const memLimitMode = ref<LimitMode>('keepLimit')
