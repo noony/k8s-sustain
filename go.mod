@@ -1,6 +1,6 @@
 module github.com/noony/k8s-sustain
 
-go 1.26.3
+go 1.26.5
 
 require (
 	github.com/argoproj/argo-rollouts v1.9.0
