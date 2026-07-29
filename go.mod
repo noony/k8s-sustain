@@ -3,7 +3,7 @@ module github.com/noony/k8s-sustain
 go 1.26.5
 
 require (
-	github.com/argoproj/argo-rollouts v1.9.0
+	github.com/argoproj/argo-rollouts v1.9.1
 	github.com/go-logr/logr v1.4.3
 	github.com/go-logr/zapr v1.3.0
 	github.com/prometheus/client_golang v1.24.0
