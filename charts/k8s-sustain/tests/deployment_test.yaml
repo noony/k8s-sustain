@@ -75,7 +75,43 @@ tests:
             - --policy-concurrency-limit=10
             - --reconcile-interval=5m
             - --recycle-replacement-timeout=5m
-            - --recommendation-retention=72h
+            - --recommendation-retention=168h
+            - --prometheus-max-inflight=8
+            - --query-shard-max-samples=10000000
+
+  # Both query-load knobs must be reachable from values, or an operator
+  # whose Prometheus is being starved has no way to turn the controller down
+  # without patching the Deployment by hand.
+  - it: threads the query-load tuning values into the controller args
+    set:
+      controller.prometheusMaxInflight: 4
+      controller.queryShardMaxSamples: 2000000
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-max-inflight=4
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --query-shard-max-samples=2000000
+
+  # Regression: `helm upgrade --reuse-values` reuses the previous release's
+  # values and does NOT pick up defaults newly added to values.yaml. A value
+  # referenced unconditionally would render `--prometheus-max-inflight=` with
+  # an empty argument, and the controller exits at startup with
+  # "invalid argument \"\" ... invalid syntax" — an upgrade that bricks the
+  # controller. Unset must omit the flag entirely so the binary's own default
+  # applies instead.
+  - it: omits the query-load flags entirely when their values are unset
+    set:
+      controller.prometheusMaxInflight: null
+      controller.queryShardMaxSamples: null
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: ^--prometheus-max-inflight=$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: ^--query-shard-max-samples=$
 
   - it: enforces the restricted security contexts
     asserts:

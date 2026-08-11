@@ -10,6 +10,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -23,7 +24,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -54,7 +54,7 @@ func TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods(t *te
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
 
-	if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 
@@ -90,7 +90,7 @@ func TestReconcileWorkload_RecommendOnly_DoesNotRecyclePods(t *testing.T) {
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
 
-	if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestReconcileWorkload_PolicyRecommendOnly_DoesNotRecyclePods(t *testing.T) 
 	policy := policyForReconcileWorkload(t, "p")
 	policy.Spec.RightSizing.RecommendOnly = true
 
-	if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 
@@ -152,6 +152,77 @@ func TestReconcileWorkload_PolicyRecommendOnly_DoesNotRecyclePods(t *testing.T) 
 	}
 }
 
+// TestReconcileWorkload_AgeGateUsesWLRCreationTimestamp pins which signal the
+// workload-age gate reads for an ephemeral identity. A standalone Job is
+// re-created on every run, so its object is always seconds old however long
+// the identity has been producing samples; the identity's
+// WorkloadRecommendation is what records when k8s-sustain first saw it, and
+// reconcileWorkload threads that object's CreationTimestamp into the gate.
+//
+// The two cases discriminate the plumbing: identical seconds-old Job objects,
+// differing only in how long their WLR has existed. Feeding the gate anything
+// but the WLR timestamp (a zero time, or the object age) collapses both cases
+// onto the same outcome.
+func TestReconcileWorkload_AgeGateUsesWLRCreationTimestamp(t *testing.T) {
+	cases := []struct {
+		name       string
+		wlrCreated time.Time
+		wantCached bool
+	}{
+		{"identity known for 3h clears the gate", time.Now().Add(-3 * time.Hour), true},
+		{"identity first seen 30s ago stays gated", time.Now().Add(-30 * time.Second), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := promServerForReconcile(t)
+			defer server.Close()
+
+			r := reconcilerWithProm(t, server, true /* in-place */)
+			policy := policyForReconcileWorkload(t, "p")
+			// Recommend-only isolates the gate: the recommendation is still
+			// computed and cached, but the apply path (which needs pods and a
+			// Job in the scheme) is skipped.
+			policy.Spec.RightSizing.RecommendOnly = true
+
+			tgt := &workloadTarget{
+				Kind: "Job", Name: "nightly-etl", Namespace: "default",
+				IdentityKind: "Job", IdentityName: "nightly-etl",
+				Selector:   &metav1.LabelSelector{MatchLabels: map[string]string{"job-name": "nightly-etl"}},
+				Containers: []corev1.Container{{Name: "app"}},
+				Object: &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default", Name: "nightly-etl",
+					// This run's object: seconds old, every run.
+					CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Second)),
+				}},
+			}
+			wlr := &sustainv1alpha1.WorkloadRecommendation{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default", Name: wlrName("Job", "nightly-etl"),
+					CreationTimestamp: metav1.NewTime(tc.wlrCreated),
+				},
+			}
+
+			if err := runComputeAndApply(context.Background(), r, policy, itemForTargetWithWLR(tgt, wlr)); err != nil {
+				t.Fatalf("reconcileWorkload: %v", err)
+			}
+
+			var got sustainv1alpha1.WorkloadRecommendation
+			key := types.NamespacedName{Namespace: "default", Name: wlrName("Job", "nightly-etl")}
+			err := r.Get(context.Background(), key, &got)
+			switch {
+			case tc.wantCached && err != nil:
+				t.Fatalf("expected a recommendation for an identity known for 3h, got %v", err)
+			case tc.wantCached && len(got.Status.Containers) == 0:
+				t.Error("recommendation was written with no containers")
+			case !tc.wantCached && err == nil:
+				t.Error("expected the gate to skip an identity first seen 30s ago, but a recommendation was written")
+			case !tc.wantCached && !apierrors.IsNotFound(err):
+				t.Fatalf("expected NotFound, got %v", err)
+			}
+		})
+	}
+}
+
 // TestReconcileWorkload_TransientPromError_RecordsRetry verifies that a 500
 // from Prometheus is treated as transient: the retry tracker records the
 // failure and reconcileWorkload returns the error so the caller can count it.
@@ -165,7 +236,7 @@ func TestReconcileWorkload_TransientPromError_RecordsRetry(t *testing.T) {
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
 
-	err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client))
+	err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt))
 	if err == nil {
 		t.Fatal("expected transient error to bubble up")
 	}
@@ -234,7 +305,7 @@ func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *test
 	// Prime the retry tracker so we can confirm it gets cleared on success.
 	r.retries.recordFailure(tgt.key())
 
-	if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 	if state := r.retries.getState(tgt.key()); state != nil && state.attempts != 0 {
@@ -244,16 +315,19 @@ func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *test
 
 // TestReconcileWorkload_PodKind_NeverRecycles verifies that a target with
 // Kind == "Pod" computes and caches a recommendation but never reaches the
-// recycle/resize/evict path — there is no controller that could recreate the
-// pod after an eviction or in-place resize.
+// selector-driven recycle path — there is no controller that could recreate
+// the pod after an eviction.
 //
 // The target's Selector is deliberately populated (unlike production
 // listBarePodTargets, which never sets it) and matches a real, running pod
 // whose CPU request differs sharply from what the mock Prometheus data would
-// recommend. This makes the assertion meaningful: if the Kind == "Pod" guard
-// were missing or merely incidental (e.g. relying on a nil selector), the
-// in-place patcher would resize this pod and the test would catch it. The
-// guard must be an unconditional, explicit skip.
+// recommend. That pod carries neither the policy nor the owner-name
+// annotation, so it is not a member of any bare-pod group either (see
+// workload.GroupBarePods). Both facts have to hold for it to stay at 999m: if
+// the Kind == "Pod" branch fell through to the generic path, or if the
+// bare-pod resize path resolved its members from the target's selector
+// instead of the grouping rule, the patcher would resize this pod. Either
+// regression fails this test.
 func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -291,7 +365,7 @@ func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
 	}
 	policy := policyForReconcileWorkload(t, "p")
 
-	if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 
@@ -347,7 +421,7 @@ func TestReconcileWorkload_OnCreateMode_CachesButNeverRecycles(t *testing.T) {
 	tgt.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
 	policy := policyForReconcileWorkload(t, "p")
 
-	if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 
@@ -438,7 +512,7 @@ func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
 			policy := policyForReconcileWorkload(t, "p")
 			policy.Spec.RightSizing.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations = tc.ignore
 
-			if err := r.reconcileWorkload(context.Background(), policy, tgt, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
+			if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
 				t.Fatalf("reconcileWorkload: %v", err)
 			}
 			if evicted != tc.wantEvicted {

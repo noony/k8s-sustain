@@ -52,11 +52,14 @@ func runStart(_ *cobra.Command, _ []string) error {
 		"reconcileInterval", cfg.ReconcileInterval,
 		"workloadConcurrencyLimit", cfg.WorkloadConcurrencyLimit,
 		"policyConcurrencyLimit", cfg.PolicyConcurrencyLimit,
+		"prometheusMaxInflight", cfg.PrometheusMaxInflight,
 		"recommendOnly", cfg.RecommendOnly,
 		"recommendationRetention", cfg.RecommendationRetention,
+		"queryShardMaxSamples", cfg.QueryShardMaxSamples,
 	)
 
-	promClient, err := promclient.New(cfg.PrometheusAddress)
+	promClient, err := promclient.New(cfg.PrometheusAddress,
+		promclient.WithMaxInflight(cfg.PrometheusMaxInflight))
 	if err != nil {
 		log.Error(err, "Unable to create Prometheus client")
 		return err
@@ -128,6 +131,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		PolicyConcurrencyLimit:    cfg.PolicyConcurrencyLimit,
 		RecycleReplacementTimeout: cfg.RecycleReplacementTimeout,
 		RecommendationRetention:   cfg.RecommendationRetention,
+		QueryShardMaxSamples:      cfg.QueryShardMaxSamples,
 		LiveOOM: controller.LiveOOMConfig{
 			Source:    oomCache,
 			TriggerCh: triggerCh,

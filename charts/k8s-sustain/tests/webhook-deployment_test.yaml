@@ -50,11 +50,48 @@ tests:
           value:
             - webhook
             - --port=9443
-            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
             - --tls-cert-file=/tls/tls.crt
             - --tls-key-file=/tls/tls.key
             - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --recommendation-retention=168h
+
+  # The webhook's --recommendation-retention is rendered from the SAME value as
+  # the controller's (deployment_test.yaml pins that one). It bounds the single
+  # path where the webhook injects from a recommendation older than its
+  # staleness budget — an identity the controller marked departed — and that
+  # bound is only meaningful if it is the window after which the controller's
+  # sweep deletes the object. One value, two flags: a webhook-specific key here
+  # could drift into serving what the controller already considers expired.
+  - it: bounds the webhook departed path with the controller's retention window
+    set:
+      controller.recommendationRetention: 24h
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --recommendation-retention=24h
+
+  # The webhook no longer queries Prometheus at all: it reads recommendations
+  # from WorkloadRecommendation objects. A --prometheus-address here would be
+  # an unknown flag and the container would refuse to start.
+  - it: passes no prometheus address to the webhook
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: prometheus-address
+
+  # The webhook serves admission reads from a WorkloadRecommendation informer
+  # rather than hitting the apiserver per pod. That cache is resident memory —
+  # roughly 20-50 MB at 10k workloads — so the default request must leave room
+  # for it, or the webhook OOMs on large clusters exactly when it matters.
+  - it: sizes webhook memory for the informer cache
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 256Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
 
   - it: reuses the controller service account
     asserts:
@@ -136,6 +173,82 @@ tests:
             timeoutSeconds: 1
             successThreshold: 1
             failureThreshold: 3
+
+  # The webhook builds its informer cache BEFORE the HTTPS listener starts, and
+  # that build waits up to crdWaitTimeout (internal/k8s/client.go, 2m) for the
+  # CRDs to be served. Nothing answers /healthz until it finishes. Liveness and
+  # readiness alone kill the container at 10 + 10*3 = 40s — on exactly the
+  # fresh-install CRD race the wait exists for — so a startupProbe must suspend
+  # them until the listener is up, with a budget larger than crdWaitTimeout.
+  #
+  # 5 + 5*36 = 185s > 120s. helm-unittest cannot do that arithmetic, so the
+  # inequality itself is asserted from the Go side, against crdWaitTimeout, for
+  # BOTH copies of the numbers: TestCRDWaitFitsInsideChartStartupProbeBudget for
+  # values.yaml and TestCRDWaitFitsInsideChartTemplateStartupProbeDefaults for
+  # the template's own defaults. This suite pins what those numbers render to.
+  - it: gives the webhook a startup budget larger than the CRD-establishment wait
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet
+          value:
+            path: /healthz
+            port: webhook
+            scheme: HTTPS
+      - isSubset:
+          path: spec.template.spec.containers[0].startupProbe
+          content:
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 36
+
+  # `helm upgrade --reuse-values` reuses the previous release's values and does
+  # NOT pick up defaults newly added to values.yaml, so every release installed
+  # before webhook.startupProbe existed upgrades with that key absent. Rendered
+  # under `with`, the probe would then vanish entirely and the container would
+  # be back on liveness/readiness alone (10 + 10*3 = 40s) against a startup that
+  # can block for crdWaitTimeout (2m) — the exact CrashLoopBackOff the probe
+  # exists to prevent, reintroduced on the upgrade path only. The template
+  # therefore carries its own defaults; this pins them, and pins that they
+  # still exceed crdWaitTimeout.
+  - it: keeps the startup probe when the release's values carry none
+    set:
+      webhook.startupProbe: null
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet
+          value:
+            path: /healthz
+            port: webhook
+            scheme: HTTPS
+      # 5 + 5*36 = 185s > 120s, same budget as the values.yaml defaults —
+      # TestCRDWaitFitsInsideChartTemplateStartupProbeDefaults is what enforces
+      # both halves of that sentence against crdWaitTimeout.
+      - isSubset:
+          path: spec.template.spec.containers[0].startupProbe
+          content:
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 36
+
+  # A partial override must not drop the remaining template defaults, or an
+  # operator raising one field would silently shrink the budget elsewhere.
+  - it: keeps template defaults for the startup-probe fields a release overrides only in part
+    set:
+      webhook.startupProbe:
+        failureThreshold: 60
+    asserts:
+      - isSubset:
+          path: spec.template.spec.containers[0].startupProbe
+          content:
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 60
 
   - it: wires custom probe timings into the probes
     set:

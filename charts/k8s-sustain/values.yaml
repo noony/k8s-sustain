@@ -51,7 +51,34 @@ controller:
   # disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs).
   # The dashboard keeps showing these as "inactive" rows until the window
   # lapses. Set to 0s to sweep them on the next reconcile instead.
-  recommendationRetention: 72h
+  #
+  # This is NOT only a dashboard setting. The webhook's sole recommendation
+  # source is the WorkloadRecommendation object, so for a RECURRING ephemeral
+  # identity this window decides whether its next run is rightsized at
+  # admission at all: reap the object between two runs and every run cold
+  # starts, with the recommendation only computed after the pod is already
+  # running. Set it above the longest expected gap between runs --
+  # the 7d default covers weekly batch; raise it for monthly cycles.
+  #
+  # Cost scales with retention only for identities whose NAME changes per run.
+  # CronJob-owned Jobs collapse onto the CronJob, and bare pods or standalone
+  # Jobs carrying k8s.sustain.io/owner-name collapse onto that annotation, so
+  # those stay bounded however long the window is. A standalone Job without
+  # the annotation is one object per run: there, retained objects grow as
+  # runs-per-day x retention-days, and the webhook caches all of them.
+  recommendationRetention: 168h
+  # Maximum concurrent Prometheus queries across the whole controller. Kept
+  # below Prometheus's own --query.max-concurrency (default 20) so k8s-sustain
+  # cannot starve the dashboards and alerting sharing that server. Lower this
+  # first if the controller is the reason your Prometheus is struggling.
+  prometheusMaxInflight: 8
+  # Projected sample budget (containers x window-minutes, summed across a
+  # shard's workloads) one batched CPU/memory/OOM query may reach before a new
+  # shard is started. Must stay under Prometheus's --query.max-samples
+  # (default 50,000,000): that limit REJECTS an over-budget query outright,
+  # failing every workload in the shard rather than just the excess. The
+  # default leaves a 5x margin.
+  queryShardMaxSamples: 10000000
   logLevel: error
   service:
     type: ClusterIP
@@ -133,13 +160,51 @@ webhook:
       # Only used when createIssuer is false.
       name: ""
       kind: Issuer
+  # The webhook serves admission reads from a WorkloadRecommendation informer
+  # cache rather than a per-pod apiserver Get. That cache is resident memory —
+  # budget roughly 20-50 MB at 10k workloads on top of the base footprint —
+  # so these are sized above the controller's, not equal to them.
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
-    limits:
       memory: 256Mi
+    limits:
+      memory: 512Mi
   # Probe timings. The probe endpoints (path/port/scheme) are fixed by the chart.
+  #
+  # startupProbe is NOT optional decoration — it is half of a contract with the
+  # Go code. The webhook builds an informer cache before its HTTPS listener
+  # starts, and that build waits for the Policy and WorkloadRecommendation CRDs
+  # to become servable (crdWaitTimeout in internal/k8s/client.go, currently
+  # 2m) plus a full informer sync. Nothing answers /healthz for that whole
+  # period. Liveness/readiness alone would kill the container at
+  # 10 + 10*3 = 40s, i.e. on exactly the fresh-install CRD-establishment race
+  # the wait exists to survive, and the pod would still end in CrashLoopBackOff.
+  #
+  # A startupProbe suspends liveness and readiness until it first succeeds, so
+  # its budget is the number that has to exceed crdWaitTimeout:
+  #     initialDelaySeconds + periodSeconds * failureThreshold
+  #   = 5 + 5 * 36 = 185s  >  120s
+  # Raise crdWaitTimeout and you must raise failureThreshold here. The Go test
+  # TestCRDWaitFitsInsideChartStartupProbeBudget reads THIS FILE and fails if
+  # the two drift apart; charts/k8s-sustain/tests/webhook-deployment_test.yaml
+  # pins the rendered values.
+  #
+  # webhook-deployment.yaml repeats these numbers as template-side defaults, so
+  # a `helm upgrade --reuse-values` from a release predating this key still gets
+  # a probe (such an upgrade never sees a newly added values.yaml default).
+  # Raising anything here means raising it there too — the chart test renders
+  # both ways and pins them to the same numbers, and the Go test
+  # TestCRDWaitFitsInsideChartTemplateStartupProbeDefaults checks the template
+  # copy against crdWaitTimeout in its own right and fails if the two copies
+  # disagree. Raising this file alone can no longer leave the upgrade path
+  # under budget with every test still green.
+  startupProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 36
   livenessProbe:
     initialDelaySeconds: 10
     periodSeconds: 10
@@ -836,6 +901,13 @@ prometheusRule:
               ) > 0.10
             ) * 1
 
+    # NOTE: `interval` here is load-bearing, not a free tuning knob. The
+    # recommender reads workload_max_pod_cpu/memory below as a plain RANGE
+    # VECTOR (`quantile_over_time(p, rule[window])`), not as a `[window:1m]`
+    # subquery, so this interval IS the percentile's sample resolution — there
+    # is no subquery step left to resample it. Raising it to cut Prometheus
+    # memory would silently coarsen every recommendation percentile in the
+    # product.
     - name: k8s_sustain.workload_signal
       interval: 1m
       rules:
@@ -853,8 +925,8 @@ prometheusRule:
             )
         # Busiest-replica CPU rate, per container, per workload. At each instant
         # this is the hottest live pod; collapsing across pods here (instead of
-        # at query time) keeps the recommender's quantile_over_time subquery
-        # cheap (one series per workload×container) and immune to pod-name churn
+        # at query time) keeps the recommender's quantile_over_time range-vector
+        # scan cheap (one series per workload×container) and immune to pod-name churn
         # — dead pods simply drop out of the max. The recommender runs
         # quantile_over_time(p, …) over this to get a true per-pod percentile
         # that covers the busiest replica.

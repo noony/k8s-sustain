@@ -38,10 +38,10 @@ func TestInitViper_EnvBinding_DotAndDashKeys(t *testing.T) {
 			viperKey: "log-level",
 		},
 		{
-			name:     "dot and dash (webhook.prometheus-address)",
-			envVar:   "K8SSUSTAIN_WEBHOOK_PROMETHEUS_ADDRESS",
-			envVal:   "http://prom.example:9090",
-			viperKey: "webhook.prometheus-address",
+			name:     "dot and dash (webhook.tls-cert-file)",
+			envVar:   "K8SSUSTAIN_WEBHOOK_TLS_CERT_FILE",
+			envVal:   "/etc/webhook/tls.crt",
+			viperKey: "webhook.tls-cert-file",
 		},
 	}
 
@@ -86,6 +86,23 @@ func TestLoadWebhookConfig_RoundTripsBoundFlags(t *testing.T) {
 	}
 	if cfg.TLSKeyFile != "/tls/tls.key" {
 		t.Errorf("TLSKeyFile = %q, want /tls/tls.key (default)", cfg.TLSKeyFile)
+	}
+}
+
+// TestBindWebhookFlags_NoPrometheusAddress verifies the webhook subcommand no
+// longer registers --prometheus-address. The webhook's Prometheus client was
+// removed (it now reads recommendations exclusively from the cached
+// WorkloadRecommendation); leaving the flag bound would be a dead knob that
+// looks like it does something and does nothing.
+func TestBindWebhookFlags_NoPrometheusAddress(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	cmd := &cobra.Command{Use: "webhook"}
+	BindWebhookFlags(cmd)
+
+	if f := cmd.Flags().Lookup("prometheus-address"); f != nil {
+		t.Errorf("BindWebhookFlags registered --prometheus-address, want it gone")
 	}
 }
 
@@ -185,14 +202,20 @@ func TestLoadDashboardConfig_RoundTripsBoundFlags(t *testing.T) {
 }
 
 // TestControllerConfig_RecommendationRetentionDefault verifies the flag
-// registers with its 72h default and threads into ControllerConfig.
+// registers with its 168h (7d) default and threads into ControllerConfig.
+//
+// The value is not arbitrary. Since the webhook's only recommendation source
+// is the WorkloadRecommendation object, this window decides whether a
+// recurring ephemeral identity is rightsized at admission on its next run: if
+// the object is reaped between two runs, every run cold starts. 7d clears the
+// weekly batch cycle that 72h did not.
 func TestControllerConfig_RecommendationRetentionDefault(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
 	cmd := &cobra.Command{}
 	BindControllerFlags(cmd)
-	if got := LoadControllerConfig().RecommendationRetention; got != 72*time.Hour {
-		t.Errorf("RecommendationRetention = %v, want 72h", got)
+	if got := LoadControllerConfig().RecommendationRetention; got != 168*time.Hour {
+		t.Errorf("RecommendationRetention = %v, want 168h", got)
 	}
 }
 
@@ -219,5 +242,55 @@ func TestControllerConfig_PolicyConcurrencyLimitEnvOverride(t *testing.T) {
 	InitViper()
 	if got := LoadControllerConfig().PolicyConcurrencyLimit; got != 3 {
 		t.Errorf("PolicyConcurrencyLimit = %d, want 3 (env override)", got)
+	}
+}
+
+// TestControllerConfig_PrometheusMaxInflightDefault verifies the
+// --prometheus-max-inflight flag registers with its default of 8 and threads
+// into ControllerConfig. The default is kept well under Prometheus's own
+// --query.max-concurrency (20) so the controller does not starve dashboards
+// and alerting sharing the same Prometheus server.
+func TestControllerConfig_PrometheusMaxInflightDefault(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	cmd := &cobra.Command{}
+	BindControllerFlags(cmd)
+	cfg := LoadControllerConfig()
+	if cfg.PrometheusMaxInflight != 8 {
+		t.Fatalf("PrometheusMaxInflight: got %d want 8", cfg.PrometheusMaxInflight)
+	}
+}
+
+// TestControllerConfig_QueryShardMaxSamplesDefault verifies the
+// --query-shard-max-samples flag registers with the shared
+// DefaultQueryShardMaxSamples constant and threads into ControllerConfig.
+// internal/prometheus/shardscale_test.go asserts its shard-collapsing scale
+// property against this same exported constant, so the two can never drift
+// apart silently -- see that test's doc comment.
+func TestControllerConfig_QueryShardMaxSamplesDefault(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	cmd := &cobra.Command{}
+	BindControllerFlags(cmd)
+	cfg := LoadControllerConfig()
+	if cfg.QueryShardMaxSamples != DefaultQueryShardMaxSamples {
+		t.Fatalf("QueryShardMaxSamples: got %d want %d", cfg.QueryShardMaxSamples, DefaultQueryShardMaxSamples)
+	}
+	if DefaultQueryShardMaxSamples != 10_000_000 {
+		t.Fatalf("DefaultQueryShardMaxSamples changed to %d -- this is a 5x safety margin under Prometheus's own --query.max-samples default of 50_000_000; changing it is a deliberate decision, not accidental drift", DefaultQueryShardMaxSamples)
+	}
+}
+
+// TestControllerConfig_QueryShardMaxSamplesEnvOverride verifies the flag can
+// be overridden via K8SSUSTAIN_QUERY_SHARD_MAX_SAMPLES.
+func TestControllerConfig_QueryShardMaxSamplesEnvOverride(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	cmd := &cobra.Command{}
+	BindControllerFlags(cmd)
+	t.Setenv("K8SSUSTAIN_QUERY_SHARD_MAX_SAMPLES", "1000000")
+	InitViper()
+	if got := LoadControllerConfig().QueryShardMaxSamples; got != 1_000_000 {
+		t.Errorf("QueryShardMaxSamples = %d, want 1000000 (env override)", got)
 	}
 }

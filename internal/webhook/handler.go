@@ -7,26 +7,19 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/go-logr/logr"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	apivalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"golang.org/x/sync/errgroup"
-
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/httpx"
 	"github.com/noony/k8s-sustain/internal/policymatch"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
-	"github.com/noony/k8s-sustain/internal/recommender"
-	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -41,26 +34,34 @@ const maxAdmissionBodyBytes = 1 << 20
 const maxPolicyNameLen = 253
 
 // apiCallTimeout bounds each individual Kubernetes API Get inside the
-// admission path. The webhook's HTTP WriteTimeout (10s) is the outer ceiling;
-// without per-call deadlines, one slow apiserver round-trip could eat the
-// whole budget and leave Prometheus / cache fallback paths no time to run.
+// admission path (Policy lookup, owner resolution, WorkloadRecommendation
+// read). The webhook's HTTP WriteTimeout (10s) is the outer ceiling; without
+// per-call deadlines, one slow apiserver round-trip could eat the whole
+// budget.
 //
 // 2s is a generous bound for direct apiserver reads through the uncached
-// controller-runtime client (built with client.New). Set high enough to absorb
-// a brief apiserver hiccup, low enough to leave room for the Prometheus path
-// and the AdmissionReview encode/decode on either side.
+// controller-runtime client (built with client.New). Set high enough to
+// absorb a brief apiserver hiccup, low enough to leave room for the other
+// calls in admit() and the AdmissionReview encode/decode on either side.
+// Now that admission never talks to Prometheus, this bound will rarely be
+// approached in practice — it remains as a backstop against a slow
+// apiserver, not because it is load-bearing for a Prometheus round-trip
+// anymore.
 const apiCallTimeout = 2 * time.Second
 
 // admissionTimeout caps the whole admit() handler. The apiserver's
 // MutatingWebhookConfiguration timeout is 5s by default; we keep a 1s headroom
-// for HTTP round-trip and JSON encode/decode so a stuck downstream (Prometheus
-// or apiserver Get) cannot push us past the upstream deadline. Failing open
-// inside the budget is strictly better than letting the apiserver time out and
-// fall back to failurePolicy.
+// for HTTP round-trip and JSON encode/decode so a stuck downstream (apiserver
+// Get) cannot push us past the upstream deadline. Failing open inside the
+// budget is strictly better than letting the apiserver time out and fall back
+// to failurePolicy. As with apiCallTimeout, this backstop is now sized
+// against the apiserver alone — Prometheus is no longer in the admission
+// path at all.
 const admissionTimeout = 4 * time.Second
 
-// isValidPolicyName guards against malformed annotation values flowing into
-// Prometheus query selectors. Accepts only DNS-1123 subdomains up to 253 chars.
+// isValidPolicyName guards against malformed annotation values being used as
+// a Policy object name in the apiserver Get below. Accepts only DNS-1123
+// subdomains up to 253 chars.
 func isValidPolicyName(name string) bool {
 	if name == "" || len(name) > maxPolicyNameLen {
 		return false
@@ -70,24 +71,51 @@ func isValidPolicyName(name string) bool {
 
 // Handler is the HTTP handler for the mutating admission webhook.
 // It intercepts Pod CREATE requests and injects resource requests/limits
-// based on matching policies backed by Prometheus data.
+// read from the WorkloadRecommendation the controller already computed and
+// cached on its reconcile cadence. The webhook itself never queries
+// Prometheus: doing so would make its query load scale with pod churn
+// (mass scale-outs, node drains, crash loops) instead of workload count.
 // Both OnCreate and Ongoing policies are handled so that pods start with
 // the latest recommendation immediately, without waiting for the controller
 // to reconcile.
 type Handler struct {
-	Client           client.Client
-	PrometheusClient *promclient.Client
-	RecommendOnly    bool
+	Client        client.Client
+	RecommendOnly bool
 
 	// ExcludedNamespaces lists namespaces the webhook must never mutate.
 	// Mirrors the controller's --excluded-namespaces flag so a workload in,
 	// say, kube-system is left untouched by both components.
 	ExcludedNamespaces []string
 
-	// CacheStaleness bounds how old a WorkloadRecommendation can be before
-	// the webhook refuses to use it as a fallback. Zero falls back to
-	// DefaultCacheStaleness.
+	// CacheStaleness bounds how old a WorkloadRecommendation may be before
+	// the webhook stops trusting it. This used to gate an emergency fallback
+	// (used only when a live Prometheus query had already failed); now that
+	// the WLR is the webhook's only recommendation source, it gates every
+	// injection: once the controller falls this far behind — a stuck
+	// reconcile loop, an outage, a huge backlog — the webhook stops injecting
+	// from stale data and lets the pod through with template resources
+	// instead. Zero falls back to DefaultCacheStaleness.
 	CacheStaleness time.Duration
+
+	// RecommendationRetention bounds the one path that waives CacheStaleness:
+	// a WorkloadRecommendation the controller marked Departed, whose ObservedAt
+	// is frozen by design (see fetchRecommendations). It must mirror the
+	// controller's --recommendation-retention, because that is the window after
+	// which the controller's sweep deletes the object — past it, the webhook is
+	// serving something only a stuck controller could still be offering.
+	//
+	// The chart renders both from the single .Values.controller.recommendationRetention
+	// key, so the two cannot drift in a chart-managed install. Zero falls back
+	// to DefaultRecommendationRetention.
+	RecommendationRetention time.Duration
+
+	// Stub-request rate limiting. Lazily initialised (see
+	// initStubStateLocked) because Handler is built as a plain struct
+	// literal everywhere, so the zero value must work.
+	stubMu        sync.Mutex
+	stubRequested map[string]time.Time
+	stubInflight  chan struct{}
+	stubLastPrune time.Time
 }
 
 type jsonPatch struct {
@@ -173,9 +201,9 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allow // no annotation — pod is not managed by any policy
 	}
 	if !isValidPolicyName(policyName) {
-		// A malformed annotation value would flow into Prometheus selector
-		// strings (owner_name=%q etc.) — reject early to avoid wasted queries
-		// and to refuse to act on a name we couldn't safely look up.
+		// A malformed annotation value cannot be a real Policy object name —
+		// reject early to avoid a wasted apiserver Get and to refuse to act
+		// on a name we couldn't safely look up.
 		logger.Info("pod has invalid policy annotation, allowing without injection", "policy", policyName)
 		return allow
 	}
@@ -268,39 +296,75 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 	logger.V(1).Info("policy configured for workload kind", "mode", *mode)
 
-	containers, _ := workload.MergeContainersForRecommendation(
-		pod.Spec.Containers, pod.Spec.InitContainers, policy.Spec.RightSizing.ExcludeInitContainers,
-	)
-	fromCache := false
-	recs, err := h.buildRecommendations(ctx, &policy, req.Namespace, ownerKind, ownerName, containers)
+	// Read the recommendation the controller already computed and cached in
+	// the WorkloadRecommendation on its reconcile cadence — the webhook
+	// performs no computation and issues no Prometheus queries of its own.
+	// A missing or stale WLR (see CacheStaleness) means we simply have
+	// nothing to inject; fail open with the pod's template resources.
+	staleness := h.CacheStaleness
+	if staleness == 0 {
+		staleness = DefaultCacheStaleness
+	}
+	cacheCtx, cacheCancel := context.WithTimeout(ctx, apiCallTimeout)
+	recs, departed, err := h.fetchRecommendations(cacheCtx, ownerKind, req.Namespace, ownerName, time.Now(), staleness)
+	cacheCancel()
+	// RecommendationSourceTotal is incremented here, at the read outcome,
+	// rather than at the eventual patch/no-patch return further down: it
+	// answers "is the WLR pipeline keeping up", which is a property of this
+	// read, not of what admit() goes on to do with a usable result (e.g.
+	// recommend-only mode still counts as a "hit" even though it never
+	// patches — the pipeline worked, the operator config just chose not to
+	// apply it).
 	if err != nil {
-		// Prometheus failed (timeout, network, or circuit breaker open).
-		// Try the cached WorkloadRecommendation that the controller writes
-		// after every successful reconcile. If it's fresh enough, inject
-		// from cache; otherwise fall open with the original template.
-		staleness := h.CacheStaleness
-		if staleness == 0 {
-			staleness = DefaultCacheStaleness
-		}
-		cacheCtx, cacheCancel := context.WithTimeout(ctx, apiCallTimeout)
-		cached, cacheErr := h.fetchCachedRecommendations(cacheCtx, ownerKind, req.Namespace, ownerName, time.Now(), staleness)
-		cacheCancel()
-		if cacheErr != nil {
-			logger.Error(cacheErr, "failed to read cached WorkloadRecommendation; falling open")
+		if errors.Is(err, ErrRecommendationStale) {
+			RecommendationSourceTotal.WithLabelValues(RecSourceStale).Inc()
+			logger.V(1).Info("WorkloadRecommendation is stale; allowing pod with template resources")
 			return allowWithLabelPatch(labelPatch)
 		}
-		if cached == nil {
-			if errors.Is(err, promclient.ErrCircuitOpen) {
-				logger.Info("prometheus circuit open and no fresh cache; allowing pod with template resources")
-			} else {
-				logger.Error(err, "failed to build recommendations and no fresh cache; allowing pod with template resources")
-			}
+		if errors.Is(err, ErrRecommendationNoData) {
+			// Already evaluated and found to have nothing recommendable. No
+			// stub request: MarkNoData (wlrcache.go) is only ever reached
+			// after the computation found a non-empty observed-resources
+			// snapshot, so a nodata WLR already has one — createStub's
+			// AlreadyExists path would have nothing to fill in even though
+			// it now also attempts a snapshot write. Nothing here has to
+			// prompt a retry either: nodata is not terminal, and the
+			// computation phase recomputes this identity on every reconcile
+			// interval for as long as the object exists.
+			RecommendationSourceTotal.WithLabelValues(RecSourceNoData).Inc()
+			logger.V(1).Info("WorkloadRecommendation has no recommendable data; allowing pod with template resources")
 			return allowWithLabelPatch(labelPatch)
 		}
-		logger.Info("prometheus unavailable; serving cached recommendation",
-			"containers", len(cached), "promErr", err.Error())
-		recs = cached
-		fromCache = true
+		RecommendationSourceTotal.WithLabelValues(RecSourceError).Inc()
+		logger.Error(err, "failed to read WorkloadRecommendation; allowing pod with template resources")
+		return allowWithLabelPatch(labelPatch)
+	}
+	if recs == nil {
+		RecommendationSourceTotal.WithLabelValues(RecSourceMissing).Inc()
+		// Nothing has computed this workload identity yet. Ask the controller
+		// to, by creating a stub WorkloadRecommendation it will fill in. Only
+		// the missing path does this: on the stale path the object already
+		// exists, so the Create is a guaranteed AlreadyExists — and createStub
+		// no longer stops there, it follows up with a Get and possibly a
+		// status Patch. That is up to three apiserver calls per admission to
+		// discover there is nothing to do, since a stale object is one the
+		// controller has already written and therefore already has an
+		// observed-resources snapshot.
+		//
+		// This pod still starts on template resources; the stub is for the
+		// next one. That is unavoidable — admission cannot wait for a
+		// Prometheus query it is no longer allowed to make.
+		h.requestRecommendation(logger, req.Namespace, ownerKind, ownerName, policyName, pod.Spec.Containers, pod.Spec.InitContainers)
+		logger.V(1).Info("no WorkloadRecommendation for workload; requested one, allowing pod with template resources")
+		return allowWithLabelPatch(labelPatch)
+	}
+	// Both outcomes injected a recommendation; they differ in its provenance —
+	// "retained" is last-known-good for an identity that has departed, so its
+	// age is bounded by --recommendation-retention rather than by staleness.
+	if departed {
+		RecommendationSourceTotal.WithLabelValues(RecSourceRetained).Inc()
+	} else {
+		RecommendationSourceTotal.WithLabelValues(RecSourceHit).Inc()
 	}
 
 	// Always inject the latest recommendation regardless of mode.
@@ -317,18 +381,8 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 
 	// Dry-run is the OR of the global flag and the policy's own
-	// spec.rightSizing.recommendOnly — computed once so the cache snapshot
-	// below and the short-circuit stay consistent.
+	// spec.rightSizing.recommendOnly.
 	recommendOnly := policy.EffectiveRecommendOnly(h.RecommendOnly)
-
-	// Persist the fresh recommendation for ephemeral identities: bare pods
-	// and standalone Jobs may never be seen by a controller reconcile at
-	// all. Skipped when recs came from the cache fallback — re-writing
-	// served-from-cache data would refresh ObservedAt and make a dead
-	// workload look alive.
-	if !fromCache {
-		h.writeRecommendationCache(logger, req.Namespace, ownerKind, ownerName, policyName, &pod, filtered, recommendOnly)
-	}
 
 	// Recommend-only records the recommendation but never mutates the pod, so
 	// the response is always an allow with no patch. Short-circuit here to skip
@@ -363,89 +417,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		Patch:     patchBytes,
 		PatchType: &pt,
 	}
-}
-
-// buildRecommendations queries Prometheus for per-pod CPU/memory percentiles
-// (busiest-replica, via the workload_max_pod recording rules) and the recent OOM
-// signal (in parallel with autoscaler detection and the workload-creation
-// lookup), then derives per-container recommendations. The percentile already
-// covers the busiest replica, so no replica division or per-pod floor is needed.
-//
-// The workload-age gate skips brand-new workloads (no usage history yet) so
-// the webhook doesn't inject the hard-floored minimums that would crashloop
-// the first pod. A recent OOM bypasses the gate so a replacement pod after
-// an OOMKill gets a recommendation anchored on the kernel-observed peak
-// rather than the too-small request that killed its predecessor.
-//
-// Unlike the controller, the webhook process has no access to the in-memory
-// live OOM watcher — it relies solely on the Prometheus OOM signal.
-func (h *Handler) buildRecommendations(
-	ctx context.Context,
-	policy *sustainv1alpha1.Policy,
-	ns, ownerKind, ownerName string,
-	containers []corev1.Container,
-) (map[string]workload.ContainerRecommendation, error) {
-	logger := log.FromContext(ctx).WithValues("kind", ownerKind, "name", ownerName, "namespace", ns)
-	rsCfg := policy.Spec.RightSizing.ResourcesConfigs
-
-	// FetchWorkloadInputs, autoscaler.Detect, and the workload-creation lookup
-	// all run in parallel. The per-pod percentiles and OOM signal are produced
-	// by FetchWorkloadInputs; autoscaler.Info feeds coordination, so overlapping
-	// these K8s + Prometheus round-trips cuts admission wall time.
-	var (
-		inputs          *recommender.WorkloadInputs
-		autoInfo        autoscaler.Info
-		workloadCreated time.Time
-	)
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		v, err := recommender.FetchWorkloadInputs(gctx, h.PrometheusClient, ns, ownerKind, ownerName, rsCfg)
-		if err != nil {
-			return err
-		}
-		inputs = v
-		return nil
-	})
-	g.Go(func() error {
-		info, err := autoscaler.Detect(gctx, h.Client, ns, ownerKind, ownerName)
-		if err != nil {
-			logger.V(1).Info("autoscaler detection failed; using empty info", "err", err)
-			autoInfo = autoscaler.Info{Kind: autoscaler.KindNone}
-			return nil
-		}
-		autoInfo = info
-		return nil
-	})
-	g.Go(func() error {
-		workloadCreated = workload.GetWorkloadCreationTime(gctx, h.Client, ownerKind, ns, ownerName)
-		return nil
-	})
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	if recommender.ShouldSkipYoungWorkload(workloadCreated, inputs.HistoryStart, inputs.HasRecentOOM()) {
-		recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "workload_too_young").Inc()
-		logger.Info("skipping injection: workload too young",
-			"age", recommender.AgeForLog(workloadCreated), "historyAge", recommender.AgeForLog(inputs.HistoryStart), "minAge", recommender.MinWorkloadAge)
-		return map[string]workload.ContainerRecommendation{}, nil
-	}
-
-	coordCfg := policy.Spec.RightSizing.AutoscalerCoordination
-	// The webhook has no live OOM watcher and emits no per-container metrics, so
-	// it passes no hooks — the shared loop runs with the Prometheus-only signal
-	// (per-container OOM recency comes from inputs.OOM.OOMCounts).
-	recs := recommender.BuildContainerRecs(
-		containers, inputs, autoInfo, rsCfg, coordCfg,
-		recommender.BuildContainerRecsOptions{
-			// Admission can run mid-scale-out, when CurrentReplicas is
-			// transiently high — the replica factor would inflate burst pods
-			// by up to 2×. Overhead-only here; the controller applies the
-			// replica correction on its reconcile cadence.
-			DisableReplicaCorrection: true,
-		},
-	)
-	return recs, nil
 }
 
 // addMatchingRecs copies into dst the recommendations whose container name
@@ -484,59 +455,6 @@ func buildPatches(pod *corev1.Pod, recs map[string]workload.ContainerRecommendat
 		return nil, nil
 	}
 	return json.Marshal(patches)
-}
-
-// wlrWriteTimeout bounds the detached, asynchronous WorkloadRecommendation
-// write. Independent of the admission budget by design.
-const wlrWriteTimeout = 5 * time.Second
-
-// isEphemeralOwnerKind gates which identities the webhook persists WLRs for.
-// Bare pods and standalone Jobs can start and finish entirely between two
-// controller reconciles, so admission is the only moment anything observes
-// them. Every other kind is refreshed by the controller loop; writing those
-// here too would just double the write traffic on busy rollouts.
-func isEphemeralOwnerKind(kind string) bool {
-	return kind == "Pod" || kind == "Job"
-}
-
-// writeRecommendationCache persists recs as a WorkloadRecommendation without
-// blocking admission: the apiserver write runs in a goroutine on a detached
-// context — the AdmissionResponse must never wait on it. Best-effort: errors
-// are logged inside wlrcache.Upsert at V(1) and dropped.
-func (h *Handler) writeRecommendationCache(logger logr.Logger, ns, ownerKind, ownerName, policyName string, pod *corev1.Pod, recs map[string]workload.ContainerRecommendation, recommendOnly bool) {
-	if !isEphemeralOwnerKind(ownerKind) {
-		return
-	}
-	// Snapshot what the pod will actually run with: this same admission
-	// injects the recommendation (unless recommend-only — global flag or
-	// per-policy field — where the pod keeps its template resources).
-	containers := pod.Spec.Containers
-	initContainers := pod.Spec.InitContainers
-	if !recommendOnly {
-		containers = containersWithRecs(containers, recs)
-		initContainers = containersWithRecs(initContainers, recs)
-	}
-	observed := wlrcache.BuildObservedResources(containers, initContainers)
-	ref := sustainv1alpha1.WorkloadReference{Kind: ownerKind, Namespace: ns, Name: ownerName}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), wlrWriteTimeout)
-		defer cancel()
-		wlrcache.Upsert(log.IntoContext(ctx, logger), h.Client, ref, policyName, recs, observed, metav1.Now())
-	}()
-}
-
-// containersWithRecs returns copies of cs with the matching recommendations
-// applied, mirroring what buildPatches injects into the pod.
-func containersWithRecs(cs []corev1.Container, recs map[string]workload.ContainerRecommendation) []corev1.Container {
-	out := make([]corev1.Container, len(cs))
-	for i := range cs {
-		c := *cs[i].DeepCopy()
-		if rec, ok := recs[c.Name]; ok {
-			workload.ApplyRecommendation(&c, rec)
-		}
-		out[i] = c
-	}
-	return out
 }
 
 func patchesForContainers(cs []corev1.Container, recs map[string]workload.ContainerRecommendation, basePath string) ([]jsonPatch, error) {

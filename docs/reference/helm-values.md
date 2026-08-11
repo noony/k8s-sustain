@@ -30,7 +30,9 @@
 | `controller.workloadConcurrencyLimit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
 | `controller.policyConcurrencyLimit` | `10` | Maximum number of Policy objects reconciled in parallel |
 | `controller.recycleReplacementTimeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where Karpenter / cluster-autoscaler node provisioning regularly takes longer. |
-| `controller.recommendationRetention` | `72h` | How long a WorkloadRecommendation outlives a workload whose object has disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs). The dashboard keeps showing these as "inactive" rows until the window lapses. Set to `0s` to sweep them on the next reconcile instead. |
+| `controller.recommendationRetention` | `168h` | How long a WorkloadRecommendation outlives a workload whose object has disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs). Not just a dashboard setting: it also decides whether a *recurring* ephemeral identity is rightsized at admission on its next run, so set it above the longest expected gap between runs (`168h` covers weekly batch). See [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). The dashboard keeps showing retained entries as "inactive" rows until the window lapses. Set to `0s` to sweep them on the next reconcile instead. |
+| `controller.prometheusMaxInflight` | `8` | Maximum concurrent Prometheus queries across the whole controller. Kept below Prometheus's own `--query.max-concurrency` (default 20) so k8s-sustain cannot starve the dashboards and alerting sharing that server. Lower this first if the controller is the reason your Prometheus is struggling. |
+| `controller.queryShardMaxSamples` | `10000000` | Projected sample budget (containers × window-minutes, summed across a shard's workloads) one batched CPU/memory/OOM query may reach before a new shard is started. Must stay under Prometheus's `--query.max-samples` (default `50000000`): that limit *rejects* an over-budget query outright, failing every workload in the shard rather than just the excess. The default leaves a 5x margin. |
 | `controller.logLevel` | `error` | Log level |
 | `controller.service.type` | `ClusterIP` | Service type for the metrics endpoint |
 | `controller.service.port` | `8080` | Service port |
@@ -90,11 +92,48 @@ controller:
 | `webhook.certManager.issuerRef.name` | `""` | Issuer name (only used when `createIssuer=false`) |
 | `webhook.certManager.issuerRef.kind` | `Issuer` | Issuer kind (only used when `createIssuer=false`) |
 | `webhook.resources` | see below | Webhook container resources |
+| `webhook.startupProbe` | see below | Startup probe timings. Suspends liveness and readiness until the webhook is actually listening. Same fixed endpoint. |
 | `webhook.livenessProbe` | same as controller | Liveness probe timings. The probe endpoint (HTTPS `/healthz` on the webhook port) is fixed by the chart. |
 | `webhook.readinessProbe` | same as controller | Readiness probe timings. Same fixed endpoint as the liveness probe. |
 | `webhook.nodeSelector` | `{}` | Node selector |
 | `webhook.tolerations` | `[]` | Tolerations |
 | `webhook.affinity` | `{}` | Affinity rules |
+
+**The webhook's startup probe is not optional.** The webhook builds an informer
+cache before its HTTPS listener starts, and that build waits up to two minutes
+for the `Policy` and `WorkloadRecommendation` CRDs to become servable — the
+fresh-install race where Helm has created the CRDs but the API server is not
+serving them yet. Nothing answers `/healthz` for that whole period, so the
+liveness probe alone would kill the container after
+`initialDelaySeconds + periodSeconds × failureThreshold` = 40s and the pod would
+end in `CrashLoopBackOff` on exactly the install the wait exists to survive.
+
+The startup probe's budget must therefore stay **larger than that two-minute
+wait** (`crdWaitTimeout` in `internal/k8s/client.go`):
+
+```yaml
+webhook:
+  startupProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5      # 5 + 5 × 36 = 185s > 120s
+    timeoutSeconds: 1
+    successThreshold: 1
+    failureThreshold: 36
+```
+
+If you shorten it, shorten it to something still comfortably above two minutes.
+A Go unit test reads this value out of `values.yaml` and fails if the two sides
+drift apart.
+
+The template carries the same numbers as its own defaults, so the probe is
+rendered even when the release's values do not contain `webhook.startupProbe`
+at all — which is what a `helm upgrade --reuse-values` from a release predating
+this key produces, since `--reuse-values` never picks up defaults newly added
+to `values.yaml`. Overriding one field keeps the template defaults for the
+others. A second Go unit test reads that template copy and checks it against
+`crdWaitTimeout` in its own right, and fails if the two copies disagree — so
+raising the wait cannot leave the `--reuse-values` path silently under budget
+while the `values.yaml` side still passes.
 
 **Default webhook resources:**
 
@@ -103,10 +142,12 @@ webhook:
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
-    limits:
       memory: 256Mi
+    limits:
+      memory: 512Mi
 ```
+
+The webhook's memory defaults are higher than the controller's on purpose. It serves admission reads from a `WorkloadRecommendation` informer cache rather than a per-pod apiserver `Get` — with Prometheus gone from the admission path, the apiserver is the only remaining source of latency there, and an uncached read per admission is a round trip a large cluster does not need. That cache is resident memory: budget roughly 20–50 MB at 10k workloads on top of the base footprint. Raise these if you run substantially more.
 
 ---
 
@@ -168,7 +209,7 @@ Only needed when running the Prometheus Operator externally (not the bundled sub
 | `webhook.serviceMonitor.additionalLabels` | `{}` | Extra labels added to the webhook `ServiceMonitor`. Same purpose as the controller variant. |
 | `prometheusRule.enabled` | `false` | Create a Prometheus Operator `PrometheusRule` holding the k8s-sustain recording rules. Leave disabled when using the bundled `prometheus` subchart — the same rules are already embedded in `prometheus.server.serverFiles`, and enabling both would duplicate the series. |
 | `prometheusRule.additionalLabels` | `{}` | Extra labels added to the `PrometheusRule`. Use to match a specific Prometheus operator's `ruleSelector` in clusters with multiple Prometheus instances. |
-| `prometheusRule.groups` | _(see values.yaml)_ | The recording-rule groups themselves. Anchored as `&recordingRulesGroups` so the bundled `prometheus` subchart's `serverFiles."recording_rules.yml".groups` aliases this exact list — edits flow to both consumers. The list is consumed regardless of `prometheusRule.enabled`; the toggle only gates the standalone `PrometheusRule` resource. |
+| `prometheusRule.groups` | *(see values.yaml)* | The recording-rule groups themselves. Anchored as `&recordingRulesGroups` so the bundled `prometheus` subchart's `serverFiles."recording_rules.yml".groups` aliases this exact list — edits flow to both consumers. The list is consumed regardless of `prometheusRule.enabled`; the toggle only gates the standalone `PrometheusRule` resource. |
 
 ---
 

@@ -32,6 +32,21 @@ const (
 	// produced it, so writers and consumers (controller, webhook, dashboard) can
 	// scope list calls server-side instead of post-filtering by spec.policy.
 	WLRPolicyLabel = "k8s.sustain.io/policy"
+
+	// WLRStubLabel marks a WorkloadRecommendation the webhook created at
+	// admission, rather than one the controller created during discovery.
+	//
+	// It is provenance, not control flow: nothing reads it to decide what to
+	// do with the object. Both writers produce the same shape, and the
+	// computation phase recomputes every WorkloadRecommendation regardless of
+	// which one created it. The label survives because "empty status" alone
+	// cannot tell the two apart — wlrcache.Upsert is necessarily two-step
+	// (Create, then Status().Patch, since a status subresource discards status
+	// supplied at Create), so a controller-created object is *transiently*
+	// empty-status too — and knowing which component first saw an identity is
+	// worth a `kubectl get wlrec -l k8s.sustain.io/stub` when an ephemeral
+	// workload is not being sized.
+	WLRStubLabel = "k8s.sustain.io/stub"
 )
 
 // UpdateMode defines how resources are updated on a given workload type.
@@ -222,11 +237,17 @@ type UpdateTypes struct {
 	// +kubebuilder:validation:Enum=OnCreate;Ongoing
 	// Pod targets bare pods that opt in via OwnerNameAnnotation (no controller
 	// owner — e.g. Airflow's KubernetesPodOperator). OnCreate injects
-	// resources at admission like every other kind. Ongoing computes and
-	// caches a recommendation the same as any kind, but NEVER recycles the
-	// pod: there is no controller that could recreate it after an eviction
-	// or in-place resize, so the "Ongoing" half of the contract that applies
-	// to every other kind does not apply here.
+	// resources at admission like every other kind. Ongoing additionally
+	// resizes the running pods of the identity in place (k8s >= 1.33), which
+	// is the only way to correct a long-running task pod after creation, with
+	// full coverage of restartPolicy Never/OnFailure only on k8s >= 1.35 —
+	// KubernetesPodOperator creates restartPolicy: Never pods by default, so
+	// on 1.33/1.34 the resize is rejected per pod and the running task keeps
+	// its admitted resources.
+	// Bare pods are NEVER evicted in either mode: no controller would
+	// recreate the pod. Note that an in-place memory resize can restart the
+	// container, the same tradeoff Job and CronJob already make; use OnCreate
+	// if your pods cannot tolerate that.
 	Pod *UpdateMode `json:"pod,omitempty"`
 }
 

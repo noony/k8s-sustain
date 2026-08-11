@@ -19,6 +19,11 @@ k8s-sustain continuously observes CPU and memory usage through Prometheus record
 | **OnCreate** | Mutating admission webhook injects resources before the pod is scheduled | Each new pod creation |
 | **Ongoing** | Controller recycles stale pods (in-place on k8s ≥ 1.33, PDB-respecting eviction otherwise); webhook injects resources into new pods | On a configurable interval |
 
+CronJob, Job and bare-pod workloads are the exception to that second row: their
+running pods are only ever resized in place, never evicted — evicting them
+would discard in-flight work, and in the bare-pod case nothing would recreate
+the pod. See [Update modes](concepts/update-modes.md).
+
 A workload opts in to a policy by setting a single annotation on its pod template:
 
 ```yaml

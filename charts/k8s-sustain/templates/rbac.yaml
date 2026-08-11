@@ -15,11 +15,18 @@ rules:
   - apiGroups: [k8s.sustain.io]
     resources: [policies/finalizers]
     verbs: [update]
-  # WorkloadRecommendation CRD — controller writes the cache after each reconcile
-  # and sweeps stale entries. Webhook shares this same ClusterRole/ServiceAccount
-  # and also writes: it persists recommendations for ephemeral identities (bare
-  # pods, standalone Jobs) at admission, since those can live and die entirely
-  # between two controller reconciles.
+  # WorkloadRecommendation CRD — the controller writes recommendations after
+  # each reconcile and sweeps stale entries. The webhook shares this same
+  # ClusterRole/ServiceAccount and needs:
+  #   - list/watch, because it serves admission reads from an informer cache
+  #     rather than hitting the apiserver per pod;
+  #   - create, to write empty-status "stub" objects for workload identities
+  #     nothing has computed yet, plus get and a status patch to record the
+  #     admitted pod's container set on the stub. Creating the object is what
+  #     puts the identity into the controller's work-list; the computation
+  #     phase fills in the recommendation on its next cycle. The webhook never
+  #     writes a recommendation itself — it computes nothing and queries
+  #     Prometheus not at all.
   - apiGroups: [k8s.sustain.io]
     resources: [workloadrecommendations]
     verbs: [get, list, watch, create, update, patch, delete]

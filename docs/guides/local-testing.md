@@ -330,30 +330,47 @@ is the same ~`200m / ~100Mi` profile as `steady`.
   kubectl get pod -n scenario-bare-pod etl-daily-run-1 --show-labels | grep k8s.sustain.io/owner-name
   ```
 
-- **The pod's own resources never change**, no matter how long it runs — this
-  is the core invariant `Ongoing` guarantees for `Pod`-kind targets: there is
-  no controller that could recreate this pod after an eviction or in-place
-  resize, so recycling is permanently skipped, regardless of `UpdateMode`:
+- **The pod is resized in place, never evicted.** Eviction is permanently off
+  for `Pod`-kind targets — nothing would recreate the pod — but an in-place
+  resize needs no controller behind it, so under `Ongoing` the running pod is
+  corrected directly through the `pods/resize` subresource. The UID never
+  changes; only the requests do:
 
   ```bash
   kubectl get pod -n scenario-bare-pod etl-daily-run-1 \
-    -o jsonpath='{.spec.containers[0].resources.requests}{"\n"}'
-  # always 500m / 256Mi, even after many reconcile cycles
+    -o jsonpath='{.metadata.uid}{" "}{.spec.containers[0].resources.requests}{"\n"}'
+  # same UID throughout; CPU comes down from 500m toward ~220m
   ```
 
-- The controller still computes and caches a `WorkloadRecommendation`
-  (`pod-etl-daily`) from the pod's actual usage — useful for the webhook's
-  Prometheus-outage fallback on a later pod sharing this `owner-name` (e.g.
-  the next Airflow DAG run). Unlike every other kind, this doesn't wait out
-  the 10-minute `MinWorkloadAge` gate: that gate exists to avoid a
-  too-young percentile triggering an immediate bad recycle, which can't
-  happen for a kind that never recycles, so it's bypassed for `Pod`. Expect
-  it within a couple of reconcile cycles, not 10+ minutes:
+  A memory decrease can be reported `Infeasible`/`Deferred` by the kubelet;
+  the patcher logs it and skips, and never falls back to eviction here. On a
+  cluster below k8s 1.33 there is no in-place support at all, so the pod
+  stays at `500m / 256Mi` and only the recommendation below appears.
 
-  (The *webhook* injection path is a different story: it gates on the
-  identity's history age, so a pod re-created under the same `owner-name`
-  within ~10 minutes of the identity's first samples keeps its template
-  resources instead of being injected from unstable early-rate data.)
+  The scenario pod leaves `restartPolicy` unset, so it defaults to `Always`
+  and resizes on any k8s ≥ 1.33. Do not generalise that to real Airflow
+  pods: `KubernetesPodOperator` uses `restartPolicy: Never`, which is only
+  fully covered from k8s ≥ 1.35 — on 1.33/1.34 such a pod's resize is
+  rejected and it keeps its admitted resources.
+
+- The controller computes and caches a `WorkloadRecommendation`
+  (`pod-etl-daily`) from the pod's actual usage — this is also the webhook's
+  *only* source of recommendations (it never queries Prometheus itself), so
+  a later pod sharing this `owner-name` (e.g. the next Airflow DAG run) gets
+  injected from it as long as the cache is still fresh when that pod is
+  admitted. Like every other kind, this waits out the 10-minute
+  `MinWorkloadAge` gate — bare pods are no longer exempt from it, since an
+  `Ongoing` bare pod can now be resized in place, so a near-zero percentile
+  from a too-young identity is no longer harmless. Expect the first cached
+  recommendation once the `etl-daily` identity has been known for 10+
+  minutes, not within the first couple of reconcile cycles:
+
+  (The identity's history-age gate is applied by the controller when it
+  builds the recommendation to cache, not by the webhook at admission — the
+  webhook no longer computes anything of its own, so a pod re-created under
+  the same `owner-name` within ~10 minutes of the identity's first samples
+  simply has no cache entry yet to inject from and keeps its template
+  resources.)
 
   ```bash
   kubectl get workloadrecommendation -n scenario-bare-pod
@@ -474,6 +491,90 @@ coexist.
   kubectl logs -n k8s-sustain -l app.kubernetes.io/name=k8s-sustain --tail=500 \
     | grep 'recommend-only'
   ```
+
+### `recurring`
+
+A namespace-scoped `CronJob` ("launcher", every 2 minutes) plays the role of
+an external scheduler like Airflow. Its RBAC is `create`/`get`/`delete` on
+`pods` in this namespace only (`ServiceAccount`/`Role`/`RoleBinding`, no
+`ClusterRole`); each run computes a unique pod name
+(`etl-recurring-$(date +%s)`, so plain `create` never collides), creates a
+genuinely bare Pod — **no `ownerReferences` at all** — carrying a stable
+`k8s.sustain.io/owner-name: etl-recurring` annotation, waits for the ~30s
+load to finish, and then **deletes the pod**.
+
+The delete is what makes the scenario work. `workload.GroupBarePods` does
+not filter on pod phase, so a `Succeeded` pod left behind still reports the
+identity in every target listing — the identity would never depart and the
+departed-refresh path would never run. With the delete, each cycle leaves
+roughly 80s of every 120s in which **no pod of the identity exists at all**,
+comfortably longer than the harness's deployed `--reconcile-interval=30s`.
+
+**Expected — measured on a real kind cluster (k8s 1.35); see
+`recurring.yaml`'s header comment for the full chronologies and reasoning:**
+
+- The `WorkloadRecommendation` (`pod-etl-recurring`) survives every gap, and
+  `status.observedAt` advances on reconciles taken while the pod list is
+  confirmed empty — this is the regression the branch fixes. The direct
+  counter is `k8s_sustain_wlr_refresh_total`, emitted only from
+  `refreshDepartedRecommendation`:
+
+  ```bash
+  kubectl get pods -n scenario-recurring -l app=etl-recurring   # empty
+  kubectl get wlrec -n scenario-recurring pod-etl-recurring \
+    -o jsonpath='{.status.observedAt}{"\n"}'                    # advances
+  ```
+
+- The 10-minute `MinWorkloadAge` gate holds correctly for the first 6 runs
+  — all admitted at the template's `500m / 256Mi`,
+  `recommendation_skipped_total{reason="workload_too_young"}` climbing.
+
+- **The moment the gate clears is not a clean convergence, and what happens
+  next depends on `WINDOW`.** The gate is time-based, not data-volume-based:
+  a pod that runs ~30s per 120s has contributed only ~2.5 minutes of real
+  container runtime by the time the 10-minute gate opens, so the percentile
+  is computed over a mostly-empty series.
+
+  - At the harness default **`WINDOW=10m`** (plain
+    `make test-scenario-recurring`): CPU floors to `1m` and stays there;
+    memory stays realistic (`53–62Mi` request, `81–93Mi` limit); every pod
+    completes and **nothing is killed**. Undramatic and long-lived — it did
+    not self-heal within 14 minutes of observation.
+  - At **`WINDOW=2m`**: the gate clears straight into `cpu=1m,
+    mem=4Mi/6Mi`, and every subsequent pod is OOM-killed the instant it
+    starts (`exitCode: 137`, `reason: OOMKilled`, `startedAt ==
+    finishedAt`). This is self-sustaining — a pod that dies at `t=0`
+    contributes no samples, so the floor re-derives itself. Observed
+    unbroken for 18 minutes with no recovery.
+
+  Either way it is a real, currently-expected design gap — recorded, not
+  fixed by this scenario. It is **not** rescued by the OOM-aware memory
+  floor, which structurally cannot fire here: both detection paths key on
+  `LastTerminationState`, which Kubernetes only populates after a container
+  restart, and a `restartPolicy: Never` pod that dies once never gets one
+  (the captured kill showed `lastState: {}`):
+
+  ```bash
+  kubectl get pod -n scenario-recurring -l app=etl-recurring \
+    --sort-by=.metadata.creationTimestamp \
+    -o jsonpath='{.items[-1].spec.containers[0].resources}{"\n"}'
+  ```
+
+- `status.departed: true` is normally not visible while the launcher keeps
+  ticking at the default window, because the recommendation keeps changing and
+  each refresh therefore rewrites `observedAt`, so the sweep's 10-minute grace
+  period never lapses. A refresh does *not* rewrite `observedAt`
+  unconditionally: `wlrcache.Upsert` skips the write when the new status is
+  equivalent to the stored one and `observedAt` is younger than
+  `wlrcache.RefreshInterval` (10 minutes) — the same 10 minutes as the grace
+  period, by coincidence of two independently tuned constants rather than by
+  design. To see `departed` deliberately, suspend the launcher and budget
+  ~15 minutes; measured at 10m01s after the last `observedAt` write, with the
+  recommendation still retained. Exact commands are in `recurring.yaml`'s
+  header.
+
+- Not in `status.sh`'s generic table (it assumes a Deployment per
+  scenario); use the commands above instead.
 
 ## Observability
 

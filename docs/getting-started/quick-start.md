@@ -82,7 +82,13 @@ spec:
 !!! note "Cold start"
     Recording rules need at least one evaluation cycle (~1 minute) before data is available.
     For meaningful percentile recommendations, allow data to accumulate for at least a few hours.
-    The controller logs `no metrics yet, skipping` for workloads with no data yet.
+    A workload the controller has known for less than 10 minutes is held back by the
+    workload-age gate, logged as `skipping recommendation: workload too young`. Its
+    `WorkloadRecommendation` object still exists — discovery creates one per matched
+    workload — but its `status` stays empty until there is something to put in it. An
+    empty `status.containers` and an unset `status.source` are the expected early
+    reading here, not a failure; the identity is recomputed on every reconcile
+    interval and fills in once Prometheus has enough history.
 
 ## 5. Check the Policy status
 
@@ -98,8 +104,11 @@ status:
     - type: Ready
       status: "True"
       reason: ReconciliationSucceeded
-      message: All targeted workloads have been processed.
+      message: All 3 workloads have been processed.
 ```
+
+The count is the number of workload objects the policy processed this cycle,
+plus any retained recommendation whose workload has since gone away.
 
 ## 6. Verify resource changes
 

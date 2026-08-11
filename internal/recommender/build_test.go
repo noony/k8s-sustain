@@ -1,12 +1,7 @@
 package recommender
 
 import (
-	"context"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -303,42 +298,42 @@ func TestBuildContainerRecs_LiveOOMWithLimitAnchorEmits(t *testing.T) {
 	}
 }
 
-// TestShouldSkipYoungWorkload covers the age gate, including the history-start
-// input: accumulated Prometheus history for the identity (e.g. prior runs of a
-// re-created standalone Job) makes the workload count as old even when the
-// object itself was just created. History can only make a workload look older,
-// never younger.
+// TestShouldSkipYoungWorkload covers the age gate, including the
+// identity-first-seen input: an identity k8s-sustain has known for a while
+// (e.g. prior runs of a re-created standalone Job) makes the workload count as
+// old even when the object itself was just created. A known identity can only
+// make a workload look older, never younger.
 func TestShouldSkipYoungWorkload(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-2 * MinWorkloadAge)
 	young := now.Add(-time.Minute)
 
 	cases := []struct {
-		name         string
-		created      time.Time
-		historyStart time.Time
-		recentOOM    bool
-		want         bool
+		name              string
+		created           time.Time
+		identityFirstSeen time.Time
+		recentOOM         bool
+		want              bool
 	}{
-		{"young object, no history", young, time.Time{}, false, true},
-		{"young object, old history", young, old, false, false},
-		{"young object, young history", young, now.Add(-2 * time.Minute), false, true},
-		{"old object, no history", old, time.Time{}, false, false},
-		{"old object, young history stays old", old, young, false, false},
+		{"young object, unknown identity", young, time.Time{}, false, true},
+		{"young object, long-known identity", young, old, false, false},
+		{"young object, newly-known identity", young, now.Add(-2 * time.Minute), false, true},
+		{"old object, unknown identity", old, time.Time{}, false, false},
+		{"old object, newly-known identity stays old", old, young, false, false},
 		{"young object, recent OOM bypasses", young, time.Time{}, true, false},
-		// Bare pods: the object age is unknown (zero), so the identity's
-		// history age is the only signal — young history gates, old history
-		// or no signal at all does not.
-		{"zero created, young history", time.Time{}, young, false, true},
-		{"zero created, old history", time.Time{}, old, false, false},
-		{"zero created, no history", time.Time{}, time.Time{}, false, false},
-		{"zero created, young history, recent OOM bypasses", time.Time{}, young, true, false},
+		// Bare pods: the object age is unknown (zero), so how long the
+		// identity has been known is the only signal — a newly-known identity
+		// gates, a long-known one or no signal at all does not.
+		{"zero created, newly-known identity", time.Time{}, young, false, true},
+		{"zero created, long-known identity", time.Time{}, old, false, false},
+		{"zero created, unknown identity", time.Time{}, time.Time{}, false, false},
+		{"zero created, newly-known identity, recent OOM bypasses", time.Time{}, young, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ShouldSkipYoungWorkload(tc.created, tc.historyStart, tc.recentOOM); got != tc.want {
+			if got := ShouldSkipYoungWorkload(tc.created, tc.identityFirstSeen, tc.recentOOM); got != tc.want {
 				t.Errorf("ShouldSkipYoungWorkload(%v, %v, %v) = %v, want %v",
-					tc.created, tc.historyStart, tc.recentOOM, got, tc.want)
+					tc.created, tc.identityFirstSeen, tc.recentOOM, got, tc.want)
 			}
 		})
 	}
@@ -354,118 +349,15 @@ func TestAgeForLog(t *testing.T) {
 	}
 }
 
-func TestHistoryLookback(t *testing.T) {
-	cases := map[string]string{
-		"10m":   "24h", // shorter than the floor → floored
-		"1h":    "24h",
-		"24h":   "24h",
-		"168h":  "168h", // longer than the floor → window wins
-		"7d":    "7d",   // prometheus duration units parse too
-		"bogus": "24h",  // unparseable → safe floor
-	}
-	for window, want := range cases {
-		if got := historyLookback(window); got != want {
-			t.Errorf("historyLookback(%q) = %q, want %q", window, got, want)
-		}
-	}
-}
-
-// TestFetchWorkloadInputs_HistoryStartForJobs verifies that the Job-kind fetch
-// issues the history-start query and surfaces its result, while other kinds
-// (whose object age is a faithful identity age) skip the extra query.
-func TestFetchWorkloadInputs_HistoryStartForJobs(t *testing.T) {
-	histStart := time.Now().Add(-25 * time.Minute).Truncate(time.Second)
-
-	var mu sync.Mutex
-	var queries []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		mu.Lock()
-		queries = append(queries, q)
-		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(q, "timestamp(") {
-			fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"%d"]}]}}`, histStart.Unix())
-			return
-		}
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-	}))
-	defer server.Close()
-
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-	p95 := int32(95)
-	rsCfg := sustainv1alpha1.ResourcesConfigs{
-		CPU:    sustainv1alpha1.ResourceConfig{Window: "1h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-		Memory: sustainv1alpha1.ResourceConfig{Window: "1h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-	}
-
-	inputs, err := FetchWorkloadInputs(context.Background(), pc, "ns", "Job", "oneshot", rsCfg)
-	if err != nil {
-		t.Fatalf("FetchWorkloadInputs(Job): %v", err)
-	}
-	if !inputs.HistoryStart.Equal(histStart) {
-		t.Errorf("HistoryStart = %v, want %v", inputs.HistoryStart, histStart)
-	}
-
-	// The lookback for the history-start query must be floored at 24h, not
-	// capped by the 1h CPU window: a lookback equal to the window would cap
-	// the observable history age at the window length, so short windows
-	// (≤ MinWorkloadAge) could never satisfy the gate.
-	mu.Lock()
-	var historyQueries []string
-	for _, q := range queries {
-		if strings.Contains(q, "timestamp(") {
-			historyQueries = append(historyQueries, q)
-		}
-	}
-	mu.Unlock()
-	if len(historyQueries) != 1 {
-		t.Fatalf("expected exactly 1 history-start query, got %d: %v", len(historyQueries), historyQueries)
-	}
-	if !strings.Contains(historyQueries[0], "[24h:") {
-		t.Errorf("history-start lookback not floored at 24h: %q", historyQueries[0])
-	}
-
-	// Bare pods are the other ephemeral identity: object age is meaningless
-	// (the annotated identity outlives any single pod), so the history-start
-	// query must run for Pod-kind too.
-	inputs, err = FetchWorkloadInputs(context.Background(), pc, "ns", "Pod", "etl-daily", rsCfg)
-	if err != nil {
-		t.Fatalf("FetchWorkloadInputs(Pod): %v", err)
-	}
-	if !inputs.HistoryStart.Equal(histStart) {
-		t.Errorf("Pod HistoryStart = %v, want %v", inputs.HistoryStart, histStart)
-	}
-
-	mu.Lock()
-	queries = nil
-	mu.Unlock()
-
-	inputs, err = FetchWorkloadInputs(context.Background(), pc, "ns", "Deployment", "web", rsCfg)
-	if err != nil {
-		t.Fatalf("FetchWorkloadInputs(Deployment): %v", err)
-	}
-	if !inputs.HistoryStart.IsZero() {
-		t.Errorf("Deployment HistoryStart = %v, want zero", inputs.HistoryStart)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	for _, q := range queries {
-		if strings.Contains(q, "timestamp(") {
-			t.Errorf("Deployment fetch issued a history-start query: %q", q)
-		}
-	}
-}
-
-// TestBuildContainerRecs_DisableReplicaCorrection verifies the webhook-path
-// flag: with it set, the replica-budget correction is suppressed while the
-// overhead formula still applies; without it, the correction multiplies the
-// CPU request by clamp(current/target_replicas, 0.5, 2.0).
-func TestBuildContainerRecs_DisableReplicaCorrection(t *testing.T) {
+// TestBuildContainerRecs_AppliesReplicaCorrection verifies that
+// BuildContainerRecs applies the full replica-budget correction end to end
+// (overhead, then the replica-budget factor) when the Policy configures a
+// ReplicaBudgetAnchor — this is now the only path: BuildContainerRecsOptions
+// no longer has a way to suppress it (see the removed DisableReplicaCorrection
+// field; it existed only for admission-time computation, which no longer
+// happens — the webhook now serves a value the controller already computed
+// on its reconcile cadence, where replica counts reflect steady state).
+func TestBuildContainerRecs_AppliesReplicaCorrection(t *testing.T) {
 	inputs := &WorkloadInputs{
 		CPUPerPod: promclient.ContainerValues{"app": 0.1}, // 100m per pod
 		OOM:       promclient.OOMSignal{PeakMemoryBytes: promclient.ContainerValues{}, OOMLimitBytes: promclient.ContainerValues{}},
@@ -476,24 +368,15 @@ func TestBuildContainerRecs_DisableReplicaCorrection(t *testing.T) {
 		Kind:              autoscaler.KindHPA,
 		MinReplicas:       2,
 		MaxReplicas:       10,
-		CurrentReplicas:   8, // mid-scale-out: 4× the anchor target, factor clamps to 2.0
+		CurrentReplicas:   8, // 4× the anchor target, factor clamps to 2.0
 		ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 80},
 	}
 	coord := sustainv1alpha1.AutoscalerCoordination{Enabled: true, ReplicaBudgetAnchor: &anchor}
 
-	// Controller path (flag unset): overhead ceil(100×110/80) = 138m, then
-	// replica factor 2.0 → 276m.
+	// Overhead ceil(100×110/80) = 138m, then replica factor 2.0 → 276m.
 	recs := BuildContainerRecs(containers, inputs, info,
 		sustainv1alpha1.ResourcesConfigs{}, coord, BuildContainerRecsOptions{})
 	if got := recs["app"].CPURequest.MilliValue(); got != 276 {
-		t.Errorf("with replica correction: CPURequest = %dm, want 276m", got)
-	}
-
-	// Webhook path (flag set): overhead only → 138m.
-	recs = BuildContainerRecs(containers, inputs, info,
-		sustainv1alpha1.ResourcesConfigs{}, coord,
-		BuildContainerRecsOptions{DisableReplicaCorrection: true})
-	if got := recs["app"].CPURequest.MilliValue(); got != 138 {
-		t.Errorf("with DisableReplicaCorrection: CPURequest = %dm, want 138m", got)
+		t.Errorf("CPURequest = %dm, want 276m (overhead + replica correction)", got)
 	}
 }

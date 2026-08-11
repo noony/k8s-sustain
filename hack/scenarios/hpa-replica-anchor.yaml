@@ -2,21 +2,34 @@
 # With anchor 0.10 and HPA min=1/max=5, target replicas = round(1+0.1*4) = 1.
 # Pre-scaled to 6 replicas → factor clamped to 2.0 → CPU request gets a 2× bump
 # on top of the overhead formula, encouraging consolidation.
+#
+# CAVEAT — the bump is hard to observe on a fresh cluster, and its absence is
+# NOT a bug. The anchor factor is computed from the replica count AT
+# COMPUTATION TIME, but no recommendation exists until the 10-minute
+# MinWorkloadAge gate elapses. This deployment's load is far below the 60% HPA
+# target, so the HPA scales it 6 → 5 → 2 → 1 within about nine minutes — before
+# the first computation. At that point currentReplicas == targetReplicas == 1,
+# the factor is 1.0, and the result is indistinguishable from `hpa-coordinated`.
+# Measured on kind (k8s 1.35): 369m here vs 345m for hpa-coordinated.
+#
+# To actually exercise the anchor, the replica count has to survive past the
+# gate — raise the load so the HPA has a reason to stay scaled out, or set
+# `behavior.scaleDown.stabilizationWindowSeconds` above 600 on the HPA below.
 
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: scenario-hpa-anchor
+  name: scenario-hpa-replica-anchor
   labels:
     k8s-sustain.io/scenario: hpa-replica-anchor
 ---
 apiVersion: k8s.sustain.io/v1alpha1
 kind: Policy
 metadata:
-  name: scenario-hpa-anchor
+  name: scenario-hpa-replica-anchor
 spec:
   selector:
-    namespaces: [scenario-hpa-anchor]
+    namespaces: [scenario-hpa-replica-anchor]
   rightSizing:
     update:
       types:
@@ -44,7 +57,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: loadgen
-  namespace: scenario-hpa-anchor
+  namespace: scenario-hpa-replica-anchor
 data:
   loadgen.py: |
     import os, time
@@ -76,7 +89,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: stress
-  namespace: scenario-hpa-anchor
+  namespace: scenario-hpa-replica-anchor
 spec:
   replicas: 6
   selector:
@@ -87,7 +100,7 @@ spec:
       labels:
         app: stress
       annotations:
-        k8s.sustain.io/policy: scenario-hpa-anchor
+        k8s.sustain.io/policy: scenario-hpa-replica-anchor
     spec:
       containers:
       - name: stress
@@ -116,7 +129,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: stress
-  namespace: scenario-hpa-anchor
+  namespace: scenario-hpa-replica-anchor
 spec:
   scaleTargetRef:
     apiVersion: apps/v1

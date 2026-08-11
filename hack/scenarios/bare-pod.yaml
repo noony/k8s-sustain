@@ -5,23 +5,70 @@
 # annotations live directly on the Pod itself — there is no pod template to
 # read them from. The Policy opts the "Pod" kind into Ongoing mode.
 #
-# Ongoing NEVER recycles a Pod-kind target, in any mode — there is no
-# controller that could recreate this pod after an eviction or in-place
-# resize. So the controller still computes and caches a recommendation
-# (useful for the webhook's Prometheus-outage fallback on a later run sharing
-# this owner-name), but the pod's own resources stay frozen at their initial
-# (deliberately oversized) values forever.
+# A Pod-kind target is NEVER evicted, in any mode — there is no controller
+# that could recreate this pod. It IS resized in place under Ongoing: an
+# in-place resize needs no controller behind it, and it is the only way to
+# correct a long-running task pod after creation. The kind cluster runs
+# k8s >= 1.33, so the running pod is expected to converge here; below 1.33
+# the same scenario leaves the pod untouched and only the recommendation
+# appears.
 #
-# Expected, within a couple of reconcile cycles (no need to wait out the
-# 10-minute MinWorkloadAge gate — it's bypassed for Pod-kind targets, since
-# they never recycle, so the gate's purpose of avoiding an immediate bad
-# recycle from a too-young percentile cannot apply to them):
-#   - the pod's own resources are UNCHANGED from 500m / 256Mi below — no
-#     recycle ever happens for Pod kind, regardless of how oversized it is.
+# This pod deliberately leaves restartPolicy unset, so it defaults to Always
+# and resizes on any k8s >= 1.33. A real Airflow KubernetesPodOperator pod
+# uses restartPolicy: Never, which is only fully covered from k8s >= 1.35 —
+# on 1.33/1.34 that pod's resize is rejected and it keeps its admitted
+# resources. Change restartPolicy here to reproduce that.
+#
+# Expected, AFTER the 10-minute MinWorkloadAge gate has elapsed for this
+# identity (Pod-kind targets are gated exactly like every other kind — the
+# exemption was removed once Ongoing bare pods started being resized in
+# place). The gate reads the earlier of the pod's creation time and the
+# WorkloadRecommendation's, so a first run on a fresh cluster waits the full
+# 10 minutes; re-applying this scenario later clears it immediately, because
+# the cache object from the previous run has been ageing all along. Until
+# then, expect recommendation_skipped_total{reason="workload_too_young"} to
+# climb — that is the gate working, not a hang:
+#   - the pod's requests move from 500m / 256Mi down toward its actual
+#     ~200m / ~100Mi usage, applied through the pods/resize subresource —
+#     the pod keeps the same UID throughout, since it is resized, never
+#     recreated.
 #   - a WorkloadRecommendation named "pod-etl-daily" exists, computed from
 #     the pod's actual ~200m / ~100Mi usage (the same target as `steady`,
-#     since the load profile and resourcesConfigs match) — even though the
-#     pod itself was never touched.
+#     since the load profile and resourcesConfigs match).
+#
+# MEASURED — a kind cluster run, k8s v1.35.0, WINDOW=10m,
+# --reconcile-interval=30s. Timestamps and values read off the live objects
+# with kubectl, not a prediction:
+#
+#   09:36:41Z  pod admitted on the template's 500m / 256Mi (memory limit
+#              256Mi). The webhook mirrors k8s.sustain.io/owner-name to a pod
+#              label and creates "pod-etl-daily" with an empty status —
+#              status.source is "" (not "nodata"): the identity is live, just
+#              dataless.
+#   ..09:46:41Z  MinWorkloadAge holds for the full 10 minutes. Every cycle
+#              logs `skipping recommendation: workload too young` with
+#              kind=Pod, and recommendation_skipped_total{
+#              reason="workload_too_young"} climbs once per cycle. That is
+#              direct evidence the gate now covers Pod-kind identities.
+#   09:47:13Z  first observation after the gate cleared: requests are already
+#              249m / 122Mi and the memory limit 183Mi. CPU and memory moved
+#              in the SAME resize, on the first cycle after the gate — not
+#              CPU first. The memory decrease (256Mi -> 122Mi request,
+#              256Mi -> 183Mi limit) was accepted outright: .status.resize
+#              was never set to Infeasible or Deferred at any sample, and
+#              restartCount stayed 0. metadata.uid was unchanged from
+#              admission through every later sample, confirming resize
+#              rather than recreation.
+#   09:50:04Z  CPU refines to 259m, then 274m at 09:53:57Z. Memory holds at
+#              122Mi / 183Mi.
+#
+# An earlier version of this file hedged that "CPU converges first" and that
+# "a memory decrease can be reported Infeasible/Deferred by the kubelet, in
+# which case the patcher logs it and skips". Neither happened on k8s 1.35 —
+# both resources converged together and the memory shrink was applied
+# immediately. The patcher does still log-and-skip a rejected resize rather
+# than falling back to eviction, but this scenario did not exercise that
+# branch, so treat it as untested here rather than as expected behaviour.
 #
 # Verify (status.sh's generic table assumes a Deployment named "stress" and
 # does not cover this case):
@@ -29,8 +76,8 @@
 #   # the pod gets the webhook-mirrored label
 #   kubectl get pod -n scenario-bare-pod etl-daily-run-1 --show-labels | grep k8s.sustain.io/owner-name
 #
-#   # the pod's resources never change, no matter how long it runs
-#   kubectl get pod -n scenario-bare-pod etl-daily-run-1 -o jsonpath='{.spec.containers[0].resources.requests}{"\n"}'
+#   # the pod is resized in place: requests converge, UID never changes
+#   kubectl get pod -n scenario-bare-pod etl-daily-run-1 -o jsonpath='{.metadata.uid}{" "}{.spec.containers[0].resources.requests}{"\n"}'
 #
 #   # the WorkloadRecommendation exists and reflects actual usage
 #   kubectl get workloadrecommendation -n scenario-bare-pod

@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -47,9 +44,19 @@ func NewServer(addr string, handler http.Handler) *http.Server {
 }
 
 // ListenAndServeWithShutdown runs listen in a goroutine and blocks until
-// either the listener returns an error or the process receives SIGTERM /
-// SIGINT. On signal, it calls srv.Shutdown with the supplied timeout and
-// returns the result.
+// either the listener returns an error or ctx is cancelled. On cancellation it
+// calls srv.Shutdown with the supplied timeout and returns the result.
+//
+// Shutdown is driven by ctx rather than by a signal handler registered here,
+// so the CALLER owns the process's one signal source. That matters because a
+// server is rarely the only thing that needs to stop: the webhook also runs an
+// informer cache and a cert watcher, and those must outlive the HTTP drain —
+// requests are still being served during it. When this function installed its
+// own signal.Notify alongside the caller's ctrl.SetupSignalHandler, the two
+// fired concurrently and the cache could stop mid-drain, leaving late
+// admissions reading a store that had stopped updating. One context, cancelled
+// by one handler, makes that ordering the caller's explicit choice instead of a
+// race between two handlers.
 //
 // name appears in the "Shutting down …" log line so the operator can tell
 // which server is going down when several share the process.
@@ -57,6 +64,7 @@ func NewServer(addr string, handler http.Handler) *http.Server {
 // listen is a closure rather than a srv method so callers can pick between
 // ListenAndServe and ListenAndServeTLS without httpx growing TLS knobs.
 func ListenAndServeWithShutdown(
+	ctx context.Context,
 	srv *http.Server,
 	logger logr.Logger,
 	name string,
@@ -70,13 +78,10 @@ func ListenAndServeWithShutdown(
 		}
 	}()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-
 	select {
 	case err := <-errCh:
 		return err
-	case <-sigCh:
+	case <-ctx.Done():
 		logger.Info("Shutting down " + name + " server")
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()

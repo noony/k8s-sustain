@@ -65,6 +65,33 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		"raw", len(targets),
 		"matching", len(filtered),
 		"excludedNamespaces", r.ExcludedNamespaces)
+
+	// Bare-pod policy-mismatch reporting happens here, AFTER filtering, not in
+	// listBarePodTargets. filterTargets already reduced targets to the ones
+	// whose PolicyName equals policy.Name, so a Pod-kind target surviving to
+	// this point IS the group's own policy — exactly one reconcile (this
+	// policy's) ever reaches this branch for a given group, instead of every
+	// policy whose selector happens to cover the namespace. This still logs
+	// once per reconcile interval for as long as the conflict persists, which
+	// is deliberate rather than an oversight: it mirrors discover()'s
+	// logging of a persistent write failure (self-heals when transient,
+	// keeps surfacing when it is not), and a silently-dropped bare pod would
+	// be its own, worse bug.
+	for i := range filtered {
+		t := &filtered[i]
+		if t.Kind != "Pod" || len(t.BarePodPolicyMismatched) == 0 {
+			continue
+		}
+		names := make([]string, 0, len(t.BarePodPolicyMismatched))
+		for _, p := range t.BarePodPolicyMismatched {
+			names = append(names, p.Name+"="+p.Annotations[sustainv1alpha1.PolicyAnnotation])
+		}
+		logger.Info("bare pods share an owner-name identity but name a different policy; "+
+			"they are excluded from the group and will not be rightsized under it — "+
+			"give them their own k8s.sustain.io/owner-name or align the policy annotation",
+			"namespace", t.Namespace, "ownerName", t.IdentityName, "groupPolicy", t.PolicyName,
+			"excluded", names)
+	}
 	return filtered, nil
 }
 
@@ -190,6 +217,20 @@ func (r *PolicyReconciler) listJobTargets(ctx context.Context, namespaces []stri
 // listWorkloadsOfKind/getWorkloadEntry so the namespace+owner-name rule and
 // the most-recently-created-pod-wins tie-break have exactly one
 // implementation.
+//
+// Each target carries its group's full member list (BarePodMembers) so the
+// apply phase never has to re-List the namespace and regroup per identity.
+// This List is the single pass; see BarePodMembers for what that saves.
+//
+// Pods that share an identity but name a different policy are dropped by the
+// grouping. Reporting that is deferred to collectTargets rather than done
+// here: this function runs once per policy whose selector merely covers the
+// namespace, before filterTargets narrows the result down to the group's own
+// policy (t.PolicyName == policy.Name). Logging here would fire once per such
+// policy, every reconcile, including every policy uninvolved on both sides of
+// the conflict — the mismatched pods are carried on the target instead
+// (BarePodPolicyMismatched) so collectTargets can log it exactly once, from
+// the one reconcile that owns the group.
 func (r *PolicyReconciler) listBarePodTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
 	return listKindTargets(ctx, r.Client, namespaces,
 		func() *corev1.PodList { return &corev1.PodList{} },
@@ -206,6 +247,12 @@ func (r *PolicyReconciler) listBarePodTargets(ctx context.Context, namespaces []
 					Containers:     g.Containers,
 					InitContainers: g.InitContainers,
 					Object:         g.Representative,
+					// The apply phase needs every member, and this grouping is
+					// the only place it is computed — see BarePodMembers.
+					BarePodMembers: g.Members,
+					// See BarePodPolicyMismatched: logged by collectTargets,
+					// not here.
+					BarePodPolicyMismatched: g.PolicyMismatched,
 				})
 			}
 		})

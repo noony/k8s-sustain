@@ -1,0 +1,456 @@
+# scenario: recurring
+# expected: The headline claim of the WLR-driven-refresh branch, end to end —
+# a recurring EPHEMERAL identity (an Airflow-style bare pod that runs ~30s,
+# exits, is DELETED, and comes back two minutes later under the same
+# k8s.sustain.io/owner-name) keeps being recomputed during the windows in
+# which no pod of it exists at all, instead of freezing the first time it
+# disappears from the target listing.
+#
+# ===========================================================================
+# HOW THE IDENTITY ACTUALLY DEPARTS — the mechanic the scenario rests on
+# ===========================================================================
+#
+# A namespace-scoped CronJob ("launcher") plays the external scheduler
+# (Airflow, in the real analogue). Every two minutes it creates a brand-new,
+# genuinely bare Pod (no ownerReferences, nobody's child) named
+# "etl-recurring-<unix-timestamp>" carrying a STABLE
+# k8s.sustain.io/owner-name: etl-recurring annotation, WAITS for it to reach a
+# terminal phase, DELETES it, and exits. The pod name changes every run (so
+# `create` never collides); the identity does not.
+#
+# Deleting the finished pod is not tidiness — it is the entire scenario:
+#
+#   * workload.GroupBarePods does NOT filter on pod phase. A Succeeded pod
+#     left lying around still reports the identity in every target listing, so
+#     the identity NEVER departs, refreshDepartedRecommendation is never
+#     reached, and the behaviour this file exists to demonstrate is never
+#     exercised. An earlier version of this file created pods and never
+#     deleted them: 29 Succeeded pods piled up over one run and
+#     k8s_sustain_wlr_refresh_total had no series for this namespace at all.
+#     (Directly re-confirmed while rewriting this file: the controller
+#     process still carried
+#     recommendation_skipped_total{namespace="scenario-recurring",
+#     owner_name="etl-recurring"} = 22 from that earlier run, and ZERO
+#     k8s_sustain_wlr_refresh_total series for the same namespace.)
+#
+#   * The gap has to outlast a reconcile. One run occupies ~40s (schedule +
+#     ~30s of load + one 2s poll + the delete), leaving ~80s of every 120s
+#     with ZERO pods. The harness deploys --reconcile-interval=30s
+#     (RECONCILE ?= 30s in Makefile.scenarios), so two to three whole
+#     reconciles land inside every gap, with margin for CronJob scheduling
+#     jitter. A once-a-minute schedule would leave a ~25s gap — SHORTER than
+#     one reconcile interval — and whether the departed path ran at all would
+#     be a coin flip.
+#
+# ===========================================================================
+# MEASURED — kind cluster kind-k8s-sustain, k8s 1.35, WINDOW=10m (the harness
+# DEFAULT). Controller image k8s-sustain:dev, imageID
+# sha256:d204d82b3b1a150cba0743cbc38b10ed05de464c52f64a84ad93941ff1d0686e,
+# pod startTime 2026-08-11T09:35:39Z (byte-identical to a fresh build of the
+# branch). Every value below is read off live objects with kubectl.
+# ===========================================================================
+#
+#   10:38:00Z  WLR "pod-etl-recurring" created by the first run's admission.
+#   10:38–10:48  6 runs (one per 2 min), all admitted at the 500m/256Mi
+#              template, all Succeeded. The webhook logs "WorkloadRecommend-
+#              ation has no recommendable data; allowing pod with template
+#              resources" for each, and recommendation_skipped_total{
+#              reason="workload_too_young"} climbs every reconcile.
+#     <- the MinWorkloadAge gate (10 min) doing real work. Six clean
+#        template-resource runs is the evidence: without the gate the very
+#        first run would have landed in the next paragraph.
+#   10:48:08Z  gate clears (10 min after the WLR's creation). First real
+#              recommendation: cpu=1m, mem=62Mi/93Mi, source=prometheus.
+#     <- cpu=1m is the hard CPU MINIMUM, i.e. a near-floor recommendation, and
+#        it is a REAL currently-expected defect rather than a scenario bug:
+#        the gate is TIME-based, not DATA-VOLUME-based. A pod that runs 30s
+#        out of every 120s has contributed only ~2.5 minutes of container
+#        runtime by the time the 10-minute gate opens, so the CPU percentile
+#        is computed over a mostly-empty series and floors out.
+#        downsizeThreshold suppression (internal/controller/tolerance.go) does
+#        NOT catch it: that rule suppresses SMALL decreases to avoid churn, so
+#        the larger the drop the more readily it goes through — the opposite
+#        of what would have helped.
+#   10:48–11:02  cpu stays pinned at 1m for the whole 14 minutes observed
+#              (7 more runs). Memory does NOT floor at this window: it stays
+#              realistic, oscillating only between 62Mi/93Mi and 53Mi/81408Ki,
+#              comfortably above the loadgen's fixed 50Mi buffer. Every run
+#              Succeeded; ZERO pods were killed.
+#     <- so at the default window the visible symptom is a sustained,
+#        undramatic near-floor CPU request, not a crash. It did not self-heal
+#        within the observation.
+#
+# Net at WINDOW=10m: one identity, no dead pods, and a CPU request stuck at
+# the floor. It is recorded here, not fixed — it is a property of the
+# MinWorkloadAge gate design (time since first-seen, not volume of samples
+# observed) applied to a workload whose duty cycle is thinner than its
+# wall-clock age, and nothing this file's RBAC/launcher/Policy can work
+# around.
+#
+# ===========================================================================
+# WINDOW DEPENDENCE — read this before you believe any number above
+# ===========================================================================
+#
+# The chronology above is WINDOW=10m, the harness default, i.e. what plain
+# `make test-scenario-recurring` gives you. WINDOW=2m produces a materially
+# DIFFERENT and much worse outcome. Both were measured on the same cluster,
+# the same controller image and this same launcher, back to back:
+#
+#   WINDOW=10m (default) — CPU floors to 1m and stays there; memory stays
+#     realistic (53–62Mi request, 81–93Mi limit); every pod completes; no
+#     kills in 14 minutes of observation. Undramatic and long-lived.
+#
+#   WINDOW=2m — the gate clears (11:32:20Z) straight into a FULL near-floor
+#     recommendation: cpu=1m, mem=4Mi/6Mi. 4Mi/6Mi is far below the loadgen's
+#     fixed 50Mi buffer, so every subsequent pod is OOM-killed the instant it
+#     starts. Caught live on pod etl-recurring-1786448520:
+#       state.terminated = {exitCode: 137, reason: "OOMKilled",
+#                           startedAt == finishedAt == 2026-08-11T11:42:01Z}
+#       spec.resources   = {requests: {cpu: 1m, memory: 4Mi},
+#                           limits: {memory: 6Mi}}
+#     and this is SELF-SUSTAINING, not a blip: a pod that dies at t=0
+#     contributes no usable samples, so the 2-minute window stays empty and
+#     the floor re-derives itself every cycle. Observed unbroken from
+#     11:32:20Z to 11:50:46Z — 18 minutes, every run killed, no recovery.
+#     status.observedAt froze at 11:32:20Z (measured). The departed=true that
+#     follows is INFERRED, not timestamped: the sweep's grace period runs off
+#     the frozen ObservedAt, so it lapses ~10 minutes later even though the
+#     launcher is still ticking. Expect it to FLAP rather than stick —
+#     wlrcache.EnsureExists clears Departed unconditionally on any cycle that
+#     catches a pod of the identity alive, and these pods do briefly exist
+#     before they are killed. A single `kubectl get wlrec` reading either
+#     value is consistent with this scenario.
+#
+#   NOT carried forward: an earlier revision of this file used a 60s schedule
+#     and never deleted its pods, and at WINDOW=2m that arrangement recovered
+#     within two cycles after a single kill. That chronology described a
+#     launcher that no longer exists here and is not a prediction for this
+#     one. Do not expect it.
+#
+# The OOM-aware memory floor does NOT rescue either case, and structurally
+# cannot on this pod shape. Both detection paths — internal/oomwatch's
+# hasFreshOOM, and the Prometheus-side
+# kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} which
+# kube-state-metrics also sources from LastTerminationState — key off a
+# container's LastTerminationState, which Kubernetes only populates after a
+# RESTART. These pods are restartPolicy: Never and die exactly once. The
+# live capture above shows it directly: lastState was {} on the OOM-killed
+# pod. Neither path can ever match here.
+#
+# ===========================================================================
+# WHAT TO WATCH, AND WHEN — read this before assuming a wait is a hang
+# ===========================================================================
+#
+#   1. WorkloadRecommendation "pod-etl-recurring" survives between runs.
+#      Visible right after the first run (~2 min):
+#        kubectl get wlrec -n scenario-recurring pod-etl-recurring
+#      It exists continuously from then on, including the ~80s of every 120s
+#      when `kubectl get pods -n scenario-recurring` shows no ETL pod.
+#
+#   2. status.observedAt ADVANCES on reconciles where NO pod of this identity
+#      exists. This is the regression the branch fixes — computation is driven
+#      by the WorkloadRecommendation list, not by a target listing, so a
+#      departed identity is recomputed like any other. MEASURED, with the pod
+#      count confirmed zero on both sides of the advance:
+#
+#        10:56:41Z .. 10:57:34Z   pods=0   observedAt=10:56:39Z
+#        10:57:44Z .. 10:57:55Z   pods=0   observedAt=10:57:39Z  <- advanced
+#                                          (and the value changed with it,
+#                                           62Mi/93Mi -> 53Mi/81408Ki)
+#
+#      Check it yourself — run both commands, wait one reconcile interval,
+#      run both again; the pod list must stay empty across the pair:
+#        kubectl get pods -n scenario-recurring -l app=etl-recurring
+#        kubectl get wlrec -n scenario-recurring pod-etl-recurring \
+#          -o jsonpath='{.status.observedAt}{"\n"}'
+#
+#      The direct counter for this path is k8s_sustain_wlr_refresh_total,
+#      which is emitted ONLY from refreshDepartedRecommendation — every
+#      increment is a recompute of an identity with no live workload object:
+#        kubectl port-forward -n k8s-sustain deploy/k8s-sustain 8080:8080
+#        curl -s localhost:8080/metrics | grep wlr_refresh_total
+#      Over the measured run these totals reached computed=43, nodata=15,
+#      retained-empty=13 for this namespace — but that is the count across the
+#      WHOLE session, roughly 23 of the 43 having accrued AFTER the launcher
+#      was suspended (see (5)), when every cycle finds the identity departed.
+#      A plain run of this scenario, launcher left ticking, shows roughly half
+#      those numbers over a comparable span. Treat them as an order of
+#      magnitude, not a target. Note also that ObservedAt is only rewritten
+#      when the recommendation VALUE changes or every wlrcache.RefreshInterval
+#      (10m), so a perfectly stable recommendation advances it slowly while
+#      the counter keeps climbing — the counter is the sharper signal.
+#
+#   3. status.source stays "nodata" (no Containers) until the MinWorkloadAge
+#      gate clears — 10 minutes, gating on the EARLIER of a pod's own creation
+#      time and the identity's first-seen time (the WLR's creation timestamp).
+#      For a recurring identity the identity age is what matters, not any
+#      individual 30s pod's age: the gate clears ~10 minutes after the FIRST
+#      run ever creates "pod-etl-recurring". Before that,
+#      recommendation_skipped_total{reason="workload_too_young"} climbs every
+#      cycle — the gate working, not a bug. Same gate bare-pod.yaml documents.
+#
+#   4. CONVERGENCE, once (3) has cleared, does not happen — see MEASURED and
+#      WINDOW DEPENDENCE above. Expect a near-floor CPU request that persists.
+#      Check the freshest pod each time, since every run is a new Pod object
+#      and the previous one has been deleted:
+#        kubectl get pod -n scenario-recurring \
+#          -l app=etl-recurring --sort-by=.metadata.creationTimestamp \
+#          -o jsonpath='{.items[-1].spec.containers[0].resources}{"\n"}'
+#      A reconcile that lands while a run is still alive may additionally
+#      resize that live pod in place via pods/resize (same mechanism as
+#      bare-pod.yaml) — not the point of this scenario, which is about the
+#      identity surviving the pod.
+#
+#   5. status.departed: true. While the launcher keeps ticking at WINDOW=10m
+#      you will normally NOT see it: the recommendation keeps changing, so the
+#      refresh keeps rewriting ObservedAt, and the sweep's 10-minute grace
+#      period (measured from ObservedAt) never lapses.
+#
+#      That is a property of these two constants, not a guarantee. A refresh
+#      does NOT rewrite ObservedAt every cycle: wlrcache.Upsert skips the write
+#      entirely when the new status is equivalent to the stored one AND
+#      ObservedAt is younger than wlrcache.RefreshInterval — see (2) above,
+#      which states the same rule. So a recommendation that has gone perfectly
+#      stable advances ObservedAt only every 10 minutes, which is exactly the
+#      sweep's grace period; the two are independently tuned and happen to be
+#      equal, and statusEquivalent's own comment says so. To observe departed
+#      deliberately rather than by that coincidence, stop new arrivals:
+#        kubectl patch cronjob -n scenario-recurring launcher \
+#          -p '{"spec":{"suspend":true}}'
+#      MEASURED: suspended 11:02:30Z; the recommendation kept being recomputed
+#      as samples thinned (decaying to cpu=1m, mem=4Mi/6Mi) until ObservedAt
+#      froze at 11:07:39Z; departed=true first observed at 11:17:40Z, exactly
+#      10m01s later, with zero pods in the namespace and Containers RETAINED
+#      (the recommendation is still served, only Departed flips and ObservedAt
+#      stops moving). Budget ~15 minutes; the exact delay is 10 minutes after
+#      the LAST ObservedAt write, which depends on when the value last
+#      changed.
+#        kubectl get wlrec -n scenario-recurring pod-etl-recurring \
+#          -o jsonpath='{.status.departed}{" "}{.status.observedAt}{"\n"}'
+#      Resume with: kubectl patch cronjob -n scenario-recurring launcher \
+#        -p '{"spec":{"suspend":false}}'. NOT OBSERVED, but expect trouble:
+#      by the time Departed flips, the retained recommendation has decayed to
+#      cpu=1m/4Mi/6Mi (measured above), so the webhook will admit the first
+#      resumed pod at 4Mi/6Mi. The 2m chronology in WINDOW DEPENDENCE shows
+#      what a pod admitted at those values does. Re-apply the scenario fresh
+#      instead if you want a clean identity.
+#
+# Not in status.sh's generic table (it assumes a Deployment named "stress").
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scenario-recurring
+  labels:
+    k8s-sustain.io/scenario: recurring
+---
+apiVersion: k8s.sustain.io/v1alpha1
+kind: Policy
+metadata:
+  name: scenario-recurring
+spec:
+  selector:
+    namespaces: [scenario-recurring]
+  rightSizing:
+    update:
+      types:
+        pod: Ongoing
+    resourcesConfigs:
+      cpu:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 10
+        limits:
+          noLimit: true
+      memory:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 15
+        limits:
+          requestsLimitsRatio: 1.5
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen
+  namespace: scenario-recurring
+data:
+  loadgen.py: |
+    import os, time
+    duty = float(os.environ.get('LOAD_DUTY', '0.2'))
+    mem_mb = int(os.environ.get('LOAD_MEM_MB', '50'))
+    runtime_s = float(os.environ.get('RUN_SECONDS', '30'))
+    buf = bytearray(mem_mb * 1024 * 1024)
+    for i in range(0, len(buf), 4096):
+        buf[i] = 1
+    def burn(d, deadline):
+        period = 0.1
+        on = period * d
+        off = period - on
+        while time.monotonic() < deadline:
+            s = time.monotonic()
+            while time.monotonic() - s < on:
+                pass
+            if off > 0:
+                time.sleep(off)
+    stop = time.monotonic() + runtime_s
+    burn(duty, stop)
+---
+# RBAC for the launcher: a namespace-scoped Role granting exactly the three
+# verbs the launch-wait-delete cycle needs on pods, and nothing else.
+#
+#   create — make the run's bare Pod.
+#   get    — poll THAT pod's status.phase until it reaches Succeeded/Failed
+#            (a named `kubectl get pod <name>`, so no "list" and no "watch";
+#            `kubectl wait` was rejected precisely because it needs both).
+#   delete — remove the finished pod, which is what makes the identity
+#            genuinely DEPART. Without it the completed pods pile up and
+#            workload.GroupBarePods — which does not filter on pod phase —
+#            keeps reporting the identity in every target listing forever,
+#            so the departed-refresh path this scenario exists to exercise
+#            would never be taken.
+#
+# No ClusterRole anywhere in this scenario; the Role is namespace-scoped and
+# grants nothing outside scenario-recurring.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recurring-launcher
+  namespace: scenario-recurring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recurring-launcher
+  namespace: scenario-recurring
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, get, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recurring-launcher
+  namespace: scenario-recurring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: recurring-launcher
+subjects:
+  - kind: ServiceAccount
+    name: recurring-launcher
+    namespace: scenario-recurring
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: launcher
+  namespace: scenario-recurring
+spec:
+  # Every TWO minutes, not every minute, and the launcher deletes the pod it
+  # created before exiting. That combination is what produces a real absence
+  # window: the pod object exists for roughly 40s (schedule + ~30s of load +
+  # one 2s poll + the delete) and then does not exist AT ALL for the
+  # remaining ~80s. 80s is ~2.7x the harness's deployed --reconcile-interval
+  # (RECONCILE ?= 30s in Makefile.scenarios), so at least two full controller
+  # reconciles land inside every gap with margin for CronJob scheduling
+  # jitter. A 60s schedule cannot do this: even with an immediate delete the
+  # gap would be ~25s, SHORTER than one reconcile interval, and whether the
+  # departed path ran at all would be a coin flip.
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      # 100s inside the 120s schedule period, leaving 20s margin. The launch-
+      # wait-delete cycle takes ~40s. The script's own wait is bounded at 70s
+      # and the delete runs unconditionally afterwards, so the delete always
+      # happens well inside this deadline — the deadline is a backstop against
+      # a wedged apiserver call, not part of normal operation. If it ever does
+      # fire mid-run the pod can leak, and a leaked pod keeps the identity
+      # present in every target listing (GroupBarePods ignores phase), which
+      # silently disables the whole point of this scenario. Check with the
+      # pod-count command in point 2 below; clear stragglers with
+      #   kubectl delete pod -n scenario-recurring -l app=etl-recurring
+      activeDeadlineSeconds: 100
+      template:
+        spec:
+          serviceAccountName: recurring-launcher
+          restartPolicy: Never
+          containers:
+            - name: launcher
+              image: alpine/k8s:1.30.0
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  ns=scenario-recurring
+                  name="etl-recurring-$(date +%s)"
+                  echo "creating bare pod ${name} (identity: etl-recurring)"
+                  kubectl create -n ${ns} -f - <<EOF
+                  apiVersion: v1
+                  kind: Pod
+                  metadata:
+                    name: ${name}
+                    labels:
+                      app: etl-recurring
+                    annotations:
+                      k8s.sustain.io/policy: scenario-recurring
+                      k8s.sustain.io/owner-name: etl-recurring
+                  spec:
+                    restartPolicy: Never
+                    containers:
+                      - name: stress
+                        image: python:3.12-alpine
+                        command: ["python3", "/loadgen/loadgen.py"]
+                        env:
+                          - name: LOAD_DUTY
+                            value: "0.20"
+                          - name: LOAD_MEM_MB
+                            value: "50"
+                          - name: RUN_SECONDS
+                            value: "30"
+                        volumeMounts:
+                          - name: loadgen
+                            mountPath: /loadgen
+                        resources:
+                          requests:
+                            cpu: 500m
+                            memory: 256Mi
+                          limits:
+                            memory: 256Mi
+                    volumes:
+                      - name: loadgen
+                        configMap:
+                          name: loadgen
+                  EOF
+                  # Wait for the run to reach a terminal phase, then DELETE the
+                  # pod. The delete is the load-bearing part of this scenario:
+                  # a Succeeded pod is still a pod, workload.GroupBarePods does
+                  # not filter on phase, and leaving it behind would keep the
+                  # identity in every target listing forever.
+                  #
+                  # Bounded at 35 x 2s = 70s so the delete still runs inside
+                  # the Job's activeDeadlineSeconds: 100 even if the pod never
+                  # terminates. Polls a NAMED pod so the Role needs "get" only,
+                  # never "list"/"watch" (which is why this is not `kubectl
+                  # wait`).
+                  i=0
+                  while [ "$i" -lt 35 ]; do
+                    phase=$(kubectl get pod -n ${ns} "${name}" \
+                      -o jsonpath='{.status.phase}' 2>/dev/null || echo Unknown)
+                    case "${phase}" in
+                      Succeeded|Failed) break ;;
+                    esac
+                    i=$((i + 1))
+                    sleep 2
+                  done
+                  echo "run ${name} finished in phase=${phase:-Unknown}; deleting"
+                  kubectl delete pod -n ${ns} "${name}" \
+                    --ignore-not-found --wait=false
+                  echo "identity etl-recurring now has ZERO pods until the next tick"

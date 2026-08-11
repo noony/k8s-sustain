@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -11,9 +12,35 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
+
+// errPrefetchMissingForBatchedKind is logged (never returned to a caller,
+// since the fallback query below still runs and may well succeed) when
+// buildRecommendations receives a nil inputs that Reconcile's
+// candidate-building loop did NOT itself mark as deliberately withheld
+// (snapshotPending false). Every kind batches now, so the only legitimate
+// source of a nil inputs is that loop's own pendingSnapshot bookkeeping (an
+// identity with no observed-resources snapshot yet to size a shard with). A
+// nil inputs that is not that means some future change desynced this guard
+// from the candidate-building loop's own withholding logic, silently
+// degrading back to a per-workload query for every affected workload — a real
+// performance regression that would otherwise be invisible because the
+// recommendation itself still succeeds via the fallback.
+var errPrefetchMissingForBatchedKind = errors.New("prefetched batch inputs missing for an identity that should always be batched")
+
+// recDeps is the slice of reconciler state the recommendation pipeline
+// actually needs. It keeps the pipeline callable as a plain function — the
+// live-target path (computeIdentity) and the departed path
+// (refreshDepartedRecommendation) both drive it, and they write the same
+// WorkloadRecommendation objects, so any divergence here would show up as a
+// workload whose recommendation changes depending on which path computed it.
+type recDeps struct {
+	Prom    *promclient.Client
+	LiveOOM LiveOOMConfig
+}
 
 func (r *PolicyReconciler) buildRecommendations(
 	ctx context.Context,
@@ -21,19 +48,82 @@ func (r *PolicyReconciler) buildRecommendations(
 	ns, ownerKind, ownerName string,
 	containers []corev1.Container,
 	autoInfo autoscaler.Info,
-	workloadCreated time.Time,
+	workloadCreated, identityFirstSeen time.Time,
+	inputs *recommender.WorkloadInputs,
+	fetchErr error,
+	snapshotPending bool,
+) (map[string]workload.ContainerRecommendation, error) {
+	return buildRecommendations(ctx, recDeps{Prom: r.PrometheusClient, LiveOOM: r.LiveOOM},
+		policy, ns, ownerKind, ownerName, containers, autoInfo, workloadCreated, identityFirstSeen, inputs, fetchErr, snapshotPending)
+}
+
+func buildRecommendations(
+	ctx context.Context,
+	deps recDeps,
+	policy *sustainv1alpha1.Policy,
+	ns, ownerKind, ownerName string,
+	containers []corev1.Container,
+	autoInfo autoscaler.Info,
+	workloadCreated, identityFirstSeen time.Time,
+	inputs *recommender.WorkloadInputs,
+	fetchErr error,
+	// snapshotPending is true when Reconcile's candidate-building loop
+	// (policy_controller.go's pendingSnapshot) itself withheld this identity
+	// from the batch because it had no observed-resources snapshot yet to
+	// size a shard with -- a legitimate, expected first-cycle state, not a
+	// bug. It suppresses errPrefetchMissingForBatchedKind's log below for
+	// exactly that case. Callers outside Reconcile's loop (buildRecommendations'
+	// direct unit tests, refreshDepartedRecommendation invoked synthetically)
+	// that are not exercising that withholding should pass false.
+	snapshotPending bool,
 ) (map[string]workload.ContainerRecommendation, error) {
 	rsCfg := policy.Spec.RightSizing.ResourcesConfigs
 	logger := log.FromContext(ctx).WithValues("kind", ownerKind, "name", ownerName, "namespace", ns)
 
-	inputs, err := recommender.FetchWorkloadInputs(ctx, r.PrometheusClient, ns, ownerKind, ownerName, rsCfg)
-	if err != nil {
-		return nil, err
+	// fetchErr is non-nil only when Reconcile's batch prefetch genuinely
+	// failed to reach Prometheus for this identity: its shard query failed,
+	// was retried, and its per-workload fallback (inside
+	// recommender.FetchWorkloadInputsBatch) ALSO failed -- see
+	// recommender.BatchStats' doc comment. Surfacing it here, before even
+	// looking at inputs, restores exactly the behaviour the old unconditional
+	// FetchWorkloadInputs call used to have: the caller's existing
+	// handleStepError("prometheus", ...) path picks this error up, which is
+	// what re-establishes retry tracking, the ReconciliationRetryScheduled
+	// warning event, and the policy's PartialFailure condition. Without this
+	// check, a total Prometheus outage would flow through as an empty (but
+	// non-nil) inputs and look identical to "no data yet" -- Ready:
+	// ReconciliationSucceeded, no retry, no event, nothing but a V(1) log.
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
+
+	// nil means this identity was not prefetched by Reconcile's
+	// FetchWorkloadInputsBatch call -- NOT "queried, found nothing" (the
+	// batch guarantees a non-nil entry for every candidate it was given, see
+	// BatchInputs's doc comment). Every kind batches now, so the one
+	// legitimate reason for a nil inputs is that Reconcile's
+	// candidate-building loop had no observed-resources snapshot yet to size a
+	// shard with and marked this identity accordingly (snapshotPending). We
+	// fall back to the original single-workload fetch here, exactly as every
+	// caller did before batching existed. A nil inputs that is not that would
+	// be a bug in the candidate-building loop, not a legitimate "no data" case
+	// -- logged loudly below so that bug can't hide behind a still-successful
+	// recommendation.
+	if inputs == nil {
+		if !snapshotPending {
+			logger.Error(errPrefetchMissingForBatchedKind,
+				"falling back to a per-workload Prometheus query; this defeats batching and should be investigated in Reconcile's candidate-building loop")
+		}
+		var err error
+		inputs, err = recommender.FetchWorkloadInputs(ctx, deps.Prom, ns, ownerKind, ownerName, rsCfg)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var liveOOMs map[string]*oomwatch.OOMRecord
-	if r.LiveOOM.Enabled() {
-		liveOOMs = r.LiveOOM.Source.RecentByWorkload(ns, ownerKind, ownerName, r.LiveOOM.EffectiveMaxAge())
+	if deps.LiveOOM.Enabled() {
+		liveOOMs = deps.LiveOOM.Source.RecentByWorkload(ns, ownerKind, ownerName, deps.LiveOOM.EffectiveMaxAge())
 	}
 	// Workload-level recency: only feeds the age-gate bypass below. The
 	// per-container memory floor uses per-container recency (OOMCounts /
@@ -46,17 +136,25 @@ func (r *PolicyReconciler) buildRecommendations(
 	// sample-count question — the latter punishes workloads with intrinsically
 	// sparse signal (e.g. a daily CronJob), since percentile queries handle
 	// absent samples correctly but a count-based gate sees the same sparsity
-	// as "no history". EXCEPTION 1: a recent OOM bypasses the gate so a
-	// crash-looping container can still get a memory recommendation from the
-	// OOM peak below. EXCEPTION 2: "Pod"-kind targets (bare pods opted in via
-	// k8s.sustain.io/owner-name) never recycle — the gate's stated purpose,
-	// avoiding a near-zero percentile that floors to the hard minimum and
-	// triggers an immediate bad recycle, cannot occur for a kind that never
-	// recycles at all, so the gate doesn't apply to it.
-	if ownerKind != "Pod" && recommender.ShouldSkipYoungWorkload(workloadCreated, inputs.HistoryStart, recentOOM) {
+	// as "no history". The only exception is a recent OOM, which bypasses the
+	// gate so a crash-looping container can still get a memory recommendation
+	// from the OOM peak below.
+	//
+	// "Pod"-kind targets (bare pods opted in via k8s.sustain.io/owner-name)
+	// are gated like every other kind. They used to be exempt, back when a
+	// bare pod could never be recycled at all and a near-zero percentile had
+	// nothing to act on; that stopped being true once Ongoing bare pods
+	// started being resized in place (see resizeBarePods) — a brand-new
+	// identity with partial warm-up samples can now produce a near-zero
+	// percentile that floors to the hard minimum and gets applied in place,
+	// which for memory can kill the container. The gate keys on the EARLIEST
+	// of the pod's creation time and the identity's first-seen time, so a
+	// recurring identity still clears it on its long-lived
+	// WorkloadRecommendation regardless of this gate.
+	if recommender.ShouldSkipYoungWorkload(workloadCreated, identityFirstSeen, recentOOM) {
 		recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "workload_too_young").Inc()
 		logger.Info("skipping recommendation: workload too young",
-			"age", recommender.AgeForLog(workloadCreated), "historyAge", recommender.AgeForLog(inputs.HistoryStart), "minAge", recommender.MinWorkloadAge)
+			"age", recommender.AgeForLog(workloadCreated), "identityAge", recommender.AgeForLog(identityFirstSeen), "minAge", recommender.MinWorkloadAge)
 		return map[string]workload.ContainerRecommendation{}, nil
 	}
 

@@ -1,0 +1,200 @@
+# scenario: coldstart
+# expected: Exercises the cold-start stub path end to end — the mechanism that
+# gives a recommendation to a workload identity the controller's periodic
+# reconcile NEVER catches alive.
+#
+# The Job below is deliberately built to be invisible to the reconcile loop:
+# it runs for ~90s and is TTL-deleted 30s later, so its entire lifetime (~2min)
+# fits comfortably inside the default 5m --reconcile-interval. Before stubs
+# existed, this identity could never accumulate a WorkloadRecommendation and
+# every run would start on its (oversized) template resources forever.
+#
+# IMPORTANT — the harness overrides the interval. `make test-kind-up` installs
+# with RECONCILE=30s, which is SHORTER than this Job's lifetime, so on a
+# default kind cluster the periodic reconcile *does* catch the Job alive and
+# you will see `recommendation_skipped_total{reason="workload_too_young"}`
+# climb for it. The stub still fires first (at admission, before any
+# reconcile), so the stub path is still exercised — but to observe the stub as
+# the *only* writer, reinstall with a realistic interval:
+#
+#   make test-kind-up RECONCILE=5m
+#
+# Then the Job is created, runs and is deleted entirely between two
+# reconciles, and the WorkloadRecommendation you see came exclusively from the
+# webhook's stub request.
+#
+# The Job name is FIXED (`etl`) on purpose. Identity is
+# (namespace, owner_kind, owner_name), so a name that changed per run — a
+# timestamp or hash suffix — would be a brand-new identity every time and would
+# never converge. That is the failure mode this scenario is designed to make
+# visible by contrast.
+#
+# Initial requests are oversized at 500m / 256Mi; actual usage is ~50m / ~30Mi.
+#
+# Expected sequence:
+#
+#   1. FIRST RUN — admitted with template resources (500m/256Mi) and a stub
+#      WorkloadRecommendation appears with an EMPTY status:
+#
+#        kubectl get wlrec -n scenario-coldstart -o yaml
+#        # spec.workloadRef: {kind: Job, name: etl}; status has no containers
+#
+#      A first-ever identity has no Prometheus history, so status.containers
+#      stays absent. That is correct, not a bug: there is genuinely nothing to
+#      recommend from yet, and the state is NOT terminal -- the identity is
+#      recomputed on every reconcile cycle.
+#
+#      Do NOT expect status.source=nodata here, and do not assert on it. Which
+#      value you get depends on whether the reconcile catches the Job ALIVE,
+#      and with the harness default of RECONCILE=30s it usually does (see the
+#      IMPORTANT note above):
+#
+#        * caught alive -> the live path returns early on zero recommendations
+#          and writes nothing at all, so status.source stays "" (empty).
+#        * never caught alive -> the identity is departed, the departed-refresh
+#          path runs MarkNoData, and status.source becomes "nodata".
+#
+#      "nodata" is therefore the RECONCILE=5m observation, not the default one.
+#      Either way the field to watch is status.containers:
+#
+#        kubectl get wlrec -n scenario-coldstart \
+#          -o jsonpath='{.items[0].status.containers}{"\n"}'
+#
+#   2. LET HISTORY ACCUMULATE — re-run the Job a few times, spaced out, until
+#      the identity has usable samples. The workload-age gate keys on the
+#      EARLIER of the Job object's creation time and the
+#      WorkloadRecommendation's own — not on any Prometheus sample age; that
+#      third signal cost an unshardable subquery per identity and was removed.
+#      The cache object is what carries the identity across runs here, since
+#      each run re-creates the Job object seconds before it is reconciled:
+#
+#        kubectl delete job etl -n scenario-coldstart --ignore-not-found
+#        make test-scenario-coldstart
+#
+#      Nothing has to be deleted to force a fresh attempt: the WorkloadRecommendation
+#      stays in the controller's work-list and is recomputed every cycle.
+#
+#   3. CONVERGED — once history exists, the next reconcile fills status.containers
+#      with a real recommendation:
+#
+#        kubectl get wlrec -n scenario-coldstart \
+#          -o jsonpath='{.items[0].status.containers}{"\n"}'
+#
+#   4. NEXT RUN IS INJECTED — the following pod is admitted with the
+#      recommended requests instead of the template's:
+#
+#        kubectl get pod -n scenario-coldstart -l app=etl \
+#          -o jsonpath='{.items[0].spec.containers[0].resources}{"\n"}'
+#
+# Observability — the two counters that tell the same story from both sides:
+#
+#   kubectl port-forward -n k8s-sustain svc/k8s-sustain-metrics 8080:8080
+#   curl -s localhost:8080/metrics | grep k8s_sustain_wlr_refresh_total
+#   # webhook side (its own metrics endpoint):
+#   curl -sk https://localhost:9443/metrics | grep recommendation_source_total
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scenario-coldstart
+  labels:
+    k8s-sustain.io/scenario: coldstart
+---
+apiVersion: k8s.sustain.io/v1alpha1
+kind: Policy
+metadata:
+  name: scenario-coldstart
+spec:
+  selector:
+    namespaces: [scenario-coldstart]
+  rightSizing:
+    update:
+      types:
+        job: OnCreate
+    resourcesConfigs:
+      cpu:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 10
+        limits:
+          noLimit: true
+      memory:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 15
+        limits:
+          requestsLimitsRatio: 1.5
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen
+  namespace: scenario-coldstart
+data:
+  loadgen.py: |
+    import os, time
+    duty = float(os.environ.get('LOAD_DUTY', '0.05'))
+    mem_mb = int(os.environ.get('LOAD_MEM_MB', '30'))
+    runtime_s = float(os.environ.get('RUN_SECONDS', '90'))
+    buf = bytearray(mem_mb * 1024 * 1024)
+    for i in range(0, len(buf), 4096):
+        buf[i] = 1
+    def burn(d, deadline):
+        period = 0.1
+        on = period * d
+        off = period - on
+        while time.monotonic() < deadline:
+            s = time.monotonic()
+            while time.monotonic() - s < on:
+                pass
+            if off > 0:
+                time.sleep(off)
+    stop = time.monotonic() + runtime_s
+    burn(duty, stop)
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Stable name: this IS the workload identity. See the header note.
+  name: etl
+  namespace: scenario-coldstart
+spec:
+  backoffLimit: 0
+  # 30s TTL + ~90s runtime keeps the whole lifetime well under the default 5m
+  # reconcile interval, so the controller's periodic pass never sees this Job
+  # alive. That is the entire point of the scenario.
+  ttlSecondsAfterFinished: 30
+  template:
+    metadata:
+      annotations:
+        k8s.sustain.io/policy: scenario-coldstart
+      labels:
+        app: etl
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: worker
+          image: python:3.12-alpine
+          command: ["python3", "/loadgen/loadgen.py"]
+          env:
+            - name: LOAD_DUTY
+              value: "0.05"
+            - name: LOAD_MEM_MB
+              value: "30"
+            - name: RUN_SECONDS
+              value: "90"
+          volumeMounts:
+            - name: loadgen
+              mountPath: /loadgen
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: loadgen
+          configMap:
+            name: loadgen

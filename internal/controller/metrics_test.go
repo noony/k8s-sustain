@@ -1,13 +1,15 @@
 package controller
 
 import (
-	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 )
 
 func TestNewMetricsRegistered(t *testing.T) {
+	seedMetricsForRegistrationCheck()
+
 	cases := []struct {
 		name   string
 		labels []string
@@ -19,6 +21,9 @@ func TestNewMetricsRegistered(t *testing.T) {
 		{"k8s_sustain_workload_retry_attempts", []string{"namespace", "owner_kind", "owner_name"}},
 		{"k8s_sustain_policy_workload_count", []string{"policy"}},
 		{"k8s_sustain_policy_at_risk_count", []string{"policy"}},
+		{"k8s_sustain_policy_batch_requested_count", []string{"policy"}},
+		{"k8s_sustain_policy_batch_resolved_count", []string{"policy"}},
+		{"k8s_sustain_policy_batch_failures_total", []string{"policy"}},
 		{"k8s_sustain_autoscaler_present", []string{"namespace", "owner_kind", "owner_name", "kind"}},
 	}
 	for _, tc := range cases {
@@ -82,14 +87,44 @@ func metricsRegistry() interface {
 	return registryForTest
 }
 
-func init() {
-	recommendedCPUCores.WithLabelValues("ns", "Deployment", "n", "c", "regular", "p").Set(0)
-	recommendedMemoryBytes.WithLabelValues("ns", "Deployment", "n", "c", "regular", "p").Set(0)
-	workloadDriftRatio.WithLabelValues("ns", "Deployment", "n", "cpu").Set(1)
-	workloadRetryState.WithLabelValues("ns", "Deployment", "n", "test").Set(0)
-	workloadRetryAttempts.WithLabelValues("ns", "Deployment", "n").Add(0)
-	policyWorkloadCount.WithLabelValues("p").Set(0)
-	policyAtRiskCount.WithLabelValues("p").Set(0)
-	autoscalerPresent.WithLabelValues("ns", "Deployment", "n", "HPA").Set(0)
-	_ = strings.Builder{}
+// seedMetricsForRegistrationCheck creates one child series per vector asserted
+// by TestNewMetricsRegistered.
+//
+// This is mandatory, not cosmetic: a *Vec with no children is absent from
+// Gather() output, so an unseeded vector is indistinguishable from an
+// unregistered one. It also has to run inside the test rather than in a
+// package init(), because the cleanup paths under test delete series --
+// DeletePolicyMetrics wipes every series carrying a given policy label, and
+// EmitWorkloadMetrics / EmitAutoscalerPresent drop stale per-workload series.
+// Seeding once at init() left the assertions at the mercy of -shuffle: any
+// test reconciling a deleted Policy named "p" removed the seeds first and the
+// gather below reported the metrics as unregistered.
+//
+// The label values are deliberately unique to this test so no other test's
+// cleanup can match and remove them.
+func seedMetricsForRegistrationCheck() {
+	const (
+		ns     = "metrics-registration-probe-ns"
+		name   = "metrics-registration-probe-workload"
+		policy = "metrics-registration-probe-policy"
+	)
+	recommendedCPUCores.WithLabelValues(ns, "Deployment", name, "c", ContainerKindRegular, policy).Set(0)
+	recommendedMemoryBytes.WithLabelValues(ns, "Deployment", name, "c", ContainerKindRegular, policy).Set(0)
+	workloadDriftRatio.WithLabelValues(ns, "Deployment", name, "cpu").Set(1)
+	workloadRetryState.WithLabelValues(ns, "Deployment", name, "test").Set(0)
+	workloadRetryAttempts.WithLabelValues(ns, "Deployment", name).Add(0)
+	policyWorkloadCount.WithLabelValues(policy).Set(0)
+	policyAtRiskCount.WithLabelValues(policy).Set(0)
+	policyBatchRequested.WithLabelValues(policy).Set(0)
+	policyBatchResolved.WithLabelValues(policy).Set(0)
+	policyBatchFailuresTotal.WithLabelValues(policy).Add(0)
+	autoscalerPresent.WithLabelValues(ns, "Deployment", name, "HPA").Set(0)
+}
+
+func TestEmitWLRRefreshRecordsOutcome(t *testing.T) {
+	EmitWLRRefresh("ns", "Pod", WLRRefreshRetainedEmpty)
+	got := testutil.ToFloat64(wlrRefreshTotal.WithLabelValues("ns", "Pod", WLRRefreshRetainedEmpty))
+	if got != 1 {
+		t.Errorf("counter = %v, want 1", got)
+	}
 }
