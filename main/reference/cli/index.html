@@ -1753,7 +1753,7 @@
 </tr>
 </tbody>
 </table>
-<p>When <code>--recommend-only</code> is enabled, both the controller and the webhook still query Prometheus and compute recommendations as usual, but they <strong>never</strong> apply changes. Computed recommendations are emitted as structured log lines at <code>info</code> level, so you can inspect them before switching to active mode.</p>
+<p>When <code>--recommend-only</code> is enabled, the controller still queries Prometheus and computes recommendations as usual, and the webhook still resolves workloads and reads the cached recommendation (it never queries Prometheus itself, recommend-only or not), but nothing <strong>applies</strong> changes. Computed recommendations are emitted as structured log lines at <code>info</code> level, so you can inspect them before switching to active mode.</p>
 <p>For a dry-run scoped to a single policy instead of the whole installation, set <code>spec.rightSizing.recommendOnly: true</code> on that <code>Policy</code> — see the <a href="../policy/#specrightsizingrecommendonly">Policy reference</a>. The global flag always wins: when it is set, every policy is dry-run regardless of its own field.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># via flag</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>k8s-sustain<span class="w"> </span>start<span class="w"> </span>--recommend-only
@@ -1825,14 +1825,24 @@
 <td>Maximum number of Policy objects reconciled in parallel</td>
 </tr>
 <tr>
+<td><code>--prometheus-max-inflight</code></td>
+<td><code>8</code></td>
+<td>Maximum concurrent Prometheus queries across the whole controller. Kept below Prometheus's own <code>--query.max-concurrency</code> (default 20) so k8s-sustain does not starve dashboards and alerting sharing the same server. A query that cannot get a slot within 2 minutes is abandoned rather than queued indefinitely; that is counted as a batch failure, not as a Prometheus failure, so it never trips the circuit breaker</td>
+</tr>
+<tr>
 <td><code>--recycle-replacement-timeout</code></td>
 <td><code>5m</code></td>
 <td>In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) regularly takes longer than the default.</td>
 </tr>
 <tr>
 <td><code>--recommendation-retention</code></td>
-<td><code>72h</code></td>
-<td>How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs). The dashboard shows these as inactive workloads. <code>0</code> sweeps them on the next reconcile.</td>
+<td><code>168h</code></td>
+<td>How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs) — that is, how long a departed identity's last-known-good keeps being served. It does <strong>not</strong> affect how often anything is recomputed: a retained identity is recomputed on <code>--reconcile-interval</code> like every other cache object. Because the webhook's only source is this object, the window decides whether a <em>recurring</em> ephemeral identity is rightsized at admission on its next run, so set it above the longest expected gap between runs — see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>. The dashboard shows retained entries as inactive workloads. <code>0</code> sweeps them on the next reconcile. The window is measured from <code>status.observedAt</code>, which keeps being refreshed while the identity's samples remain inside the query window, so the clock only starts once that history ages out — budget object count against roughly <code>window + retention</code>.</td>
+</tr>
+<tr>
+<td><code>--query-shard-max-samples</code></td>
+<td><code>10000000</code></td>
+<td>Projected Prometheus sample budget (containers × window-minutes, summed across a shard's workloads) a single batched CPU/memory/OOM shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own <code>--query.max-samples</code> (default <code>50000000</code>): that server-side limit <em>rejects</em> an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default leaves a 5x margin.</td>
 </tr>
 </tbody>
 </table>
@@ -1846,9 +1856,9 @@
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nv">K8SSUSTAIN_RECONCILE_INTERVAL</span><span class="o">=</span>30m<span class="w"> </span>k8s-sustain<span class="w"> </span>start
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nv">K8SSUSTAIN_LOG_LEVEL</span><span class="o">=</span>debug<span class="w"> </span>k8s-sustain<span class="w"> </span>start
 <a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Subcommand-scoped flag (dashboard.bind-address, webhook.prometheus-address)</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Subcommand-scoped flag (dashboard.bind-address, webhook.excluded-namespaces)</span>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nv">K8SSUSTAIN_DASHBOARD_BIND_ADDRESS</span><span class="o">=</span>:9999<span class="w"> </span>k8s-sustain<span class="w"> </span>dashboard
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nv">K8SSUSTAIN_WEBHOOK_PROMETHEUS_ADDRESS</span><span class="o">=</span>http://prom.example:9090<span class="w"> </span>k8s-sustain<span class="w"> </span>webhook
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nv">K8SSUSTAIN_WEBHOOK_EXCLUDED_NAMESPACES</span><span class="o">=</span>kube-system,monitoring<span class="w"> </span>k8s-sustain<span class="w"> </span>webhook
 <a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
 <a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># List-valued flag — comma-separated, same syntax as --excluded-namespaces=a,b</span>
 <a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="nv">K8SSUSTAIN_EXCLUDED_NAMESPACES</span><span class="o">=</span>kube-system,monitoring<span class="w"> </span>k8s-sustain<span class="w"> </span>start
@@ -1917,11 +1927,6 @@
 <td>Path to the TLS private key file</td>
 </tr>
 <tr>
-<td><code>--prometheus-address</code></td>
-<td><code>http://localhost:9090</code></td>
-<td>Address of the Prometheus server</td>
-</tr>
-<tr>
 <td><code>--log-level</code></td>
 <td><code>info</code></td>
 <td>Log verbosity: <code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code></td>
@@ -1930,6 +1935,11 @@
 <td><code>--excluded-namespaces</code></td>
 <td>—</td>
 <td>Comma-separated list of namespaces the webhook must never mutate. Pods in these namespaces are admitted unchanged. Mirrors the controller flag so both components stay in lockstep.</td>
+</tr>
+<tr>
+<td><code>--recommendation-retention</code></td>
+<td><code>168h</code></td>
+<td>Must match the controller flag of the same name. It bounds the one case where the webhook injects from a recommendation older than the 30 min staleness budget: an identity the controller marked <em>departed</em>, whose <code>status.observedAt</code> is frozen by design. Past this window the object is one the controller's sweep should already have deleted, so the webhook treats it as stale rather than injecting last-known-good forever — which is what a controller wedged before its sweep would otherwise cause. The chart renders both flags from the single <code>controller.recommendationRetention</code> value, so they cannot drift.</td>
 </tr>
 </tbody>
 </table>
@@ -1978,7 +1988,7 @@
 </code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Using <code>Fail</code> in production</p>
-<p>Setting <code>failurePolicy: Fail</code> means <strong>pod creation is blocked</strong> if the webhook is unavailable. Only use this if you have ≥2 webhook replicas and are confident in the availability of Prometheus.</p>
+<p>Setting <code>failurePolicy: Fail</code> means <strong>pod creation is blocked</strong> if the webhook is unavailable. Only use this if you have ≥2 webhook replicas. The webhook no longer depends on Prometheus at admission time — it only needs the apiserver to read the cached <code>WorkloadRecommendation</code> — but it still needs the controller's cache to stay fresh (within <code>DefaultCacheStaleness</code>, 30 min) for injections to happen at all, and a webhook outage under <code>Fail</code> still blocks pod creation regardless.</p>
 </div>
 <hr />
 <h2 id="k8s-sustain-dashboard"><code>k8s-sustain dashboard</code><a class="headerlink" href="#k8s-sustain-dashboard" title="Permanent link">&para;</a></h2>

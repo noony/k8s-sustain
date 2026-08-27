@@ -941,6 +941,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cold-start-the-first-run-is-never-injected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cold start: the first run is never injected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#collecting-enough-history" class="md-nav__link">
     <span class="md-ellipsis">
       Collecting enough history
@@ -1538,6 +1547,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cold-start-the-first-run-is-never-injected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cold start: the first run is never injected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#collecting-enough-history" class="md-nav__link">
     <span class="md-ellipsis">
       Collecting enough history
@@ -1697,13 +1715,23 @@
 <li>On clusters below k8s 1.33, or when the kubelet reports the resize as <code>Infeasible</code> or <code>Error</code>, or the API server rejects the resize for that pod (e.g. it would change the QoS class), the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook. The <code>ResourcesUpdated</code> event only counts pods whose resize the API server actually accepted.</li>
 <li>The controller never patches the <code>CronJob</code> or <code>Job</code> object, so RBAC for <code>batch/cronjobs</code> and <code>batch/jobs</code> is read-only.</li>
 </ul>
+<h3 id="cold-start-the-first-run-is-never-injected">Cold start: the first run is never injected<a class="headerlink" href="#cold-start-the-first-run-is-never-injected" title="Permanent link">&para;</a></h3>
+<p>A standalone Job is re-created on every run, so its object is always seconds old at admission, and a Job that runs briefly and is TTL-cleaned may never be alive when a reconcile fires. Its identity enters the cache through a <strong>cold-start stub</strong>:</p>
+<ol>
+<li><strong>First run.</strong> No <code>WorkloadRecommendation</code> exists, so the pod is admitted with its template resources and the webhook creates an empty stub, recording the admitted pod's container set on it. Admission cannot wait for a Prometheus query it no longer makes — the stub is for the <em>next</em> run.</li>
+<li><strong>Next reconcile.</strong> The object is now in the controller's work-list, so the identity is recomputed on every reconcile interval whether or not a Job happens to be running at the time. On that first pass the identity is still seconds old, so the workload-age gate holds it back and nothing is written. Once the run finishes — a Complete or Failed Job leaves the target listing, as does a TTL-cleaned one — the identity is <em>departed</em>, and a cycle that finds nothing for it records <code>status.source: nodata</code>. That is <strong>not</strong> terminal: it means only that nothing has been computed yet, and the identity is recomputed on the next cycle regardless.</li>
+<li><strong>Convergence.</strong> Once the identity has cleared the 10-minute age gate and Prometheus has usable samples for it, the next reconcile writes a real recommendation — so convergence takes <strong>one reconcile interval</strong> from that point, not a longer retry cycle. Every run after that is injected at admission.</li>
+</ol>
+<p>A short Job that always finishes between two reconciles converges too. The controller no longer has to catch a run alive: the cache object outlives the runs, so it keeps ageing past the gate and Prometheus history keeps accumulating against the one identity. Keep <code>--recommendation-retention</code> above the gap between runs so the object is not swept in between (see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>).</p>
+<p>The <a href="../../concepts/recommendation-pipeline/#stages">workload-age gate</a> is what makes this work across runs: it keys on the earliest of the object's <code>CreationTimestamp</code> and the identity's <code>WorkloadRecommendation</code> <code>CreationTimestamp</code>, so an identity k8s-sustain has known since an earlier run counts as old even though each run's object is brand new.</p>
+<p>A Job whose <strong>name changes every run</strong> (a timestamp or hash suffix) is a different identity each time and will never converge — it is a new cold start on every run. Use a stable Job name, or run it under a CronJob, so history accumulates against one identity. Watch <code>k8s_sustain_wlr_refresh_total{outcome="nodata"}</code> to spot this: a rate that never converts to <code>computed</code> is the signature, alongside a <code>WorkloadRecommendation</code> count that grows with every run.</p>
 <h3 id="collecting-enough-history">Collecting enough history<a class="headerlink" href="#collecting-enough-history" title="Permanent link">&para;</a></h3>
 <p>CronJobs that run infrequently (e.g. weekly) may not have enough data for a meaningful percentile. Use a longer window:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">resourcesConfigs</span><span class="p">:</span>
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">cpu</span><span class="p">:</span>
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">720h</span><span class="w">   </span><span class="c1"># 30 days</span>
 </code></pre></div>
-<p>If fewer than ~10 data points exist in the window, the controller logs <code>no metrics yet, skipping</code> and leaves resources unchanged.</p>
+<p>When the window holds no usable samples, the controller writes no recommendation and leaves resources unchanged, retrying on the next reconcile. A live Job or CronJob simply keeps an empty <code>status</code> on its <code>WorkloadRecommendation</code>; only once the identity is departed does a fruitless cycle record <code>status.source: nodata</code>. Separately, an identity known for less than 10 minutes is held back by the <a href="../../concepts/recommendation-pipeline/#stages">workload-age gate</a>, which logs <code>skipping recommendation: workload too young</code> and increments <code>k8s_sustain_recommendation_skipped_total{reason="workload_too_young"}</code>.</p>
 <h3 id="guaranteed-qos-for-batch-jobs">Guaranteed QoS for batch jobs<a class="headerlink" href="#guaranteed-qos-for-batch-jobs" title="Permanent link">&para;</a></h3>
 <p>Setting <code>equalsToRequest: true</code> for both CPU and memory limits makes the pod a <a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/#guaranteed">Guaranteed QoS class</a>, which prevents throttling and OOM eviction under memory pressure. This is often desirable for batch workloads.</p>
 <h3 id="oom-detection-for-one-shot-pods">OOM detection for one-shot pods<a class="headerlink" href="#oom-detection-for-one-shot-pods" title="Permanent link">&para;</a></h3>

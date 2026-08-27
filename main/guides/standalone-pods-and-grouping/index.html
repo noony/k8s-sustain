@@ -952,6 +952,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Bare pods (Airflow example)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#keep-the-window-long-relative-to-the-duty-cycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      Keep the window long relative to the duty cycle
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1474,6 +1489,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Bare pods (Airflow example)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#keep-the-window-long-relative-to-the-duty-cycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      Keep the window long relative to the duty cycle
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1581,20 +1611,89 @@ like every other kind:</p>
 aggregates under the single identity <code>Pod/etl-daily</code> within the <code>airflow</code>
 namespace. The webhook injects resources at admission like any other
 <code>OnCreate</code> kind.</p>
-<p><strong><code>Ongoing</code> mode never recycles bare pods.</strong> There is no controller that
-could recreate the pod after an eviction or in-place resize, so even with
-<code>pod: Ongoing</code> configured, the controller computes and caches a
-recommendation (useful for the webhook's Prometheus-outage fallback) but
-never evicts or resizes the pod itself.</p>
+<p><strong>Bare pods are never evicted, in any mode.</strong> There is no controller that
+could recreate the pod, so eviction would simply destroy the workload.</p>
+<p><strong><code>Ongoing</code> bare pods are resized in place.</strong> Eviction needs a controller
+behind it; an in-place resize does not. So with <code>pod: Ongoing</code> on a cluster
+that supports <code>InPlacePodVerticalScaling</code> (k8s ≥ 1.33), the controller
+corrects the running pods of the identity directly through the <code>pods/resize</code>
+subresource — otherwise a long-running Airflow task would stay on whatever it
+was admitted with for its entire life. Below 1.33 there is no in-place
+support, so nothing is applied to a running bare pod and the recommendation
+only reaches the next pod through the webhook.</p>
+<p><strong>Mind the <code>restartPolicy</code> caveat.</strong> k8s 1.33 and 1.34 do not cover pods whose
+<code>restartPolicy</code> is <code>Never</code> or <code>OnFailure</code>; full coverage of those arrives in
+<strong>k8s ≥ 1.35</strong>. This is not a footnote for Airflow readers:
+<code>KubernetesPodOperator</code> creates <code>restartPolicy: Never</code> pods by default, so on a
+1.33/1.34 cluster the resize is rejected per pod and the running task keeps its
+admitted resources. The rejection is logged and skipped — it never falls back
+to eviction — and the next pod of the identity is still injected correctly at
+admission. This is the same version caveat that applies to
+<a href="../jobs-and-cronjobs/">Job and CronJob pods</a>, which run with the same
+<code>restartPolicy</code> values.</p>
+<p>Which pods count as "the running pods of the identity" is decided by the same
+grouping rule the controller uses to discover them: no controller
+<code>ownerReference</code>, a valid <code>owner-name</code>, matching policy annotation. A pod that
+merely carries the mirrored <code>owner-name</code> <strong>label</strong> but belongs to a
+ReplicaSet is not a member and is never touched by this path — that is the
+bare-pod counterpart of the ownerRef check protecting every other kind.</p>
+<p><strong>One owner-name, one policy.</strong> The group is claimed by the policy named on the
+first of its pods the controller sees. A pod that shares the
+<code>(namespace, owner-name)</code> but names a <em>different</em> policy in
+<code>k8s.sustain.io/policy</code> is excluded from the group entirely: it is not a member,
+it never supplies the group's containers, and it is never resized under the
+group's recommendation. Both pods map to the same <code>WorkloadRecommendation</code> name,
+so there is no second identity for the odd pod to belong to — this is a
+configuration conflict, not a supported layout. The controller logs it on every
+reconcile:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>bare pods share an owner-name identity but name a different policy; they are
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>excluded from the group and will not be rightsized under it
+</code></pre></div>
+<p>Fix it by giving those pods their own <code>k8s.sustain.io/owner-name</code>, or by
+aligning their <code>k8s.sustain.io/policy</code> annotation with the rest of the group.</p>
+<p>One tradeoff to be aware of: an in-place <strong>memory</strong> resize can restart the
+container, which for an Airflow task means losing in-flight work. This is not
+specific to bare pods — <code>Job</code> and <code>CronJob</code> already accept it, on the same
+reasoning that resizing the running pod is the only way to correct it after
+creation. Downsize suppression (<code>downsizeThreshold</code>) bounds how often it can
+fire. If your tasks cannot tolerate a restart, use <code>pod: OnCreate</code>: the
+recommendation is still computed and cached, and the webhook still injects it
+into the next pod of the identity.</p>
+<h3 id="keep-the-window-long-relative-to-the-duty-cycle">Keep the window long relative to the duty cycle<a class="headerlink" href="#keep-the-window-long-relative-to-the-duty-cycle" title="Permanent link">&para;</a></h3>
+<p>A recurring bare-pod identity is only alive for part of the wall clock — an
+Airflow task that runs for 30 seconds every two minutes is running about a
+quarter of the time. Two settings interact with that, and it is worth knowing
+which one protects you.</p>
+<p>The 10-minute age gate does <strong>not</strong>: it is a floor on how long k8s-sustain has
+known the identity, not on how much data it has, so a duty-cycled workload
+clears it with proportionally less usage history than a continuously-running
+one. The <code>window</code> is what protects you, because a window long relative to the
+duty cycle still spans many complete runs.</p>
+<p>The failure mode when it does not: if the window is short enough that it
+frequently contains only the first seconds of a run — the part where the CPU
+rate rule has not stabilised — the percentile lands near zero, the hard floors
+(1m CPU, 1Mi memory) take over, and the identity gets a near-floor
+recommendation that a real run cannot fit in.</p>
+<p><strong>This is not reachable on a default install.</strong> The default <code>window</code> is <code>168h</code>
+(7 days), which covers thousands of runs of any realistic recurring task; you
+would have to configure a window measured in minutes to see it. Where it does
+show up is in short-window experiments — the <code>recurring</code> local-testing
+scenario reproduces the dramatic, OOM-killing form deliberately at
+<code>WINDOW=2m</code>, but the same identity also misbehaves at the harness <em>default</em>
+<code>WINDOW=10m</code>: CPU floors to the 1m minimum and stays pinned there for the
+whole observation window, with no self-heal, even though memory stays
+realistic and no pods are killed at that window. If you deliberately shorten
+<code>window</code> for a recurring workload, size it against the workload's <em>period</em>,
+not its runtime.</p>
 <h2 id="grouping-owned-workloads-bluegreen-example">Grouping owned workloads (blue/green example)<a class="headerlink" href="#grouping-owned-workloads-bluegreen-example" title="Permanent link">&para;</a></h2>
 <p>Set the same annotation on the pod template of each Deployment you want
 grouped:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">template</span><span class="p">:</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-policy</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="nt">k8s.sustain.io/owner-name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">app</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">      </span><span class="nt">annotations</span><span class="p">:</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">        </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-policy</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">        </span><span class="nt">k8s.sustain.io/owner-name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">app</span>
 </code></pre></div>
 <p>Both <code>app-blue</code> and <code>app-green</code> report into one shared <code>Deployment/app</code>
 identity — one Prometheus query aggregate, one <code>WorkloadRecommendation</code>
@@ -1603,6 +1702,42 @@ object (<code>deployment-app</code>, not <code>deployment-app-blue</code> /
 Deployment's own pods are evicted or resized independently, using the shared
 computed recommendation — grouping affects identity and data, not which pods
 get touched.</p>
+<p>Because the group has one <code>WorkloadRecommendation</code>, it also has one
+<code>status.observedResources</code> snapshot and one recommendation in
+<code>status.containers</code>, and <strong>both are computed once per identity rather than once
+per member</strong>. The snapshot is the <strong>union</strong> of the members' containers, so a
+container only <code>app-green</code> declares is still sized and still recommended; where
+both members declare the same container name under different requests/limits (a
+group mid-migration), the entry from the member whose <code>kind/namespace/name</code>
+sorts first is kept whole, rather than mixing one member's request with
+another's limit. The recommendation is then computed against that union, using
+the autoscaler of the first member (in the same sort order) that has one, and
+treating the identity as being as old as its oldest member.</p>
+<p><strong>If members of an owner-name group differ in autoscaler state — one has an
+HPA and a sibling doesn't, or they're governed by different autoscaler kinds —
+the first sorted member's autoscaler governs the shared recommendation for
+every member</strong>, including the ones it doesn't actually target. This is a
+misconfiguration, not a supported migration state (unlike the container-set
+union above, which is expected to be transient): a member with no autoscaler
+of its own can silently inherit a value shaped by an HPA that has no view of
+it, over- or under-provisioning it depending on the coordination factor. The
+controller detects and reports this — a <code>V(1)</code> log naming the identity and the
+disagreeing members, plus <code>k8s_sustain_group_autoscaler_mismatch_total</code> — but
+does not change the selection; fixing it means making the group's autoscaler
+state consistent, typically by attaching (or removing) an HPA/ScaledObject on
+the other members.</p>
+<p>Every one of those choices is decided by the members' own names or by an
+aggregate over all of them, so the stored snapshot and the stored recommendation
+do not depend on the order the API server lists the members in, nor on which
+member's work finishes first. Discovery and the computation phase both write
+<code>status.observedResources</code> (discovery via <code>EnsureExists</code>, computation via
+<code>wlrcache.Upsert</code>), but always the same value — the merged snapshot computed
+once per identity — so the two writers can never disagree, and a group whose
+members and metrics are unchanged therefore costs <strong>no status write at all</strong> on
+subsequent reconciles, rather than one write per member per cycle.</p>
+<p>Applying is still per real Deployment: each member aligns its own pods against
+that one shared recommendation, narrowed to the containers that member actually
+declares.</p>
 <h2 id="namespace-scoping">Namespace scoping<a class="headerlink" href="#namespace-scoping" title="Permanent link">&para;</a></h2>
 <p>For bare pods, the grouping key is <code>namespace + owner-name</code>, not
 <code>owner-name</code> alone. Two pods in different namespaces using the same
@@ -1617,14 +1752,54 @@ object backing it, the dashboard groups live pods by <code>(namespace,
 owner-name)</code> the same way the controller does (<code>workload.GroupBarePods</code>) —
 the most recently created pod in the group supplies the displayed
 containers and annotations.</p>
-<p>Because a bare pod like the Airflow example above can start and finish
-entirely between two controller reconciles, the webhook records its
-<code>WorkloadRecommendation</code> at admission time rather than waiting for the
-controller. Once the pod completes and is deleted, that recommendation
+<p>A bare pod like the Airflow example above can start and finish entirely
+between two controller reconciles, so the controller's periodic pass may never
+catch that identity alive — and between runs the group appears in no workload
+listing at all. Cold start covers this: the webhook computes nothing, but when
+it admits a pod for an identity that has no <code>WorkloadRecommendation</code>, it
+creates an empty <strong>stub</strong> and records the admitted pod's container set on it.
+From that moment the identity is in the controller's work-list and is
+recomputed on every reconcile interval, whether or not a pod of the group is
+running at the time.</p>
+<p>What this means for a bare-pod identity in practice:</p>
+<ul>
+<li><strong>First pod ever.</strong> Admitted with its template resources — admission cannot
+  wait for a Prometheus query it no longer makes — and a stub is created.</li>
+<li><strong>Next reconcile.</strong> The identity is recomputed. With no accumulated history
+  yet, nothing is written: while a pod of the group is running the identity is
+  a live target and its status is left as it stands, and once the group is
+  empty the identity is <em>departed</em>, so a cycle that finds nothing records
+  <code>status.source: nodata</code>. Either way it means "nothing computed yet", not
+  "give up" — it is retried every cycle, and nothing has to be deleted, reaped
+  or recreated to force a fresh attempt.</li>
+<li><strong>Once the identity has usable samples</strong>, a recommendation is computed and
+  cached — and every subsequent pod of that <code>owner-name</code> is injected at
+  admission. The
+  <a href="../../concepts/recommendation-pipeline/#stages">workload-age gate</a> applies
+  to bare pods exactly like every other kind: a <code>Pod</code>-kind identity younger
+  than 10 minutes is skipped. That was not always true — bare pods used to be
+  exempt, back when a bare pod could never be recycled at all and a near-zero
+  percentile had nothing to act on, but that premise stopped holding once
+  <code>Ongoing</code> bare pods started being resized in place, so the exemption was
+  removed. The exposure of the gate applying is narrow in practice — it reads
+  the <em>earliest</em> of the pod's creation time and the identity's first-seen
+  time, so a recurring identity clears it on its long-lived cache object
+  anyway, and a brand-new identity usually has no samples to recommend from at
+  all. What gates a bare-pod identity in practice is usually simply whether
+  its percentile queries return anything yet — the age gate mostly matters for
+  a brand-new identity with partial warm-up samples in its first 10 minutes.</li>
+</ul>
+<p>So a recurring bare-pod identity converges on its own: the cache object
+outlives the individual pods, so it keeps ageing past the gate and Prometheus
+history keeps accumulating against the one <code>owner-name</code>, even across gaps when
+no pod of the group exists. A genuinely one-off pod that runs once and never
+returns does not converge, and that is the intended outcome — there is nothing
+to right-size for a second time. See
+<a href="../../concepts/workload-recommendations/#cold-start-stub-recommendations">Cold start</a>.</p>
+<p>Once a cache entry does exist and the pod later completes and is deleted, it
 stays visible on the dashboard as an <strong>inactive</strong> row for the retention
-window (<code>--recommendation-retention</code>, default <code>72h</code>) — see
-<a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>
-— even though the pod never lived through a reconcile cycle.</p>
+window (<code>--recommendation-retention</code>, default <code>168h</code>) — see
+<a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</p>
 
 
 

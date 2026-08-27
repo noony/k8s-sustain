@@ -620,6 +620,33 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      Discovery
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#computation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Computation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#application" class="md-nav__link">
+    <span class="md-ellipsis">
+      Application
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#pod-oom-watcher" class="md-nav__link">
     <span class="md-ellipsis">
       Pod OOM watcher
@@ -1491,6 +1518,33 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      Discovery
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#computation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Computation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#application" class="md-nav__link">
+    <span class="md-ellipsis">
+      Application
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#pod-oom-watcher" class="md-nav__link">
     <span class="md-ellipsis">
       Pod OOM watcher
@@ -1594,48 +1648,69 @@
 <a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>│           │                                 │                   │
 <a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>│           │ list / patch                    │ Get Policy        │
 <a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>│           │                                 │ Get Job/RS        │
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>│           ▼                                 ▼                   │
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>│  ┌────────────────────────────────────────────────────────┐     │
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>│  │                   Kubernetes API Server                │     │
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>│  └─────────────────────────┬──────────────────────────────┘     │
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>│                            │                                    │
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>│           ┌────────────────┼────────────────┐                   │
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>│           ▼                ▼                ▼                   │
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>│    Deployments      StatefulSets        CronJobs                │
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>│    DaemonSets       Argo Rollouts                               │
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>│                                                                 │
-<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>│  ┌──────────────────────────────────────────────────────────┐   │
-<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>│  │                        Prometheus                        │   │
-<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>│  │  k8s_sustain:container_cpu_usage_by_workload:rate1m      │   │
-<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>│  │  k8s_sustain:container_memory_by_workload:bytes          │   │
-<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>│  └────────────────────────────┬─────────────────────────────┘   │
-<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>│                               │                                 │
-<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>│  ┌────────────────────────────┴─────────────────────────────┐   │
-<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>│  │  k8s-sustain-dashboard (optional)                        │   │
-<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>│  │  Web UI: policy exploration, metrics, simulator          │   │
-<a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>│  └──────────────────────────────────────────────────────────┘   │
-<a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>└─────────────────────────────────────────────────────────────────┘
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>│           │                                 │ Watch WLR (cache) │
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>│           │                                 │ Create stub WLR   │
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>│           ▼                                 ▼                   │
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>│  ┌────────────────────────────────────────────────────────┐     │
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>│  │                   Kubernetes API Server                │     │
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>│  └─────────────────────────┬──────────────────────────────┘     │
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>│                            │                                    │
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>│           ┌────────────────┼────────────────┐                   │
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>│           ▼                ▼                ▼                   │
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>│    Deployments      StatefulSets        CronJobs                │
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>│    DaemonSets       Argo Rollouts                               │
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>│                                                                 │
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>│  ┌──────────────────────────────────────────────────────────┐   │
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>│  │                        Prometheus                        │   │
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>│  │  k8s_sustain:container_cpu_usage_by_workload:rate1m      │   │
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>│  │  k8s_sustain:container_memory_by_workload:bytes          │   │
+<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>│  └────────────────────────────┬─────────────────────────────┘   │
+<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>│                               │                                 │
+<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>│  ┌────────────────────────────┴─────────────────────────────┐   │
+<a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>│  │  k8s-sustain-dashboard (optional)                        │   │
+<a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>│  │  Web UI: policy exploration, metrics, simulator          │   │
+<a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a>│  └──────────────────────────────────────────────────────────┘   │
+<a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a>└─────────────────────────────────────────────────────────────────┘
 </code></pre></div>
 <h2 id="controller-k8s-sustain-start">Controller (<code>k8s-sustain start</code>)<a class="headerlink" href="#controller-k8s-sustain-start" title="Permanent link">&para;</a></h2>
 <p>The controller is a standard <a href="https://github.com/kubernetes-sigs/controller-runtime">controller-runtime</a> reconciler that watches <code>Policy</code> objects.</p>
-<p><strong>Reconcile loop:</strong> (independent <code>Policy</code> objects reconcile in parallel too, bounded by <code>--policy-concurrency-limit</code>, default 10 — a separate knob from the per-workload fan-out in step 3 below)</p>
-<ol>
-<li>A <code>Policy</code> event is received (create / update / periodic requeue)</li>
-<li>For each workload kind enabled in the policy (<code>deployment</code>, <code>statefulSet</code>, <code>daemonSet</code>, <code>argoRollout</code>, <code>cronJob</code>):</li>
+<p><strong>Reconcile loop:</strong> a <code>Policy</code> event (create / update / periodic requeue) runs three phases in order — <strong>discovery</strong>, <strong>computation</strong>, <strong>application</strong>. Only computation talks to Prometheus. Independent <code>Policy</code> objects reconcile in parallel, bounded by <code>--policy-concurrency-limit</code> (default 10) — a separate knob from the per-workload fan-out inside the computation phase.</p>
+<p>The controller requeues after <code>--reconcile-interval</code> (default <code>5m</code>).</p>
+<h3 id="discovery">Discovery<a class="headerlink" href="#discovery" title="Permanent link">&para;</a></h3>
+<p>For each workload kind enabled in the policy (<code>deployment</code>, <code>statefulSet</code>, <code>daemonSet</code>, <code>argoRollout</code>, <code>cronJob</code>, <code>job</code>, <code>pod</code>):</p>
+<ul>
 <li>List all objects of that kind — scoped to the namespaces in <code>selector.namespaces</code> when specified, or cluster-wide otherwise</li>
-<li>Filter by the <code>k8s.sustain.io/policy</code> annotation in the pod template</li>
-<li>Skip workloads in retry backoff from a previous transient failure</li>
-<li>Process matching workloads in parallel (bounded by <code>--workload-concurrency-limit</code>, default 5):</li>
-<li>Detect autoscalers (HPA / KEDA <code>ScaledObject</code>) targeting the workload — read-only, no patches</li>
-<li>Compute a per-container recommendation (see <a href="../recommendation-pipeline/">Recommendation Pipeline</a>) and cache it in a <code>WorkloadRecommendation</code> object, regardless of update mode — this keeps <code>OnCreate</code> workloads visible on the dashboard and gives the webhook a Prometheus-outage fallback</li>
-<li><code>OnCreate</code>-mode workloads stop here: the recommendation is computed and cached, but never applied by the controller — resource injection at pod creation is the webhook's job</li>
+<li>Filter by the <code>k8s.sustain.io/policy</code> annotation in the pod template — or, for bare pods, on the pod itself, since there is no template to read it from</li>
+<li>Ensure a <code>WorkloadRecommendation</code> exists for the matched identity, creating it when missing and keeping its policy label and <code>status.observedResources</code> snapshot current</li>
+</ul>
+<p>Discovery issues <strong>no Prometheus queries</strong>, and it creates a cache object for <em>every</em> matched target rather than only for the ones that currently have enough history to compute. The object count therefore tracks matched workloads, not computable ones — expect a <code>WorkloadRecommendation</code> per matched workload from the first reconcile onward, most of them briefly empty.</p>
+<p>Several targets collapse onto one identity under <a href="../../guides/standalone-pods-and-grouping/">owner-name grouping</a> (<code>app-blue</code> and <code>app-green</code> both reporting as <code>Deployment/app</code>). They share a single <code>WorkloadRecommendation</code> and a single computation, but every member is carried into the application phase, which must reach each one's own pods.</p>
+<h3 id="computation">Computation<a class="headerlink" href="#computation" title="Permanent link">&para;</a></h3>
+<p>The work-list is <strong>the policy's <code>WorkloadRecommendation</code> objects, not the target listing</strong>. That inversion is the point: an identity that appears in no listing — a completed Job, a bare-pod group between runs — is still recomputed on every cycle. When the work-list came from the listing, nothing could refresh those identities at all, and their recommendation stayed frozen until the retention window lapsed and the object was swept.</p>
+<p>The listing is not discarded, though: the work-list is the union of the cache objects and the identities discovery just ensured. Both the controller's reads go through the same watch-populated informer cache, so an object created moments earlier in the <em>same</em> reconcile is often not visible to a list yet — and nothing watches <code>WorkloadRecommendation</code> to re-trigger a reconcile when it becomes visible. Without the union a freshly matched workload would be neither computed nor applied on the cycle it is first seen and would wait a full <code>--reconcile-interval</code> for a second chance. Discovery already holds everything such an identity needs (its container set comes from the target), so this costs no extra API calls.</p>
+<ul>
+<li>Prefetch every identity's Prometheus inputs in <strong>one sharded batch call per policy</strong> (see <a href="../recommendation-pipeline/#how-the-data-is-fetched">Recommendation Pipeline</a>) — a handful of queries for the whole policy instead of several per workload. Every kind batches identically, including <code>Job</code> and <code>Pod</code></li>
+<li>Skip identities in retry backoff from a previous transient failure. Under owner-name grouping an identity is withheld only when <em>every</em> member is backed off, so one sick member cannot deny its healthy siblings their inputs</li>
+<li>Process the work-list in parallel (bounded by <code>--workload-concurrency-limit</code>, default 5): detect autoscalers (HPA / KEDA <code>ScaledObject</code>) targeting the workload — read-only, no patches — and compute a per-container recommendation (see <a href="../recommendation-pipeline/">Recommendation Pipeline</a>)</li>
+<li>The unit is the <strong>identity</strong>, not the workload object: a group of workloads sharing an owner-name produces exactly one computation and one write, against the union of the members' containers. Computing per member instead gave a single shared object several competing answers, with the one that survived decided by whichever member's goroutine finished last</li>
+<li>Write the result back to the <code>WorkloadRecommendation</code>, regardless of update mode — this keeps <code>OnCreate</code> workloads visible on the dashboard and is the webhook's only source of recommendations at admission (it never queries Prometheus itself)</li>
+<li>An identity that produces nothing recommendable this cycle is simply not written. For a <strong>live</strong> target the status is left as it stands — an identity that has never produced anything keeps an empty <code>status.containers</code> and an unset <code>status.source</code>. Either way it is recomputed on the next cycle, and converges as soon as Prometheus has enough history; nothing here is a terminal state</li>
+<li>A <strong>departed</strong> identity that produces nothing is additionally marked <code>status.source: nodata</code>, recording that the controller looked and found nothing. The mark never overwrites an existing recommendation, so a departed identity whose samples have aged out of the query window keeps its last-known-good</li>
+<li>A <strong>departed</strong> identity — one with a cache object but no live workload object behind it — stops here. It is computed and cached so the webhook can inject it into that identity's <em>next</em> pod, but there are no running pods to align</li>
+</ul>
+<p>Departed refreshes are counted in <code>k8s_sustain_wlr_refresh_total{namespace, owner_kind, outcome}</code>, the only signal that reports on a population no listing contains; see <a href="../../reference/metrics/#k8s_sustain_wlr_refresh_total">Metrics</a>.</p>
+<h3 id="application">Application<a class="headerlink" href="#application" title="Permanent link">&para;</a></h3>
+<p>Only live targets in <code>Ongoing</code> mode are applied. <code>OnCreate</code>-mode workloads stop after computation — the recommendation is cached but never applied by the controller, because resource injection at pod creation is the webhook's job — and a departed identity has no pods to apply anything to, so it stopped in the previous phase.</p>
+<ul>
 <li>If <code>--recommend-only</code> is set, log the recommendation and skip patching</li>
 <li>Recycle stale running pods: on k8s &gt;= 1.33 via in-place resource patching through the <code>/resize</code> subresource; on k8s &lt; 1.33 via the Eviction API (PDB-respecting). The webhook injects the latest resources into replacement pods at creation time. Pods are listed by the workload's label selector and then filtered by <strong>controller ownership</strong>: a pod is only recycled when its ownerRef chain resolves to the target workload (directly for StatefulSet/DaemonSet, via the owning ReplicaSet for Deployment/Argo Rollout). Bare pods or pods of another workload with an overlapping selector are skipped and logged — the opt-in contract is per-workload</li>
-<li><strong>CronJob exception:</strong> the controller never mutates the CronJob spec and never evicts a job pod. On clusters that support in-place resize, currently-running job pods are resized via <code>pods/resize</code>; otherwise they finish on their existing resources and the next scheduled run picks up the new values from the webhook</li>
+<li><strong>CronJob and Job exception:</strong> the controller never mutates the CronJob or Job spec and never evicts a job pod. On clusters that support in-place resize, currently-running job pods are resized via <code>pods/resize</code>; otherwise they finish on their existing resources and, for a CronJob, the next scheduled run picks up the new values from the webhook</li>
+<li><strong>Bare-pod exception:</strong> a <code>Pod</code>-kind identity is never evicted in any mode — no controller would recreate the pod — but under <code>Ongoing</code> its running pods <em>are</em> resized in place, since an in-place resize needs no controller behind it. Membership comes from the same grouping rule the controller discovers them with, so a ReplicaSet-owned pod that merely carries the mirrored <code>owner-name</code> label is never touched</li>
+<li>Under owner-name grouping, every member is applied independently against the identity's one shared recommendation, narrowed to the containers that member actually declares</li>
 <li>Emit a <code>ResourcesUpdated</code> event on the workload object on success</li>
 <li>On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a <code>ReconciliationRetryScheduled</code> warning event on the workload</li>
-</ol>
-<p>The controller requeues after <code>--reconcile-interval</code> (default <code>5m</code>).</p>
+</ul>
+<p><code>--policy-concurrency-limit</code> × <code>--workload-concurrency-limit</code> bounds how many workloads are in flight at once (50 by default), each issuing several Prometheus queries — enough to burst well past Prometheus's own <code>--query.max-concurrency</code> (default 20, shared with every other consumer of that server: Grafana dashboards, alerting rules). <code>--prometheus-max-inflight</code> (default 8) is a separate, global cap on concurrent Prometheus queries across the whole controller process, independent of the two concurrency-limit flags above — it throttles the client itself rather than the workload fan-out, so it protects Prometheus even if the concurrency limits are turned up.</p>
 <h3 id="pod-oom-watcher">Pod OOM watcher<a class="headerlink" href="#pod-oom-watcher" title="Permanent link">&para;</a></h3>
 <p>A second controller-runtime reconciler runs alongside the Policy reconciler and watches <code>Pod</code> objects cluster-wide, filtered to those carrying the <code>k8s.sustain.io/policy</code> annotation. It exists to close the multi-minute latency window between an OOM kill and the next recording-rule-driven reconcile (kube-state-metrics scrape → Prometheus scrape → 1m rule evaluation → 5–10m reconcile interval).</p>
 <p>When a container's <code>LastTerminationState.Terminated.Reason == "OOMKilled"</code> is observed, the watcher:</p>
@@ -1658,16 +1733,19 @@
 <li><code>Pod → Job → CronJob</code></li>
 <li><code>Pod → StatefulSet / DaemonSet</code></li>
 <li>Fetches the named Policy from the API server</li>
-<li>Checks that the policy has <code>OnCreate</code> mode for that workload kind</li>
-<li>Queries Prometheus for current recommendations</li>
-<li>Skips containers that already have a CPU request set</li>
-<li>If <code>--recommend-only</code> is set, logs the recommendation and allows the pod through unchanged</li>
-<li>Returns an RFC 6902 JSON Patch with the recommended resources</li>
+<li>Checks that the policy manages that workload kind at all. Both <code>OnCreate</code> <strong>and</strong> <code>Ongoing</code> inject — otherwise an <code>Ongoing</code> pod would start on template resources and wait for a resize it does not need</li>
+<li>Reads the <code>WorkloadRecommendation</code> the controller already cached for that workload (<code>fetchRecommendations</code> in <code>internal/webhook/recommendations.go</code>) — the webhook itself never queries Prometheus</li>
+<li>Narrows the cached recommendation to the containers present in this pod, matched by name. A container that already has resources set is <em>not</em> skipped — the patch replaces whatever the template specified</li>
+<li>If the cache is stale beyond <code>DefaultCacheStaleness</code> (30 min), or <code>--recommend-only</code> is set, allows the pod through with its template resources unchanged. If the cache is <strong>missing entirely</strong>, additionally creates a stub <code>WorkloadRecommendation</code> so the controller computes one for the next pod of this workload</li>
+<li>Otherwise returns an RFC 6902 JSON Patch with the recommended resources</li>
 <li>The API server applies the patch before persisting the pod</li>
 </ol>
 <p>The webhook <strong>fails open</strong> (<code>failurePolicy: Ignore</code> by default) — if it is unreachable or returns an error, the pod is admitted unchanged. The controller will handle ongoing reconciliation regardless.</p>
-<p><strong>Latency budget.</strong> The handler is bounded by a hard 4s deadline on the admission context (under the apiserver's 5s <code>MutatingWebhookConfiguration</code> timeout). Each Prometheus query has its own short 2s per-query timeout so a slow upstream cannot exhaust the budget for the cache-fallback path. If Prometheus is unavailable, the webhook serves the cached <code>WorkloadRecommendation</code> written by the controller; if the cache is missing or stale beyond <code>DefaultCacheStaleness</code> (30 min), the pod is admitted with its original template resources.</p>
-<p><strong>Ephemeral-identity cache writes.</strong> For bare pods and standalone Jobs — workloads that can be created and deleted entirely between two controller reconciles — the webhook itself writes the <code>WorkloadRecommendation</code> after computing a fresh recommendation, in a detached goroutine so the write never blocks the <code>AdmissionResponse</code>. See <a href="../workload-recommendations/">Workload Recommendations</a> for details.</p>
+<p><strong>Latency budget.</strong> The handler is bounded by a hard 4s deadline on the admission context (under the apiserver's 5s <code>MutatingWebhookConfiguration</code> timeout). The webhook makes no Prometheus calls — the only outbound work in the admission path is a handful of Kubernetes API <code>Get</code>s (Policy lookup, owner resolution, the <code>WorkloadRecommendation</code> read), each bounded by its own short 2s per-call timeout, so a slow apiserver round-trip cannot exhaust the budget. The webhook always serves the cached <code>WorkloadRecommendation</code> written by the controller; if the cache is missing or stale beyond <code>DefaultCacheStaleness</code> (30 min), the pod is admitted with its original template resources.</p>
+<p><strong>Informer-backed reads.</strong> With Prometheus out of the admission path, the apiserver is the only remaining source of latency there. The webhook therefore serves its <code>Policy</code> and <code>WorkloadRecommendation</code> reads from an informer cache (<code>k8s.NewCached</code>) rather than a per-pod <code>Get</code> — at several thousand workloads an uncached read per admission is a round trip the cluster does not need. Budget roughly 20–50 MB resident at 10k workloads; the chart's webhook memory request is sized accordingly.</p>
+<p>Only those two kinds are cached. The owner-chain kinds (<code>ReplicaSet</code>, <code>Job</code>) are read at most once per pod CREATE, and an informer over every ReplicaSet in the cluster would cost far more memory than the Get it saves — so they stay uncached. The two cached informers are registered and synced during startup, before the webhook is receiving traffic: registering them lazily on first use would push a blocking cluster-wide LIST into the first admission, inside its 2s per-call timeout, and on a large cluster the first pods after every restart would fail open onto template resources.</p>
+<p><strong>Stub writes (the webhook's only write).</strong> The webhook computes nothing, so it never writes a recommendation. It does write one thing: when a pod is admitted for a workload identity that has no <code>WorkloadRecommendation</code> at all, it creates an empty-status <strong>stub</strong> — recording the admitted pod's container set in <code>status.observedResources</code> — and admits the pod unchanged. Creating the object is what puts the identity into the controller's work-list; the <a href="#computation">computation phase</a> fills in the recommendation on its next cycle, so the next pod of that workload is injected.</p>
+<p>This is how an identity the controller's periodic listing never sees gets discovered at all: bare pods and standalone Jobs can be created and deleted entirely between two reconciles, so no target listing may ever contain them. Recording the container set on the stub is what makes the object self-sufficient afterwards — computation reads the containers from there rather than from a workload object that may already be gone. The create is detached from the <code>AdmissionResponse</code> and idempotent, which makes a mass scale-out self-debouncing. See <a href="../workload-recommendations/#cold-start-stub-recommendations">Workload Recommendations</a> for the full lifecycle.</p>
 <h2 id="dashboard-k8s-sustain-dashboard">Dashboard (<code>k8s-sustain dashboard</code>)<a class="headerlink" href="#dashboard-k8s-sustain-dashboard" title="Permanent link">&para;</a></h2>
 <p>The dashboard is an optional web UI that provides:</p>
 <ul>
@@ -1677,7 +1755,7 @@
 </ul>
 <p>It is read-only: it queries the Kubernetes API and Prometheus but never modifies any resources. See the <a href="../../guides/dashboard/">Dashboard guide</a> for details.</p>
 <h2 id="recommend-only-mode">Recommend-only mode<a class="headerlink" href="#recommend-only-mode" title="Permanent link">&para;</a></h2>
-<p>When <code>--recommend-only</code> is passed (or <code>recommendOnly: true</code> in the Helm values), all three components continue to operate normally — querying Prometheus, computing recommendations, resolving workloads — but <strong>no mutations are applied</strong>. Recommendations are emitted as structured JSON log lines at <code>info</code> level. The same dry-run can be scoped to a single policy with <code>spec.rightSizing.recommendOnly: true</code>; the global flag remains a master switch that overrides every policy.</p>
+<p>When <code>--recommend-only</code> is passed (or <code>recommendOnly: true</code> in the Helm values), all three components continue to operate normally — the controller keeps querying Prometheus, computing recommendations, and caching them; the webhook keeps resolving workloads and reading the cached recommendation; the dashboard keeps querying Prometheus for its own charts — but <strong>no mutations are applied</strong>. Recommendations are emitted as structured JSON log lines at <code>info</code> level. The same dry-run can be scoped to a single policy with <code>spec.rightSizing.recommendOnly: true</code>; the global flag remains a master switch that overrides every policy.</p>
 <p>This is useful for:</p>
 <ul>
 <li>Validating that k8s-sustain produces sensible recommendations before enabling active mode</li>

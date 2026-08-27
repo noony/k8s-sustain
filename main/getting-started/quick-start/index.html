@@ -1613,7 +1613,13 @@
 <p class="admonition-title">Cold start</p>
 <p>Recording rules need at least one evaluation cycle (~1 minute) before data is available.
 For meaningful percentile recommendations, allow data to accumulate for at least a few hours.
-The controller logs <code>no metrics yet, skipping</code> for workloads with no data yet.</p>
+A workload the controller has known for less than 10 minutes is held back by the
+workload-age gate, logged as <code>skipping recommendation: workload too young</code>. Its
+<code>WorkloadRecommendation</code> object still exists — discovery creates one per matched
+workload — but its <code>status</code> stays empty until there is something to put in it. An
+empty <code>status.containers</code> and an unset <code>status.source</code> are the expected early
+reading here, not a failure; the identity is recomputed on every reconcile
+interval and fills in once Prometheus has enough history.</p>
 </div>
 <h2 id="5-check-the-policy-status">5. Check the Policy status<a class="headerlink" href="#5-check-the-policy-status" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>policy<span class="w"> </span>staging-rightsizing<span class="w"> </span>-o<span class="w"> </span>yaml
@@ -1624,8 +1630,10 @@ The controller logs <code>no metrics yet, skipping</code> for workloads with no 
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ready</span>
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">      </span><span class="nt">status</span><span class="p">:</span><span class="w"> </span><span class="s">"True"</span>
 <a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">      </span><span class="nt">reason</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ReconciliationSucceeded</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">      </span><span class="nt">message</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">All targeted workloads have been processed.</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">      </span><span class="nt">message</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">All 3 workloads have been processed.</span>
 </code></pre></div>
+<p>The count is the number of workload objects the policy processed this cycle,
+plus any retained recommendation whose workload has since gone away.</p>
 <h2 id="6-verify-resource-changes">6. Verify resource changes<a class="headerlink" href="#6-verify-resource-changes" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>deployment<span class="w"> </span>my-app<span class="w"> </span>-n<span class="w"> </span>staging<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.template.spec.containers[*].resources}'</span>

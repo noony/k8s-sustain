@@ -1646,14 +1646,25 @@ anchor=0.10</code>:</p>
 <li>Workload currently at 6 replicas (on target): <code>factor = 1.0</code>, no change.</li>
 </ul>
 <p>The clamp <code>[0.5, 2.0]</code> exists so a single reconcile can't catastrophically up- or down-size a pod. Steady-state convergence takes a few reconcile cycles, which is fine for a knob that's optimising for monthly cost rather than real-time response.</p>
-<p><strong>Applied by the controller only.</strong> The webhook never applies the replica
-factor at pod admission: a pod created <em>during</em> an HPA scale-out would see a
-transiently high replica count and be admitted with up to 2× the intended
-CPU request — potentially triggering node scale-up before the fleet
-settles. Pods are admitted with overhead-only shaping; the controller
-applies the replica correction on its reconcile cadence (in-place resize or
-eviction), when replica counts reflect steady state. The overhead formula
-above is unaffected and applies on both paths.</p>
+<p><strong>Computed by the controller; served as-is by the webhook.</strong> The
+replica-budget factor is only ever computed by the controller, as part of
+the single recommendation pipeline it runs on its reconcile cadence — there
+is no second, webhook-side computation anymore. Earlier versions had the
+webhook independently build its own recommendation at admission time with
+the replica factor deliberately disabled there (<code>DisableReplicaCorrection</code>):
+a pod created <em>during</em> an HPA scale-out would otherwise see a transiently
+high <code>current_replicas</code> read live at admission and be injected with up to 2×
+the intended CPU request, potentially triggering node scale-up before the
+fleet settled. That admission-time computation — and the option to suppress
+part of it — no longer exists: the webhook now only injects whatever value
+the controller last computed and cached in the <code>WorkloadRecommendation</code> (see
+<a href="../workload-recommendations/">Workload Recommendations</a>), replica-budget
+correction included. In practice this still lands close to steady state,
+because the cached factor reflects the replica count as of the controller's
+last reconcile (default every 5m) rather than the instant a scale-out's own
+new pods are created — but a reconcile that happens to land mid-scale-out
+can still cache a transient factor until the next cycle corrects it. The
+overhead formula above is unaffected either way.</p>
 <h2 id="detection-rules">Detection rules<a class="headerlink" href="#detection-rules" title="Permanent link">&para;</a></h2>
 <ul>
 <li>HPA matched by <code>scaleTargetRef</code>; <code>ScaledObject</code> by <code>spec.scaleTargetRef</code>.</li>

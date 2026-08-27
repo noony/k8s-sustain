@@ -1346,6 +1346,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#recurring" class="md-nav__link">
+    <span class="md-ellipsis">
+      recurring
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1834,6 +1843,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#recurring" class="md-nav__link">
+    <span class="md-ellipsis">
+      recurring
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2175,29 +2193,44 @@ is the same ~<code>200m / ~100Mi</code> profile as <code>steady</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-bare-pod<span class="w"> </span>etl-daily-run-1<span class="w"> </span>--show-labels<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>k8s.sustain.io/owner-name
 </code></pre></div>
 <ul>
-<li><strong>The pod's own resources never change</strong>, no matter how long it runs — this
-  is the core invariant <code>Ongoing</code> guarantees for <code>Pod</code>-kind targets: there is
-  no controller that could recreate this pod after an eviction or in-place
-  resize, so recycling is permanently skipped, regardless of <code>UpdateMode</code>:</li>
+<li><strong>The pod is resized in place, never evicted.</strong> Eviction is permanently off
+  for <code>Pod</code>-kind targets — nothing would recreate the pod — but an in-place
+  resize needs no controller behind it, so under <code>Ongoing</code> the running pod is
+  corrected directly through the <code>pods/resize</code> subresource. The UID never
+  changes; only the requests do:</li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-bare-pod<span class="w"> </span>etl-daily-run-1<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.containers[0].resources.requests}{"\n"}'</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="c1"># always 500m / 256Mi, even after many reconcile cycles</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.metadata.uid}{" "}{.spec.containers[0].resources.requests}{"\n"}'</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="c1"># same UID throughout; CPU comes down from 500m toward ~220m</span>
 </code></pre></div>
+<p>A memory decrease can be reported <code>Infeasible</code>/<code>Deferred</code> by the kubelet;
+  the patcher logs it and skips, and never falls back to eviction here. On a
+  cluster below k8s 1.33 there is no in-place support at all, so the pod
+  stays at <code>500m / 256Mi</code> and only the recommendation below appears.</p>
+<p>The scenario pod leaves <code>restartPolicy</code> unset, so it defaults to <code>Always</code>
+  and resizes on any k8s ≥ 1.33. Do not generalise that to real Airflow
+  pods: <code>KubernetesPodOperator</code> uses <code>restartPolicy: Never</code>, which is only
+  fully covered from k8s ≥ 1.35 — on 1.33/1.34 such a pod's resize is
+  rejected and it keeps its admitted resources.</p>
 <ul>
-<li>The controller still computes and caches a <code>WorkloadRecommendation</code>
-  (<code>pod-etl-daily</code>) from the pod's actual usage — useful for the webhook's
-  Prometheus-outage fallback on a later pod sharing this <code>owner-name</code> (e.g.
-  the next Airflow DAG run). Unlike every other kind, this doesn't wait out
-  the 10-minute <code>MinWorkloadAge</code> gate: that gate exists to avoid a
-  too-young percentile triggering an immediate bad recycle, which can't
-  happen for a kind that never recycles, so it's bypassed for <code>Pod</code>. Expect
-  it within a couple of reconcile cycles, not 10+ minutes:</li>
+<li>The controller computes and caches a <code>WorkloadRecommendation</code>
+  (<code>pod-etl-daily</code>) from the pod's actual usage — this is also the webhook's
+  <em>only</em> source of recommendations (it never queries Prometheus itself), so
+  a later pod sharing this <code>owner-name</code> (e.g. the next Airflow DAG run) gets
+  injected from it as long as the cache is still fresh when that pod is
+  admitted. Like every other kind, this waits out the 10-minute
+  <code>MinWorkloadAge</code> gate — bare pods are no longer exempt from it, since an
+  <code>Ongoing</code> bare pod can now be resized in place, so a near-zero percentile
+  from a too-young identity is no longer harmless. Expect the first cached
+  recommendation once the <code>etl-daily</code> identity has been known for 10+
+  minutes, not within the first couple of reconcile cycles:</li>
 </ul>
-<p>(The <em>webhook</em> injection path is a different story: it gates on the
-  identity's history age, so a pod re-created under the same <code>owner-name</code>
-  within ~10 minutes of the identity's first samples keeps its template
-  resources instead of being injected from unstable early-rate data.)</p>
+<p>(The identity's history-age gate is applied by the controller when it
+  builds the recommendation to cache, not by the webhook at admission — the
+  webhook no longer computes anything of its own, so a pod re-created under
+  the same <code>owner-name</code> within ~10 minutes of the identity's first samples
+  simply has no cache entry yet to inject from and keeps its template
+  resources.)</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>workloadrecommendation<span class="w"> </span>-n<span class="w"> </span>scenario-bare-pod
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090<span class="w"> </span><span class="p">&amp;</span>
 <a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>curl<span class="w"> </span>-s<span class="w"> </span>localhost:8090/api/workloads/scenario-bare-pod/Pod/etl-daily/recommendations
@@ -2301,15 +2334,100 @@ coexist.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>k8s-sustain<span class="w"> </span>--tail<span class="o">=</span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">'recommend-only'</span>
 </code></pre></div>
+<h3 id="recurring"><code>recurring</code><a class="headerlink" href="#recurring" title="Permanent link">&para;</a></h3>
+<p>A namespace-scoped <code>CronJob</code> ("launcher", every 2 minutes) plays the role of
+an external scheduler like Airflow. Its RBAC is <code>create</code>/<code>get</code>/<code>delete</code> on
+<code>pods</code> in this namespace only (<code>ServiceAccount</code>/<code>Role</code>/<code>RoleBinding</code>, no
+<code>ClusterRole</code>); each run computes a unique pod name
+(<code>etl-recurring-$(date +%s)</code>, so plain <code>create</code> never collides), creates a
+genuinely bare Pod — <strong>no <code>ownerReferences</code> at all</strong> — carrying a stable
+<code>k8s.sustain.io/owner-name: etl-recurring</code> annotation, waits for the ~30s
+load to finish, and then <strong>deletes the pod</strong>.</p>
+<p>The delete is what makes the scenario work. <code>workload.GroupBarePods</code> does
+not filter on pod phase, so a <code>Succeeded</code> pod left behind still reports the
+identity in every target listing — the identity would never depart and the
+departed-refresh path would never run. With the delete, each cycle leaves
+roughly 80s of every 120s in which <strong>no pod of the identity exists at all</strong>,
+comfortably longer than the harness's deployed <code>--reconcile-interval=30s</code>.</p>
+<p><strong>Expected — measured on a real kind cluster (k8s 1.35); see
+<code>recurring.yaml</code>'s header comment for the full chronologies and reasoning:</strong></p>
+<ul>
+<li>The <code>WorkloadRecommendation</code> (<code>pod-etl-recurring</code>) survives every gap, and
+  <code>status.observedAt</code> advances on reconciles taken while the pod list is
+  confirmed empty — this is the regression the branch fixes. The direct
+  counter is <code>k8s_sustain_wlr_refresh_total</code>, emitted only from
+  <code>refreshDepartedRecommendation</code>:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>scenario-recurring<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>etl-recurring<span class="w">   </span><span class="c1"># empty</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-recurring<span class="w"> </span>pod-etl-recurring<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.observedAt}{"\n"}'</span><span class="w">                    </span><span class="c1"># advances</span>
+</code></pre></div>
+<ul>
+<li>
+<p>The 10-minute <code>MinWorkloadAge</code> gate holds correctly for the first 6 runs
+  — all admitted at the template's <code>500m / 256Mi</code>,
+  <code>recommendation_skipped_total{reason="workload_too_young"}</code> climbing.</p>
+</li>
+<li>
+<p><strong>The moment the gate clears is not a clean convergence, and what happens
+  next depends on <code>WINDOW</code>.</strong> The gate is time-based, not data-volume-based:
+  a pod that runs ~30s per 120s has contributed only ~2.5 minutes of real
+  container runtime by the time the 10-minute gate opens, so the percentile
+  is computed over a mostly-empty series.</p>
+</li>
+<li>
+<p>At the harness default <strong><code>WINDOW=10m</code></strong> (plain
+    <code>make test-scenario-recurring</code>): CPU floors to <code>1m</code> and stays there;
+    memory stays realistic (<code>53–62Mi</code> request, <code>81–93Mi</code> limit); every pod
+    completes and <strong>nothing is killed</strong>. Undramatic and long-lived — it did
+    not self-heal within 14 minutes of observation.</p>
+</li>
+<li>At <strong><code>WINDOW=2m</code></strong>: the gate clears straight into <code>cpu=1m,
+    mem=4Mi/6Mi</code>, and every subsequent pod is OOM-killed the instant it
+    starts (<code>exitCode: 137</code>, <code>reason: OOMKilled</code>, <code>startedAt ==
+    finishedAt</code>). This is self-sustaining — a pod that dies at <code>t=0</code>
+    contributes no samples, so the floor re-derives itself. Observed
+    unbroken for 18 minutes with no recovery.</li>
+</ul>
+<p>Either way it is a real, currently-expected design gap — recorded, not
+  fixed by this scenario. It is <strong>not</strong> rescued by the OOM-aware memory
+  floor, which structurally cannot fire here: both detection paths key on
+  <code>LastTerminationState</code>, which Kubernetes only populates after a container
+  restart, and a <code>restartPolicy: Never</code> pod that dies once never gets one
+  (the captured kill showed <code>lastState: {}</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-recurring<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>etl-recurring<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">  </span>--sort-by<span class="o">=</span>.metadata.creationTimestamp<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.items[-1].spec.containers[0].resources}{"\n"}'</span>
+</code></pre></div>
+<ul>
+<li>
+<p><code>status.departed: true</code> is normally not visible while the launcher keeps
+  ticking at the default window, because the recommendation keeps changing and
+  each refresh therefore rewrites <code>observedAt</code>, so the sweep's 10-minute grace
+  period never lapses. A refresh does <em>not</em> rewrite <code>observedAt</code>
+  unconditionally: <code>wlrcache.Upsert</code> skips the write when the new status is
+  equivalent to the stored one and <code>observedAt</code> is younger than
+  <code>wlrcache.RefreshInterval</code> (10 minutes) — the same 10 minutes as the grace
+  period, by coincidence of two independently tuned constants rather than by
+  design. To see <code>departed</code> deliberately, suspend the launcher and budget
+  ~15 minutes; measured at 10m01s after the last <code>observedAt</code> write, with the
+  recommendation still retained. Exact commands are in <code>recurring.yaml</code>'s
+  header.</p>
+</li>
+<li>
+<p>Not in <code>status.sh</code>'s generic table (it assumes a Deployment per
+  scenario); use the commands above instead.</p>
+</li>
+</ul>
 <h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
 <p><code>make test-scenario-status</code> prints a table:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
-<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
-<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
 </code></pre></div>
 <p>The dashboard remains the richer source of truth — start a port-forward
 and open <code>http://localhost:8090</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
 </code></pre></div>
 <h2 id="adding-a-new-scenario">Adding a new scenario<a class="headerlink" href="#adding-a-new-scenario" title="Permanent link">&para;</a></h2>
 <p>See <code>hack/scenarios/README.md</code>.</p>

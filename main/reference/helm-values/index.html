@@ -1677,8 +1677,18 @@
 </tr>
 <tr>
 <td><code>controller.recommendationRetention</code></td>
-<td><code>72h</code></td>
-<td>How long a WorkloadRecommendation outlives a workload whose object has disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs). The dashboard keeps showing these as "inactive" rows until the window lapses. Set to <code>0s</code> to sweep them on the next reconcile instead.</td>
+<td><code>168h</code></td>
+<td>How long a WorkloadRecommendation outlives a workload whose object has disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs). Not just a dashboard setting: it also decides whether a <em>recurring</em> ephemeral identity is rightsized at admission on its next run, so set it above the longest expected gap between runs (<code>168h</code> covers weekly batch). See <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>. The dashboard keeps showing retained entries as "inactive" rows until the window lapses. Set to <code>0s</code> to sweep them on the next reconcile instead.</td>
+</tr>
+<tr>
+<td><code>controller.prometheusMaxInflight</code></td>
+<td><code>8</code></td>
+<td>Maximum concurrent Prometheus queries across the whole controller. Kept below Prometheus's own <code>--query.max-concurrency</code> (default 20) so k8s-sustain cannot starve the dashboards and alerting sharing that server. Lower this first if the controller is the reason your Prometheus is struggling.</td>
+</tr>
+<tr>
+<td><code>controller.queryShardMaxSamples</code></td>
+<td><code>10000000</code></td>
+<td>Projected sample budget (containers × window-minutes, summed across a shard's workloads) one batched CPU/memory/OOM query may reach before a new shard is started. Must stay under Prometheus's <code>--query.max-samples</code> (default <code>50000000</code>): that limit <em>rejects</em> an over-budget query outright, failing every workload in the shard rather than just the excess. The default leaves a 5x margin.</td>
 </tr>
 <tr>
 <td><code>controller.logLevel</code></td>
@@ -1828,6 +1838,11 @@
 <td>Webhook container resources</td>
 </tr>
 <tr>
+<td><code>webhook.startupProbe</code></td>
+<td>see below</td>
+<td>Startup probe timings. Suspends liveness and readiness until the webhook is actually listening. Same fixed endpoint.</td>
+</tr>
+<tr>
 <td><code>webhook.livenessProbe</code></td>
 <td>same as controller</td>
 <td>Liveness probe timings. The probe endpoint (HTTPS <code>/healthz</code> on the webhook port) is fixed by the chart.</td>
@@ -1854,15 +1869,46 @@
 </tr>
 </tbody>
 </table>
-<p><strong>Default webhook resources:</strong></p>
+<p><strong>The webhook's startup probe is not optional.</strong> The webhook builds an informer
+cache before its HTTPS listener starts, and that build waits up to two minutes
+for the <code>Policy</code> and <code>WorkloadRecommendation</code> CRDs to become servable — the
+fresh-install race where Helm has created the CRDs but the API server is not
+serving them yet. Nothing answers <code>/healthz</code> for that whole period, so the
+liveness probe alone would kill the container after
+<code>initialDelaySeconds + periodSeconds × failureThreshold</code> = 40s and the pod would
+end in <code>CrashLoopBackOff</code> on exactly the install the wait exists to survive.</p>
+<p>The startup probe's budget must therefore stay <strong>larger than that two-minute
+wait</strong> (<code>crdWaitTimeout</code> in <code>internal/k8s/client.go</code>):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">webhook</span><span class="p">:</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">startupProbe</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">      </span><span class="c1"># 5 + 5 × 36 = 185s &gt; 120s</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">timeoutSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">successThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">failureThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">36</span>
 </code></pre></div>
+<p>If you shorten it, shorten it to something still comfortably above two minutes.
+A Go unit test reads this value out of <code>values.yaml</code> and fails if the two sides
+drift apart.</p>
+<p>The template carries the same numbers as its own defaults, so the probe is
+rendered even when the release's values do not contain <code>webhook.startupProbe</code>
+at all — which is what a <code>helm upgrade --reuse-values</code> from a release predating
+this key produces, since <code>--reuse-values</code> never picks up defaults newly added
+to <code>values.yaml</code>. Overriding one field keeps the template defaults for the
+others. A second Go unit test reads that template copy and checks it against
+<code>crdWaitTimeout</code> in its own right, and fails if the two copies disagree — so
+raising the wait cannot leave the <code>--reuse-values</code> path silently under budget
+while the <code>values.yaml</code> side still passes.</p>
+<p><strong>Default webhook resources:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">webhook</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512Mi</span>
+</code></pre></div>
+<p>The webhook's memory defaults are higher than the controller's on purpose. It serves admission reads from a <code>WorkloadRecommendation</code> informer cache rather than a per-pod apiserver <code>Get</code> — with Prometheus gone from the admission path, the apiserver is the only remaining source of latency there, and an uncached read per admission is a round trip a large cluster does not need. That cache is resident memory: budget roughly 20–50 MB at 10k workloads on top of the base footprint. Raise these if you run substantially more.</p>
 <hr />
 <h2 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h2>
 <table>
@@ -1942,13 +1988,13 @@
 </tbody>
 </table>
 <p><strong>Default dashboard resources:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">dashboard</span><span class="p">:</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">dashboard</span><span class="p">:</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
 </code></pre></div>
 <hr />
 <h2 id="serviceaccount">ServiceAccount<a class="headerlink" href="#serviceaccount" title="Permanent link">&para;</a></h2>
@@ -2069,12 +2115,12 @@
 <h2 id="prometheus-subchart">Prometheus subchart<a class="headerlink" href="#prometheus-subchart" title="Permanent link">&para;</a></h2>
 <p>Pass any value supported by the <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">prometheus chart</a> under the <code>prometheus:</code> key. Recording rules for k8s-sustain are embedded in <code>prometheus.server.serverFiles</code> by default.</p>
 <p>Common overrides:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">prometheus</span><span class="p">:</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">server</span><span class="p">:</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">retention</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15d</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nt">persistentVolume</span><span class="p">:</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="nt">size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20Gi</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">prometheus</span><span class="p">:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">server</span><span class="p">:</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">retention</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15d</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">persistentVolume</span><span class="p">:</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">      </span><span class="nt">size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20Gi</span>
 </code></pre></div>
 
 

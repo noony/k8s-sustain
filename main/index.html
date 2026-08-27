@@ -1534,6 +1534,10 @@
 </tr>
 </tbody>
 </table>
+<p>CronJob, Job and bare-pod workloads are the exception to that second row: their
+running pods are only ever resized in place, never evicted — evicting them
+would discard in-flight work, and in the bare-pod case nothing would recreate
+the pod. See <a href="concepts/update-modes/">Update modes</a>.</p>
 <p>A workload opts in to a policy by setting a single annotation on its pod template:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">metadata</span><span class="p">:</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>

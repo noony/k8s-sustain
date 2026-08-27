@@ -1526,7 +1526,7 @@
 <li>The latest recommendation is always injected — the webhook overrides whatever the pod template currently specifies</li>
 <li>Existing running pods are <strong>not</strong> affected — only newly created pods receive the recommendation</li>
 <li>If the webhook is unavailable, the pod is admitted without resource injection (<code>failurePolicy: Ignore</code>)</li>
-<li>The controller still computes a recommendation for <code>OnCreate</code> workloads on its regular reconcile cycle and caches it in a <code>WorkloadRecommendation</code> object — this keeps the workload visible on the dashboard and gives the webhook a fallback value during a Prometheus outage, but the controller <strong>never</strong> recycles, resizes, or otherwise mutates the workload in this mode</li>
+<li>The controller still computes a recommendation for <code>OnCreate</code> workloads on its regular reconcile cycle and caches it in a <code>WorkloadRecommendation</code> object — this keeps the workload visible on the dashboard and is what the webhook injects at admission (the webhook has no other source of recommendations), but the controller <strong>never</strong> recycles, resizes, or otherwise mutates the workload in this mode</li>
 </ul>
 <p><strong>Best for:</strong></p>
 <ul>
@@ -1547,8 +1547,9 @@
 <p><strong>At pod creation (webhook):</strong></p>
 <ul>
 <li>The webhook intercepts <code>Pod CREATE</code> requests for pods that carry the policy annotation</li>
-<li>Unlike OnCreate mode, the webhook always injects the latest recommendation — even if the container already has a CPU request — ensuring new pods never start with stale resources</li>
+<li>As in OnCreate mode, the webhook injects the latest recommendation over whatever the template specifies, so new pods never start with stale resources and never wait for the controller's first resize</li>
 </ul>
+<p><strong>Three kinds never take the eviction path</strong>, on any cluster version: <code>cronJob</code>, <code>job</code> and <code>pod</code>. Evicting those pods would destroy in-flight work that nothing will redo — and for a bare pod, nothing would recreate it at all. For them <code>Ongoing</code> means in-place resize or nothing: the k8s &lt; 1.33 path immediately below does not apply to them at all, and neither does the eviction fallback in the k8s ≥ 1.33 path. Each kind's exception is spelled out at the end of this section.</p>
 <p><strong>Ongoing reconciliation (controller) on clusters without in-place update support (k8s &lt; 1.33):</strong></p>
 <ol>
 <li>Each non-terminal pod (Running or Pending) with stale resources is evicted via the Eviction API. Staleness is detected on both requests and limits — a recommendation that only changes a limit still triggers a recycle. Evicting Pending pods unblocks workloads stuck unschedulable because their original request was too large; the webhook re-injects the smaller recommendation on the replacement.</li>
@@ -1570,9 +1571,10 @@
 <li>Situations where you want resources to track actual usage over time</li>
 <li>Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.33)</li>
 </ul>
-<p><strong>Note:</strong> The controller never patches workload templates (Deployment, StatefulSet, CronJob, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s &lt; 1.33), pods are replaced via PDB-respecting eviction, which causes pod restarts.</p>
+<p><strong>Note:</strong> The controller never patches workload templates (Deployment, StatefulSet, CronJob, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s &lt; 1.33), pods are replaced via PDB-respecting eviction, which causes pod restarts — except for the three never-evicted kinds below.</p>
 <p><strong>CronJob exception:</strong> for <code>cronJob: Ongoing</code>, eviction is <em>never</em> used — evicting a Job pod would kill the run. Currently-running job pods are resized in place when the cluster supports it (k8s ≥ 1.33, with full coverage of <code>restartPolicy: Never</code>/<code>OnFailure</code> on k8s ≥ 1.35); otherwise they are left to finish on their original resources and the next scheduled run picks up the new values from the webhook. The CronJob spec itself is never modified, so GitOps tools see no drift.</p>
 <p><strong>Standalone Job exception:</strong> <code>job: Ongoing</code> behaves the same way — the controller resizes a standalone Job's currently-running pods in place and never evicts them (which would discard in-flight work) or mutates the Job spec. Because a standalone Job has no next run, in-place resize is the only post-creation correction, so <code>Ongoing</code> is worthwhile only for <strong>long-running</strong> Jobs and requires k8s ≥ 1.35 (standalone Jobs always run with <code>restartPolicy: Never</code>/<code>OnFailure</code>). On clusters without in-place support the running pod is left untouched. Jobs owned by a CronJob are handled by the CronJob path above, not this one.</p>
+<p><strong>Bare-pod exception:</strong> <code>pod: Ongoing</code> is the third member of the same family, and the reason for it is the strongest of the three — no controller exists that could recreate an evicted bare pod, so eviction would not disrupt the workload, it would delete it. A bare pod (opted in via <a href="../../guides/standalone-pods-and-grouping/"><code>k8s.sustain.io/owner-name</code></a>) is therefore <strong>never evicted in either mode</strong>, while <code>Ongoing</code> resizes its running pods in place through <code>pods/resize</code> (k8s ≥ 1.33, with full coverage of <code>restartPolicy: Never</code>/<code>OnFailure</code> on k8s ≥ 1.35 — Airflow's <code>KubernetesPodOperator</code> uses <code>Never</code> by default). On clusters without in-place support nothing is applied to a running bare pod and the recommendation only reaches the identity's next pod through the webhook. As with Job and CronJob, an in-place <strong>memory</strong> resize can restart the container and so discard an in-flight task; bare pods inherit that tradeoff rather than getting an exception from it. Use <code>pod: OnCreate</code> if your tasks cannot tolerate a restart — the recommendation is still computed, cached and injected into the next pod.</p>
 <hr />
 <h2 id="choosing-a-mode">Choosing a mode<a class="headerlink" href="#choosing-a-mode" title="Permanent link">&para;</a></h2>
 <table>
@@ -1608,6 +1610,14 @@
 <td><code>OnCreate</code> — pods finish before a reconcile would touch them</td>
 </tr>
 <tr>
+<td>Long-running bare pods (k8s ≥ 1.33; ≥ 1.35 for <code>restartPolicy: Never</code>/<code>OnFailure</code>, which Airflow's <code>KubernetesPodOperator</code> uses)</td>
+<td><code>Ongoing</code> — resizes the running pod in place; never evicted</td>
+</tr>
+<tr>
+<td>Short-lived bare pods, or tasks that cannot tolerate a container restart</td>
+<td><code>OnCreate</code> — inject at admission only</td>
+</tr>
+<tr>
 <td>StatefulSets with persistent state</td>
 <td><code>Ongoing</code> + k8s ≥ 1.33, or <code>OnCreate</code></td>
 </tr>
@@ -1626,7 +1636,7 @@
 <p>Independently of <code>OnCreate</code> or <code>Ongoing</code>, you can run in <strong>recommend-only</strong> mode at two scopes: globally, by passing <code>--recommend-only</code> (or <code>recommendOnly: true</code> in the Helm values), or per policy, by setting <code>spec.rightSizing.recommendOnly: true</code> on an individual <code>Policy</code>. The global flag is a master switch — when set, every policy is dry-run regardless of its own field. In this mode:</p>
 <ul>
 <li>The controller still reconciles and computes recommendations, but <strong>never recycles pods</strong></li>
-<li>The webhook still intercepts pod creation and computes recommendations, but <strong>never injects resources</strong> (only the owner-name metadata label mirror is still applied)</li>
+<li>The webhook still intercepts pod creation and reads the cached recommendation, but <strong>never injects resources</strong> (only the owner-name metadata label mirror is still applied)</li>
 <li>Computed recommendations are logged as structured JSON at <code>info</code> level</li>
 </ul>
 <p>This is useful for validating recommendations before switching to active mode. See the <a href="../../reference/cli/">CLI reference</a> for details.</p>

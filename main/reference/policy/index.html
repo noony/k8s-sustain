@@ -1915,6 +1915,11 @@
 <td><code>OnCreate</code> | <code>Ongoing</code></td>
 <td>Manages standalone <code>Job</code> objects</td>
 </tr>
+<tr>
+<td><code>pod</code></td>
+<td><code>OnCreate</code> | <code>Ongoing</code></td>
+<td>Manages bare pods that opt in via <code>k8s.sustain.io/owner-name</code> (no controller owner). Never evicted in either mode — nothing would recreate the pod; <code>Ongoing</code> resizes the running pods in place on k8s ≥ 1.33, with full coverage of <code>restartPolicy: Never</code>/<code>OnFailure</code> (Airflow's default) only on k8s ≥ 1.35. See <a href="../../guides/standalone-pods-and-grouping/">Standalone Pods &amp; Identity Grouping</a></td>
+</tr>
 </tbody>
 </table>
 <p>See <a href="../../concepts/update-modes/">Update Modes</a> for the difference between <code>OnCreate</code> and <code>Ongoing</code>.</p>
@@ -2158,9 +2163,16 @@ new pod has nothing to disrupt.</p>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ready</span>
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="nt">status</span><span class="p">:</span><span class="w"> </span><span class="s">"True"</span>
 <a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="nt">reason</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ReconciliationSucceeded</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="nt">message</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">All targeted workloads have been processed.</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="nt">message</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">All 3 workloads have been processed.</span>
 <a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">      </span><span class="nt">lastTransitionTime</span><span class="p">:</span><span class="w"> </span><span class="s">"2024-01-01T00:00:00Z"</span>
 </code></pre></div>
+<p>The count covers every workload object the policy processed, plus each
+retained recommendation whose workload object no longer exists. Workloads
+grouped under a shared <code>k8s.sustain.io/owner-name</code> are counted individually,
+because each one's pods are applied to separately even though they share a
+single recommendation.</p>
+<p>These three reasons are the complete set the controller writes to
+<code>Policy.status.conditions</code>:</p>
 <table>
 <thead>
 <tr>
@@ -2173,25 +2185,31 @@ new pod has nothing to disrupt.</p>
 <tr>
 <td><code>ReconciliationSucceeded</code></td>
 <td>True</td>
-<td>All matching workloads were processed successfully</td>
+<td>Every matching workload was processed, and every workload identity was registered for computation</td>
 </tr>
 <tr>
-<td><code>ReconciliationFailed</code></td>
+<td><code>PartialFailure</code></td>
 <td>False</td>
-<td>One or more workloads failed; see <code>message</code> for details</td>
+<td>Some workloads failed, and/or some workload identities could not be registered for computation; see <code>message</code>, which names only whichever of the two actually happened</td>
 </tr>
 <tr>
-<td><code>NamespaceResolutionFailed</code></td>
+<td><code>ListFailed</code></td>
 <td>False</td>
-<td>Could not list namespaces</td>
-</tr>
-<tr>
-<td><code>InvalidSelector</code></td>
-<td>False</td>
-<td>The label selector is malformed</td>
+<td>The cycle could not even build its work list — listing the matching workloads failed, or listing the policy's <code>WorkloadRecommendation</code> objects did. No workload was processed</td>
 </tr>
 </tbody>
 </table>
+<p><code>ReconciliationFailed</code> is <strong>not</strong> a condition reason. It is an Event reason,
+recorded as a <code>Warning</code> on the <em>workload object</em> (not on the <code>Policy</code>) when
+that individual workload hits a permanent, non-retried error. A permanent
+error is dropped from the retry tracker and does not count toward the
+cycle's failure total, so a cycle in which every emitted event is
+<code>ReconciliationFailed</code> still leaves the policy at <code>ReconciliationSucceeded</code>.
+<code>PartialFailure</code> is driven instead by transient errors — which emit
+<code>ReconciliationRetryScheduled</code>, not <code>ReconciliationFailed</code> — and by
+workload identities that could not be registered for computation. That
+second count is per <strong>identity</strong>, not per workload object: workloads grouped
+under a shared <code>k8s.sustain.io/owner-name</code> register once, together.</p>
 <hr />
 <h2 id="rbac">RBAC<a class="headerlink" href="#rbac" title="Permanent link">&para;</a></h2>
 <p><code>Policy</code> is a cluster-scoped resource. Users who create or modify policies need:</p>
