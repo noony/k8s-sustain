@@ -393,7 +393,9 @@ max by (namespace, owner_kind, owner_name, container) (
 
 Busiest-replica CPU rate, per container, per workload: at each instant this is the hottest live pod. The recommender runs `quantile_over_time(p, …)` over this to get a true per-pod percentile that covers the busiest replica — so it needs no replica division and no separate per-pod floor.
 
-Collapsing across pods **here** (in the recording rule) rather than at query time is deliberate: it keeps the recommender's `[window:1m]` subquery cheap (one series per workload×container instead of one per historical pod) and immune to pod-name churn — a pod that briefly ran hot then died is the `max` for only those instants and drops out afterward, so its partial-lifetime samples can't distort the percentile.
+Collapsing across pods **here** (in the recording rule) rather than at query time is deliberate: it keeps the recommender's `quantile_over_time(p, …[window])` range-vector scan cheap (one series per workload×container instead of one per historical pod) and immune to pod-name churn — a pod that briefly ran hot then died is the `max` for only those instants and drops out afterward, so its partial-lifetime samples can't distort the percentile.
+
+This rule (and `workload_max_pod_memory:bytes` below) lives in the `k8s_sustain.workload_signal` group, which evaluates at `interval: 1m`. The recommender reads it as a plain range vector rather than a `[window:1m]` subquery, so that `interval` **is** the percentile's effective sample resolution — there is no subquery step left to resample it. Raising the group's interval to cut Prometheus load would silently coarsen every recommendation percentile in the product; it is not a free knob.
 
 ### `k8s_sustain:workload_max_pod_memory:bytes`
 

@@ -48,6 +48,23 @@ spec:
             - --reconcile-interval={{ .Values.controller.reconcileInterval }}
             - --recycle-replacement-timeout={{ .Values.controller.recycleReplacementTimeout }}
             - --recommendation-retention={{ .Values.controller.recommendationRetention }}
+            {{- /* Emitted only when set, rather than with a template-side
+                   default. `helm upgrade --reuse-values` reuses the previous
+                   release's values and does NOT pick up defaults newly added
+                   to values.yaml, so a value referenced unconditionally here
+                   would render as an empty `--flag=` on such an upgrade and
+                   the container would refuse to start. Omitting the flag
+                   instead falls through to the binary's own default, which
+                   internal/controller's defaults-agree test pins to the same
+                   number as values.yaml. */}}
+            {{- with .Values.controller.prometheusMaxInflight }}
+            - --prometheus-max-inflight={{ . }}
+            {{- end }}
+            {{- /* int64: Helm renders a plain large number as 2e+06, which the
+                   flag parser rejects outright. */}}
+            {{- with .Values.controller.queryShardMaxSamples }}
+            - --query-shard-max-samples={{ int64 . }}
+            {{- end }}
             {{- if .Values.recommendOnly }}
             - --recommend-only=true
             {{- end }}

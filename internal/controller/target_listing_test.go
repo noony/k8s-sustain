@@ -2,15 +2,18 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
@@ -441,5 +444,74 @@ func TestListBarePodTargets_OwnedPod_NotDiscovered(t *testing.T) {
 	}
 	if len(targets) != 0 {
 		t.Errorf("expected 0 targets for an owned pod (handled by listJobTargets instead), got %d", len(targets))
+	}
+}
+
+// TestCollectTargets_BarePodPolicyMismatchLoggedOnlyByOwningPolicy pins the
+// F4 follow-up fix: the "bare pods share an owner-name identity but name a
+// different policy" log must fire exactly once per reconcile, from the
+// policy that actually owns the group -- not from every policy whose
+// selector merely happens to cover the namespace. Before the fix,
+// listBarePodTargets logged this itself, BEFORE filterTargets narrowed the
+// result down to the group's own policy, so a policy uninvolved on either
+// side of the conflict would still report it, every reconcile, forever.
+func TestCollectTargets_BarePodPolicyMismatchLoggedOnlyByOwningPolicy(t *testing.T) {
+	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Hour)
+
+	podOwner := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "airflow", Name: "etl-run-1", CreationTimestamp: metav1.NewTime(newer),
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "p",
+				sustainv1alpha1.OwnerNameAnnotation: "etl-daily",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	podMismatched := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "airflow", Name: "etl-run-2", CreationTimestamp: metav1.NewTime(older),
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "other-policy",
+				sustainv1alpha1.OwnerNameAnnotation: "etl-daily",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+
+	r := makeReconciler(t, podOwner, podMismatched)
+
+	ongoing := sustainv1alpha1.UpdateModeOngoing
+	owningPolicy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	owningPolicy.Spec.RightSizing.Update.Types.Pod = &ongoing
+
+	// uninvolvedPolicy shares the namespace (an empty selector.namespaces
+	// covers everything, same as owningPolicy's) and also has Pod enabled, so
+	// its collectTargets call lists and groups the exact same pods -- but it
+	// names neither side of the conflict.
+	uninvolvedPolicy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "uninvolved"}}
+	uninvolvedPolicy.Spec.RightSizing.Update.Types.Pod = &ongoing
+
+	const marker = "bare pods share an owner-name identity but name a different policy"
+
+	capture := func(policy *sustainv1alpha1.Policy) string {
+		var lines []string
+		logger := funcr.New(func(prefix, args string) {
+			lines = append(lines, prefix+" "+args)
+		}, funcr.Options{})
+		ctx := log.IntoContext(context.Background(), logger)
+		if _, err := r.collectTargets(ctx, policy); err != nil {
+			t.Fatalf("collectTargets: %v", err)
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	if out := capture(owningPolicy); !strings.Contains(out, marker) {
+		t.Errorf("owning policy %q must log the mismatch; got:\n%s", owningPolicy.Name, out)
+	}
+	if out := capture(uninvolvedPolicy); strings.Contains(out, marker) {
+		t.Errorf("uninvolved policy %q must NOT report a conflict naming someone else's policies; got:\n%s",
+			uninvolvedPolicy.Name, out)
 	}
 }

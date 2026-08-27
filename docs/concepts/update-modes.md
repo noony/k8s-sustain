@@ -20,7 +20,7 @@ spec:
 - The latest recommendation is always injected — the webhook overrides whatever the pod template currently specifies
 - Existing running pods are **not** affected — only newly created pods receive the recommendation
 - If the webhook is unavailable, the pod is admitted without resource injection (`failurePolicy: Ignore`)
-- The controller still computes a recommendation for `OnCreate` workloads on its regular reconcile cycle and caches it in a `WorkloadRecommendation` object — this keeps the workload visible on the dashboard and gives the webhook a fallback value during a Prometheus outage, but the controller **never** recycles, resizes, or otherwise mutates the workload in this mode
+- The controller still computes a recommendation for `OnCreate` workloads on its regular reconcile cycle and caches it in a `WorkloadRecommendation` object — this keeps the workload visible on the dashboard and is what the webhook injects at admission (the webhook has no other source of recommendations), but the controller **never** recycles, resizes, or otherwise mutates the workload in this mode
 
 **Best for:**
 
@@ -47,7 +47,9 @@ spec:
 **At pod creation (webhook):**
 
 - The webhook intercepts `Pod CREATE` requests for pods that carry the policy annotation
-- Unlike OnCreate mode, the webhook always injects the latest recommendation — even if the container already has a CPU request — ensuring new pods never start with stale resources
+- As in OnCreate mode, the webhook injects the latest recommendation over whatever the template specifies, so new pods never start with stale resources and never wait for the controller's first resize
+
+**Three kinds never take the eviction path**, on any cluster version: `cronJob`, `job` and `pod`. Evicting those pods would destroy in-flight work that nothing will redo — and for a bare pod, nothing would recreate it at all. For them `Ongoing` means in-place resize or nothing: the k8s < 1.33 path immediately below does not apply to them at all, and neither does the eviction fallback in the k8s ≥ 1.33 path. Each kind's exception is spelled out at the end of this section.
 
 **Ongoing reconciliation (controller) on clusters without in-place update support (k8s < 1.33):**
 
@@ -71,11 +73,13 @@ See [In-Place Updates](in-place-updates.md) for details.
 - Situations where you want resources to track actual usage over time
 - Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.33)
 
-**Note:** The controller never patches workload templates (Deployment, StatefulSet, CronJob, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s < 1.33), pods are replaced via PDB-respecting eviction, which causes pod restarts.
+**Note:** The controller never patches workload templates (Deployment, StatefulSet, CronJob, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s < 1.33), pods are replaced via PDB-respecting eviction, which causes pod restarts — except for the three never-evicted kinds below.
 
 **CronJob exception:** for `cronJob: Ongoing`, eviction is *never* used — evicting a Job pod would kill the run. Currently-running job pods are resized in place when the cluster supports it (k8s ≥ 1.33, with full coverage of `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35); otherwise they are left to finish on their original resources and the next scheduled run picks up the new values from the webhook. The CronJob spec itself is never modified, so GitOps tools see no drift.
 
 **Standalone Job exception:** `job: Ongoing` behaves the same way — the controller resizes a standalone Job's currently-running pods in place and never evicts them (which would discard in-flight work) or mutates the Job spec. Because a standalone Job has no next run, in-place resize is the only post-creation correction, so `Ongoing` is worthwhile only for **long-running** Jobs and requires k8s ≥ 1.35 (standalone Jobs always run with `restartPolicy: Never`/`OnFailure`). On clusters without in-place support the running pod is left untouched. Jobs owned by a CronJob are handled by the CronJob path above, not this one.
+
+**Bare-pod exception:** `pod: Ongoing` is the third member of the same family, and the reason for it is the strongest of the three — no controller exists that could recreate an evicted bare pod, so eviction would not disrupt the workload, it would delete it. A bare pod (opted in via [`k8s.sustain.io/owner-name`](../guides/standalone-pods-and-grouping.md)) is therefore **never evicted in either mode**, while `Ongoing` resizes its running pods in place through `pods/resize` (k8s ≥ 1.33, with full coverage of `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35 — Airflow's `KubernetesPodOperator` uses `Never` by default). On clusters without in-place support nothing is applied to a running bare pod and the recommendation only reaches the identity's next pod through the webhook. As with Job and CronJob, an in-place **memory** resize can restart the container and so discard an in-flight task; bare pods inherit that tradeoff rather than getting an exception from it. Use `pod: OnCreate` if your tasks cannot tolerate a restart — the recommendation is still computed, cached and injected into the next pod.
 
 ---
 
@@ -89,6 +93,8 @@ See [In-Place Updates](in-place-updates.md) for details.
 | CronJob pods (ephemeral per-run) | `OnCreate` — each run gets fresh recommendations |
 | Long-running standalone Jobs (k8s ≥ 1.35) | `Ongoing` — resizes the running pod in place mid-run |
 | Short-lived standalone Jobs | `OnCreate` — pods finish before a reconcile would touch them |
+| Long-running bare pods (k8s ≥ 1.33; ≥ 1.35 for `restartPolicy: Never`/`OnFailure`, which Airflow's `KubernetesPodOperator` uses) | `Ongoing` — resizes the running pod in place; never evicted |
+| Short-lived bare pods, or tasks that cannot tolerate a container restart | `OnCreate` — inject at admission only |
 | StatefulSets with persistent state | `Ongoing` + k8s ≥ 1.33, or `OnCreate` |
 | DaemonSets | `Ongoing` (rolling update is DaemonSet's normal behaviour) |
 | Argo Rollouts | `Ongoing` or `OnCreate` — works like Deployments with canary/blue-green strategies |
@@ -100,7 +106,7 @@ See [In-Place Updates](in-place-updates.md) for details.
 Independently of `OnCreate` or `Ongoing`, you can run in **recommend-only** mode at two scopes: globally, by passing `--recommend-only` (or `recommendOnly: true` in the Helm values), or per policy, by setting `spec.rightSizing.recommendOnly: true` on an individual `Policy`. The global flag is a master switch — when set, every policy is dry-run regardless of its own field. In this mode:
 
 - The controller still reconciles and computes recommendations, but **never recycles pods**
-- The webhook still intercepts pod creation and computes recommendations, but **never injects resources** (only the owner-name metadata label mirror is still applied)
+- The webhook still intercepts pod creation and reads the cached recommendation, but **never injects resources** (only the owner-name metadata label mirror is still applied)
 - Computed recommendations are logged as structured JSON at `info` level
 
 This is useful for validating recommendations before switching to active mode. See the [CLI reference](../reference/cli.md) for details.

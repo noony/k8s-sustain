@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/noony/k8s-sustain/cmd/controller"
 	"github.com/noony/k8s-sustain/internal/config"
@@ -68,5 +69,15 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 
 	httpSrv := srv.NewHTTPServer(cfg.BindAddress)
 	log.Info("Starting dashboard server", "version", version.Version, "addr", cfg.BindAddress)
-	return httpx.ListenAndServeWithShutdown(httpSrv, log, "dashboard", 10*time.Second, httpSrv.ListenAndServe)
+
+	// The dashboard's only shutdown-sensitive component is the HTTP server
+	// itself — its Kubernetes client is uncached and its Prometheus client
+	// holds no background loop — so unlike the webhook there is nothing here
+	// that has to outlive the drain. It still owns its signal handler
+	// explicitly rather than letting httpx register one, so that every binary
+	// in this repo has exactly one signal source and shutdown ordering is
+	// always visible at the call site. SetupSignalHandler may only be called
+	// once per process; the three subcommands never share one.
+	return httpx.ListenAndServeWithShutdown(
+		ctrl.SetupSignalHandler(), httpSrv, log, "dashboard", 10*time.Second, httpSrv.ListenAndServe)
 }

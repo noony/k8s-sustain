@@ -21,27 +21,43 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// sweepGracePeriod protects recently written WorkloadRecommendations from
-// the sweep, regardless of the retention setting. The webhook writes WLRs at
-// pod admission; a pod created after this cycle's target listing would
-// otherwise look departed (or, for a Job object that still exists, opted
-// out) and be deleted moments after being written. A fresh ObservedAt proves
-// something just observed the workload. Matches wlrRefreshInterval so a live
-// workload's periodic ObservedAt bump keeps it covered between reconciles.
-// This assumes a reconcile pass (target listing → sweep) completes within the
-// grace window; a pass longer than 10 minutes could misclassify a mid-pass
-// admission as opted out.
+// sweepGracePeriod protects freshly CREATED WorkloadRecommendations from the
+// sweep, regardless of the retention setting. An identity first written just
+// after this cycle's target listing was built is absent from that listing
+// through no fault of its own, and would otherwise be deleted moments after
+// being created — by the sweep at the end of the very same pass. This assumes
+// a reconcile pass (target listing → sweep) completes within the grace
+// window; a pass longer than 10 minutes could misclassify a mid-pass write as
+// opted out. (The controller is currently the only writer; this also covers
+// whatever mechanism eventually replaces the webhook's removed
+// ephemeral-identity write path, which raced the sweep the same way.)
+//
+// Anchored on the object's CreationTimestamp, NOT on status.ObservedAt, and
+// that distinction is the whole point. Under WLR-driven computation the
+// controller recomputes every identity in its own list each cycle — departed
+// ones included — so ObservedAt now means "this controller recently ran a
+// query", not "something recently observed this workload alive". Anchoring
+// grace on it made the guard self-satisfying: phase 2 rewrote ObservedAt,
+// then the sweep at the end of the same pass read the timestamp it had just
+// written and always concluded the object was fresh. That made
+// retainDepartedWLR unreachable for any identity whose samples were still
+// flowing, so a workload that opted out (annotation removed, labels changed,
+// namespace excluded) kept its WorkloadRecommendation, and its shard
+// membership, forever. A CreationTimestamp cannot be refreshed by the writer
+// it is meant to be independent of.
 const sweepGracePeriod = 10 * time.Minute
 
 // wlrName delegates to the shared cache package — controller and webhook
-// must agree on WLR object names or the fallback contract breaks.
+// must agree on WLR object names or the read contract breaks.
 func wlrName(kind, name string) string { return wlrcache.Name(kind, name) }
 
-// wlrLastSeen returns the freshness anchor for sweep decisions. A WLR that
-// was just Created but whose status patch hasn't landed yet has a zero
-// ObservedAt — its CreationTimestamp proves the write is in flight, and the
-// grace period must cover that window or the webhook's two-step write races
-// the sweep.
+// wlrLastSeen returns the anchor for RETENTION decisions — how long a
+// departed identity's last-known-good has been sitting in the cache. A WLR
+// that was just Created but whose status patch hasn't landed yet has a zero
+// ObservedAt, so its CreationTimestamp stands in.
+//
+// Not used for the grace period: see sweepGracePeriod for why that one must
+// be anchored on the CreationTimestamp alone.
 func wlrLastSeen(wlr *sustainv1alpha1.WorkloadRecommendation) time.Time {
 	seen := wlr.Status.ObservedAt.Time
 	if wlr.CreationTimestamp.After(wlr.Status.ObservedAt.Time) {
@@ -55,31 +71,42 @@ func wlrLastSeen(wlr *sustainv1alpha1.WorkloadRecommendation) time.Time {
 // to bump the timestamp. Must stay well under the webhook's
 // DefaultCacheStaleness (30m): without the periodic bump, stable workloads
 // would freeze ObservedAt at their last value change and the webhook would
-// reject the cache as stale — exactly the workloads the fallback protects.
+// reject the cache as stale and admit pods with template resources —
+// exactly the workloads this refresh keeps injectable.
 const wlrRefreshInterval = wlrcache.RefreshInterval
 
 // wlrPolicyLabel labels each WorkloadRecommendation with the Policy that
 // produced it. Shared via the exported constant in api/v1alpha1.
 const wlrPolicyLabel = sustainv1alpha1.WLRPolicyLabel
 
-// upsertWorkloadRecommendation persists the recommendation via the shared
-// write path, snapshotting the target's current container resources.
+// upsertWorkloadRecommendation persists an IDENTITY's recommendation via the
+// shared write path. Called once per computeItem, never once per group member.
 //
-// Errors are logged but never propagated up — the cache is a fallback path,
-// not load-bearing. A failed write only means the webhook may serve a slightly
-// older cached value during the next Prometheus outage.
+// The observed-resources snapshot it writes is the identity's own
+// (computeItem.Observed), which is the same value discovery wrote through
+// EnsureExists moments earlier — the two writers of that field agree by
+// construction, so a converged identity costs no write here at all. Passing a
+// single member's snapshot instead is what used to make the members of an
+// owner-name group patch the field back and forth forever, each cycle, with the
+// winner decided by goroutine scheduling.
+//
+// The error is returned rather than swallowed. The recycle path treats a failed
+// cache write as non-fatal and drops it (the webhook keeps serving the previous
+// value until the next successful write); refreshDepartedRecommendation, where
+// the write IS the deliverable, must not.
 func (r *PolicyReconciler) upsertWorkloadRecommendation(
 	ctx context.Context,
-	t *workloadTarget,
+	it computeItem,
 	policyName string,
 	recs map[string]workload.ContainerRecommendation,
 	now metav1.Time,
-) {
-	wlrcache.Upsert(ctx, r.Client,
-		sustainv1alpha1.WorkloadReference{Kind: t.IdentityKind, Namespace: t.Namespace, Name: t.IdentityName},
-		policyName, recs,
-		wlrcache.BuildObservedResources(t.Containers, t.InitContainers),
-		now)
+) error {
+	ref := sustainv1alpha1.WorkloadReference{
+		Kind:      it.Identity.OwnerKind,
+		Namespace: it.Identity.Namespace,
+		Name:      it.Identity.OwnerName,
+	}
+	return wlrcache.Upsert(ctx, r.Client, ref, policyName, recs, it.Observed, now)
 }
 
 // deleteWLRsWhere lists WorkloadRecommendation objects with the given options
@@ -125,11 +152,11 @@ func (r *PolicyReconciler) deleteWLRsWhere(
 // were created by this policy but whose target workload no longer appears in
 // the current target set. Called once per Reconcile after a successful pass.
 //
-// A departed WLR is not deleted outright: a fresh ObservedAt (within
-// sweepGracePeriod) always protects it — this guards against a pod written
-// mid-cycle by the webhook after the target list was built — and beyond that
-// retainDepartedWLR decides based on RecommendationRetention and whether the
-// workload object itself is actually gone.
+// A WLR whose target is absent is not deleted outright: a recent
+// CreationTimestamp (within sweepGracePeriod) protects it — this guards
+// against an identity first written mid-cycle, after the target list was
+// built — and beyond that retainDepartedWLR decides based on whether the
+// workload object is actually gone, and if so on RecommendationRetention.
 //
 // Best-effort: errors are logged, never returned. A missed sweep just leaves
 // a stale cache entry until the next cycle.
@@ -154,7 +181,7 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 			if _, ok := wanted[wlr.Namespace+"/"+wlr.Name]; ok {
 				return true
 			}
-			if now.Sub(wlrLastSeen(wlr)) < sweepGracePeriod {
+			if now.Sub(wlr.CreationTimestamp.Time) < sweepGracePeriod {
 				return true
 			}
 			return r.retainDepartedWLR(ctx, logger, wlr, now)
@@ -169,27 +196,87 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 }
 
 // retainDepartedWLR decides whether a WorkloadRecommendation whose target
-// left the policy's target set should be kept. Kept when the workload object
-// is gone (or a terminal Job) and the recommendation is within the retention
-// window — this keeps ephemeral workloads (bare pods, argocd-hook Jobs)
-// visible on the dashboard after they end. Deleted when retention is
-// disabled, when the workload still exists (it opted out), or when the
-// window has lapsed. Fails open: an existence-check error keeps the object
-// so a later sweep can decide.
+// left the policy's target set should be kept.
+//
+// A target can be absent for three different reasons, and the object's own
+// existence is what tells them apart:
+//
+//   - The workload is GONE (deleted, or a terminal Job): departed. Kept while
+//     within the retention window, which is what keeps ephemeral workloads
+//     (bare pods, argocd-hook Jobs) on the dashboard after they end.
+//   - The workload still EXISTS and is older than the grace period: it opted
+//     out — annotation removed, labels changed, namespace excluded. Deleted,
+//     and this is the only path that ever removes such an entry.
+//   - The workload still EXISTS but was created within the grace period: it
+//     simply postdates this cycle's target listing. Kept.
+//
+// Fails open: an existence-check error keeps the object so a later sweep can
+// decide.
+//
+// Note the retention window is measured from ObservedAt, which the
+// computation phase refreshes for as long as the identity's samples remain
+// inside the query window. A departed identity is therefore retained for
+// roughly (window + retention), not retention alone — see
+// docs/reference/cli.md.
 func (r *PolicyReconciler) retainDepartedWLR(ctx context.Context, logger logr.Logger, wlr *sustainv1alpha1.WorkloadRecommendation, now time.Time) bool {
-	if r.RecommendationRetention <= 0 {
-		return false
-	}
-	gone, err := r.workloadGone(ctx, wlr.Spec.WorkloadRef)
+	gone, created, err := r.workloadGone(ctx, wlr.Spec.WorkloadRef)
 	if err != nil {
+		// Deliberately NOT marked departed. This branch keeps the object on an
+		// inconclusive check, not a confirmed departure, and the mark waives the
+		// webhook's freshness gate — applying it here would let a live workload
+		// whose existence check merely errored be served arbitrarily old data.
 		logger.V(1).Info("workload existence check failed; keeping WorkloadRecommendation",
 			"name", wlr.Name, "namespace", wlr.Namespace, "err", err)
 		return true
 	}
 	if !gone {
+		// The workload is still running but is no longer matched: it opted
+		// out, and its cache entry goes. Unless the OBJECT is itself younger
+		// than the grace period — then it was created after this cycle's
+		// target listing was built, and the next listing will pick it up.
+		// The WLR's own age cannot answer this: a workload recreated under a
+		// name k8s-sustain already knows reuses the existing object.
+		return now.Sub(created) < sweepGracePeriod
+	}
+	// Retention is only consulted for genuinely departed identities. Checked
+	// here rather than at the top of the function so that disabling retention
+	// cannot short-circuit the opt-out branch above into deleting a workload
+	// that merely raced the listing.
+	if r.RecommendationRetention <= 0 {
 		return false
 	}
-	return now.Sub(wlrLastSeen(wlr)) <= r.RecommendationRetention
+	if now.Sub(wlrLastSeen(wlr)) > r.RecommendationRetention {
+		return false
+	}
+	r.markDeparted(ctx, logger, wlr)
+	return true
+}
+
+// markDeparted records that this recommendation is being retained for a
+// workload identity confirmed gone, so the webhook serves it instead of
+// rejecting it as stale — see WorkloadRecommendationStatus.Departed for why
+// that distinction exists at all.
+//
+// Idempotent by design: the sweep runs every reconcile, but the patch is
+// issued only on the transition, so a departed identity costs one write for
+// its whole retention window rather than one per cycle.
+//
+// Best-effort, like the rest of the sweep. A failed patch leaves the object
+// unmarked and the next sweep retries; the only consequence in between is that
+// the webhook keeps treating it as stale, which is the pre-existing behaviour.
+func (r *PolicyReconciler) markDeparted(ctx context.Context, logger logr.Logger, wlr *sustainv1alpha1.WorkloadRecommendation) {
+	if wlr.Status.Departed {
+		return
+	}
+	patched := wlr.DeepCopy()
+	patched.Status.Departed = true
+	if err := r.Status().Patch(ctx, patched, client.MergeFrom(wlr)); err != nil {
+		logger.V(1).Info("failed to mark WorkloadRecommendation departed; will retry next sweep",
+			"name", wlr.Name, "namespace", wlr.Namespace, "err", err)
+		return
+	}
+	logger.V(1).Info("retaining recommendation for departed workload",
+		"name", wlr.Name, "namespace", wlr.Namespace)
 }
 
 // workloadGone reports whether the referenced workload object no longer
@@ -199,7 +286,16 @@ func (r *PolicyReconciler) retainDepartedWLR(ctx context.Context, logger logr.Lo
 // name is the owner-name annotation value, not a real object name, so
 // existence cannot be checked with a GET. Owner-name-overridden identities
 // on other kinds hit the same limit and resolve to NotFound → gone.
-func (r *PolicyReconciler) workloadGone(ctx context.Context, ref sustainv1alpha1.WorkloadReference) (bool, error) {
+//
+// The second return is the surviving object's CreationTimestamp, zero when
+// the object is gone. retainDepartedWLR needs it to tell the two reasons a
+// live workload can be absent from the target set apart: it opted out, or it
+// was created after this cycle's listing was built. Only the object's own age
+// separates them, and nothing on the WLR can stand in for it.
+func (r *PolicyReconciler) workloadGone(
+	ctx context.Context,
+	ref sustainv1alpha1.WorkloadReference,
+) (bool, time.Time, error) {
 	var obj client.Object
 	switch ref.Kind {
 	case "Deployment":
@@ -215,19 +311,19 @@ func (r *PolicyReconciler) workloadGone(ctx context.Context, ref sustainv1alpha1
 	case "Job":
 		obj = &batchv1.Job{}
 	default: // "Pod" (bare-pod identity) or unknown future kind
-		return true, nil
+		return true, time.Time{}, nil
 	}
 	err := r.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, obj)
 	if apierrors.IsNotFound(err) {
-		return true, nil
+		return true, time.Time{}, nil
 	}
 	if err != nil {
-		return false, err
+		return false, time.Time{}, err
 	}
 	if job, ok := obj.(*batchv1.Job); ok && jobIsTerminal(job) {
-		return true, nil
+		return true, time.Time{}, nil
 	}
-	return false, nil
+	return false, obj.GetCreationTimestamp().Time, nil
 }
 
 // deleteAllRecommendationsForPolicy removes every WorkloadRecommendation tied
@@ -262,6 +358,12 @@ func (r *PolicyReconciler) deleteAllRecommendationsForPolicy(ctx context.Context
 //     (which skips finalizers entirely).
 //   - WLRs from a controller crash mid-delete.
 //   - WLRs orphaned by a Policy renamed before the per-policy sweep ran.
+//
+// It no longer ages out "nodata" recommendations. Under WLR-driven refresh a
+// nodata status means "nothing computed YET" and is retried on every cycle, so
+// there is no terminal state to collect. An identity that never materialises is
+// removed by the per-policy sweep once its target is absent and the retention
+// window lapses.
 //
 // Best-effort and idempotent. Safe to run on a tick.
 func (r *PolicyReconciler) reapOrphanedRecommendations(ctx context.Context) error {

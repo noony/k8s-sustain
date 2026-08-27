@@ -216,6 +216,62 @@ func TestEmitPolicyRollup(t *testing.T) {
 	}
 }
 
+// TestEmitPolicyBatchCoverage pins the two batch-coverage gauges: how many
+// workload identities a policy's batch prefetch requested versus how many
+// resolved with at least one usable sample. Gauges are Set(), not Add(), so
+// re-running this test under -count>1 in the same process is safe -- each
+// call just re-asserts the same value, unlike a counter's cumulative total.
+func TestEmitPolicyBatchCoverage(t *testing.T) {
+	const policyName = "batch-coverage-test"
+	EmitPolicyBatchCoverage(policyName, 9, 4)
+
+	requested := gaugeValue(t, "k8s_sustain_policy_batch_requested_count", map[string]string{"policy": policyName})
+	if requested != 9 {
+		t.Errorf("batch_requested_count = %v, want 9", requested)
+	}
+	resolved := gaugeValue(t, "k8s_sustain_policy_batch_resolved_count", map[string]string{"policy": policyName})
+	if resolved != 4 {
+		t.Errorf("batch_resolved_count = %v, want 4", resolved)
+	}
+}
+
+// TestEmitPolicyBatchFailures pins the batch-failures counter in isolation
+// from coverage -- see TestEmitPolicyBatchCoverage for that half, and
+// policy_controller_test.go's TestReconcile_TotalOutage_* /
+// TestReconcile_EmptySuccessfulResponse_* for the end-to-end proof that the
+// two move independently.
+//
+// Because this is a Counter (cumulative, unlike the coverage gauges above),
+// this test uses a before/after delta rather than an absolute value -- the
+// same idiom as TestEmitRecycleSuppressed -- so it stays correct under
+// `go test -count>1`, where package-level Prometheus collectors persist
+// across repeated runs in the same process. Asserting an absolute value here
+// (as TestIncrementRetryAttempt does, which predates this change and is a
+// known, separately-tracked flake) would fail on the second run.
+func TestEmitPolicyBatchFailures(t *testing.T) {
+	const policyName = "batch-failures-test"
+	before := testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues(policyName))
+
+	EmitPolicyBatchFailures(policyName, 3)
+
+	after := testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues(policyName))
+	if after-before != 3 {
+		t.Fatalf("batch_failures_total delta = %v, want 3 (before=%v after=%v)", after-before, before, after)
+	}
+
+	// A zero-failure call must be a true no-op: EmitPolicyBatchCoverage
+	// already carries the "nothing failed" case (see its own doc comment for
+	// why coverage and failures are deliberately separate metrics), so this
+	// counter should never even create a zero-valued series for a healthy
+	// cycle.
+	before = testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues(policyName))
+	EmitPolicyBatchFailures(policyName, 0)
+	after = testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues(policyName))
+	if after != before {
+		t.Fatalf("batch_failures_total changed on a zero-failure call: before=%v after=%v", before, after)
+	}
+}
+
 func TestEmitAutoscalerTargetsConfigured_ClearsAndSets(t *testing.T) {
 	const ns, kind, name = "ns", "Deployment", "ats-test"
 
@@ -330,5 +386,117 @@ func TestEmitRecycleSuppressed(t *testing.T) {
 	after := testutil.ToFloat64(recycleSuppressedTotal.WithLabelValues("ns", "Deployment", "web", "cpu"))
 	if after-before != 1 {
 		t.Fatalf("counter not incremented: before=%v after=%v", before, after)
+	}
+}
+
+// seriesCountForPolicy reports how many series of the named metric family
+// carry policy="<policy>". Unlike gaugeValue it does not fail when nothing
+// matches — the absence of a series is exactly what the deletion test asserts.
+func seriesCountForPolicy(t *testing.T, name, policy string) int {
+	t.Helper()
+	mfs, err := metrics.Registry.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	n := 0
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.Metric {
+			for _, l := range m.Label {
+				if l.GetName() == "policy" && l.GetValue() == policy {
+					n++
+				}
+			}
+		}
+	}
+	return n
+}
+
+// TestDeletePolicyMetricsRemovesEverySeriesForThePolicy pins the cleanup that
+// runs when a Policy is deleted.
+//
+// Without it a deleted Policy's series live forever: a gauge keeps exporting
+// its last value, so "deleted" is indistinguishable from "live but matching
+// nothing", and cardinality tracks every policy ever seen. Measured on a kind
+// cluster before this fix: after 20 scenarios were applied and all 20 Policies
+// deleted, policy_workload_count, policy_at_risk_count,
+// policy_batch_requested_count, policy_batch_resolved_count and
+// reconcile_total each still exported 20 series against zero Policies.
+//
+// The per-workload vectors are included deliberately: their policy label names
+// the policy that produced them, and after deletion no reconcile will ever
+// revisit them.
+func TestDeletePolicyMetricsRemovesEverySeriesForThePolicy(t *testing.T) {
+	const policyName = "delete-metrics-test"
+
+	EmitPolicyRollup(policyName, 3, 1)
+	EmitPolicyBatchCoverage(policyName, 5, 2)
+	EmitPolicyBatchFailures(policyName, 4)
+	reconcileTotal.WithLabelValues(policyName, "success").Inc()
+	reconcileDuration.WithLabelValues(policyName).Observe(0.5)
+	EmitWorkloadMetrics(WorkloadMetrics{
+		Namespace: "ns", Kind: "Deployment", Name: "api", Policy: policyName,
+		Containers: []ContainerMetric{{
+			Name: "app", Kind: ContainerKindRegular,
+			HasCPU: true, RecommendedCPUCores: 0.25, CurrentCPUCores: 0.5,
+			HasMemory: true, RecommendedMemoryBytes: 1024, CurrentMemoryBytes: 2048,
+		}},
+	})
+
+	names := []string{
+		"k8s_sustain_policy_workload_count",
+		"k8s_sustain_policy_at_risk_count",
+		"k8s_sustain_policy_batch_requested_count",
+		"k8s_sustain_policy_batch_resolved_count",
+		"k8s_sustain_policy_batch_failures_total",
+		"k8s_sustain_reconcile_total",
+		"k8s_sustain_reconcile_duration_seconds",
+		"k8s_sustain_recommended_cpu_cores",
+		"k8s_sustain_workload_template_cpu_cores",
+		"k8s_sustain_recommended_memory_bytes",
+		"k8s_sustain_workload_template_memory_bytes",
+	}
+
+	// Guard: if a metric never got a series here, its post-delete count of 0
+	// would prove nothing and the test would pass vacuously.
+	for _, n := range names {
+		if got := seriesCountForPolicy(t, n, policyName); got == 0 {
+			t.Fatalf("%s has no series for policy %q before deletion: "+
+				"the assertion below would be vacuous", n, policyName)
+		}
+	}
+
+	DeletePolicyMetrics(policyName)
+
+	for _, n := range names {
+		if got := seriesCountForPolicy(t, n, policyName); got != 0 {
+			t.Errorf("%s still has %d series for deleted policy %q", n, got, policyName)
+		}
+	}
+}
+
+// TestDeletePolicyMetricsLeavesOtherPoliciesAlone guards the obvious way to
+// "fix" the leak wrongly: resetting whole metric vectors.
+func TestDeletePolicyMetricsLeavesOtherPoliciesAlone(t *testing.T) {
+	const doomed, survivor = "doomed-policy", "survivor-policy"
+
+	EmitPolicyRollup(doomed, 3, 1)
+	EmitPolicyRollup(survivor, 8, 6)
+	EmitPolicyBatchCoverage(survivor, 11, 9)
+
+	DeletePolicyMetrics(doomed)
+
+	if got := seriesCountForPolicy(t, "k8s_sustain_policy_workload_count", doomed); got != 0 {
+		t.Errorf("doomed policy still has %d workload_count series", got)
+	}
+	if got := gaugeValue(t, "k8s_sustain_policy_workload_count",
+		map[string]string{"policy": survivor}); got != 8 {
+		t.Errorf("survivor workload_count = %v, want 8 (Reset() would zero this)", got)
+	}
+	if got := gaugeValue(t, "k8s_sustain_policy_batch_requested_count",
+		map[string]string{"policy": survivor}); got != 11 {
+		t.Errorf("survivor batch_requested = %v, want 11", got)
 	}
 }

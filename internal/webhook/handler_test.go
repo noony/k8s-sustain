@@ -4,18 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,26 +20,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
-
-// mockPromVector builds a Prometheus instant-query JSON response with per-container
-// values, keyed by container name.
-func mockPromVector(values map[string]float64) string {
-	var b strings.Builder
-	b.WriteString(`{"status":"success","data":{"resultType":"vector","result":[`)
-	first := true
-	for name, v := range values {
-		if !first {
-			b.WriteString(",")
-		}
-		first = false
-		fmt.Fprintf(&b, `{"metric":{"container":%q},"value":[0,"%g"]}`, name, v)
-	}
-	b.WriteString(`]}}`)
-	return b.String()
-}
 
 func qtyp(s string) *resource.Quantity { q := resource.MustParse(s); return &q }
 
@@ -380,343 +357,17 @@ func TestBuildPatches_PatchesInitContainers(t *testing.T) {
 	}
 }
 
-// TestBuildRecommendations_WorkloadLevelSignal verifies that buildRecommendations
-// uses the per-pod (busiest-replica) percentile directly, with no replica
-// division. The max-pod query returns per-pod CPU=0.4 cores → request=400m
-// (no headroom configured), per-pod memory=100MiB → request=100MiB.
-func TestBuildRecommendations_WorkloadLevelSignal(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			// per-pod p95 of the busiest replica = 0.4 cores
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.4})))
-		case strings.Contains(q, "workload_max_pod_memory"):
-			// per-pod p95 of the busiest replica = 100 MiB
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 100 * 1024 * 1024})))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
-	defer server.Close()
-
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-
-	// Use a fake k8s client (no HPAs/ScaledObjects → autoscaler.Info{Kind:None}).
-	fakeClient := fake.NewClientBuilder().Build()
-
-	h := &Handler{
-		Client:           fakeClient,
-		PrometheusClient: pc,
-	}
-
-	p95 := int32(95)
-	policy := &sustainv1alpha1.Policy{
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-					CPU: sustainv1alpha1.ResourceConfig{
-						Window:   "168h",
-						Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95},
-					},
-					Memory: sustainv1alpha1.ResourceConfig{
-						Window:   "168h",
-						Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95},
-					},
-				},
-			},
-		},
-	}
-
-	containers := []corev1.Container{{Name: "app"}}
-	recs, err := h.buildRecommendations(context.Background(), policy, "default", "Deployment", "my-app", containers)
-	if err != nil {
-		t.Fatalf("buildRecommendations: %v", err)
-	}
-
-	rec, ok := recs["app"]
-	if !ok {
-		t.Fatal("expected recommendation for container 'app'")
-	}
-
-	// Per-pod CPU = 0.4 cores → 400m (no headroom configured).
-	wantCPU := resource.MustParse("400m")
-	if rec.CPURequest == nil {
-		t.Fatal("CPURequest is nil")
-	}
-	if rec.CPURequest.Cmp(wantCPU) != 0 {
-		t.Errorf("CPURequest = %s, want %s", rec.CPURequest.String(), wantCPU.String())
-	}
-
-	// Per-pod memory = 100MiB
-	wantMem := resource.MustParse("100Mi")
-	if rec.MemoryRequest == nil {
-		t.Fatal("MemoryRequest is nil")
-	}
-	if rec.MemoryRequest.Cmp(wantMem) != 0 {
-		t.Errorf("MemoryRequest = %s, want %s", rec.MemoryRequest.String(), wantMem.String())
-	}
-}
-
-// TestBuildRecommendations_NoPrometheusData verifies that when Prometheus returns
-// no samples for a container, no recommendation is emitted for it.
-func TestBuildRecommendations_NoPrometheusData(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		w.Header().Set("Content-Type", "application/json")
-		// All queries return empty
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-	}))
-	defer server.Close()
-
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-
-	fakeClient := fake.NewClientBuilder().Build()
-	h := &Handler{
-		Client:           fakeClient,
-		PrometheusClient: pc,
-	}
-
-	p95 := int32(95)
-	policy := &sustainv1alpha1.Policy{
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-					CPU:    sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-					Memory: sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-				},
-			},
-		},
-	}
-
-	containers := []corev1.Container{{Name: "app"}}
-	recs, err := h.buildRecommendations(context.Background(), policy, "default", "Deployment", "my-app", containers)
-	if err != nil {
-		t.Fatalf("buildRecommendations: %v", err)
-	}
-	if len(recs) != 0 {
-		t.Errorf("expected no recommendations when Prometheus has no data, got %v", recs)
-	}
-}
-
-// TestBuildRecommendations_AppliesAutoscalerCoordination verifies that the
-// webhook applies overhead from autoscaler coordination at admission time. With
-// a baseline of 100m CPU and an HPA targeting CPU at 70%, the request should
-// be bumped to ceil(100 * 110 / 70) = 158m.
-func TestBuildRecommendations_AppliesAutoscalerCoordination(t *testing.T) {
-	const baselineCores = 0.1 // 100m baseline (per-pod)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": baselineCores})))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
-	defer server.Close()
-
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-
-	// Register autoscaling/v2 in the scheme so the fake client can serve HPAs.
-	scheme := runtime.NewScheme()
-	if err := autoscalingv2.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme: %v", err)
-	}
-
-	cpuTarget := int32(70)
-	hpa := &autoscalingv2.HorizontalPodAutoscaler{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "my-app"},
-		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
-			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "my-app"},
-			MaxReplicas:    5,
-			Metrics: []autoscalingv2.MetricSpec{{
-				Type: autoscalingv2.ResourceMetricSourceType,
-				Resource: &autoscalingv2.ResourceMetricSource{
-					Name: corev1.ResourceCPU,
-					Target: autoscalingv2.MetricTarget{
-						Type:               autoscalingv2.UtilizationMetricType,
-						AverageUtilization: &cpuTarget,
-					},
-				},
-			}},
-		},
-	}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(hpa).Build()
-
-	h := &Handler{
-		Client:           fakeClient,
-		PrometheusClient: pc,
-	}
-
-	p95 := int32(95)
-	policy := &sustainv1alpha1.Policy{
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-					CPU: sustainv1alpha1.ResourceConfig{
-						Window:   "168h",
-						Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95},
-					},
-					Memory: sustainv1alpha1.ResourceConfig{
-						Window:   "168h",
-						Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95},
-					},
-				},
-				AutoscalerCoordination: sustainv1alpha1.AutoscalerCoordination{
-					Enabled: true,
-				},
-			},
-		},
-	}
-
-	containers := []corev1.Container{{Name: "app"}}
-	recs, err := h.buildRecommendations(context.Background(), policy, "default", "Deployment", "my-app", containers)
-	if err != nil {
-		t.Fatalf("buildRecommendations: %v", err)
-	}
-
-	rec, ok := recs["app"]
-	if !ok {
-		t.Fatal("expected recommendation for container 'app'")
-	}
-	if rec.CPURequest == nil {
-		t.Fatal("CPURequest is nil")
-	}
-	// Baseline 100m, overhead = ceil(100 * 110 / 70) = 158m.
-	if rec.CPURequest.MilliValue() != 158 {
-		t.Errorf("CPURequest = %dm, want 158m", rec.CPURequest.MilliValue())
-	}
-}
-
-// TestBuildRecommendations_SkipsReplicaCorrectionAtAdmission verifies the
-// webhook never applies the replica-budget correction: a pod admitted during
-// an HPA scale-out (CurrentReplicas transiently high) must get the
-// overhead-only request, not the replica-corrected one. The controller
-// applies the correction later on its reconcile cadence.
-func TestBuildRecommendations_SkipsReplicaCorrectionAtAdmission(t *testing.T) {
-	const baselineCores = 0.1 // 100m baseline (per-pod)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": baselineCores})))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
-	defer server.Close()
-
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-
-	scheme := runtime.NewScheme()
-	if err := autoscalingv2.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme: %v", err)
-	}
-
-	cpuTarget := int32(70)
-	minReplicas := int32(2)
-	hpa := &autoscalingv2.HorizontalPodAutoscaler{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "my-app"},
-		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
-			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "my-app"},
-			MinReplicas:    &minReplicas,
-			MaxReplicas:    10,
-			Metrics: []autoscalingv2.MetricSpec{{
-				Type: autoscalingv2.ResourceMetricSourceType,
-				Resource: &autoscalingv2.ResourceMetricSource{
-					Name: corev1.ResourceCPU,
-					Target: autoscalingv2.MetricTarget{
-						Type:               autoscalingv2.UtilizationMetricType,
-						AverageUtilization: &cpuTarget,
-					},
-				},
-			}},
-		},
-		// Mid-scale-out: 8 replicas vs the anchor target of 2. If the webhook
-		// applied the replica factor this would double the request (clamp 2.0).
-		Status: autoscalingv2.HorizontalPodAutoscalerStatus{CurrentReplicas: 8},
-	}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(hpa).Build()
-
-	h := &Handler{
-		Client:           fakeClient,
-		PrometheusClient: pc,
-	}
-
-	p95 := int32(95)
-	anchor := 0.0
-	policy := &sustainv1alpha1.Policy{
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-					CPU: sustainv1alpha1.ResourceConfig{
-						Window:   "168h",
-						Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95},
-					},
-					Memory: sustainv1alpha1.ResourceConfig{
-						Window:   "168h",
-						Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95},
-					},
-				},
-				AutoscalerCoordination: sustainv1alpha1.AutoscalerCoordination{
-					Enabled:             true,
-					ReplicaBudgetAnchor: &anchor,
-				},
-			},
-		},
-	}
-
-	containers := []corev1.Container{{Name: "app"}}
-	recs, err := h.buildRecommendations(context.Background(), policy, "default", "Deployment", "my-app", containers)
-	if err != nil {
-		t.Fatalf("buildRecommendations: %v", err)
-	}
-
-	rec, ok := recs["app"]
-	if !ok {
-		t.Fatal("expected recommendation for container 'app'")
-	}
-	if rec.CPURequest == nil {
-		t.Fatal("CPURequest is nil")
-	}
-	// Overhead only: ceil(100 × 110 / 70) = 158m. With the replica factor it
-	// would be 316m — that must never appear at admission.
-	if rec.CPURequest.MilliValue() != 158 {
-		t.Errorf("CPURequest = %dm, want 158m (overhead only, no replica factor)", rec.CPURequest.MilliValue())
-	}
-}
-
-// admitTestEnv bundles the boilerplate for end-to-end admit() tests:
-// scheme, fake client, mock Prometheus, and a constructed Handler.
+// admitTestEnv bundles the boilerplate for end-to-end admit() tests: scheme,
+// fake client, and a constructed Handler. The webhook reads recommendations
+// exclusively from a WorkloadRecommendation now — there is no Prometheus
+// mock to configure. Tests that need admission to inject something seed one
+// via objs, using freshWLR below.
 type admitTestEnv struct {
 	handler *Handler
-	server  *httptest.Server
 }
 
-// newAdmitEnv builds a Handler whose Prometheus mock returns one CPU and one
-// memory sample for container "app" (yielding ~100m CPU, ~64Mi memory after
-// per-pod division by replicas=1).
+// newAdmitEnv builds a Handler backed by a fake client preloaded with objs
+// (Policies, ReplicaSets, WorkloadRecommendations, ...).
 func newAdmitEnv(t *testing.T, objs ...runtime.Object) *admitTestEnv {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -725,26 +376,6 @@ func newAdmitEnv(t *testing.T, objs ...runtime.Object) *admitTestEnv {
 	}
 	if err := appsv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme apps: %v", err)
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.1})))
-		case strings.Contains(q, "workload_max_pod_memory"):
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 64 * 1024 * 1024})))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
-
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		server.Close()
-		t.Fatalf("prometheus client: %v", err)
 	}
 
 	objsTyped := make([]client.Object, 0, len(objs))
@@ -757,12 +388,29 @@ func newAdmitEnv(t *testing.T, objs ...runtime.Object) *admitTestEnv {
 		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
 
 	return &admitTestEnv{
-		handler: &Handler{Client: fc, PrometheusClient: pc},
-		server:  server,
+		handler: &Handler{Client: fc},
 	}
 }
 
-func (e *admitTestEnv) close() { e.server.Close() }
+// wlrRec builds a single-container recommendation entry from plain quantity
+// strings, mirroring what the controller's upsert path writes.
+func wlrRec(cpu, mem string) sustainv1alpha1.ContainerRecommendation {
+	return sustainv1alpha1.ContainerRecommendation{CPURequest: qtyp(cpu), MemoryRequest: qtyp(mem)}
+}
+
+// freshWLR builds a WorkloadRecommendation for (kind, ns, name) with a fresh
+// ObservedAt, keyed exactly as the controller writes and the webhook reads
+// (wlrName). Admission tests seed one of these instead of configuring a
+// Prometheus mock — the webhook's only recommendation source now.
+func freshWLR(kind, ns, name string, containers map[string]sustainv1alpha1.ContainerRecommendation) *sustainv1alpha1.WorkloadRecommendation {
+	return &sustainv1alpha1.WorkloadRecommendation{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: wlrName(kind, name)},
+		Status: sustainv1alpha1.WorkloadRecommendationStatus{
+			ObservedAt: metav1.Now(),
+			Containers: containers,
+		},
+	}
+}
 
 func basicPolicy(name string, mode sustainv1alpha1.UpdateMode) *sustainv1alpha1.Policy {
 	p95 := int32(95)
@@ -843,7 +491,6 @@ func admissionRequestFor(t *testing.T, pod *corev1.Pod) *admissionv1.AdmissionRe
 // or an unrelated subresource where Object is not populated).
 func TestAdmit_EmptyObjectRaw_AllowsWithoutPatch(t *testing.T) {
 	env := newAdmitEnv(t)
-	defer env.close()
 
 	resp := env.handler.admit(context.Background(), &admissionv1.AdmissionRequest{
 		UID:       "uid",
@@ -864,7 +511,6 @@ func TestAdmit_EmptyObjectRaw_AllowsWithoutPatch(t *testing.T) {
 // annotation pass through untouched.
 func TestAdmit_NoAnnotation_AllowsWithoutPatch(t *testing.T) {
 	env := newAdmitEnv(t)
-	defer env.close()
 
 	pod := podWithRSOwner("default", "p", "rs", "")
 	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
@@ -881,7 +527,6 @@ func TestAdmit_NoAnnotation_AllowsWithoutPatch(t *testing.T) {
 func TestAdmit_PolicyNotFound_AllowsWithoutPatch(t *testing.T) {
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
 	env := newAdmitEnv(t, rs)
-	defer env.close()
 
 	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "missing-policy")
 	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
@@ -897,7 +542,6 @@ func TestAdmit_PolicyNotFound_AllowsWithoutPatch(t *testing.T) {
 // owner are skipped — the webhook can't determine workload kind.
 func TestAdmit_StandalonePod_AllowsWithoutPatch(t *testing.T) {
 	env := newAdmitEnv(t, basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate))
-	defer env.close()
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -931,7 +575,6 @@ func TestAdmit_KindNotConfigured_AllowsWithoutPatch(t *testing.T) {
 	}
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
 	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
 
 	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
 	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
@@ -948,8 +591,13 @@ func TestAdmit_KindNotConfigured_AllowsWithoutPatch(t *testing.T) {
 func TestAdmit_RecommendOnly_AllowsWithoutPatch(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
+	// A WLR is present with data to inject, so the assertion below actually
+	// exercises the recommend-only short-circuit rather than the (also
+	// no-patch) "nothing to inject" path.
+	wlr := freshWLR("Deployment", "default", "my-app", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
+	env := newAdmitEnv(t, policy, rs, wlr)
 	env.handler.RecommendOnly = true
 
 	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
@@ -969,8 +617,10 @@ func TestAdmit_PolicyRecommendOnly_AllowsWithoutPatch(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	policy.Spec.RightSizing.RecommendOnly = true
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
+	wlr := freshWLR("Deployment", "default", "my-app", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
+	env := newAdmitEnv(t, policy, rs, wlr)
 
 	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
 	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
@@ -985,8 +635,8 @@ func TestAdmit_PolicyRecommendOnly_AllowsWithoutPatch(t *testing.T) {
 // TestAdmit_BarePodWithOwnerName_InjectsAsPodKind verifies a pod with no
 // controller owner but a valid owner-name annotation is treated as kind
 // "Pod": it gets the label-mirror patch AND, when the policy configures
-// types.pod, a resource injection patch from Prometheus data queried under
-// the overridden identity.
+// types.pod, a resource injection patch read from the WorkloadRecommendation
+// cached under the overridden identity.
 func TestAdmit_BarePodWithOwnerName_InjectsAsPodKind(t *testing.T) {
 	mode := sustainv1alpha1.UpdateModeOnCreate
 	policy := &sustainv1alpha1.Policy{
@@ -1001,8 +651,10 @@ func TestAdmit_BarePodWithOwnerName_InjectsAsPodKind(t *testing.T) {
 			},
 		},
 	}
-	env := newAdmitEnv(t, policy)
-	defer env.close()
+	wlr := freshWLR("Pod", "default", "etl-daily", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
+	env := newAdmitEnv(t, policy, wlr)
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1031,70 +683,6 @@ func TestAdmit_BarePodWithOwnerName_InjectsAsPodKind(t *testing.T) {
 	}
 }
 
-// TestAdmit_PolicyRecommendOnly_WLRSnapshotKeepsTemplateValues guards the
-// admit -> writeRecommendationCache wiring: admit must pass the EFFECTIVE
-// recommend-only value (global flag OR the policy's own
-// spec.rightSizing.recommendOnly) into the cache write, not h.RecommendOnly
-// directly. Here the handler's global flag stays false and only the policy
-// field is true, so if admit regressed to passing h.RecommendOnly the pod
-// would look "mutated" to the cache write and the WLR would snapshot the
-// (never-applied) recommendation instead of the template value.
-func TestAdmit_PolicyRecommendOnly_WLRSnapshotKeepsTemplateValues(t *testing.T) {
-	mode := sustainv1alpha1.UpdateModeOnCreate
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p"},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				Update: sustainv1alpha1.UpdateSpec{Types: sustainv1alpha1.UpdateTypes{Pod: &mode}},
-				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-					CPU:    sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: ptr.To(int32(95))}},
-					Memory: sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: ptr.To(int32(95))}},
-				},
-				// Per-policy dry-run; the handler's global RecommendOnly stays
-				// false (checked below) so any effect here must come from this
-				// field, not the flag.
-				RecommendOnly: true,
-			},
-		},
-	}
-	env := newAdmitEnv(t, policy)
-	defer env.close()
-	if env.handler.RecommendOnly {
-		t.Fatal("test setup error: global RecommendOnly must be false")
-	}
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "etl-daily-run-1",
-			Annotations: map[string]string{
-				sustainv1alpha1.PolicyAnnotation:    "p",
-				sustainv1alpha1.OwnerNameAnnotation: "etl-daily",
-			},
-		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("700m")},
-			},
-		}}},
-	}
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatal("expected allow")
-	}
-	if resp.Patch != nil && strings.Contains(string(resp.Patch), `"/spec/containers/0/resources"`) {
-		t.Errorf("policy recommend-only must not inject resources, got patch %s", resp.Patch)
-	}
-
-	wlr := waitForWLR(t, env.handler.Client, "default", "pod-etl-daily")
-	got := wlr.Status.ObservedResources["app"].CPURequest
-	if got == nil || got.String() != "700m" {
-		t.Errorf("observed cpu = %v, want 700m (template value) — admit must pass the effective "+
-			"recommend-only value, not h.RecommendOnly, into writeRecommendationCache", got)
-	}
-}
-
 // TestAdmit_BarePodWithOwnerName_KindNotConfigured_LabelOnly verifies that
 // when the policy does not configure types.pod, a bare pod with a valid
 // owner-name annotation still gets the label mirror patch, but no resource
@@ -1103,7 +691,6 @@ func TestAdmit_PolicyRecommendOnly_WLRSnapshotKeepsTemplateValues(t *testing.T) 
 func TestAdmit_BarePodWithOwnerName_KindNotConfigured_LabelOnly(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate) // only Deployment configured
 	env := newAdmitEnv(t, policy)
-	defer env.close()
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1129,50 +716,22 @@ func TestAdmit_BarePodWithOwnerName_KindNotConfigured_LabelOnly(t *testing.T) {
 	}
 }
 
-// TestAdmit_OwnedPodWithOwnerNameOverride_QueriesOverriddenIdentity verifies
+// TestAdmit_OwnedPodWithOwnerNameOverride_ReadsOverriddenIdentityWLR verifies
 // that a pod with a real controller owner AND a valid owner-name annotation
-// still gets the label-mirror patch, and that the Prometheus query is issued
-// under the overridden name, not the real Deployment name.
-func TestAdmit_OwnedPodWithOwnerNameOverride_QueriesOverriddenIdentity(t *testing.T) {
+// still gets the label-mirror patch, and that the WorkloadRecommendation read
+// is keyed by the overridden name, not the real Deployment name: two WLRs are
+// seeded (one under each name), and the injected values must come from the
+// overridden one only.
+func TestAdmit_OwnedPodWithOwnerNameOverride_ReadsOverriddenIdentityWLR(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "app-blue-rs", "app-blue")
-	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
-
-	// buildRecommendations fires the CPU and memory Prometheus queries
-	// concurrently (errgroup), so the mock server's handler runs on multiple
-	// goroutines at once — sawQuery must be guarded, not a bare string, or
-	// -race flags a write-write race even though the test never needed more
-	// than "the most recent query seen".
-	var (
-		mu       sync.Mutex
-		sawQuery string
-	)
-	env.handler.PrometheusClient = nil // replaced below with a query-capturing server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		if strings.Contains(q, "owner_name=") {
-			mu.Lock()
-			sawQuery = q
-			mu.Unlock()
-		}
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.1})))
-		case strings.Contains(q, "workload_max_pod_memory"):
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 64 * 1024 * 1024})))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
-	defer server.Close()
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-	env.handler.PrometheusClient = pc
+	realWLR := freshWLR("Deployment", "default", "app-blue", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("999m", "999Mi"),
+	})
+	overrideWLR := freshWLR("Deployment", "default", "app", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
+	env := newAdmitEnv(t, policy, rs, realWLR, overrideWLR)
 
 	pod := podWithRSOwner("default", "app-blue-rs-xyz", "app-blue-rs", "p")
 	pod.Annotations[sustainv1alpha1.OwnerNameAnnotation] = "app"
@@ -1180,17 +739,15 @@ func TestAdmit_OwnedPodWithOwnerNameOverride_QueriesOverriddenIdentity(t *testin
 	if !resp.Allowed {
 		t.Fatal("expected allow")
 	}
-	mu.Lock()
-	got := sawQuery
-	mu.Unlock()
-	if got == "" {
-		t.Fatal("expected a Prometheus query carrying owner_name")
+	if resp.Patch == nil {
+		t.Fatal("expected an injection patch")
 	}
-	if !strings.Contains(got, `owner_name="app"`) {
-		t.Errorf("expected query to use overridden owner_name=app, got: %s", got)
+	patchStr := string(resp.Patch)
+	if !strings.Contains(patchStr, `"100m"`) {
+		t.Errorf("expected injection from the overridden identity's WLR (100m): %s", patchStr)
 	}
-	if strings.Contains(got, `owner_name="app-blue"`) {
-		t.Errorf("query must not use the real, non-overridden name: %s", got)
+	if strings.Contains(patchStr, `"999m"`) {
+		t.Errorf("must not inject from the real, non-overridden identity's WLR: %s", patchStr)
 	}
 }
 
@@ -1198,12 +755,14 @@ func TestAdmit_OwnedPodWithOwnerNameOverride_QueriesOverriddenIdentity(t *testin
 // RecommendOnly's "never mutates the pod" contract is scoped to
 // resources/limits: a valid owner-name annotation still produces the
 // label-mirror patch (the only mechanism that makes the override visible to
-// Prometheus), but never a resource-injection patch.
+// Prometheus via kube-state-metrics), but never a resource-injection patch.
 func TestAdmit_RecommendOnly_OwnerNameAnnotation_LabelPatchOnly(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
+	wlr := freshWLR("Deployment", "default", "app", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
+	env := newAdmitEnv(t, policy, rs, wlr)
 	env.handler.RecommendOnly = true
 
 	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
@@ -1239,7 +798,6 @@ func TestAdmit_RecommendOnly_OwnerNameAnnotation_LabelPatchOnly(t *testing.T) {
 // as absent: no label patch, today's owner-resolution behavior unchanged.
 func TestAdmit_InvalidOwnerNameLabelValue_NoLabelPatch(t *testing.T) {
 	env := newAdmitEnv(t, basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate))
-	defer env.close()
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1267,8 +825,10 @@ func TestAdmit_InvalidOwnerNameLabelValue_NoLabelPatch(t *testing.T) {
 func TestAdmit_DeploymentInjection_PatchesResources(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
+	wlr := freshWLR("Deployment", "default", "my-app", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
+	env := newAdmitEnv(t, policy, rs, wlr)
 
 	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
 	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
@@ -1300,8 +860,10 @@ func TestAdmit_DeploymentInjection_PatchesResources(t *testing.T) {
 func TestServeHTTP_RoundTripsAdmissionReview(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
+	wlr := freshWLR("Deployment", "default", "my-app", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
+	env := newAdmitEnv(t, policy, rs, wlr)
 
 	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
 	review := admissionv1.AdmissionReview{
@@ -1344,7 +906,6 @@ func TestServeHTTP_RoundTripsAdmissionReview(t *testing.T) {
 // AdmissionReview JSON with HTTP 400 instead of allowing through.
 func TestServeHTTP_BadBody_Returns400(t *testing.T) {
 	env := newAdmitEnv(t)
-	defer env.close()
 
 	req := httptest.NewRequest(http.MethodPost, "/mutate", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -1383,11 +944,10 @@ func TestIsValidPolicyName(t *testing.T) {
 }
 
 // TestAdmit_InvalidPolicyAnnotation_AllowsWithoutPatch verifies that a
-// malformed annotation value (uppercase, oversized, etc.) is rejected early
-// without flowing into Prometheus selector strings.
+// malformed annotation value (uppercase, oversized, etc.) is rejected early,
+// before it is ever used to look up a Policy object.
 func TestAdmit_InvalidPolicyAnnotation_AllowsWithoutPatch(t *testing.T) {
 	env := newAdmitEnv(t, basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate))
-	defer env.close()
 
 	pod := podWithRSOwner("default", "p", "rs", strings.Repeat("a", 300))
 	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
@@ -1408,7 +968,6 @@ func TestAdmit_PolicySelectorNamespaces_PodOutsideListSkipped(t *testing.T) {
 
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
 	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
 
 	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
 	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
@@ -1427,8 +986,10 @@ func TestAdmit_PolicySelectorNamespaces_PodInsideListInjected(t *testing.T) {
 	policy.Spec.Selector.Namespaces = []string{"production"}
 
 	rs := deploymentReplicaSet("production", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
+	wlr := freshWLR("Deployment", "production", "my-app", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
+	env := newAdmitEnv(t, policy, rs, wlr)
 
 	pod := podWithRSOwner("production", "my-app-rs-xyz", "my-app-rs", "p")
 	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
@@ -1448,7 +1009,6 @@ func TestAdmit_ExcludedNamespaces_Skipped(t *testing.T) {
 
 	rs := deploymentReplicaSet("kube-system", "kube-app-rs", "kube-app")
 	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
 	env.handler.ExcludedNamespaces = []string{"kube-system"}
 
 	pod := podWithRSOwner("kube-system", "kube-app-rs-xyz", "kube-app-rs", "p")
@@ -1472,7 +1032,6 @@ func TestAdmit_LabelSelector_PodLabelsDontMatch_Skipped(t *testing.T) {
 
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
 	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
 
 	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
 	pod.Labels = map[string]string{"team": "growth"}
@@ -1494,8 +1053,10 @@ func TestAdmit_LabelSelector_PodLabelsMatch_Injected(t *testing.T) {
 	}
 
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
+	wlr := freshWLR("Deployment", "default", "my-app", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
+	env := newAdmitEnv(t, policy, rs, wlr)
 
 	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
 	pod.Labels = map[string]string{"team": "platform"}
@@ -1521,7 +1082,6 @@ func TestAdmit_InvalidLabelSelector_FailsOpen(t *testing.T) {
 
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
 	env := newAdmitEnv(t, policy, rs)
-	defer env.close()
 
 	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
 	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
@@ -1530,130 +1090,5 @@ func TestAdmit_InvalidLabelSelector_FailsOpen(t *testing.T) {
 	}
 	if resp.Patch != nil {
 		t.Errorf("must not patch when selector is malformed, got %d bytes", len(resp.Patch))
-	}
-}
-
-// jobHistoryEnv builds a buildRecommendations fixture for a standalone Job
-// whose Job object was created moments ago. historyAge controls how old the
-// identity's Prometheus history is (zero = no history at all).
-func jobHistoryTestHandler(t *testing.T, historyAge time.Duration) (*Handler, func()) {
-	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		// Must match before the max_pod cases: the history-start expression
-		// wraps the same workload_max_pod_cpu rule in timestamp().
-		case strings.Contains(q, "timestamp("):
-			if historyAge == 0 {
-				_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-				return
-			}
-			fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"%d"]}]}}`, time.Now().Add(-historyAge).Unix())
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 0.05})))
-		case strings.Contains(q, "workload_max_pod_memory"):
-			_, _ = w.Write([]byte(mockPromVector(map[string]float64{"app": 30 * 1024 * 1024})))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
-
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		server.Close()
-		t.Fatalf("prometheus client: %v", err)
-	}
-
-	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
-		Namespace:         "scenario-job",
-		Name:              "oneshot",
-		CreationTimestamp: metav1.Now(),
-	}}
-	fakeClient := fake.NewClientBuilder().WithObjects(job).Build()
-
-	return &Handler{Client: fakeClient, PrometheusClient: pc}, server.Close
-}
-
-func jobHistoryTestPolicy() *sustainv1alpha1.Policy {
-	p95 := int32(95)
-	return &sustainv1alpha1.Policy{
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-					CPU:    sustainv1alpha1.ResourceConfig{Window: "1h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-					Memory: sustainv1alpha1.ResourceConfig{Window: "1h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-				},
-			},
-		},
-	}
-}
-
-// TestBuildRecommendations_YoungJobWithHistoryGetsRecommendation reproduces the
-// standalone-Job re-run: the Job object is seconds old (every run re-creates
-// it), but the identity has accumulated Prometheus history from earlier runs.
-// The age gate must key on the history age, not the object age, so the run
-// still receives a recommendation (and downstream, a WorkloadRecommendation).
-func TestBuildRecommendations_YoungJobWithHistoryGetsRecommendation(t *testing.T) {
-	h, closeServer := jobHistoryTestHandler(t, 25*time.Minute)
-	defer closeServer()
-
-	recs, err := h.buildRecommendations(context.Background(), jobHistoryTestPolicy(), "scenario-job", "Job", "oneshot", []corev1.Container{{Name: "app"}})
-	if err != nil {
-		t.Fatalf("buildRecommendations: %v", err)
-	}
-	if _, ok := recs["app"]; !ok {
-		t.Fatalf("expected recommendation for young Job with %s of identity history, got %v", "25m", recs)
-	}
-}
-
-// TestBuildRecommendations_YoungJobWithoutHistorySkipped verifies the gate
-// still protects a genuinely first run: brand-new Job object and no identity
-// history in Prometheus → no recommendation.
-func TestBuildRecommendations_YoungJobWithoutHistorySkipped(t *testing.T) {
-	h, closeServer := jobHistoryTestHandler(t, 0)
-	defer closeServer()
-
-	recs, err := h.buildRecommendations(context.Background(), jobHistoryTestPolicy(), "scenario-job", "Job", "oneshot", []corev1.Container{{Name: "app"}})
-	if err != nil {
-		t.Fatalf("buildRecommendations: %v", err)
-	}
-	if len(recs) != 0 {
-		t.Fatalf("expected no recommendation for first-ever Job run, got %v", recs)
-	}
-}
-
-// TestBuildRecommendations_BarePodYoungHistorySkipped covers the bare-pod
-// analogue of the Job case: the identity (k8s.sustain.io/owner-name) has only
-// a few minutes of Prometheus history — e.g. a re-run moments after a short
-// first run. The object age is unknown for Pod-kind, so the gate must key on
-// the history age alone and skip injection rather than recommend from
-// unstable early rate samples.
-func TestBuildRecommendations_BarePodYoungHistorySkipped(t *testing.T) {
-	h, closeServer := jobHistoryTestHandler(t, 3*time.Minute)
-	defer closeServer()
-
-	recs, err := h.buildRecommendations(context.Background(), jobHistoryTestPolicy(), "scenario-job", "Pod", "etl-daily", []corev1.Container{{Name: "app"}})
-	if err != nil {
-		t.Fatalf("buildRecommendations: %v", err)
-	}
-	if len(recs) != 0 {
-		t.Fatalf("expected no recommendation for bare pod with 3m of identity history, got %v", recs)
-	}
-}
-
-// TestBuildRecommendations_BarePodOldHistoryGetsRecommendation verifies bare
-// pods with mature identity history keep getting webhook injections.
-func TestBuildRecommendations_BarePodOldHistoryGetsRecommendation(t *testing.T) {
-	h, closeServer := jobHistoryTestHandler(t, 25*time.Minute)
-	defer closeServer()
-
-	recs, err := h.buildRecommendations(context.Background(), jobHistoryTestPolicy(), "scenario-job", "Pod", "etl-daily", []corev1.Container{{Name: "app"}})
-	if err != nil {
-		t.Fatalf("buildRecommendations: %v", err)
-	}
-	if _, ok := recs["app"]; !ok {
-		t.Fatalf("expected recommendation for bare pod with 25m of identity history, got %v", recs)
 	}
 }

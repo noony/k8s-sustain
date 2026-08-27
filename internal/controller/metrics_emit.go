@@ -154,6 +154,74 @@ func EmitPolicyRollup(policy string, workloadCount, atRiskCount int) {
 	policyAtRiskCount.WithLabelValues(policy).Set(float64(atRiskCount))
 }
 
+// EmitPolicyBatchCoverage records how many workload identities a policy's
+// sharded Prometheus batch prefetch requested this cycle versus how many
+// resolved with at least one usable CPU or memory sample
+// (recommender.BatchInputs). This is a capacity/health signal, not a failure
+// signal: a workload resolving with zero samples because it legitimately has
+// no history yet looks the same here as one Prometheus never had a chance to
+// answer for -- see EmitPolicyBatchFailures for the metric that actually
+// carries "something is wrong". Deliberately kept as two gauges rather than
+// a single ratio so a caller can tell "0 requested" (nothing to cover) apart
+// from "N requested, 0 resolved" (total miss) without doing division first.
+func EmitPolicyBatchCoverage(policy string, requested, resolved int) {
+	policyBatchRequested.WithLabelValues(policy).Set(float64(requested))
+	policyBatchResolved.WithLabelValues(policy).Set(float64(resolved))
+}
+
+// EmitPolicyBatchFailures adds to the cumulative count of workload identities
+// whose batch Prometheus fetch genuinely failed for a policy this cycle (see
+// recommender.BatchStats.Failures). Kept as its own counter -- never merged
+// with EmitPolicyBatchCoverage's gauges -- so "Prometheus is unwell" stays
+// distinguishable from "workloads legitimately have no data yet", which is
+// exactly the distinction recommender.BatchStats exists to preserve. A
+// no-op on failures<=0 so a healthy cycle never creates a zero-valued series.
+func EmitPolicyBatchFailures(policy string, failures int) {
+	if failures <= 0 {
+		return
+	}
+	policyBatchFailuresTotal.WithLabelValues(policy).Add(float64(failures))
+}
+
+// DeletePolicyMetrics removes every series carrying this policy's label, for
+// use when the Policy itself is deleted.
+//
+// Without it, a Policy's series outlive the object forever: a gauge keeps
+// exporting its last value, so a deleted policy is indistinguishable from a
+// live one that happens to match nothing, and cardinality grows with every
+// policy the controller has ever seen rather than with the number that exist.
+// Measured on a kind cluster: after running 20 scenarios and deleting all 20
+// Policies, each of policy_workload_count, policy_at_risk_count,
+// policy_batch_requested_count, policy_batch_resolved_count and
+// reconcile_total still exported 20 series with zero Policies in the cluster.
+//
+// This deliberately covers the per-WORKLOAD vectors too. Their policy label
+// names the policy that produced them, so once it is gone those series are
+// stale by the same argument -- and unlike the workload-scoped cleanup in
+// EmitWorkload, nothing else will ever revisit them: the reconcile that would
+// have refreshed or removed them is exactly the one that stops happening.
+//
+// DeletePartialMatch is used uniformly so the single-label and multi-label
+// vectors (reconcile_total carries policy+result) are handled the same way.
+func DeletePolicyMetrics(policy string) {
+	l := prometheus.Labels{"policy": policy}
+	for _, c := range []interface{ DeletePartialMatch(prometheus.Labels) int }{
+		reconcileTotal,
+		reconcileDuration,
+		policyWorkloadCount,
+		policyAtRiskCount,
+		policyBatchRequested,
+		policyBatchResolved,
+		policyBatchFailuresTotal,
+		recommendedCPUCores,
+		templateCPUCores,
+		recommendedMemoryBytes,
+		templateMemoryBytes,
+	} {
+		c.DeletePartialMatch(l)
+	}
+}
+
 // emitWorkloadFromRecs builds and emits WorkloadMetrics from the workload's
 // container specs (current requests) and the per-container recommendations.
 // initNames identifies which container names originated as InitContainers so

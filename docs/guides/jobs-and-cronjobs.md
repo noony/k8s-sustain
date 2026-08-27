@@ -137,6 +137,20 @@ Practical implications:
 - On clusters below k8s 1.33, or when the kubelet reports the resize as `Infeasible` or `Error`, or the API server rejects the resize for that pod (e.g. it would change the QoS class), the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook. The `ResourcesUpdated` event only counts pods whose resize the API server actually accepted.
 - The controller never patches the `CronJob` or `Job` object, so RBAC for `batch/cronjobs` and `batch/jobs` is read-only.
 
+### Cold start: the first run is never injected
+
+A standalone Job is re-created on every run, so its object is always seconds old at admission, and a Job that runs briefly and is TTL-cleaned may never be alive when a reconcile fires. Its identity enters the cache through a **cold-start stub**:
+
+1. **First run.** No `WorkloadRecommendation` exists, so the pod is admitted with its template resources and the webhook creates an empty stub, recording the admitted pod's container set on it. Admission cannot wait for a Prometheus query it no longer makes — the stub is for the *next* run.
+2. **Next reconcile.** The object is now in the controller's work-list, so the identity is recomputed on every reconcile interval whether or not a Job happens to be running at the time. On that first pass the identity is still seconds old, so the workload-age gate holds it back and nothing is written. Once the run finishes — a Complete or Failed Job leaves the target listing, as does a TTL-cleaned one — the identity is *departed*, and a cycle that finds nothing for it records `status.source: nodata`. That is **not** terminal: it means only that nothing has been computed yet, and the identity is recomputed on the next cycle regardless.
+3. **Convergence.** Once the identity has cleared the 10-minute age gate and Prometheus has usable samples for it, the next reconcile writes a real recommendation — so convergence takes **one reconcile interval** from that point, not a longer retry cycle. Every run after that is injected at admission.
+
+   A short Job that always finishes between two reconciles converges too. The controller no longer has to catch a run alive: the cache object outlives the runs, so it keeps ageing past the gate and Prometheus history keeps accumulating against the one identity. Keep `--recommendation-retention` above the gap between runs so the object is not swept in between (see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads)).
+
+The [workload-age gate](../concepts/recommendation-pipeline.md#stages) is what makes this work across runs: it keys on the earliest of the object's `CreationTimestamp` and the identity's `WorkloadRecommendation` `CreationTimestamp`, so an identity k8s-sustain has known since an earlier run counts as old even though each run's object is brand new.
+
+A Job whose **name changes every run** (a timestamp or hash suffix) is a different identity each time and will never converge — it is a new cold start on every run. Use a stable Job name, or run it under a CronJob, so history accumulates against one identity. Watch `k8s_sustain_wlr_refresh_total{outcome="nodata"}` to spot this: a rate that never converts to `computed` is the signature, alongside a `WorkloadRecommendation` count that grows with every run.
+
 ### Collecting enough history
 
 CronJobs that run infrequently (e.g. weekly) may not have enough data for a meaningful percentile. Use a longer window:
@@ -147,7 +161,7 @@ resourcesConfigs:
     window: 720h   # 30 days
 ```
 
-If fewer than ~10 data points exist in the window, the controller logs `no metrics yet, skipping` and leaves resources unchanged.
+When the window holds no usable samples, the controller writes no recommendation and leaves resources unchanged, retrying on the next reconcile. A live Job or CronJob simply keeps an empty `status` on its `WorkloadRecommendation`; only once the identity is departed does a fruitless cycle record `status.source: nodata`. Separately, an identity known for less than 10 minutes is held back by the [workload-age gate](../concepts/recommendation-pipeline.md#stages), which logs `skipping recommendation: workload too young` and increments `k8s_sustain_recommendation_skipped_total{reason="workload_too_young"}`.
 
 ### Guaranteed QoS for batch jobs
 

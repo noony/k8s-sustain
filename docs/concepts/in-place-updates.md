@@ -20,7 +20,9 @@ INFO  InPlacePodVerticalScaling support  enabled=true   server=v1.33.2
 INFO  InPlacePodVerticalScaling support  enabled=false  server=v1.30.5
 ```
 
-In both modes the patcher lists pods by the workload's label selector and then drops any pod whose controller ownerRef chain does not resolve to the target workload (directly for StatefulSet/DaemonSet pods, via the owning ReplicaSet for Deployment/Argo Rollout pods). A bare debug pod carrying the same labels, or a pod belonging to another workload with an overlapping selector, is never resized or evicted — the skip is logged so overlapping selectors are easy to diagnose.
+In both modes the patcher lists pods by the workload's label selector and then drops any pod whose controller ownerRef chain does not resolve to the target workload (directly for StatefulSet/DaemonSet pods, via the owning ReplicaSet for Deployment/Argo Rollout pods). A debug pod carrying the same labels, or a pod belonging to another workload with an overlapping selector, is never resized or evicted — the skip is logged so overlapping selectors are easy to diagnose.
+
+`Pod`-kind targets are the one exception to that lookup, because a bare pod has no ownerRef to resolve and no workload object to take a selector from. Their membership comes from the grouping rule instead — no controller `ownerReference`, a valid `k8s.sustain.io/owner-name`, and a `k8s.sustain.io/policy` annotation matching the one that claimed the group. The first is what makes a ReplicaSet-owned pod that merely carries the mirrored `owner-name` label a non-member; the second is what stops a pod opted into a *different* policy from being resized under this group's recommendation, and it is logged rather than silently dropped. See the [bare-pod paragraph](#bare-pods) below.
 
 When `Ongoing` mode is active and `inPlace=true`, the patcher walks each running pod and:
 
@@ -50,7 +52,23 @@ On any cluster where `inPlace=false` (auto-detected as < 1.33):
 - Pods annotated `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` are never evicted (only the literal `"false"` blocks, matching cluster-autoscaler's convention). The skip is logged and the loop moves to the next pod. Set `spec.rightSizing.update.eviction.ignoreAutoscalerSafeToEvictAnnotations: true` to evict them anyway. In-place resizes are not gated by the annotation — a resize does not disrupt the pod. This gate also covers the eviction fallback for `Infeasible`/`Error` in-place resizes described above.
 - The workload controller (Deployment / StatefulSet / etc.) replaces the evicted pod from the updated template; the webhook injects the latest recommendation into the replacement at admission time.
 
+## Kinds that are never evicted
+
+Three kinds opt out of the eviction path entirely, on the same reasoning: evicting the pod would destroy work that nothing will redo. For all three, in-place resize is the *only* post-creation correction, so on a cluster without in-place support the running pod simply keeps its original resources.
+
+### CronJobs and Jobs
+
 CronJobs are special-cased: the controller never mutates the CronJob spec (which would cause GitOps drift) and never evicts a job pod (which would kill the run). Job pods are enumerated via the `batch.kubernetes.io/job-name` label and confirmed by controller ownerRef back to the Job (which is itself ownerRef-checked against the CronJob), so a bystander pod carrying the label is never touched. On clusters that support in-place resize, currently-running job pods are resized via the `pods/resize` subresource using the same machinery as Deployments — including for `restartPolicy: Never`/`OnFailure` pods on k8s ≥ 1.35. If the cluster does not support in-place resize, the running pod is left untouched and the next scheduled run picks up the new resources from the webhook. Standalone Jobs (not owned by a CronJob) get the same treatment when `job: Ongoing` is set: their running pods are resized in place and never evicted. Unlike a CronJob there is no next run, so on clusters without in-place support the pod simply keeps its original resources for the rest of its lifetime.
+
+### Bare pods
+
+Bare pods opted in via `k8s.sustain.io/owner-name` (kind `Pod`) are the third member of that family, and the strongest case of it: no controller exists that could recreate an evicted bare pod, so eviction would not disrupt the workload — it would delete it. Under `pod: Ongoing` their running pods **are** resized in place, through the same `pods/resize` machinery; an in-place resize needs no controller behind it, and without it a long-running Airflow task would keep whatever it was admitted with for its entire life. Under `pod: OnCreate`, nothing is applied to a running pod at all and the recommendation reaches the identity's next pod through the webhook.
+
+Membership is decided by the grouping rule rather than a label selector, so a ReplicaSet-owned pod that happens to carry the mirrored `owner-name` label is never a member — the bare-pod counterpart of the ownerRef check protecting every other kind.
+
+The `restartPolicy` caveat bites hardest here. Airflow's `KubernetesPodOperator` creates `restartPolicy: Never` pods by default, and those are only fully covered from **k8s ≥ 1.35**; on 1.33/1.34 the resize is rejected per pod, logged, and skipped — never escalated to eviction.
+
+An in-place **memory** resize can restart the container, which for an Airflow task means losing in-flight work. Bare pods inherit that tradeoff from Job and CronJob rather than getting an exception from it: resizing the running pod is the only way to correct it after creation. Downsize suppression (`downsizeThreshold`) bounds how often it can fire, and `pod: OnCreate` opts out of it entirely. See [Standalone Pods & Identity Grouping](../guides/standalone-pods-and-grouping.md).
 
 ## Caveats
 

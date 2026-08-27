@@ -8,9 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
@@ -44,7 +46,7 @@ func TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter(t *testing.T) {
 	containers := []corev1.Container{{Name: "app"}}
 
 	// 1 minute old — well under the 10-minute gate.
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Minute))
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Minute), time.Time{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -53,12 +55,17 @@ func TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter(t *testing.T) {
 	}
 }
 
-// TestBuildRecommendations_PodKind_BypassesYoungWorkloadGate verifies that
-// the age gate does not apply to "Pod"-kind targets (bare pods opted in via
-// k8s.sustain.io/owner-name): a Pod-kind target never recycles, so the
-// gate's stated purpose — avoiding a near-zero percentile that floors to the
-// hard minimum and triggers an immediate bad recycle — cannot occur for it.
-func TestBuildRecommendations_PodKind_BypassesYoungWorkloadGate(t *testing.T) {
+// TestBuildRecommendations_PodKind_SubjectToYoungWorkloadGate verifies that
+// the age gate applies to "Pod"-kind targets (bare pods opted in via
+// k8s.sustain.io/owner-name) exactly like every other kind. Bare pods used to
+// bypass this gate unconditionally; that exception was written when a bare
+// pod could never be recycled at all, so a near-zero percentile had nothing
+// to act on. That premise stopped holding once Ongoing bare pods started
+// being resized in place (pods/resize, k8s >= 1.33): a brand-new identity
+// with partial warm-up samples can now produce a near-zero percentile that
+// floors to the hard minimum (1m CPU / 1Mi memory) and gets applied in
+// place — for memory, that can kill the container. See buildRecommendations.
+func TestBuildRecommendations_PodKind_SubjectToYoungWorkloadGate(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
 
@@ -66,14 +73,23 @@ func TestBuildRecommendations_PodKind_BypassesYoungWorkloadGate(t *testing.T) {
 	policy := policyForReconcileWorkload(t, "p")
 	containers := []corev1.Container{{Name: "app"}}
 
-	// 1 minute old — well under the 10-minute gate that DOES apply to every
+	// 1 minute old — well under the 10-minute gate that applies to every
 	// other kind (see TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter).
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Pod", "etl-daily", containers, autoscaler.Info{}, time.Now().Add(-time.Minute))
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Pod", "etl-daily", containers, autoscaler.Info{}, time.Now().Add(-time.Minute), time.Time{}, nil, nil, false)
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+	if len(recs) != 0 {
+		t.Errorf("expected empty recommendations for a young Pod-kind target — the age gate must apply to it, got %d entries: %v", len(recs), recs)
+	}
+
+	// 2 hours old — clears the gate, same as every other kind.
+	recs, err = r.buildRecommendations(context.Background(), policy, "default", "Pod", "etl-daily", containers, autoscaler.Info{}, time.Now().Add(-2*time.Hour), time.Time{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
 	if len(recs) == 0 {
-		t.Fatal("expected non-empty recommendations for a young Pod-kind target — the age gate must not apply to it")
+		t.Fatal("expected non-empty recommendations for an established Pod-kind target")
 	}
 	if rec := recs["app"]; rec.CPURequest == nil {
 		t.Error("expected CPU recommendation, got nil")
@@ -94,7 +110,7 @@ func TestBuildRecommendations_SparseSignal_StillProducesRecommendation(t *testin
 
 	// 2 hours old — clears the age gate; the mock returns sparse but non-empty
 	// CPU/memory totals, mimicking a cronjob that just finished a run.
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-2*time.Hour))
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-2*time.Hour), time.Time{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -121,12 +137,11 @@ func TestBuildRecommendations_RecentOOMBypassesHistoryGate(t *testing.T) {
 		case strings.Contains(q, "count_over_time"):
 			// 3 samples — below the 12-sample floor (CrashLoop reality).
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"3"]}]}}`))
-		case strings.Contains(q, "workload_oom_24h"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"5"]}]}}`))
-		case strings.Contains(q, "container_peak_memory_24h:bytes"):
-			// Peak working-set witness from the OOM signal: 80Mi.
+		case strings.Contains(q, "__name__=~"):
+			// The combined OOM-signal query: oom count 5, peak working-set 80Mi.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-				{"metric":{"container":"app"},"value":[0,"83886080"]}
+				{"metric":{"__name__":"k8s_sustain:workload_oom_24h","container":"app"},"value":[0,"5"]},
+				{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","container":"app"},"value":[0,"83886080"]}
 			]}}`))
 		default:
 			// Empty for everything else — usage / replica queries return nothing.
@@ -144,7 +159,7 @@ func TestBuildRecommendations_RecentOOMBypassesHistoryGate(t *testing.T) {
 		},
 	}}
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -180,12 +195,11 @@ func TestBuildRecommendations_RecentOOMRaisesMemoryFloor(t *testing.T) {
 		switch {
 		case strings.Contains(q, "count_over_time"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"168"]}]}}`))
-		case strings.Contains(q, "workload_oom_24h"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"2"]}]}}`))
-		case strings.Contains(q, "container_peak_memory_24h:bytes"):
-			// Peak working-set witness for the OOM signal: 800Mi.
+		case strings.Contains(q, "__name__=~"):
+			// The combined OOM-signal query: oom count 2, peak working-set 800Mi.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-				{"metric":{"container":"app"},"value":[0,"838860800"]}
+				{"metric":{"__name__":"k8s_sustain:workload_oom_24h","container":"app"},"value":[0,"2"]},
+				{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","container":"app"},"value":[0,"838860800"]}
 			]}}`))
 		case strings.Contains(q, "workload_max_pod_cpu"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.1"]}]}}`))
@@ -213,7 +227,7 @@ func TestBuildRecommendations_RecentOOMRaisesMemoryFloor(t *testing.T) {
 
 	before := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "app")
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -258,18 +272,13 @@ func TestBuildRecommendations_OOMTimeLimitBumpsBeyondLimit(t *testing.T) {
 		switch {
 		case strings.Contains(q, "count_over_time"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"168"]}]}}`))
-		case strings.Contains(q, "workload_oom_24h"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"9"]}]}}`))
-		case strings.Contains(q, "container_peak_memory_24h:bytes"):
-			// Peak underreports — cgroup v2 sub-scrape spike missed.
-			// 36Mi, well below the 96Mi limit the kernel killed at.
+		case strings.Contains(q, "__name__=~"):
+			// The combined OOM-signal query: oom count 9, peak underreports at
+			// 36Mi (cgroup v2 sub-scrape spike missed), OOM-time limit 96Mi.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-				{"metric":{"container":"app"},"value":[0,"37748736"]}
-			]}}`))
-		case strings.Contains(q, "container_oom_limit_24h:bytes"):
-			// 96Mi — the cgroup limit at the moment of OOM.
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-				{"metric":{"container":"app"},"value":[0,"100663296"]}
+				{"metric":{"__name__":"k8s_sustain:workload_oom_24h","container":"app"},"value":[0,"9"]},
+				{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","container":"app"},"value":[0,"37748736"]},
+				{"metric":{"__name__":"k8s_sustain:container_oom_limit_24h:bytes","container":"app"},"value":[0,"100663296"]}
 			]}}`))
 		case strings.Contains(q, "workload_max_pod_cpu"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.01"]}]}}`))
@@ -291,7 +300,7 @@ func TestBuildRecommendations_OOMTimeLimitBumpsBeyondLimit(t *testing.T) {
 		},
 	}}
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -317,17 +326,14 @@ func TestBuildRecommendations_SiblingOOMDoesNotFloorInnocentContainer(t *testing
 		q := r.Form.Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "workload_oom_24h"):
-			// Only app OOMed.
+		case strings.Contains(q, "__name__=~"):
+			// The combined OOM-signal query: only app OOMed, but the peak rule
+			// is NOT OOM-scoped — both containers have a 24h high-water mark
+			// well above their percentile.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-				{"metric":{"container":"app"},"value":[0,"2"]}
-			]}}`))
-		case strings.Contains(q, "container_peak_memory_24h:bytes"):
-			// The peak rule is NOT OOM-scoped: both containers have a 24h
-			// high-water mark well above their percentile.
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-				{"metric":{"container":"app"},"value":[0,"838860800"]},
-				{"metric":{"container":"side"},"value":[0,"629145600"]}
+				{"metric":{"__name__":"k8s_sustain:workload_oom_24h","container":"app"},"value":[0,"2"]},
+				{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","container":"app"},"value":[0,"838860800"]},
+				{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","container":"side"},"value":[0,"629145600"]}
 			]}}`))
 		case strings.Contains(q, "workload_max_pod_cpu"):
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
@@ -352,7 +358,7 @@ func TestBuildRecommendations_SiblingOOMDoesNotFloorInnocentContainer(t *testing
 
 	sideFloorBefore := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "side")
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -389,13 +395,11 @@ func TestBuildRecommendations_YoungWorkload_SiblingOOMBypassesAgeGate(t *testing
 		q := r.Form.Get("query")
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case strings.Contains(q, "workload_oom_24h"):
+		case strings.Contains(q, "__name__=~"):
+			// The combined OOM-signal query: oom count 1, peak 80Mi for app.
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-				{"metric":{"container":"app"},"value":[0,"1"]}
-			]}}`))
-		case strings.Contains(q, "container_peak_memory_24h:bytes"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-				{"metric":{"container":"app"},"value":[0,"83886080"]}
+				{"metric":{"__name__":"k8s_sustain:workload_oom_24h","container":"app"},"value":[0,"1"]},
+				{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","container":"app"},"value":[0,"83886080"]}
 			]}}`))
 		default:
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
@@ -408,7 +412,7 @@ func TestBuildRecommendations_YoungWorkload_SiblingOOMBypassesAgeGate(t *testing
 	containers := []corev1.Container{{Name: "app"}, {Name: "side"}}
 
 	// 1 minute old — under the 10-minute gate, but app's OOM bypasses it.
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Minute))
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Minute), time.Time{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -476,7 +480,7 @@ func TestBuildRecommendations_LiveOOMFloorsOnlyOOMedContainer(t *testing.T) {
 	policy := policyForReconcileWorkload(t, "p")
 	containers := []corev1.Container{{Name: "app"}, {Name: "side"}}
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -519,7 +523,7 @@ func TestBuildRecommendations_OOMSignalEmpty_DoesNotApplyFloor(t *testing.T) {
 
 	before := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "app")
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour))
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -537,5 +541,52 @@ func TestBuildRecommendations_OOMSignalEmpty_DoesNotApplyFloor(t *testing.T) {
 	after := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "app")
 	if after != before {
 		t.Errorf("expected oom_floor_applied counter unchanged, delta=%v", after-before)
+	}
+}
+
+// TestBuildRecommendations_NilInputsLogsOnlyForGenuineCandidateBug covers the
+// consequence of removing the Job/Pod kind check from the nil-inputs guard:
+// with every kind now batched, the ONLY thing that still legitimately
+// produces a nil inputs is Reconcile's own candidate-building loop marking an
+// identity as snapshotPending (no observed-resources snapshot yet -- see
+// policy_controller.go's pendingSnapshot). Before snapshotPending existed,
+// widening the guard to every kind would have made
+// errPrefetchMissingForBatchedKind fire on the cycle where an identity first
+// reaches the work-list without a snapshot -- the SECOND cycle after
+// discovery, not the first: on the first the object is usually still absent
+// from the cached List, so the identity is not processed at all and nothing
+// logs. On the second it is normally already snapshotted, since EnsureExists
+// writes one at discovery time, so what this would actually have misreported
+// is the narrower set pendingSnapshot exists for -- a webhook stub create, or
+// an EnsureExists whose status patch never landed (the two causes named at
+// policy_controller.go's pendingSnapshot). Routine, benign states either way.
+// This pins that the guard tells the two apart.
+func TestBuildRecommendations_NilInputsLogsOnlyForGenuineCandidateBug(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	policy := policyForReconcileWorkload(t, "p")
+	containers := []corev1.Container{{Name: "app"}}
+
+	capture := func(snapshotPending bool) string {
+		var lines []string
+		logger := funcr.New(func(prefix, args string) {
+			lines = append(lines, prefix+" "+args)
+		}, funcr.Options{})
+		ctx := log.IntoContext(context.Background(), logger)
+		if _, err := r.buildRecommendations(ctx, policy, "default", "Deployment", "web", containers,
+			autoscaler.Info{}, time.Now().Add(-2*time.Hour), time.Time{}, nil, nil, snapshotPending); err != nil {
+			t.Fatalf("buildRecommendations: %v", err)
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	const marker = "prefetched batch inputs missing"
+	if out := capture(false); !strings.Contains(out, marker) {
+		t.Error("expected errPrefetchMissingForBatchedKind to fire for a nil inputs the candidate loop did not mark as withheld -- this is the genuine-bug case the log exists to catch")
+	}
+	if out := capture(true); strings.Contains(out, marker) {
+		t.Error("a nil inputs the candidate loop marked snapshotPending (no observed-resources snapshot yet) must not log errPrefetchMissingForBatchedKind -- it is a routine first-cycle state, not a bug")
 	}
 }

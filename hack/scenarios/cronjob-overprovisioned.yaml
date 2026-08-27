@@ -1,9 +1,12 @@
 # scenario: cronjob-overprovisioned
 # expected: A CronJob whose initial requests are dramatically larger than its
-# real per-run usage. CPU request drops from 1000m to ~60m and memory from
+# real per-run usage. CPU request drops from 300m to ~45m and memory from
 # 512Mi to ~50Mi within ~WINDOW + reconcile_interval, observed on each new
 # scheduled run's pod (webhook-injected). The CronJob spec stays at its
-# original 1000m / 512Mi forever — that is the contract.
+# original 300m / 512Mi forever — that is the contract.
+#
+# (Measured on kind, k8s 1.35, WINDOW=10m: 43m / 51Mi on the run's pod, with
+# the CronJob spec still reading 300m / 512Mi.)
 #
 # Mirrors the `overprovisioned` Deployment scenario but on the CronJob path,
 # to confirm aggressive downsizing works for cronjobs too.

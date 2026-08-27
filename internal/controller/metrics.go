@@ -85,7 +85,7 @@ var (
 
 	recommendationSkipped = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_recommendation_skipped_total",
-		Help: "Recommendations skipped without emitting, by reason (e.g. insufficient_history).",
+		Help: "Recommendations skipped without emitting, by reason (e.g. workload_too_young).",
 	}, []string{"namespace", "owner_kind", "owner_name", "reason"})
 
 	oomFloorApplied = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -121,6 +121,54 @@ var (
 		Name: "k8s_sustain_recycle_suppressed_total",
 		Help: "Resource decreases not applied because they fell below the policy's downsizeThreshold, by resource. Counted once per resource per pod processed per reconcile.",
 	}, []string{"namespace", "owner_kind", "owner_name", "resource"})
+
+	// policyBatchRequested and policyBatchResolved are a coverage/capacity
+	// pair, deliberately separate from policyBatchFailuresTotal below: a
+	// workload identity can resolve with zero samples because it is
+	// legitimately new, which is not the same thing as a genuine Prometheus
+	// fetch failure. Collapsing the two would recreate exactly the ambiguity
+	// recommender.BatchStats was introduced to eliminate -- see its doc
+	// comment.
+	policyBatchRequested = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "k8s_sustain_policy_batch_requested_count",
+		Help: "Number of workload identities requested in a policy's sharded Prometheus batch prefetch this reconcile cycle.",
+	}, []string{"policy"})
+
+	policyBatchResolved = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "k8s_sustain_policy_batch_resolved_count",
+		Help: "Number of requested workload identities that resolved with at least one CPU or memory sample this reconcile cycle. A workload can legitimately resolve to zero samples (too young, quiet container) without that being a failure -- see k8s_sustain_policy_batch_failures_total for the Prometheus-health signal, which is a distinct metric on purpose.",
+	}, []string{"policy"})
+
+	// policyBatchFailuresTotal is the "Prometheus is unwell" signal: it only
+	// grows when a batch shard query AND its per-workload fallback both
+	// genuinely failed for an identity (recommender.BatchStats.Failures).
+	// It must never be derived from policyBatchRequested/policyBatchResolved
+	// -- a low resolved count on its own says nothing about failures, only
+	// this counter does.
+	policyBatchFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "k8s_sustain_policy_batch_failures_total",
+		Help: "Cumulative count of workload identities whose batch Prometheus fetch (shard query and its per-workload fallback) genuinely failed, per policy. Distinct from batch_requested/batch_resolved: a workload resolving with zero samples because it has no history yet is never counted here.",
+	}, []string{"policy"})
+
+	wlrRefreshTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "k8s_sustain_wlr_refresh_total",
+			Help: "WorkloadRecommendation refresh outcomes for DEPARTED identities only -- those with a " +
+				"WorkloadRecommendation but no live workload object in the current listing -- by namespace, " +
+				"owner kind and outcome (computed, nodata, retained-empty, no-snapshot, error). A live " +
+				"workload never increments this; see k8s_sustain_policy_batch_* for that population.",
+		},
+		[]string{"namespace", "owner_kind", "outcome"},
+	)
+
+	groupAutoscalerMismatchTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "k8s_sustain_group_autoscaler_mismatch_total",
+		Help: "Owner-name groups whose members disagree on autoscaler presence or kind, counted once per " +
+			"reconcile per identity. The group's shared recommendation is still shaped by the first sorted " +
+			"member's autoscaler (see groupAutoscalerInfo) -- this counter exists to surface the resulting " +
+			"misconfiguration, e.g. an un-autoscaled member silently inheriting an HPA-coordinated value it " +
+			"was never meant to get.",
+	}, []string{"namespace", "owner_kind", "owner_name"})
 )
 
 func init() {
@@ -146,6 +194,11 @@ func init() {
 		oomReactionLatencySeconds,
 		oomCacheEntries,
 		recycleSuppressedTotal,
+		policyBatchRequested,
+		policyBatchResolved,
+		policyBatchFailuresTotal,
+		wlrRefreshTotal,
+		groupAutoscalerMismatchTotal,
 	)
 }
 
@@ -169,4 +222,48 @@ func SetOOMCacheEntries(n int) {
 // downsize threshold held back on a workload.
 func EmitRecycleSuppressed(namespace, ownerKind, ownerName, resource string) {
 	recycleSuppressedTotal.WithLabelValues(namespace, ownerKind, ownerName, resource).Inc()
+}
+
+// WorkloadRecommendation refresh outcomes for EmitWLRRefresh.
+const (
+	// WLRRefreshComputed: fresh values were written.
+	WLRRefreshComputed = "computed"
+	// WLRRefreshNoData: the identity has never produced a recommendation and
+	// still has no usable samples. Not terminal — retried next cycle.
+	WLRRefreshNoData = "nodata"
+	// WLRRefreshRetainedEmpty: the identity HAS a recommendation but produced
+	// nothing this cycle, so the previous values were deliberately left in
+	// place. This is the value worth alerting on: it is the moment a served
+	// recommendation stops having live data behind it, and without a counter
+	// it is completely silent — the webhook keeps injecting, the WLR keeps
+	// looking populated, and nothing in the object records that its samples
+	// aged out of the query window.
+	WLRRefreshRetainedEmpty = "retained-empty"
+	// WLRRefreshError: the computation failed (Prometheus unreachable, write
+	// rejected). Distinct from nodata, which is a healthy Prometheus with
+	// nothing to say.
+	WLRRefreshError = "error"
+	// WLRRefreshNoSnapshot: the identity's WLR carries no
+	// status.observedResources, so there is no container list to compute
+	// against and the refresh is skipped before it starts. Distinct from
+	// nodata, which is about Prometheus having nothing to say — this one is
+	// about k8s-sustain not knowing what to ask about.
+	//
+	// It exists because this branch used to return silently, which is how a
+	// read-after-write bug that stranded every genuinely new identity in
+	// exactly this state shipped unnoticed. Transient on a healthy cluster (a
+	// discovery or webhook write is one cycle behind); sustained for the same
+	// identity means the snapshot write is failing.
+	WLRRefreshNoSnapshot = "no-snapshot"
+)
+
+// EmitWLRRefresh records the outcome of one WorkloadRecommendation refresh.
+func EmitWLRRefresh(namespace, ownerKind, outcome string) {
+	wlrRefreshTotal.WithLabelValues(namespace, ownerKind, outcome).Inc()
+}
+
+// EmitGroupAutoscalerMismatch increments the counter for an owner-name group
+// whose members disagree on autoscaler presence or kind this reconcile.
+func EmitGroupAutoscalerMismatch(namespace, ownerKind, ownerName string) {
+	groupAutoscalerMismatchTotal.WithLabelValues(namespace, ownerKind, ownerName).Inc()
 }

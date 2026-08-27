@@ -116,6 +116,7 @@ Defines which workload kinds are managed and in what mode. Omitting a kind means
 | `argoRollout` | `OnCreate` \| `Ongoing` | Manages Argo Rollouts `Rollout` objects |
 | `cronJob` | `OnCreate` \| `Ongoing` | Manages `CronJob` objects |
 | `job` | `OnCreate` \| `Ongoing` | Manages standalone `Job` objects |
+| `pod` | `OnCreate` \| `Ongoing` | Manages bare pods that opt in via `k8s.sustain.io/owner-name` (no controller owner). Never evicted in either mode — nothing would recreate the pod; `Ongoing` resizes the running pods in place on k8s ≥ 1.33, with full coverage of `restartPolicy: Never`/`OnFailure` (Airflow's default) only on k8s ≥ 1.35. See [Standalone Pods & Identity Grouping](../guides/standalone-pods-and-grouping.md) |
 
 See [Update Modes](../concepts/update-modes.md) for the difference between `OnCreate` and `Ongoing`.
 
@@ -224,16 +225,36 @@ status:
     - type: Ready
       status: "True"
       reason: ReconciliationSucceeded
-      message: All targeted workloads have been processed.
+      message: All 3 workloads have been processed.
       lastTransitionTime: "2024-01-01T00:00:00Z"
 ```
 
+The count covers every workload object the policy processed, plus each
+retained recommendation whose workload object no longer exists. Workloads
+grouped under a shared `k8s.sustain.io/owner-name` are counted individually,
+because each one's pods are applied to separately even though they share a
+single recommendation.
+
+These three reasons are the complete set the controller writes to
+`Policy.status.conditions`:
+
 | Reason | Status | Meaning |
 |--------|--------|---------|
-| `ReconciliationSucceeded` | True | All matching workloads were processed successfully |
-| `ReconciliationFailed` | False | One or more workloads failed; see `message` for details |
-| `NamespaceResolutionFailed` | False | Could not list namespaces |
-| `InvalidSelector` | False | The label selector is malformed |
+| `ReconciliationSucceeded` | True | Every matching workload was processed, and every workload identity was registered for computation |
+| `PartialFailure` | False | Some workloads failed, and/or some workload identities could not be registered for computation; see `message`, which names only whichever of the two actually happened |
+| `ListFailed` | False | The cycle could not even build its work list — listing the matching workloads failed, or listing the policy's `WorkloadRecommendation` objects did. No workload was processed |
+
+`ReconciliationFailed` is **not** a condition reason. It is an Event reason,
+recorded as a `Warning` on the *workload object* (not on the `Policy`) when
+that individual workload hits a permanent, non-retried error. A permanent
+error is dropped from the retry tracker and does not count toward the
+cycle's failure total, so a cycle in which every emitted event is
+`ReconciliationFailed` still leaves the policy at `ReconciliationSucceeded`.
+`PartialFailure` is driven instead by transient errors — which emit
+`ReconciliationRetryScheduled`, not `ReconciliationFailed` — and by
+workload identities that could not be registered for computation. That
+second count is per **identity**, not per workload object: workloads grouped
+under a shared `k8s.sustain.io/owner-name` register once, together.
 
 ---
 

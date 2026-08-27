@@ -15,7 +15,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -297,7 +296,7 @@ func TestReconcileWorkload_JobResizesRunningPod(t *testing.T) {
 	target := jobToTarget(job)
 	policy := policyForReconcileWorkload(t, "p")
 
-	if err := r.reconcileWorkload(context.Background(), policy, &target, autoscaler.NewNamespacedSnapshot(r.Client)); err != nil {
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(&target)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 	if !podResized {

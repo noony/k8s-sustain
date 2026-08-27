@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/prometheus/common/model"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -31,23 +30,59 @@ const MinWorkloadAge = 10 * time.Minute
 // ShouldSkipYoungWorkload reports whether a workload is too young to have
 // produced stable rate samples and has no recent OOM to bypass the gate.
 //
-// The effective birth is the earliest known signal among the workload
-// object's creation time and historyStart, the oldest Prometheus sample the
-// workload identity has (each zero when unknown or absent). The split
-// matters for ephemeral identities: a standalone Job is re-created on every
-// run, so its object is always seconds old at admission, and a bare pod's
-// object age is meaningless entirely (workloadCreated stays zero) — for
-// both, accumulated history under the same identity is what proves the
-// workload is old enough. When neither signal exists the gate is disabled:
-// with no object age and no history there is nothing to recommend from
-// anyway, so skipping would only mask the no-data outcome.
-func ShouldSkipYoungWorkload(workloadCreated, historyStart time.Time, recentOOM bool) bool {
+// The effective birth is the earliest known signal among the workload object's
+// creation time and identityFirstSeen, when k8s-sustain first recorded the
+// identity (each zero when unknown). The split matters for ephemeral
+// identities: a standalone Job is re-created on every run, so its object is
+// always seconds old, and a bare pod's identity has no object at all — for
+// both, how long the identity has been KNOWN is what proves the workload is
+// old enough.
+//
+// Callers pass the WorkloadRecommendation's CreationTimestamp. That measures
+// elapsed time since first discovery, which is the quantity this gate actually
+// compares: time.Since(start) against MinWorkloadAge — "how long has this
+// existed", not "how many samples are there".
+//
+// Elapsed time is a PROXY for sample stability, and the two come apart for a
+// duty-cycled workload. Observed on a kind cluster: a bare pod running ~35s
+// every 2 minutes cleared the 10-minute gate on roughly three minutes of
+// cumulative runtime, of which the CPU rate rule's first samples per run are
+// the unstable ones — and the resulting recommendation sat at the hard floor,
+// exactly the outcome the gate exists to prevent. The gate is a floor on
+// WALL-CLOCK age, so a workload that is only alive for a fraction of that wall
+// clock can pass it with proportionally less data. The behaviour is deliberately
+// left as is (see hack/scenarios/recurring.yaml for the measurements): the
+// alternative signal, sample count or coverage, is a per-identity Prometheus
+// subquery that cannot be sharded, which is precisely what was removed to get
+// the query load down. The mitigation is the configured window, not the gate —
+// see the caveat in docs/guides/standalone-pods-and-grouping.md.
+//
+// Usually the two diverge because an identity predates its WLR — fresh
+// install, new Policy, WLR recreated after retention lapsed. In all of those
+// the WLR is YOUNGER, so the gate errs toward waiting one more cycle, which is
+// the safe direction; the unsafe one is recommending from unstable near-zero
+// samples, which is what this gate exists to prevent.
+//
+// One divergence runs the other way, and it is a real (if narrow) hole: losing
+// the Prometheus data itself — retention loss, a reinstall — resets first
+// observation to now while the WLR keeps its old age. The gate then passes an
+// identity whose samples are minutes old. It is narrow because total absence
+// of data produces no recommendation at all, so only the partial-refill window
+// is exposed, and because long-lived kinds were never protected here anyway
+// (their object age is unaffected by anything happening in Prometheus). The
+// old query-based signal did cover this case for Job and Pod identities; that
+// is what was traded away for making the gate independent of Prometheus.
+//
+// When neither signal exists the gate is disabled: with no object age and no
+// known identity there is nothing to recommend from anyway, so skipping would
+// only mask the no-data outcome.
+func ShouldSkipYoungWorkload(workloadCreated, identityFirstSeen time.Time, recentOOM bool) bool {
 	if recentOOM {
 		return false
 	}
 	start := workloadCreated
-	if start.IsZero() || (!historyStart.IsZero() && historyStart.Before(start)) {
-		start = historyStart
+	if start.IsZero() || (!identityFirstSeen.IsZero() && identityFirstSeen.Before(start)) {
+		start = identityFirstSeen
 	}
 	if start.IsZero() {
 		return false
@@ -66,15 +101,6 @@ type WorkloadInputs struct {
 	// OOM counts. Empty when the query failed (fail-open) — callers should
 	// not block recommendations on missing OOM data.
 	OOM promclient.OOMSignal
-	// HistoryStart is the oldest sample the workload identity has in
-	// Prometheus within the CPU window floored at minHistoryLookback. Only
-	// fetched for the ephemeral identity kinds, Job and Pod (see
-	// FetchWorkloadInputs); zero for other kinds, when the identity has no
-	// history, or when the query failed (fail-open). Feeds the workload-age
-	// gate so re-created standalone Jobs and bare pods are aged by their
-	// accumulated history rather than a seconds-old (or non-existent)
-	// object.
-	HistoryStart time.Time
 }
 
 // HasRecentOOM reports whether the workload has any recent OOM activity in
@@ -90,31 +116,12 @@ func (w *WorkloadInputs) HasRecentOOM() bool {
 
 // AgeForLog renders an age for the too-young skip logs. Returns "none" for
 // the zero time — logging it directly would render as a meaningless epoch
-// offset (object age) or a near-MaxInt64 duration (history age).
+// offset (object age) or a near-MaxInt64 duration (identity age).
 func AgeForLog(start time.Time) string {
 	if start.IsZero() {
 		return "none"
 	}
 	return time.Since(start).String()
-}
-
-// minHistoryLookback floors the range used to locate a Job identity's oldest
-// Prometheus sample. The gate asks "how old is this identity?", not "what
-// feeds the percentile?" — a lookback capped at the policy window would cap
-// the observable history age at the window length, so a window at or below
-// MinWorkloadAge could never satisfy the gate.
-const minHistoryLookback = 24 * time.Hour
-
-// historyLookback returns the CPU window floored at minHistoryLookback.
-// Unparseable windows fall back to the floor: worst case the gate sees
-// history a shorter window would have hidden, which only ever unblocks a
-// recommendation whose percentile query still decides on its own data.
-func historyLookback(window string) string {
-	d, err := model.ParseDuration(window)
-	if err != nil || time.Duration(d) < minHistoryLookback {
-		return "24h"
-	}
-	return window
 }
 
 // FetchWorkloadInputs runs the Prometheus queries shared by the controller
@@ -140,7 +147,6 @@ func FetchWorkloadInputs(
 	var (
 		cpuPerPod, memPerPod promclient.ContainerValues
 		oomSignal            promclient.OOMSignal
-		historyStart         time.Time
 	)
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -171,33 +177,14 @@ func FetchWorkloadInputs(
 		oomSignal = v
 		return nil
 	})
-	// Ephemeral identities need the history age for the workload-age gate:
-	// a Job object is re-created on every run, and a bare pod's identity
-	// (k8s.sustain.io/owner-name) has no object at all — in both cases the
-	// object age says nothing about how much usage history the identity has
-	// accumulated. Long-lived kinds (their object age IS the identity age)
-	// skip the extra query. Best-effort: on failure the gate falls back to
-	// the object age.
-	if ownerKind == "Job" || ownerKind == "Pod" {
-		g.Go(func() error {
-			v, err := pc.QueryWorkloadHistoryStart(gctx, ns, ownerKind, ownerName, historyLookback(cpuWindow))
-			if err != nil {
-				logger.V(1).Info("history start query failed; age gate falls back to object age", "err", err)
-				return nil
-			}
-			historyStart = v
-			return nil
-		})
-	}
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
 	return &WorkloadInputs{
-		CPUPerPod:    cpuPerPod,
-		MemPerPod:    memPerPod,
-		OOM:          oomSignal,
-		HistoryStart: historyStart,
+		CPUPerPod: cpuPerPod,
+		MemPerPod: memPerPod,
+		OOM:       oomSignal,
 	}, nil
 }
 
@@ -249,16 +236,6 @@ type BuildContainerRecsOptions struct {
 	// returned map; mutating res.Rec there is not supported — store happens from
 	// the value returned by ComputeContainerRec.
 	OnResult func(name string, res ContainerRecResult)
-	// DisableReplicaCorrection suppresses the replica-budget correction
-	// (Policy replicaBudgetAnchor) for this call: BuildContainerRecs clears
-	// the anchor on its copy of the coordination config, so ApplyCoordination
-	// runs overhead-only. The webhook sets this — at admission time
-	// autoscaler.Info.CurrentReplicas is transiently high during an HPA
-	// scale-out, so an admission-time replica factor would inflate burst pods
-	// by up to the 2.0 clamp. The controller leaves it false and applies the
-	// correction on its reconcile cadence instead (in-place resize or
-	// eviction), where replica counts reflect steady state.
-	DisableReplicaCorrection bool
 }
 
 // BuildContainerRecs runs the per-container recommendation loop shared by the
@@ -283,12 +260,6 @@ func BuildContainerRecs(
 	coordCfg sustainv1alpha1.AutoscalerCoordination,
 	opts BuildContainerRecsOptions,
 ) map[string]workload.ContainerRecommendation {
-	if opts.DisableReplicaCorrection {
-		// coordCfg is a value copy; clearing the anchor here cannot mutate
-		// the caller's Policy object.
-		coordCfg.ReplicaBudgetAnchor = nil
-	}
-
 	recs := make(map[string]workload.ContainerRecommendation)
 	for _, c := range containers {
 		cpuPerPod, hasCPU := inputs.CPUPerPod[c.Name]

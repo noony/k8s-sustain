@@ -37,11 +37,26 @@ spec:
           args:
             - webhook
             - --port={{ .Values.webhook.port }}
-            - --prometheus-address={{ include "k8s-sustain.prometheusAddress" . }}
             - --log-level={{ .Values.webhook.logLevel }}
             - --tls-cert-file=/tls/tls.crt
             - --tls-key-file=/tls/tls.key
             - --excluded-namespaces={{ concat (list .Release.Namespace "kube-system" "kube-public") .Values.excludedNamespaces | join "," }}
+            {{- /* Deliberately the CONTROLLER's value, not a webhook-specific
+                   one. It bounds the single path where the webhook injects from
+                   a recommendation older than its staleness budget (an identity
+                   the controller marked departed), and the bound only means
+                   anything if it is the window after which the controller's own
+                   sweep deletes the object. One value, two flags, no drift.
+
+                   Rendered under `with` so a `helm upgrade --reuse-values` that
+                   somehow lacks the key omits the flag and falls through to the
+                   binary's default rather than rendering an empty `--flag=` the
+                   container refuses to start on — see the sibling comment in
+                   deployment.yaml. config.DefaultRecommendationRetention is that
+                   default for both binaries. */}}
+            {{- with .Values.controller.recommendationRetention }}
+            - --recommendation-retention={{ . }}
+            {{- end }}
             {{- if .Values.recommendOnly }}
             - --recommend-only=true
             {{- end }}
@@ -57,6 +72,46 @@ spec:
             - name: health
               containerPort: 8082
               protocol: TCP
+          {{- /* Rendered unconditionally with template-side defaults, NOT under
+                 `with`. `helm upgrade --reuse-values` reuses the previous
+                 release's values and does NOT pick up defaults newly added to
+                 values.yaml, so every release installed before
+                 webhook.startupProbe existed would upgrade with the probe
+                 missing entirely — back to liveness/readiness alone
+                 (10 + 10*3 = 40s) against a startup that can block for
+                 crdWaitTimeout (2m), which is exactly the CrashLoopBackOff this
+                 probe exists to prevent. Same hazard, same shape as the
+                 controller Deployment's flag rendering. mergeOverwrite (rather
+                 than `default`) so a release overriding one field keeps the
+                 defaults for the rest.
+
+                 These numbers duplicate values.yaml on purpose — they are the
+                 fallback for a release whose values do not carry the key at
+                 all, so they cannot be read from .Values. Both copies are
+                 pinned by charts/k8s-sustain/tests/webhook-deployment_test.yaml
+                 (the defaults render, and the no-values render matches them).
+                 The BUDGET is pinned against crdWaitTimeout from the Go side,
+                 for each copy separately: values.yaml by
+                 TestCRDWaitFitsInsideChartStartupProbeBudget, this dict by
+                 TestCRDWaitFitsInsideChartTemplateStartupProbeDefaults, which
+                 also fails if the two copies drift apart. Raising
+                 crdWaitTimeout therefore cannot pass CI without raising both. */}}
+          {{- $startupProbe := mergeOverwrite (dict
+                "initialDelaySeconds" 5
+                "periodSeconds" 5
+                "timeoutSeconds" 1
+                "successThreshold" 1
+                "failureThreshold" 36)
+                (.Values.webhook.startupProbe | default dict) }}
+          # Suspends liveness/readiness until the informer cache (which waits on
+          # CRD establishment before the listener starts) is up. Its budget must
+          # exceed crdWaitTimeout in internal/k8s/client.go — see values.yaml.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: webhook
+              scheme: HTTPS
+            {{- toYaml $startupProbe | nindent 12 }}
           livenessProbe:
             httpGet:
               path: /healthz

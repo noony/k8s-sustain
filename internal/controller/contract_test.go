@@ -20,22 +20,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	whhandler "github.com/noony/k8s-sustain/internal/webhook"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // TestIntegration_ControllerWritesCache_WebhookReadsIt is the contract test
-// between the controller (WLR cache writer) and the webhook (WLR cache
-// reader). It catches drift in:
+// between the controller (WLR writer) and the webhook (WLR reader) — the
+// only two components in the recommendation pipeline now that the webhook
+// never queries Prometheus itself. It catches drift in:
 //   - WLR object name format (wlrName)
 //   - sweep label key (wlrPolicyLabel)
 //   - status shape (Containers map, ObservedAt, Source)
 //   - staleness threshold (DefaultCacheStaleness)
 //
 // The controller writes via upsertWorkloadRecommendation. The webhook reads
-// via its real ServeHTTP entry point with a Prometheus mock that returns 500
-// — forcing the cache fallback path that exists for Prometheus outages.
+// via its real ServeHTTP entry point — this is the webhook's only
+// recommendation source, so this test exercises the primary path, not an
+// emergency fallback.
 func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {
@@ -75,8 +76,8 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 	r := &PolicyReconciler{Client: c, Scheme: scheme}
 	wantCPU := resource.MustParse("250m")
 	wantMem := resource.MustParse("128Mi")
-	r.upsertWorkloadRecommendation(context.Background(),
-		&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"},
+	_ = r.upsertWorkloadRecommendation(context.Background(),
+		itemForTarget(&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}),
 		policy.Name,
 		map[string]workload.ContainerRecommendation{
 			"app": {CPURequest: &wantCPU, MemoryRequest: &wantMem},
@@ -94,17 +95,9 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 		t.Errorf("WLR sweep label = %q, want %q", got, policy.Name)
 	}
 
-	// Webhook side: Prometheus is "down" (HTTP 500) → admit() must take the
-	// cache fallback branch and inject from the WLR we just wrote.
-	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "prometheus down", http.StatusInternalServerError)
-	}))
-	defer promServer.Close()
-	pc, err := promclient.New(promServer.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-	h := &whhandler.Handler{Client: c, PrometheusClient: pc}
+	// Webhook side: admit() must read the WLR we just wrote and inject from
+	// it — the webhook has no Prometheus client at all to fall back from.
+	h := &whhandler.Handler{Client: c}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -129,7 +122,7 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 		t.Fatalf("admission denied; want allowed (fail-open). result=%v", resp.Result)
 	}
 	if len(resp.Patch) == 0 {
-		t.Fatal("no patch returned; webhook should have injected from cached WLR while Prometheus is down")
+		t.Fatal("no patch returned; webhook should have injected from the WLR the controller wrote")
 	}
 	patchStr := string(resp.Patch)
 	// Loose substring assertions: the JSONPatch is RFC 6902 ops, values are
@@ -142,9 +135,10 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 	}
 }
 
-// TestIntegration_StaleCache_WebhookFallsOpen verifies that a cached WLR
-// older than the webhook's staleness threshold is ignored — no patch is
-// emitted, and the pod is allowed through with template resources.
+// TestIntegration_StaleCache_WebhookFallsOpen verifies that a WLR older than
+// the webhook's staleness threshold is ignored — no patch is emitted, and the
+// pod is allowed through with template resources. This is the webhook's only
+// defense against injecting from a controller that has stopped reconciling.
 func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {
@@ -178,8 +172,8 @@ func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 	r := &PolicyReconciler{Client: c, Scheme: scheme}
 	wantCPU := resource.MustParse("250m")
 	stale := metav1.NewTime(time.Now().Add(-2 * 24 * time.Hour))
-	r.upsertWorkloadRecommendation(context.Background(),
-		&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"},
+	_ = r.upsertWorkloadRecommendation(context.Background(),
+		itemForTarget(&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}),
 		policy.Name,
 		map[string]workload.ContainerRecommendation{
 			"app": {CPURequest: &wantCPU},
@@ -187,15 +181,7 @@ func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 		stale,
 	)
 
-	promServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "prometheus down", http.StatusInternalServerError)
-	}))
-	defer promServer.Close()
-	pc, err := promclient.New(promServer.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-	h := &whhandler.Handler{Client: c, PrometheusClient: pc}
+	h := &whhandler.Handler{Client: c}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

@@ -128,6 +128,32 @@ func getStringSlice(key string) []string {
 
 // --- Controller (start) flags ------------------------------------------------
 
+// DefaultQueryShardMaxSamples is the default --query-shard-max-samples value:
+// the projected Prometheus sample budget (containers x window-minutes summed
+// across a shard's workloads) that internal/prometheus.BuildShards packs
+// against when deciding where to close one batched shard query and start the
+// next. Prometheus's own --query.max-samples defaults to 50_000_000 and
+// REJECTS an over-budget query outright, failing every workload sharing that
+// shard -- this default leaves a 5x safety margin under that ceiling.
+//
+// Exported (rather than an inline literal in BindControllerFlags) so
+// internal/prometheus/shardscale_test.go's scale assertion can reference the
+// exact shipped value instead of duplicating it as a second literal that
+// could silently drift out of sync -- see that test's doc comment for why it
+// pulls this constant in via an external (_test package) import rather than
+// internal/prometheus depending on this package directly.
+const DefaultQueryShardMaxSamples = 10_000_000
+
+// DefaultRecommendationRetention is the default --recommendation-retention
+// value, shared by the controller and the webhook.
+//
+// One constant for both bindings on purpose: the controller decides how long a
+// departed WorkloadRecommendation is kept, and the webhook refuses to inject
+// from one older than that (internal/webhook.Handler.RecommendationRetention).
+// Two literals could drift into a window where the webhook serves what the
+// controller considers expired, or refuses what it still retains.
+const DefaultRecommendationRetention = 168 * time.Hour
+
 // BindControllerFlags registers flags for the "start" subcommand.
 func BindControllerFlags(cmd *cobra.Command) {
 	flags := cmd.Flags()
@@ -141,10 +167,14 @@ func BindControllerFlags(cmd *cobra.Command) {
 	bindStringSlice(flags, "excluded-namespaces", "excluded-namespaces", nil, "Namespaces the reconciler should never touch")
 	bindInt(flags, "workload-concurrency-limit", "workload-concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
 	bindInt(flags, "policy-concurrency-limit", "policy-concurrency-limit", 10, "Maximum number of Policy objects reconciled in parallel")
+	bindInt(flags, "prometheus-max-inflight", "prometheus-max-inflight", 8,
+		"Maximum concurrent Prometheus queries across the whole controller. Kept below Prometheus's own --query.max-concurrency (default 20) so k8s-sustain does not starve dashboards and alerting")
 	bindDuration(flags, "recycle-replacement-timeout", "recycle-replacement-timeout", 5*time.Minute,
 		"In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) takes several minutes.")
-	bindDuration(flags, "recommendation-retention", "recommendation-retention", 72*time.Hour,
-		"How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs). The dashboard shows these as inactive workloads. 0 sweeps them on the next reconcile.")
+	bindDuration(flags, "recommendation-retention", "recommendation-retention", DefaultRecommendationRetention,
+		"How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs). Also decides whether a RECURRING ephemeral identity is rightsized at admission on its next run: the webhook's only recommendation source is this object, so an identity whose gap between runs exceeds this window cold-starts every time. Set it above the longest expected inter-run gap (the 7d default covers weekly batch). The dashboard shows retained entries as inactive workloads. 0 sweeps them on the next reconcile.")
+	bindInt(flags, "query-shard-max-samples", "query-shard-max-samples", DefaultQueryShardMaxSamples,
+		"Projected Prometheus sample budget (containers x window-minutes, summed across a shard's workloads) a single batched CPU/memory/OOM shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own --query.max-samples (default 50,000,000): that server-side limit REJECTS an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default here leaves a 5x margin.")
 }
 
 // ControllerConfig holds resolved configuration for the controller.
@@ -159,9 +189,11 @@ type ControllerConfig struct {
 	ExcludedNamespaces        []string
 	WorkloadConcurrencyLimit  int
 	PolicyConcurrencyLimit    int
+	PrometheusMaxInflight     int
 	RecommendOnly             bool
 	RecycleReplacementTimeout time.Duration
 	RecommendationRetention   time.Duration
+	QueryShardMaxSamples      int
 }
 
 // LoadControllerConfig reads the current Viper state and returns a ControllerConfig.
@@ -177,9 +209,11 @@ func LoadControllerConfig() ControllerConfig {
 		ExcludedNamespaces:        getStringSlice("excluded-namespaces"),
 		WorkloadConcurrencyLimit:  viper.GetInt("workload-concurrency-limit"),
 		PolicyConcurrencyLimit:    viper.GetInt("policy-concurrency-limit"),
+		PrometheusMaxInflight:     viper.GetInt("prometheus-max-inflight"),
 		RecommendOnly:             RecommendOnly(),
 		RecycleReplacementTimeout: viper.GetDuration("recycle-replacement-timeout"),
 		RecommendationRetention:   viper.GetDuration("recommendation-retention"),
+		QueryShardMaxSamples:      viper.GetInt("query-shard-max-samples"),
 	}
 }
 
@@ -191,9 +225,16 @@ func BindWebhookFlags(cmd *cobra.Command) {
 	bindString(flags, "webhook.tls-cert-file", "tls-cert-file", "/tls/tls.crt", "Path to TLS certificate file")
 	bindString(flags, "webhook.tls-key-file", "tls-key-file", "/tls/tls.key", "Path to TLS private key file")
 	bindInt(flags, "webhook.port", "port", 9443, "Port the webhook server listens on")
-	bindString(flags, "webhook.prometheus-address", "prometheus-address", "http://localhost:9090", "Prometheus server address")
 	bindString(flags, "webhook.log-level", "log-level", "info", "Log level (debug, info, warn, error)")
 	bindStringSlice(flags, "webhook.excluded-namespaces", "excluded-namespaces", nil, "Namespaces the webhook should never mutate (mirrors the controller flag)")
+	// Bound under a "webhook."-prefixed Viper key even though the flag name
+	// matches the controller's: viper.BindPFlag maps a key to exactly one
+	// pflag, so reusing the flat "recommendation-retention" key would leave
+	// whichever subcommand registered last owning it, and the webhook's own
+	// --recommendation-retention would be read off the controller's (unset)
+	// flagset. The DEFAULT is shared, which is the part that must not drift.
+	bindDuration(flags, "webhook.recommendation-retention", "recommendation-retention", DefaultRecommendationRetention,
+		"Must match the controller's --recommendation-retention. It bounds the one case where the webhook injects from a WorkloadRecommendation older than the staleness budget: an identity the controller marked departed, whose ObservedAt is frozen by design. Past this window the object is one the controller's sweep should already have deleted, so the webhook treats it as stale instead of injecting it forever. The chart renders both flags from the single controller.recommendationRetention value.")
 }
 
 // WebhookConfig holds resolved configuration for the webhook server.
@@ -201,10 +242,12 @@ type WebhookConfig struct {
 	TLSCertFile        string
 	TLSKeyFile         string
 	Port               int
-	PrometheusAddress  string
 	LogLevel           string
 	RecommendOnly      bool
 	ExcludedNamespaces []string
+	// RecommendationRetention mirrors the controller flag of the same name;
+	// see BindWebhookFlags for why the webhook needs it.
+	RecommendationRetention time.Duration
 }
 
 // LoadWebhookConfig reads the current Viper state and returns a WebhookConfig.
@@ -216,10 +259,11 @@ func LoadWebhookConfig() WebhookConfig {
 		TLSCertFile:        viper.GetString("webhook.tls-cert-file"),
 		TLSKeyFile:         viper.GetString("webhook.tls-key-file"),
 		Port:               viper.GetInt("webhook.port"),
-		PrometheusAddress:  viper.GetString("webhook.prometheus-address"),
 		LogLevel:           viper.GetString("webhook.log-level"),
 		RecommendOnly:      RecommendOnly(),
 		ExcludedNamespaces: getStringSlice("webhook.excluded-namespaces"),
+
+		RecommendationRetention: viper.GetDuration("webhook.recommendation-retention"),
 	}
 }
 

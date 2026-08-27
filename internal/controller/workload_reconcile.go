@@ -15,9 +15,28 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// reconcileWorkload processes a single workload target: queries Prometheus,
-// computes recommendations, recycles pods, emits events, and tracks retries.
-func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustainv1alpha1.Policy, t *workloadTarget, autoSnap *autoscaler.NamespacedSnapshot) error {
+// reconcileWorkload APPLIES an identity's recommendation to a single workload
+// target: recycles or resizes its pods, emits events and metrics, and tracks
+// retries. It does not compute anything and does not write the
+// WorkloadRecommendation — computeIdentity did both, once for the identity,
+// before any member reached this function.
+//
+// recs is that shared recommendation, covering the union of the identity's
+// members' containers; this function narrows it to the containers this member
+// actually runs. computeErr is computeIdentity's failure for the identity, and
+// is surfaced through the same handleStepError("prometheus", ...) path the
+// in-line computation used to take, so retry tracking, the
+// ReconciliationRetryScheduled event and the policy's PartialFailure condition
+// all behave as before — per real workload object, which is what retry state is
+// keyed on.
+func (r *PolicyReconciler) reconcileWorkload(
+	ctx context.Context,
+	policy *sustainv1alpha1.Policy,
+	t *workloadTarget,
+	autoSnap *autoscaler.NamespacedSnapshot,
+	recs map[string]workload.ContainerRecommendation,
+	computeErr error,
+) error {
 	// Early bail-out if the parent reconcile context has already been cancelled
 	// (typically a manager shutdown mid-batch). Without this, queued workers
 	// still kick off autoscaler detection + Prometheus queries that will
@@ -54,15 +73,13 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 	EmitAutoscalerPresent(t.Namespace, t.Kind, t.Name, string(autoInfo.Kind))
 	EmitAutoscalerTargetsConfigured(t.Namespace, t.Kind, t.Name, string(autoInfo.Kind), autoInfo.ConfiguredTargets)
 
-	workloadCreated := time.Time{}
-	if t.Object != nil {
-		workloadCreated = t.Object.GetCreationTimestamp().Time
-	}
-	recs, err := r.buildRecommendations(ctx, policy, t.Namespace, t.IdentityKind, t.IdentityName, containers, autoInfo, workloadCreated)
-	if err != nil {
-		return r.handleStepError(ctx, t, "prometheus", "Prometheus query failed", err)
+	if computeErr != nil {
+		return r.handleStepError(ctx, t, "prometheus", "Prometheus query failed", computeErr)
 	}
 
+	// The identity's recommendation covers the union of its members'
+	// containers; this member applies only the subset it declares.
+	recs = recsForTarget(recs, containers)
 	if len(recs) == 0 {
 		logger.V(1).Info("no recommendations available yet (no Prometheus data)")
 		r.recordStepSuccess(t)
@@ -74,13 +91,6 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 
 	// Emit per-container recommendation/drift metrics before recycling pods.
 	emitWorkloadFromRecs(t, policy.Name, recs, initNames)
-
-	// Persist last-known-good recommendation as a WorkloadRecommendation.
-	// Lets the webhook serve cached values during a Prometheus outage and
-	// gives operators a `kubectl get wlrec` audit surface. Best-effort: the
-	// upsert never propagates errors so a failed cache write can't block the
-	// recycle path.
-	r.upsertWorkloadRecommendation(ctx, t, policy.Name, recs, metav1.Now())
 
 	if policy.EffectiveRecommendOnly(r.RecommendOnly) {
 		source := "policy"
@@ -100,15 +110,19 @@ func (r *PolicyReconciler) reconcileWorkload(ctx context.Context, policy *sustai
 		return nil
 	}
 
-	// Bare-pod identities (Kind == "Pod") have no controller owner that could
-	// recreate an evicted/resized pod — recycling never applies, in any
-	// UpdateMode. This is a permanent, unconditional exception, not a mode
-	// check: the recommendation above is still computed and cached (the
-	// webhook's Prometheus-outage fallback still benefits), but this is the
-	// only kind that stops here rather than dispatching to a recycle path.
+	// Bare-pod identities (Kind == "Pod") are NEVER evicted: no controller
+	// would recreate the pod. In-place resize needs no controller, so on
+	// clusters that support it the running pods are corrected directly —
+	// otherwise a long-running Airflow task would stay on whatever it was
+	// admitted with, forever. Below k8s 1.33 resizeInPlaceTarget is a no-op
+	// and bare pods stay untouched, exactly as before.
+	//
+	// OnCreate bare pods never reach here: that early return sits above this
+	// branch, so the mode distinction needs no new API surface.
 	if t.Kind == "Pod" {
-		r.recordStepSuccess(t)
-		return nil
+		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, func() (int, error) {
+			return r.resizeBarePods(ctx, t, recs, tol, suppressionObserver)
+		})
 	}
 
 	// CronJob: never mutate the CronJob spec (would cause GitOps drift) and

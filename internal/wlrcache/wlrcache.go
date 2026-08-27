@@ -5,6 +5,29 @@
 // object naming, no-op write suppression, and the observed-resources
 // snapshot identical across both — the webhook fallback contract breaks
 // silently if naming ever diverges.
+//
+// # Never re-read after a successful Create
+//
+// Both writers here run against a CACHE-BACKED client
+// (internal/k8s.NewCached caches WorkloadRecommendation deliberately, and its
+// DisableFor list covers only ReplicaSet and Job; the controller manager's
+// client caches every watched kind). A Get issued immediately after a
+// successful Create races the informer's watch event and reliably returns
+// NotFound — this was observed in production, on every genuinely new identity,
+// as "re-reading recommendation stub …: WorkloadRecommendation … not found".
+// The consequence is not a retried write, it is an object stranded with an
+// empty status.observedResources, which internal/controller's computation
+// phase then skips: the identity stays inert until some later writer happens
+// to find the object warm in cache. For a once-a-day bare pod that is a day.
+//
+// So: Create populates the passed object in place with the server-assigned UID
+// and resourceVersion, and every function below patches status straight off
+// that object. A Get is reserved for the paths where somebody else wrote the
+// object — the initial lookup, and the AlreadyExists branch — where a cache
+// read is the only way to learn what it already holds. Tests for this live in
+// ensure_exists_test.go behind a lagging-reader interceptor, because
+// fake.NewClientBuilder is read-your-writes and structurally cannot express
+// cache lag.
 package wlrcache
 
 import (
@@ -50,9 +73,15 @@ const RefreshInterval = 10 * time.Minute
 
 // Upsert writes (or updates) the WorkloadRecommendation for ref. Idempotent:
 // if the existing status matches, no API call is made (subject to
-// RefreshInterval for the ObservedAt bump). Best-effort: errors are logged
-// at V(1) and never returned — the cache is a fallback/visibility path, not
-// load-bearing.
+// RefreshInterval for the ObservedAt bump).
+//
+// Every failure is logged at V(1) AND returned. The reconcile path that just
+// wants visibility can keep ignoring the result — a failed cache write does
+// not invalidate the recycle it accompanies. The departed-refresh path must
+// not: for an identity with no live workload object this write IS the whole
+// deliverable, and reporting success when the status patch failed would leave
+// the recommendation unwritten while k8s_sustain_wlr_refresh_total counts it
+// as computed — the very metric operators are told to watch.
 func Upsert(
 	ctx context.Context,
 	c client.Client,
@@ -61,12 +90,12 @@ func Upsert(
 	recs map[string]workload.ContainerRecommendation,
 	observed map[string]sustainv1alpha1.ObservedContainerResources,
 	now metav1.Time,
-) {
+) error {
 	logger := log.FromContext(ctx).WithValues("kind", ref.Kind, "name", ref.Name, "namespace", ref.Namespace)
 
 	desired := buildStatus(recs, observed, now)
 	if len(desired.Containers) == 0 {
-		return
+		return nil
 	}
 
 	key := types.NamespacedName{Namespace: ref.Namespace, Name: Name(ref.Kind, ref.Name)}
@@ -83,15 +112,13 @@ func Upsert(
 		}
 		if err := c.Create(ctx, obj); err != nil {
 			logger.V(1).Info("failed to create WorkloadRecommendation; skipping cache write", "err", err)
-			return
+			return fmt.Errorf("creating WorkloadRecommendation %s: %w", key, err)
 		}
-		if err := c.Get(ctx, key, &existing); err != nil {
-			logger.V(1).Info("failed to re-read WorkloadRecommendation after create", "err", err)
-			return
-		}
+		// No re-read: see the read-after-write note on this package.
+		existing = *obj
 	} else if err != nil {
 		logger.V(1).Info("failed to read WorkloadRecommendation", "err", err)
-		return
+		return fmt.Errorf("reading WorkloadRecommendation %s: %w", key, err)
 	}
 
 	if existing.Spec.WorkloadRef != ref || existing.Spec.Policy != policyName ||
@@ -105,21 +132,181 @@ func Upsert(
 		patched.Labels[sustainv1alpha1.WLRPolicyLabel] = policyName
 		if err := c.Patch(ctx, patched, client.MergeFrom(&existing)); err != nil {
 			logger.V(1).Info("failed to patch WorkloadRecommendation spec", "err", err)
-			return
+			return fmt.Errorf("patching WorkloadRecommendation %s spec: %w", key, err)
 		}
 		existing = *patched
 	}
 
 	if statusEquivalent(existing.Status, desired) &&
 		now.Sub(existing.Status.ObservedAt.Time) < RefreshInterval {
-		return
+		return nil
 	}
 
 	patched := existing.DeepCopy()
 	patched.Status = desired
 	if err := c.Status().Patch(ctx, patched, client.MergeFrom(&existing)); err != nil {
 		logger.V(1).Info("failed to patch WorkloadRecommendation status", "err", err)
+		return fmt.Errorf("patching WorkloadRecommendation %s status: %w", key, err)
 	}
+	return nil
+}
+
+// EnsureExists creates the WorkloadRecommendation for ref if it is missing and
+// keeps its spec, policy label and observed-resources snapshot current. It
+// never writes Containers, Source or ObservedAt.
+//
+// This is the discovery half of the write path, and it exists because Upsert
+// deliberately refuses to create an object with no recommendation in it. Under
+// WLR-driven computation the object must exist BEFORE anything can compute it,
+// so a newly matched workload needs a home for its identity on the cycle it is
+// first seen, not on the cycle it first produces data.
+//
+// Clearing Departed here is what makes discovery the authority on the flag: an
+// identity present in a target listing is by definition not departed, whatever
+// a previous sweep concluded.
+func EnsureExists(
+	ctx context.Context,
+	c client.Client,
+	ref sustainv1alpha1.WorkloadReference,
+	policyName string,
+	observed map[string]sustainv1alpha1.ObservedContainerResources,
+) error {
+	logger := log.FromContext(ctx).WithValues("kind", ref.Kind, "name", ref.Name, "namespace", ref.Namespace)
+	key := types.NamespacedName{Namespace: ref.Namespace, Name: Name(ref.Kind, ref.Name)}
+
+	var existing sustainv1alpha1.WorkloadRecommendation
+	err := c.Get(ctx, key, &existing)
+	if apierrors.IsNotFound(err) {
+		obj := &sustainv1alpha1.WorkloadRecommendation{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: key.Namespace,
+				Name:      key.Name,
+				Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: policyName},
+			},
+			Spec: sustainv1alpha1.WorkloadRecommendationSpec{WorkloadRef: ref, Policy: policyName},
+		}
+		if cErr := c.Create(ctx, obj); cErr != nil {
+			if !apierrors.IsAlreadyExists(cErr) {
+				logger.V(1).Info("failed to create WorkloadRecommendation", "err", cErr)
+				return fmt.Errorf("creating WorkloadRecommendation %s: %w", key, cErr)
+			}
+			// Raced another writer (the webhook's stub creation). Its object is
+			// equivalent, but only a read can say what status it already
+			// carries, so this is the one branch that re-reads.
+			if gErr := c.Get(ctx, key, &existing); gErr != nil {
+				logger.V(1).Info("failed to re-read WorkloadRecommendation after create race", "err", gErr)
+				return fmt.Errorf("re-reading WorkloadRecommendation %s after create race: %w", key, gErr)
+			}
+		} else {
+			// No re-read: see the read-after-write note on this package.
+			existing = *obj
+		}
+	} else if err != nil {
+		logger.V(1).Info("failed to read WorkloadRecommendation", "err", err)
+		return fmt.Errorf("reading WorkloadRecommendation %s: %w", key, err)
+	}
+
+	if existing.Spec.WorkloadRef != ref || existing.Spec.Policy != policyName ||
+		existing.Labels[sustainv1alpha1.WLRPolicyLabel] != policyName {
+		patched := existing.DeepCopy()
+		patched.Spec.WorkloadRef = ref
+		patched.Spec.Policy = policyName
+		if patched.Labels == nil {
+			patched.Labels = map[string]string{}
+		}
+		patched.Labels[sustainv1alpha1.WLRPolicyLabel] = policyName
+		if pErr := c.Patch(ctx, patched, client.MergeFrom(&existing)); pErr != nil {
+			logger.V(1).Info("failed to patch WorkloadRecommendation spec", "err", pErr)
+			return fmt.Errorf("patching WorkloadRecommendation %s spec: %w", key, pErr)
+		}
+		existing = *patched
+	}
+
+	if !existing.Status.Departed && observedEquivalent(existing.Status.ObservedResources, observed) {
+		return nil
+	}
+	patched := existing.DeepCopy()
+	patched.Status.Departed = false
+	if observed != nil {
+		patched.Status.ObservedResources = observed
+	}
+	if pErr := c.Status().Patch(ctx, patched, client.MergeFrom(&existing)); pErr != nil {
+		logger.V(1).Info("failed to patch WorkloadRecommendation status", "err", pErr)
+		return fmt.Errorf("patching WorkloadRecommendation %s status: %w", key, pErr)
+	}
+	return nil
+}
+
+// MarkNoData records that a computation produced nothing for an identity that
+// has never produced anything.
+//
+// It is a no-op when Containers is already populated. That guard is the whole
+// contract: under WLR-driven refresh every identity is recomputed every cycle,
+// including departed ones whose data will eventually age out of the query
+// window. Overwriting a retained last-known-good with an empty status the
+// moment its samples expire would silently strip exactly the recommendation
+// the retention window exists to preserve. Not bumping ObservedAt matters for
+// the same reason: it is the webhook's freshness signal, and a bump would
+// claim data that is no longer there.
+//
+// Unlike the old stub flow this state is NOT terminal. The next cycle
+// recomputes the identity, so an identity that simply has no history yet
+// converges as soon as Prometheus has enough of it.
+func MarkNoData(
+	ctx context.Context,
+	c client.Client,
+	ref sustainv1alpha1.WorkloadReference,
+	now metav1.Time,
+) error {
+	logger := log.FromContext(ctx).WithValues("kind", ref.Kind, "name", ref.Name, "namespace", ref.Namespace)
+	key := types.NamespacedName{Namespace: ref.Namespace, Name: Name(ref.Kind, ref.Name)}
+	var existing sustainv1alpha1.WorkloadRecommendation
+	if err := c.Get(ctx, key, &existing); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		logger.V(1).Info("failed to read WorkloadRecommendation", "err", err)
+		return fmt.Errorf("reading WorkloadRecommendation %s: %w", key, err)
+	}
+	if len(existing.Status.Containers) > 0 {
+		return nil
+	}
+	if existing.Status.Source == sustainv1alpha1.RecommendationSourceNoData {
+		return nil // already recorded; avoid a write every cycle
+	}
+	patched := existing.DeepCopy()
+	patched.Status.Source = sustainv1alpha1.RecommendationSourceNoData
+	patched.Status.ObservedAt = now
+	if err := c.Status().Patch(ctx, patched, client.MergeFrom(&existing)); err != nil {
+		logger.V(1).Info("failed to patch WorkloadRecommendation status", "err", err)
+		return fmt.Errorf("patching WorkloadRecommendation %s status: %w", key, err)
+	}
+	return nil
+}
+
+// observedEquivalent reports whether two observed-resource snapshots convey
+// the same thing, so discovery does not write on every cycle for an unchanged
+// workload.
+func observedEquivalent(a, b map[string]sustainv1alpha1.ObservedContainerResources) bool {
+	if b == nil {
+		return true // caller had nothing to snapshot; leave what is there
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for name, av := range a {
+		bv, ok := b[name]
+		if !ok || av.Init != bv.Init {
+			return false
+		}
+		if !quantityEqual(av.CPURequest, bv.CPURequest) ||
+			!quantityEqual(av.MemoryRequest, bv.MemoryRequest) ||
+			!quantityEqual(av.CPULimit, bv.CPULimit) ||
+			!quantityEqual(av.MemoryLimit, bv.MemoryLimit) {
+			return false
+		}
+	}
+	return true
 }
 
 // BuildObservedResources snapshots per-container requests/limits so the
@@ -160,7 +347,7 @@ func buildStatus(
 ) sustainv1alpha1.WorkloadRecommendationStatus {
 	out := sustainv1alpha1.WorkloadRecommendationStatus{
 		ObservedAt:        now,
-		Source:            "prometheus",
+		Source:            sustainv1alpha1.RecommendationSourcePrometheus,
 		Containers:        map[string]sustainv1alpha1.ContainerRecommendation{},
 		ObservedResources: observed,
 	}
@@ -182,6 +369,17 @@ func buildStatus(
 // so write amplification scales with *change*, not workload count.
 func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
 	if a.Source != b.Source {
+		return false
+	}
+	// A departed identity coming back to life must always write, even when its
+	// recommendation values are unchanged: the write is what clears Departed,
+	// and leaving it set would keep the webhook waiving the freshness gate for
+	// a workload that is running again. In practice ObservedAt is always older
+	// than RefreshInterval by the time anything is marked departed (the sweep
+	// waits sweepGracePeriod first), so the caller's second condition already
+	// forces the write — but that is a coincidence of two independently-tuned
+	// constants, not a guarantee, so the difference is made explicit here.
+	if a.Departed != b.Departed {
 		return false
 	}
 	if len(a.Containers) != len(b.Containers) {
