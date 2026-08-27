@@ -1635,7 +1635,7 @@
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">  </span><span class="nt">triggers</span><span class="p">:</span>
 <a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cpu</span>
 <a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">      </span><span class="nt">metricType</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Utilization</span>
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">      </span><span class="nt">metadata</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> value</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;70&quot;</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">      </span><span class="nt">metadata</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> value</span><span class="p">:</span><span class="w"> </span><span class="s">"70"</span><span class="w"> </span><span class="p p-Indicator">}</span>
 </code></pre></div>
 <h3 id="3-enable-autoscaler-coordination">3. Enable autoscaler coordination<a class="headerlink" href="#3-enable-autoscaler-coordination" title="Permanent link">&para;</a></h3>
 <p>To shape requests so KEDA's utilization signal stays meaningful, enable the overhead formula on the Policy:</p>
@@ -1655,7 +1655,7 @@
 <h2 id="verification">Verification<a class="headerlink" href="#verification" title="Permanent link">&para;</a></h2>
 <p>Confirm the controller observed the <code>ScaledObject</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>deploy/k8s-sustain-controller<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;scaledObject|coordination&#39;</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">'scaledObject|coordination'</span>
 </code></pre></div>
 <p>The metric <code>k8s_sustain_coordination_factor</code> should report the applied multiplier (<code>kind="overhead"</code>) for the workload.</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>

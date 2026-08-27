@@ -1587,7 +1587,7 @@
 <p>Add the annotation to the pod template of any Deployment you want right-sized:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>deployment<span class="w"> </span>my-app<span class="w"> </span>-n<span class="w"> </span>staging<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--type<span class="o">=</span>json<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-p<span class="o">=</span><span class="s1">&#39;[{&quot;op&quot;:&quot;add&quot;,&quot;path&quot;:&quot;/spec/template/metadata/annotations&quot;,&quot;value&quot;:{&quot;k8s.sustain.io/policy&quot;:&quot;staging-rightsizing&quot;}}]&#39;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-p<span class="o">=</span><span class="s1">'[{"op":"add","path":"/spec/template/metadata/annotations","value":{"k8s.sustain.io/policy":"staging-rightsizing"}}]'</span>
 </code></pre></div>
 <p>Or add it directly in the Deployment manifest:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
@@ -1622,13 +1622,13 @@ The controller logs <code>no metrics yet, skipping</code> for workloads with no 
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">status</span><span class="p">:</span>
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">conditions</span><span class="p">:</span>
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ready</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">      </span><span class="nt">status</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;True&quot;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">      </span><span class="nt">status</span><span class="p">:</span><span class="w"> </span><span class="s">"True"</span>
 <a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">      </span><span class="nt">reason</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ReconciliationSucceeded</span>
 <a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">      </span><span class="nt">message</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">All targeted workloads have been processed.</span>
 </code></pre></div>
 <h2 id="6-verify-resource-changes">6. Verify resource changes<a class="headerlink" href="#6-verify-resource-changes" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>deployment<span class="w"> </span>my-app<span class="w"> </span>-n<span class="w"> </span>staging<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.template.spec.containers[*].resources}&#39;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.template.spec.containers[*].resources}'</span>
 </code></pre></div>
 <p>The controller reconciles on a fixed <code>10m</code> interval by default. To see changes sooner during testing, run the controller locally with <code>--reconcile-interval=2m</code> (see <a href="../../reference/cli/">CLI Reference</a>).</p>
 <h2 id="next-steps">Next steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>

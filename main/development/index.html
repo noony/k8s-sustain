@@ -2105,7 +2105,7 @@ what the harness does or deviate from it.</p>
 </code></pre></div>
 <p>Open <code>http://localhost:8090</code>.</p>
 <h3 id="6-create-a-test-policy">6. Create a test policy<a class="headerlink" href="#6-create-a-test-policy" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt;&#39;EOF&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt;'EOF'</span>
 <a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="s">apiVersion: k8s.sustain.io/v1alpha1</span>
 <a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="s">kind: Policy</span>
 <a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="s">metadata:</span>
@@ -2206,12 +2206,12 @@ what the harness does or deviate from it.</p>
 under <code>charts/k8s-sustain/tests/</code> — one <code>*_test.yaml</code> file per template, asserting on
 default rendering, every enable/disable conditional, and value wiring. Install the plugin
 once, then run the suite:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># --verify=false: helm v4 verifies plugin provenance by default, which git-source installs don&#39;t support</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># --verify=false: helm v4 verifies plugin provenance by default, which git-source installs don't support</span>
 <a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>helm<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>https://github.com/helm-unittest/helm-unittest.git<span class="w"> </span>--version<span class="w"> </span><span class="m">1</span>.0.0<span class="w"> </span>--verify<span class="o">=</span><span class="nb">false</span>
 <a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>make<span class="w"> </span>helm-unittest
 </code></pre></div>
 <p>Run a single suite with the plugin's <code>-f</code> flag (paths are relative to the chart root):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>helm<span class="w"> </span>unittest<span class="w"> </span>charts/k8s-sustain<span class="w"> </span>-f<span class="w"> </span><span class="s1">&#39;tests/deployment_test.yaml&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>helm<span class="w"> </span>unittest<span class="w"> </span>charts/k8s-sustain<span class="w"> </span>-f<span class="w"> </span><span class="s1">'tests/deployment_test.yaml'</span>
 </code></pre></div>
 <p>CI runs the full suite in the <code>helm</code> job alongside <code>helm lint</code> and <code>helm template</code>.
 <code>charts/k8s-sustain/tests/promtool_test.sh</code> additionally validates the rendered

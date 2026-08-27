@@ -1579,9 +1579,9 @@
 <li><strong>Resize status inspection:</strong></li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># pending-resize verdict lives in pod conditions</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.conditions[?(@.type==&quot;PodResizePending&quot;)]}&#39;</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.conditions[?(@.type=="PodResizePending")]}'</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># actual resources currently allocated to the containers</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.containerStatuses[*].resources}&#39;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>my-pod<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.containerStatuses[*].resources}'</span>
 </code></pre></div>
 <h2 id="disabling-in-place-updates">Disabling in-place updates<a class="headerlink" href="#disabling-in-place-updates" title="Permanent link">&para;</a></h2>
 <p>There is currently no toggle to force eviction-based behaviour on a supported cluster: the mode follows the detected server version. File an issue if you need a clean toggle.</p>

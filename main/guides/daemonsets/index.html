@@ -1625,7 +1625,7 @@
 </code></pre></div>
 <h2 id="verification">Verification<a class="headerlink" href="#verification" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>logging<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>fluentd<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>yq<span class="w"> </span><span class="s1">&#39;.items[].spec.containers[].resources&#39;</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>yq<span class="w"> </span><span class="s1">'.items[].spec.containers[].resources'</span>
 </code></pre></div>
 <p>All node pods carry the recommended values; the DaemonSet's pod template is unchanged.</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>

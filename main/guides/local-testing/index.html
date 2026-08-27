@@ -2013,7 +2013,7 @@ exited; the new requests land via webhook injection on the next pod creation.</p
 <p>Inspect the <code>container_kind</code> label on emitted gauges:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>--raw<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>/api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">&#39;k8s_sustain_recommended_cpu_cores{.*container_kind=&quot;init&quot;&#39;</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">'k8s_sustain_recommended_cpu_cores{.*container_kind="init"'</span>
 </code></pre></div>
 <h3 id="cronjob"><code>cronjob</code><a class="headerlink" href="#cronjob" title="Permanent link">&para;</a></h3>
 <p>Single CronJob (<code>schedule: "* * * * *"</code>) running for ~30s per invocation
@@ -2029,12 +2029,12 @@ requests injected by the webhook at admission. After
 memory to ~<code>110Mi</code>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># CronJob spec is unchanged across reconciles (no controller patches)</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>cronjob<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob<span class="w"> </span>job<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.jobTemplate.spec.template.spec.containers[0].resources}&#39;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.jobTemplate.spec.template.spec.containers[0].resources}'</span>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># The current recommendation is exposed via WorkloadRecommendation</span>
 <a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob<span class="w"> </span>cronjob-job<span class="w"> </span>-o<span class="w"> </span>yaml
 <a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1"># Inspect a running job pod — its container resources reflect the latest reco</span>
 <a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob<span class="w"> </span>-l<span class="w"> </span>batch.kubernetes.io/job-name<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-A4<span class="w"> </span><span class="s1">&#39;resources:&#39;</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-A4<span class="w"> </span><span class="s1">'resources:'</span>
 </code></pre></div>
 <p>This scenario also exercises the Pod → Job → CronJob recording-rule
 chain — without it, <code>owner_kind="CronJob"</code> would have no metrics and the
@@ -2053,14 +2053,14 @@ scenario that exercises the new in-place resize path on a <code>restartPolicy:
 Never</code> Job pod (k8s ≥ 1.35).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nv">POD</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--field-selector<span class="w"> </span>status.phase<span class="o">=</span>Running<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.items[0].metadata.name}'</span><span class="k">)</span>
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span><span class="nv">$POD</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.containers[0].resources}{&quot;\n&quot;}&#39;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.containers[0].resources}{"\n"}'</span>
 <a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>sleep<span class="w"> </span><span class="m">60</span>
 <a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span><span class="nv">$POD</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.containers[0].resources}{&quot;\n&quot;}&#39;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.containers[0].resources}{"\n"}'</span>
 <a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span><span class="nv">$POD</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.containerStatuses[0].restartCount}{&quot;\n&quot;}&#39;</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.containerStatuses[0].restartCount}{"\n"}'</span>
 </code></pre></div>
 <h3 id="cronjob-overprovisioned"><code>cronjob-overprovisioned</code><a class="headerlink" href="#cronjob-overprovisioned" title="Permanent link">&para;</a></h3>
 <p>CronJob analogue of the <code>overprovisioned</code> Deployment scenario. Initial
@@ -2088,7 +2088,7 @@ first run has no history, so it is skipped by the gate and leaves no
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>hack/scenarios/job.yaml
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>make<span class="w"> </span>test-scenario-job
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-job<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].spec.containers[0].resources}{&quot;\n&quot;}&#39;</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.items[0].spec.containers[0].resources}{"\n"}'</span>
 </code></pre></div>
 <h3 id="statefulset"><code>statefulset</code><a class="headerlink" href="#statefulset" title="Permanent link">&para;</a></h3>
 <p>Three-replica StatefulSet (<code>web-0</code>, <code>web-1</code>, <code>web-2</code>) with deliberately
@@ -2103,7 +2103,7 @@ oversized requests (<code>500m / 256Mi</code>) and ~<code>200m / ~100Mi</code> o
   semantics. Inspect with:</li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>events<span class="w"> </span>-n<span class="w"> </span>scenario-statefulset<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--sort-by<span class="o">=</span>.lastTimestamp<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;Evicted|Killing|Recycled&#39;</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--sort-by<span class="o">=</span>.lastTimestamp<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">'Evicted|Killing|Recycled'</span>
 </code></pre></div>
 <ul>
 <li>The full 3-pod recycle finishes in roughly one reconcile cycle. If the
@@ -2113,7 +2113,7 @@ oversized requests (<code>500m / 256Mi</code>) and ~<code>200m / ~100Mi</code> o
   would stretch to 15+ minutes before failing. Watch the controller log:</li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>-c<span class="w"> </span>controller<span class="w"> </span>--since<span class="o">=</span>5m<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;evict|recycle|replacement&#39;</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>-c<span class="w"> </span>controller<span class="w"> </span>--since<span class="o">=</span>5m<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">'evict|recycle|replacement'</span>
 </code></pre></div>
 <ul>
 <li>The CPU request drops to ~<code>220m</code> and memory to ~<code>110Mi</code> on every
@@ -2121,7 +2121,7 @@ oversized requests (<code>500m / 256Mi</code>) and ~<code>200m / ~100Mi</code> o
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="k">for</span><span class="w"> </span>i<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">2</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-statefulset<span class="w"> </span>web-<span class="nv">$i</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.containers[0].resources}{&quot;\n&quot;}&#39;</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.containers[0].resources}{"\n"}'</span>
 <a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="k">done</span>
 </code></pre></div>
 <h3 id="custom-name"><code>custom-name</code><a class="headerlink" href="#custom-name" title="Permanent link">&para;</a></h3>
@@ -2181,7 +2181,7 @@ is the same ~<code>200m / ~100Mi</code> profile as <code>steady</code>.</p>
   resize, so recycling is permanently skipped, regardless of <code>UpdateMode</code>:</li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-bare-pod<span class="w"> </span>etl-daily-run-1<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.containers[0].resources.requests}{&quot;\n&quot;}&#39;</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.containers[0].resources.requests}{"\n"}'</span>
 <a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="c1"># always 500m / 256Mi, even after many reconcile cycles</span>
 </code></pre></div>
 <ul>
@@ -2224,7 +2224,7 @@ container, Kubernetes restarts it, and the cycle repeats.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-oom-kill<span class="w"> </span>stress<span class="w"> </span>-o<span class="w"> </span>yaml
 <a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>kubectl<span class="w"> </span>--raw<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span>/api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">&#39;k8s_sustain_oom_floor_applied_total&#39;</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">'k8s_sustain_oom_floor_applied_total'</span>
 </code></pre></div>
 <h3 id="qos-change"><code>qos-change</code><a class="headerlink" href="#qos-change" title="Permanent link">&para;</a></h3>
 <p>3-replica Deployment whose containers start as <strong>Guaranteed QoS</strong> —
@@ -2250,10 +2250,10 @@ Burstable, which Kubernetes forbids through the <code>/resize</code> subresource
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Guaranteed before the recycle, Burstable after</span>
 <a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-qos-change<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{range .items[*]}{.metadata.name}{&quot;: &quot;}{.status.qosClass}{&quot;\n&quot;}{end}&#39;</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{range .items[*]}{.metadata.name}{": "}{.status.qosClass}{"\n"}{end}'</span>
 <a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1"># the per-pod Invalid rejection and the eviction fallback</span>
 <a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>deploy/k8s-sustain-controller<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;rejected as invalid|falling back to eviction&#39;</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">'rejected as invalid|falling back to eviction'</span>
 <a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="c1"># PDB status during the recycle: disruptionsAllowed flips between 1 and 0,</span>
 <a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="c1"># at least 2 pods stay Ready</span>
 <a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pdb<span class="w"> </span>-n<span class="w"> </span>scenario-qos-change<span class="w"> </span>stress<span class="w"> </span>-o<span class="w"> </span>wide
@@ -2282,7 +2282,7 @@ coexist.</p>
   recommendation never converges with current and <code>RECYCLED</code> stays <code>no</code>:</li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-recommend-only<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.uid}{&quot; &quot;}{.items[0].spec.containers[0].resources.requests}{&quot;\n&quot;}&#39;</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.items[0].metadata.uid}{" "}{.items[0].spec.containers[0].resources.requests}{"\n"}'</span>
 </code></pre></div>
 <ul>
 <li><strong>The webhook does not inject either</strong>: delete the pod (only after the
@@ -2299,7 +2299,7 @@ coexist.</p>
   webhook logs <code>recommend-only: would inject resources</code> on pod creation:</li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>k8s-sustain<span class="w"> </span>--tail<span class="o">=</span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">&#39;recommend-only&#39;</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">'recommend-only'</span>
 </code></pre></div>
 <h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
 <p><code>make test-scenario-status</code> prints a table:</p>
