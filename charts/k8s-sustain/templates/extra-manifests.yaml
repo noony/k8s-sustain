@@ -1,0 +1,14 @@
+{{- /*
+Arbitrary user-supplied objects rendered alongside the chart's own manifests.
+Each entry is either a YAML map (rendered verbatim) or a multi-line string;
+both are passed through `tpl`, so entries may use template expressions such as
+the fullname helper or .Release.Namespace.
+*/}}
+{{- range $manifest := .Values.extraManifests }}
+---
+{{- if kindIs "string" $manifest }}
+{{ tpl $manifest $ }}
+{{- else }}
+{{ tpl (toYaml $manifest) $ }}
+{{- end }}
+{{- end }}

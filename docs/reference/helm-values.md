@@ -221,6 +221,51 @@ Only needed when running the Prometheus Operator externally (not the bundled sub
 
 ---
 
+## Extra manifests
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `extraManifests` | `[]` | Arbitrary extra objects rendered with the release, for anything the chart does not template itself |
+
+Use it for objects that belong to the release but have no dedicated chart value — a
+`Secret` holding Prometheus credentials, a `NetworkPolicy`, a Grafana dashboard
+`ConfigMap`, an `ExternalSecret`, an extra `RoleBinding`.
+
+Each entry is either a YAML map or a multi-line string, and both are passed through
+`tpl`, so entries may use template expressions (`.Release.Namespace`, `.Values.*`, the
+chart's `k8s-sustain.fullname` helper, ...):
+
+```yaml
+extraManifests:
+  # Map form — rendered verbatim; quote any value containing a template expression.
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: '{{ include "k8s-sustain.fullname" . }}-grafana-dashboard'
+      namespace: '{{ .Release.Namespace }}'
+      labels:
+        grafana_dashboard: "1"
+    data:
+      k8s-sustain.json: |
+        {"title": "k8s-sustain"}
+
+  # String form — handy for manifests you paste in as-is.
+  - |
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: {{ include "k8s-sustain.fullname" . }}-allow-webhook
+      namespace: {{ .Release.Namespace }}
+    spec:
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: {{ include "k8s-sustain.name" . }}
+      ingress:
+        - {}
+```
+
+---
+
 ## Prometheus subchart
 
 Pass any value supported by the [prometheus chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) under the `prometheus:` key. Recording rules for k8s-sustain are embedded in `prometheus.server.serverFiles` by default.

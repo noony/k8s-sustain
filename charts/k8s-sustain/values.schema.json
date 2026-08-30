@@ -3,6 +3,11 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
+    "extraManifests": {
+      "type": "array",
+      "description": "Extra objects rendered with the release. Each item is a YAML map or a multi-line string; both are passed through `tpl`.",
+      "items": { "type": ["object", "string"] }
+    },
     "image": {
       "type": "object",
       "additionalProperties": false,
