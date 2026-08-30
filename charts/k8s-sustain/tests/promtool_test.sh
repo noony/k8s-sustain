@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Validates the rendered PrometheusRule manifest with promtool and asserts
-# that all dashboard-required recording rules are present.
+# Validates the rendered PrometheusRule manifest with promtool: checks the
+# rules parse, asserts that all dashboard-required recording rules are present,
+# and runs the `promtool test rules` unit tests in tests/promtool/ against the
+# rendered rules (semantics, not just syntax).
 #
 # This script always cd's to the worktree root (3 levels above this file)
 # before running helm, so it can be invoked from any cwd.
@@ -39,4 +41,16 @@ for rule in "${required[@]}"; do
   fi
 done
 
-echo "OK: rules valid and contain required entries"
+# Unit-test rule SEMANTICS. Each fixture declares `rule_files: [rules-only.yaml]`
+# and promtool resolves that relative to the fixture, so both have to sit in the
+# same directory.
+shopt -s nullglob
+fixtures=("$(dirname "$0")"/promtool/*_test.yaml)
+if [ ${#fixtures[@]} -gt 0 ]; then
+  cp "${fixtures[@]}" "$WORKDIR/"
+  (cd "$WORKDIR" && promtool test rules ./*_test.yaml)
+else
+  echo "WARNING: no promtool unit-test fixtures found" >&2
+fi
+
+echo "OK: rules valid, contain required entries, and pass unit tests"

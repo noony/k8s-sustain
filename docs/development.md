@@ -286,8 +286,14 @@ helm unittest charts/k8s-sustain -f 'tests/deployment_test.yaml'
 ```
 
 CI runs the full suite in the `helm` job alongside `helm lint` and `helm template`.
-`charts/k8s-sustain/tests/promtool_test.sh` additionally validates the rendered
-PrometheusRule recording rules with `promtool` (requires `promtool` and `yq`).
+`make helm-promtool` additionally validates the rendered PrometheusRule
+recording rules with `promtool` (requires `promtool` and `yq`): it checks that
+the rules parse, that the dashboard-required ones are present, and it runs the
+`promtool test rules` fixtures in `charts/k8s-sustain/tests/promtool/` against
+the rendered output. Those fixtures test rule *semantics* — feed a rule its
+input series and assert the recorded value — which `promtool check rules`
+cannot do. Add one whenever a rule's correctness depends on timing or on a
+join window, since that is exactly what a syntax check misses.
 
 ## Adding a new workload kind
 

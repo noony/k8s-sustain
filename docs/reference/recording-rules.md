@@ -292,7 +292,9 @@ max by (namespace, owner_kind, owner_name, container) (
   max by (namespace, pod, container) (
     max_over_time(
       (
-        container_spec_memory_limit_bytes{container!="", container!="POD", image!="", node!=""}
+        min_over_time(
+          container_spec_memory_limit_bytes{container!="", container!="POD", image!="", node!=""}[2m]
+        )
         and on(namespace, pod, container)
         (changes(kube_pod_container_status_restarts_total{container!="", container!="POD"}[2m]) > 0)
         and on(namespace, pod, container)
@@ -307,7 +309,9 @@ max by (namespace, owner_kind, owner_name, container) (
 
 The cgroup memory limit observed at the moment a recent OOM event fired, per (workload, container), max over 24h. The recommender uses this as a bump anchor — when a workload OOM'd recently, the memory recommendation floor is `max(peak_working_set_24h, oom_time_limit × 1.20)` — to push the request above the limit the kernel killed at.
 
-The conjunction (`container_spec_memory_limit_bytes AND restart_changed AND last_term=OOMKilled`) ensures the limit is only recorded at moments a NEW OOM event fires, not while the workload sits at the bumped limit afterward. This is the property that prevents the feedback loop the `container_peak_memory_24h:bytes` comment warns about: once the workload fits after a bump, no new OOM events occur and the recorded limit stays at its pre-bump value. After 24h with no further OOMs, the signal drains and the recommender falls back to the percentile.
+The conjunction (`min_over_time(container_spec_memory_limit_bytes) AND restart_changed AND last_term=OOMKilled`) ensures the limit is only recorded at moments a NEW OOM event fires, not while the workload sits at the bumped limit afterward. This is the property that prevents the feedback loop the `container_peak_memory_24h:bytes` comment warns about: once the workload fits after a bump, no new OOM events occur and the recorded limit stays at its pre-bump value. After 24h with no further OOMs, the signal drains and the recommender falls back to the percentile.
+
+`min_over_time(...[2m])` is what makes that property actually hold. The restart gate stays true for two minutes *after* the kill, and k8s-sustain reacts to an OOM within seconds (the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher) forces an immediate reconcile), so the raised limit lands comfortably inside that window. Sampling the limit directly would record k8s-sustain's own response as though the kernel had killed at it, and `max_over_time` would then hold that inflated value for 24h — the recommendation deriving its next anchor from its own previous output. An OOM response only ever *raises* a limit, so the minimum across the window is the pre-bump value: the limit the container was actually killed at. A downsize landing in the same window makes the anchor conservative rather than inflated, and the peak anchor covers that direction. Both properties are pinned by `charts/k8s-sustain/tests/promtool/oom_limit_anchor_test.yaml`.
 
 ### `k8s_sustain:workload_oom_24h`
 
