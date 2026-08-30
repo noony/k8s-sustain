@@ -1538,11 +1538,12 @@
 running pods are only ever resized in place, never evicted — evicting them
 would discard in-flight work, and in the bare-pod case nothing would recreate
 the pod. See <a href="concepts/update-modes/">Update modes</a>.</p>
-<p>A workload opts in to a policy by setting a single annotation on its pod template:</p>
+<p>A workload opts in to a policy by setting a single annotation:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">metadata</span><span class="p">:</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-policy</span>
 </code></pre></div>
+<p>It is honoured on the workload's pod template, on the workload object's own <code>metadata.annotations</code>, or on its Namespace — see the <a href="reference/annotation/">Annotation reference</a> for the full precedence and the opt-out escape hatch.</p>
 <hr />
 <h2 id="supported-workloads">Supported workloads<a class="headerlink" href="#supported-workloads" title="Permanent link">&para;</a></h2>
 <table>

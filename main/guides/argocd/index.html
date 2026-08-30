@@ -1594,7 +1594,7 @@
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
 <ul>
 <li>An Argo CD installation managing the target namespace.</li>
-<li>A Git repository containing the workload manifest with a <code>k8s.sustain.io/policy</code> annotation on the pod template.</li>
+<li>A Git repository containing the workload manifest with a <code>k8s.sustain.io/policy</code> annotation (pod template, the workload's own <code>metadata.annotations</code>, or its Namespace — see the <a href="../../reference/annotation/">Annotation reference</a>).</li>
 <li>A k8s-sustain <code>Policy</code> matching the workload (see <a href="../../getting-started/installation/">Installation</a>).</li>
 <li>Read access to a Prometheus instance from the controller.</li>
 </ul>

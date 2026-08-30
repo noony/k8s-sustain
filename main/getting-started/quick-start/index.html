@@ -1584,7 +1584,7 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>staging-policy.yaml
 </code></pre></div>
 <h2 id="3-opt-in-a-deployment">3. Opt in a Deployment<a class="headerlink" href="#3-opt-in-a-deployment" title="Permanent link">&para;</a></h2>
-<p>Add the annotation to the pod template of any Deployment you want right-sized:</p>
+<p>Add the annotation to the pod template of any Deployment you want right-sized (it is also honoured on the Deployment's own <code>metadata.annotations</code> or its Namespace — see the <a href="../../reference/annotation/">Annotation reference</a>):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>deployment<span class="w"> </span>my-app<span class="w"> </span>-n<span class="w"> </span>staging<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--type<span class="o">=</span>json<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-p<span class="o">=</span><span class="s1">'[{"op":"add","path":"/spec/template/metadata/annotations","value":{"k8s.sustain.io/policy":"staging-rightsizing"}}]'</span>

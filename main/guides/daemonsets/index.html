@@ -1575,7 +1575,7 @@
 <p>Right-size a DaemonSet in <code>Ongoing</code> mode while respecting the DaemonSet's update strategy.</p>
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
 <ul>
-<li>A DaemonSet with a <code>k8s.sustain.io/policy</code> annotation on its pod template.</li>
+<li>A DaemonSet with a <code>k8s.sustain.io/policy</code> annotation (pod template, the DaemonSet's own <code>metadata.annotations</code>, or its Namespace — see the <a href="../../reference/annotation/">Annotation reference</a>).</li>
 <li>A k8s-sustain <code>Policy</code> matching the workload.</li>
 <li>A Prometheus instance reachable from the controller.</li>
 </ul>

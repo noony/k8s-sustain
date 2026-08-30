@@ -1355,6 +1355,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#namespace-optin" class="md-nav__link">
+    <span class="md-ellipsis">
+      namespace-optin
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1847,6 +1856,15 @@
   <a href="#recurring" class="md-nav__link">
     <span class="md-ellipsis">
       recurring
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#namespace-optin" class="md-nav__link">
+    <span class="md-ellipsis">
+      namespace-optin
     </span>
   </a>
   
@@ -2419,15 +2437,34 @@ comfortably longer than the harness's deployed <code>--reconcile-interval=30s</c
   scenario); use the commands above instead.</p>
 </li>
 </ul>
+<h3 id="namespace-optin"><code>namespace-optin</code><a class="headerlink" href="#namespace-optin" title="Permanent link">&para;</a></h3>
+<p>Two Deployments in one namespace, same shape as <code>steady</code>, but neither
+carries a <code>k8s.sustain.io/policy</code> annotation of its own anywhere: <code>web</code> opts
+in purely through the Namespace's <code>k8s.sustain.io/policy</code> annotation, and
+<code>opted-out</code> sets <code>k8s.sustain.io/opt-out: "true"</code> on its own
+<code>metadata.annotations</code> to override that inherited opt-in. Validates the
+delegated, most-specific-first annotation resolution (see the <a href="../../reference/annotation/">Annotation
+reference</a>).</p>
+<p><strong>Expected:</strong></p>
+<ul>
+<li><code>web</code>: CPU request drops from <code>500m</code> to ~<code>220m</code>, memory from <code>256Mi</code> to
+  ~<code>110Mi</code>, within <code>WINDOW + reconcile_interval</code> — exactly like <code>steady</code>,
+  despite carrying no annotation of its own anywhere.</li>
+<li><code>opted-out</code>: requests stay pinned at <code>500m / 256Mi</code> forever; it is never
+  reconciled.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>deploy<span class="w"> </span>-n<span class="w"> </span>scenario-namespace-optin<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].resources.requests}{"\n"}{end}'</span>
+</code></pre></div>
 <h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
 <p><code>make test-scenario-status</code> prints a table:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
-<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
-<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
 </code></pre></div>
 <p>The dashboard remains the richer source of truth — start a port-forward
 and open <code>http://localhost:8090</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
 </code></pre></div>
 <h2 id="adding-a-new-scenario">Adding a new scenario<a class="headerlink" href="#adding-a-new-scenario" title="Permanent link">&para;</a></h2>
 <p>See <code>hack/scenarios/README.md</code>.</p>

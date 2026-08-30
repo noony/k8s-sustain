@@ -2000,6 +2000,11 @@
 <td><code>(empty — same-origin only)</code></td>
 <td>Allowed CORS origins (comma-separated). Use <code>*</code> to allow all (not recommended).</td>
 </tr>
+<tr>
+<td><code>--excluded-namespaces</code></td>
+<td><code>(empty)</code></td>
+<td>Namespaces the controller/webhook never manage (comma-separated). Mirrors their <code>--excluded-namespaces</code> flag so the dashboard's policy-scoped workload views stay consistent with what is actually managed.</td>
+</tr>
 </tbody>
 </table>
 <p>When a request carries an <code>Origin</code> header and a CORS allowlist is configured,

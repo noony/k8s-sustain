@@ -1633,8 +1633,12 @@ admission. This is the same version caveat that applies to
 <code>restartPolicy</code> values.</p>
 <p>Which pods count as "the running pods of the identity" is decided by the same
 grouping rule the controller uses to discover them: no controller
-<code>ownerReference</code>, a valid <code>owner-name</code>, matching policy annotation. A pod that
-merely carries the mirrored <code>owner-name</code> <strong>label</strong> but belongs to a
+<code>ownerReference</code>, a valid <code>owner-name</code>, and a <strong>resolved</strong> policy that matches
+the group's — resolved the same way as every other kind, across the pod's own
+annotation and its Namespace's (see <a href="../../reference/annotation/">Annotation Reference</a>).
+Namespace-level opt-in works for bare pods too: <code>GroupBarePods</code> consults the
+namespace annotation map it is passed, not just each pod's own annotations. A
+pod that merely carries the mirrored <code>owner-name</code> <strong>label</strong> but belongs to a
 ReplicaSet is not a member and is never touched by this path — that is the
 bare-pod counterpart of the ownerRef check protecting every other kind.</p>
 <p><strong>One owner-name, one policy.</strong> The group is claimed by the policy named on the

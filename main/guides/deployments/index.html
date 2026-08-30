@@ -1575,7 +1575,7 @@
 <p>Right-size a Deployment (or StatefulSet) in <code>Ongoing</code> mode without disrupting running traffic.</p>
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
 <ul>
-<li>A Deployment or StatefulSet with a <code>k8s.sustain.io/policy</code> annotation on its pod template.</li>
+<li>A Deployment or StatefulSet with a <code>k8s.sustain.io/policy</code> annotation (pod template, the workload's own <code>metadata.annotations</code>, or its Namespace — see the <a href="../../reference/annotation/">Annotation reference</a>).</li>
 <li>A k8s-sustain <code>Policy</code> matching the workload (see <a href="../../getting-started/installation/">Installation</a>).</li>
 <li>A Prometheus instance reachable from the controller.</li>
 </ul>

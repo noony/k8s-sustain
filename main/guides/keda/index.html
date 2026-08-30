@@ -1594,7 +1594,7 @@
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
 <ul>
 <li>KEDA installed in the cluster (the <code>ScaledObject</code> CRD is sufficient).</li>
-<li>A workload with a <code>k8s.sustain.io/policy</code> annotation on its pod template.</li>
+<li>A workload with a <code>k8s.sustain.io/policy</code> annotation (pod template, its own <code>metadata.annotations</code>, or its Namespace — see the <a href="../../reference/annotation/">Annotation reference</a>).</li>
 <li>A k8s-sustain <code>Policy</code> matching the workload (see <a href="../../getting-started/installation/">Installation</a>).</li>
 <li>A Prometheus instance reachable from the controller.</li>
 </ul>
