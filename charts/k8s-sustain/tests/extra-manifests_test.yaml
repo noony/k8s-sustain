@@ -1,0 +1,100 @@
+suite: extra manifests
+templates:
+  - templates/extra-manifests.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: renders nothing when the list is empty
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a map entry verbatim
+    set:
+      extraManifests:
+        - apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: extra-config
+          data:
+            hello: world
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: extra-config
+      - equal:
+          path: data.hello
+          value: world
+
+  - it: templates map entries through tpl
+    set:
+      extraManifests:
+        - apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: '{{ include "k8s-sustain.fullname" . }}-extra'
+            namespace: '{{ .Release.Namespace }}'
+          data:
+            image: '{{ .Values.image.repository }}'
+    asserts:
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-extra
+      - equal:
+          path: metadata.namespace
+          value: k8s-sustain
+      - equal:
+          path: data.image
+          value: ghcr.io/noony/k8s-sustain
+
+  - it: renders and templates a multi-line string entry
+    set:
+      extraManifests:
+        - |
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: {{ include "k8s-sustain.fullname" . }}-auth
+            namespace: {{ .Release.Namespace }}
+          stringData:
+            password: s3cret
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-auth
+      - equal:
+          path: stringData.password
+          value: s3cret
+
+  - it: renders every entry of a mixed list
+    set:
+      extraManifests:
+        - apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: first
+        - |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: second
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: first
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: second
+        documentIndex: 1

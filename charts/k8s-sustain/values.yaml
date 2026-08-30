@@ -304,6 +304,28 @@ dashboard:
   tolerations: []
   affinity: {}
 
+# Extra objects to deploy with the release, for anything the chart does not
+# template itself (a Secret holding Prometheus credentials, a NetworkPolicy, a
+# Grafana dashboard ConfigMap, an external-secrets ExternalSecret, ...).
+# Each entry is either a YAML map or a multi-line string; both are passed
+# through `tpl`, so template expressions and release values may be used.
+extraManifests: []
+#  - apiVersion: v1
+#    kind: ConfigMap
+#    metadata:
+#      name: '{{ include "k8s-sustain.fullname" . }}-extra'
+#      namespace: '{{ .Release.Namespace }}'
+#    data:
+#      hello: world
+#  - |
+#    apiVersion: v1
+#    kind: Secret
+#    metadata:
+#      name: {{ include "k8s-sustain.fullname" . }}-prometheus-auth
+#      namespace: {{ .Release.Namespace }}
+#    stringData:
+#      password: s3cret
+
 # PrometheusRule for the k8s-sustain recording rules, for users running the
 # Prometheus Operator externally (e.g. kube-prometheus-stack).
 # Leave disabled when using the bundled `prometheus` subchart — recording rules
