@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func makeKey(container string) Key {
@@ -371,6 +373,33 @@ func TestConcurrentAccess(t *testing.T) {
 	// Across 4 workloads * 8 containers we expect at most 32 distinct keys.
 	if got := c.Size(); got == 0 || got > 32 {
 		t.Fatalf("unexpected size after concurrent run: %d", got)
+	}
+}
+
+// TestResolvedMarkTTLDeterministic drives AlreadyResolved/MarkResolved's TTL
+// window via the injectable-now variants (alreadyResolvedAt/markResolvedAt)
+// instead of racing a real clock: a mark inside the ttl window must still
+// suppress, and the same mark queried past the window must not.
+func TestResolvedMarkTTLDeterministic(t *testing.T) {
+	c := NewCache(time.Minute)
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	podUID := types.UID("pod-1")
+
+	// Nothing marked yet: never suppresses.
+	if c.alreadyResolvedAt(base, podUID, "web", 1, base) {
+		t.Fatalf("AlreadyResolved reported true before any MarkResolved call")
+	}
+
+	c.markResolvedAt(base, podUID, "web", 1, base)
+
+	// Just inside the window: still suppresses.
+	if !c.alreadyResolvedAt(base.Add(59*time.Second), podUID, "web", 1, base) {
+		t.Fatalf("AlreadyResolved reported false inside the ttl window")
+	}
+
+	// Past the window: must no longer suppress.
+	if c.alreadyResolvedAt(base.Add(61*time.Second), podUID, "web", 1, base) {
+		t.Fatalf("AlreadyResolved reported true past the ttl window")
 	}
 }
 

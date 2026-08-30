@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -20,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/policymatch/policymatchtest"
 )
 
 func newTestServerWithDeployment(t *testing.T, ns, name string) *Server {
@@ -386,5 +388,370 @@ func TestPolicyWorkloadsIncludesInactiveScopedToPolicy(t *testing.T) {
 	decodeEnvelopeData(t, rec.Body, &resp)
 	if len(resp.Items) != 1 || resp.Items[0].Name != "etl" || resp.Items[0].Active {
 		t.Errorf("got %+v, want single inactive row etl", resp.Items)
+	}
+}
+
+// TestAllWorkloads_AnnotationLevels replays the shared contract table against
+// the dashboard's own wiring. The dashboard is a third independent reader of
+// the annotation — a workload the controller manages but the dashboard reports
+// as unmanaged is a bug users see before anyone sees the metric.
+func TestAllWorkloads_AnnotationLevels(t *testing.T) {
+	for _, tc := range policymatchtest.AnnotationCases() {
+		t.Run(tc.Name, func(t *testing.T) {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name: "team-a", Annotations: tc.Namespace,
+			}}
+			d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+				Namespace: "team-a", Name: "web", Annotations: tc.Workload,
+			}}
+			d.Spec.Template.Annotations = tc.Template
+			c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(ns, d).Build()
+			srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+			nsAnnotations, err := srv.namespaceAnnotations(context.Background())
+			if err != nil {
+				t.Fatalf("namespaceAnnotations: %v", err)
+			}
+			entries, err := srv.listWorkloadsOfKind(context.Background(), "Deployment", nsAnnotations)
+			if err != nil {
+				t.Fatalf("listWorkloadsOfKind: %v", err)
+			}
+			if len(entries) != 1 {
+				t.Fatalf("expected the deployment to be listed regardless of opt-in, got %d", len(entries))
+			}
+			if got := entries[0].ResolvedPolicy(); got != tc.WantPolicy {
+				t.Errorf("ResolvedPolicy() = %q, want %q (level %q)", got, tc.WantPolicy, tc.WantLevel)
+			}
+		})
+	}
+}
+
+// TestAllWorkloads_AnnotationLevels_Job replays the same contract table
+// against the "Job" branch of listWorkloadsOfKind, which builds its entries
+// with append rather than indexed assignment — a different construction
+// shape from every other kind, and the one most likely to silently drop a
+// newly added workloadEntry field in a future change.
+func TestAllWorkloads_AnnotationLevels_Job(t *testing.T) {
+	for _, tc := range policymatchtest.AnnotationCases() {
+		t.Run(tc.Name, func(t *testing.T) {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name: "team-a", Annotations: tc.Namespace,
+			}}
+			j := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+				Namespace: "team-a", Name: "oneshot", Annotations: tc.Workload,
+			}}
+			j.Spec.Template.Annotations = tc.Template
+			c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(ns, j).Build()
+			srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+			nsAnnotations, err := srv.namespaceAnnotations(context.Background())
+			if err != nil {
+				t.Fatalf("namespaceAnnotations: %v", err)
+			}
+			entries, err := srv.listWorkloadsOfKind(context.Background(), "Job", nsAnnotations)
+			if err != nil {
+				t.Fatalf("listWorkloadsOfKind: %v", err)
+			}
+			if len(entries) != 1 {
+				t.Fatalf("expected the job to be listed regardless of opt-in, got %d", len(entries))
+			}
+			if got := entries[0].ResolvedPolicy(); got != tc.WantPolicy {
+				t.Errorf("ResolvedPolicy() = %q, want %q (level %q)", got, tc.WantPolicy, tc.WantLevel)
+			}
+		})
+	}
+}
+
+// TestPolicyWorkloads_NamespaceLevelOptIn verifies the policy-scoped endpoint —
+// the one that filters on the resolved policy — includes a workload whose only
+// opt-in is on its namespace.
+func TestPolicyWorkloads_NamespaceLevelOptIn(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "team-a",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+	}}
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
+
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, ns, d).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rows := srv.listPolicyWorkloadRows(context.Background(), policy, "p")
+	if len(rows) != 1 || rows[0].Name != "web" {
+		t.Fatalf("expected the namespace-opted-in deployment in the policy's workload rows, got %+v", rows)
+	}
+}
+
+func ptrMode(m sustainv1alpha1.UpdateMode) *sustainv1alpha1.UpdateMode { return &m }
+
+// TestPolicyWorkloads_NamespaceOptIn_SelectorExcludesIt pins the fix for a
+// review finding: the dashboard used to filter policy-scoped workload rows
+// purely on e.ResolvedPolicy() == policyName, never consulting
+// policymatch.Matches. A Namespace naming a Policy whose own selector does
+// not reach it must not make every workload in that namespace show up as
+// Automated under that policy — ResolvePolicy answers the workload's opt-in,
+// Matches answers the Policy's consent, and callers must apply both (see
+// policymatch.ResolvePolicy's doc comment).
+func TestPolicyWorkloads_NamespaceOptIn_SelectorExcludesIt(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
+	// The policy's own selector never reaches team-a.
+	policy.Spec.Selector.Namespaces = []string{"other-namespace"}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "team-a",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+	}}
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
+
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, ns, d).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rows := srv.listPolicyWorkloadRows(context.Background(), policy, "p")
+	if len(rows) != 0 {
+		t.Fatalf("a namespace must not opt into a policy whose selector excludes it, got %+v", rows)
+	}
+}
+
+// TestPolicyWorkloads_LabelSelectorExcludesWorkload is the label-selector
+// half of the same gate: a workload whose own labels do not satisfy the
+// Policy's LabelSelector must not appear even though it resolves to that
+// policy's name.
+func TestPolicyWorkloads_LabelSelectorExcludesWorkload(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
+	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"team": "b"}}
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Namespace:   "team-a",
+		Name:        "web",
+		Labels:      map[string]string{"team": "a"},
+		Annotations: map[string]string{},
+	}}
+	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
+
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, d).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rows := srv.listPolicyWorkloadRows(context.Background(), policy, "p")
+	if len(rows) != 0 {
+		t.Fatalf("a workload whose labels don't satisfy the policy's LabelSelector must not appear, got %+v", rows)
+	}
+}
+
+// TestPolicyWorkloads_GroupedIdentity_SiblingLabelSatisfiesSelector pins the
+// fix for a review finding: groupEntriesByIdentity (handlers_workload_kinds.go)
+// collapses several real Deployments sharing a k8s.sustain.io/owner-name
+// override onto one entry, keeping the most recently created as the
+// representative — but the label-selector gate used to be evaluated against
+// that representative's labels ALONE, while the controller's filterTargets
+// evaluates every real object independently. So a Policy whose LabelSelector
+// missed only the representative, while still matching a grouped sibling the
+// controller manages, made the whole identity vanish from the dashboard —
+// stricter than the controller.
+//
+// Here "web-green" (newer, becomes the representative) does NOT satisfy the
+// selector; "web-blue" (older, folded into the same "web" identity) DOES.
+// The identity must still appear, because at least one real object behind it
+// matches.
+func TestPolicyWorkloads_GroupedIdentity_SiblingLabelSatisfiesSelector(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
+	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"team": "b"}}
+
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	older := deploymentWithOwnerName("team-a", "web-blue", "web", baseTime)
+	older.Labels = map[string]string{"team": "b"} // satisfies the selector
+	newer := deploymentWithOwnerName("team-a", "web-green", "web", baseTime.Add(time.Hour))
+	newer.Labels = map[string]string{"team": "a"} // does NOT satisfy the selector; becomes the representative
+
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, older, newer).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rows := srv.listPolicyWorkloadRows(context.Background(), policy, "p")
+	if len(rows) != 1 {
+		t.Fatalf("expected the grouped \"web\" identity to appear because a grouped sibling satisfies the "+
+			"policy's LabelSelector even though the representative doesn't, got %+v", rows)
+	}
+	if rows[0].Name != "web" {
+		t.Errorf("Name = %q, want web", rows[0].Name)
+	}
+}
+
+// deploymentWithOwnerNamePolicyAndLabels is like deploymentWithOwnerName but
+// lets the caller pick the pod-template policy annotation and the object's
+// own labels independently, so grouped-identity tests can put a DIFFERENT
+// policy opt-in on each real object sharing an owner-name override.
+func deploymentWithOwnerNamePolicyAndLabels(ns, name, ownerName, policyName string, labels map[string]string, created time.Time) *appsv1.Deployment {
+	d := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: labels, CreationTimestamp: metav1.NewTime(created)},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: policyName},
+				},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: name}}},
+			},
+		},
+	}
+	if ownerName != "" {
+		d.Spec.Template.Annotations[sustainv1alpha1.OwnerNameAnnotation] = ownerName
+	}
+	return d
+}
+
+// TestPolicyWorkloads_GroupedIdentity_MixedOptInAndLabelDoesNotManage pins
+// the fix for the review finding this branch exists to fix: the dashboard's
+// gate used to be split across two places that read DIFFERENT real objects
+// behind a grouped identity — the opt-in half read only the representative's
+// annotations, the label half accepted ANY member's labels. That let a
+// Policy manage an identity via two different objects — one supplying the
+// opt-in, another supplying the label match — even when no single real
+// object satisfied both halves, which the controller's filterTargets (which
+// evaluates every real object independently) would never do.
+//
+// "checkout-blue" (newer, becomes the representative) opts into "p" but its
+// own labels ("track": "blue") don't satisfy p's selector ("track": "green").
+// "checkout-green" (older, folds into the same "checkout" identity) DOES
+// have labels that satisfy p's selector, but it opts into "q", not "p". No
+// single real object opts into p AND satisfies p's selector, so p manages
+// nothing here — the identity must not appear in p's workload list.
+func TestPolicyWorkloads_GroupedIdentity_MixedOptInAndLabelDoesNotManage(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
+	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"track": "green"}}
+
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	older := deploymentWithOwnerNamePolicyAndLabels("team-a", "checkout-green", "checkout", "q",
+		map[string]string{"track": "green"}, baseTime)
+	newer := deploymentWithOwnerNamePolicyAndLabels("team-a", "checkout-blue", "checkout", "p",
+		map[string]string{"track": "blue"}, baseTime.Add(time.Hour))
+
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, older, newer).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rows := srv.listPolicyWorkloadRows(context.Background(), policy, "p")
+	if len(rows) != 0 {
+		t.Fatalf("p manages neither real object on its own (blue opts in but fails the selector, "+
+			"green satisfies the selector but opts into q), so the \"checkout\" identity must not "+
+			"appear in p's workload list, got %+v", rows)
+	}
+}
+
+// TestPolicyWorkloads_GroupedIdentity_SiblingOptsInAndMatches pins the mirror
+// case: the representative opts into a DIFFERENT policy ("q"), but a grouped
+// sibling opts into "p" AND satisfies p's own selector on its own labels.
+// The controller manages that sibling under p (filterTargets evaluates every
+// real object independently), so the dashboard must report the identity as
+// managed under p too — both in the policy-scoped list and in the
+// cluster-wide /api/workloads view, which must report the same verdict for
+// the same identity (see collectAllWorkloads' doc on why the two must never
+// disagree).
+func TestPolicyWorkloads_GroupedIdentity_SiblingOptsInAndMatches(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
+	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"track": "green"}}
+
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	older := deploymentWithOwnerNamePolicyAndLabels("team-a", "checkout-green", "checkout", "p",
+		map[string]string{"track": "green"}, baseTime)
+	newer := deploymentWithOwnerNamePolicyAndLabels("team-a", "checkout-blue", "checkout", "q",
+		map[string]string{"track": "blue"}, baseTime.Add(time.Hour))
+
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, older, newer).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rows := srv.listPolicyWorkloadRows(context.Background(), policy, "p")
+	if len(rows) != 1 || rows[0].Name != "checkout" {
+		t.Fatalf("green opts into p and satisfies p's selector on its own labels, so the \"checkout\" "+
+			"identity must appear in p's workload list even though the representative (blue) opted "+
+			"into a different policy, got %+v", rows)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads", nil))
+	var resp struct {
+		Items []struct {
+			Name       string `json:"name"`
+			Automated  bool   `json:"automated"`
+			PolicyName string `json:"policyName"`
+		} `json:"items"`
+	}
+	decodeEnvelopeData(t, rec.Body, &resp)
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected exactly one grouped \"checkout\" identity from /api/workloads, got %+v", resp.Items)
+	}
+	if !resp.Items[0].Automated || resp.Items[0].PolicyName != "p" {
+		t.Errorf("expected Automated=true/PolicyName=%q from collectAllWorkloads for the grouped "+
+			"identity managed via its sibling, got %+v", "p", resp.Items[0])
+	}
+}
+
+// TestAllWorkloads_NamespaceOptIn_SelectorExcludesIt is the /api/workloads
+// (collectAllWorkloads) counterpart: Automated must reflect the Policy's
+// consent, not merely the workload's opt-in.
+func TestAllWorkloads_NamespaceOptIn_SelectorExcludesIt(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	policy.Spec.Selector.Namespaces = []string{"other-namespace"}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "team-a",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+	}}
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, ns, d).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	rec := httptest.NewRecorder()
+	srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads", nil))
+	var resp struct {
+		Items []struct {
+			Name       string `json:"name"`
+			Automated  bool   `json:"automated"`
+			PolicyName string `json:"policyName"`
+		} `json:"items"`
+	}
+	decodeEnvelopeData(t, rec.Body, &resp)
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected the deployment to still be listed (unmanaged), got %+v", resp.Items)
+	}
+	if resp.Items[0].Automated || resp.Items[0].PolicyName != "" {
+		t.Errorf("expected Automated=false/PolicyName=\"\" for a workload whose namespace opt-in the policy's selector excludes, got %+v", resp.Items[0])
+	}
+}
+
+// TestNamespaceAnnotations_FetchedOnceAcrossMultiKindRequest guards the
+// fan-out regression a Task 5 review caught: listWorkloadsOfKind originally
+// fetched its own namespace-annotation map, so a request that loops over
+// every workload kind — collectAllWorkloads iterates supportedWorkloadKinds
+// unconditionally, up to seven kinds — issued one cluster-wide Namespace List
+// per kind instead of one per request, against the dashboard's uncached
+// client. Namespace annotations must be fetched once by the looping caller
+// and threaded through every listWorkloadsOfKind call.
+func TestNamespaceAnnotations_FetchedOnceAcrossMultiKindRequest(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "team-a",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+	}}
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "oneshot"}}
+
+	var namespaceListCalls int
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(ns, d, job).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*corev1.NamespaceList); ok {
+					namespaceListCalls++
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	workloads := srv.collectAllWorkloads(context.Background())
+	if len(workloads) == 0 {
+		t.Fatalf("expected at least one workload from the multi-kind collection, got none")
+	}
+	if namespaceListCalls != 1 {
+		t.Errorf("Namespace List calls = %d, want exactly 1 for a request spanning %d kinds", namespaceListCalls, len(supportedWorkloadKinds))
 	}
 }

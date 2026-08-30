@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,12 +11,16 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/policymatch/policymatchtest"
 )
 
 func TestFilterTargets_PolicyAndNamespace(t *testing.T) {
@@ -102,7 +107,7 @@ func TestListDeploymentTargets_NamespaceScoped(t *testing.T) {
 	d3 := annotatedDeployment("ns-c", "app3", "p")
 	r := makeReconciler(t, d1, d2, d3)
 
-	got, err := r.listDeploymentTargets(context.Background(), []string{"ns-a", "ns-b"})
+	got, err := r.listDeploymentTargets(context.Background(), []string{"ns-a", "ns-b"}, newNSAnnotations(r.Client))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -126,7 +131,7 @@ func TestListDeploymentTargets_AllNamespaces(t *testing.T) {
 		annotatedDeployment("a", "x", "p"),
 		annotatedDeployment("b", "y", "p"),
 	)
-	got, err := r.listDeploymentTargets(context.Background(), nil)
+	got, err := r.listDeploymentTargets(context.Background(), nil, newNSAnnotations(r.Client))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -150,7 +155,7 @@ func TestListStatefulSetTargets(t *testing.T) {
 		},
 	}
 	r := makeReconciler(t, ss)
-	got, err := r.listStatefulSetTargets(context.Background(), nil)
+	got, err := r.listStatefulSetTargets(context.Background(), nil, newNSAnnotations(r.Client))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -162,15 +167,18 @@ func TestListStatefulSetTargets(t *testing.T) {
 func TestListCronJobTargets(t *testing.T) {
 	cj := annotatedCronJob("default", "nightly", "p")
 	r := makeReconciler(t, cj)
-	got, err := r.listCronJobTargets(context.Background(), nil)
+	got, err := r.listCronJobTargets(context.Background(), nil, newNSAnnotations(r.Client))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(got) != 1 || got[0].Kind != "CronJob" || got[0].Name != "nightly" {
 		t.Errorf("unexpected: %+v", got)
 	}
-	if got[0].PolicyName != "p" {
-		t.Errorf("policy annotation not propagated from JobTemplate: %q", got[0].PolicyName)
+	// listCronJobTargets no longer resolves PolicyName itself — collectTargets
+	// does, from the three annotation levels — but it must still carry the
+	// JobTemplate's pod-template annotations through for that resolution.
+	if got[0].TemplateAnnotations[sustainv1alpha1.PolicyAnnotation] != "p" {
+		t.Errorf("policy annotation not propagated from JobTemplate: %q", got[0].TemplateAnnotations[sustainv1alpha1.PolicyAnnotation])
 	}
 	if got[0].Selector != nil {
 		t.Errorf("CronJob target should have nil Selector (no pod recycling): %+v", got[0].Selector)
@@ -192,7 +200,7 @@ func TestListDaemonSetTargets(t *testing.T) {
 		},
 	}
 	r := makeReconciler(t, ds)
-	got, err := r.listDaemonSetTargets(context.Background(), nil)
+	got, err := r.listDaemonSetTargets(context.Background(), nil, newNSAnnotations(r.Client))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -209,7 +217,7 @@ func TestListRolloutTargets_NamespaceScoped(t *testing.T) {
 	r2 := annotatedRollout("ns-b", "ro2", "p")
 	r := makeReconciler(t, r1, r2)
 
-	got, err := r.listRolloutTargets(context.Background(), []string{"ns-a"})
+	got, err := r.listRolloutTargets(context.Background(), []string{"ns-a"}, newNSAnnotations(r.Client))
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -372,7 +380,7 @@ func TestListBarePodTargets_GroupsByNamespaceAndOwnerName(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(podA1, podA2, podB).Build()
 	r := &PolicyReconciler{Client: fc}
 
-	targets, err := r.listBarePodTargets(context.Background(), nil)
+	targets, err := r.listBarePodTargets(context.Background(), nil, newNSAnnotations(r.Client))
 	if err != nil {
 		t.Fatalf("listBarePodTargets: %v", err)
 	}
@@ -409,7 +417,7 @@ func TestListBarePodTargets_NoOwnerNameAnnotation_NotDiscovered(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
 	r := &PolicyReconciler{Client: fc}
 
-	targets, err := r.listBarePodTargets(context.Background(), nil)
+	targets, err := r.listBarePodTargets(context.Background(), nil, newNSAnnotations(r.Client))
 	if err != nil {
 		t.Fatalf("listBarePodTargets: %v", err)
 	}
@@ -438,7 +446,7 @@ func TestListBarePodTargets_OwnedPod_NotDiscovered(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
 	r := &PolicyReconciler{Client: fc}
 
-	targets, err := r.listBarePodTargets(context.Background(), nil)
+	targets, err := r.listBarePodTargets(context.Background(), nil, newNSAnnotations(r.Client))
 	if err != nil {
 		t.Fatalf("listBarePodTargets: %v", err)
 	}
@@ -515,3 +523,182 @@ func TestCollectTargets_BarePodPolicyMismatchLoggedOnlyByOwningPolicy(t *testing
 			uninvolvedPolicy.Name, out)
 	}
 }
+
+// TestCollectTargets_AnnotationLevels replays the shared contract table
+// (policymatchtest.AnnotationCases) against the controller's own wiring: a
+// Deployment whose pod template, own metadata and Namespace carry the case's
+// annotations must be collected under policy "p" exactly when the shared
+// resolver says so.
+func TestCollectTargets_AnnotationLevels(t *testing.T) {
+	for _, tc := range policymatchtest.AnnotationCases() {
+		t.Run(tc.Name, func(t *testing.T) {
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name: "team-a", Annotations: tc.Namespace,
+			}}
+			d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+				Namespace: "team-a", Name: "web", Annotations: tc.Workload,
+			}}
+			d.Spec.Template.Annotations = tc.Template
+			d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
+
+			r := makeReconciler(t, ns, d)
+			policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+			policy.Spec.RightSizing.Update.Types.Deployment = ptrUpdateMode(sustainv1alpha1.UpdateModeOngoing)
+
+			got, err := r.collectTargets(context.Background(), policy)
+			if err != nil {
+				t.Fatalf("collectTargets: %v", err)
+			}
+			wantCount := 0
+			if tc.WantPolicy == "p" {
+				wantCount = 1
+			}
+			if len(got) != wantCount {
+				t.Fatalf("expected %d targets for case %q (resolver says policy=%q level=%q), got %d",
+					wantCount, tc.Name, tc.WantPolicy, tc.WantLevel, len(got))
+			}
+		})
+	}
+}
+
+// TestCollectTargets_NamespaceOptInStillHonoursSelector pins the delegated
+// opt-in rule: a Namespace naming a Policy whose selector does not reach it
+// gets nothing. The Namespace chooses among the policies offered to it; it
+// cannot grant itself one.
+//
+// Selector.Namespaces is deliberately left EMPTY (cluster-wide) here rather
+// than scoped away from team-a. An earlier version of this test set
+// Selector.Namespaces = []string{"other-namespace"}, which made
+// listKindTargets scope its List away from team-a before the Deployment was
+// ever listed — the assertion passed with filterTargets never evaluating
+// anything, on the one invariant here with a security flavour (a namespace
+// owner must not grant itself a policy). The rejection is routed through
+// filterTargets instead by using a LabelSelector the Deployment's own labels
+// do not satisfy, so the Deployment IS listed and Matches is what excludes it
+// (verified by temporarily deleting the policymatch.Matches call from
+// filterTargets and confirming this test then fails — see the fix report for
+// that evidence).
+func TestCollectTargets_NamespaceOptInStillHonoursSelector(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "team-a",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+	}}
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "team-a",
+		Name:      "web",
+		Labels:    map[string]string{"team": "a"},
+	}}
+	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
+
+	r := makeReconciler(t, ns, d)
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	// No Selector.Namespaces: cluster-wide, so team-a IS listed. The selector
+	// excludes the Deployment on labels instead, routing the rejection
+	// through filterTargets' policymatch.Matches call.
+	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{
+		MatchLabels: map[string]string{"team": "b"},
+	}
+	policy.Spec.RightSizing.Update.Types.Deployment = ptrUpdateMode(sustainv1alpha1.UpdateModeOngoing)
+
+	got, err := r.collectTargets(context.Background(), policy)
+	if err != nil {
+		t.Fatalf("collectTargets: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("a namespace must not opt into a policy whose selector excludes it, got %+v", got)
+	}
+}
+
+// TestCollectTargets_PodTemplateOptIn_NoNamespaceReads pins the fix for a
+// review finding: collectTargets used to fetch the Namespace unconditionally
+// for every non-Pod target, even when the pod template annotation alone
+// already decides the outcome. That coupled every existing pod-template-only
+// user to a Namespace read it never needed — a read failure there would now
+// abort a reconcile for a workload untouched by this branch's Namespace
+// feature. The walk must be lazy: zero Namespace reads when the pod template
+// decides.
+func TestCollectTargets_PodTemplateOptIn_NoNamespaceReads(t *testing.T) {
+	d := annotatedDeployment("team-a", "web", "p")
+
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme apps: %v", err)
+	}
+	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme sustain: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme core: %v", err)
+	}
+
+	var nsGets int
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(d).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1.Namespace); ok {
+					nsGets++
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	r := &PolicyReconciler{Client: c, Scheme: scheme}
+
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	policy.Spec.RightSizing.Update.Types.Deployment = ptrUpdateMode(sustainv1alpha1.UpdateModeOngoing)
+
+	got, err := r.collectTargets(context.Background(), policy)
+	if err != nil {
+		t.Fatalf("collectTargets: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "web" {
+		t.Fatalf("expected the pod-template-annotated deployment, got %+v", got)
+	}
+	if nsGets != 0 {
+		t.Errorf("expected 0 Namespace Gets for a pod-template-only opt-in, got %d — "+
+			"the walk must not fetch a level it does not need", nsGets)
+	}
+}
+
+// TestCollectTargets_NamespaceReadError_Propagates drives a non-NotFound
+// Namespace Get failure through collectTargets end to end (namespace_annotations_test.go
+// covers the same failure at the nsAnnotations.get level in isolation). The
+// Deployment carries no pod-template or workload-level annotation, so the
+// lazy walk (see collectTargets) must fall through to the Namespace — that is
+// what makes the failing Get reachable at all.
+func TestCollectTargets_NamespaceReadError_Propagates(t *testing.T) {
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
+	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
+
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme apps: %v", err)
+	}
+	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme sustain: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme core: %v", err)
+	}
+
+	boom := apierrors.NewInternalError(errors.New("boom"))
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(d).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1.Namespace); ok {
+					return boom
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	r := &PolicyReconciler{Client: c, Scheme: scheme}
+
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	policy.Spec.RightSizing.Update.Types.Deployment = ptrUpdateMode(sustainv1alpha1.UpdateModeOngoing)
+
+	_, err := r.collectTargets(context.Background(), policy)
+	if err == nil {
+		t.Fatal("expected a non-NotFound namespace read failure to propagate out of collectTargets")
+	}
+}
+
+func ptrUpdateMode(m sustainv1alpha1.UpdateMode) *sustainv1alpha1.UpdateMode { return &m }

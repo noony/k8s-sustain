@@ -8,6 +8,8 @@ package oomwatch
 import (
 	"context"
 	"time"
+
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // DefaultRecentMaxAge is the freshness window the recommender uses when
@@ -27,11 +29,12 @@ type Key struct {
 type OOMRecord struct {
 	// Container is the container name within the pod that was OOM-killed.
 	Container string
-	// PolicyName is the value of the k8s.sustain.io/policy annotation on the
-	// source pod when the event was observed. Empty if the annotation was
-	// missing (in which case the pod would not have been admitted to the
-	// watcher in the first place; we keep the field for symmetry with the
-	// EventHandler contract).
+	// PolicyName is the name of the Policy the source pod's workload opted
+	// into, resolved across all three annotation levels — pod template,
+	// owning workload, Namespace (see policymatch.ResolvePolicy) — not
+	// necessarily the pod's own annotation. Never empty on a recorded event:
+	// Reconcile returns before recording when resolution yields no policy at
+	// any level.
 	PolicyName string
 	// ObservedAt is the wall-clock time at which the watcher first saw the
 	// kill. Distinct from TerminatedAt because the watcher may lag a few
@@ -72,6 +75,37 @@ type Sink interface {
 	// RestartCount + TerminatedAt). Returns false for duplicates so the
 	// watcher can skip notifying downstream subscribers.
 	Record(key Key, record OOMRecord) bool
+
+	// AlreadyResolved reports whether this exact container termination —
+	// identified by pod UID + container name + restart count + terminated-at,
+	// all readable straight off the Pod object with zero apiserver calls —
+	// has already been fully resolved by an earlier Reconcile pass, whether
+	// or not that pass found a managing Policy.
+	//
+	// This exists so Reconcile can skip the owner/Namespace walk on a repeat
+	// status event for a kill it has already dealt with: Pod status updates
+	// fire on every unrelated field change (readiness, IP, ...), but
+	// LastTerminationState only changes on an actual new container restart,
+	// so RestartCount+TerminatedAt staying put means nothing new happened.
+	// It cannot reuse Record's own Key-based dedup because that Key names
+	// the resolved workload — the very thing the owner walk this check
+	// exists to skip would have to produce first.
+	//
+	// Never marks anything; MarkResolved does that. Keeping the check and
+	// the mark as two calls (rather than one Record-style check-and-mark)
+	// matters for correctness: Reconcile only calls MarkResolved after the
+	// owner/Namespace reads have actually succeeded, so a transient read
+	// failure — which returns an error and lets controller-runtime retry
+	// with backoff — gets retried for real instead of being permanently
+	// suppressed by a mark made before resolution was known to succeed.
+	AlreadyResolved(podUID types.UID, container string, restartCount int32, terminatedAt time.Time) bool
+
+	// MarkResolved records that this exact container termination (see
+	// AlreadyResolved) has now been resolved. Called once per fresh
+	// termination, only after the owner and Namespace reads that resolution
+	// needed have returned without error — see AlreadyResolved's doc for why
+	// that ordering is load-bearing.
+	MarkResolved(podUID types.UID, container string, restartCount int32, terminatedAt time.Time)
 }
 
 // EventHandler is invoked by the watcher whenever a new (deduped) OOM record

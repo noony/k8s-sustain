@@ -65,7 +65,7 @@ func barePodTarget(ns, ownerName string, pods ...*corev1.Pod) *workloadTarget {
 		IdentityName: ownerName,
 		PolicyName:   "p",
 	}
-	for _, g := range workload.GroupBarePods(items) {
+	for _, g := range workload.GroupBarePods(items, nil) {
 		if g.Namespace == ns && g.Name == ownerName {
 			t.Containers = g.Containers
 			t.InitContainers = g.InitContainers

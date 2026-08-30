@@ -4,7 +4,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/policymatch"
 )
 
 // BarePodGroup is one (namespace, owner-name) identity formed by grouping
@@ -39,9 +39,11 @@ type BarePodGroup struct {
 
 // GroupBarePods groups pods with no controller owner and a valid owner-name
 // annotation by (namespace, owner-name), per the spec's namespace-scoping
-// rule. Pods with a real controller owner, or without a valid owner-name
-// annotation, are excluded — they're either handled by another kind's
-// listing, or are anonymous bare pods that opt into nothing.
+// rule. A pod opts in through its own annotations or through its Namespace's
+// (see policymatch.ResolvePolicy and the nsAnnotations parameter). Pods with a
+// real controller owner, or without a valid owner-name annotation, are
+// excluded — they're either handled by another kind's listing, or are
+// anonymous bare pods that opt into nothing.
 //
 // The most recently created pod in each group supplies the representative
 // containers: an older pod's spec may be stale (e.g. after a DAG code
@@ -68,7 +70,12 @@ type BarePodGroup struct {
 // resized in place under another policy's recommendation — and for memory an
 // in-place resize can restart the container. Every other kind checks ownerRef
 // UID and selector before the patcher touches a pod; this is that check.
-func GroupBarePods(pods []corev1.Pod) []BarePodGroup {
+//
+// nsAnnotations maps namespace name to that Namespace's annotations, supplying
+// the least-specific opt-in level (see policymatch.ResolvePolicy). A nil map,
+// or a namespace absent from it, simply means no namespace-level opt-in —
+// callers that have not fetched namespaces may pass nil.
+func GroupBarePods(pods []corev1.Pod, nsAnnotations map[string]map[string]string) []BarePodGroup {
 	groups := map[string]*BarePodGroup{} // key: namespace + "/" + owner-name
 	var order []string
 	for i := range pods {
@@ -76,7 +83,10 @@ func GroupBarePods(pods []corev1.Pod) []BarePodGroup {
 		if metav1.GetControllerOf(p) != nil {
 			continue // has a real controller owner — handled elsewhere
 		}
-		policyName := p.Annotations[sustainv1alpha1.PolicyAnnotation]
+		// A bare Pod has no pod template, so its own annotations ARE the most
+		// specific level; the workload level is nil because there is no
+		// separate object to carry it.
+		policyName, _ := policymatch.ResolvePolicy(p.Annotations, nil, nsAnnotations[p.Namespace])
 		if policyName == "" {
 			continue
 		}

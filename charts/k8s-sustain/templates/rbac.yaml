@@ -54,10 +54,13 @@ rules:
   - apiGroups: [batch]
     resources: [jobs, cronjobs]
     verbs: [get, list, watch]
-  # Namespaces and Pods (in-place updates)
+  # Namespaces and Pods (in-place updates). get is used to resolve
+  # namespace-level policy opt-in (k8s.sustain.io/policy on the Namespace).
+  # Served from the informer cache in both the controller and the webhook,
+  # which share this ClusterRole.
   - apiGroups: [""]
     resources: [namespaces]
-    verbs: [list, watch]
+    verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list, watch, patch]

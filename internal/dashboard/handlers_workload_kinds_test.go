@@ -9,7 +9,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
@@ -53,7 +55,7 @@ func TestListWorkloadsOfKind_Pod_GroupsByOwnerName(t *testing.T) {
 	).Build()
 	srv := &Server{K8sClient: c, Logger: testLogger(t)}
 
-	entries, err := srv.listWorkloadsOfKind(context.Background(), "Pod")
+	entries, err := srv.listWorkloadsOfKind(context.Background(), "Pod", nil)
 	if err != nil {
 		t.Fatalf("listWorkloadsOfKind: %v", err)
 	}
@@ -64,8 +66,8 @@ func TestListWorkloadsOfKind_Pod_GroupsByOwnerName(t *testing.T) {
 	if e.Namespace != "airflow" || e.Name != "etl-daily" {
 		t.Errorf("entry = %s/%s, want airflow/etl-daily", e.Namespace, e.Name)
 	}
-	if e.PolicyAnnotation() != "p" {
-		t.Errorf("PolicyAnnotation() = %q, want p", e.PolicyAnnotation())
+	if e.ResolvedPolicy() != "p" {
+		t.Errorf("ResolvedPolicy() = %q, want p", e.ResolvedPolicy())
 	}
 	if len(e.Containers()) != 1 || e.Containers()[0].Name != "app" {
 		t.Errorf("Containers() = %+v, want one container named app", e.Containers())
@@ -76,7 +78,7 @@ func TestListWorkloadsOfKind_Pod_NoMatchingPods_ReturnsEmpty(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
 	srv := &Server{K8sClient: c, Logger: testLogger(t)}
 
-	entries, err := srv.listWorkloadsOfKind(context.Background(), "Pod")
+	entries, err := srv.listWorkloadsOfKind(context.Background(), "Pod", nil)
 	if err != nil {
 		t.Fatalf("listWorkloadsOfKind: %v", err)
 	}
@@ -123,7 +125,7 @@ func TestListWorkloadsOfKind_Deployment_NoOverride_NameStaysReal(t *testing.T) {
 	).Build()
 	srv := &Server{K8sClient: c, Logger: testLogger(t)}
 
-	entries, err := srv.listWorkloadsOfKind(context.Background(), "Deployment")
+	entries, err := srv.listWorkloadsOfKind(context.Background(), "Deployment", nil)
 	if err != nil {
 		t.Fatalf("listWorkloadsOfKind: %v", err)
 	}
@@ -142,7 +144,7 @@ func TestListWorkloadsOfKind_Deployment_Rename_AddressedByOverride(t *testing.T)
 	).Build()
 	srv := &Server{K8sClient: c, Logger: testLogger(t)}
 
-	entries, err := srv.listWorkloadsOfKind(context.Background(), "Deployment")
+	entries, err := srv.listWorkloadsOfKind(context.Background(), "Deployment", nil)
 	if err != nil {
 		t.Fatalf("listWorkloadsOfKind: %v", err)
 	}
@@ -182,7 +184,7 @@ func TestListWorkloadsOfKind_Deployment_GroupingCollapsesToOneEntry(t *testing.T
 	).Build()
 	srv := &Server{K8sClient: c, Logger: testLogger(t)}
 
-	entries, err := srv.listWorkloadsOfKind(context.Background(), "Deployment")
+	entries, err := srv.listWorkloadsOfKind(context.Background(), "Deployment", nil)
 	if err != nil {
 		t.Fatalf("listWorkloadsOfKind: %v", err)
 	}
@@ -214,7 +216,7 @@ func TestListWorkloadsOfKind_Deployment_SameNameDifferentNamespaces_BothListed(t
 	).Build()
 	srv := &Server{K8sClient: c, Logger: testLogger(t)}
 
-	entries, err := srv.listWorkloadsOfKind(context.Background(), "Deployment")
+	entries, err := srv.listWorkloadsOfKind(context.Background(), "Deployment", nil)
 	if err != nil {
 		t.Fatalf("listWorkloadsOfKind: %v", err)
 	}
@@ -241,8 +243,8 @@ func TestGetWorkloadEntry_FallsBackToRetainedWLR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getWorkloadEntry: %v", err)
 	}
-	if e.PolicyAnnotation() != "p" {
-		t.Errorf("PolicyAnnotation = %q, want p", e.PolicyAnnotation())
+	if e.ResolvedPolicy() != "p" {
+		t.Errorf("ResolvedPolicy = %q, want p", e.ResolvedPolicy())
 	}
 	cs := e.Containers()
 	if len(cs) != 1 || cs[0].Name != "main" {
@@ -261,5 +263,34 @@ func TestGetWorkloadEntry_StillNotFoundWithoutWLR(t *testing.T) {
 	_, err := srv.getWorkloadEntry(context.Background(), "airflow", "Pod", "missing")
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("err = %v, want NotFound", err)
+	}
+}
+
+// TestGetWorkloadEntry_UnsupportedKind_NoNamespaceList pins the fix for a
+// review finding: kind is an unvalidated route param (GET
+// /api/workloads/{namespace}/{kind}/{name}), so an unsupported value must be
+// rejected as NotFound before the Namespace List that namespaceAnnotations
+// issues — not after, once listWorkloadsOfKind's kind switch finally gives
+// up. Without the guard, a bogus kind cost a full cluster-wide Namespace List
+// against the dashboard's uncached client on every request.
+func TestGetWorkloadEntry_UnsupportedKind_NoNamespaceList(t *testing.T) {
+	var namespaceListCalls int
+	c := fake.NewClientBuilder().WithScheme(Scheme()).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*corev1.NamespaceList); ok {
+					namespaceListCalls++
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t)}
+
+	_, err := srv.getWorkloadEntry(context.Background(), "airflow", "BogusKind", "x")
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("err = %v, want NotFound for an unsupported kind", err)
+	}
+	if namespaceListCalls != 0 {
+		t.Errorf("Namespace List calls = %d, want 0 for an unsupported kind", namespaceListCalls)
 	}
 }

@@ -10,8 +10,10 @@
 //
 // Both writers here run against a CACHE-BACKED client
 // (internal/k8s.NewCached caches WorkloadRecommendation deliberately, and its
-// DisableFor list covers only ReplicaSet and Job; the controller manager's
-// client caches every watched kind). A Get issued immediately after a
+// DisableFor list covers the owner-chain kinds instead — ReplicaSet, Job,
+// Deployment, StatefulSet, DaemonSet, CronJob and Rollout, see
+// k8s.OwnerChainDisableFor; the controller manager's client caches every
+// watched kind). A Get issued immediately after a
 // successful Create races the informer's watch event and reliably returns
 // NotFound — this was observed in production, on every genuinely new identity,
 // as "re-reading recommendation stub …: WorkloadRecommendation … not found".

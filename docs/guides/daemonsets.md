@@ -8,7 +8,7 @@ Right-size a DaemonSet in `Ongoing` mode while respecting the DaemonSet's update
 
 ## Prerequisites
 
-- A DaemonSet with a `k8s.sustain.io/policy` annotation on its pod template.
+- A DaemonSet with a `k8s.sustain.io/policy` annotation (pod template, the DaemonSet's own `metadata.annotations`, or its Namespace — see the [Annotation reference](../reference/annotation.md)).
 - A k8s-sustain `Policy` matching the workload.
 - A Prometheus instance reachable from the controller.
 

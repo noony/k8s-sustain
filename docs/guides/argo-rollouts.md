@@ -102,7 +102,7 @@ When the mutating admission webhook receives a Pod CREATE, it walks the `ownerRe
 2. The ReplicaSet's owner can be either a `Deployment` (apps/v1) **or** a `Rollout` (argoproj.io/v1alpha1). The walker matches on `Kind` and returns the top-level workload.
 3. The webhook then looks up the Policy via the pod's `k8s.sustain.io/policy` annotation, decides whether the resolved kind (`Rollout`) is configured, and patches the pod's container resources before admission.
 
-This walker is what makes `OnCreate` mode work for Rollouts without any extra configuration — you only need the Policy to enable `argoRollout: OnCreate` (or `Ongoing`) and to annotate the Rollout's pod template with the policy name.
+This walker is what makes `OnCreate` mode work for Rollouts without any extra configuration — you only need the Policy to enable `argoRollout: OnCreate` (or `Ongoing`) and to annotate the Rollout with the policy name (pod template, the Rollout's own `metadata.annotations`, or its Namespace — see the [Annotation reference](../reference/annotation.md)).
 
 ## Notes
 

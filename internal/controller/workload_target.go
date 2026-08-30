@@ -27,7 +27,14 @@ type workloadTarget struct {
 	// Labels is the workload object's metadata.labels. Used by filterTargets
 	// to evaluate Policy.Spec.Selector.LabelSelector.
 	Labels map[string]string
-	Object client.Object
+	// TemplateAnnotations and ObjectAnnotations are the two workload-owned
+	// annotation levels, carried rather than resolved at construction because
+	// the third level (the Namespace) needs an apiserver read that a pure
+	// conversion function has no business doing. collectTargets resolves all
+	// three into PolicyName; see policymatch.ResolvePolicy.
+	TemplateAnnotations map[string]string
+	ObjectAnnotations   map[string]string
+	Object              client.Object
 	// IdentityKind and IdentityName are the kind/name used for Prometheus
 	// queries and WorkloadRecommendation naming. Equal to Kind/Name unless
 	// the pod template carries a valid k8s.sustain.io/owner-name annotation
@@ -87,19 +94,23 @@ func (w *workloadTarget) recommendableContainers(excludeInit bool) ([]corev1.Con
 // not handle Argo Rollouts).
 func newTargetFromTemplate(obj client.Object, kind string, tmpl *corev1.PodTemplateSpec, selector *metav1.LabelSelector) workloadTarget {
 	t := workloadTarget{
-		Kind:         kind,
-		Name:         obj.GetName(),
-		Namespace:    obj.GetNamespace(),
-		Selector:     selector,
-		Labels:       obj.GetLabels(),
-		Object:       obj,
-		IdentityKind: kind,
-		IdentityName: obj.GetName(),
+		Kind:              kind,
+		Name:              obj.GetName(),
+		Namespace:         obj.GetNamespace(),
+		Selector:          selector,
+		Labels:            obj.GetLabels(),
+		ObjectAnnotations: obj.GetAnnotations(),
+		Object:            obj,
+		IdentityKind:      kind,
+		IdentityName:      obj.GetName(),
 	}
 	if tmpl != nil {
-		t.PolicyName = tmpl.Annotations[sustainv1alpha1.PolicyAnnotation]
+		t.TemplateAnnotations = tmpl.Annotations
 		t.Containers = tmpl.Spec.Containers
 		t.InitContainers = tmpl.Spec.InitContainers
+		// The identity override stays pod-template-only: it is mirrored onto a
+		// pod LABEL by the webhook for kube-state-metrics, so it has to live
+		// where pods inherit it. Opt-in has no such constraint.
 		t.IdentityKind, t.IdentityName = workload.ApplyOwnerNameOverride(kind, obj.GetName(), tmpl.Annotations)
 	}
 	return t

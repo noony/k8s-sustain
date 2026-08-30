@@ -116,7 +116,7 @@ spec:
               image: busybox:1.36
 ```
 
-1. The annotation must be in `spec.jobTemplate.spec.template.metadata.annotations`.
+1. For a CronJob the pod-template level is two levels deep — `spec.jobTemplate.spec.template.metadata.annotations` — but it is also honoured on the CronJob's own `metadata.annotations` or its Namespace; see the [Annotation reference](../reference/annotation.md).
 
 ### Ongoing mode for CronJobs
 

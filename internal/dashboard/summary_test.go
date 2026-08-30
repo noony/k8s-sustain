@@ -11,8 +11,12 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/testr"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
@@ -414,5 +418,49 @@ func TestHandleSummaryServesFreshPartialWhenLastGoodTooOld(t *testing.T) {
 	decodeEnvelopeData(t, rec2.Body, &got)
 	if got.KPI.CPUSavedCores != 99.9 {
 		t.Errorf("expected fresh-but-partial 99.9, got %v", got.KPI.CPUSavedCores)
+	}
+}
+
+// TestCollectPolicyWorkloads_Basic pins collectPolicyWorkloads' own contract
+// directly rather than only through its one caller, handlePolicyBatchSimulate
+// (batch_simulate.go) — it was otherwise untested in isolation. It does NOT
+// back the summary page's per-policy rollups; those come from Prometheus via
+// fetchPolicyRollups (handlers_policies.go).
+func TestCollectPolicyWorkloads_Basic(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
+	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
+	other := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "unmanaged"}}
+
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, d, other).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t)}
+
+	got := srv.collectPolicyWorkloads(context.Background(), "p", policy)
+	if len(got) != 1 || got[0].Name != "web" || got[0].Kind != "Deployment" || got[0].PolicyName != "p" {
+		t.Fatalf("collectPolicyWorkloads = %+v, want exactly the pod-template-annotated deployment", got)
+	}
+}
+
+// TestCollectPolicyWorkloads_SelectorExcludesNamespaceOptIn is the summary
+// rollup's counterpart to TestPolicyWorkloads_NamespaceOptIn_SelectorExcludesIt:
+// a Namespace naming a Policy whose own selector does not reach it must not
+// inflate that policy's summary counts.
+func TestCollectPolicyWorkloads_SelectorExcludesNamespaceOptIn(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
+	policy.Spec.Selector.Namespaces = []string{"other-namespace"}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "team-a",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+	}}
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
+
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, ns, d).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t)}
+
+	got := srv.collectPolicyWorkloads(context.Background(), "p", policy)
+	if len(got) != 0 {
+		t.Fatalf("a namespace must not opt into a policy whose selector excludes it, got %+v", got)
 	}
 }

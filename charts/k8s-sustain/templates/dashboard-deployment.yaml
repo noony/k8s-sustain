@@ -39,6 +39,7 @@ spec:
             - --bind-address={{ .Values.dashboard.bindAddress }}
             - --prometheus-address={{ include "k8s-sustain.prometheusAddress" . }}
             - --log-level={{ .Values.dashboard.logLevel }}
+            - --excluded-namespaces={{ concat (list .Release.Namespace "kube-system" "kube-public") .Values.excludedNamespaces | join "," }}
             {{- if .Values.dashboard.corsAllowedOrigins }}
             - --cors-allowed-origins={{ join "," .Values.dashboard.corsAllowedOrigins }}
             {{- end }}

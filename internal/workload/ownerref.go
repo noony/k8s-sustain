@@ -51,42 +51,56 @@ func IsOwnedByKind(refs []metav1.OwnerReference, kind string) bool {
 // immediate controller ref is returned as terminal. Returns ("", "", nil) for
 // orphan pods.
 func ResolvePodOwner(ctx context.Context, c client.Client, pod *corev1.Pod) (kind, name string, err error) {
-	for _, ref := range pod.OwnerReferences {
-		if ref.Controller == nil || !*ref.Controller {
-			continue
-		}
-		switch ref.Kind {
-		case "ReplicaSet":
-			var rs appsv1.ReplicaSet
-			if err := c.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}, &rs); err != nil {
-				return "", "", fmt.Errorf("getting replicaset %s: %w", ref.Name, err)
-			}
-			for _, rsRef := range rs.OwnerReferences {
-				if rsRef.Controller == nil || !*rsRef.Controller {
-					continue
-				}
-				switch rsRef.Kind {
-				case "Deployment", "Rollout":
-					return rsRef.Kind, rsRef.Name, nil
-				}
-			}
-			return "ReplicaSet", ref.Name, nil
-		case "Job":
-			var job batchv1.Job
-			if err := c.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}, &job); err != nil {
-				return "", "", fmt.Errorf("getting job %s: %w", ref.Name, err)
-			}
-			for _, jobRef := range job.OwnerReferences {
-				if jobRef.Controller != nil && *jobRef.Controller && jobRef.Kind == "CronJob" {
-					return "CronJob", jobRef.Name, nil
-				}
-			}
-			return "Job", ref.Name, nil
-		default:
-			return ref.Kind, ref.Name, nil
-		}
+	ref := metav1.GetControllerOf(pod)
+	if ref == nil {
+		return "", "", nil
 	}
-	return "", "", nil
+	return ResolveControllerOwner(ctx, c, pod.Namespace, *ref)
+}
+
+// ResolveControllerOwner resolves a single controller ownerReference (as
+// returned by metav1.GetControllerOf) to the top-level workload kind+name,
+// performing at most one apiserver Get — for ReplicaSet or Job, to look one
+// level further up; every other kind (StatefulSet, DaemonSet, a custom
+// controller) is already terminal and costs no Get at all.
+//
+// Split out of ResolvePodOwner so a caller that wants to cache the walk
+// (internal/webhook's Handler.ownerRefCache, on the admission hot path) can
+// key its cache by this one ref — namespace/kind/name/UID of the pod's
+// immediate controller owner, the identity that repeats across every pod
+// behind one ReplicaSet/Job during a rolling restart — without duplicating
+// the switch below.
+func ResolveControllerOwner(ctx context.Context, c client.Client, namespace string, ref metav1.OwnerReference) (kind, name string, err error) {
+	switch ref.Kind {
+	case "ReplicaSet":
+		var rs appsv1.ReplicaSet
+		if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: ref.Name}, &rs); err != nil {
+			return "", "", fmt.Errorf("getting replicaset %s: %w", ref.Name, err)
+		}
+		for _, rsRef := range rs.OwnerReferences {
+			if rsRef.Controller == nil || !*rsRef.Controller {
+				continue
+			}
+			switch rsRef.Kind {
+			case "Deployment", "Rollout":
+				return rsRef.Kind, rsRef.Name, nil
+			}
+		}
+		return "ReplicaSet", ref.Name, nil
+	case "Job":
+		var job batchv1.Job
+		if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: ref.Name}, &job); err != nil {
+			return "", "", fmt.Errorf("getting job %s: %w", ref.Name, err)
+		}
+		for _, jobRef := range job.OwnerReferences {
+			if jobRef.Controller != nil && *jobRef.Controller && jobRef.Kind == "CronJob" {
+				return "CronJob", jobRef.Name, nil
+			}
+		}
+		return "Job", ref.Name, nil
+	default:
+		return ref.Kind, ref.Name, nil
+	}
 }
 
 // PodOwnedByWorkload reports whether the pod's controller ownerRef chain

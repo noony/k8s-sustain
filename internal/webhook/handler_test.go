@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
@@ -18,8 +22,10 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -376,6 +382,9 @@ func newAdmitEnv(t *testing.T, objs ...runtime.Object) *admitTestEnv {
 	}
 	if err := appsv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme apps: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme core: %v", err)
 	}
 
 	objsTyped := make([]client.Object, 0, len(objs))
@@ -1090,5 +1099,214 @@ func TestAdmit_InvalidLabelSelector_FailsOpen(t *testing.T) {
 	}
 	if resp.Patch != nil {
 		t.Errorf("must not patch when selector is malformed, got %d bytes", len(resp.Patch))
+	}
+}
+
+// TestAdmit_NamespaceLevelOptIn_Injects verifies the full admission path for a
+// pod whose only opt-in is on its Namespace: the webhook must resolve it, find
+// the cached WorkloadRecommendation, and patch the pod.
+func TestAdmit_NamespaceLevelOptIn_Injects(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "team-a",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+	}}
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
+	env := newAdmitEnv(t,
+		basicPolicy("p", sustainv1alpha1.UpdateModeOngoing),
+		ns, d,
+		deploymentReplicaSet("team-a", "web-abc", "web"),
+		freshWLR("Deployment", "team-a", "web", map[string]sustainv1alpha1.ContainerRecommendation{
+			"app": wlrRec("100m", "128Mi"),
+		}),
+	)
+	pod := podWithRSOwner("team-a", "web-abc-1", "web-abc", "")
+
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatalf("pod must always be allowed")
+	}
+	if len(resp.Patch) == 0 {
+		t.Fatalf("expected a resource patch for a namespace-opted-in pod, got none")
+	}
+}
+
+// TestAdmit_WorkloadOptOutBeatsNamespaceOptIn verifies the escape hatch end to
+// end: the namespace opts everything in, the Deployment opts back out, no patch.
+func TestAdmit_WorkloadOptOutBeatsNamespaceOptIn(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "team-a",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+	}}
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "team-a", Name: "web",
+		Annotations: map[string]string{sustainv1alpha1.OptOutAnnotation: "true"},
+	}}
+	env := newAdmitEnv(t,
+		basicPolicy("p", sustainv1alpha1.UpdateModeOngoing),
+		ns, d,
+		deploymentReplicaSet("team-a", "web-abc", "web"),
+		freshWLR("Deployment", "team-a", "web", map[string]sustainv1alpha1.ContainerRecommendation{
+			"app": wlrRec("100m", "128Mi"),
+		}),
+	)
+	pod := podWithRSOwner("team-a", "web-abc-1", "web-abc", "")
+
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatalf("pod must always be allowed")
+	}
+	if len(resp.Patch) != 0 {
+		t.Fatalf("an opted-out workload must not be patched, got %s", resp.Patch)
+	}
+}
+
+// TestAdmit_PodLevelOptOutBeatsNamespaceOptIn verifies the escape hatch at
+// the MOST specific level end to end: a pod carrying its own opt-out
+// annotation is admitted without a resource patch even though its Namespace
+// opts everything in. This is a distinct path from
+// TestAdmit_WorkloadOptOutBeatsNamespaceOptIn (the workload-level opt-out):
+// a pod-level opt-out is caught by admit() itself, directly off
+// pod.Annotations, before resolveOptIn (and therefore before any owner or
+// Namespace read) is ever reached — see the comment on that early return in
+// handler.go. Only the workload-level opt-out was covered end to end before
+// this test.
+func TestAdmit_PodLevelOptOutBeatsNamespaceOptIn(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "team-a",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+	}}
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
+	env := newAdmitEnv(t,
+		basicPolicy("p", sustainv1alpha1.UpdateModeOngoing),
+		ns, d,
+		deploymentReplicaSet("team-a", "web-abc", "web"),
+		freshWLR("Deployment", "team-a", "web", map[string]sustainv1alpha1.ContainerRecommendation{
+			"app": wlrRec("100m", "128Mi"),
+		}),
+	)
+	pod := podWithRSOwner("team-a", "web-abc-1", "web-abc", "")
+	pod.Annotations[sustainv1alpha1.OptOutAnnotation] = "true"
+
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatalf("pod must always be allowed")
+	}
+	if len(resp.Patch) != 0 {
+		t.Fatalf("a pod-level opt-out must not be patched, got %s", resp.Patch)
+	}
+}
+
+// TestAdmit_OwnerGetFailure_FailsOpen verifies the new lookup keeps the
+// webhook's fail-open contract: a broken read admits the pod unmutated.
+func TestAdmit_OwnerGetFailure_FailsOpen(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "team-a",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
+	}}
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
+		WithObjects(
+			basicPolicy("p", sustainv1alpha1.UpdateModeOngoing),
+			ns,
+			deploymentReplicaSet("team-a", "web-abc", "web"),
+			// A WLR with data to inject, so the non-error path would produce a
+			// patch: without this, the assertions below would pass whether or
+			// not the injected Deployment-Get error actually fired (the
+			// no-WLR path is ALSO an allow-with-no-patch), and the test would
+			// not discriminate between the two.
+			freshWLR("Deployment", "team-a", "web", map[string]sustainv1alpha1.ContainerRecommendation{
+				"app": wlrRec("100m", "128Mi"),
+			}),
+		).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*appsv1.Deployment); ok {
+					return errors.New("boom")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	h := &Handler{Client: c}
+	pod := podWithRSOwner("team-a", "web-abc-1", "web-abc", "")
+
+	resp := h.admit(context.Background(), admissionRequestFor(t, pod))
+	if !resp.Allowed {
+		t.Fatalf("a failed owner read must still admit the pod")
+	}
+	if len(resp.Patch) != 0 {
+		t.Fatalf("expected no patch when opt-in resolution failed, got %s", resp.Patch)
+	}
+}
+
+// TestAdmit_PodTemplateAnnotated_ConcurrentAdmissionsCollapseToOneReplicaSetGet
+// pins the most valuable of the caching fixes: every EXISTING user annotates
+// the pod template directly (sustainv1alpha1.PolicyAnnotation on the pod
+// itself), so admit() never calls resolveOptIn for them at all — the
+// multi-level opt-in chain (and its caching) is skipped entirely once
+// policyName is already non-empty from the pod's own annotation. That left
+// the pod-template-annotated path — the one every existing user takes —
+// resolving its owner via the uncached workload.ResolvePodOwner, so a
+// rolling restart of a pod-template-annotated Deployment still paid N
+// uncached ReplicaSet Gets on the admission hot path even after
+// resolveOptIn's own walk was cached. admit() must now go through
+// h.resolveCachedPodOwner for this path too, and it must do so without
+// resolving the owner twice or skipping resolution — see the
+// "Already resolved by the multi-level opt-in chain" comment in admit().
+func TestAdmit_PodTemplateAnnotated_ConcurrentAdmissionsCollapseToOneReplicaSetGet(t *testing.T) {
+	const n = 50
+	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
+	rs := deploymentReplicaSet("team-a", "web-abc", "web")
+	wlr := freshWLR("Deployment", "team-a", "web", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
+
+	var joined int32
+	allJoined := make(chan struct{})
+	prev := singleflightTestHook
+	singleflightTestHook = func(string) {
+		if atomic.AddInt32(&joined, 1) == n {
+			close(allJoined)
+		}
+	}
+	defer func() { singleflightTestHook = prev }()
+
+	var rsGets int32
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(policy, rs, wlr).
+		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*appsv1.ReplicaSet); ok {
+					atomic.AddInt32(&rsGets, 1)
+					<-allJoined // held open until every one of the N admissions has joined
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	h := &Handler{Client: c}
+
+	reqs := make([]*admissionv1.AdmissionRequest, n)
+	for i := range n {
+		pod := podWithRSOwner("team-a", fmt.Sprintf("web-abc-%d", i), "web-abc", "p")
+		reqs[i] = admissionRequestFor(t, pod)
+	}
+
+	var wg sync.WaitGroup
+	allowed := make([]bool, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			resp := h.admit(context.Background(), reqs[i])
+			allowed[i] = resp.Allowed
+		}(i)
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&rsGets); got != 1 {
+		t.Errorf("expected exactly 1 ReplicaSet Get for %d pod-template-annotated admissions behind the same owner, got %d", n, got)
+	}
+	for i, a := range allowed {
+		if !a {
+			t.Errorf("admission %d not allowed", i)
+		}
 	}
 }

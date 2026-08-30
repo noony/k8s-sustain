@@ -48,7 +48,7 @@ kubectl apply -f staging-policy.yaml
 
 ## 3. Opt in a Deployment
 
-Add the annotation to the pod template of any Deployment you want right-sized:
+Add the annotation to the pod template of any Deployment you want right-sized (it is also honoured on the Deployment's own `metadata.annotations` or its Namespace — see the [Annotation reference](../reference/annotation.md)):
 
 ```bash
 kubectl patch deployment my-app -n staging \

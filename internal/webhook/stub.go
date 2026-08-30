@@ -241,9 +241,11 @@ func (h *Handler) requestRecommendation(logger logr.Logger, ns, ownerKind, owner
 //
 // A Get is issued ONLY on the AlreadyExists path, never after a successful
 // Create. h.Client is cache-backed for WorkloadRecommendation (internal/k8s's
-// NewCached caches this kind deliberately, and DisableFor covers only
-// ReplicaSet and Job), so a read immediately after a create races the watch
-// event and reliably returns NotFound. That failure mode was observed in
+// NewCached caches this kind deliberately, and DisableFor covers the
+// owner-chain kinds — ReplicaSet, Job, Deployment, StatefulSet, DaemonSet,
+// CronJob and Rollout, see k8s.OwnerChainDisableFor — not
+// WorkloadRecommendation), so a read immediately after a create races the
+// watch event and reliably returns NotFound. That failure mode was observed in
 // production: the create succeeded, the re-read 404'd, the snapshot patch
 // never happened, and the identity sat inert with an empty
 // status.observedResources until a later admission — at least one dedup TTL

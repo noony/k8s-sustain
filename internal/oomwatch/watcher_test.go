@@ -2,6 +2,7 @@ package oomwatch
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -16,16 +18,23 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
 // stubSink captures the calls the Watcher makes against the Sink interface
-// and can be configured to return false to simulate a duplicate record.
+// and can be configured to return false to simulate a duplicate record. It
+// also backs AlreadyResolved/MarkResolved with a plain map (no TTL — tests
+// that need TTL expiry exercise the real Cache instead) so the pre-walk dedup
+// path is exercisable without pulling in Cache.
 type stubSink struct {
-	mu       sync.Mutex
-	calls    []sinkCall
-	returnFn func(Key, OOMRecord) bool
+	mu                sync.Mutex
+	calls             []sinkCall
+	returnFn          func(Key, OOMRecord) bool
+	resolved          map[resolvedEventKey]bool
+	markResolvedCalls []resolvedEventKey
 }
 
 type sinkCall struct {
@@ -51,8 +60,31 @@ func (s *stubSink) snapshot() []sinkCall {
 	return out
 }
 
+func (s *stubSink) AlreadyResolved(podUID types.UID, container string, restartCount int32, terminatedAt time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := resolvedEventKey{PodUID: podUID, Container: container, RestartCount: restartCount, TerminatedAt: terminatedAt}
+	return s.resolved[key]
+}
+
+func (s *stubSink) MarkResolved(podUID types.UID, container string, restartCount int32, terminatedAt time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.resolved == nil {
+		s.resolved = make(map[resolvedEventKey]bool)
+	}
+	key := resolvedEventKey{PodUID: podUID, Container: container, RestartCount: restartCount, TerminatedAt: terminatedAt}
+	s.resolved[key] = true
+	s.markResolvedCalls = append(s.markResolvedCalls, key)
+}
+
 // Compile-time guard: our stub satisfies the Sink contract this file relies on.
 var _ Sink = (*stubSink)(nil)
+
+// errFakeRead is the underlying error wrapped by the injected apierrors in
+// the read-failure tests below; a fixed sentinel keeps the fake-client
+// interceptor setups terse.
+var errFakeRead = errors.New("boom")
 
 type stubHandler struct {
 	mu    sync.Mutex
@@ -435,6 +467,104 @@ func TestReconcile_NewRecordFiresHandler(t *testing.T) {
 	}
 }
 
+// TestReconcile_NewOOMAfterResolvedStillFiresHandler is the load-bearing
+// property behind resolvedEventKey: a genuinely new OOM kill on a pod that
+// already had an earlier kill marked resolved must still be recorded and
+// still fire the handler. TestReconcile_DuplicateSkipsHandler only exercises
+// a single reconcile, so it cannot catch a regression that made
+// resolvedEventKey (or AlreadyResolved) too coarse — e.g. keyed on pod UID +
+// container alone, ignoring RestartCount/TerminatedAt. If that ever broke,
+// real OOM kills would silently stop being recorded and the recommender's
+// memory-floor bump would silently stop firing.
+func TestReconcile_NewOOMAfterResolvedStillFiresHandler(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pod := newPod("app-xyz").
+		owner("StatefulSet", "app").
+		container("main", "128Mi").
+		statusOOM("main", now.Add(-time.Minute), 0).
+		build()
+
+	sch := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod).Build()
+	sinkCache := NewCache(time.Hour)
+	handler := &stubHandler{}
+
+	reconcile(t, c, sinkCache, handler, pod, now)
+	if got := len(handler.snapshot()); got != 1 {
+		t.Fatalf("handler calls after first OOM = %d, want 1", got)
+	}
+
+	// A genuinely new OOM on the same container: RestartCount bumped and
+	// TerminatedAt later, exactly the pair AlreadyResolved/MarkResolved key
+	// on (see resolvedEventKey's doc).
+	pod.Status.ContainerStatuses[0].RestartCount = 1
+	pod.Status.ContainerStatuses[0].LastTerminationState.Terminated.FinishedAt = metav1.NewTime(now.Add(time.Minute))
+	// Pod is in the fake client's default status-subresource set, so a plain
+	// Update would silently discard this Status change — Status().Update is
+	// required.
+	if err := c.Status().Update(context.Background(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+
+	reconcile(t, c, sinkCache, handler, pod, now.Add(2*time.Minute))
+
+	if got := len(handler.snapshot()); got != 2 {
+		t.Fatalf("handler calls after second (new) OOM = %d, want 2 — a new RestartCount/TerminatedAt must not be suppressed by the earlier mark", got)
+	}
+	rec := handler.snapshot()[1].Record
+	if rec.RestartCount != 1 {
+		t.Errorf("second handler call RestartCount = %d, want 1 (the newer kill)", rec.RestartCount)
+	}
+	if !rec.TerminatedAt.Equal(now.Add(time.Minute)) {
+		t.Errorf("second handler call TerminatedAt = %v, want %v", rec.TerminatedAt, now.Add(time.Minute))
+	}
+}
+
+// TestReconcile_NewOOMSameSecondDifferentRestartStillFiresHandler isolates
+// the RestartCount half of resolvedEventKey specifically. metav1.Time only
+// round-trips to whole-second precision through the API (Kubernetes objects
+// serialize FinishedAt as RFC3339), so two OOM kills of the same container
+// within the same wall-clock second can carry an IDENTICAL TerminatedAt and
+// differ only by RestartCount. If resolvedEventKey (or the Sink built on it)
+// ever dropped RestartCount from its identity — keying only on
+// PodUID+Container+TerminatedAt — this exact scenario would collide: the
+// second kill would be reported as "already resolved" and silently dropped,
+// even though it is a genuinely new termination. TestReconcile_
+// NewOOMAfterResolvedStillFiresHandler bumps both fields together (the
+// common case) and would NOT catch that specific regression, because
+// TerminatedAt alone would still distinguish the two events.
+func TestReconcile_NewOOMSameSecondDifferentRestartStillFiresHandler(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	finishedAt := now.Add(-time.Minute)
+	pod := newPod("app-xyz").
+		owner("StatefulSet", "app").
+		container("main", "128Mi").
+		statusOOM("main", finishedAt, 0).
+		build()
+
+	sch := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod).Build()
+	sinkCache := NewCache(time.Hour)
+	handler := &stubHandler{}
+
+	reconcile(t, c, sinkCache, handler, pod, now)
+	if got := len(handler.snapshot()); got != 1 {
+		t.Fatalf("handler calls after first OOM = %d, want 1", got)
+	}
+
+	// Same TerminatedAt as the first kill, only RestartCount bumped.
+	pod.Status.ContainerStatuses[0].RestartCount = 1
+	if err := c.Status().Update(context.Background(), pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+
+	reconcile(t, c, sinkCache, handler, pod, now.Add(time.Minute))
+
+	if got := len(handler.snapshot()); got != 2 {
+		t.Errorf("handler calls after second (new) OOM = %d, want 2 — a bumped RestartCount alone must still be treated as a new termination", got)
+	}
+}
+
 func TestReconcile_OrphanPodSkipped(t *testing.T) {
 	pod := newPod("orphan").
 		container("main", "128Mi").
@@ -536,5 +666,513 @@ func TestContainerMemLimitBytes_Missing(t *testing.T) {
 	pod := newPod("p").container("main", "64Mi").build()
 	if got := containerMemLimitBytes(pod, "other"); got != 0 {
 		t.Errorf("got %d, want 0", got)
+	}
+}
+
+// TestReconcile_NamespaceLevelOptIn_RecordsOOM is the regression this task
+// exists for: a pod whose workload opted in via its Namespace carries no
+// policy annotation of its own, so the old annotation-only check dropped its
+// OOM kill entirely — costing both the immediate re-reconcile and the
+// memory-floor bump.
+func TestReconcile_NamespaceLevelOptIn_RecordsOOM(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "default",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "ns-policy"},
+	}}
+	pod := newPod("app-xyz").
+		noAnnotation().
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		statusOOM("main", now.Add(-time.Minute), 1).
+		build()
+
+	sch := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod, ns).Build()
+	sink := &stubSink{}
+	handler := &stubHandler{}
+
+	reconcile(t, c, sink, handler, pod, now)
+
+	calls := sink.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("sink calls = %d, want 1", len(calls))
+	}
+	if calls[0].Record.PolicyName != "ns-policy" {
+		t.Errorf("PolicyName = %q, want %q", calls[0].Record.PolicyName, "ns-policy")
+	}
+	wantKey := Key{Namespace: "default", OwnerKind: "StatefulSet", OwnerName: "app", Container: "main"}
+	if calls[0].Key != wantKey {
+		t.Errorf("key = %#v, want %#v", calls[0].Key, wantKey)
+	}
+	if len(handler.snapshot()) != 1 {
+		t.Errorf("handler calls = %d, want 1", len(handler.snapshot()))
+	}
+}
+
+// TestReconcile_WorkloadLevelOptIn_RecordsOOM covers the same path via the
+// Deployment's (here StatefulSet's) own metadata.annotations.
+func TestReconcile_WorkloadLevelOptIn_RecordsOOM(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
+		Namespace:   "default",
+		Name:        "app",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "workload-policy"},
+	}}
+	pod := newPod("app-xyz").
+		noAnnotation().
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		statusOOM("main", now.Add(-time.Minute), 1).
+		build()
+
+	sch := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod, sts).Build()
+	sink := &stubSink{}
+
+	reconcile(t, c, sink, nil, pod, now)
+
+	calls := sink.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("sink calls = %d, want 1", len(calls))
+	}
+	if calls[0].Record.PolicyName != "workload-policy" {
+		t.Errorf("PolicyName = %q, want %q", calls[0].Record.PolicyName, "workload-policy")
+	}
+}
+
+// TestReconcile_OptOutBeatsNamespaceOptIn verifies the escape hatch: a
+// workload that opts out records nothing even though its namespace opts in.
+func TestReconcile_OptOutBeatsNamespaceOptIn(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "default",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "ns-policy"},
+	}}
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
+		Namespace:   "default",
+		Name:        "app",
+		Annotations: map[string]string{sustainv1alpha1.OptOutAnnotation: "true"},
+	}}
+	pod := newPod("app-xyz").
+		noAnnotation().
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		statusOOM("main", time.Now(), 1).
+		build()
+
+	sch := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod, sts, ns).Build()
+	sink := &stubSink{}
+
+	reconcile(t, c, sink, nil, pod, time.Now())
+
+	if got := len(sink.snapshot()); got != 0 {
+		t.Errorf("sink calls = %d, want 0", got)
+	}
+}
+
+// TestReconcile_UnmanagedPod_RecordsNothing pins that a pod resolving to no
+// policy at any level is still dropped — the load-bearing resync check.
+func TestReconcile_UnmanagedPod_RecordsNothing(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}
+	pod := newPod("app-xyz").
+		noAnnotation().
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		statusOOM("main", time.Now(), 1).
+		build()
+
+	sch := newScheme(t)
+	// The StatefulSet owner is deliberately absent from the fake client, and
+	// the Namespace carries no annotations either — nothing at any level opts
+	// this pod in.
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod, ns).Build()
+	sink := &stubSink{}
+
+	reconcile(t, c, sink, nil, pod, time.Now())
+
+	if got := len(sink.snapshot()); got != 0 {
+		t.Errorf("sink calls = %d, want 0", got)
+	}
+}
+
+// TestReconcile_OwnerAnnotationsReadError_ReturnsError pins the fix for a
+// review finding: a non-NotFound failure reading the owner object's
+// annotations must be returned as an error, not silently degraded to "no
+// annotations at that level". Degrading would resolve to the pod's own
+// annotation alone, which is empty for exactly the workload- and
+// namespace-level opt-ins this task exists to serve — silently un-managing
+// them for as long as the read keeps failing. Returning the error instead
+// makes controller-runtime requeue with backoff, matching the precedent in
+// internal/controller/namespace_annotations.go's identical Namespace read.
+func TestReconcile_OwnerAnnotationsReadError_ReturnsError(t *testing.T) {
+	pod := newPod("app-xyz").
+		noAnnotation().
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		statusOOM("main", time.Now(), 1).
+		build()
+
+	sch := newScheme(t)
+	boom := apierrors.NewInternalError(errFakeRead)
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*appsv1.StatefulSet); ok {
+					return boom
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	sink := &stubSink{}
+
+	w := &Watcher{Client: c, Sink: sink, Now: time.Now}
+	_, err := w.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name},
+	})
+	if err == nil {
+		t.Fatal("Reconcile returned nil error for a non-NotFound owner read failure; want an error so controller-runtime requeues")
+	}
+	if got := len(sink.snapshot()); got != 0 {
+		t.Errorf("sink calls = %d, want 0 — the OOM must not be recorded under a degraded (pod-only) resolution", got)
+	}
+}
+
+// TestReconcile_NamespaceAnnotationsReadError_ReturnsError is the Namespace-read
+// counterpart of TestReconcile_OwnerAnnotationsReadError_ReturnsError.
+func TestReconcile_NamespaceAnnotationsReadError_ReturnsError(t *testing.T) {
+	pod := newPod("app-xyz").
+		noAnnotation().
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		statusOOM("main", time.Now(), 1).
+		build()
+
+	sch := newScheme(t)
+	boom := apierrors.NewInternalError(errFakeRead)
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1.Namespace); ok {
+					return boom
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	sink := &stubSink{}
+
+	w := &Watcher{Client: c, Sink: sink, Now: time.Now}
+	_, err := w.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name},
+	})
+	if err == nil {
+		t.Fatal("Reconcile returned nil error for a non-NotFound namespace read failure; want an error so controller-runtime requeues")
+	}
+	if got := len(sink.snapshot()); got != 0 {
+		t.Errorf("sink calls = %d, want 0 — the OOM must not be recorded under a degraded (pod-only) resolution", got)
+	}
+}
+
+// TestReconcile_AlreadyResolvedOOMSkipsOwnerAndNamespaceGets pins the fix for
+// a review finding: hasFreshOOM's signal
+// (LastTerminationState.Terminated.Reason == OOMKilled) never clears on its
+// own, so a pod that has ever been OOM-killed re-triggers Reconcile on every
+// later status write too — readiness flips, IP changes, anything — not just
+// the actual kill. Before this fix, every one of those re-runs re-did the
+// full owner+Namespace walk even though nothing about the kill had changed
+// (same RestartCount + TerminatedAt), because Reconcile had no way to know
+// that without doing the very walk the check exists to save. Uses the real
+// Cache (not stubSink) so this exercises the actual AlreadyResolved/
+// MarkResolved wiring end to end, not a test double's approximation of it.
+func TestReconcile_AlreadyResolvedOOMSkipsOwnerAndNamespaceGets(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "default",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "ns-policy"},
+	}}
+	pod := newPod("app-xyz").
+		noAnnotation().
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		statusOOM("main", now.Add(-time.Minute), 1).
+		build()
+
+	sch := newScheme(t)
+	var stsGets, nsGets int
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod, ns).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				switch obj.(type) {
+				case *appsv1.StatefulSet:
+					stsGets++
+				case *corev1.Namespace:
+					nsGets++
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+
+	sinkCache := NewCache(time.Hour)
+	handler := &stubHandler{}
+
+	reconcile(t, c, sinkCache, handler, pod, now)
+	if got := sinkCache.Size(); got != 1 {
+		t.Fatalf("cache size after first reconcile = %d, want 1", got)
+	}
+	if stsGets == 0 || nsGets == 0 {
+		t.Fatalf("first reconcile: stsGets=%d nsGets=%d, want both > 0 (the walk must happen at least once)", stsGets, nsGets)
+	}
+	baseSts, baseNs := stsGets, nsGets
+
+	// A repeat status event for the exact same pod object — same
+	// RestartCount, same TerminatedAt — simulating an unrelated status write
+	// (readiness flip, IP change) on a pod that has not had a new OOM.
+	reconcile(t, c, sinkCache, handler, pod, now.Add(time.Second))
+
+	if stsGets != baseSts {
+		t.Errorf("second reconcile issued %d StatefulSet Gets beyond the baseline %d; the already-resolved OOM must not re-run the owner walk", stsGets-baseSts, baseSts)
+	}
+	if nsGets != baseNs {
+		t.Errorf("second reconcile issued %d Namespace Gets beyond the baseline %d; the already-resolved OOM must not re-run the Namespace read", nsGets-baseNs, baseNs)
+	}
+	if got := len(handler.snapshot()); got != 1 {
+		t.Errorf("handler calls = %d, want 1 (no new notification for a repeat of an already-resolved event)", got)
+	}
+}
+
+// TestReconcile_PodTemplateOptIn_NoOwnerOrNamespaceReads pins the fix for a
+// review finding: Reconcile used to resolve all three annotation levels
+// eagerly, fetching the owner object and the Namespace even when the pod's
+// own annotation already decides the outcome. That coupled every existing
+// pod-template-only workload to reads it never needed — a transient owner or
+// Namespace read failure would drop and requeue an OOM signal for a workload
+// untouched by this branch's workload/namespace opt-in feature. The walk must
+// be lazy: zero owner Gets and zero Namespace Gets when the pod template
+// decides.
+func TestReconcile_PodTemplateOptIn_NoOwnerOrNamespaceReads(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pod := newPod("app-xyz").
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		statusOOM("main", now.Add(-time.Minute), 1).
+		build()
+
+	sch := newScheme(t)
+	var ownerGets, nsGets int
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				switch obj.(type) {
+				case *appsv1.StatefulSet:
+					ownerGets++
+				case *corev1.Namespace:
+					nsGets++
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	sink := &stubSink{}
+
+	reconcile(t, c, sink, nil, pod, now)
+
+	calls := sink.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("sink calls = %d, want 1", len(calls))
+	}
+	if calls[0].Record.PolicyName != "my-policy" {
+		t.Errorf("PolicyName = %q, want %q", calls[0].Record.PolicyName, "my-policy")
+	}
+	if ownerGets != 0 {
+		t.Errorf("owner (StatefulSet) Gets = %d, want 0 — the pod template already decided", ownerGets)
+	}
+	if nsGets != 0 {
+		t.Errorf("Namespace Gets = %d, want 0 — the pod template already decided", nsGets)
+	}
+}
+
+// TestReconcile_WorkloadLevelOptIn_NoNamespaceReads is the second step of the
+// same laziness: when the pod template is silent but the owning workload's
+// own annotation decides, the owner Get still has to happen (it is the only
+// way to read that level), but the Namespace read must not.
+func TestReconcile_WorkloadLevelOptIn_NoNamespaceReads(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
+		Namespace:   "default",
+		Name:        "app",
+		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "workload-policy"},
+	}}
+	pod := newPod("app-xyz").
+		noAnnotation().
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		statusOOM("main", now.Add(-time.Minute), 1).
+		build()
+
+	sch := newScheme(t)
+	var nsGets int
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod, sts).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*corev1.Namespace); ok {
+					nsGets++
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	sink := &stubSink{}
+
+	reconcile(t, c, sink, nil, pod, now)
+
+	calls := sink.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("sink calls = %d, want 1", len(calls))
+	}
+	if calls[0].Record.PolicyName != "workload-policy" {
+		t.Errorf("PolicyName = %q, want %q", calls[0].Record.PolicyName, "workload-policy")
+	}
+	if nsGets != 0 {
+		t.Errorf("Namespace Gets = %d, want 0 — the workload level already decided", nsGets)
+	}
+}
+
+// TestReconcile_DegradedOwnerResolution_DoesNotMarkResolved pins the fix for a
+// review finding: when ResolvePodOwner's Get fails, Reconcile falls back to
+// the immediate controller ref (immediateController) rather than dropping the
+// OOM — but when the pod template alone decides the policy (the common
+// opt-in path), ownerAnnotations is never called on that pass, so the failed
+// ResolvePodOwner Get is never retried. If MarkResolved were still called for
+// this termination, AlreadyResolved would suppress the owner walk on every
+// later status write for up to the cache TTL, even after the apiserver
+// recovers — permanently pinning the OOM under the degraded ReplicaSet bucket
+// instead of self-healing to the real Deployment owner. A second reconcile of
+// the same pod (same RestartCount/TerminatedAt) must therefore still retry
+// the ResolvePodOwner Get.
+func TestReconcile_DegradedOwnerResolution_DoesNotMarkResolved(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	// The pod template carries the policy annotation (newPod's default), so
+	// this pass never reaches ownerAnnotations — the only place that would
+	// otherwise retry the ReplicaSet Get within the same pass.
+	pod := newPod("app-xyz").
+		owner("ReplicaSet", "app-rs").
+		container("main", "128Mi").
+		statusOOM("main", now.Add(-time.Minute), 0).
+		build()
+
+	sch := newScheme(t)
+	var rsGets int
+	// The ReplicaSet is deliberately never preloaded into the fake client, so
+	// every Get for it fails with NotFound — the same failure
+	// TestReconcile_ReplicaSetMissingFallsBackToRS exercises, just counted
+	// here across two reconciles instead of one.
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*appsv1.ReplicaSet); ok {
+					rsGets++
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+
+	sinkCache := NewCache(time.Hour)
+
+	reconcile(t, c, sinkCache, nil, pod, now)
+	if rsGets != 1 {
+		t.Fatalf("rsGets after first reconcile = %d, want 1", rsGets)
+	}
+	if sinkCache.Size() != 1 {
+		t.Fatalf("cache size after first reconcile = %d, want 1", sinkCache.Size())
+	}
+
+	// Same RestartCount and TerminatedAt as the first pass — simulating an
+	// unrelated status write (readiness flip, IP change) that re-triggers
+	// Reconcile without a new OOM kill.
+	reconcile(t, c, sinkCache, nil, pod, now.Add(time.Second))
+
+	if rsGets != 2 {
+		t.Errorf("rsGets after second reconcile = %d, want 2 — a degraded owner resolution must not be marked resolved, so the owner walk must retry", rsGets)
+	}
+}
+
+// TestPredicate_AdmitsOOMKilledPodWithoutAnnotation pins the broadened event
+// filter: a pod with no policy annotation but an OOMKilled container status
+// must reach Reconcile, or namespace-level opt-ins never get an event at all.
+func TestPredicate_AdmitsOOMKilledPodWithoutAnnotation(t *testing.T) {
+	pod := newPod("app-xyz").
+		noAnnotation().
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		statusOOM("main", time.Now(), 1).
+		build()
+
+	pred := admitPodEventPredicate()
+	if !pred.Create(event.CreateEvent{Object: pod}) {
+		t.Error("CreateFunc dropped an OOM-killed pod with no policy annotation")
+	}
+	if !pred.Update(event.UpdateEvent{ObjectOld: pod, ObjectNew: pod}) {
+		t.Error("UpdateFunc dropped an OOM-killed pod with no policy annotation")
+	}
+	if !pred.Generic(event.GenericEvent{Object: pod}) {
+		t.Error("GenericFunc dropped an OOM-killed pod with no policy annotation")
+	}
+}
+
+// TestPredicate_DropsOrdinaryPodWithoutAnnotation pins that the filter still
+// drops the common case — an unannotated pod with no OOM status. Without this
+// the watcher wakes on every pod transition in the cluster.
+func TestPredicate_DropsOrdinaryPodWithoutAnnotation(t *testing.T) {
+	pod := newPod("app-xyz").
+		noAnnotation().
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		build()
+
+	pred := admitPodEventPredicate()
+	if pred.Create(event.CreateEvent{Object: pod}) {
+		t.Error("CreateFunc admitted an ordinary pod with no policy annotation and no OOM status")
+	}
+	if pred.Update(event.UpdateEvent{ObjectOld: pod, ObjectNew: pod}) {
+		t.Error("UpdateFunc admitted an ordinary pod with no policy annotation and no OOM status")
+	}
+	if pred.Generic(event.GenericEvent{Object: pod}) {
+		t.Error("GenericFunc admitted an ordinary pod with no policy annotation and no OOM status")
+	}
+}
+
+// TestPredicate_AdmitsAnnotatedPodWithoutOOM pins the original arm of the
+// filter, which the broadened predicate must not have regressed: a pod
+// carrying the policy annotation is admitted even with no OOM status at all.
+func TestPredicate_AdmitsAnnotatedPodWithoutOOM(t *testing.T) {
+	pod := newPod("app-xyz").
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		build()
+
+	pred := admitPodEventPredicate()
+	if !pred.Create(event.CreateEvent{Object: pod}) {
+		t.Error("CreateFunc dropped an annotated pod with no OOM status")
+	}
+	if !pred.Update(event.UpdateEvent{ObjectOld: pod, ObjectNew: pod}) {
+		t.Error("UpdateFunc dropped an annotated pod with no OOM status")
+	}
+	if !pred.Generic(event.GenericEvent{Object: pod}) {
+		t.Error("GenericFunc dropped an annotated pod with no OOM status")
+	}
+}
+
+// TestPredicate_DeleteAlwaysDropped pins that Delete events are always
+// dropped regardless of annotation or OOM status: an OOM kill never surfaces
+// as a Pod delete (the pod restarts in place), so chasing one would only
+// race with the GC.
+func TestPredicate_DeleteAlwaysDropped(t *testing.T) {
+	pod := newPod("app-xyz").
+		owner("StatefulSet", "app").
+		container("main", "256Mi").
+		statusOOM("main", time.Now(), 1).
+		build()
+
+	pred := admitPodEventPredicate()
+	if pred.Delete(event.DeleteEvent{Object: pod}) {
+		t.Error("DeleteFunc admitted a delete event for an annotated, OOM-killed pod")
 	}
 }

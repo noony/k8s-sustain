@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -116,6 +117,39 @@ type Handler struct {
 	stubRequested map[string]time.Time
 	stubInflight  chan struct{}
 	stubLastPrune time.Time
+
+	// ownerAnnCache caches Gets of an owning workload object's own
+	// metadata.annotations (see ownerAnnotations in optin.go), keyed by
+	// (namespace, kind, name). See ownerAnnotationsCache's doc for why this
+	// exists: the pre-gate (anyPolicyCovers) does not bound cost when a
+	// Policy has no namespace/label selector, so without this cache every
+	// unannotated pod CREATE on such a cluster pays for an uncached owner Get.
+	ownerAnnCache ownerAnnotationsCache
+
+	// ownerRefCache caches the pod→owner ownerRef walk (see
+	// resolveCachedPodOwner in optin.go), keyed by the pod's own immediate
+	// controller ownerRef (namespace/kind/name/UID — e.g. its ReplicaSet or
+	// Job). Bounds the same uncovered-Policy cost as ownerAnnCache, but one
+	// Get earlier in the chain: workload.ResolvePodOwner's ReplicaSet/Job
+	// Get, which every pod behind one owner shares, was previously uncached
+	// on this hot path even though ownerAnnCache already memoised the Get one
+	// step further up (the resolved Deployment/CronJob/...).
+	ownerRefCache ttlLRUCache[resolvedOwnerRef]
+
+	// ownerAnnSF and ownerRefSF collapse a concurrent burst of cache misses
+	// for the SAME key into one in-flight Get, with every other caller
+	// waiting on its result instead of each issuing its own redundant Get —
+	// see ownerAnnotations and resolveCachedPodOwner in optin.go. Without
+	// this, ownerAnnCache/ownerRefCache only bound the STEADY-STATE cost (a
+	// warm cache turns repeat lookups into map reads); a genuinely
+	// concurrent cold-start burst — a rolling restart, which is the exact
+	// case these caches exist for — still lets every one of the N
+	// simultaneous misses issue its own Get before any of them has a chance
+	// to populate the cache. The zero value of singleflight.Group is usable
+	// (its map is lazily initialised), matching every other field here and
+	// Handler's plain-struct-literal construction throughout the test suite.
+	ownerAnnSF singleflight.Group
+	ownerRefSF singleflight.Group
 }
 
 type jsonPatch struct {
@@ -195,10 +229,33 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 	pod.Namespace = req.Namespace
 
+	// resolvedOwner is filled in by the multi-level chain below when it runs,
+	// so the owner resolution further down is not paid for twice.
+	var resolvedOwner podOwner
+
 	policyName := pod.Annotations[sustainv1alpha1.PolicyAnnotation]
+	if pod.Annotations[sustainv1alpha1.OptOutAnnotation] == "true" {
+		logger.V(1).Info("pod opts out, allowing without injection")
+		return allow
+	}
 	if policyName == "" {
-		logger.V(1).Info("pod has no policy annotation, allowing without injection")
-		return allow // no annotation — pod is not managed by any policy
+		// The pod carries no annotation of its own, but its workload or its
+		// namespace may. Pods inherit neither, so this costs lookups — see
+		// resolveOptIn for the cheapest-first ordering that keeps them off the
+		// common path. Fails open like every other error here.
+		optInCtx, optInCancel := context.WithTimeout(ctx, optInTimeout)
+		name, level, owner, err := h.resolveOptIn(optInCtx, logger, &pod)
+		optInCancel()
+		if err != nil {
+			logger.Error(err, "failed to resolve multi-level policy opt-in; allowing pod without injection")
+			return allow
+		}
+		if name == "" {
+			logger.V(1).Info("pod has no policy annotation at any level, allowing without injection")
+			return allow
+		}
+		policyName, resolvedOwner = name, owner
+		logger = logger.WithValues("optInLevel", level)
 	}
 	if !isValidPolicyName(policyName) {
 		// A malformed annotation value cannot be a real Policy object name —
@@ -271,12 +328,25 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		}
 	}
 
-	ownerCtx, ownerCancel := context.WithTimeout(ctx, 2*apiCallTimeout)
-	ownerKind, ownerName, err := workload.ResolvePodOwner(ownerCtx, h.Client, &pod)
-	ownerCancel()
-	if err != nil {
-		logger.Error(err, "failed to resolve owner kind")
-		return allowWithLabelPatch(labelPatch)
+	// Already resolved by the multi-level opt-in chain when that path ran;
+	// resolving again would double the apiserver reads for every workload that
+	// opts in above the pod template. Otherwise — the common case, since
+	// every existing user annotates the pod template — go through the same
+	// cached, singleflight-collapsed walk resolveOptIn uses
+	// (h.resolveCachedPodOwner, see optin.go) rather than the uncached
+	// workload.ResolvePodOwner: a rolling restart of a pod-template-annotated
+	// Deployment creates N pods behind the same ReplicaSet, and this is the
+	// path all of them take.
+	ownerKind, ownerName := resolvedOwner.Kind, resolvedOwner.Name
+	if !resolvedOwner.Resolved {
+		ownerCtx, ownerCancel := context.WithTimeout(ctx, 2*apiCallTimeout)
+		var err error
+		ownerKind, ownerName, err = h.resolveCachedPodOwner(ownerCtx, &pod)
+		ownerCancel()
+		if err != nil {
+			logger.Error(err, "failed to resolve owner kind")
+			return allowWithLabelPatch(labelPatch)
+		}
 	}
 	ownerKind, ownerName = workload.ApplyOwnerNameOverride(ownerKind, ownerName, pod.Annotations)
 	if ownerKind == "" {

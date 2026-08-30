@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/policymatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -63,18 +65,150 @@ type workloadEntry struct {
 	Namespace string
 	Name      string
 	Template  *corev1.PodTemplateSpec
+	// ObjectAnnotations is the workload object's own metadata.annotations and
+	// NamespaceAnnotations its Namespace's — the two opt-in levels that are not
+	// on the pod template. Resolved into the entry at construction so
+	// ResolvedPolicy stays a pure accessor and every call site keeps working
+	// without threading I/O through it.
+	ObjectAnnotations    map[string]string
+	NamespaceAnnotations map[string]string
+	// ObjectLabels is the workload object's own metadata.labels — what
+	// policymatch.Matches evaluates a Policy's LabelSelector against. Needed
+	// alongside ResolvedPolicy because opting in (ResolvePolicy) and matching
+	// (policymatch.Matches) are two different questions: a workload can name a
+	// Policy whose selector does not reach it, and callers that only check
+	// ResolvedPolicy() == policyName render it as managed anyway. See
+	// listPolicyWorkloadRows, collectPolicyWorkloads and collectAllWorkloads,
+	// which all gate on both.
+	ObjectLabels map[string]string
+	// Members carries, in fold order, the per-object opt-in and label data
+	// for every REAL object folded into this identity by
+	// groupEntriesByIdentity (see its doc): the representative first (mirror
+	// of the fields above — TemplateAnnotations/ObjectAnnotations/Labels for
+	// the same object this entry already carries on its own fields), then
+	// each grouped sibling. entryMatchesPolicy walks Members and, for EACH
+	// member, resolves that SAME member's own opted-in policy
+	// (policymatch.ResolvePolicy) and checks the Policy's LabelSelector
+	// against that SAME member's own labels (policymatch.Matches) — it never
+	// mixes one member's opt-in with a different member's labels. That
+	// mixing was the bug this field replaced AllObjectLabels to fix: pairing
+	// the representative's opt-in with a sibling's labels (or vice versa)
+	// let a Policy manage an identity via two different real objects when no
+	// single real object satisfied both halves — stricter or looser than the
+	// controller's filterTargets, which evaluates every real object
+	// independently, depending on which half came loose.
+	//
+	// NamespaceAnnotations is deliberately not part of identityMember:
+	// grouping is scoped per namespace (workloadKey embeds e.Namespace, see
+	// groupEntriesByIdentity), so every member folded into one identity
+	// shares this entry's own Namespace and NamespaceAnnotations too — there
+	// is exactly one namespace-level opt-in per identity, not one per
+	// member.
+	//
+	// nil for the overwhelming majority of entries — anything that never went
+	// through grouping (kind "Pod") or whose identity had exactly one real
+	// object behind it — in which case entryMatchesPolicy evaluates this
+	// entry's own Template/ObjectAnnotations/ObjectLabels directly instead of
+	// allocating a length-1 slice, identical to before this field existed.
+	Members   []identityMember
 	OwnerRefs []metav1.OwnerReference
 	// CreationTimestamp is read by groupEntriesByIdentity to pick the most
 	// recently created object as the representative when multiple real
 	// objects share one overridden identity. Unused once grouping is done.
 	CreationTimestamp time.Time
+	// FromRetainedWLR marks an entry synthesized by inactiveWorkloadEntry from
+	// a retained WorkloadRecommendation rather than a live object. Namespace
+	// IS populated on such an entry (inactiveWorkloadEntry sets it from the
+	// lookup's own namespace argument) and safe to gate on. OwnerRefs is
+	// empty — a WLR carries no owner snapshot — but nothing reads it for
+	// these entries. ObjectLabels is the field genuinely unavailable: a WLR
+	// carries no label snapshot either (see inactiveWorkloadEntry), so
+	// evaluating the Policy's LabelSelector against it would test an empty
+	// label set and reject workloads it should not — the WLR's Spec.Policy is
+	// itself the controller's last verdict that this workload matched. See
+	// entryMatchesPolicy: callers must skip only the label half of
+	// policymatch.Matches when this is set, while still evaluating the
+	// namespace half (--excluded-namespaces, Policy.Spec.Selector.Namespaces)
+	// against entry.Namespace, which is checkable and there is no reason to
+	// skip.
+	FromRetainedWLR bool
 }
 
-func (e workloadEntry) PolicyAnnotation() string {
-	if e.Template == nil {
-		return ""
+// identityMember is one real object folded into a workloadEntry's identity by
+// groupEntriesByIdentity — see workloadEntry.Members' doc for how the gate
+// consumes them.
+//
+// The three fields travel together as one struct rather than as separate
+// per-field slices because the gate's whole point is that opt-in and selector
+// match are evaluated against the SAME object: parallel slices would let an
+// index mismatch silently pair one object's annotations with another's labels,
+// which is precisely the bug this type was introduced to fix.
+type identityMember struct {
+	TemplateAnnotations map[string]string
+	ObjectAnnotations   map[string]string
+	Labels              map[string]string
+}
+
+// entryMatchesPolicy reports whether policy manages entry: some real object
+// behind the identity both opts into policy (policymatch.ResolvePolicy
+// resolves to policy.Name) AND satisfies policy's own selector
+// (policymatch.Matches) — evaluated on that SAME object. Opting in and
+// matching are two different questions (a workload can name a Policy whose
+// selector does not reach it), and for a grouped identity they must be asked
+// of one object at a time: pairing one member's opt-in with a different
+// member's labels is exactly the bug this function used to have — see
+// workloadEntry.Members' doc.
+//
+// For an entry synthesized from a retained WorkloadRecommendation
+// (workloadEntry.FromRetainedWLR — see its doc for why), no member data is
+// available (a WLR snapshot carries no label/annotation history), so only
+// the two namespace-based checks are evaluated: the label check is skipped
+// by passing a nil selector to policymatch.MatchesSelector, which treats nil
+// as "match all labels" (see its doc) — not by skipping the gate entirely,
+// which would also stop honouring --excluded-namespaces and
+// Policy.Spec.Selector.Namespaces for these entries even though
+// entry.Namespace is available and checkable. The WLR's own Spec.Policy IS
+// the controller's last verdict that this workload matched the Policy's
+// LabelSelector before it departed.
+//
+// For an ordinary (live-object) entry, entry.Members holds one member per
+// real object when grouping folded more than one into this identity (see
+// groupEntriesByIdentity's doc); when it is nil (the overwhelming majority
+// of entries: kind "Pod", or any identity backed by exactly one real
+// object), this evaluates entry's own ResolvedPolicy()/ObjectLabels
+// directly instead of allocating a length-1 Members slice, identical in
+// behaviour and allocation profile to before this field existed.
+func entryMatchesPolicy(policy *sustainv1alpha1.Policy, entry workloadEntry, excludedNamespaces []string) bool {
+	if entry.FromRetainedWLR {
+		return entry.ResolvedPolicy() == policy.Name &&
+			policymatch.MatchesSelector(policy, entry.Namespace, nil, excludedNamespaces, nil)
 	}
-	return e.Template.Annotations[sustainv1alpha1.PolicyAnnotation]
+	if len(entry.Members) == 0 {
+		return entry.ResolvedPolicy() == policy.Name &&
+			policymatch.Matches(policy, entry.Namespace, entry.ObjectLabels, excludedNamespaces)
+	}
+	for _, m := range entry.Members {
+		name, _ := policymatch.ResolvePolicy(m.TemplateAnnotations, m.ObjectAnnotations, entry.NamespaceAnnotations)
+		if name != policy.Name {
+			continue
+		}
+		if policymatch.Matches(policy, entry.Namespace, m.Labels, excludedNamespaces) {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolvedPolicy returns the Policy this workload opts into, walking all three
+// annotation levels. Named for what it answers rather than for where it reads
+// from, because it is no longer a single annotation lookup.
+func (e workloadEntry) ResolvedPolicy() string {
+	var template map[string]string
+	if e.Template != nil {
+		template = e.Template.Annotations
+	}
+	name, _ := policymatch.ResolvePolicy(template, e.ObjectAnnotations, e.NamespaceAnnotations)
+	return name
 }
 
 func (e workloadEntry) Containers() []corev1.Container {
@@ -101,7 +235,16 @@ func (e workloadEntry) InitContainers() []corev1.Container {
 // onto one entry named by the override (see workloadEntry.Name), matching
 // what Prometheus/WorkloadRecommendation already key by. "Pod" doesn't need
 // the extra pass — workload.GroupBarePods already produces final identities.
-func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...client.ListOption) ([]workloadEntry, error) {
+//
+// nsAnnotations supplies the namespace-level policy opt-in for every entry
+// this call produces; it is not fetched here. A caller that loops over
+// supportedWorkloadKinds (up to seven kinds) must call
+// (*Server).namespaceAnnotations once before the loop and pass the same map
+// into every listWorkloadsOfKind call, or the one cluster-wide Namespace List
+// that call is meant to be becomes one List per kind per request. See
+// namespaceAnnotations' doc for why that matters against the dashboard's
+// uncached client.
+func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, nsAnnotations map[string]map[string]string, opts ...client.ListOption) ([]workloadEntry, error) {
 	switch kind {
 	case "Deployment":
 		var list appsv1.DeploymentList
@@ -111,7 +254,16 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		out := make([]workloadEntry, len(list.Items))
 		for i := range list.Items {
 			d := &list.Items[i]
-			out[i] = workloadEntry{Namespace: d.Namespace, Name: d.Name, Template: &d.Spec.Template, OwnerRefs: d.OwnerReferences, CreationTimestamp: d.CreationTimestamp.Time}
+			out[i] = workloadEntry{
+				Namespace:            d.Namespace,
+				Name:                 d.Name,
+				Template:             &d.Spec.Template,
+				ObjectAnnotations:    d.Annotations,
+				ObjectLabels:         d.Labels,
+				NamespaceAnnotations: nsAnnotations[d.Namespace],
+				OwnerRefs:            d.OwnerReferences,
+				CreationTimestamp:    d.CreationTimestamp.Time,
+			}
 		}
 		return groupEntriesByIdentity(out, kind), nil
 	case "StatefulSet":
@@ -122,7 +274,16 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		out := make([]workloadEntry, len(list.Items))
 		for i := range list.Items {
 			st := &list.Items[i]
-			out[i] = workloadEntry{Namespace: st.Namespace, Name: st.Name, Template: &st.Spec.Template, OwnerRefs: st.OwnerReferences, CreationTimestamp: st.CreationTimestamp.Time}
+			out[i] = workloadEntry{
+				Namespace:            st.Namespace,
+				Name:                 st.Name,
+				Template:             &st.Spec.Template,
+				ObjectAnnotations:    st.Annotations,
+				ObjectLabels:         st.Labels,
+				NamespaceAnnotations: nsAnnotations[st.Namespace],
+				OwnerRefs:            st.OwnerReferences,
+				CreationTimestamp:    st.CreationTimestamp.Time,
+			}
 		}
 		return groupEntriesByIdentity(out, kind), nil
 	case "DaemonSet":
@@ -133,7 +294,16 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		out := make([]workloadEntry, len(list.Items))
 		for i := range list.Items {
 			ds := &list.Items[i]
-			out[i] = workloadEntry{Namespace: ds.Namespace, Name: ds.Name, Template: &ds.Spec.Template, OwnerRefs: ds.OwnerReferences, CreationTimestamp: ds.CreationTimestamp.Time}
+			out[i] = workloadEntry{
+				Namespace:            ds.Namespace,
+				Name:                 ds.Name,
+				Template:             &ds.Spec.Template,
+				ObjectAnnotations:    ds.Annotations,
+				ObjectLabels:         ds.Labels,
+				NamespaceAnnotations: nsAnnotations[ds.Namespace],
+				OwnerRefs:            ds.OwnerReferences,
+				CreationTimestamp:    ds.CreationTimestamp.Time,
+			}
 		}
 		return groupEntriesByIdentity(out, kind), nil
 	case "Rollout":
@@ -144,7 +314,16 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		out := make([]workloadEntry, len(list.Items))
 		for i := range list.Items {
 			r := &list.Items[i]
-			out[i] = workloadEntry{Namespace: r.Namespace, Name: r.Name, Template: &r.Spec.Template, OwnerRefs: r.OwnerReferences, CreationTimestamp: r.CreationTimestamp.Time}
+			out[i] = workloadEntry{
+				Namespace:            r.Namespace,
+				Name:                 r.Name,
+				Template:             &r.Spec.Template,
+				ObjectAnnotations:    r.Annotations,
+				ObjectLabels:         r.Labels,
+				NamespaceAnnotations: nsAnnotations[r.Namespace],
+				OwnerRefs:            r.OwnerReferences,
+				CreationTimestamp:    r.CreationTimestamp.Time,
+			}
 		}
 		return groupEntriesByIdentity(out, kind), nil
 	case "CronJob":
@@ -155,7 +334,16 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		out := make([]workloadEntry, len(list.Items))
 		for i := range list.Items {
 			cj := &list.Items[i]
-			out[i] = workloadEntry{Namespace: cj.Namespace, Name: cj.Name, Template: &cj.Spec.JobTemplate.Spec.Template, OwnerRefs: cj.OwnerReferences, CreationTimestamp: cj.CreationTimestamp.Time}
+			out[i] = workloadEntry{
+				Namespace:            cj.Namespace,
+				Name:                 cj.Name,
+				Template:             &cj.Spec.JobTemplate.Spec.Template,
+				ObjectAnnotations:    cj.Annotations,
+				ObjectLabels:         cj.Labels,
+				NamespaceAnnotations: nsAnnotations[cj.Namespace],
+				OwnerRefs:            cj.OwnerReferences,
+				CreationTimestamp:    cj.CreationTimestamp.Time,
+			}
 		}
 		return groupEntriesByIdentity(out, kind), nil
 	case "Job":
@@ -169,7 +357,16 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 			if workload.IsOwnedByKind(j.OwnerReferences, "CronJob") {
 				continue
 			}
-			out = append(out, workloadEntry{Namespace: j.Namespace, Name: j.Name, Template: &j.Spec.Template, OwnerRefs: j.OwnerReferences, CreationTimestamp: j.CreationTimestamp.Time})
+			out = append(out, workloadEntry{
+				Namespace:            j.Namespace,
+				Name:                 j.Name,
+				Template:             &j.Spec.Template,
+				ObjectAnnotations:    j.Annotations,
+				ObjectLabels:         j.Labels,
+				NamespaceAnnotations: nsAnnotations[j.Namespace],
+				OwnerRefs:            j.OwnerReferences,
+				CreationTimestamp:    j.CreationTimestamp.Time,
+			})
 		}
 		return groupEntriesByIdentity(out, kind), nil
 	case "Pod":
@@ -177,10 +374,16 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
 			return nil, err
 		}
-		groups := workload.GroupBarePods(list.Items)
+		groups := workload.GroupBarePods(list.Items, nsAnnotations)
 		out := make([]workloadEntry, len(groups))
 		for i, g := range groups {
-			out[i] = workloadEntry{Namespace: g.Namespace, Name: g.Name, Template: barePodGroupTemplate(g)}
+			out[i] = workloadEntry{
+				Namespace:            g.Namespace,
+				Name:                 g.Name,
+				Template:             barePodGroupTemplate(g),
+				ObjectLabels:         g.Labels,
+				NamespaceAnnotations: nsAnnotations[g.Namespace],
+			}
 		}
 		return out, nil
 	default:
@@ -204,8 +407,31 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, opts ...c
 //
 // Order of the returned slice follows first-seen identity, for stable
 // pagination across calls against an unchanged object set.
+//
+// Every real object folded into an identity has its own opt-in/label data
+// recorded on the surviving entry's Members (see workloadEntry's doc on that
+// field), not just the representative's — so a caller gating on both halves
+// of the Policy consent (entryMatchesPolicy) can consider every real object
+// the controller would, not just whichever one this function chose to
+// display. Members is built in fold order — the final representative first,
+// then every other real object in the order this loop processed them (a
+// later object that outranks the current representative on
+// CreationTimestamp bumps the previous representative into that same fold
+// order, it does not reorder anything already folded in) — because
+// resolveManagingPolicy takes the FIRST member that satisfies a Policy, so
+// that order is what decides the identity's displayed policy when more than
+// one member's opt-in would otherwise qualify. (entryMatchesPolicy only ever
+// answers yes/no for one Policy, so member order cannot change its result.)
+// Allocation-sane: an identity backed by exactly one real object — the
+// overwhelming majority — never allocates the extra slice at all.
 func groupEntriesByIdentity(entries []workloadEntry, kind string) []workloadEntry {
-	best := make(map[string]workloadEntry, len(entries))
+	type accum struct {
+		rep workloadEntry
+		// extra holds every other real object folded into this identity, in
+		// fold order — nil until a second real object folds in.
+		extra []identityMember
+	}
+	best := make(map[string]accum, len(entries))
 	var order []string
 	for _, e := range entries {
 		var annotations map[string]string
@@ -214,26 +440,63 @@ func groupEntriesByIdentity(entries []workloadEntry, kind string) []workloadEntr
 		}
 		_, identity := workload.ApplyOwnerNameOverride(kind, e.Name, annotations)
 		key := workloadKey(e.Namespace, kind, identity)
-		cur, seen := best[key]
-		if !seen || e.CreationTimestamp.After(cur.CreationTimestamp) {
-			if !seen {
-				order = append(order, key)
-			}
+		a, seen := best[key]
+		if !seen {
 			e.Name = identity
-			best[key] = e
+			best[key] = accum{rep: e}
+			order = append(order, key)
+			continue
 		}
+		// A second (or later) real object shares this identity. Its own
+		// opt-in/label data must be considered by entryMatchesPolicy
+		// regardless of which object ends up as the representative — only
+		// the representative's Template/OwnerRefs/etc. are ever displayed,
+		// but every real object's own opt-in and labels are what the
+		// controller actually gates on.
+		if e.CreationTimestamp.After(a.rep.CreationTimestamp) {
+			// e becomes the new representative; the previous one folds into
+			// extra instead.
+			old := a.rep
+			e.Name = identity
+			a.extra = append(a.extra, memberOf(old))
+			a.rep = e
+		} else {
+			a.extra = append(a.extra, memberOf(e))
+		}
+		// accum is stored by value, so the mutated local must be written back
+		// — indexing the map above returned a copy, not a pointer into it.
+		best[key] = a
 	}
 	out := make([]workloadEntry, 0, len(order))
 	for _, key := range order {
-		out = append(out, best[key])
+		a := best[key]
+		rep := a.rep
+		if len(a.extra) > 0 {
+			rep.Members = append([]identityMember{memberOf(rep)}, a.extra...)
+		}
+		out = append(out, rep)
 	}
 	return out
+}
+
+// memberOf snapshots e's own opt-in/label data as an identityMember, for
+// groupEntriesByIdentity to record onto a surviving entry's Members.
+func memberOf(e workloadEntry) identityMember {
+	var template map[string]string
+	if e.Template != nil {
+		template = e.Template.Annotations
+	}
+	return identityMember{
+		TemplateAnnotations: template,
+		ObjectAnnotations:   e.ObjectAnnotations,
+		Labels:              e.ObjectLabels,
+	}
 }
 
 // barePodGroupTemplate synthesizes the PodTemplateSpec workloadEntry expects
 // for a bare-pod group: containers/init-containers come from the group's
 // representative pod (the most recently created one), and annotations/labels
-// (read by workloadEntry.PolicyAnnotation and the policy-selector label match)
+// (read by workloadEntry.ResolvedPolicy and the policy-selector label match)
 // come from the same pod. There is no real pod template for a bare pod — this
 // exists purely so "Pod" can reuse workloadEntry's existing accessors instead
 // of every caller branching on kind.
@@ -259,8 +522,32 @@ func barePodGroupTemplate(g workload.BarePodGroup) *corev1.PodTemplateSpec {
 // this lists every object of kind in the namespace (via listWorkloadsOfKind,
 // which already applies the same override resolution) and finds the entry
 // whose resolved Name matches.
+//
+// This is a single-kind, single-namespace lookup, not a loop over
+// supportedWorkloadKinds, so it fetches its own namespace annotations rather
+// than requiring a caller-supplied map — that keeps it exactly one Namespace
+// List, same as before this parameter existed.
 func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name string) (workloadEntry, error) {
-	entries, err := s.listWorkloadsOfKind(ctx, kind, client.InNamespace(namespace))
+	// kind is an unvalidated route param (see server.go's route registrations)
+	// reaching all the way down from a request URL, so reject it before the
+	// Namespace List below: an unsupported kind can never match a real
+	// workload, and without this guard GET /api/workloads/x/BogusKind/y paid
+	// for a full cluster-wide Namespace List against the dashboard's uncached
+	// client before listWorkloadsOfKind's kind switch finally rejected it.
+	// handlers_simulate.go validates ownerKind the same way, off the same
+	// supportedWorkloadKinds table.
+	if !slices.Contains(supportedWorkloadKinds, kind) {
+		return workloadEntry{}, apierrors.NewNotFound(groupResourceForKind(kind), name)
+	}
+	nsAnnotations, err := s.namespaceAnnotations(ctx)
+	if err != nil {
+		// Degrade to pod-template and workload-level opt-in rather than failing
+		// the lookup: a namespace read failure must not break workload detail
+		// pages.
+		s.Logger.Error(err, "failed to list namespaces; namespace-level policy opt-in will not be resolved")
+		nsAnnotations = nil
+	}
+	entries, err := s.listWorkloadsOfKind(ctx, kind, nsAnnotations, client.InNamespace(namespace))
 	if err != nil {
 		return workloadEntry{}, err
 	}
@@ -335,6 +622,7 @@ func (s *Server) inactiveWorkloadEntry(ctx context.Context, namespace, kind, nam
 				},
 				Spec: corev1.PodSpec{Containers: containers, InitContainers: initContainers},
 			},
+			FromRetainedWLR: true,
 		}, true
 	}
 	return workloadEntry{}, false
