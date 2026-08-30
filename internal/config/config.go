@@ -49,8 +49,12 @@ func bindDuration(flags *pflag.FlagSet, key, flagName string, def time.Duration,
 	_ = viper.BindPFlag(key, flags.Lookup(flagName))
 }
 
-func bindStringSlice(flags *pflag.FlagSet, key, flagName string, def []string, usage string) {
-	flags.StringSlice(flagName, def, usage)
+// bindStringSlice always registers a nil (empty) default: every current
+// caller wants "unset means empty list," and unparam correctly flags a def
+// parameter that is never anything else. Add it back if a caller genuinely
+// needs a non-empty default.
+func bindStringSlice(flags *pflag.FlagSet, key, flagName, usage string) {
+	flags.StringSlice(flagName, nil, usage)
 	_ = viper.BindPFlag(key, flags.Lookup(flagName))
 }
 
@@ -164,7 +168,7 @@ func BindControllerFlags(cmd *cobra.Command) {
 	bindString(flags, "log-level", "log-level", "info", "Log level (debug, info, warn, error)")
 	bindString(flags, "prometheus-address", "prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
 	bindDuration(flags, "reconcile-interval", "reconcile-interval", 5*time.Minute, "How often policies are re-evaluated")
-	bindStringSlice(flags, "excluded-namespaces", "excluded-namespaces", nil, "Namespaces the reconciler should never touch")
+	bindStringSlice(flags, "excluded-namespaces", "excluded-namespaces", "Namespaces the reconciler should never touch")
 	bindInt(flags, "workload-concurrency-limit", "workload-concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
 	bindInt(flags, "policy-concurrency-limit", "policy-concurrency-limit", 10, "Maximum number of Policy objects reconciled in parallel")
 	bindInt(flags, "prometheus-max-inflight", "prometheus-max-inflight", 8,
@@ -226,7 +230,7 @@ func BindWebhookFlags(cmd *cobra.Command) {
 	bindString(flags, "webhook.tls-key-file", "tls-key-file", "/tls/tls.key", "Path to TLS private key file")
 	bindInt(flags, "webhook.port", "port", 9443, "Port the webhook server listens on")
 	bindString(flags, "webhook.log-level", "log-level", "info", "Log level (debug, info, warn, error)")
-	bindStringSlice(flags, "webhook.excluded-namespaces", "excluded-namespaces", nil, "Namespaces the webhook should never mutate (mirrors the controller flag)")
+	bindStringSlice(flags, "webhook.excluded-namespaces", "excluded-namespaces", "Namespaces the webhook should never mutate (mirrors the controller flag)")
 	// Bound under a "webhook."-prefixed Viper key even though the flag name
 	// matches the controller's: viper.BindPFlag maps a key to exactly one
 	// pflag, so reusing the flat "recommendation-retention" key would leave
@@ -275,7 +279,8 @@ func BindDashboardFlags(cmd *cobra.Command) {
 	bindString(flags, "dashboard.bind-address", "bind-address", ":8090", "Address the dashboard server listens on")
 	bindString(flags, "dashboard.prometheus-address", "prometheus-address", "http://localhost:9090", "Prometheus server address")
 	bindString(flags, "dashboard.log-level", "log-level", "info", "Log level (debug, info, warn, error)")
-	bindStringSlice(flags, "dashboard.cors-allowed-origins", "cors-allowed-origins", nil, "Allowed CORS origins (e.g. http://localhost:3000). Empty (default) means same-origin only. Use * to allow all.")
+	bindStringSlice(flags, "dashboard.cors-allowed-origins", "cors-allowed-origins", "Allowed CORS origins (e.g. http://localhost:3000). Empty (default) means same-origin only. Use * to allow all.")
+	bindStringSlice(flags, "dashboard.excluded-namespaces", "excluded-namespaces", "Namespaces the controller/webhook never manage (mirrors their --excluded-namespaces flag). The dashboard uses this to keep its policy-scoped workload views consistent with what the controller and webhook actually manage.")
 }
 
 // DashboardConfig holds resolved configuration for the dashboard server.
@@ -284,6 +289,7 @@ type DashboardConfig struct {
 	PrometheusAddress  string
 	LogLevel           string
 	CORSAllowedOrigins []string
+	ExcludedNamespaces []string
 }
 
 // LoadDashboardConfig reads the current Viper state and returns a DashboardConfig.
@@ -294,5 +300,6 @@ func LoadDashboardConfig() DashboardConfig {
 		PrometheusAddress:  viper.GetString("dashboard.prometheus-address"),
 		LogLevel:           viper.GetString("dashboard.log-level"),
 		CORSAllowedOrigins: getStringSlice("dashboard.cors-allowed-origins"),
+		ExcludedNamespaces: getStringSlice("dashboard.excluded-namespaces"),
 	}
 }

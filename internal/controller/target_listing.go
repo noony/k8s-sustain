@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/policymatch"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -32,10 +33,11 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		"job", types.Job,
 		"pod", types.Pod)
 
+	nsAnn := newNSAnnotations(r.Client)
 	kinds := []struct {
 		mode *sustainv1alpha1.UpdateMode
 		name string
-		list func(context.Context, []string) ([]workloadTarget, error)
+		list func(context.Context, []string, *nsAnnotations) ([]workloadTarget, error)
 	}{
 		{types.Deployment, "deployments", r.listDeploymentTargets},
 		{types.StatefulSet, "statefulsets", r.listStatefulSetTargets},
@@ -49,7 +51,7 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		if k.mode == nil {
 			continue
 		}
-		t, err := k.list(ctx, namespaces)
+		t, err := k.list(ctx, namespaces, nsAnn)
 		if err != nil {
 			return nil, fmt.Errorf("listing %s: %w", k.name, err)
 		}
@@ -58,6 +60,41 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		}
 		logger.V(1).Info("listed workloads", "kind", k.name, "count", len(t))
 		targets = append(targets, t...)
+	}
+
+	// Resolve each target's opt-in across all three annotation levels. Bare-pod
+	// targets already carry a resolved PolicyName (GroupBarePods does the walk
+	// as it groups, because the policy is part of the grouping rule itself).
+	//
+	// The Namespace read is LAZY: it is only issued when neither the pod
+	// template nor the workload's own annotations already decide the outcome
+	// (policymatch.DecidesAt). Both of those levels are already in memory —
+	// they came from the List that built targets — so checking them first is
+	// free. Fetching the Namespace unconditionally, as an earlier version of
+	// this loop did, coupled every existing pod-template-only workload to a
+	// Namespace read it never needed: a non-NotFound failure on that read
+	// (RBAC gap, apiserver hiccup) would abort this entire reconcile even
+	// though the workload's own annotation already answered the question.
+	for i := range targets {
+		t := &targets[i]
+		if t.Kind == "Pod" {
+			continue
+		}
+		var level policymatch.Level
+		if policymatch.DecidesAt(t.TemplateAnnotations) || policymatch.DecidesAt(t.ObjectAnnotations) {
+			t.PolicyName, level = policymatch.ResolvePolicy(t.TemplateAnnotations, t.ObjectAnnotations, nil)
+		} else {
+			a, err := nsAnn.get(ctx, t.Namespace)
+			if err != nil {
+				return nil, err
+			}
+			t.PolicyName, level = policymatch.ResolvePolicy(t.TemplateAnnotations, t.ObjectAnnotations, a)
+		}
+		if t.PolicyName != "" {
+			logger.V(1).Info("resolved workload opt-in",
+				"kind", t.Kind, "namespace", t.Namespace, "name", t.Name,
+				"policy", t.PolicyName, "level", level)
+		}
 	}
 
 	filtered := filterTargets(targets, policy, r.ExcludedNamespaces)
@@ -82,9 +119,24 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		if t.Kind != "Pod" || len(t.BarePodPolicyMismatched) == 0 {
 			continue
 		}
+		// A mismatched pod's own annotation can be empty — its policy may have
+		// come from its Namespace rather than the pod itself, since bare pods
+		// resolve through the same three levels as everything else (see
+		// GroupBarePods). Re-resolving here (rather than reading
+		// p.Annotations[PolicyAnnotation] directly, which is empty in that
+		// case) is what keeps this log line from printing "pod-2=" for a pod
+		// whose policy actually came from the namespace. This costs no new
+		// apiserver read: listBarePodTargets already warmed nsAnn for every
+		// namespace it grouped pods in, via nsAnn.forPods, so this is a cache
+		// hit.
+		nsA, err := nsAnn.get(ctx, t.Namespace)
+		if err != nil {
+			return nil, err
+		}
 		names := make([]string, 0, len(t.BarePodPolicyMismatched))
 		for _, p := range t.BarePodPolicyMismatched {
-			names = append(names, p.Name+"="+p.Annotations[sustainv1alpha1.PolicyAnnotation])
+			resolvedName, _ := policymatch.ResolvePolicy(p.Annotations, nil, nsA)
+			names = append(names, p.Name+"="+resolvedName)
 		}
 		logger.Info("bare pods share an owner-name identity but name a different policy; "+
 			"they are excluded from the group and will not be rightsized under it — "+
@@ -129,7 +181,7 @@ func listKindTargets[L client.ObjectList](
 	return fetch()
 }
 
-func (r *PolicyReconciler) listDeploymentTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+func (r *PolicyReconciler) listDeploymentTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
 	return listKindTargets(ctx, r.Client, namespaces,
 		func() *appsv1.DeploymentList { return &appsv1.DeploymentList{} },
 		func(l *appsv1.DeploymentList, out *[]workloadTarget) {
@@ -139,7 +191,7 @@ func (r *PolicyReconciler) listDeploymentTargets(ctx context.Context, namespaces
 		})
 }
 
-func (r *PolicyReconciler) listStatefulSetTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+func (r *PolicyReconciler) listStatefulSetTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
 	return listKindTargets(ctx, r.Client, namespaces,
 		func() *appsv1.StatefulSetList { return &appsv1.StatefulSetList{} },
 		func(l *appsv1.StatefulSetList, out *[]workloadTarget) {
@@ -149,7 +201,7 @@ func (r *PolicyReconciler) listStatefulSetTargets(ctx context.Context, namespace
 		})
 }
 
-func (r *PolicyReconciler) listDaemonSetTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+func (r *PolicyReconciler) listDaemonSetTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
 	return listKindTargets(ctx, r.Client, namespaces,
 		func() *appsv1.DaemonSetList { return &appsv1.DaemonSetList{} },
 		func(l *appsv1.DaemonSetList, out *[]workloadTarget) {
@@ -159,7 +211,7 @@ func (r *PolicyReconciler) listDaemonSetTargets(ctx context.Context, namespaces 
 		})
 }
 
-func (r *PolicyReconciler) listRolloutTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+func (r *PolicyReconciler) listRolloutTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
 	return listKindTargets(ctx, r.Client, namespaces,
 		func() *rolloutsv1alpha1.RolloutList { return &rolloutsv1alpha1.RolloutList{} },
 		func(l *rolloutsv1alpha1.RolloutList, out *[]workloadTarget) {
@@ -173,7 +225,7 @@ func (r *PolicyReconciler) listRolloutTargets(ctx context.Context, namespaces []
 // CronJob targets carry the JobTemplate's pod spec; reconcile resizes the
 // currently-running job pods in place rather than recycling them or mutating
 // the CronJob spec (jobs run to completion).
-func (r *PolicyReconciler) listCronJobTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+func (r *PolicyReconciler) listCronJobTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
 	return listKindTargets(ctx, r.Client, namespaces,
 		func() *batchv1.CronJobList { return &batchv1.CronJobList{} },
 		func(l *batchv1.CronJobList, out *[]workloadTarget) {
@@ -188,7 +240,7 @@ func (r *PolicyReconciler) listCronJobTargets(ctx context.Context, namespaces []
 // so listing them here would double-process), as are terminal Jobs (Complete
 // or Failed — no running pods to resize). Like CronJobs, the Job spec is never
 // mutated; reconcile resizes the running pods in place.
-func (r *PolicyReconciler) listJobTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
+func (r *PolicyReconciler) listJobTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
 	return listKindTargets(ctx, r.Client, namespaces,
 		func() *batchv1.JobList { return &batchv1.JobList{} },
 		func(l *batchv1.JobList, out *[]workloadTarget) {
@@ -231,11 +283,23 @@ func (r *PolicyReconciler) listJobTargets(ctx context.Context, namespaces []stri
 // the conflict — the mismatched pods are carried on the target instead
 // (BarePodPolicyMismatched) so collectTargets can log it exactly once, from
 // the one reconcile that owns the group.
-func (r *PolicyReconciler) listBarePodTargets(ctx context.Context, namespaces []string) ([]workloadTarget, error) {
-	return listKindTargets(ctx, r.Client, namespaces,
+func (r *PolicyReconciler) listBarePodTargets(ctx context.Context, namespaces []string, nsAnn *nsAnnotations) ([]workloadTarget, error) {
+	// GroupBarePods filters by resolved policy as it groups, so it needs the
+	// namespace level up front rather than after the fact. nsErr carries a
+	// namespace read failure out of the callback, which has no error return.
+	var nsErr error
+	targets, err := listKindTargets(ctx, r.Client, namespaces,
 		func() *corev1.PodList { return &corev1.PodList{} },
 		func(l *corev1.PodList, out *[]workloadTarget) {
-			for _, g := range workload.GroupBarePods(l.Items) {
+			if nsErr != nil {
+				return
+			}
+			nsMap, err := nsAnn.forPods(ctx, l.Items)
+			if err != nil {
+				nsErr = err
+				return
+			}
+			for _, g := range workload.GroupBarePods(l.Items, nsMap) {
 				*out = append(*out, workloadTarget{
 					Kind:           "Pod",
 					IdentityKind:   "Pod",
@@ -256,4 +320,11 @@ func (r *PolicyReconciler) listBarePodTargets(ctx context.Context, namespaces []
 				})
 			}
 		})
+	if err != nil {
+		return nil, err
+	}
+	if nsErr != nil {
+		return nil, nsErr
+	}
+	return targets, nil
 }

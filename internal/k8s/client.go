@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"time"
 
+	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -62,14 +64,17 @@ func New(scheme *runtime.Scheme) (client.Client, error) {
 // Passing the same context for both is valid and means "shutdown stops the
 // cache immediately too"; the webhook deliberately does not want that.
 //
-// Exactly two kinds are cached: Policy and WorkloadRecommendation. Both are
-// read on every admission and both are small. The owner-chain kinds
-// (ReplicaSet, Job) are deliberately left UNcached via DisableFor -- they are
-// read at most once per pod CREATE, and an informer over every ReplicaSet in
-// the cluster (default revisionHistoryLimit keeps ~10 per Deployment) would
-// cost far more memory than the per-pod Get it saves.
+// Three kinds are cached: Policy, WorkloadRecommendation and Namespace. All
+// three are read on every admission (Namespace only on the multi-level
+// opt-in path, see internal/webhook/optin.go) and all three are small even
+// at cluster scale. The owner-chain kinds (ReplicaSet, Job, Deployment,
+// StatefulSet, DaemonSet, CronJob and Rollout — see OwnerChainDisableFor) are
+// deliberately left UNcached via DisableFor -- each is read at most once per
+// pod CREATE, and an informer over every object of one of these kinds in the
+// cluster (default revisionHistoryLimit alone keeps ~10 ReplicaSets per
+// Deployment) would cost far more memory than the per-pod Get it saves.
 //
-// NewCached pre-warms those two informers and blocks until they have synced.
+// NewCached pre-warms those three informers and blocks until they have synced.
 // Both halves matter, and the pre-warm is the part that is easy to get wrong:
 // cache.New creates NO informers up front, so calling WaitForCacheSync on a
 // fresh cache waits on an empty set and returns true immediately -- a no-op
@@ -145,14 +150,45 @@ func NewCached(runCtx, startCtx context.Context, scheme *runtime.Scheme) (client
 		Cache: &client.CacheOptions{
 			Reader: c,
 			// Read straight from the apiserver instead of standing up an
-			// informer over every object of these kinds. They appear only in
-			// the owner chain, at most one Get per pod CREATE.
-			DisableFor: []client.Object{
-				&appsv1.ReplicaSet{},
-				&batchv1.Job{},
-			},
+			// informer over every object of these kinds. See
+			// OwnerChainDisableFor's doc comment for why each one is here.
+			DisableFor: OwnerChainDisableFor(),
 		},
 	})
+}
+
+// OwnerChainDisableFor lists the kinds NewCached serves straight from the
+// apiserver instead of standing up an informer for, because every Get of one
+// of these kinds happens at most once per pod CREATE:
+//
+//   - ReplicaSet and Job are read while walking a pod's controller ownerRef
+//     chain to its top-level workload kind (internal/workload.ResolvePodOwner).
+//   - Deployment, StatefulSet, DaemonSet, CronJob and Rollout are read one
+//     level beyond that, by the webhook's multi-level opt-in resolution
+//     (internal/webhook/optin.go, ownerAnnotations), to fetch the resolved
+//     owner OBJECT's own metadata.annotations — the "workload" level of
+//     ResolvePolicy that a pod does not inherit.
+//
+// An informer over any of these would watch every object of that kind
+// cluster-wide for a read that happens once per pod CREATE — the same
+// memory-for-a-single-Get trade the ReplicaSet/Job split already avoids (see
+// the package doc above). Exported so
+// TestDisableForCoversOwnerAnnotationKinds (internal/webhook/optin_test.go)
+// can assert this list actually covers every kind ownerAnnotations can Get:
+// the two evolve in different packages, so nothing else stops a kind added to
+// one from being silently missing from the other, which would reintroduce
+// exactly the startup-stall / unbounded-memory bug this function exists to
+// prevent.
+func OwnerChainDisableFor() []client.Object {
+	return []client.Object{
+		&appsv1.ReplicaSet{},
+		&batchv1.Job{},
+		&appsv1.Deployment{},
+		&appsv1.StatefulSet{},
+		&appsv1.DaemonSet{},
+		&batchv1.CronJob{},
+		&rolloutsv1alpha1.Rollout{},
+	}
 }
 
 // crdWaitTimeout bounds how long NewCached waits for the Policy and
@@ -241,5 +277,10 @@ func cachedKinds() []client.Object {
 	return []client.Object{
 		&sustainv1alpha1.Policy{},
 		&sustainv1alpha1.WorkloadRecommendation{},
+		// Namespaces are read on the admission hot path to resolve
+		// namespace-level policy opt-in. There are few of them even in large
+		// clusters, so the informer's memory cost is trivial next to keeping
+		// that read off the apiserver for every pod create.
+		&corev1.Namespace{},
 	}
 }

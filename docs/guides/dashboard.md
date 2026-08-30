@@ -41,6 +41,7 @@ At startup, the dashboard validates Prometheus connectivity and logs a warning i
 | `--prometheus-address`    | `http://localhost:9090`      | Prometheus server URL                    |
 | `--log-level`             | `info`                       | Log level (debug, info, warn, error)     |
 | `--cors-allowed-origins`  | `(empty — same-origin only)` | Allowed CORS origins (comma-separated). Use `*` to allow all (not recommended). |
+| `--excluded-namespaces`   | `(empty)`                    | Namespaces the controller/webhook never manage (comma-separated). Mirrors their `--excluded-namespaces` flag so the dashboard's policy-scoped workload views stay consistent with what is actually managed. |
 
 When a request carries an `Origin` header and a CORS allowlist is configured,
 the dashboard appends `Vary: Origin` to the response. This prevents shared

@@ -463,8 +463,10 @@ func TestCreateStubNeverOverwritesPopulatedSnapshot(t *testing.T) {
 // laggingCacheReader models the one property fake.NewClientBuilder does not
 // have: the webhook's client is informer-backed for WorkloadRecommendation
 // (internal/k8s.NewCached caches this kind on purpose; its DisableFor list
-// covers only ReplicaSet and Job), so it is NOT read-your-writes. A Get issued
-// immediately after a Create races the watch event and returns NotFound.
+// covers the owner-chain kinds instead — ReplicaSet, Job, Deployment,
+// StatefulSet, DaemonSet, CronJob and Rollout, see k8s.OwnerChainDisableFor),
+// so it is NOT read-your-writes. A Get issued immediately after a Create
+// races the watch event and returns NotFound.
 //
 // It fails the first Get of any key that has been Created and not yet warmed;
 // warm() models the watch event landing so assertions can see what was really

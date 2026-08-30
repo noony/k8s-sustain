@@ -8,7 +8,7 @@ Right-size a Deployment (or StatefulSet) in `Ongoing` mode without disrupting ru
 
 ## Prerequisites
 
-- A Deployment or StatefulSet with a `k8s.sustain.io/policy` annotation on its pod template.
+- A Deployment or StatefulSet with a `k8s.sustain.io/policy` annotation (pod template, the workload's own `metadata.annotations`, or its Namespace — see the [Annotation reference](../reference/annotation.md)).
 - A k8s-sustain `Policy` matching the workload (see [Installation](../getting-started/installation.md)).
 - A Prometheus instance reachable from the controller.
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // defaultTTL is the fallback retention horizon when the caller passes a
@@ -34,6 +36,18 @@ func workloadKeyOf(k Key) workloadKey {
 	return workloadKey{Namespace: k.Namespace, OwnerKind: k.OwnerKind, OwnerName: k.OwnerName}
 }
 
+// resolvedEventKey identifies one specific container termination on one
+// specific pod — pod UID + container + restart count + terminated-at —
+// independent of whatever workload (if any) it resolves to. See
+// Cache.AlreadyResolved / Cache.MarkResolved and the Sink interface doc for
+// why this cannot simply reuse Key.
+type resolvedEventKey struct {
+	PodUID       types.UID
+	Container    string
+	RestartCount int32
+	TerminatedAt time.Time
+}
+
 // Cache is an in-memory store of OOM observations keyed by workload+container.
 // It implements both Source (read API consumed by the recommender) and Sink
 // (write API consumed by the watcher), letting both sides share a single
@@ -45,6 +59,13 @@ type Cache struct {
 	mu         sync.RWMutex
 	entries    map[Key]OOMRecord
 	byWorkload map[workloadKey]map[string]struct{}
+	// resolved backs AlreadyResolved/MarkResolved: value is the time the
+	// event was marked resolved, aged out under the same ttl as entries (see
+	// sweep and evictOldestResolvedLocked). Guarded by the same mu as
+	// entries/byWorkload rather than a separate lock — there is no hot path
+	// here that needs them to be independent, and one lock is one less thing
+	// to get wrong.
+	resolved map[resolvedEventKey]time.Time
 
 	// SizeObserver, if set, is invoked with the current entry count after
 	// every mutation (Record, sweep). The controller wires it to the
@@ -76,6 +97,7 @@ func NewCacheWithLimit(ttl time.Duration, maxEntries int) *Cache {
 		maxEntries: maxEntries,
 		entries:    make(map[Key]OOMRecord),
 		byWorkload: make(map[workloadKey]map[string]struct{}),
+		resolved:   make(map[resolvedEventKey]time.Time),
 	}
 }
 
@@ -107,6 +129,47 @@ func (c *Cache) Record(key Key, record OOMRecord) bool {
 		obs(n)
 	}
 	return true
+}
+
+// AlreadyResolved implements Sink. See the interface doc for the full
+// contract; this is a plain TTL-bounded lookup guarded by the same lock as
+// entries/byWorkload.
+func (c *Cache) AlreadyResolved(podUID types.UID, container string, restartCount int32, terminatedAt time.Time) bool {
+	return c.alreadyResolvedAt(time.Now(), podUID, container, restartCount, terminatedAt)
+}
+
+// alreadyResolvedAt is AlreadyResolved with an injectable "now", following
+// the same explicit-parameter pattern sweep(now) already establishes for
+// testing this type deterministically (Sink's interface signature is fixed,
+// so the clock can't be a constructor argument the way ttlLRUCache's is in
+// internal/webhook — it has to be threaded through like sweep's is).
+func (c *Cache) alreadyResolvedAt(now time.Time, podUID types.UID, container string, restartCount int32, terminatedAt time.Time) bool {
+	key := resolvedEventKey{PodUID: podUID, Container: container, RestartCount: restartCount, TerminatedAt: terminatedAt}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	at, ok := c.resolved[key]
+	return ok && now.Sub(at) <= c.ttl
+}
+
+// MarkResolved implements Sink. Bounded the same way entries is: on insert
+// of a genuinely new key past maxEntries, the oldest resolved mark is
+// evicted to make room, so a fleet with many distinct chronically-restarting
+// pods cannot grow this map without bound between TTL sweeps.
+func (c *Cache) MarkResolved(podUID types.UID, container string, restartCount int32, terminatedAt time.Time) {
+	c.markResolvedAt(time.Now(), podUID, container, restartCount, terminatedAt)
+}
+
+// markResolvedAt is MarkResolved with an injectable "now" — see
+// alreadyResolvedAt's doc for why this mirrors sweep(now) instead of a
+// struct-level clock field.
+func (c *Cache) markResolvedAt(now time.Time, podUID types.UID, container string, restartCount int32, terminatedAt time.Time) {
+	key := resolvedEventKey{PodUID: podUID, Container: container, RestartCount: restartCount, TerminatedAt: terminatedAt}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.resolved[key]; !exists && len(c.resolved) >= c.maxEntries {
+		c.evictOldestResolvedLocked()
+	}
+	c.resolved[key] = now
 }
 
 // RecentByWorkload returns a per-container map of fresh records for the given
@@ -187,12 +250,18 @@ func (c *Cache) Run(ctx context.Context) {
 	}
 }
 
-// sweep drops every entry older than ttl. Exposed (unexported) so tests can
-// drive eviction deterministically without waiting on a real ticker.
+// sweep drops every entry older than ttl, in both entries and resolved.
+// Exposed (unexported) so tests can drive eviction deterministically without
+// waiting on a real ticker.
 func (c *Cache) sweep(now time.Time) {
 	c.mu.Lock()
 	for key := range c.entries {
 		c.deleteIfStaleLocked(key, now)
+	}
+	for key, at := range c.resolved {
+		if now.Sub(at) > c.ttl {
+			delete(c.resolved, key)
+		}
 	}
 	n := len(c.entries)
 	obs := c.SizeObserver
@@ -242,6 +311,26 @@ func (c *Cache) evictOldestLocked() {
 	}
 	if !first {
 		c.deleteEntryLocked(oldestKey)
+	}
+}
+
+// evictOldestResolvedLocked drops the resolved mark with the smallest
+// mark-time. Caller must hold mu in write mode. Same O(N) full-scan trade-off
+// as evictOldestLocked, and for the same reason: cheap enough at this cap not
+// to warrant an auxiliary heap.
+func (c *Cache) evictOldestResolvedLocked() {
+	var oldestKey resolvedEventKey
+	var oldestAt time.Time
+	first := true
+	for key, at := range c.resolved {
+		if first || at.Before(oldestAt) {
+			oldestKey = key
+			oldestAt = at
+			first = false
+		}
+	}
+	if !first {
+		delete(c.resolved, oldestKey)
 	}
 }
 

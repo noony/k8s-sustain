@@ -84,6 +84,16 @@ tests:
             resources: [horizontalpodautoscalers]
             verbs: [get, list, watch]
 
+  - it: grants the controller get on namespaces for namespace-level opt-in
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [namespaces]
+            verbs: [get, list, watch]
+
   - it: binds the controller role to the chart service account
     documentIndex: 1
     asserts:

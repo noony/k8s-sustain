@@ -298,8 +298,10 @@ To support a new workload kind (e.g. `Rollout` from Argo):
 3. Add `RecycleRolloutPods` to `internal/workload/patcher.go`
 4. Add `reconcileRollouts` to `internal/controller/policy_controller.go`
 5. Add the case to `UpdateTypes.ModeForKind` in `api/v1alpha1/policy_types.go` and to `resolveOwner` in `internal/webhook/handler.go`
-6. Add RBAC markers (`+kubebuilder:rbac:...`) to the controller
-7. Add the Helm RBAC rule in `charts/k8s-sustain/templates/rbac.yaml`
+6. Add the kind to the `ownerKindObjects` table in `internal/webhook/optin.go`. This is what lets the webhook's multi-level opt-in resolution read the workload-level annotation for the new kind; a kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)
+7. Add the same kind to `k8s.OwnerChainDisableFor()` in `internal/k8s/client.go`. Every kind in `ownerKindObjects` must appear here too, or its first Get on the admission hot path stands up a cluster-wide informer over every object of that kind instead of costing one Get. `TestDisableForCoversOwnerAnnotationKinds` (`internal/webhook/optin_test.go`) cross-checks the two lists and fails if one is missing from the other
+8. Add RBAC markers (`+kubebuilder:rbac:...`) to the controller
+9. Add the Helm RBAC rule in `charts/k8s-sustain/templates/rbac.yaml`
 
 ## Documentation site
 

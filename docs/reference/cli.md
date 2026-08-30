@@ -161,6 +161,7 @@ k8s-sustain dashboard [flags]
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--cors-allowed-origins` | *(empty)* | Comma-separated list of allowed CORS origins. Empty (default) = same-origin only. Use `*` to allow all (not recommended). |
+| `--excluded-namespaces` | — | Comma-separated list of namespaces the controller and webhook never manage. Mirrors their `--excluded-namespaces` flag so the dashboard's policy-scoped workload views stay consistent with what is actually managed. |
 
 ### Health endpoints
 

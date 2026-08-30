@@ -57,7 +57,7 @@ The controller requeues after `--reconcile-interval` (default `5m`).
 For each workload kind enabled in the policy (`deployment`, `statefulSet`, `daemonSet`, `argoRollout`, `cronJob`, `job`, `pod`):
 
 - List all objects of that kind — scoped to the namespaces in `selector.namespaces` when specified, or cluster-wide otherwise
-- Filter by the `k8s.sustain.io/policy` annotation in the pod template — or, for bare pods, on the pod itself, since there is no template to read it from
+- Resolve the `k8s.sustain.io/policy` annotation via `internal/policymatch.ResolvePolicy`, most-specific-first: the pod template (or, for bare pods, the pod's own annotations, since there is no template to read it from), then the workload object's own `metadata.annotations`, then the Namespace's. See the [Annotation reference](../reference/annotation.md) for the full precedence and the opt-out escape hatch.
 - Ensure a `WorkloadRecommendation` exists for the matched identity, creating it when missing and keeping its policy label and `status.observedResources` snapshot current
 
 Discovery issues **no Prometheus queries**, and it creates a cache object for *every* matched target rather than only for the ones that currently have enough history to compute. The object count therefore tracks matched workloads, not computable ones — expect a `WorkloadRecommendation` per matched workload from the first reconcile onward, most of them briefly empty.
@@ -97,9 +97,9 @@ Only live targets in `Ongoing` mode are applied. `OnCreate`-mode workloads stop 
 
 ### Pod OOM watcher
 
-A second controller-runtime reconciler runs alongside the Policy reconciler and watches `Pod` objects cluster-wide, filtered to those carrying the `k8s.sustain.io/policy` annotation. It exists to close the multi-minute latency window between an OOM kill and the next recording-rule-driven reconcile (kube-state-metrics scrape → Prometheus scrape → 1m rule evaluation → 5–10m reconcile interval).
+A second controller-runtime reconciler runs alongside the Policy reconciler and watches `Pod` objects cluster-wide, filtered by a local event predicate to those carrying the `k8s.sustain.io/policy` annotation OR a fresh `OOMKilled` container status. It exists to close the multi-minute latency window between an OOM kill and the next recording-rule-driven reconcile (kube-state-metrics scrape → Prometheus scrape → 1m rule evaluation → 5–10m reconcile interval).
 
-When a container's `LastTerminationState.Terminated.Reason == "OOMKilled"` is observed, the watcher:
+When a container's `LastTerminationState.Terminated.Reason == "OOMKilled"` is observed, the watcher first checks whether this exact termination (pod UID + container + restart count + terminated-at, all local — no apiserver call) has already been resolved on an earlier pass; if so it stops right there. Otherwise it resolves the [multi-level annotation](../reference/annotation.md) the pod's workload opts in through — pod template, owning workload metadata, or Namespace, same `ResolvePolicy` every other reader uses — and, if the pod is managed by some policy:
 
 - Resolves the pod's top-level workload owner and upserts an entry in an in-memory cache keyed by `(namespace, ownerKind, ownerName, container)`. Restart-count and termination timestamp are used to dedup repeated observations of the same kill.
 - Captures the container's memory limit from the pod spec at that moment, so the recommender has a bump anchor even when Prometheus hasn't yet surfaced the OOM-time limit recording rule.
@@ -107,7 +107,7 @@ When a container's `LastTerminationState.Terminated.Reason == "OOMKilled"` is ob
 
 The recommender reads the cache during recommendation build: a hit sets the live OOM signal for that container only — equivalent to the per-container Prometheus `workload_oom_24h` recency signal — and feeds the OOM-floor stage of the [Recommendation Pipeline](recommendation-pipeline.md#stages). The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.
 
-**Operational notes.** The cache is in-memory and lives only for the lifetime of the controller process; on restart, the 24h Prometheus history (`k8s_sustain:workload_oom_24h`, `k8s_sustain:container_oom_limit_24h:bytes`) repopulates the floor on the next reconcile. Only pods carrying the `k8s.sustain.io/policy` annotation are watched, so cardinality is bounded by opted-in workloads. The watcher is leader-elected like other controllers — non-leaders idle.
+**Operational notes.** The cache is in-memory and lives only for the lifetime of the controller process; on restart, the 24h Prometheus history (`k8s_sustain:workload_oom_24h`, `k8s_sustain:container_oom_limit_24h:bytes`) repopulates the floor on the next reconcile. The event predicate stays local (no apiserver calls): a pod is queued for reconcile because it carries the annotation itself or has ever had an `OOMKilled` container status. The OOM arm is sticky — `LastTerminationState.Terminated` persists on the pod status for the container's lifetime, so once a container has OOM'd, every later event for that pod (a readiness flip, an IP change) keeps re-queuing a reconcile too, not just the kill itself. Queued-pod cardinality is therefore bounded by the number of pods that have OOM'd at least once (plus annotated pods), not by OOM events; but the repeat wakes are cheap: the pre-resolution check described above (pod UID + container + restart count + terminated-at, same tuple the Sink already dedups managed OOMs by) catches a repeat before it costs anything beyond the initial Pod Get, so a chronically-restarting pod's owner/Namespace resolution runs once per distinct kill, not once per status write — including for a pod that turns out to be managed by no Policy at all. The watcher is leader-elected like other controllers — non-leaders idle.
 
 ## Admission Webhook (`k8s-sustain webhook`)
 
@@ -117,7 +117,7 @@ The webhook is a [mutating admission webhook](https://kubernetes.io/docs/referen
 
 1. Pod creation request arrives at the API server
 2. API server calls `POST /mutate` on the webhook service
-3. Webhook reads `k8s.sustain.io/policy` from the pod's annotations
+3. Webhook reads `k8s.sustain.io/policy` from the pod's own annotations (the common case, since pods inherit it from the pod template); if the pod carries neither the policy nor the opt-out annotation, it falls back to resolving the owning workload's `metadata.annotations` and then the Namespace's — see [Policy selection](#policy-selection)
 4. Resolves the pod's owner chain to determine the workload kind:
    - `Pod → ReplicaSet → Deployment`
    - `Pod → Job → CronJob`
@@ -134,9 +134,11 @@ The webhook **fails open** (`failurePolicy: Ignore` by default) — if it is unr
 
 **Latency budget.** The handler is bounded by a hard 4s deadline on the admission context (under the apiserver's 5s `MutatingWebhookConfiguration` timeout). The webhook makes no Prometheus calls — the only outbound work in the admission path is a handful of Kubernetes API `Get`s (Policy lookup, owner resolution, the `WorkloadRecommendation` read), each bounded by its own short 2s per-call timeout, so a slow apiserver round-trip cannot exhaust the budget. The webhook always serves the cached `WorkloadRecommendation` written by the controller; if the cache is missing or stale beyond `DefaultCacheStaleness` (30 min), the pod is admitted with its original template resources.
 
-**Informer-backed reads.** With Prometheus out of the admission path, the apiserver is the only remaining source of latency there. The webhook therefore serves its `Policy` and `WorkloadRecommendation` reads from an informer cache (`k8s.NewCached`) rather than a per-pod `Get` — at several thousand workloads an uncached read per admission is a round trip the cluster does not need. Budget roughly 20–50 MB resident at 10k workloads; the chart's webhook memory request is sized accordingly.
+**Informer-backed reads.** With Prometheus out of the admission path, the apiserver is the only remaining source of latency there. The webhook therefore serves its `Policy`, `WorkloadRecommendation` and `Namespace` reads from an informer cache (`k8s.NewCached`) rather than a per-pod `Get` — at several thousand workloads an uncached read per admission is a round trip the cluster does not need. Budget roughly 20–50 MB resident at 10k workloads; the chart's webhook memory request is sized accordingly.
 
-Only those two kinds are cached. The owner-chain kinds (`ReplicaSet`, `Job`) are read at most once per pod CREATE, and an informer over every ReplicaSet in the cluster would cost far more memory than the Get it saves — so they stay uncached. The two cached informers are registered and synced during startup, before the webhook is receiving traffic: registering them lazily on first use would push a blocking cluster-wide LIST into the first admission, inside its 2s per-call timeout, and on a large cluster the first pods after every restart would fail open onto template resources.
+Only those three kinds are cached. The owner-chain kinds (`ReplicaSet`, `Job`, and — for the multi-level opt-in's workload-level read — `Deployment`, `StatefulSet`, `DaemonSet`, `CronJob`, `Rollout`) are read at most once per pod CREATE, and an informer over every object of one of those kinds in the cluster would cost far more memory than the Get it saves — so they stay uncached. The three cached informers are registered and synced during startup, before the webhook is receiving traffic: registering them lazily on first use would push a blocking cluster-wide LIST into the first admission, inside its 2s per-call timeout, and on a large cluster the first pods after every restart would fail open onto template resources.
+
+The owner-chain reads are not entirely without a cost control of their own: see [Annotation Reference](../reference/annotation.md#the-webhooks-cost-control-does-not-fully-bound-itself) for the small TTL cache that keeps a rolling restart from re-reading the same owner's annotations once per replica.
 
 **Stub writes (the webhook's only write).** The webhook computes nothing, so it never writes a recommendation. It does write one thing: when a pod is admitted for a workload identity that has no `WorkloadRecommendation` at all, it creates an empty-status **stub** — recording the admitted pod's container set in `status.observedResources` — and admits the pod unchanged. Creating the object is what puts the identity into the controller's work-list; the [computation phase](#computation) fills in the recommendation on its next cycle, so the next pod of that workload is injected.
 
@@ -173,8 +175,8 @@ k8s-sustain ships pre-computed recording rules that the controller and webhook q
 
 ## Policy selection
 
-Each workload explicitly declares its policy via the `k8s.sustain.io/policy` annotation on its pod template. This is a deliberate design choice:
+Each workload explicitly declares its policy via the `k8s.sustain.io/policy` annotation, honoured at three levels — pod template, the workload object's own `metadata.annotations`, and its Namespace's — most specific first. See the [Annotation reference](../reference/annotation.md) for the full precedence table and the `k8s.sustain.io/opt-out` escape hatch. This is a deliberate design choice:
 
-- **No implicit matching** — a workload is never accidentally governed by a policy
-- **No ambiguity** — one annotation, one policy, deterministic behavior
-- **Same annotation, two consumers** — the webhook reads it from the pod (inherited from the template); the controller reads it from the workload's pod template directly
+- **No implicit matching** — a workload is never accidentally governed by a policy. A Namespace annotation only reaches workloads a Policy's own `spec.selector` already covers, and `--excluded-namespaces` remains a hard deny — namespace owners choose among the policies offered to them, they cannot grant themselves one.
+- **No ambiguity** — one annotation, one policy, deterministic behavior: the first level that says anything wins.
+- **Same resolution, three consumers** — the controller, the webhook, and the dashboard all resolve the annotation through the one shared `internal/policymatch.ResolvePolicy` function, so they can never disagree about which policy a workload is opted into. The webhook reads the pod's own annotations first (inherited from the template, so this is usually all it needs) and only falls back to reading the owning workload and Namespace objects when the pod itself is silent.

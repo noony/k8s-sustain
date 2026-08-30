@@ -61,10 +61,11 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 	}
 
 	srv := &dashboard.Server{
-		K8sClient:   k8sClient,
-		PromClient:  promClient,
-		Logger:      log,
-		CORSOrigins: cfg.CORSAllowedOrigins,
+		K8sClient:          k8sClient,
+		PromClient:         promClient,
+		Logger:             log,
+		CORSOrigins:        cfg.CORSAllowedOrigins,
+		ExcludedNamespaces: cfg.ExcludedNamespaces,
 	}
 
 	httpSrv := srv.NewHTTPServer(cfg.BindAddress)

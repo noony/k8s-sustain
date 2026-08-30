@@ -59,6 +59,7 @@ tests:
             - --bind-address=:8090
             - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
+            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
 
   - it: adds the CORS flag only when origins are configured
     set:
@@ -70,6 +71,17 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --cors-allowed-origins=https://a.example,https://b.example
+
+  - it: merges custom excludedNamespaces with the always-excluded defaults
+    set:
+      dashboard.enabled: true
+      excludedNamespaces:
+        - team-a
+        - team-b
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --excluded-namespaces=k8s-sustain,kube-system,kube-public,team-a,team-b
 
   - it: exposes the http port with probes
     set:

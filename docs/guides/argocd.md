@@ -9,7 +9,7 @@ Run a workload under Argo CD GitOps with k8s-sustain right-sizing it, and confir
 ## Prerequisites
 
 - An Argo CD installation managing the target namespace.
-- A Git repository containing the workload manifest with a `k8s.sustain.io/policy` annotation on the pod template.
+- A Git repository containing the workload manifest with a `k8s.sustain.io/policy` annotation (pod template, the workload's own `metadata.annotations`, or its Namespace — see the [Annotation reference](../reference/annotation.md)).
 - A k8s-sustain `Policy` matching the workload (see [Installation](../getting-started/installation.md)).
 - Read access to a Prometheus instance from the controller.
 

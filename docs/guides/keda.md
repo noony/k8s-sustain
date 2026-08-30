@@ -9,7 +9,7 @@ Run a workload scaled by a `ScaledObject` and confirm k8s-sustain's recommendati
 ## Prerequisites
 
 - KEDA installed in the cluster (the `ScaledObject` CRD is sufficient).
-- A workload with a `k8s.sustain.io/policy` annotation on its pod template.
+- A workload with a `k8s.sustain.io/policy` annotation (pod template, its own `metadata.annotations`, or its Namespace — see the [Annotation reference](../reference/annotation.md)).
 - A k8s-sustain `Policy` matching the workload (see [Installation](../getting-started/installation.md)).
 - A Prometheus instance reachable from the controller.
 

@@ -94,8 +94,12 @@ admission. This is the same version caveat that applies to
 
 Which pods count as "the running pods of the identity" is decided by the same
 grouping rule the controller uses to discover them: no controller
-`ownerReference`, a valid `owner-name`, matching policy annotation. A pod that
-merely carries the mirrored `owner-name` **label** but belongs to a
+`ownerReference`, a valid `owner-name`, and a **resolved** policy that matches
+the group's — resolved the same way as every other kind, across the pod's own
+annotation and its Namespace's (see [Annotation Reference](../reference/annotation.md)).
+Namespace-level opt-in works for bare pods too: `GroupBarePods` consults the
+namespace annotation map it is passed, not just each pod's own annotations. A
+pod that merely carries the mirrored `owner-name` **label** but belongs to a
 ReplicaSet is not a member and is never touched by this path — that is the
 bare-pod counterpart of the ownerRef check protecting every other kind.
 

@@ -71,6 +71,15 @@ type Server struct {
 	//   - other: the request's Origin must match one of the listed values.
 	CORSOrigins []string
 
+	// ExcludedNamespaces mirrors the controller's and webhook's
+	// --excluded-namespaces flag: a hard deny that policymatch.Matches applies
+	// ahead of a Policy's own selector. Without this, the dashboard's
+	// policy-scoped workload views (listPolicyWorkloadRows,
+	// collectPolicyWorkloads, collectAllWorkloads) could render a workload in
+	// an operator-excluded namespace as managed even though neither the
+	// controller nor the webhook would ever touch it.
+	ExcludedNamespaces []string
+
 	cacheInit    sync.Once
 	summaryCache *Cache
 }

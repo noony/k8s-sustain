@@ -144,3 +144,22 @@ func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name
 		EffectivenessSeries: map[string][]promclient.TimeValue{"cpu": cpuSeries, "memory": memSeries},
 	})
 }
+
+// policiesByName lists every Policy once and indexes it by name, for callers
+// that need to check policymatch.Matches against a resolved policy name for
+// many workloads without a *Policy already in hand (a single Get per row
+// would scale with workload count instead of Policy count). Returns a
+// non-nil map — possibly empty — on success; a nil return always means the
+// List failed, which callers use to distinguish "no Policies exist" from
+// "could not check".
+func (s *Server) policiesByName(ctx context.Context) (map[string]*sustainv1alpha1.Policy, error) {
+	var list sustainv1alpha1.PolicyList
+	if err := s.K8sClient.List(ctx, &list); err != nil {
+		return nil, err
+	}
+	out := make(map[string]*sustainv1alpha1.Policy, len(list.Items))
+	for i := range list.Items {
+		out[list.Items[i].Name] = &list.Items[i]
+	}
+	return out, nil
+}

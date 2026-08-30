@@ -46,7 +46,7 @@ func TestGroupBarePods_GroupsByNamespaceAndOwnerName(t *testing.T) {
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
 	}
 
-	groups := GroupBarePods([]corev1.Pod{podA1, podA2, podB})
+	groups := GroupBarePods([]corev1.Pod{podA1, podA2, podB}, nil)
 	if len(groups) != 2 {
 		t.Fatalf("expected 2 groups (one per namespace), got %d: %+v", len(groups), groups)
 	}
@@ -70,7 +70,7 @@ func TestGroupBarePods_NoOwnerNameAnnotation_NotDiscovered(t *testing.T) {
 		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
 	}
-	groups := GroupBarePods([]corev1.Pod{pod})
+	groups := GroupBarePods([]corev1.Pod{pod}, nil)
 	if len(groups) != 0 {
 		t.Errorf("expected 0 groups for a pod with no owner-name annotation, got %d", len(groups))
 	}
@@ -89,7 +89,7 @@ func TestGroupBarePods_OwnedPod_NotDiscovered(t *testing.T) {
 		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
 	}
-	groups := GroupBarePods([]corev1.Pod{pod})
+	groups := GroupBarePods([]corev1.Pod{pod}, nil)
 	if len(groups) != 0 {
 		t.Errorf("expected 0 groups for an owned pod (handled by another kind's listing instead), got %d", len(groups))
 	}
@@ -123,7 +123,7 @@ func TestGroupBarePods_CollectsMembers(t *testing.T) {
 	}
 	pods := []corev1.Pod{mk("a", false), mk("b", false), mk("impostor", true)}
 
-	groups := GroupBarePods(pods)
+	groups := GroupBarePods(pods, nil)
 	if len(groups) != 1 {
 		t.Fatalf("got %d groups, want 1", len(groups))
 	}
@@ -152,7 +152,7 @@ func TestGroupBarePods_MembersAreNamespaceScoped(t *testing.T) {
 			},
 		}
 	}
-	groups := GroupBarePods([]corev1.Pod{mk("airflow", "a"), mk("airflow", "b"), mk("airflow-staging", "c")})
+	groups := GroupBarePods([]corev1.Pod{mk("airflow", "a"), mk("airflow", "b"), mk("airflow-staging", "c")}, nil)
 	if len(groups) != 2 {
 		t.Fatalf("got %d groups, want 2", len(groups))
 	}
@@ -173,7 +173,7 @@ func TestGroupBarePods_NoPolicyAnnotation_NotDiscovered(t *testing.T) {
 		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
 	}
-	groups := GroupBarePods([]corev1.Pod{pod})
+	groups := GroupBarePods([]corev1.Pod{pod}, nil)
 	if len(groups) != 0 {
 		t.Errorf("expected 0 groups for a pod with no policy annotation, got %d", len(groups))
 	}
@@ -206,7 +206,7 @@ func TestGroupBarePods_ExcludesPodsOfAnotherPolicy(t *testing.T) {
 		// Newer, so without the exclusion it would also become the
 		// representative and donate its containers to the group.
 		mk("run-2", "other", base.Add(time.Minute)),
-	})
+	}, nil)
 
 	if len(groups) != 1 {
 		t.Fatalf("got %d groups, want 1: a mismatched pod must not fork the identity", len(groups))
@@ -226,5 +226,72 @@ func TestGroupBarePods_ExcludesPodsOfAnotherPolicy(t *testing.T) {
 	}
 	if len(g.PolicyMismatched) != 1 || g.PolicyMismatched[0].Name != "run-2" {
 		t.Errorf("PolicyMismatched = %v, want run-2 recorded so the caller can log it", g.PolicyMismatched)
+	}
+}
+
+// TestGroupBarePods_NamespaceLevelOptIn verifies a bare pod with a valid
+// owner-name but no policy annotation of its own is grouped when its Namespace
+// opts in. Bare pods are the one kind with no pod template, so the Pod's own
+// annotations serve as the template level and the namespace supplies the rest.
+func TestGroupBarePods_NamespaceLevelOptIn(t *testing.T) {
+	pods := []corev1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   "airflow",
+			Name:        "dag-task-abc",
+			Annotations: map[string]string{sustainv1alpha1.OwnerNameAnnotation: "dag-task"},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "base"}}},
+	}}
+	nsAnnotations := map[string]map[string]string{
+		"airflow": {sustainv1alpha1.PolicyAnnotation: "p"},
+	}
+
+	groups := GroupBarePods(pods, nsAnnotations)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group from a namespace-annotated pod, got %d", len(groups))
+	}
+	if groups[0].PolicyName != "p" {
+		t.Errorf("PolicyName = %q, want %q", groups[0].PolicyName, "p")
+	}
+	if groups[0].Name != "dag-task" {
+		t.Errorf("Name = %q, want %q", groups[0].Name, "dag-task")
+	}
+}
+
+// TestGroupBarePods_PodOptOutBeatsNamespace verifies a bare pod can opt out of
+// a namespace-wide opt-in.
+func TestGroupBarePods_PodOptOutBeatsNamespace(t *testing.T) {
+	pods := []corev1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "airflow",
+			Name:      "dag-task-abc",
+			Annotations: map[string]string{
+				sustainv1alpha1.OwnerNameAnnotation: "dag-task",
+				sustainv1alpha1.OptOutAnnotation:    "true",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "base"}}},
+	}}
+	nsAnnotations := map[string]map[string]string{
+		"airflow": {sustainv1alpha1.PolicyAnnotation: "p"},
+	}
+
+	if groups := GroupBarePods(pods, nsAnnotations); len(groups) != 0 {
+		t.Fatalf("an opted-out pod must form no group, got %d: %+v", len(groups), groups)
+	}
+}
+
+// TestGroupBarePods_NilNamespaceAnnotationsUnchanged pins that passing nil
+// preserves the pre-existing rule: only a pod's own policy annotation opts in.
+func TestGroupBarePods_NilNamespaceAnnotationsUnchanged(t *testing.T) {
+	pods := []corev1.Pod{{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   "airflow",
+			Name:        "dag-task-abc",
+			Annotations: map[string]string{sustainv1alpha1.OwnerNameAnnotation: "dag-task"},
+		},
+	}}
+	if groups := GroupBarePods(pods, nil); len(groups) != 0 {
+		t.Fatalf("without a policy annotation and without namespace opt-in, expected no groups, got %d", len(groups))
 	}
 }

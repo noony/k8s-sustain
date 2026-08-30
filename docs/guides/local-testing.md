@@ -576,6 +576,29 @@ comfortably longer than the harness's deployed `--reconcile-interval=30s`.
 - Not in `status.sh`'s generic table (it assumes a Deployment per
   scenario); use the commands above instead.
 
+### `namespace-optin`
+
+Two Deployments in one namespace, same shape as `steady`, but neither
+carries a `k8s.sustain.io/policy` annotation of its own anywhere: `web` opts
+in purely through the Namespace's `k8s.sustain.io/policy` annotation, and
+`opted-out` sets `k8s.sustain.io/opt-out: "true"` on its own
+`metadata.annotations` to override that inherited opt-in. Validates the
+delegated, most-specific-first annotation resolution (see the [Annotation
+reference](../reference/annotation.md)).
+
+**Expected:**
+
+- `web`: CPU request drops from `500m` to ~`220m`, memory from `256Mi` to
+  ~`110Mi`, within `WINDOW + reconcile_interval` — exactly like `steady`,
+  despite carrying no annotation of its own anywhere.
+- `opted-out`: requests stay pinned at `500m / 256Mi` forever; it is never
+  reconciled.
+
+  ```bash
+  kubectl get deploy -n scenario-namespace-optin \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].resources.requests}{"\n"}{end}'
+  ```
+
 ## Observability
 
 `make test-scenario-status` prints a table:

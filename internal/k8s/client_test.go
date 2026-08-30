@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -49,20 +50,26 @@ var _ func(context.Context, context.Context, *runtime.Scheme) (client.Client, er
 // that call's 2s timeout.
 //
 // Pinning the exact contents rather than just "non-empty" is deliberate. The
-// webhook reads these two kinds on every admission; dropping one would
-// reintroduce the startup stall for it, and adding an owner-chain kind here
-// (ReplicaSet, Job) would stand up an informer over every such object in the
-// cluster — precisely what DisableFor in NewCached exists to prevent.
+// webhook reads Policy and WorkloadRecommendation on every admission, and
+// Namespace on the multi-level opt-in path (now three kinds, not two);
+// dropping any of them would reintroduce the startup stall for it, and
+// adding an owner-chain kind here (ReplicaSet, Job, Deployment, StatefulSet,
+// DaemonSet, CronJob, Rollout — see OwnerChainDisableFor) would stand up an
+// informer over every such object in the cluster — precisely what DisableFor
+// in NewCached exists to prevent.
 func TestCachedKindsArePreWarmed(t *testing.T) {
 	got := cachedKinds()
-	if len(got) != 2 {
-		t.Fatalf("cachedKinds: got %d kinds, want 2 (Policy, WorkloadRecommendation)", len(got))
+	if len(got) != 3 {
+		t.Fatalf("cachedKinds: got %d kinds, want 3 (Policy, WorkloadRecommendation, Namespace)", len(got))
 	}
 	if _, ok := got[0].(*sustainv1alpha1.Policy); !ok {
 		t.Errorf("cachedKinds[0]: got %T, want *v1alpha1.Policy", got[0])
 	}
 	if _, ok := got[1].(*sustainv1alpha1.WorkloadRecommendation); !ok {
 		t.Errorf("cachedKinds[1]: got %T, want *v1alpha1.WorkloadRecommendation", got[1])
+	}
+	if _, ok := got[2].(*corev1.Namespace); !ok {
+		t.Errorf("cachedKinds[2]: got %T, want *corev1.Namespace", got[2])
 	}
 }
 

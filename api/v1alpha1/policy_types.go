@@ -28,6 +28,21 @@ const (
 	// Example: k8s.sustain.io/owner-name: etl-daily
 	OwnerNameAnnotation = "k8s.sustain.io/owner-name"
 
+	// OptOutAnnotation excludes a workload from a Policy it would otherwise
+	// inherit from a less specific annotation level (its Namespace, or its own
+	// metadata when the pod template is what is being evaluated). Only the
+	// literal string "true" opts out; any other value is ignored.
+	//
+	// It exists because namespace-level opt-in is all-or-nothing: without an
+	// escape hatch, one workload that must keep its hand-tuned resources would
+	// force the whole namespace to stay un-annotated. A dedicated key rather
+	// than a reserved PolicyAnnotation value ("none", "") so it can never
+	// collide with a real Policy name, and so an empty templated value stays
+	// what it has always been — no opt-in at all, not an opt-out.
+	//
+	// Example: k8s.sustain.io/opt-out: "true"
+	OptOutAnnotation = "k8s.sustain.io/opt-out"
+
 	// WLRPolicyLabel labels each WorkloadRecommendation with the Policy that
 	// produced it, so writers and consumers (controller, webhook, dashboard) can
 	// scope list calls server-side instead of post-filtering by spec.policy.

@@ -35,7 +35,7 @@ func TestListJobTargets_SkipsCronJobOwnedAndTerminal(t *testing.T) {
 	}
 	r := makeReconciler(t, standalone, cronOwned, terminal)
 
-	got, err := r.listJobTargets(context.Background(), nil)
+	got, err := r.listJobTargets(context.Background(), nil, newNSAnnotations(r.Client))
 	if err != nil {
 		t.Fatalf("listJobTargets: %v", err)
 	}
@@ -67,8 +67,11 @@ func TestJobToTarget_FromPodTemplate(t *testing.T) {
 	if got.Name != "batch-1" || got.Namespace != "default" {
 		t.Errorf("Name/Namespace = %q/%q, want batch-1/default", got.Name, got.Namespace)
 	}
-	if got.PolicyName != "p" {
-		t.Errorf("PolicyName = %q, want p", got.PolicyName)
+	// newTargetFromTemplate no longer resolves PolicyName itself (that moved to
+	// collectTargets, which also consults the workload/namespace levels); it
+	// still carries the pod-template annotation through for that resolution.
+	if got.TemplateAnnotations[sustainv1alpha1.PolicyAnnotation] != "p" {
+		t.Errorf("TemplateAnnotations[PolicyAnnotation] = %q, want p", got.TemplateAnnotations[sustainv1alpha1.PolicyAnnotation])
 	}
 	if len(got.Containers) != 1 || got.Containers[0].Name != "worker" {
 		t.Errorf("Containers = %v, want [worker]", got.Containers)
