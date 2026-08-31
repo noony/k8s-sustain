@@ -121,10 +121,20 @@ func seedMetricsForRegistrationCheck() {
 	autoscalerPresent.WithLabelValues(ns, "Deployment", name, "HPA").Set(0)
 }
 
+// Asserts the DELTA this call contributes, not an absolute counter value.
+// wlrRefreshTotal is a counter on the process-global registry, so it is
+// monotonic for the lifetime of the test binary: under `go test -count=N` —
+// the shape of a stress run hunting a flake — the same process runs this test
+// N times against the same counter, and an absolute assertion holds only on
+// the first iteration. Reading a delta rather than resetting the child is
+// deliberate: seedMetricsForRegistrationCheck above documents that removing
+// series from this registry mid-run is what broke the registration probe once
+// already.
 func TestEmitWLRRefreshRecordsOutcome(t *testing.T) {
+	c := wlrRefreshTotal.WithLabelValues("ns", "Pod", WLRRefreshRetainedEmpty)
+	before := testutil.ToFloat64(c)
 	EmitWLRRefresh("ns", "Pod", WLRRefreshRetainedEmpty)
-	got := testutil.ToFloat64(wlrRefreshTotal.WithLabelValues("ns", "Pod", WLRRefreshRetainedEmpty))
-	if got != 1 {
-		t.Errorf("counter = %v, want 1", got)
+	if got := testutil.ToFloat64(c) - before; got != 1 {
+		t.Errorf("counter delta = %v, want 1", got)
 	}
 }
