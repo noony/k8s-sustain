@@ -153,34 +153,29 @@ func TestEmitCoordinationFactor(t *testing.T) {
 	}
 }
 
+// Asserts the DELTA the three calls contribute, not an absolute counter
+// value — see TestEmitWLRRefreshRecordsOutcome in metrics_test.go for why a
+// counter on the process-global registry cannot be asserted absolutely under
+// `go test -count=N`.
 func TestIncrementRetryAttempt(t *testing.T) {
 	const ns, kind, name = "ns", "Deployment", "retry-attempt"
 
+	retryAttempts := func() float64 {
+		t.Helper()
+		var v float64
+		for _, m := range seriesForWorkload(t, "k8s_sustain_workload_retry_attempts", ns, kind, name) {
+			v += m.GetCounter().GetValue()
+		}
+		return v
+	}
+
+	before := retryAttempts()
 	IncrementRetryAttempt(ns, kind, name)
 	IncrementRetryAttempt(ns, kind, name)
 	IncrementRetryAttempt(ns, kind, name)
 
-	mfs, err := metrics.Registry.Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	var got float64
-	for _, mf := range mfs {
-		if mf.GetName() != "k8s_sustain_workload_retry_attempts" {
-			continue
-		}
-		for _, m := range mf.Metric {
-			labels := map[string]string{}
-			for _, l := range m.Label {
-				labels[l.GetName()] = l.GetValue()
-			}
-			if labels["namespace"] == ns && labels["owner_kind"] == kind && labels["owner_name"] == name {
-				got = m.GetCounter().GetValue()
-			}
-		}
-	}
-	if got != 3 {
-		t.Errorf("retry_attempts_total = %v, want 3", got)
+	if got := retryAttempts() - before; got != 3 {
+		t.Errorf("retry_attempts_total delta = %v, want 3", got)
 	}
 }
 
