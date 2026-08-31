@@ -250,7 +250,7 @@ func TestResolveCachedPodOwner_KeyIncludesUID(t *testing.T) {
 // cache exists for — could still let every one of N simultaneous misses
 // issue its own Get before any of them had populated the cache.
 //
-// singleflightTestHook lets this test hold the Get open until all N callers
+// Handler.sfJoinHook lets this test hold the Get open until all N callers
 // have joined the same in-flight resolution, so it genuinely exercises
 // concurrency rather than passing by timing luck: if the fix were reverted
 // (no singleflight), every one of the N goroutines would reach the
@@ -265,13 +265,11 @@ func TestOwnerAnnotations_ConcurrentMissesCollapseToOneGet(t *testing.T) {
 
 	var joined int32
 	allJoined := make(chan struct{})
-	prev := singleflightTestHook
-	singleflightTestHook = func(string) {
+	joinHook := func(string) {
 		if atomic.AddInt32(&joined, 1) == n {
 			close(allJoined)
 		}
 	}
-	defer func() { singleflightTestHook = prev }()
 
 	var gets int32
 	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(d).
@@ -284,7 +282,7 @@ func TestOwnerAnnotations_ConcurrentMissesCollapseToOneGet(t *testing.T) {
 				return cl.Get(ctx, key, obj, opts...)
 			},
 		}).Build()
-	h := &Handler{Client: c}
+	h := &Handler{Client: c, sfJoinHook: joinHook}
 
 	var wg sync.WaitGroup
 	errs := make([]error, n)
@@ -322,13 +320,11 @@ func TestResolveCachedPodOwner_ConcurrentMissesCollapseToOneGet(t *testing.T) {
 
 	var joined int32
 	allJoined := make(chan struct{})
-	prev := singleflightTestHook
-	singleflightTestHook = func(string) {
+	joinHook := func(string) {
 		if atomic.AddInt32(&joined, 1) == n {
 			close(allJoined)
 		}
 	}
-	defer func() { singleflightTestHook = prev }()
 
 	var rsGets int32
 	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(rs).
@@ -341,7 +337,7 @@ func TestResolveCachedPodOwner_ConcurrentMissesCollapseToOneGet(t *testing.T) {
 				return cl.Get(ctx, key, obj, opts...)
 			},
 		}).Build()
-	h := &Handler{Client: c}
+	h := &Handler{Client: c, sfJoinHook: joinHook}
 
 	var wg sync.WaitGroup
 	kinds := make([]string, n)
@@ -394,7 +390,30 @@ func TestOwnerAnnotations_WaiterRespectsOwnContextDeadline(t *testing.T) {
 		}).Build()
 	h := &Handler{Client: c}
 
+	// The leader goroutine must be JOINED before this test returns, not
+	// merely released: a goroutine still inside ownerAnnotations after its
+	// own test has finished runs concurrently with whatever test -shuffle
+	// puts next, and while it is in there it reads Handler.sfJoinHook. Back
+	// when that hook was a package-level var, this straggler read it while
+	// the next test was writing it — a data race, and one that also fired
+	// that test's barrier counter, releasing its barrier a caller early so a
+	// late caller opened a second singleflight round and broke its
+	// "exactly one Get" assertion. Releasing the leader is also done here
+	// rather than only on the happy path, so an early t.Fatal above cannot
+	// strand it forever and trip the package's goleak check.
+	leaderDone := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseLeader := func() { releaseOnce.Do(func() { close(leaderCanProceed) }) }
+	defer func() {
+		releaseLeader()
+		select {
+		case <-leaderDone:
+		case <-time.After(2 * time.Second):
+			t.Error("leader goroutine still running after the test finished")
+		}
+	}()
 	go func() {
+		defer close(leaderDone)
 		_, _ = h.ownerAnnotations(context.Background(), "team-a", "Deployment", "web")
 	}()
 
@@ -409,7 +428,7 @@ func TestOwnerAnnotations_WaiterRespectsOwnContextDeadline(t *testing.T) {
 	start := time.Now()
 	_, err := h.ownerAnnotations(followerCtx, "team-a", "Deployment", "web")
 	elapsed := time.Since(start)
-	close(leaderCanProceed) // let the leader's Get finish so nothing leaks past the test
+	releaseLeader() // let the leader's Get finish; the deferred join waits for it
 
 	if err == nil {
 		t.Fatal("expected the follower to return an error on its own context deadline")

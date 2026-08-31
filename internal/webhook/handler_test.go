@@ -1261,13 +1261,11 @@ func TestAdmit_PodTemplateAnnotated_ConcurrentAdmissionsCollapseToOneReplicaSetG
 
 	var joined int32
 	allJoined := make(chan struct{})
-	prev := singleflightTestHook
-	singleflightTestHook = func(string) {
+	joinHook := func(string) {
 		if atomic.AddInt32(&joined, 1) == n {
 			close(allJoined)
 		}
 	}
-	defer func() { singleflightTestHook = prev }()
 
 	var rsGets int32
 	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(policy, rs, wlr).
@@ -1281,7 +1279,7 @@ func TestAdmit_PodTemplateAnnotated_ConcurrentAdmissionsCollapseToOneReplicaSetG
 				return cl.Get(ctx, key, obj, opts...)
 			},
 		}).Build()
-	h := &Handler{Client: c}
+	h := &Handler{Client: c, sfJoinHook: joinHook}
 
 	reqs := make([]*admissionv1.AdmissionRequest, n)
 	for i := range n {
