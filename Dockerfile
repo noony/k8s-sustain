@@ -5,7 +5,7 @@ RUN npm ci
 COPY internal/dashboard/ui/frontend/ ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.0-alpine AS builder
 ARG TARGETOS
 ARG TARGETARCH
 # VERSION is embedded into the binary so `k8s-sustain version` and the startup
