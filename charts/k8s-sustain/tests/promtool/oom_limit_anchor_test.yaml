@@ -1,0 +1,66 @@
+# Unit test for k8s_sustain:container_oom_limit_24h:bytes.
+#
+# The anchor must be the limit the container was actually KILLED at — never the
+# larger limit k8s-sustain itself writes moments later in response to that kill.
+#
+# The rule gates on changes(restarts[2m]) > 0, which stays true for two minutes
+# AFTER the restart. An in-place resize landing inside that window is otherwise
+# sampled as though it were the OOM-time limit, and max_over_time(...[24h]) then
+# holds that inflated value for 24 hours. Because the recommender derives the
+# next limit from this anchor, that feeds the OOM floor its own output.
+rule_files:
+  - rules-only.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 30s samples, matching a real scrape interval. At 1m resolution
+    # changes(...[2m]) is true for a single step (range selectors are
+    # left-open), so nothing lands inside the window and the bug hides.
+  - interval: 30s
+    input_series:
+      # Runs at a 96Mi limit through t=6m; OOM-killed at t=6m; k8s-sustain
+      # reacts and raises the limit to 184Mi at t=6m30s — the OOM watcher
+      # triggers an immediate reconcile, so this is the realistic delay.
+      - series: 'container_spec_memory_limit_bytes{namespace="scenario-oom-kill",pod="stress-abc",container="stress",image="stress:v1",node="node-1"}'
+        values: '100663296x12 192937984x9'
+      - series: 'kube_pod_container_status_restarts_total{namespace="scenario-oom-kill",pod="stress-abc",container="stress"}'
+        values: '0x11 1x10'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="scenario-oom-kill",pod="stress-abc",container="stress",reason="OOMKilled"}'
+        values: '0x11 1x10'
+      - series: 'kube_pod_owner{namespace="scenario-oom-kill",pod="stress-abc",owner_kind="StatefulSet",owner_name="web",owner_is_controller="true"}'
+        values: '1x21'
+
+    promql_expr_test:
+      # 96Mi = 100663296. Reading 184Mi (192937984) here means the rule captured
+      # k8s-sustain's own post-kill resize as an OOM-time limit.
+      - expr: k8s_sustain:container_oom_limit_24h:bytes
+        eval_time: 10m
+        exp_samples:
+          - labels: 'k8s_sustain:container_oom_limit_24h:bytes{container="stress",namespace="scenario-oom-kill",owner_kind="StatefulSet",owner_name="web"}'
+            value: 100663296
+
+  # The complement: min_over_time must not blunt a GENUINE escalation. When the
+  # container is killed again at the raised limit, that limit is a real
+  # OOM-time limit and the anchor has to follow it up — otherwise a workload
+  # whose need actually grew would never get bumped past its first kill.
+  - interval: 30s
+    input_series:
+      # 96Mi until t=6m, raised to 184Mi at t=6m30s, then a SECOND genuine kill
+      # at t=12m — by which point 184Mi has been the steady-state limit for
+      # five and a half minutes, so it is genuinely what the kernel killed at.
+      - series: 'container_spec_memory_limit_bytes{namespace="scenario-oom-kill",pod="stress-abc",container="stress",image="stress:v1",node="node-1"}'
+        values: '100663296x12 192937984x17'
+      - series: 'kube_pod_container_status_restarts_total{namespace="scenario-oom-kill",pod="stress-abc",container="stress"}'
+        values: '0x11 1x11 2x6'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="scenario-oom-kill",pod="stress-abc",container="stress",reason="OOMKilled"}'
+        values: '0x11 1x18'
+      - series: 'kube_pod_owner{namespace="scenario-oom-kill",pod="stress-abc",owner_kind="StatefulSet",owner_name="web",owner_is_controller="true"}'
+        values: '1x30'
+
+    promql_expr_test:
+      - expr: k8s_sustain:container_oom_limit_24h:bytes
+        eval_time: 14m
+        exp_samples:
+          - labels: 'k8s_sustain:container_oom_limit_24h:bytes{container="stress",namespace="scenario-oom-kill",owner_kind="StatefulSet",owner_name="web"}'
+            value: 192937984

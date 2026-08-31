@@ -410,30 +410,58 @@ func oomTerminations(pod *corev1.Pod) []containerTermination {
 	return out
 }
 
-// containerMemLimitBytes returns the configured memory limit (in bytes) for
-// the named container from the pod spec, or zero if no limit is set. We read
-// the spec rather than the status because Status.Resources only exists for
-// in-place resize-capable pods (k8s >= 1.27 and feature-gated until 1.33).
+// containerMemLimitBytes returns the memory limit (in bytes) the kernel
+// actually killed the named container at, or zero if no limit is set.
+//
+// ContainerStatus.Resources — the limits the kubelet successfully applied — is
+// the authoritative source and is preferred over pod.Spec. pod.Spec carries
+// the DESIRED limit, which the recommender itself rewrites on every in-place
+// resize, so anchoring the OOM memory floor there feeds the floor its own
+// previous output: floor = limit * 1.20 (bump) * 1.15 (headroom), new limit =
+// 1.50 * request, hence ~2.07x per kill with nothing to converge on. The two
+// diverge for as long as a resize is pending, and permanently once a resize is
+// infeasible (a request above node capacity is never applied, so the container
+// keeps dying at its old small limit while the spec grows without bound).
+//
+// pod.Spec remains the fallback: Status.Resources is only populated for
+// in-place resize-capable pods (k8s >= 1.33), and a pod that has never been
+// resized has no divergence to worry about.
 func containerMemLimitBytes(pod *corev1.Pod, container string) int64 {
+	for i := range pod.Status.ContainerStatuses {
+		cs := &pod.Status.ContainerStatuses[i]
+		if cs.Name != container || cs.Resources == nil {
+			continue
+		}
+		// Applied state is authoritative once present, including when it
+		// carries no memory limit at all — a resize that removed the limit
+		// must not fall through and resurrect the stale spec value.
+		return memLimitBytes(cs.Resources.Limits)
+	}
 	for i := range pod.Spec.Containers {
 		c := &pod.Spec.Containers[i]
 		if c.Name != container {
 			continue
 		}
-		if c.Resources.Limits == nil {
-			return 0
-		}
-		q := c.Resources.Limits.Memory()
-		if q == nil || q.IsZero() {
-			return 0
-		}
-		v, ok := q.AsInt64()
-		if !ok {
-			return 0
-		}
-		return v
+		return memLimitBytes(c.Resources.Limits)
 	}
 	return 0
+}
+
+// memLimitBytes extracts a memory limit in bytes from a ResourceList,
+// returning zero when no usable limit is present.
+func memLimitBytes(limits corev1.ResourceList) int64 {
+	if limits == nil {
+		return 0
+	}
+	q := limits.Memory()
+	if q == nil || q.IsZero() {
+		return 0
+	}
+	v, ok := q.AsInt64()
+	if !ok {
+		return 0
+	}
+	return v
 }
 
 func (w *Watcher) now() time.Time {

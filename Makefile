@@ -71,6 +71,9 @@ helm-template: helm-deps ## Render Helm chart templates
 	helm template k8s-sustain charts/k8s-sustain
 	helm template k8s-sustain-policies charts/k8s-sustain-policies
 
+helm-promtool: helm-deps ## Validate and unit-test the PrometheusRule recording rules (requires promtool and yq)
+	bash charts/k8s-sustain/tests/promtool_test.sh
+
 helm-unittest: helm-deps ## Run Helm chart unit tests (requires the helm-unittest plugin)
 	helm unittest charts/k8s-sustain
 	helm unittest charts/k8s-sustain-policies

@@ -194,6 +194,29 @@ func (b *podBuilder) statusOOM(name string, finishedAt time.Time, restartCount i
 	return b
 }
 
+// appliedResources sets ContainerStatus.Resources — the limits the kubelet
+// actually applied to the running container. It diverges from pod.Spec while
+// an in-place resize is pending or infeasible, which is exactly the case the
+// OOM anchor has to get right.
+func (b *podBuilder) appliedResources(name, memLimit string) *podBuilder {
+	res := &corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse(memLimit),
+		},
+	}
+	for i := range b.pod.Status.ContainerStatuses {
+		if b.pod.Status.ContainerStatuses[i].Name == name {
+			b.pod.Status.ContainerStatuses[i].Resources = res
+			return b
+		}
+	}
+	b.pod.Status.ContainerStatuses = append(b.pod.Status.ContainerStatuses, corev1.ContainerStatus{
+		Name:      name,
+		Resources: res,
+	})
+	return b
+}
+
 func (b *podBuilder) statusReason(name, reason string) *podBuilder {
 	b.pod.Status.ContainerStatuses = append(b.pod.Status.ContainerStatuses, corev1.ContainerStatus{
 		Name: name,
@@ -659,6 +682,84 @@ func TestContainerMemLimitBytes_NoLimit(t *testing.T) {
 	pod := newPod("p").container("main", "").build()
 	if got := containerMemLimitBytes(pod, "main"); got != 0 {
 		t.Errorf("got %d, want 0", got)
+	}
+}
+
+// TestContainerMemLimitBytes_PrefersAppliedLimitOverDesiredSpec pins the
+// anchor to the limit the kernel actually killed at.
+//
+// pod.Spec carries the DESIRED limit, which the recommender itself rewrites on
+// every in-place resize. Reading the anchor from there feeds the OOM memory
+// floor its own previous output: floor = limit * 1.20 (bump) * 1.15 (headroom)
+// and the new limit = 1.50 * request, so each kill multiplies the
+// recommendation by ~2.07x. Observed end to end on a kind cluster: 120Mi grew
+// to 19630Mi in six seconds, ending at a 59GiB limit on an 8GiB node.
+func TestContainerMemLimitBytes_PrefersAppliedLimitOverDesiredSpec(t *testing.T) {
+	// Spec was already bumped to 512Mi by a previous recommendation; the
+	// kubelet only ever applied 128Mi, which is what the container died at.
+	pod := newPod("p").
+		container("main", "512Mi").
+		appliedResources("main", "128Mi").
+		build()
+
+	if got, want := containerMemLimitBytes(pod, "main"), int64(128*1024*1024); got != want {
+		t.Errorf("containerMemLimitBytes = %d, want %d (applied limit, not desired spec)", got, want)
+	}
+}
+
+// TestContainerMemLimitBytes_FallsBackToSpecWhenStatusEmpty covers clusters or
+// moments where the kubelet has not populated ContainerStatus.Resources.
+func TestContainerMemLimitBytes_FallsBackToSpecWhenStatusEmpty(t *testing.T) {
+	pod := newPod("p").container("main", "64Mi").build()
+
+	if got, want := containerMemLimitBytes(pod, "main"), int64(64*1024*1024); got != want {
+		t.Errorf("containerMemLimitBytes = %d, want %d", got, want)
+	}
+}
+
+// TestReconcile_OOMLimitAnchorsOnAppliedLimit is the regression guard for the
+// runaway: the recorded anchor must not be the request the recommender just
+// wrote, or the floor compounds against itself on every kill.
+func TestReconcile_OOMLimitAnchorsOnAppliedLimit(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	finished := now.Add(-30 * time.Second)
+
+	pod := newPod("app-xyz").
+		owner("StatefulSet", "app").
+		container("main", "40635Mi").
+		statusOOM("main", finished, 12).
+		appliedResources("main", "180Mi").
+		build()
+
+	sch := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pod).Build()
+	sink := &stubSink{}
+	handler := &stubHandler{}
+
+	reconcile(t, c, sink, handler, pod, now)
+
+	calls := sink.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("sink calls = %d, want 1", len(calls))
+	}
+	if got, want := calls[0].Record.OOMLimitBytes, int64(180*1024*1024); got != want {
+		t.Errorf("OOMLimitBytes = %d, want %d (applied limit, not the infeasible 40635Mi spec)", got, want)
+	}
+}
+
+// TestContainerMemLimitBytes_AppliedStatusWithoutMemoryLimitWins covers a
+// resize that REMOVES the memory limit (RemoveMemoryLimit). Once the kubelet
+// has applied that, there is no limit for the kernel to kill at, so the stale
+// spec value must not be resurrected as a bump anchor.
+func TestContainerMemLimitBytes_AppliedStatusWithoutMemoryLimitWins(t *testing.T) {
+	pod := newPod("p").container("main", "256Mi").build()
+	pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, corev1.ContainerStatus{
+		Name:      "main",
+		Resources: &corev1.ResourceRequirements{Limits: corev1.ResourceList{}},
+	})
+
+	if got := containerMemLimitBytes(pod, "main"); got != 0 {
+		t.Errorf("containerMemLimitBytes = %d, want 0 (applied state has no memory limit)", got)
 	}
 }
 

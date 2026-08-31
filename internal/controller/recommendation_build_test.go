@@ -590,3 +590,72 @@ func TestBuildRecommendations_NilInputsLogsOnlyForGenuineCandidateBug(t *testing
 		t.Error("a nil inputs the candidate loop marked snapshotPending (no observed-resources snapshot yet) must not log errPrefetchMissingForBatchedKind -- it is a routine first-cycle state, not a bug")
 	}
 }
+
+// TestBuildRecommendations_OOMAnchorTakesMaxOfPrometheusAndLive pins how the
+// two OOM-time-limit anchors combine.
+//
+// Prometheus's anchor is windowed: k8s_sustain:container_oom_limit_24h:bytes
+// samples the limit around a restart, so right after a resize-then-OOM it can
+// still report the PREVIOUS limit for a cycle. The live watcher captures the
+// exact applied limit at each kill with no windowing at all. Neither anchor can
+// be inflated by k8s-sustain's own write any more, so the higher of the two is
+// the limit the container most recently and genuinely died at. Preferring
+// Prometheus whenever it holds any value anchors on the stale, lower one and
+// under-bumps a container that is still OOM-looping.
+func TestBuildRecommendations_OOMAnchorTakesMaxOfPrometheusAndLive(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		q := r.Form.Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "workload_max_pod_cpu"):
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"0.1"]}
+			]}}`))
+		case strings.Contains(q, "workload_max_pod_memory"):
+			// Percentile is well below both anchors so the floor decides.
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"container":"app"},"value":[0,"52428800"]}
+			]}}`))
+		case strings.Contains(q, "workload_oom_24h"):
+			// Prometheus still reports the PRE-resize limit (96Mi).
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
+				{"metric":{"__name__":"k8s_sustain:workload_oom_24h","container":"app"},"value":[0,"1"]},
+				{"metric":{"__name__":"k8s_sustain:container_oom_limit_24h:bytes","container":"app"},"value":[0,"100663296"]}
+			]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		}
+	}))
+	defer server.Close()
+
+	r := reconcilerWithProm(t, server, true /* in-place */)
+	r.LiveOOM = LiveOOMConfig{
+		Source: &fakeOOMSource{records: map[string]*oomwatch.OOMRecord{
+			"app": {
+				Container:     "app",
+				TerminatedAt:  time.Now().Add(-10 * time.Second),
+				OOMLimitBytes: 192937984, // 184Mi — the limit actually applied at the kill
+			},
+		}},
+		TriggerCh: make(chan event.GenericEvent),
+	}
+	policy := policyForReconcileWorkload(t, "p")
+	containers := []corev1.Container{{Name: "app"}}
+
+	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
+	if err != nil {
+		t.Fatalf("buildRecommendations: %v", err)
+	}
+
+	app, ok := recs["app"]
+	if !ok || app.MemoryRequest == nil {
+		t.Fatalf("expected memory recommendation, got %v", recs)
+	}
+	// Anchored on the live 184Mi the bump alone is 220.8Mi. Anchored on
+	// Prometheus's stale 96Mi it is 115.2Mi — below the limit it just died at,
+	// so the container would be resized back down into another kill.
+	if app.MemoryRequest.Cmp(resource.MustParse("184Mi")) <= 0 {
+		t.Errorf("expected a bump above the 184Mi applied limit, got %s", app.MemoryRequest)
+	}
+}
