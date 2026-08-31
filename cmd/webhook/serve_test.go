@@ -31,13 +31,28 @@ import (
 // and cert watcher must outlive the drain), which is exactly why the startup
 // phase needs a context of its own rather than borrowing either one.
 func TestServe_AbortsStartupWhenTheSignalContextIsCancelled(t *testing.T) {
-	// Unblocks the stub if the assertion below fails, so a failing run does not
-	// leave a goroutine parked for the rest of the package's tests.
+	// Unblocks the stub if the assertion below fails, and JOINS serve before
+	// the stub is uninstalled again. Releasing alone is not enough: on the
+	// timeout path below, serve is still running when the test returns, and
+	// newCachedClient is a package-level var that this cleanup writes — a
+	// straggler still reading it would be a data race against that write, and
+	// would run concurrently with whatever test the -shuffle order puts next.
+	// Cleanups run LIFO, so the restore is registered FIRST and therefore runs
+	// LAST, after the join below.
 	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
+	finished := make(chan struct{})
+	done := make(chan error, 1)
 
 	orig := newCachedClient
 	t.Cleanup(func() { newCachedClient = orig })
+	t.Cleanup(func() {
+		close(release)
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("serve is still running after the test finished")
+		}
+	})
 	// Stands in for NewCached's blocking startup: it returns when the context
 	// it was handed for that phase is cancelled, and not before.
 	newCachedClient = func(_, startupCtx context.Context, _ *runtime.Scheme) (client.Client, error) {
@@ -53,8 +68,10 @@ func TestServe_AbortsStartupWhenTheSignalContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	done := make(chan error, 1)
-	go func() { done <- serve(ctx, config.WebhookConfig{Port: 9443}, logr.Discard()) }()
+	go func() {
+		defer close(finished)
+		done <- serve(ctx, config.WebhookConfig{Port: 9443}, logr.Discard())
+	}()
 
 	select {
 	case err := <-done:

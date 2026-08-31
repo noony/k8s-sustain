@@ -150,6 +150,31 @@ type Handler struct {
 	// Handler's plain-struct-literal construction throughout the test suite.
 	ownerAnnSF singleflight.Group
 	ownerRefSF singleflight.Group
+
+	// sfJoinHook, if non-nil, is invoked with the singleflight key
+	// immediately after optin.go's DoChan call registers a caller (the leader
+	// or a follower, indistinguishably) with ownerAnnSF or ownerRefSF.
+	// DoChan registers the caller synchronously, under the group's own mutex,
+	// before it returns, so calling the hook only after DoChan returns is
+	// what makes "N concurrent callers have all joined the same in-flight
+	// resolution" an actually true statement by the time the hook fires —
+	// calling it before DoChan would let a caller be preempted between the
+	// hook and DoChan, so a barrier built on it could release while that
+	// caller had not joined yet. It exists purely so tests can
+	// deterministically detect that join without relying on sleeps or
+	// scheduler luck — see the burst-collapse tests in optin_test.go and
+	// handler_test.go. Always nil outside tests.
+	//
+	// It is a field rather than a package-level var deliberately. As a
+	// global it was written by one test while another test's still-running
+	// goroutine read it — a data race under -race, and worse, a straggler
+	// from a finished test would fire the NEXT test's barrier counter, so
+	// that test's barrier could release before all N of its own callers had
+	// joined and a late caller would start a second singleflight round,
+	// failing the "exactly one Get" assertion. Per-Handler, a test's hook is
+	// reachable only through the Handler that test built, and is set once at
+	// construction before any goroutine touches it.
+	sfJoinHook func(key string)
 }
 
 type jsonPatch struct {

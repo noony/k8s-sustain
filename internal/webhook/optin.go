@@ -150,8 +150,8 @@ func (h *Handler) resolveCachedPodOwner(ctx context.Context, pod *corev1.Pod) (k
 	ch := h.ownerRefSF.DoChan(key, func() (any, error) {
 		return h.fetchAndCacheOwnerRef(namespace, refCopy, key)
 	})
-	if singleflightTestHook != nil {
-		singleflightTestHook(key)
+	if h.sfJoinHook != nil {
+		h.sfJoinHook(key)
 	}
 	select {
 	case <-ctx.Done():
@@ -253,8 +253,8 @@ func (h *Handler) ownerAnnotations(ctx context.Context, namespace, kind, name st
 	ch := h.ownerAnnSF.DoChan(key, func() (any, error) {
 		return h.fetchAndCacheOwnerAnnotations(namespace, kind, name, key)
 	})
-	if singleflightTestHook != nil {
-		singleflightTestHook(key)
+	if h.sfJoinHook != nil {
+		h.sfJoinHook(key)
 	}
 	select {
 	case <-ctx.Done():

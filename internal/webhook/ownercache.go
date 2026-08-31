@@ -161,20 +161,6 @@ func (c *ttlLRUCache[V]) nowFn() time.Time {
 // private-to-the-cache map holding at most the two keys ResolvePolicy reads.
 type ownerAnnotationsCache = ttlLRUCache[map[string]string]
 
-// singleflightTestHook, if non-nil, is invoked with the singleflight key
-// immediately after optin.go's DoChan call registers a caller (the leader or
-// a follower, indistinguishably) with Handler.ownerAnnSF or Handler.ownerRefSF.
-// DoChan registers the caller synchronously, under the group's own mutex,
-// before it returns, so calling the hook only after DoChan returns is what
-// makes "N concurrent callers have all joined the same in-flight resolution"
-// an actually true statement by the time the hook fires — calling it before
-// DoChan would let a caller be preempted between the hook and DoChan, so a
-// barrier built on it could release while that caller had not joined yet. It
-// exists purely so tests can deterministically detect that join without
-// relying on sleeps or scheduler luck — see the burst-collapse tests in
-// optin_test.go. Always nil outside tests.
-var singleflightTestHook func(key string)
-
 // resolvedOwnerRef is the value type cached by Handler.ownerRefCache: the
 // (kind, name) pair workload.ResolveControllerOwner resolved for one
 // controller ownerRef. A zero value ({"", ""}) is itself a legitimate
