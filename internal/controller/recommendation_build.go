@@ -167,14 +167,32 @@ func buildRecommendations(
 	recs := recommender.BuildContainerRecs(containers, inputs, autoInfo, rsCfg, coordCfg,
 		recommender.BuildContainerRecsOptions{
 			// Construct the per-container OOM context: prometheus signal + any
-			// live OOM observation, with a fallback to the cache-captured cgroup
-			// limit when Prometheus hasn't yet surfaced it.
+			// live OOM observation, anchoring on whichever reports the HIGHER
+			// OOM-time limit.
+			//
+			// The two anchors have complementary blind spots and neither can be
+			// inflated by k8s-sustain's own resize any more, so max() is safe
+			// and strictly better than preferring either one:
+			//
+			//   - Prometheus survives a controller restart (the live cache is
+			//     in-memory only) but is windowed: the recording rule reads the
+			//     limit around a restart, so right after a resize-then-OOM it
+			//     can still report the PREVIOUS limit for a cycle.
+			//   - The live record carries the exact limit the kubelet had
+			//     applied at that kill, with no windowing lag, but is lost on
+			//     restart and expires with the cache TTL.
+			//
+			// Preferring Prometheus whenever it holds any value anchors on the
+			// stale, lower limit during that window and under-bumps a container
+			// that is still OOM-looping — resizing it back down into another
+			// kill. Taking the max keeps the most recent limit it genuinely
+			// died at, from whichever source noticed first.
 			EnrichOOM: func(name string, oom recommender.OOMSignal) recommender.OOMSignal {
 				liveRec = liveOOMs[name]
 				if liveRec != nil {
 					oom.LiveEventAt = liveRec.TerminatedAt
-					if oom.OOMTimeLimitBytes == 0 && liveRec.OOMLimitBytes > 0 {
-						oom.OOMTimeLimitBytes = float64(liveRec.OOMLimitBytes)
+					if live := float64(liveRec.OOMLimitBytes); live > oom.OOMTimeLimitBytes {
+						oom.OOMTimeLimitBytes = live
 					}
 				}
 				return oom
