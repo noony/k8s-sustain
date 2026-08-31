@@ -2214,8 +2214,14 @@ once, then run the suite:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>helm<span class="w"> </span>unittest<span class="w"> </span>charts/k8s-sustain<span class="w"> </span>-f<span class="w"> </span><span class="s1">'tests/deployment_test.yaml'</span>
 </code></pre></div>
 <p>CI runs the full suite in the <code>helm</code> job alongside <code>helm lint</code> and <code>helm template</code>.
-<code>charts/k8s-sustain/tests/promtool_test.sh</code> additionally validates the rendered
-PrometheusRule recording rules with <code>promtool</code> (requires <code>promtool</code> and <code>yq</code>).</p>
+<code>make helm-promtool</code> additionally validates the rendered PrometheusRule
+recording rules with <code>promtool</code> (requires <code>promtool</code> and <code>yq</code>): it checks that
+the rules parse, that the dashboard-required ones are present, and it runs the
+<code>promtool test rules</code> fixtures in <code>charts/k8s-sustain/tests/promtool/</code> against
+the rendered output. Those fixtures test rule <em>semantics</em> — feed a rule its
+input series and assert the recorded value — which <code>promtool check rules</code>
+cannot do. Add one whenever a rule's correctness depends on timing or on a
+join window, since that is exactly what a syntax check misses.</p>
 <h2 id="adding-a-new-workload-kind">Adding a new workload kind<a class="headerlink" href="#adding-a-new-workload-kind" title="Permanent link">&para;</a></h2>
 <p>To support a new workload kind (e.g. <code>Rollout</code> from Argo):</p>
 <ol>
