@@ -92,6 +92,7 @@ nav:
       - Helm Values: reference/helm-values.md
       - Metrics: reference/metrics.md
       - Recording Rules: reference/recording-rules.md
+  - Security: security.md
   - Development: development.md
 
 extra:

@@ -52,6 +52,30 @@ CI runs `gosec` on every push.
 Dependabot is configured for `gomod`, GitHub Actions, the dashboard's npm
 modules, and Docker base images — PRs are opened weekly.
 
+### Pinning GitHub Actions
+
+Every `uses:` in every workflow must be pinned to a full 40-character commit
+SHA, with the version in a trailing comment:
+
+```yaml
+- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+```
+
+A mutable tag (`@v5`) lets whoever controls the action's repository repoint it
+at new code that then runs with your workflow's token. `hack/verify-action-pins.sh`
+enforces this: it runs as a `pre-commit` hook locally and as the `supply-chain`
+CI job, and fails on any tag- or branch-pinned action as well as on a SHA with
+no trailing version comment. `zizmor` runs in the same
+job and lints the workflows for other Actions security problems.
+
+Keep the trailing `# vX.Y.Z` comment accurate — Dependabot uses it to bump the
+pin, and it is the only human-readable record of what the SHA points at.
+
+Release signing depends on `id-token: write` being granted to exactly the jobs
+that sign. If you touch a job's `permissions:` block, check that signing still
+runs. The full posture and the verification commands are documented in
+[Security](security.md).
+
 ## Project structure
 
 ```text

@@ -20,6 +20,10 @@ updates:
         patterns:
           - "go.opentelemetry.io/*"
 
+  # Every `uses:` in this repo is pinned to a commit SHA (enforced by
+  # hack/verify-action-pins.sh), which means a pin only moves when something
+  # moves it — dependabot is that something. It rewrites both the SHA and the
+  # trailing `# vX.Y.Z` comment, so pins stay both current and readable.
   - package-ecosystem: github-actions
     directory: /
     cooldown:
@@ -28,6 +32,12 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    groups:
+      # One PR for all of them: SHA bumps are unreviewable individually and a
+      # single PR is one CI run and one pin audit instead of a dozen.
+      github-actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: npm
     directory: /internal/dashboard/ui/frontend

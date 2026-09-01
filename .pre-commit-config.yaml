@@ -33,6 +33,12 @@ repos:
 
   - repo: local
     hooks:
+      - id: verify-action-pins
+        name: verify GitHub Action pins
+        entry: hack/verify-action-pins.sh
+        language: system
+        pass_filenames: false
+        files: ^\.github/workflows/
       - id: verify-crds
         name: verify CRDs in sync
         entry: make verify-crds
