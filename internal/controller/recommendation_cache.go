@@ -109,28 +109,49 @@ func (r *PolicyReconciler) upsertWorkloadRecommendation(
 	return wlrcache.Upsert(ctx, r.Client, ref, policyName, recs, it.Observed, now)
 }
 
+// wlrDeleteGuard says how strongly a cleanup path conditions its deletes —
+// and, inseparably, what a conflict means on that path. Both follow from one
+// question: does the decision keep() made depend on the REVISION it read, or
+// only on the object's identity?
+type wlrDeleteGuard int
+
+const (
+	// deleteIfUnchanged conditions the delete on the UID *and* the
+	// ResourceVersion observed in the List. For a decision that depends on
+	// mutable contents: keep() judges a copy read from the informer cache and
+	// that copy can be obsolete by the time the Delete lands. With
+	// MaxConcurrentReconciles > 1, a workload re-annotated from policy P1 to P2
+	// is rewritten by Reconcile(P2) — new label, freshly computed
+	// recommendation — while Reconcile(P1)'s sweep still holds the pre-rewrite
+	// copy that says the target has left P1's set. Unconditioned, that delete
+	// destroys live state and the webhook falls back to template resources
+	// until P2's next cycle. The precondition turns it into a conflict, which
+	// is benign here: the decision was made against a revision that no longer
+	// exists, so the object is left alone (not counted as deleted) and
+	// re-judged on fresh data by the next pass.
+	deleteIfUnchanged wlrDeleteGuard = iota
+
+	// deleteIfSameObject conditions the delete on the UID alone. For a decision
+	// that does not depend on the revision at all — "this object belongs to the
+	// policy being deleted" stays true however often the object is rewritten —
+	// so the only real hazard is a delete+recreate that reused the name, which
+	// the UID already covers. Adding the ResourceVersion there would buy
+	// nothing and cost a failure mode: a rewrite inside the informer cache's
+	// propagation window would turn into a conflict and the object would
+	// survive. A conflict on this guard is consequently NOT benign — it is
+	// unexpected, and it is returned so the caller can retry rather than
+	// declare the cleanup finished.
+	deleteIfSameObject
+)
+
 // deleteWLRsWhere lists WorkloadRecommendation objects with the given options
-// and deletes every item for which keep returns false.
+// and deletes every item for which keep returns false, conditioning each delete
+// as the guard prescribes (see wlrDeleteGuard for why the caller chooses).
 //
-// Every delete is conditioned on the UID and ResourceVersion observed in the
-// List, because keep() judges a copy read from the informer cache and that copy
-// can be obsolete by the time the Delete lands. With MaxConcurrentReconciles
-// > 1, a workload re-annotated from policy P1 to P2 is rewritten by
-// Reconcile(P2) — new label, freshly computed recommendation — while
-// Reconcile(P1)'s sweep still holds the pre-rewrite copy that says the target
-// has left P1's set. Unconditioned, that delete destroys live state and the
-// webhook falls back to template resources until P2's next cycle. The
-// precondition turns it into a conflict instead.
-//
-// Two delete outcomes are therefore benign rather than failures, and neither is
-// retried here:
-//
-//   - IsNotFound — the object is already gone, which is the intended end state,
-//     so it counts as deleted.
-//   - IsConflict — the object changed since it was listed, so the decision to
-//     delete it was made against state that no longer exists. It is left alone
-//     (not counted as deleted) and re-evaluated on fresh data by the next sweep,
-//     with the orphan reaper as the backstop.
+// IsNotFound is benign on every path: the object is already gone, which is the
+// intended end state, so it counts as deleted. IsConflict is benign only under
+// deleteIfUnchanged, where it is the expected outcome of a stale decision;
+// under deleteIfSameObject it is reported like any other failure.
 //
 // Any other delete failure is logged at V(1) via logger and the first such
 // error is returned alongside the count of successful deletions. A list failure
@@ -139,10 +160,11 @@ func (r *PolicyReconciler) upsertWorkloadRecommendation(
 //
 // This is the shared core of the three WLR cleanup paths (per-cycle sweep,
 // per-policy delete, orphan reaper); each wraps it with its own list options,
-// keep predicate, error handling and aggregate logging.
+// keep predicate, guard, error handling and aggregate logging.
 func (r *PolicyReconciler) deleteWLRsWhere(
 	ctx context.Context,
 	logger logr.Logger,
+	guard wlrDeleteGuard,
 	listOpts []client.ListOption,
 	keep func(*sustainv1alpha1.WorkloadRecommendation) bool,
 ) (deleted int, listErr error, deleteErr error) {
@@ -157,13 +179,18 @@ func (r *PolicyReconciler) deleteWLRsWhere(
 			continue
 		}
 		// Copied out of the listed item: the preconditions must describe the
-		// exact revision keep() judged, not whatever the object looks like now.
-		uid, resourceVersion := wlr.UID, wlr.ResourceVersion
-		err := r.Delete(ctx, wlr, client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion})
+		// exact object keep() judged, not whatever it looks like now.
+		uid := wlr.UID
+		preconditions := client.Preconditions{UID: &uid}
+		if guard == deleteIfUnchanged {
+			resourceVersion := wlr.ResourceVersion
+			preconditions.ResourceVersion = &resourceVersion
+		}
+		err := r.Delete(ctx, wlr, preconditions)
 		switch {
 		case err == nil || apierrors.IsNotFound(err):
 			deleted++
-		case apierrors.IsConflict(err):
+		case apierrors.IsConflict(err) && guard == deleteIfUnchanged:
 			logger.V(1).Info("WorkloadRecommendation changed since it was listed; leaving it to the next sweep",
 				"name", wlr.Name, "namespace", wlr.Namespace, "policy", wlr.Spec.Policy)
 		default:
@@ -199,7 +226,7 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 	}
 
 	now := time.Now()
-	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger,
+	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, deleteIfUnchanged,
 		[]client.ListOption{client.MatchingLabels{wlrPolicyLabel: policyName}},
 		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
 			// Defensive: if the label is stale relative to spec.policy (e.g. on
@@ -361,11 +388,19 @@ func (r *PolicyReconciler) workloadGone(
 // the parent Policy on the normal `kubectl delete policy` path.
 //
 // Returns an error so the finalizer is only removed once cleanup finishes;
-// otherwise a transient API failure mid-delete would orphan WLRs.
+// otherwise a transient API failure mid-delete would orphan WLRs. That is why
+// this path uses deleteIfSameObject and, unlike the sweep, reports a conflict
+// instead of absorbing it: its keep predicate is `spec.policy != policyName`,
+// which does not depend on the object's revision, so a ResourceVersion
+// precondition would buy nothing while letting a WLR rewritten inside the
+// informer cache's propagation window survive a cleanup this caller has
+// already been told finished. Swallowing the conflict on top of that would
+// drop the finalizer and delete the Policy, leaving the orphan reaper's next
+// tick as the only remaining collector — the guarantee this path exists for.
 func (r *PolicyReconciler) deleteAllRecommendationsForPolicy(ctx context.Context, policyName string) error {
 	logger := log.FromContext(ctx).WithValues("policy", policyName)
 
-	deleted, listErr, deleteErr := r.deleteWLRsWhere(ctx, logger,
+	deleted, listErr, deleteErr := r.deleteWLRsWhere(ctx, logger, deleteIfSameObject,
 		[]client.ListOption{client.MatchingLabels{wlrPolicyLabel: policyName}},
 		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
 			// Defensive: belt-and-braces against label drift on legacy WLRs.
@@ -394,7 +429,16 @@ func (r *PolicyReconciler) deleteAllRecommendationsForPolicy(ctx context.Context
 // removed by the per-policy sweep once its target is absent and the retention
 // window lapses.
 //
-// Best-effort and idempotent. Safe to run on a tick.
+// Best-effort and idempotent. Safe to run on a tick — which is also why it
+// keeps the strict deleteIfUnchanged guard. Its predicate reads spec.policy,
+// a field the migration path rewrites in place (wlrcache.Upsert re-points a
+// re-annotated workload's WLR at its new policy), so a stale copy can say
+// "orphan" about an object that has just been adopted and recomputed; reaping
+// it destroys live state exactly as it would in the sweep. Unlike the
+// finalizer path this one guarantees nothing, so a conflict costs only a
+// 10-minute wait — and it is self-limiting, because the only thing that
+// rewrites a WLR is a reconcile of the policy that owns it, i.e. an object
+// that keeps conflicting is an object that is not an orphan.
 func (r *PolicyReconciler) reapOrphanedRecommendations(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("orphan-reaper")
 
@@ -407,7 +451,7 @@ func (r *PolicyReconciler) reapOrphanedRecommendations(ctx context.Context) erro
 		known[policies.Items[i].Name] = struct{}{}
 	}
 
-	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, nil,
+	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, deleteIfUnchanged, nil,
 		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
 			if wlr.Spec.Policy == "" {
 				// Untracked entry — leave it; some other writer may own it.
