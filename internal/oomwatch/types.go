@@ -74,6 +74,13 @@ type Sink interface {
 	// (i.e. distinct from any existing entry for the same Key by
 	// RestartCount + TerminatedAt). Returns false for duplicates so the
 	// watcher can skip notifying downstream subscribers.
+	//
+	// A Key names a workload+container, so concurrent reconciles of several
+	// pods of one workload write to it. What the Key retains is the newest
+	// observation by (TerminatedAt, RestartCount), never simply the
+	// last-written one; an out-of-order observation is still reported as new
+	// (it is a real kill nothing has seen) but does not displace the newer
+	// entry. See Cache.Record for the full rationale.
 	Record(key Key, record OOMRecord) bool
 
 	// AlreadyResolved reports whether this exact container termination —

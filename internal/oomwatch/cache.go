@@ -70,6 +70,17 @@ type Cache struct {
 	// SizeObserver, if set, is invoked with the current entry count after
 	// every mutation (Record, sweep). The controller wires it to the
 	// k8s_sustain_oom_cache_entries gauge.
+	//
+	// The count is snapshotted under mu but the call is made after Unlock,
+	// on purpose: this is a caller-supplied callback that ends in a
+	// Prometheus gauge write (its own lock), and invoking it under mu would
+	// both serialize every cache mutation behind it and create a
+	// mu -> observer lock order that a callback touching the cache could
+	// close into a deadlock. The cost is that two concurrent mutations may
+	// reach the observer out of order, leaving the gauge off by the handful
+	// of entries between them; it self-corrects on the next mutation and at
+	// worst on the next sweep tick, which is well within what a size gauge
+	// needs to be good for.
 	SizeObserver func(int)
 
 	runOnce sync.Once
@@ -104,8 +115,25 @@ func NewCacheWithLimit(ttl time.Duration, maxEntries int) *Cache {
 // Record upserts an observation. It returns false when the existing entry for
 // the same Key has the same (RestartCount, TerminatedAt) tuple, which is how
 // the watcher distinguishes "we already told the controller about this kill"
-// from "this is a brand new kill". When the tuple differs the newer record
-// wins unconditionally so the cache always reflects the latest known state.
+// from "this is a brand new kill"; any other tuple reports true.
+//
+// Storage is latest-wins, ordered by (TerminatedAt, RestartCount) — see
+// newerThan. A Key names a workload+container, not a pod, so several pods of
+// the same workload write to it, and the watcher reconciles pods in parallel
+// (maxConcurrentReconciles > 1): without an explicit ordering, "newest" would
+// silently degrade to "whichever goroutine took the lock last", letting an
+// older, smaller OOMLimitBytes overwrite a newer, larger one and under-bump
+// the recommender's memory floor for that cycle.
+//
+// A distinct-but-older observation is therefore dropped from the map yet
+// still reports true. That is deliberate: it is a real kill this cache had
+// never seen, so the watcher should still fan it out and trigger an immediate
+// reconcile — the same thing it did before ordering was enforced. Suppressing
+// it would lose the signal outright whenever node clock skew makes a genuinely
+// new kill on another pod look older. Reporting true costs at most one extra
+// (idempotent) Policy reconcile, and the storm protection that actually
+// matters lives one level up in AlreadyResolved/MarkResolved, which dedups per
+// pod UID before Reconcile ever reaches this call.
 func (c *Cache) Record(key Key, record OOMRecord) bool {
 	c.mu.Lock()
 	if existing, ok := c.entries[key]; ok {
@@ -113,6 +141,12 @@ func (c *Cache) Record(key Key, record OOMRecord) bool {
 			existing.TerminatedAt.Equal(record.TerminatedAt) {
 			c.mu.Unlock()
 			return false
+		}
+		if !newerThan(record, existing) {
+			// Distinct kill, but out of order: keep the newer entry and
+			// report the observation as new anyway (see the doc above).
+			c.mu.Unlock()
+			return true
 		}
 	} else if len(c.entries) >= c.maxEntries {
 		// Cap reached on insert of a NEW key — evict the entry with the
@@ -129,6 +163,22 @@ func (c *Cache) Record(key Key, record OOMRecord) bool {
 		obs(n)
 	}
 	return true
+}
+
+// newerThan reports whether a is a strictly later observation than b, using
+// (TerminatedAt, RestartCount) as a lexicographic order. RestartCount only
+// breaks ties on an equal TerminatedAt because TerminatedAt comes from
+// metav1.Time and is therefore truncated to whole seconds: two kills of the
+// same container inside one second are indistinguishable by time alone, and
+// the restart counter is what separates them. It is never allowed to override
+// TerminatedAt, since restart counts from two different pods of the same
+// workload are unrelated counters and comparing them across pods is
+// meaningless.
+func newerThan(a, b OOMRecord) bool {
+	if a.TerminatedAt.Equal(b.TerminatedAt) {
+		return a.RestartCount > b.RestartCount
+	}
+	return a.TerminatedAt.After(b.TerminatedAt)
 }
 
 // AlreadyResolved implements Sink. See the interface doc for the full

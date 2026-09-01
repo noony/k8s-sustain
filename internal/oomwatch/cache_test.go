@@ -419,3 +419,135 @@ func TestSize(t *testing.T) {
 		t.Fatalf("Size after dedup=%d, want 2", c.Size())
 	}
 }
+
+// TestRecordLatestWins pins the ordering guarantee Record makes for a single
+// Key: the stored entry is always the newest observation by
+// (TerminatedAt, RestartCount), no matter which order the writes arrive in.
+// Different pods of the same workload are genuinely parallel reconcile keys
+// (maxConcurrentReconciles > 1), so without this an older, smaller record
+// could land last and under-bump the recommender's OOM memory floor.
+func TestRecordLatestWins(t *testing.T) {
+	t0 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+
+	rec := func(restart int32, terminated time.Time, limit int64) OOMRecord {
+		r := makeRecord(restart, terminated)
+		r.OOMLimitBytes = limit
+		return r
+	}
+
+	const (
+		small = 128 * 1024 * 1024
+		big   = 512 * 1024 * 1024
+	)
+
+	cases := []struct {
+		name  string
+		first OOMRecord
+		write OOMRecord
+		want  OOMRecord
+	}{
+		{
+			name:  "newer then older keeps the newer entry",
+			first: rec(5, t1, big),
+			write: rec(2, t0, small),
+			want:  rec(5, t1, big),
+		},
+		{
+			name:  "older then newer takes the newer entry",
+			first: rec(2, t0, small),
+			write: rec(5, t1, big),
+			want:  rec(5, t1, big),
+		},
+		{
+			name:  "same TerminatedAt higher RestartCount wins",
+			first: rec(5, t1, small),
+			write: rec(6, t1, big),
+			want:  rec(6, t1, big),
+		},
+		{
+			name:  "same TerminatedAt lower RestartCount loses",
+			first: rec(6, t1, big),
+			write: rec(5, t1, small),
+			want:  rec(6, t1, big),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCache(time.Hour)
+			key := makeKey("web")
+			c.Record(key, tc.first)
+			c.Record(key, tc.write)
+
+			got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Hour)[key.Container]
+			if got == nil {
+				t.Fatalf("RecentByWorkload lost the entry entirely")
+			}
+			if got.RestartCount != tc.want.RestartCount {
+				t.Errorf("RestartCount = %d, want %d", got.RestartCount, tc.want.RestartCount)
+			}
+			if !got.TerminatedAt.Equal(tc.want.TerminatedAt) {
+				t.Errorf("TerminatedAt = %v, want %v", got.TerminatedAt, tc.want.TerminatedAt)
+			}
+			if got.OOMLimitBytes != tc.want.OOMLimitBytes {
+				t.Errorf("OOMLimitBytes = %d, want %d", got.OOMLimitBytes, tc.want.OOMLimitBytes)
+			}
+			if c.Size() != 1 {
+				t.Errorf("Size() = %d, want 1", c.Size())
+			}
+		})
+	}
+}
+
+// TestRecordReturnValueOnOlderRecord pins the bool contract for the branch
+// TestRecordLatestWins added: an out-of-order observation is still a distinct
+// kill this cache had never seen, so it reports true (and fans out to the
+// handler) even though it does not displace the stored entry. Only an exact
+// (RestartCount, TerminatedAt) repeat reports false.
+func TestRecordReturnValueOnOlderRecord(t *testing.T) {
+	t0 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+
+	c := NewCache(time.Hour)
+	key := makeKey("web")
+
+	if got := c.Record(key, makeRecord(5, t1)); !got {
+		t.Fatalf("first Record() = false, want true")
+	}
+	// Distinct but older: new to the cache, so it still triggers.
+	if got := c.Record(key, makeRecord(2, t0)); !got {
+		t.Errorf("Record(older) = false, want true (distinct kill, still reported)")
+	}
+	// Repeat of the winning entry: pure duplicate, must not re-trigger.
+	if got := c.Record(key, makeRecord(5, t1)); got {
+		t.Errorf("Record(duplicate of stored) = true, want false")
+	}
+}
+
+// TestRecordConcurrentLatestWins is the race-detector variant of
+// TestRecordLatestWins: whichever goroutine writes last, the newest
+// observation must be the one left in the cache.
+func TestRecordConcurrentLatestWins(t *testing.T) {
+	c := NewCache(time.Hour)
+	key := makeKey("web")
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	const writers = 16
+	var wg sync.WaitGroup
+	for i := range writers {
+		wg.Go(func() {
+			r := makeRecord(int32(i), base.Add(time.Duration(i)*time.Minute))
+			r.OOMLimitBytes = int64(i+1) * 1024 * 1024
+			c.Record(key, r)
+		})
+	}
+	wg.Wait()
+
+	got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Hour)[key.Container]
+	if got == nil {
+		t.Fatalf("RecentByWorkload lost the entry entirely")
+	}
+	if want := int32(writers - 1); got.RestartCount != want {
+		t.Errorf("RestartCount = %d, want %d (newest write must win)", got.RestartCount, want)
+	}
+}
