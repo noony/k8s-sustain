@@ -1851,7 +1851,7 @@
 <p>Restricts which namespaces and workloads this policy applies to. Both the controller (when listing workloads to reconcile) and the admission webhook (when deciding whether to inject resources at pod creation) honour the same selector — so a workload outside the policy's scope is left alone by both components.</p>
 <p>The webhook additionally honours the operator-level <code>--excluded-namespaces</code> flag (see <a href="../cli/">CLI reference</a>); a pod in an excluded namespace is admitted unchanged regardless of selector configuration. If <code>spec.selector.labelSelector</code> is malformed, the webhook fails open (admits the pod without mutation and logs a warning) rather than denying it.</p>
 <h3 id="specselectornamespaces"><code>spec.selector.namespaces</code><a class="headerlink" href="#specselectornamespaces" title="Permanent link">&para;</a></h3>
-<p>A list of namespace names to target. An empty list matches all namespaces.</p>
+<p>A list of namespace names to target. An empty list matches all namespaces. Duplicate entries are collapsed — naming a namespace twice targets it once, not twice.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">namespaces</span><span class="p">:</span>

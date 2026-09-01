@@ -2,118 +2,118 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/development/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/concepts/architecture/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/concepts/autoscaler-coordination/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/concepts/in-place-updates/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/concepts/node-optimization/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/concepts/recommendation-pipeline/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/concepts/update-modes/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/concepts/workload-recommendations/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/getting-started/installation/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/getting-started/prerequisites/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/getting-started/quick-start/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/guides/argo-rollouts/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/guides/argocd/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/guides/cert-manager/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/guides/daemonsets/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/guides/dashboard/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/guides/deployments/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/guides/jobs-and-cronjobs/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/guides/keda/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/guides/local-testing/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/guides/managing-policies-with-helm/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/guides/standalone-pods-and-grouping/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/reference/annotation/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/reference/cli/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/reference/helm-values/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/reference/metrics/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/reference/policy/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
     <url>
          <loc>https://noony.github.io/k8s-sustain/main/reference/recording-rules/</loc>
-         <lastmod>2026-08-31</lastmod>
+         <lastmod>2026-09-01</lastmod>
     </url>
 </urlset>

@@ -1436,6 +1436,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#k8s_sustain_webhook_panic_total" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s_sustain_webhook_panic_total
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#k8s_sustain_webhook_recommendation_source_total" class="md-nav__link">
     <span class="md-ellipsis">
       k8s_sustain_webhook_recommendation_source_total
@@ -1730,6 +1739,15 @@
   
     <nav class="md-nav" aria-label="Webhook server">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#k8s_sustain_webhook_panic_total" class="md-nav__link">
+    <span class="md-ellipsis">
+      k8s_sustain_webhook_panic_total
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#k8s_sustain_webhook_recommendation_source_total" class="md-nav__link">
@@ -2142,7 +2160,7 @@ for the formulas.</p>
 <tr>
 <td><code>k8s_sustain_webhook_panic_total</code></td>
 <td>counter</td>
-<td><code>path</code></td>
+<td><code>path</code> (see below)</td>
 </tr>
 <tr>
 <td><code>k8s_sustain_webhook_cert_expiry_seconds</code></td>
@@ -2156,6 +2174,9 @@ for the formulas.</p>
 </tr>
 </tbody>
 </table>
+<h4 id="k8s_sustain_webhook_panic_total"><code>k8s_sustain_webhook_panic_total</code><a class="headerlink" href="#k8s_sustain_webhook_panic_total" title="Permanent link">&para;</a></h4>
+<p>Every panic the webhook recovered. The <code>path</code> label is the route pattern (e.g. <code>POST /mutate</code>) for a panic caught by the shared <code>internal/httpx</code> recovery middleware on the request goroutine — a bounded pattern, never the raw request path.</p>
+<p>Two label values are not routes: <code>singleflight/ownerRef</code> and <code>singleflight/ownerAnnotations</code>. The owner-resolution Gets behind <a href="../annotation/#the-webhooks-cost-control-does-not-fully-bound-itself">the opt-in caches</a> run on a <code>singleflight</code> goroutine rather than the request goroutine, so the middleware cannot see a panic there; the webhook recovers it itself, logs it with its stack, counts it here and fails that admission open. Any non-zero rate on this metric is a bug worth an issue, but a panic on one of these two paths is <em>contained</em> — it costs one admission its injection, not the process.</p>
 <h4 id="k8s_sustain_webhook_recommendation_source_total"><code>k8s_sustain_webhook_recommendation_source_total</code><a class="headerlink" href="#k8s_sustain_webhook_recommendation_source_total" title="Permanent link">&para;</a></h4>
 <p>The outcome of every admission's <code>WorkloadRecommendation</code> read, by <code>source</code>:</p>
 <table>

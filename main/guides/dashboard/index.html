@@ -1350,6 +1350,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      Caching
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#routing-and-methods" class="md-nav__link">
     <span class="md-ellipsis">
       Routing and methods
@@ -1892,6 +1901,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      Caching
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#routing-and-methods" class="md-nav__link">
     <span class="md-ellipsis">
       Routing and methods
@@ -2172,6 +2190,15 @@ Past 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 
 <p>Clients may forward their own value by sending <code>X-Request-Id: &lt;id&gt;</code> on the request — the dashboard echoes it back instead of generating a new one.</p>
 <h3 id="compression">Compression<a class="headerlink" href="#compression" title="Permanent link">&para;</a></h3>
 <p>Responses are gzip-encoded when the request advertises <code>Accept-Encoding: gzip</code> (browsers do this automatically; <code>curl --compressed</code> opts in). Large endpoints (<code>/api/workloads/.../metrics</code>, <code>/api/summary/trend</code>, <code>/api/policies/{name}/batch-simulate</code>) typically compress 5–10×.</p>
+<p>Responses that must not carry a body (<code>204</code>, <code>304</code>, <code>1xx</code>), responses the handler declares empty with <code>Content-Length: 0</code>, and already-compressed content types (images, video, audio, archives) bypass compression entirely rather than being advertised as gzip. A response that <em>is</em> committed as gzip always carries valid gzip framing even when its body is empty (<code>GET /healthz</code>), so a gzip-aware prober never sees a zero-byte payload labelled <code>Content-Encoding: gzip</code>.</p>
+<h3 id="caching">Caching<a class="headerlink" href="#caching" title="Permanent link">&para;</a></h3>
+<p><code>/api/summary</code> is the one cached endpoint: its cluster-wide snapshot is held in an in-memory LRU with a 60s TTL, and a successful response carries <code>Cache-Control: public, max-age=60</code>. Error responses drop that header so a single failed recompute is never re-served from a browser or proxy cache. Everything else is computed per request.</p>
+<p>Three behaviours matter when the cache misses:</p>
+<ul>
+<li><strong>One recompute at a time.</strong> The snapshot costs ~16 Prometheus queries, so concurrent misses (a dashboard open in several tabs, or a TTL that just lapsed under load) are collapsed onto a single shared computation instead of each firing its own fan-out. Each request still honours its own context deadline: a caller that gives up does not abort the shared work for the others, and a slow computation cannot make a fast one wait indefinitely.</li>
+<li><strong>A partial Prometheus failure never poisons the cache.</strong> Only a fully successful recompute is stored. When some queries fail, the dashboard prefers the most recent complete snapshot for up to 10 minutes (10x the TTL) so a brief blip is invisible; past that it serves the fresh-but-partial result rather than pretending an arbitrarily old snapshot is current.</li>
+<li><strong>A cancelled request</strong> that was waiting on a recompute falls back to that same recent snapshot when one exists, and otherwise returns <code>503 Service Unavailable</code> instead of an all-zeroes <code>200</code>.</li>
+</ul>
 <h3 id="routing-and-methods">Routing and methods<a class="headerlink" href="#routing-and-methods" title="Permanent link">&para;</a></h3>
 <p>Routes use Go 1.22 method-specific patterns, so the wrong HTTP verb returns <code>405 Method Not Allowed</code> with an <code>Allow</code> header listing the supported method(s). Path parameters (<code>{name}</code>, <code>{namespace}</code>, <code>{kind}</code>) are URL-decoded by the standard library.</p>
 <p>An <code>/api/*</code> path that matches no registered route returns the JSON 404 error envelope (it is never rewritten to the SPA's <code>index.html</code>). Endpoints that fetch a single Kubernetes object return 404 only when the object is actually missing; any other API-server failure surfaces as a 500. <code>/api/summary/trend</code> returns <code>503 Service Unavailable</code> when every Prometheus query fails (a full outage), while partial failures still return the series that succeeded.</p>
