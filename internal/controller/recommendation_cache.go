@@ -110,11 +110,32 @@ func (r *PolicyReconciler) upsertWorkloadRecommendation(
 }
 
 // deleteWLRsWhere lists WorkloadRecommendation objects with the given options
-// and deletes every item for which keep returns false. IsNotFound on delete is
-// tolerated (the object is counted as deleted). Each delete failure is logged
-// at V(1) via logger and the first such error is returned alongside the count
-// of successful deletions. A list failure is returned (wrapped) with a zero
-// count so callers can distinguish it from a partial delete failure.
+// and deletes every item for which keep returns false.
+//
+// Every delete is conditioned on the UID and ResourceVersion observed in the
+// List, because keep() judges a copy read from the informer cache and that copy
+// can be obsolete by the time the Delete lands. With MaxConcurrentReconciles
+// > 1, a workload re-annotated from policy P1 to P2 is rewritten by
+// Reconcile(P2) — new label, freshly computed recommendation — while
+// Reconcile(P1)'s sweep still holds the pre-rewrite copy that says the target
+// has left P1's set. Unconditioned, that delete destroys live state and the
+// webhook falls back to template resources until P2's next cycle. The
+// precondition turns it into a conflict instead.
+//
+// Two delete outcomes are therefore benign rather than failures, and neither is
+// retried here:
+//
+//   - IsNotFound — the object is already gone, which is the intended end state,
+//     so it counts as deleted.
+//   - IsConflict — the object changed since it was listed, so the decision to
+//     delete it was made against state that no longer exists. It is left alone
+//     (not counted as deleted) and re-evaluated on fresh data by the next sweep,
+//     with the orphan reaper as the backstop.
+//
+// Any other delete failure is logged at V(1) via logger and the first such
+// error is returned alongside the count of successful deletions. A list failure
+// is returned (wrapped) with a zero count so callers can distinguish it from a
+// partial delete failure.
 //
 // This is the shared core of the three WLR cleanup paths (per-cycle sweep,
 // per-policy delete, orphan reaper); each wraps it with its own list options,
@@ -135,15 +156,23 @@ func (r *PolicyReconciler) deleteWLRsWhere(
 		if keep(wlr) {
 			continue
 		}
-		if err := r.Delete(ctx, wlr); err != nil && !apierrors.IsNotFound(err) {
+		// Copied out of the listed item: the preconditions must describe the
+		// exact revision keep() judged, not whatever the object looks like now.
+		uid, resourceVersion := wlr.UID, wlr.ResourceVersion
+		err := r.Delete(ctx, wlr, client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion})
+		switch {
+		case err == nil || apierrors.IsNotFound(err):
+			deleted++
+		case apierrors.IsConflict(err):
+			logger.V(1).Info("WorkloadRecommendation changed since it was listed; leaving it to the next sweep",
+				"name", wlr.Name, "namespace", wlr.Namespace, "policy", wlr.Spec.Policy)
+		default:
 			logger.V(1).Info("failed to delete WorkloadRecommendation",
 				"name", wlr.Name, "namespace", wlr.Namespace, "policy", wlr.Spec.Policy, "err", err)
 			if deleteErr == nil {
 				deleteErr = err
 			}
-			continue
 		}
-		deleted++
 	}
 	return deleted, nil, deleteErr
 }

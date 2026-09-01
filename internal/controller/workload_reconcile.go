@@ -231,8 +231,11 @@ func (r *PolicyReconciler) handleStepError(ctx context.Context, t *workloadTarge
 		}
 		return nil
 	}
-	r.retries.recordFailure(t.key())
-	state := r.retries.getState(t.key())
+	// Take the state recordFailure computed under its own lock rather than
+	// reading it back: another goroutine holding the same workload key can
+	// clear it in between (recordSuccess deletes the entry), and this runs
+	// inside an errgroup closure, where a nil deref takes the process down.
+	state := r.retries.recordFailure(t.key())
 	r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, "ReconciliationRetryScheduled", "ReconciliationRetryScheduled",
 		"%s: %v. Retry attempt %d at %s", msg, err, state.attempts, state.nextRetry.Format(time.RFC3339))
 	log.FromContext(ctx).Error(err, msg+", retry scheduled", "attempt", state.attempts)

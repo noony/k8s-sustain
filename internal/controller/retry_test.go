@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,4 +148,71 @@ func TestBlockedCountAmong(t *testing.T) {
 	if got := rt.blockedCountAmong(keys); got != 2 {
 		t.Errorf("blockedCountAmong: got %d, want 2", got)
 	}
+}
+
+// TestRetryTracker_RecordFailure_ReturnsResultingState verifies recordFailure
+// hands back the state it just computed under the lock. handleStepError needs
+// the attempt count and next-retry time it produced; reading them back with a
+// second, separate getState call left a window in which a concurrent
+// recordSuccess could delete the entry, so getState returned nil and the
+// caller panicked dereferencing it.
+func TestRetryTracker_RecordFailure_ReturnsResultingState(t *testing.T) {
+	rt := newRetryTracker()
+	const key = "Deployment/prod/web"
+
+	first := rt.recordFailure(key)
+	if first == nil {
+		t.Fatal("recordFailure must return the resulting state, got nil")
+	}
+	if first.attempts != 1 {
+		t.Errorf("attempts = %d, want 1", first.attempts)
+	}
+	if first.nextRetry.IsZero() {
+		t.Error("nextRetry must be set")
+	}
+
+	second := rt.recordFailure(key)
+	if second.attempts != 2 {
+		t.Errorf("attempts = %d, want 2", second.attempts)
+	}
+	if !second.nextRetry.After(first.nextRetry) {
+		t.Errorf("nextRetry did not advance: %v then %v", first.nextRetry, second.nextRetry)
+	}
+
+	// The returned value is a copy: mutating it must not corrupt the tracker.
+	second.attempts = 99
+	if state := rt.getState(key); state == nil || state.attempts != 2 {
+		t.Errorf("returned state must be a copy, tracker now holds %+v", state)
+	}
+}
+
+// TestRetryTracker_RecordFailure_RacesRecordSuccess drives the exact
+// interleaving that used to panic the operator: the same workload key
+// dispatched to two goroutines (which a duplicated selector namespace made
+// possible), one recording a transient failure while the other records
+// success and deletes the entry. recordFailure must always return usable
+// state; nothing here may nil-deref.
+func TestRetryTracker_RecordFailure_RacesRecordSuccess(t *testing.T) {
+	rt := newRetryTracker()
+	const key = "Deployment/prod/web"
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			state := rt.recordFailure(key)
+			if state == nil {
+				t.Error("recordFailure returned nil state")
+				return
+			}
+			_ = state.attempts
+			_ = state.nextRetry
+		}()
+		go func() {
+			defer wg.Done()
+			rt.recordSuccess(key)
+		}()
+	}
+	wg.Wait()
 }

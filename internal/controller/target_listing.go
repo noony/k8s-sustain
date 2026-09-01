@@ -147,10 +147,40 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 	return filtered, nil
 }
 
+// dedupeNamespaces removes repeats from a namespace list, preserving the order
+// of first appearance. A nil or empty list is returned unchanged: that is what
+// means "all namespaces" to every caller.
+//
+// policy.Spec.Selector.Namespaces is a plain atomic array with no uniqueness
+// constraint, so the apiserver accepts `namespaces: [prod, prod]`. Listing it
+// verbatim produced the same workload twice, and the two copies were dispatched
+// to two errgroup goroutines that then raced each other over per-workload state
+// — the retry tracker (one goroutine's recordSuccess deleting the entry the
+// other had just written) and the WorkloadRecommendation write.
+func dedupeNamespaces(namespaces []string) []string {
+	if len(namespaces) < 2 {
+		return namespaces
+	}
+	seen := make(map[string]struct{}, len(namespaces))
+	out := make([]string, 0, len(namespaces))
+	for _, ns := range namespaces {
+		if _, ok := seen[ns]; ok {
+			continue
+		}
+		seen[ns] = struct{}{}
+		out = append(out, ns)
+	}
+	return out
+}
+
 // listKindTargets lists objects of kind L across the given namespaces (or
 // cluster-wide if namespaces is empty), converting items to workloadTargets via
 // appendItems. newList must return a fresh list per call — sharing one value
 // across calls would let the second List overwrite the first.
+//
+// The namespace list is deduped here rather than at the call sites: this is the
+// single funnel every kind's listing goes through, so one workload can never be
+// emitted as two targets no matter which selector produced the list.
 func listKindTargets[L client.ObjectList](
 	ctx context.Context,
 	c client.Client,
@@ -169,7 +199,7 @@ func listKindTargets[L client.ObjectList](
 	}
 	if len(namespaces) > 0 {
 		var all []workloadTarget
-		for _, ns := range namespaces {
+		for _, ns := range dedupeNamespaces(namespaces) {
 			t, err := fetch(client.InNamespace(ns))
 			if err != nil {
 				return nil, err

@@ -702,3 +702,90 @@ func TestCollectTargets_NamespaceReadError_Propagates(t *testing.T) {
 }
 
 func ptrUpdateMode(m sustainv1alpha1.UpdateMode) *sustainv1alpha1.UpdateMode { return &m }
+
+// TestDedupeNamespaces covers the collapse of a selector namespace list the
+// apiserver happily accepts with repeats (the field is a plain atomic array
+// with no uniqueness constraint). Order of first appearance must survive, and
+// nil/empty must stay nil/empty because that is what means "all namespaces".
+func TestDedupeNamespaces(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{name: "nil stays nil", in: nil, want: nil},
+		{name: "empty stays empty", in: []string{}, want: []string{}},
+		{name: "single", in: []string{"prod"}, want: []string{"prod"}},
+		{name: "no duplicates keeps order", in: []string{"b", "a", "c"}, want: []string{"b", "a", "c"}},
+		{name: "adjacent duplicates", in: []string{"prod", "prod"}, want: []string{"prod"}},
+		{name: "non-adjacent duplicates keep first position", in: []string{"b", "a", "b", "c", "a"}, want: []string{"b", "a", "c"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := dedupeNamespaces(tc.in)
+			if tc.in == nil && got != nil {
+				t.Fatalf("nil input must stay nil, got %v", got)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("dedupeNamespaces(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("dedupeNamespaces(%v) = %v, want %v", tc.in, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestListKindTargets_DuplicateNamespacesListedOnce verifies a namespace named
+// twice in spec.selector.namespaces yields one target per workload, not two.
+// Two copies of the same target are dispatched to two errgroup goroutines that
+// then race each other over the per-workload retry state and the
+// WorkloadRecommendation write.
+func TestListKindTargets_DuplicateNamespacesListedOnce(t *testing.T) {
+	d1 := annotatedDeployment("ns-a", "app1", "p")
+	d2 := annotatedDeployment("ns-b", "app2", "p")
+	r := makeReconciler(t, d1, d2)
+
+	got, err := r.listDeploymentTargets(context.Background(), []string{"ns-a", "ns-b", "ns-a"}, newNSAnnotations(r.Client))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 2 {
+		names := make([]string, 0, len(got))
+		for _, tgt := range got {
+			names = append(names, tgt.key())
+		}
+		t.Fatalf("expected 2 targets from a duplicated namespace list, got %d (%v)", len(got), names)
+	}
+}
+
+// TestCollectTargets_DuplicateSelectorNamespaces verifies the dedup survives
+// the full collection path: one workload must appear exactly once in the
+// target set even when its namespace is repeated in the policy selector.
+func TestCollectTargets_DuplicateSelectorNamespaces(t *testing.T) {
+	ongoing := sustainv1alpha1.UpdateModeOngoing
+	policy := &sustainv1alpha1.Policy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p"},
+		Spec: sustainv1alpha1.PolicySpec{
+			Selector: sustainv1alpha1.PolicySelector{
+				Namespaces: []string{"prod", "prod"},
+			},
+			RightSizing: sustainv1alpha1.RightSizingSpec{
+				Update: sustainv1alpha1.UpdateSpec{
+					Types: sustainv1alpha1.UpdateTypes{Deployment: &ongoing},
+				},
+			},
+		},
+	}
+	r := makeReconciler(t, annotatedDeployment("prod", "web", "p"))
+
+	got, err := r.collectTargets(context.Background(), policy)
+	if err != nil {
+		t.Fatalf("collectTargets: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 target, got %d (%+v)", len(got), got)
+	}
+}

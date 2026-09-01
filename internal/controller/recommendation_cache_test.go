@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -918,5 +919,107 @@ func TestSweep_KeepsWLRForWorkloadYoungerThanGrace(t *testing.T) {
 	if !wlrExists(t, r, "prod", "Deployment", "fresh") {
 		t.Error("WLR deleted for a workload younger than the grace period; " +
 			"it postdates the target listing rather than having opted out")
+	}
+}
+
+// rewriteOnListClient simulates the window the sweep reads through: every
+// WorkloadRecommendation List is answered from the store and then each listed
+// object is rewritten (bumping its resourceVersion) before the caller gets a
+// look at it. That is exactly what a second Reconcile does when a workload is
+// re-annotated from policy P1 to P2 — P2 re-labels and rewrites the object
+// while P1's sweep is still holding the copy it listed.
+type rewriteOnListClient struct {
+	client.Client
+	rewrites int
+}
+
+func (c *rewriteOnListClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if err := c.Client.List(ctx, list, opts...); err != nil {
+		return err
+	}
+	wlrs, ok := list.(*sustainv1alpha1.WorkloadRecommendationList)
+	if !ok {
+		return nil
+	}
+	for i := range wlrs.Items {
+		fresh := wlrs.Items[i].DeepCopy()
+		fresh.Labels[wlrPolicyLabel] = "p2"
+		fresh.Spec.Policy = "p2"
+		if err := c.Update(ctx, fresh); err != nil {
+			return err
+		}
+		c.rewrites++
+	}
+	return nil
+}
+
+// TestSweep_DoesNotDeleteWLRRewrittenSinceItWasListed: the sweep decides on a
+// copy read from the informer cache, so by the time it issues the Delete the
+// object may already belong to another policy, carrying a freshly computed
+// recommendation. Deleting it there destroys live state and leaves the webhook
+// injecting template resources until the new policy's next cycle (up to
+// --reconcile-interval). The Delete must therefore be conditioned on the
+// resourceVersion that was observed, so a stale decision fails as a conflict
+// instead.
+func TestSweep_DoesNotDeleteWLRRewrittenSinceItWasListed(t *testing.T) {
+	// Still running, well past the grace period, absent from the target set:
+	// the "opted out" branch, which deletes unconditionally today.
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web"}}
+	r := reconcilerForCache(t, wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour)), dep)
+	r.RecommendationRetention = 72 * time.Hour
+
+	base := r.Client
+	racy := &rewriteOnListClient{Client: base}
+	r.Client = racy
+	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	r.Client = base
+
+	if racy.rewrites == 0 {
+		t.Fatal("test setup: the sweep never listed the WorkloadRecommendation")
+	}
+	if !wlrExists(t, r, "prod", "Deployment", "web") {
+		t.Error("the sweep deleted a WorkloadRecommendation that had been rewritten since it was " +
+			"listed; the delete must carry the observed resourceVersion as a precondition")
+	}
+}
+
+// A conflicting delete is not a failure to report: the object changed under
+// the sweep, which means some other reconcile is now responsible for it. The
+// policy-deletion path must not fail (and so must not hold its finalizer) over
+// one.
+func TestDeleteAllRecommendationsForPolicy_ConflictIsBenign(t *testing.T) {
+	r := reconcilerForCache(t, wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour)))
+
+	base := r.Client
+	racy := &rewriteOnListClient{Client: base}
+	r.Client = racy
+	err := r.deleteAllRecommendationsForPolicy(context.Background(), "p")
+	r.Client = base
+
+	if err != nil {
+		t.Errorf("a delete that conflicted with a concurrent rewrite must be treated as benign, got %v", err)
+	}
+	if racy.rewrites == 0 {
+		t.Fatal("test setup: the delete path never listed the WorkloadRecommendation")
+	}
+}
+
+// The precondition must not break the ordinary case: an untouched WLR is still
+// deleted, and a delete of an object someone else already removed still counts
+// as done rather than as an error.
+func TestDeleteWLRsWhere_DeletesUnchangedAndToleratesAlreadyGone(t *testing.T) {
+	present := wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour))
+	r := reconcilerForCache(t, present)
+
+	deleted, listErr, deleteErr := r.deleteWLRsWhere(context.Background(), logr.Discard(), nil,
+		func(*sustainv1alpha1.WorkloadRecommendation) bool { return false })
+	if listErr != nil || deleteErr != nil {
+		t.Fatalf("list err %v, delete err %v", listErr, deleteErr)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1", deleted)
+	}
+	if wlrExists(t, r, "prod", "Deployment", "web") {
+		t.Error("an unchanged WLR must still be deleted")
 	}
 }
