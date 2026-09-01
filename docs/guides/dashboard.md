@@ -265,7 +265,7 @@ Responses that must not carry a body (`204`, `304`, `1xx`), responses the handle
 
 ### Caching
 
-`/api/summary` is the one cached endpoint: its cluster-wide snapshot is held in an in-memory LRU with a 60s TTL, and the response carries `Cache-Control: public, max-age=60`. Everything else is computed per request.
+`/api/summary` is the one cached endpoint: its cluster-wide snapshot is held in an in-memory LRU with a 60s TTL, and a successful response carries `Cache-Control: public, max-age=60`. Error responses drop that header so a single failed recompute is never re-served from a browser or proxy cache. Everything else is computed per request.
 
 Three behaviours matter when the cache misses:
 

@@ -653,6 +653,12 @@ func TestHandleSummaryFollowerHonoursOwnContextDeadline(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("follower status = %d, want 503 (no last-good snapshot to fall back on)", rec.Code)
 	}
+	// The handler sets max-age=60 for the summary payload before it knows
+	// whether it has one. An error must not go out carrying it, or a browser
+	// or intermediary re-serves this 503 for a minute after recovery.
+	if cc := rec.Header().Get("Cache-Control"); cc != "" {
+		t.Errorf("Cache-Control = %q on the 503, want it cleared", cc)
+	}
 }
 
 // TestComputeAndCacheSummaryRecoversPanic pins the singleflight leader's

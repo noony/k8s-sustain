@@ -132,6 +132,12 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, lastGood)
 			return
 		}
+		// The max-age=60 set above belongs to the summary payload. A 503 is
+		// not heuristically cacheable, but that explicit header makes it so,
+		// and WriteFieldError never clears it — leaving it set would let a
+		// browser or an intermediary re-serve this error for a full minute
+		// after a single slow recompute, long after Prometheus recovered.
+		w.Header().Del("Cache-Control")
 		writeError(w, http.StatusServiceUnavailable, "summary recomputation did not complete before the request was cancelled")
 		return
 	case res = <-ch:
@@ -141,7 +147,10 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		// computeAndCacheSummary returns an error only for a recovered panic.
 		// Re-panic on the request's own goroutine so the shared recovery
 		// middleware turns it into the usual 500 and records panicTotal, for
-		// waiters exactly as for the request that led the flight.
+		// waiters exactly as for the request that led the flight. Drop the
+		// payload's Cache-Control first for the same reason as above: the
+		// middleware's 500 must not be served from a cache for 60s.
+		w.Header().Del("Cache-Control")
 		panic(res.Err)
 	}
 	out := res.Val.(summaryComputation)
