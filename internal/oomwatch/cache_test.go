@@ -421,11 +421,14 @@ func TestSize(t *testing.T) {
 }
 
 // TestRecordLatestWins pins the ordering guarantee Record makes for a single
-// Key: the stored entry is always the newest observation by
-// (TerminatedAt, RestartCount), no matter which order the writes arrive in.
+// Key's identity and timestamps: those always come from the newest observation
+// by (TerminatedAt, RestartCount), no matter which order the writes arrive in.
 // Different pods of the same workload are genuinely parallel reconcile keys
-// (maxConcurrentReconciles > 1), so without this an older, smaller record
-// could land last and under-bump the recommender's OOM memory floor.
+// (maxConcurrentReconciles > 1), so without this the stored identity would
+// degrade to whichever goroutine took the lock last. OOMLimitBytes follows a
+// different rule (max, not recency) — see TestRecordMergesLargestOOMLimit; the
+// cases here all happen to have the newest record carrying the larger limit,
+// so both rules agree on the expectation.
 func TestRecordLatestWins(t *testing.T) {
 	t0 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)
@@ -549,5 +552,175 @@ func TestRecordConcurrentLatestWins(t *testing.T) {
 	}
 	if want := int32(writers - 1); got.RestartCount != want {
 		t.Errorf("RestartCount = %d, want %d (newest write must win)", got.RestartCount, want)
+	}
+}
+
+// TestRecordMergesLargestOOMLimit pins the per-field merge: recency governs
+// identity/timestamps, but OOMLimitBytes is the max across every pod that
+// wrote to the slot. The failing case needs no timestamp tie — a Deployment
+// whose limit was bumped 128Mi -> 256Mi can have an old un-resized pod OOM at
+// t1 (128Mi) after a resized pod OOM'd at t0 (256Mi). The newer record wins
+// the identity, but anchoring the memory floor on 128Mi would bump into a
+// limit 256Mi already proved insufficient.
+func TestRecordMergesLargestOOMLimit(t *testing.T) {
+	now := time.Now()
+	t0 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+
+	const (
+		small = 128 * 1024 * 1024
+		big   = 256 * 1024 * 1024
+	)
+
+	// podA: newer kill on the stale 128Mi spec. podB: older kill on the
+	// already-resized 256Mi spec.
+	podA := OOMRecord{
+		Container: "web", PolicyName: "policy-a", ObservedAt: now,
+		TerminatedAt: t1, RestartCount: 3,
+		PodName: "pod-a", PodUID: "uid-a", OOMLimitBytes: small,
+	}
+	podB := OOMRecord{
+		Container: "web", PolicyName: "policy-a", ObservedAt: now,
+		TerminatedAt: t0, RestartCount: 9,
+		PodName: "pod-b", PodUID: "uid-b", OOMLimitBytes: big,
+	}
+
+	cases := []struct {
+		name  string
+		order []OOMRecord
+	}{
+		{"older-larger first", []OOMRecord{podB, podA}},
+		{"newer-smaller first", []OOMRecord{podA, podB}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCache(time.Hour)
+			key := makeKey("web")
+			for _, r := range tc.order {
+				c.Record(key, r)
+			}
+
+			got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Hour)[key.Container]
+			if got == nil {
+				t.Fatalf("RecentByWorkload lost the entry entirely")
+			}
+			// Identity and timestamps come from the newest observation.
+			if !got.TerminatedAt.Equal(podA.TerminatedAt) {
+				t.Errorf("TerminatedAt = %v, want %v (newest observation)", got.TerminatedAt, podA.TerminatedAt)
+			}
+			if got.PodUID != podA.PodUID {
+				t.Errorf("PodUID = %q, want %q (newest observation)", got.PodUID, podA.PodUID)
+			}
+			if got.RestartCount != podA.RestartCount {
+				t.Errorf("RestartCount = %d, want %d (newest observation)", got.RestartCount, podA.RestartCount)
+			}
+			// The anchor is the largest limit that still got OOM-killed.
+			if got.OOMLimitBytes != big {
+				t.Errorf("OOMLimitBytes = %d, want %d (largest killed limit)", got.OOMLimitBytes, int64(big))
+			}
+		})
+	}
+}
+
+// TestRecordMergesOOMLimitOnEqualTerminatedAt is the same merge on the
+// equal-timestamp path: metav1.Time truncates to whole seconds, so two pods of
+// one workload can OOM "at the same time" and the only tie-break left is a
+// restart counter that means nothing across pods. Whichever identity wins, the
+// anchor must still be the larger killed limit.
+func TestRecordMergesOOMLimitOnEqualTerminatedAt(t *testing.T) {
+	now := time.Now()
+	at := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	const (
+		small = 128 * 1024 * 1024
+		big   = 256 * 1024 * 1024
+	)
+
+	podA := OOMRecord{
+		Container: "web", PolicyName: "policy-a", ObservedAt: now,
+		TerminatedAt: at, RestartCount: 7,
+		PodName: "pod-a", PodUID: "uid-a", OOMLimitBytes: small,
+	}
+	podB := OOMRecord{
+		Container: "web", PolicyName: "policy-a", ObservedAt: now,
+		TerminatedAt: at, RestartCount: 1,
+		PodName: "pod-b", PodUID: "uid-b", OOMLimitBytes: big,
+	}
+
+	cases := []struct {
+		name  string
+		order []OOMRecord
+	}{
+		{"high restart count first", []OOMRecord{podA, podB}},
+		{"low restart count first", []OOMRecord{podB, podA}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCache(time.Hour)
+			key := makeKey("web")
+			for _, r := range tc.order {
+				c.Record(key, r)
+			}
+
+			got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Hour)[key.Container]
+			if got == nil {
+				t.Fatalf("RecentByWorkload lost the entry entirely")
+			}
+			if got.OOMLimitBytes != big {
+				t.Errorf("OOMLimitBytes = %d, want %d (largest killed limit)", got.OOMLimitBytes, int64(big))
+			}
+		})
+	}
+}
+
+// TestRecordReturnValueWithMergedLimit pins that merging the anchor did not
+// move the bool contract: a distinct-but-older observation still reports true
+// (it is a real kill nothing has seen, so it must still fan out), and an exact
+// repeat of the stored identity still reports false — including when the stored
+// entry carries a larger anchor merged in from a third pod, which the repeat
+// must neither drop nor turn into a permanent "new kill".
+func TestRecordReturnValueWithMergedLimit(t *testing.T) {
+	t0 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+
+	const (
+		small = 128 * 1024 * 1024
+		big   = 256 * 1024 * 1024
+	)
+
+	rec := func(pod string, restart int32, terminated time.Time, limit int64) OOMRecord {
+		return OOMRecord{
+			Container: "web", PolicyName: "policy-a", ObservedAt: time.Now(),
+			TerminatedAt: terminated, RestartCount: restart,
+			PodName: pod, PodUID: pod, OOMLimitBytes: limit,
+		}
+	}
+
+	c := NewCache(time.Hour)
+	key := makeKey("web")
+
+	if got := c.Record(key, rec("uid-a", 3, t1, small)); !got {
+		t.Fatalf("first Record() = false, want true")
+	}
+	// Distinct but older, and carrying the bigger killed limit.
+	if got := c.Record(key, rec("uid-b", 9, t0, big)); !got {
+		t.Errorf("Record(older) = false, want true (distinct kill, still reported)")
+	}
+	// Exact repeat of the stored identity, while the slot holds another
+	// pod's larger anchor: still a duplicate, and the anchor survives.
+	for range 2 {
+		if got := c.Record(key, rec("uid-a", 3, t1, small)); got {
+			t.Errorf("Record(duplicate of stored) = true, want false")
+		}
+	}
+	got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Hour)[key.Container]
+	if got == nil {
+		t.Fatalf("RecentByWorkload lost the entry entirely")
+	}
+	if got.OOMLimitBytes != big {
+		t.Errorf("OOMLimitBytes = %d, want %d (duplicate must not drop the merged anchor)", got.OOMLimitBytes, int64(big))
+	}
+	if got.PodUID != "uid-a" {
+		t.Errorf("PodUID = %q, want %q (newest observation)", got.PodUID, "uid-a")
 	}
 }

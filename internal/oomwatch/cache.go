@@ -117,44 +117,78 @@ func NewCacheWithLimit(ttl time.Duration, maxEntries int) *Cache {
 // the watcher distinguishes "we already told the controller about this kill"
 // from "this is a brand new kill"; any other tuple reports true.
 //
-// Storage is latest-wins, ordered by (TerminatedAt, RestartCount) — see
-// newerThan. A Key names a workload+container, not a pod, so several pods of
-// the same workload write to it, and the watcher reconciles pods in parallel
-// (maxConcurrentReconciles > 1): without an explicit ordering, "newest" would
-// silently degrade to "whichever goroutine took the lock last", letting an
-// older, smaller OOMLimitBytes overwrite a newer, larger one and under-bump
-// the recommender's memory floor for that cycle.
+// Storage is a PER-FIELD MERGE, not a winning record. A Key names a
+// workload+container, not a pod, so every pod of the workload writes to the
+// same slot and the watcher reconciles pods in parallel
+// (maxConcurrentReconciles > 1) — and the slot carries two kinds of field
+// whose merge rules differ:
 //
-// A distinct-but-older observation is therefore dropped from the map yet
-// still reports true. That is deliberate: it is a real kill this cache had
-// never seen, so the watcher should still fan it out and trigger an immediate
-// reconcile — the same thing it did before ordering was enforced. Suppressing
-// it would lose the signal outright whenever node clock skew makes a genuinely
-// new kill on another pod look older. Reporting true costs at most one extra
-// (idempotent) Policy reconcile, and the storm protection that actually
-// matters lives one level up in AlreadyResolved/MarkResolved, which dedups per
-// pod UID before Reconcile ever reaches this call.
+//   - Identity and timestamps (PodName, PodUID, TerminatedAt, ObservedAt,
+//     RestartCount, PolicyName) come from the newest observation, ordered by
+//     newerThan. Without an explicit ordering "newest" would silently degrade
+//     to "whichever goroutine took the lock last".
+//   - OOMLimitBytes — the kernel-applied memory limit at the moment of the
+//     kill, which the recommender anchors its OOM memory floor on — takes the
+//     MAX of the incoming and stored values, because the anchor that matters
+//     is the largest limit that still got OOM-killed. Recency is the wrong
+//     rule here: a workload whose limit was bumped 128Mi -> 256Mi can have an
+//     old un-resized pod (128Mi) OOM *after* an already-resized one (256Mi),
+//     and anchoring on the newer 128Mi would bump the floor to a value 256Mi
+//     just proved insufficient. internal/controller/recommendation_build.go
+//     already max()es this record against the Prometheus anchor for exactly
+//     that reason; keeping only the newest limit here discarded evidence the
+//     consumer would have maxed anyway.
+//
+// The one accepted cost is on a deliberate downsize: after the limit is
+// lowered on purpose, an older larger limit keeps anchoring the floor high
+// until it ages out. That is bounded (the cache TTL, and RecentByWorkload's
+// maxAge window on top of it) and self-healing, and it errs in the
+// conservative direction — a brief over-provision rather than an under-bump
+// into another OOM. It does not reintroduce the runaway fixed in 8c44b62:
+// that one compounded because the anchor was read from our own spec output,
+// whereas every value merged here is a limit the kernel actually applied.
+//
+// A distinct-but-older observation therefore contributes its limit but not its
+// identity, and still reports true. That is deliberate: it is a real kill this
+// cache had never seen, so the watcher should still fan it out and trigger an
+// immediate reconcile — the same thing it did before ordering was enforced.
+// Suppressing it would lose the signal outright whenever node clock skew makes
+// a genuinely new kill on another pod look older. Reporting true costs at most
+// one extra (idempotent) Policy reconcile, and the storm protection that
+// actually matters lives one level up in AlreadyResolved/MarkResolved, which
+// dedups per pod UID before Reconcile ever reaches this call.
 func (c *Cache) Record(key Key, record OOMRecord) bool {
 	c.mu.Lock()
+	merged := record
 	if existing, ok := c.entries[key]; ok {
 		if existing.RestartCount == record.RestartCount &&
 			existing.TerminatedAt.Equal(record.TerminatedAt) {
+			// Same kill as the stored one: report the duplicate, but never
+			// let it lower the anchor — the stored value may have been maxed
+			// in from another pod, and a repeat carrying a larger limit is
+			// still evidence that limit died.
+			if record.OOMLimitBytes > existing.OOMLimitBytes {
+				existing.OOMLimitBytes = record.OOMLimitBytes
+				c.entries[key] = existing
+			}
 			c.mu.Unlock()
 			return false
 		}
 		if !newerThan(record, existing) {
-			// Distinct kill, but out of order: keep the newer entry and
-			// report the observation as new anyway (see the doc above).
-			c.mu.Unlock()
-			return true
+			// Distinct kill, but out of order: keep the newer entry's
+			// identity and report the observation as new anyway.
+			merged = existing
 		}
+		// Whichever identity won, the anchor is the largest killed limit —
+		// so it is taken from both sides, not from the winner.
+		merged.OOMLimitBytes = max(record.OOMLimitBytes, existing.OOMLimitBytes)
 	} else if len(c.entries) >= c.maxEntries {
 		// Cap reached on insert of a NEW key — evict the entry with the
 		// oldest ObservedAt. Updates of existing keys do not count against
 		// the cap so a hot-looping workload cannot starve other workloads.
 		c.evictOldestLocked()
 	}
-	c.entries[key] = record
+	c.entries[key] = merged
 	c.addIndexLocked(key)
 	n := len(c.entries)
 	obs := c.SizeObserver
@@ -167,13 +201,16 @@ func (c *Cache) Record(key Key, record OOMRecord) bool {
 
 // newerThan reports whether a is a strictly later observation than b, using
 // (TerminatedAt, RestartCount) as a lexicographic order. RestartCount only
-// breaks ties on an equal TerminatedAt because TerminatedAt comes from
-// metav1.Time and is therefore truncated to whole seconds: two kills of the
-// same container inside one second are indistinguishable by time alone, and
-// the restart counter is what separates them. It is never allowed to override
-// TerminatedAt, since restart counts from two different pods of the same
-// workload are unrelated counters and comparing them across pods is
-// meaningless.
+// breaks ties on an equal TerminatedAt, which TerminatedAt's metav1.Time
+// origin makes common: it is truncated to whole seconds, so two kills inside
+// one second are indistinguishable by time alone.
+//
+// This ordering governs the record's identity and timestamps ONLY — see
+// Record, which merges OOMLimitBytes by max() instead of taking it from the
+// winner. That split is what makes the tie-break harmless: restart counts from
+// two different pods of one workload are unrelated counters, so on a cross-pod
+// tie this picks arbitrarily between two equally-recent identity stamps, and
+// nothing the recommender computes from depends on which one it picks.
 func newerThan(a, b OOMRecord) bool {
 	if a.TerminatedAt.Equal(b.TerminatedAt) {
 		return a.RestartCount > b.RestartCount

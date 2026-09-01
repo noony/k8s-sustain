@@ -76,11 +76,14 @@ type Sink interface {
 	// watcher can skip notifying downstream subscribers.
 	//
 	// A Key names a workload+container, so concurrent reconciles of several
-	// pods of one workload write to it. What the Key retains is the newest
-	// observation by (TerminatedAt, RestartCount), never simply the
-	// last-written one; an out-of-order observation is still reported as new
-	// (it is a real kill nothing has seen) but does not displace the newer
-	// entry. See Cache.Record for the full rationale.
+	// pods of one workload write to it. What the Key retains is a per-field
+	// merge, never simply the last-written record: identity and timestamps
+	// come from the newest observation by (TerminatedAt, RestartCount), while
+	// OOMLimitBytes is the max across every pod that wrote to the slot — the
+	// largest limit that still got OOM-killed is the only useful anchor for
+	// the memory floor. An out-of-order observation is still reported as new
+	// (it is a real kill nothing has seen) but contributes only its limit.
+	// See Cache.Record for the full rationale.
 	Record(key Key, record OOMRecord) bool
 
 	// AlreadyResolved reports whether this exact container termination —
