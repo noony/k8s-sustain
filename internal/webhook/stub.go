@@ -59,7 +59,8 @@ const stubRequestMaxInflight = 16
 // stubRequestQueueTimeout bounds how long a stub request waits for a write
 // slot before giving up. Generous, because giving up here can lose the request
 // entirely for a run-once identity; it exists only so a wedged apiserver cannot
-// park goroutines forever.
+// park goroutines forever. Shutdown does not wait it out: it cancels the parked
+// goroutines outright (see Shutdown), so this budget never delays a drain.
 const stubRequestQueueTimeout = 30 * time.Second
 
 // stubRequestPruneInterval throttles the sweep that drops expired dedup
@@ -67,9 +68,18 @@ const stubRequestQueueTimeout = 30 * time.Second
 // background goroutines.
 const stubRequestPruneInterval = 5 * time.Minute
 
-// initStubStateLocked lazily builds the dedup map and in-flight semaphore.
-// Handler is constructed as a plain struct literal (cmd/webhook/serve.go, and
-// every test), so the zero value has to be usable. Caller must hold stubMu.
+// stubDrainTimeout bounds Shutdown's wait for the detached stub goroutines.
+// Shutdown cancels them first, so this is only the time they need to unwind an
+// already-cancelled context — not the time a write would take. It is short on
+// purpose: a stub write is best-effort and the next admission for the identity
+// re-requests it, so abandoning one costs a reconcile interval, while blocking
+// here eats into terminationGracePeriodSeconds.
+const stubDrainTimeout = 2 * time.Second
+
+// initStubStateLocked lazily builds the dedup map, the in-flight semaphore and
+// the parent context the detached goroutines derive from. Handler is
+// constructed as a plain struct literal (cmd/webhook/serve.go, and every test),
+// so the zero value has to be usable. Caller must hold stubMu.
 func (h *Handler) initStubStateLocked() {
 	if h.stubRequested == nil {
 		h.stubRequested = make(map[string]time.Time)
@@ -77,31 +87,108 @@ func (h *Handler) initStubStateLocked() {
 	if h.stubInflight == nil {
 		h.stubInflight = make(chan struct{}, stubRequestMaxInflight)
 	}
+	if h.stubCtx == nil {
+		h.stubCtx, h.stubStop = context.WithCancel(context.Background())
+	}
 }
 
-// claimStubRequest reports whether the caller should issue a stub create for
-// key, recording the claim when it should. False means the identity was
-// already requested within stubRequestDedupTTL.
-func (h *Handler) claimStubRequest(key string, now time.Time) bool {
+// beginStubRequest claims the right to issue a stub create for key and, when it
+// grants that claim, registers the detached goroutine that will issue it.
+//
+// It returns the parent context every stub goroutine derives from (cancelled by
+// Shutdown), the dedup expiry written for this claim, and whether the caller
+// should proceed. False means the identity was already requested within
+// stubRequestDedupTTL, or that shutdown has begun; nothing was registered, so
+// the caller must not start a goroutine.
+//
+// The claim, the shutdown check and the stubWG.Add are ONE critical section on
+// purpose. Splitting them reintroduces the classic WaitGroup misuse — an Add
+// racing a Wait already in progress — which here means a stub goroutine
+// starting after Shutdown concluded there were none left, and then reading the
+// informer cache that cmd/webhook has since cancelled.
+//
+// The returned expiry is the token dropStubClaim compares against; see there
+// for why an unconditional delete is not enough.
+func (h *Handler) beginStubRequest(key string, now time.Time) (parent context.Context, until time.Time, ok bool) {
 	h.stubMu.Lock()
 	defer h.stubMu.Unlock()
 	h.initStubStateLocked()
 
-	if until, exists := h.stubRequested[key]; exists && now.Before(until) {
-		return false
+	if h.stubStopping {
+		return nil, time.Time{}, false
+	}
+	if existing, exists := h.stubRequested[key]; exists && now.Before(existing) {
+		return nil, time.Time{}, false
 	}
 	h.pruneStubRequestsLocked(now)
-	h.stubRequested[key] = now.Add(stubRequestDedupTTL)
-	return true
+	until = now.Add(stubRequestDedupTTL)
+	h.stubRequested[key] = until
+	h.stubWG.Add(1)
+	return h.stubCtx, until, true
 }
 
 // dropStubClaim forgets a claim so the next admission for that identity can
 // retry immediately, instead of being suppressed for the rest of the TTL.
 // Used when the request never reached the apiserver at all.
-func (h *Handler) dropStubClaim(key string) {
+//
+// It is a compare-and-delete: claimed is the expiry beginStubRequest wrote for
+// this caller, and the entry is removed only if it is still that one. A claim
+// can expire while its own owner is still queued — the dedup TTL and the queue
+// budget are both 30s — so by the time a giving-up goroutine drops "its" claim,
+// a later admission may already have won a fresh claim for the same key and
+// started its own create. Deleting unconditionally would erase that fresh claim
+// and let a third admission issue a second concurrent create for the same
+// identity. createStub's AlreadyExists branch absorbs the duplicate, so this is
+// dedup strength rather than correctness — but the point of the claim is not to
+// issue the write at all.
+func (h *Handler) dropStubClaim(key string, claimed time.Time) {
 	h.stubMu.Lock()
 	defer h.stubMu.Unlock()
-	delete(h.stubRequested, key)
+	if until, exists := h.stubRequested[key]; exists && until.Equal(claimed) {
+		delete(h.stubRequested, key)
+	}
+}
+
+// Shutdown stops accepting new stub requests, cancels the detached stub
+// goroutines already in flight, and waits for them to unwind. It is safe to
+// call more than once and on a Handler that never served anything.
+//
+// The wait ends at ctx or at stubDrainTimeout, whichever comes first. The
+// internal cap is not redundant: it is what makes this call unable to hang a
+// shutdown no matter what the caller passes — cmd/webhook reaches here with its
+// signal context already cancelled, so it hands this a fresh one.
+//
+// It exists because those goroutines outlive the admission that spawned them:
+// one can be parked for up to stubRequestQueueTimeout (30s) on a write slot, or
+// stubWriteTimeout (5s) inside an apiserver call whose read is served by the
+// informer cache. cmd/webhook cancels that cache as soon as the HTTP drain
+// finishes, so without this join a straggler would read a store that had
+// already been stopped. Cancelling first is what keeps the wait short: the
+// goroutines abandon the write rather than finishing it, which is the right
+// trade because the next admission for the identity requests it again.
+func (h *Handler) Shutdown(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, stubDrainTimeout)
+	defer cancel()
+
+	h.stubMu.Lock()
+	h.initStubStateLocked()
+	if !h.stubStopping {
+		h.stubStopping = true
+		h.stubStop()
+	}
+	h.stubMu.Unlock()
+
+	drained := make(chan struct{})
+	go func() {
+		h.stubWG.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // acquireStubSlot blocks until a write slot is free or ctx expires. Returns a
@@ -151,11 +238,16 @@ func (h *Handler) pruneStubRequestsLocked(now time.Time) {
 // never enter the work-list at all, and every one of their pods would start on
 // template resources forever.
 //
-// The create runs on a detached context in a goroutine: the AdmissionResponse
-// must never block on an apiserver write, and the pod this admission is for
-// cannot benefit from the stub anyway (the recommendation lands later). Errors
-// are logged and dropped — the next pod of the same workload retries
-// implicitly.
+// The create runs in a goroutine, on a context detached from the admission's:
+// the AdmissionResponse must never block on an apiserver write, and the pod
+// this admission is for cannot benefit from the stub anyway (the recommendation
+// lands later). Errors are logged and dropped — the next pod of the same
+// workload retries implicitly.
+//
+// Detached from the ADMISSION, not from the process: the goroutine is
+// registered with h.stubWG and its context descends from h.stubCtx, so
+// Shutdown can cancel and join it before cmd/webhook stops the informer cache
+// it reads from.
 //
 // Requests are deduplicated per identity and bounded in flight, so the write
 // volume this generates scales with the number of DISTINCT unrecommended
@@ -167,23 +259,31 @@ func (h *Handler) pruneStubRequestsLocked(now time.Time) {
 // here.
 func (h *Handler) requestRecommendation(logger logr.Logger, ns, ownerKind, ownerName, policyName string, containers, initContainers []corev1.Container) {
 	key := ns + "/" + wlrcache.Name(ownerKind, ownerName)
-	if !h.claimStubRequest(key, time.Now()) {
+	parent, claimed, ok := h.beginStubRequest(key, time.Now())
+	if !ok {
 		return
 	}
 	go func() {
-		queueCtx, queueCancel := context.WithTimeout(context.Background(), stubRequestQueueTimeout)
+		// Registered by beginStubRequest, under the same lock that decides
+		// whether shutdown has begun — see Shutdown.
+		defer h.stubWG.Done()
+
+		// Both budgets hang off the handler's stub context, not Background:
+		// Shutdown cancels it, so neither the queue wait nor the write can
+		// outlive the drain and touch a stopped informer cache.
+		queueCtx, queueCancel := context.WithTimeout(parent, stubRequestQueueTimeout)
 		defer queueCancel()
 		release, err := h.acquireStubSlot(queueCtx)
 		if err != nil {
 			// Never reached the apiserver, so forget the claim rather than
 			// suppressing this identity for the rest of the TTL.
-			h.dropStubClaim(key)
+			h.dropStubClaim(key, claimed)
 			logger.V(1).Info("gave up waiting for a stub write slot", "err", err)
 			return
 		}
 		defer release()
 
-		ctx, cancel := context.WithTimeout(context.Background(), stubWriteTimeout)
+		ctx, cancel := context.WithTimeout(parent, stubWriteTimeout)
 		defer cancel()
 		if err := h.createStub(log.IntoContext(ctx, logger), ns, ownerKind, ownerName, policyName, containers, initContainers); err != nil {
 			logger.V(1).Info("failed to create recommendation stub", "err", err)
@@ -200,7 +300,7 @@ func (h *Handler) requestRecommendation(logger logr.Logger, ns, ownerKind, owner
 // because the controller may have created the object first. It is a backstop
 // for the rare duplicate, NOT the debouncing mechanism — "one rejected write
 // each" is only cheap when duplicates are rare, and pod churn is precisely what
-// makes them not rare. The rate limiting lives in claimStubRequest.
+// makes them not rare. The rate limiting lives in beginStubRequest.
 //
 // Create — never Update — is deliberate. An existing object may hold a live
 // recommendation, and overwriting it with an empty status would erase a

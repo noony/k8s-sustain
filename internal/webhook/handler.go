@@ -110,13 +110,36 @@ type Handler struct {
 	// to DefaultRecommendationRetention.
 	RecommendationRetention time.Duration
 
-	// Stub-request rate limiting. Lazily initialised (see
-	// initStubStateLocked) because Handler is built as a plain struct
+	// Stub-request rate limiting and shutdown tracking. Lazily initialised
+	// (see initStubStateLocked) because Handler is built as a plain struct
 	// literal everywhere, so the zero value must work.
+	//
+	// stubMu guards every field below, INCLUDING stubWG's Add and the
+	// stubStopping flag: registering a detached goroutine and deciding that
+	// no more may start have to be one atomic step, or Shutdown can start
+	// waiting on a WaitGroup that is about to be incremented again. See
+	// beginStubRequest.
 	stubMu        sync.Mutex
 	stubRequested map[string]time.Time
 	stubInflight  chan struct{}
 	stubLastPrune time.Time
+
+	// stubCtx is the parent of every detached stub goroutine's context, and
+	// stubStop cancels it. Cancelling is what makes Shutdown's wait short: a
+	// goroutine parked for up to stubRequestQueueTimeout (30s) on a write slot,
+	// or mid-apiserver-call, gives up at once instead of being waited out.
+	stubCtx  context.Context
+	stubStop context.CancelFunc
+
+	// stubStopping records that Shutdown has begun, so no further detached
+	// goroutine is registered. Distinct from stubCtx.Err() only for
+	// readability: both flip in the same critical section.
+	stubStopping bool
+
+	// stubWG counts the detached stub-create goroutines currently in flight,
+	// so Shutdown can join them before cmd/webhook cancels the informer cache
+	// they read from.
+	stubWG sync.WaitGroup
 
 	// ownerAnnCache caches Gets of an owning workload object's own
 	// metadata.annotations (see ownerAnnotations in optin.go), keyed by

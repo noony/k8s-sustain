@@ -543,3 +543,180 @@ func TestCreateStubWritesSnapshotWhenTheCacheLagsBehindTheCreate(t *testing.T) {
 		t.Fatalf("observedResources empty after create: the identity can never be computed, got %+v", got.Status)
 	}
 }
+
+// A claim can expire while its own owner is still parked on a write slot — the
+// dedup TTL and the queue budget are the same 30s — so the goroutine that
+// eventually gives up may be dropping a claim that belongs to a LATER
+// admission, which has already started its own create. An unconditional delete
+// there re-opens the identity for a third admission and lets a second
+// concurrent create go out for the same object name.
+func TestDropStubClaimDoesNotEvictANewerClaim(t *testing.T) {
+	h := &Handler{}
+	const key = "prod/job-etl"
+	t0 := time.Now()
+
+	_, stale, ok := h.beginStubRequest(key, t0)
+	if !ok {
+		t.Fatal("the first request for an unclaimed identity must be granted")
+	}
+	h.stubWG.Done() // no goroutine is started here; keep the counter balanced.
+
+	// The claim expires while its owner is still queued, and the next admission
+	// wins a fresh one.
+	later := t0.Add(stubRequestDedupTTL + time.Millisecond)
+	_, fresh, ok := h.beginStubRequest(key, later)
+	if !ok {
+		t.Fatal("an expired claim must not keep suppressing the identity")
+	}
+	h.stubWG.Done()
+
+	// Only now does the first goroutine's queue budget fire.
+	h.dropStubClaim(key, stale)
+
+	h.stubMu.Lock()
+	until, exists := h.stubRequested[key]
+	h.stubMu.Unlock()
+	if !exists || !until.Equal(fresh) {
+		t.Fatalf("the stale dropper erased a newer claim (exists=%v, until=%v, want %v): the "+
+			"admission that owns the in-flight create is left unprotected", exists, until, fresh)
+	}
+	if _, _, ok := h.beginStubRequest(key, later.Add(time.Millisecond)); ok {
+		t.Error("a third admission was granted a claim while the second one's create is still " +
+			"in flight: two concurrent creates for one identity, one of them guaranteed to be " +
+			"rejected with AlreadyExists")
+	}
+}
+
+// blockingCreateClient parks inside Create until the test releases it, ignoring
+// the context on purpose. It models the window the shutdown ordering exists
+// for: a detached stub goroutine sitting in an apiserver call — whose read is
+// served by the informer cache cmd/webhook cancels right after the HTTP drain —
+// at the moment shutdown begins.
+type blockingCreateClient struct {
+	client.Client
+	entered   chan struct{}
+	release   chan struct{}
+	enterOnce sync.Once
+}
+
+func (c *blockingCreateClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	c.enterOnce.Do(func() { close(c.entered) })
+	<-c.release
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+// The stub create outlives the AdmissionResponse it came from, so the HTTP
+// drain finishing says nothing about whether one is still running. cmd/webhook
+// cancels the informer cache the instant serve's drain returns; a stub
+// goroutine still reading through that client would then be served by a stopped
+// store. Shutdown is what closes that window, so it must not return while one
+// is in flight.
+func TestHandlerShutdownWaitsForAnInFlightStubWrite(t *testing.T) {
+	blocking := &blockingCreateClient{
+		Client: fake.NewClientBuilder().WithScheme(config.Scheme()).
+			WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build(),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h := &Handler{Client: blocking}
+
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(blocking.release) }) }
+	defer release() // never leave the goroutine parked, whatever the test does.
+
+	h.requestRecommendation(logr.Discard(), "prod", "Job", "etl", "p1", nil, nil)
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the detached stub goroutine never reached its apiserver call")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- h.Shutdown(context.Background()) }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Shutdown returned (%v) while a stub write was still using the client: "+
+			"cmd/webhook cancels the informer cache immediately afterwards, so that write "+
+			"would read a stopped store", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown never returned once the in-flight write completed")
+	}
+}
+
+// Waiting is only half of it: a stub request parked on a write slot has a 30s
+// queue budget, and no shutdown may sit through that. Shutdown cancels the
+// parked goroutines instead — the write is best-effort and the next admission
+// for the identity asks again, so abandoning it is the right trade.
+func TestHandlerShutdownReleasesAStubRequestParkedOnAWriteSlot(t *testing.T) {
+	counter := &countingCreateClient{Client: fake.NewClientBuilder().WithScheme(config.Scheme()).
+		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()}
+	h := &Handler{Client: counter}
+
+	// Fill every write slot so the request below has nowhere to go.
+	releases := make([]func(), 0, stubRequestMaxInflight)
+	defer func() {
+		for _, rel := range releases {
+			rel()
+		}
+	}()
+	for i := range stubRequestMaxInflight {
+		rel, err := h.acquireStubSlot(context.Background())
+		if err != nil {
+			t.Fatalf("filling write slot %d: %v", i, err)
+		}
+		releases = append(releases, rel)
+	}
+
+	h.requestRecommendation(logr.Discard(), "prod", "Job", "etl", "p1", nil, nil)
+
+	start := time.Now()
+	if err := h.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown gave up after %s instead of joining the parked goroutine (%v): it "+
+			"must cancel it, not wait out its %s queue budget", time.Since(start),
+			err, stubRequestQueueTimeout)
+	}
+	if elapsed := time.Since(start); elapsed > stubDrainTimeout {
+		t.Errorf("Shutdown took %s, over its own %s bound", elapsed, stubDrainTimeout)
+	}
+	if got := counter.count(); got != 0 {
+		t.Errorf("%d creates issued after shutdown began: an abandoned queued request must not "+
+			"reach the apiserver at all", got)
+	}
+}
+
+// Once Shutdown has begun there is nothing left to run a stub write for: the
+// informer cache is about to be cancelled, and registering another goroutine
+// would be an Add racing a Wait already in progress.
+func TestRequestRecommendationIsRefusedAfterShutdown(t *testing.T) {
+	counter := &countingCreateClient{Client: fake.NewClientBuilder().WithScheme(config.Scheme()).
+		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()}
+	h := &Handler{Client: counter}
+
+	if err := h.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown on an idle handler: %v", err)
+	}
+	h.requestRecommendation(logr.Discard(), "prod", "Job", "etl", "p1", nil, nil)
+
+	// beginStubRequest refuses under stubMu, so "no claim recorded" is a
+	// synchronous fact, not a race with a goroutine that may or may not exist.
+	h.stubMu.Lock()
+	claims := len(h.stubRequested)
+	h.stubMu.Unlock()
+	if claims != 0 {
+		t.Fatalf("%d stub claims recorded after shutdown: a goroutine was registered past the "+
+			"point where Shutdown stopped waiting for them", claims)
+	}
+	if got := counter.count(); got != 0 {
+		t.Errorf("%d creates issued after shutdown", got)
+	}
+}

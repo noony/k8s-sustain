@@ -78,8 +78,9 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error {
 	// The informer cache and cert watcher run on a SEPARATE context that
 	// outlives ctx on purpose. They are cancelled only after the HTTP server
-	// has finished draining (see the deferred stopDeps and the ordering at the
-	// end of this function).
+	// has finished draining AND the handler's detached stub writes have been
+	// drained with it (see the deferred stopDeps and the ordering at the end of
+	// this function).
 	//
 	// Deriving them from ctx instead would stop the cache the instant SIGTERM
 	// arrives, while the server is still serving admissions for up to its
@@ -221,10 +222,26 @@ func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error
 		return srv.ListenAndServeTLS(certPath, keyPath)
 	})
 
-	// Only now, with the drain complete and no request able to arrive, is it
-	// safe to stop the informer cache and cert watcher. The deferred stopDeps
-	// covers the early-return paths above; this call makes the ordering
-	// explicit on the path that actually serves traffic.
+	// The HTTP drain ends the REQUESTS, not everything they started. An
+	// admission that found no WorkloadRecommendation dispatches the stub create
+	// on a goroutine that deliberately outlives its AdmissionResponse
+	// (internal/webhook/stub.go): it can be parked on a write slot, or inside an
+	// apiserver call whose read is served by the informer cache below. So the
+	// handler is drained first — it cancels those goroutines and joins them,
+	// bounded by its own timeout so this can never eat the grace period — and
+	// only then, with no request able to arrive AND nothing still reading, is it
+	// safe to stop the informer cache and cert watcher.
+	//
+	// A stub write abandoned here is not lost work: the next admission for the
+	// same identity requests it again.
+	//
+	// The deferred stopDeps covers the early-return paths above; this call makes
+	// the ordering explicit on the path that actually serves traffic. ctx is
+	// already cancelled by the time we get here (that is what ended the serve),
+	// so the drain gets a context of its own.
+	if drainErr := handler.Shutdown(context.Background()); drainErr != nil {
+		log.Info("Gave up waiting for in-flight recommendation-stub writes", "err", drainErr)
+	}
 	stopDeps()
 	return err
 }

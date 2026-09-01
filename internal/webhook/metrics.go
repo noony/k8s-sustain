@@ -65,9 +65,28 @@ const (
 	RecSourceRetained = "retained"
 )
 
+// Panic label values for PanicTotal that are not HTTP routes. The two
+// singleflight leader functions in optin.go run their owner Get on the
+// group's own goroutine rather than the request goroutine, so a panic there
+// is recovered by sfPanicSafe instead of the httpx middleware — but it is
+// still a webhook panic, and an operator alerting on
+// k8s_sustain_webhook_panic_total must see it. Both values are constants, so
+// they add exactly two bounded series to the label rather than anything
+// caller-controlled.
+const (
+	// panicLabelOwnerRef labels a panic recovered inside
+	// fetchAndCacheOwnerRef — the pod's ownerRef walk.
+	panicLabelOwnerRef = "singleflight/ownerRef"
+	// panicLabelOwnerAnnotations labels a panic recovered inside
+	// fetchAndCacheOwnerAnnotations — the owning workload's annotations Get.
+	panicLabelOwnerAnnotations = "singleflight/ownerAnnotations"
+)
+
 // RequestDuration tracks how long each webhook HTTP request takes, labelled
-// by route and HTTP status text. PanicTotal counts panics caught by the
-// httpx recovery middleware.
+// by route and HTTP status text. PanicTotal counts panics the webhook
+// recovered: those caught by the httpx recovery middleware, labelled by
+// route pattern, plus those caught by sfPanicSafe on a singleflight leader
+// goroutine, labelled with one of the panicLabel* constants above.
 //
 // RecommendationSourceTotal is the operator-facing signal for whether the
 // WorkloadRecommendation pipeline the webhook now depends on exclusively is
@@ -94,7 +113,7 @@ var (
 
 	PanicTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_webhook_panic_total",
-		Help: "Number of panics recovered by the webhook middleware, by request path.",
+		Help: "Number of panics the webhook recovered, by request route or by the internal operation that panicked.",
 	}, []string{"path"})
 
 	RecommendationSourceTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
