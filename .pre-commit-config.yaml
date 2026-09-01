@@ -38,7 +38,7 @@ repos:
         entry: hack/verify-action-pins.sh
         language: system
         pass_filenames: false
-        files: ^\.github/workflows/
+        files: ^(\.github/(workflows|actions)/|hack/verify-action-pins\.sh$)
       - id: verify-crds
         name: verify CRDs in sync
         entry: make verify-crds

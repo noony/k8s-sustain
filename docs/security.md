@@ -8,7 +8,7 @@ The project is pre-1.0 and under active development. Signing, provenance and SBO
 
 | Artifact | Signature | Build provenance | SBOM |
 |---|---|---|---|
-| Container image `ghcr.io/noony/k8s-sustain` (`linux/amd64`, `linux/arm64`) | cosign keyless, over the image index digest | SLSA provenance attestation, pushed to the registry | SPDX-JSON attestation, pushed to the registry |
+| Container image `ghcr.io/noony/k8s-sustain` (`linux/amd64`, `linux/arm64`) | cosign keyless, over the image index digest and each platform manifest digest | SLSA provenance attestation, pushed to the registry | SPDX-JSON attestation, pushed to the registry |
 | Release binaries `k8s-sustain-linux-amd64`, `k8s-sustain-linux-arm64`, `k8s-sustain-darwin-arm64` | cosign keyless bundle over `sha256sums.txt`, which covers every binary | SLSA provenance attestation per binary | `k8s-sustain.spdx.json` on the GitHub release |
 | Helm charts `oci://ghcr.io/noony/helm-charts/k8s-sustain` and `.../k8s-sustain-policies` | cosign keyless, over the pushed chart digest | — | — |
 
@@ -17,7 +17,10 @@ All signing is **keyless**: there is no private key to steal or rotate. The sign
 - **OIDC issuer** — `https://token.actions.githubusercontent.com`
 - **Certificate identity (subject)** — `https://github.com/noony/k8s-sustain/.github/workflows/release.yml@refs/tags/<tag>`
 
-The SBOM is a single SPDX document for the Go module. All three binaries and both image architectures are built from one dependency graph, so one document describes them all.
+There are two SBOMs, and they are not the same document:
+
+- The **image SBOM** is cataloged from the published `linux/amd64` image and attached to the registry as an attestation. It lists the Go modules linked into the binary and the distroless base. The `linux/arm64` image is built from the same module graph on the same base, so its contents are identical; syft resolves a multi-arch index to the host platform, which is why only one is produced.
+- The **binary SBOM** (`k8s-sustain.spdx.json` on the GitHub release) is cataloged from the built `k8s-sustain-linux-amd64` binary via Go's embedded build info, so it lists exactly the modules that were linked. All three release binaries are cross-compilations of the same package set, so one document covers them. The release binaries do not bundle the dashboard UI, so no npm packages appear in it.
 
 !!! note "Placeholders"
     Examples below use `v0.1.0` as the tag. Substitute the release you are actually verifying. Image and chart tags drop the leading `v` (the git tag `v0.1.0` publishes the image tag `0.1.0`); confirm the exact tag on the [package page](https://github.com/noony/k8s-sustain/pkgs/container/k8s-sustain) if in doubt.
@@ -110,13 +113,13 @@ The provenance records which workflow, which commit and which runner produced th
 
 ### Getting the SPDX document back out
 
-The simplest source is the GitHub release, which carries the same document as a plain file:
+The binary SBOM is a plain file on the GitHub release:
 
 ```bash
 gh release download "${TAG}" --repo noony/k8s-sustain --pattern 'k8s-sustain.spdx.json'
 ```
 
-To pull it out of the registry attestation instead, ask `gh` for JSON and extract the predicate:
+The image SBOM lives only in the registry attestation. Ask `gh` for JSON and extract the predicate:
 
 ```bash
 gh attestation verify "oci://ghcr.io/noony/k8s-sustain:${VERSION}" \
@@ -221,6 +224,8 @@ The signatures are only worth as much as the pipeline that produces them, so the
 - **A `supply-chain` CI job enforces this.** `hack/verify-action-pins.sh` fails the build on any action pinned to a tag or branch rather than a SHA, and on a SHA with no trailing version comment. The same check runs locally as a `pre-commit` hook, so it fails before the push rather than after.
 - **[zizmor](https://docs.zizmor.sh/) lints the workflows** for GitHub Actions security problems — template-injection sinks, over-broad permissions, untrusted checkout of pull-request code. Findings are uploaded as SARIF and surface in the repository's Security tab.
 - **[`step-security/harden-runner`](https://github.com/step-security/harden-runner) is the first step of every job** in every workflow, in `egress-policy: audit` mode. It records the network egress each job actually makes, which makes an unexpected outbound connection from a compromised dependency visible instead of silent.
+- **Release publishing uses the `gh` CLI that ships on the runner**, not a third-party action. The only steps that hold a `contents: write` token are first-party scripts, and the GitHub release is created by one job and only appended to by the other, so there is no create/create race between them.
+- **The release build runs with the Go cache disabled.** Cache entries are writable by any run on the default branch, so restoring one into a job that produces signed binaries would let a poisoned cache reach a release. `zizmor` flags exactly this pattern.
 - **`permissions:` is least-privilege and declared per job.** The workflow default is `contents: read`; a job gets `id-token: write` only if it signs, `packages: write` only if it pushes to GHCR, `contents: write` only if it uploads release assets. Signing depends on `id-token: write` being present on exactly the jobs that sign; a job that loses it fails outright, because cosign cannot mint a certificate without an OIDC token.
 - **Dependabot** tracks Go modules, GitHub Actions, the dashboard's npm dependencies and the Docker base image weekly.
 - **The runtime image is distroless** (`gcr.io/distroless/static:nonroot`): no shell, no package manager, non-root UID.

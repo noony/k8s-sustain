@@ -49,6 +49,14 @@ for file in "${files[@]}"; do
       sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^["'"'"']//' -e 's/["'"'"']$//')"
     comment="$(printf '%s' "$comment" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 
+    # A bare `uses:` with the value on the next line is valid YAML that
+    # Actions accepts, so treat it as a violation rather than skipping it --
+    # otherwise a line break silently bypasses this gate.
+    if [[ -z "$ref" ]]; then
+      violations+=("$file:$lineno: uses: (value is on a following line; put the pinned ref on the same line)")
+      continue
+    fi
+
     # Local composite actions and container refs carry no upstream tag to pin.
     if [[ "$ref" == ./* || "$ref" == docker://* ]]; then
       pinned=$((pinned + 1))
@@ -66,7 +74,7 @@ for file in "${files[@]}"; do
     fi
 
     pinned=$((pinned + 1))
-  done < <(grep -nE '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[^[:space:]]' "$file" || true)
+  done < <(grep -nE '^[[:space:]]*(-[[:space:]]+)?uses:' "$file" || true)
 done
 
 if [[ ${#violations[@]} -gt 0 ]]; then
