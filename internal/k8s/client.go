@@ -52,6 +52,15 @@ func New(scheme *runtime.Scheme) (client.Client, error) {
 //     for as long as it is not Done. The caller keeps it alive past its own
 //     shutdown signal on purpose, so in-flight admissions still read a cache
 //     that is being updated while the server drains (see cmd/webhook/serve.go).
+//     runCtx is the CALLER's to own and to cancel, and that is the whole
+//     release mechanism on the success path: the returned client keeps a
+//     goroutine and one informer per cached kind alive until runCtx is Done,
+//     so a caller that never cancels it — context.Background(), say — holds
+//     them, and their memory, for the life of the process. Failure returns
+//     need no such unwinding: NewCached stops whatever it started before
+//     returning an error, so a caller that retries construction or gives up on
+//     it has nothing left to clean up and no need to cancel a context it may
+//     still want for the next attempt.
 //   - startCtx bounds the BLOCKING part of this call — the CRD wait and the
 //     cache sync below — and is where the caller passes its shutdown signal.
 //     Nothing answers /healthz while this call blocks, and the wait alone runs
@@ -95,7 +104,7 @@ func New(scheme *runtime.Scheme) (client.Client, error) {
 // negligible. This is a real number to account for in the webhook
 // Deployment's memory requests/limits, not a rounding error -- it trades
 // apiserver query load for webhook pod memory.
-func NewCached(runCtx, startCtx context.Context, scheme *runtime.Scheme) (client.Client, error) {
+func NewCached(runCtx, startCtx context.Context, scheme *runtime.Scheme) (_ client.Client, err error) {
 	restCfg := ctrl.GetConfigOrDie()
 
 	c, err := cache.New(restCfg, cache.Options{Scheme: scheme})
@@ -103,19 +112,19 @@ func NewCached(runCtx, startCtx context.Context, scheme *runtime.Scheme) (client
 		return nil, fmt.Errorf("building informer cache: %w", err)
 	}
 
-	// Cache.Start blocks for as long as runCtx is alive (it's the informers'
-	// run loop), so it has to run in its own goroutine. Its return value is
-	// always nil in practice (Start only returns non-nil if called twice on
-	// the same cache, which cannot happen here since we own the only
-	// reference); nothing actionable to do with it once runCtx ends and the
-	// process is already shutting down.
-	go func() {
-		_ = c.Start(runCtx)
-	}()
-
-	// Register the informers BEFORE waiting. cache.New creates none on its
-	// own, so without this the WaitForCacheSync below would wait on an empty
-	// set and return true instantly -- see the doc comment above.
+	// Register the informers BEFORE starting the cache. cache.New creates none
+	// on its own, so without this the WaitForCacheSync below would wait on an
+	// empty set and return true instantly -- see the doc comment above.
+	//
+	// Doing it before Start rather than after is what keeps this loop's error
+	// returns free of cleanup: GetInformer on a cache that has not been started
+	// only creates the informer, it neither runs nor blocks on it (see
+	// Informers.Get, which skips the wait-for-sync when started is false), so
+	// the CRD-establishment failure below -- much the likeliest way this
+	// function fails -- happens with no run goroutine in existence. The sync
+	// itself is not skipped, only moved: Start below runs all three informers
+	// at once and WaitForCacheSync waits for the set, instead of each
+	// GetInformer blocking on its own kind in turn.
 	//
 	// ONE deadline for the whole loop, not one per kind. Every cached kind
 	// comes from the same chart and is established within the same second or
@@ -131,6 +140,31 @@ func NewCached(runCtx, startCtx context.Context, scheme *runtime.Scheme) (client
 		}
 	}
 
+	// Past this point the cache is running, so every error return has to stop
+	// it. It cannot be left to the caller: runCtx is the caller's and outlives
+	// this call by design (see the doc comment), so on a failed construction
+	// there is no client to justify a live cache, and a caller that passed
+	// context.Background() has no cancel to call at all -- the goroutine and
+	// its informers would simply stay. cacheCtx is the child this function
+	// owns; the guard cancels it on failure only, leaving the success path's
+	// cache bound to runCtx exactly as before.
+	cacheCtx, stopCache := context.WithCancel(runCtx)
+	defer func() {
+		if err != nil {
+			stopCache()
+		}
+	}()
+
+	// Cache.Start blocks for as long as cacheCtx is alive (it's the informers'
+	// run loop), so it has to run in its own goroutine. Its return value is
+	// always nil in practice (Start only returns non-nil if called twice on
+	// the same cache, which cannot happen here since we own the only
+	// reference); nothing actionable to do with it once the context ends and
+	// the process is already shutting down.
+	go func() {
+		_ = c.Start(cacheCtx)
+	}()
+
 	// Now meaningful: blocks until Start has actually begun (avoiding the race
 	// where a caller reads before the cache flips into "started") and until
 	// every informer registered above reports HasSynced.
@@ -145,7 +179,10 @@ func NewCached(runCtx, startCtx context.Context, scheme *runtime.Scheme) (client
 		return nil, errors.New("informer cache failed to sync")
 	}
 
-	return client.New(restCfg, client.Options{
+	// Assigned rather than returned directly so the guard above sees this
+	// error too: the cache is already running by now, and a client that could
+	// not be built is one more caller-less cache to stop.
+	cached, err := client.New(restCfg, client.Options{
 		Scheme: scheme,
 		Cache: &client.CacheOptions{
 			Reader: c,
@@ -155,6 +192,10 @@ func NewCached(runCtx, startCtx context.Context, scheme *runtime.Scheme) (client
 			DisableFor: OwnerChainDisableFor(),
 		},
 	})
+	if err != nil {
+		return nil, fmt.Errorf("building cache-backed client: %w", err)
+	}
+	return cached, nil
 }
 
 // OwnerChainDisableFor lists the kinds NewCached serves straight from the
