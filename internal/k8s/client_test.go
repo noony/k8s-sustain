@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -331,4 +334,73 @@ func TestCRDWaitFitsInsideChartTemplateStartupProbeDefaults(t *testing.T) {
 // allowed failure. This is the number that has to exceed crdWaitTimeout.
 func startupProbeBudget(initialDelaySeconds, periodSeconds, failureThreshold int) time.Duration {
 	return time.Duration(initialDelaySeconds+periodSeconds*failureThreshold) * time.Second
+}
+
+// NewCached starts the informer cache in a goroutine whose lifetime is runCtx,
+// and runCtx is deliberately NOT the caller's shutdown signal (see the doc
+// comment): the webhook keeps it alive past SIGTERM so draining admissions
+// still read a cache that is being updated. That makes every error return a
+// place NewCached has to stop that goroutine itself — a caller whose
+// construction failed has no client, no reason to keep a cache, and under the
+// signature may legally have passed context.Background() as runCtx, in which
+// case nothing ever cancels it and a full informer set leaks on every startup
+// failure. The CRD-not-established path that crdWaitTimeout exists for is the
+// likely one, and it is precisely the path a webhook retries on.
+//
+// The failure is forced with a scheme that knows none of the cached kinds, so
+// GetInformer fails on the first kind with no apiserver traffic at all. The
+// error is not what is under test — the surviving goroutine is.
+//
+// This covers the registration error path, which is the one that reaches
+// production. The two returns AFTER the cache starts (a failed cache sync, a
+// failed client.New) are held by the deferred guard in NewCached and cannot be
+// driven from here: reaching them needs informers that register successfully
+// and therefore a live apiserver, which this package's unit tests do not have
+// (see TestNewCached_SignatureContract). The package-wide goleak TestMain is
+// the backstop for those.
+func TestNewCached_FailedStartupDoesNotLeakCacheGoroutine(t *testing.T) {
+	t.Setenv("KUBECONFIG", writeStubKubeconfig(t))
+
+	notLeaked := goleak.IgnoreCurrent()
+
+	// runCtx is never cancelled here, exactly like a caller that hands over
+	// context.Background(): the cleanup has to come from NewCached.
+	c, err := NewCached(context.Background(), context.Background(), runtime.NewScheme())
+	if err == nil {
+		t.Fatalf("NewCached: want an error for a scheme missing every cached kind, got client %v", c)
+	}
+	if c != nil {
+		t.Errorf("NewCached returned client %v alongside error %v; a failed construction must return no client", c, err)
+	}
+
+	goleak.VerifyNone(t, notLeaked)
+}
+
+// writeStubKubeconfig gives ctrl.GetConfigOrDie something to parse — it exits
+// the process rather than returning an error when it finds nothing, which
+// would take the whole test binary with it. The server address is never
+// dialled by the tests using this: they fail before any request is issued.
+func writeStubKubeconfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	const stub = `apiVersion: v1
+kind: Config
+clusters:
+- name: stub
+  cluster:
+    server: https://127.0.0.1:1
+contexts:
+- name: stub
+  context:
+    cluster: stub
+    user: stub
+current-context: stub
+users:
+- name: stub
+  user: {}
+`
+	if err := os.WriteFile(path, []byte(stub), 0o600); err != nil {
+		t.Fatalf("writing stub kubeconfig: %v", err)
+	}
+	return path
 }

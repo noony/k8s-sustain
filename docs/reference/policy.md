@@ -70,7 +70,7 @@ The webhook additionally honours the operator-level `--excluded-namespaces` flag
 
 ### `spec.selector.namespaces`
 
-A list of namespace names to target. An empty list matches all namespaces.
+A list of namespace names to target. An empty list matches all namespaces. Duplicate entries are collapsed — naming a namespace twice targets it once, not twice.
 
 ```yaml
 spec:

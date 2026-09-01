@@ -54,8 +54,16 @@ func (rt *retryTracker) shouldSkip(key string) bool {
 }
 
 // recordFailure increments the attempt counter and sets the next retry time
-// with exponential backoff capped at maxRetryDelay.
-func (rt *retryTracker) recordFailure(key string) {
+// with exponential backoff capped at maxRetryDelay. It returns a copy of the
+// resulting state, never nil.
+//
+// The return value is what callers must use to report the attempt: reading the
+// state back with a separate getState call leaves a window in which another
+// goroutine handling the SAME workload key can call recordSuccess and delete
+// the entry, so the read comes back nil. Computing and returning it under the
+// one lock makes that pair atomic, and a copy keeps the caller off the map's
+// live value.
+func (rt *retryTracker) recordFailure(key string) *retryState {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	now := time.Now()
@@ -74,7 +82,9 @@ func (rt *retryTracker) recordFailure(key string) {
 	shift := min(s.attempts-1, maxShift)
 	delay := min(baseRetryDelay<<shift, maxRetryDelay)
 	s.nextRetry = now.Add(delay)
+	cp := *s
 	rt.pruneLocked(now)
+	return &cp
 }
 
 // pruneLocked drops entries whose nextRetry is more than retryStateMaxIdle

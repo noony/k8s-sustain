@@ -3,6 +3,7 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -10,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/policymatch"
@@ -147,9 +149,9 @@ func (h *Handler) resolveCachedPodOwner(ctx context.Context, pod *corev1.Pod) (k
 
 	namespace := pod.Namespace
 	refCopy := *ref
-	ch := h.ownerRefSF.DoChan(key, func() (any, error) {
+	ch := h.ownerRefSF.DoChan(key, sfPanicSafe(log.FromContext(ctx), panicLabelOwnerRef, key, func() (any, error) {
 		return h.fetchAndCacheOwnerRef(namespace, refCopy, key)
-	})
+	}))
 	if h.sfJoinHook != nil {
 		h.sfJoinHook(key)
 	}
@@ -171,6 +173,57 @@ func (h *Handler) resolveCachedPodOwner(ctx context.Context, pod *corev1.Pod) (k
 	}
 }
 
+// sfPanicSafe wraps a singleflight leader function so a panic inside it can
+// never escape onto the group's own goroutine, turning it instead into an
+// ordinary error every caller already fails open on.
+//
+// This is not defensive noise. Both leader functions here used to run inline
+// on the request goroutine, where httpx.WithRecovery (internal/httpx) turned
+// any panic into a 500 — which for a webhook IS failing open. Behind DoChan
+// they run on singleflight's internal doCall goroutine instead, and
+// golang.org/x/sync/singleflight deliberately makes a leader panic
+// UNRECOVERABLE as soon as at least one caller has joined via DoChan: rather
+// than deliver it as an error, it re-raises it on a bare `go panic(e)`
+// goroutine with no recover anywhere on its stack. A nil entry in the scheme,
+// a nil deref in the RESTMapper, an informer bug — anything that panics under
+// the owner Get would abort the ENTIRE webhook process, killing every
+// in-flight admission with it; under failurePolicy: Fail that blocks every
+// Pod CREATE in the cluster until the pod is back. That is the exact opposite
+// of the fail-open contract the rest of this package upholds.
+//
+// Recovering here puts the panic back on a path the callers already handle:
+// the error reaches the leader and every parked waiter alike, nothing is
+// cached (an error is never a legitimate result), and admit() admits the pod
+// unmutated exactly as it would on a failed Get. The panic is not swallowed —
+// it is logged with its stack and counted on PanicTotal, the same counter the
+// httpx middleware feeds, so it stays as visible as it was when the middleware
+// was the one catching it.
+//
+// op must be a bounded constant (see the panicLabel* constants in metrics.go),
+// never the key: the key is caller-controlled and would blow up the counter's
+// label cardinality. It is logged instead, where cardinality does not matter.
+func sfPanicSafe(logger logr.Logger, op, key string, fn func() (any, error)) func() (any, error) {
+	return func() (val any, err error) {
+		defer func() {
+			rec := recover()
+			if rec == nil {
+				return
+			}
+			logger.Error(nil, "recovered panic in singleflight owner resolution",
+				"operation", op,
+				"key", key,
+				"panic", fmt.Sprint(rec),
+				"stack", string(debug.Stack()),
+			)
+			PanicTotal.WithLabelValues(op).Inc()
+			// A nil val is safe: both call sites type-assert res.Val only
+			// when res.Err is nil.
+			val, err = nil, fmt.Errorf("panic resolving %s for %s: %v", op, key, rec)
+		}()
+		return fn()
+	}
+}
+
 // fetchAndCacheOwnerRef performs the single Get that backs a whole
 // singleflight-collapsed burst for resolveCachedPodOwner, then populates
 // ownerRefCache. It runs on a context detached from any individual admission
@@ -180,6 +233,10 @@ func (h *Handler) resolveCachedPodOwner(ctx context.Context, pod *corev1.Pod) (k
 // singleflight's leader has itself timed out and returned — tying its
 // lifetime to that one caller's context would abort the shared work for
 // every other admission still waiting on it.
+//
+// It is invoked through sfPanicSafe, never raw: a panic on singleflight's own
+// goroutine is unrecoverable by design, so it must be turned into an ordinary
+// error here rather than taking the process down with it.
 func (h *Handler) fetchAndCacheOwnerRef(namespace string, ref metav1.OwnerReference, key string) (any, error) {
 	getCtx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
 	defer cancel()
@@ -250,9 +307,9 @@ func (h *Handler) ownerAnnotations(ctx context.Context, namespace, kind, name st
 		return v, nil
 	}
 
-	ch := h.ownerAnnSF.DoChan(key, func() (any, error) {
+	ch := h.ownerAnnSF.DoChan(key, sfPanicSafe(log.FromContext(ctx), panicLabelOwnerAnnotations, key, func() (any, error) {
 		return h.fetchAndCacheOwnerAnnotations(namespace, kind, name, key)
-	})
+	}))
 	if h.sfJoinHook != nil {
 		h.sfJoinHook(key)
 	}

@@ -11,6 +11,7 @@ import (
 
 	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	"github.com/go-logr/logr"
+	"golang.org/x/sync/singleflight"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -82,6 +83,30 @@ type Server struct {
 
 	cacheInit    sync.Once
 	summaryCache *Cache
+
+	// summarySF collapses concurrent /api/summary recomputes onto a single
+	// shared computation. summaryCache alone only bounds the STEADY-STATE
+	// cost: its entries exist only once a recompute has completed, so on a
+	// cold or just-expired key every concurrent miss used to run its own
+	// ~16-query Prometheus fan-out (16N round-trips for N clients), and the
+	// unconditional Set that followed let a slow one overwrite a newer
+	// snapshot and hand the older data a fresh 60s TTL. One flight per key
+	// fixes both at once. The zero value of singleflight.Group is usable (its
+	// map is lazily initialised), matching Server's plain-struct-literal
+	// construction throughout the test suite.
+	summarySF singleflight.Group
+
+	// sfJoinHook, if non-nil, is invoked with the singleflight key by every
+	// request just after it joins summarySF. Tests use it as a barrier so a
+	// concurrent-burst assertion exercises real concurrency instead of
+	// scheduler luck. Always nil outside tests.
+	//
+	// It is a field rather than a package-level var for the same reason
+	// webhook.Handler.sfJoinHook is: as a global it would be written by one
+	// test while another test's still-running goroutine read it — a data race
+	// under -race, and a straggler from a finished test would fire the NEXT
+	// test's barrier counter.
+	sfJoinHook func(key string)
 }
 
 // Handler returns an http.Handler with all dashboard routes registered.

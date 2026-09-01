@@ -148,9 +148,15 @@ for the formulas.
 | Name | Type | Labels |
 |------|------|--------|
 | `k8s_sustain_webhook_request_duration_seconds` | histogram | `path`, `status` |
-| `k8s_sustain_webhook_panic_total`              | counter   | `path` |
+| `k8s_sustain_webhook_panic_total`              | counter   | `path` (see below) |
 | `k8s_sustain_webhook_cert_expiry_seconds`      | gauge     | — |
 | `k8s_sustain_webhook_recommendation_source_total` | counter | `source` |
+
+#### `k8s_sustain_webhook_panic_total`
+
+Every panic the webhook recovered. The `path` label is the route pattern (e.g. `POST /mutate`) for a panic caught by the shared `internal/httpx` recovery middleware on the request goroutine — a bounded pattern, never the raw request path.
+
+Two label values are not routes: `singleflight/ownerRef` and `singleflight/ownerAnnotations`. The owner-resolution Gets behind [the opt-in caches](annotation.md#the-webhooks-cost-control-does-not-fully-bound-itself) run on a `singleflight` goroutine rather than the request goroutine, so the middleware cannot see a panic there; the webhook recovers it itself, logs it with its stack, counts it here and fails that admission open. Any non-zero rate on this metric is a bug worth an issue, but a panic on one of these two paths is *contained* — it costs one admission its injection, not the process.
 
 #### `k8s_sustain_webhook_recommendation_source_total`
 

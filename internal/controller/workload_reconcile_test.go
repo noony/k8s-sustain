@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -521,4 +522,35 @@ func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHandleStepError_ConcurrentSuccess_NoPanic reproduces the crash that
+// killed the operator process: the same workload target reaching two errgroup
+// goroutines at once (a namespace repeated in spec.selector.namespaces used to
+// make that possible), one taking the transient-error path while the other
+// clears the retry state on success. handleStepError used to record the
+// failure and then read the state back in a second, unsynchronised call, so
+// the intervening recordSuccess made that read return nil and the deref
+// panicked inside an errgroup closure, which does not recover.
+func TestHandleStepError_ConcurrentSuccess_NoPanic(t *testing.T) {
+	rec := events.NewFakeRecorder(1024)
+	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
+	tgt := deploymentTarget("default", "web")
+	transient := apierrors.NewServiceUnavailable("prometheus down")
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := r.handleStepError(context.Background(), tgt, "prometheus", "Prometheus query failed", transient); err == nil {
+				t.Error("transient error must be returned for requeue")
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			r.recordStepSuccess(tgt)
+		}()
+	}
+	wg.Wait()
 }

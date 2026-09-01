@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -363,6 +364,142 @@ func TestResolveCachedPodOwner_ConcurrentMissesCollapseToOneGet(t *testing.T) {
 		if kinds[i] != "Deployment" || names[i] != "web" {
 			t.Fatalf("call %d: got (%q, %q), want (Deployment, web)", i, kinds[i], names[i])
 		}
+	}
+}
+
+// TestOwnerAnnotations_LeaderPanicFailsOpenForEveryWaiter pins the fix for a
+// review finding about the move of the owner Get behind singleflight. That Get
+// used to run inline on the request goroutine, where httpx.WithRecovery turned
+// any panic into a 500 — i.e. into the webhook's fail-open contract. Behind
+// DoChan it runs on singleflight's own goroutine instead, and singleflight
+// deliberately makes a leader panic UNRECOVERABLE as soon as any caller has
+// joined via DoChan: it re-raises it with a bare `go panic(e)` that has no
+// recover on its stack. A nil map, a nil deref in the owner walk or a client
+// bug would therefore abort the whole process — every in-flight admission dies
+// with it, and under failurePolicy: Fail every Pod CREATE in the cluster blocks
+// until the pod is back. That is the exact opposite of failing open.
+//
+// Without the fix this test does not fail, it CRASHES the test binary.
+func TestOwnerAnnotations_LeaderPanicFailsOpenForEveryWaiter(t *testing.T) {
+	const n = 2 // the leader, plus one caller parked on the shared channel
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
+
+	// The Get is held until BOTH callers have joined, so the panic happens
+	// with a waiter genuinely parked on the DoChan channel — the only shape in
+	// which singleflight escalates it to an unrecoverable re-panic.
+	var joined int32
+	allJoined := make(chan struct{})
+	joinHook := func(string) {
+		if atomic.AddInt32(&joined, 1) == n {
+			close(allJoined)
+		}
+	}
+
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(d).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*appsv1.Deployment); ok {
+					<-allJoined
+					panic("owner Get exploded")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	h := &Handler{Client: c, sfJoinHook: joinHook}
+
+	before := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelOwnerAnnotations))
+
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	results := make([]map[string]string, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = h.ownerAnnotations(context.Background(), "team-a", "Deployment", "web")
+		}(i)
+	}
+	wg.Wait()
+
+	for i := range n {
+		switch {
+		case errs[i] == nil:
+			t.Errorf("call %d: got a nil error, want the recovered panic surfaced as an ordinary error to fail open on", i)
+		case !strings.Contains(errs[i].Error(), "panic"):
+			t.Errorf("call %d: error = %v, want it to name the recovered panic", i, errs[i])
+		}
+		if results[i] != nil {
+			t.Errorf("call %d: annotations = %v, want nil", i, results[i])
+		}
+	}
+	if _, ok := h.ownerAnnCache.get("team-a/Deployment/web"); ok {
+		t.Error("a panicking resolution must not populate ownerAnnCache")
+	}
+	if delta := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelOwnerAnnotations)) - before; delta != 1 {
+		t.Errorf("PanicTotal[%s] delta = %v, want 1", panicLabelOwnerAnnotations, delta)
+	}
+}
+
+// TestResolveCachedPodOwner_LeaderPanicFailsOpenForEveryWaiter is
+// TestOwnerAnnotations_LeaderPanicFailsOpenForEveryWaiter's counterpart for
+// ownerRefSF: the pod→owner walk's Get runs on the same singleflight
+// goroutine and must contain a panic the same way.
+func TestResolveCachedPodOwner_LeaderPanicFailsOpenForEveryWaiter(t *testing.T) {
+	const n = 2
+	rs := deploymentReplicaSet("team-a", "web-abc", "web")
+
+	var joined int32
+	allJoined := make(chan struct{})
+	joinHook := func(string) {
+		if atomic.AddInt32(&joined, 1) == n {
+			close(allJoined)
+		}
+	}
+
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(rs).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*appsv1.ReplicaSet); ok {
+					<-allJoined
+					panic("ownerRef walk exploded")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	h := &Handler{Client: c, sfJoinHook: joinHook}
+
+	before := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelOwnerRef))
+
+	var wg sync.WaitGroup
+	kinds := make([]string, n)
+	names := make([]string, n)
+	errs := make([]error, n)
+	for i := range n {
+		pod := podWithRSOwner("team-a", fmt.Sprintf("web-abc-%d", i), "web-abc", "")
+		wg.Add(1)
+		go func(i int, pod *corev1.Pod) {
+			defer wg.Done()
+			kinds[i], names[i], errs[i] = h.resolveCachedPodOwner(context.Background(), pod)
+		}(i, pod)
+	}
+	wg.Wait()
+
+	for i := range n {
+		switch {
+		case errs[i] == nil:
+			t.Errorf("call %d: got a nil error, want the recovered panic surfaced as an ordinary error to fail open on", i)
+		case !strings.Contains(errs[i].Error(), "panic"):
+			t.Errorf("call %d: error = %v, want it to name the recovered panic", i, errs[i])
+		}
+		if kinds[i] != "" || names[i] != "" {
+			t.Errorf("call %d: got (%q, %q), want no resolved owner", i, kinds[i], names[i])
+		}
+	}
+	if _, ok := h.ownerRefCache.get("team-a/ReplicaSet/web-abc/"); ok {
+		t.Error("a panicking resolution must not populate ownerRefCache")
+	}
+	if delta := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelOwnerRef)) - before; delta != 1 {
+		t.Errorf("PanicTotal[%s] delta = %v, want 1", panicLabelOwnerRef, delta)
 	}
 }
 
