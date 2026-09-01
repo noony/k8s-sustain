@@ -40,10 +40,14 @@ The dashboard provides:
 }
 
 func runDashboard(_ *cobra.Command, _ []string) error {
-	cfg := config.LoadDashboardConfig()
+	cfg, err := config.LoadDashboardConfig()
+	if err != nil {
+		return err
+	}
 	log := logging.Setup(cfg.LogLevel, "dashboard")
 
-	promClient, err := promclient.New(cfg.PrometheusAddress)
+	promClient, err := promclient.New(cfg.PrometheusAddress,
+		promclient.WithTransportConfig(cfg.PrometheusTransport))
 	if err != nil {
 		return fmt.Errorf("creating prometheus client: %w", err)
 	}

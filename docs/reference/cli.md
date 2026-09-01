@@ -56,6 +56,43 @@ k8s-sustain start [flags]
 | `--recommendation-retention` | `168h` | How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs) — that is, how long a departed identity's last-known-good keeps being served. It does **not** affect how often anything is recomputed: a retained identity is recomputed on `--reconcile-interval` like every other cache object. Because the webhook's only source is this object, the window decides whether a *recurring* ephemeral identity is rightsized at admission on its next run, so set it above the longest expected gap between runs — see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). The dashboard shows retained entries as inactive workloads. `0` sweeps them on the next reconcile. The window is measured from `status.observedAt`, which keeps being refreshed while the identity's samples remain inside the query window, so the clock only starts once that history ages out — budget object count against roughly `window + retention`. |
 | `--query-shard-max-samples` | `10000000` | Projected Prometheus sample budget (containers × window-minutes, summed across a shard's workloads) a single batched CPU/memory/OOM shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own `--query.max-samples` (default `50000000`): that server-side limit *rejects* an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default leaves a 5x margin. |
 
+### Prometheus authentication and TLS flags
+
+These flags exist with **identical names** on both `start` and `dashboard`
+(the webhook has none — it never queries Prometheus). See the
+[Authenticated Prometheus guide](../guides/authenticated-prometheus.md) for
+worked Helm examples.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--prometheus-bearer-token` | — | Static bearer token sent as `Authorization: Bearer <token>` on every request. Mutually exclusive with `--prometheus-bearer-token-file`. Read once at startup, so a rotating token must use the file form. |
+| `--prometheus-bearer-token-file` | — | Path to a file holding the bearer token. **Re-read on every request**, so projected service-account tokens keep working across rotation and a Secret update needs no restart. |
+| `--prometheus-basic-auth-username` | — | Username for HTTP basic auth. Required whenever a password or password file is set. |
+| `--prometheus-basic-auth-password` | — | Password for HTTP basic auth. Mutually exclusive with `--prometheus-basic-auth-password-file`. |
+| `--prometheus-basic-auth-password-file` | — | Path to a file holding the basic-auth password. Re-read on every request. |
+| `--prometheus-headers` | — | Extra HTTP header sent on every request, as `Key=Value` (e.g. `X-Scope-OrgID=tenant-a` for a multi-tenant Thanos/Mimir/Cortex gateway). **Repeat the flag** for several headers; each occurrence is taken verbatim, so a value may contain commas or quotes. Only the first `=` splits an entry, so values may contain `=`. The env-var form (`K8SSUSTAIN_PROMETHEUS_HEADERS`) is a single comma-separated string instead, so a value with a comma must use the flag. Header names must be valid HTTP tokens and values must not contain control characters — both are checked at startup. |
+| `--prometheus-tls-ca-file` | — | PEM CA bundle used to verify the Prometheus server certificate. **Appended** to a copy of the system trust store rather than replacing it. |
+| `--prometheus-tls-cert-file` | — | Client certificate for mutual TLS. Must be set together with `--prometheus-tls-key-file`. The pair is **re-read on every TLS handshake**, so a certificate rotated in place (cert-manager renewing the Secret, a mesh sidecar refreshing its pair) is used without a restart. |
+| `--prometheus-tls-key-file` | — | Client private key for mutual TLS. Must be set together with `--prometheus-tls-cert-file`. Re-read on every handshake, like the certificate. |
+| `--prometheus-tls-server-name` | — | Overrides the SNI / certificate hostname verified against the server certificate. Reach for this before `--prometheus-tls-insecure-skip-verify`. |
+| `--prometheus-tls-insecure-skip-verify` | `false` | Disable server-certificate verification. Insecure — the connection can be intercepted, and every credential above with it. Logs a loud warning at startup. |
+
+Every file named above is also read **once at construction**, so a bad path, a
+malformed key pair, or a CA file with no valid PEM block fails the process at
+startup (`CrashLoopBackOff`) instead of degrading into per-query errors that
+look like a Prometheus outage. Credentials are never logged.
+
+Conflicting combinations are rejected at startup rather than silently resolved:
+bearer token + bearer token file, password + password file, bearer + basic
+auth, a password without a username, an `Authorization` entry in
+`--prometheus-headers` alongside bearer/basic auth, a header name or value
+that HTTP would reject, and a TLS cert without its key.
+
+If the system certificate store cannot be read, `--prometheus-tls-ca-file`
+becomes the *only* trusted root; the startup log says so with a `WARNING`
+line, since a public-CA ingress on the same address would then fail with
+"unknown authority".
+
 ### Environment variables
 
 Every flag can be overridden with an environment variable prefixed by `K8SSUSTAIN_` (uppercase, hyphens and dots → underscores). The mapping is:
@@ -76,6 +113,26 @@ K8SSUSTAIN_WEBHOOK_EXCLUDED_NAMESPACES=kube-system,monitoring k8s-sustain webhoo
 # List-valued flag — comma-separated, same syntax as --excluded-namespaces=a,b
 K8SSUSTAIN_EXCLUDED_NAMESPACES=kube-system,monitoring k8s-sustain start
 ```
+
+!!! danger "The same flag, two different environment variables"
+    Flags that exist on both `start` and `dashboard` — every
+    `--prometheus-*` authentication flag, `--log-level`,
+    `--excluded-namespaces` — share a **flag name** but not an environment
+    variable. The controller reads `K8SSUSTAIN_<FLAG>`; the dashboard binds all
+    of its flags under the `dashboard.` key prefix and reads
+    `K8SSUSTAIN_DASHBOARD_<FLAG>`.
+
+    ```bash
+    K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE=/etc/prom/token k8s-sustain start
+    K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE=/etc/prom/token k8s-sustain dashboard
+    ```
+
+    An unprefixed variable passed to `dashboard` is **silently ignored** — no
+    warning, no error. The dashboard starts and queries Prometheus
+    unauthenticated, which surfaces much later as "No metrics data available"
+    while the controller works fine. The Helm chart renders the correct prefix
+    for each component automatically; this only bites when you set environment
+    variables yourself.
 
 ### Log verbosity
 
@@ -162,6 +219,18 @@ k8s-sustain dashboard [flags]
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--cors-allowed-origins` | *(empty)* | Comma-separated list of allowed CORS origins. Empty (default) = same-origin only. Use `*` to allow all (not recommended). |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces the controller and webhook never manage. Mirrors their `--excluded-namespaces` flag so the dashboard's policy-scoped workload views stay consistent with what is actually managed. |
+
+The dashboard also accepts the full set of
+[Prometheus authentication and TLS flags](#prometheus-authentication-and-tls-flags)
+documented under `start`, with identical names and semantics — it queries
+Prometheus directly and needs the same credentials the controller does.
+
+!!! danger "Dashboard environment variables carry the `DASHBOARD` prefix"
+    `k8s-sustain dashboard` reads **`K8SSUSTAIN_DASHBOARD_PROMETHEUS_*`**, not
+    `K8SSUSTAIN_PROMETHEUS_*`, because every dashboard flag is bound under the
+    `dashboard.` Viper key prefix. An unprefixed variable is silently ignored
+    and the dashboard queries Prometheus unauthenticated. The flag names
+    themselves are unprefixed and identical to the controller's.
 
 ### Health endpoints
 

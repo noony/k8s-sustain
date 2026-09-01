@@ -44,7 +44,11 @@ func TestRetentionDefaultAgreesWithConfigDefault(t *testing.T) {
 	// controller would already have deleted".
 	ctrlCmd := &cobra.Command{}
 	config.BindControllerFlags(ctrlCmd)
-	if got := config.LoadControllerConfig().RecommendationRetention; got != cfg.RecommendationRetention {
+	ctrlCfg, err := config.LoadControllerConfig()
+	if err != nil {
+		t.Fatalf("LoadControllerConfig: %v", err)
+	}
+	if got := ctrlCfg.RecommendationRetention; got != cfg.RecommendationRetention {
 		t.Errorf("controller --recommendation-retention default is %s but the webhook's is %s — "+
 			"the webhook's bound must be the controller's retention window", got, cfg.RecommendationRetention)
 	}

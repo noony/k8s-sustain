@@ -18,6 +18,92 @@
 
 ---
 
+## Prometheus authentication
+
+Authentication and TLS for the Prometheus connection. One top-level block wires
+the **controller** and the **dashboard** identically, so the two can never
+disagree about which Prometheus — or which tenant — a recommendation came from.
+The webhook is deliberately not wired: it never queries Prometheus, it only
+reads cached `WorkloadRecommendation` objects.
+
+See the [Authenticated Prometheus guide](../guides/authenticated-prometheus.md)
+for worked examples (Thanos/Mimir tenant gateway, service-account token behind
+an auth proxy, basic auth with a private CA).
+
+!!! note "`prometheusAuth` is not `prometheus`"
+    This block configures k8s-sustain's *client*. The separate top-level
+    `prometheus:` key configures the [bundled Prometheus subchart](#prometheus-subchart).
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `prometheusAuth.existingSecret` | `""` | Name of an existing Secret in the release namespace holding the bearer token and/or basic-auth credentials. Required for any of the `*Key` values below to take effect. |
+| `prometheusAuth.bearerTokenKey` | `""` | Key in `existingSecret` holding the bearer token. Mounted at `/etc/k8s-sustain/prometheus-auth/<key>` and passed as `--prometheus-bearer-token-file`. |
+| `prometheusAuth.bearerTokenFile` | `""` | Absolute path to a bearer token file that **already exists in the pod**, passed verbatim as `--prometheus-bearer-token-file`. No volume or mount is rendered. Canonical value: `/var/run/secrets/kubernetes.io/serviceaccount/token`, the kubelet's rotating projected token. Mutually exclusive with `bearerTokenKey` and `bearerToken` — setting either alongside it fails the template. |
+| `prometheusAuth.bearerToken` | `""` | Inline bearer token. **Discouraged** — rendered verbatim into the pod spec. Ignored when `existingSecret` + `bearerTokenKey` are set. |
+| `prometheusAuth.basicAuth.username` | `""` | Basic-auth username, passed as `--prometheus-basic-auth-username`. Not secret material, so a plain value is fine. |
+| `prometheusAuth.basicAuth.usernameKey` | `""` | Key in `existingSecret` holding the username, injected with `valueFrom.secretKeyRef` (there is no `--prometheus-basic-auth-username-file` flag). Wins over `username` when both are set. |
+| `prometheusAuth.basicAuth.passwordKey` | `""` | Key in `existingSecret` holding the password. Mounted at `/etc/k8s-sustain/prometheus-auth/<key>` and passed as `--prometheus-basic-auth-password-file`. |
+| `prometheusAuth.basicAuth.passwordFile` | `""` | Absolute path to a password file that **already exists in the pod** (a secret-store CSI mount, say), passed verbatim as `--prometheus-basic-auth-password-file`. No volume is rendered. Mutually exclusive with `passwordKey` and `password`. |
+| `prometheusAuth.basicAuth.password` | `""` | Inline password. **Discouraged** — rendered verbatim into the pod spec. Ignored when `existingSecret` + `passwordKey` are set. |
+| `prometheusAuth.headers` | `{}` | Extra HTTP headers sent with every query, rendered as one `--prometheus-headers=Key=Value` flag per entry, so a value may contain commas or quotes. Header **values land in the pod spec** — use for tenant ids, not credentials. Values **must be strings**: an unquoted number such as `1234567` is parsed as a float and rejected by the values schema (write `"1234567"`). Example: `{X-Scope-OrgID: tenant-a}`. Keys are sorted so the rendered flags and the pod-template hash stay stable. |
+| `prometheusAuth.tls.existingSecret` | `""` | Secret holding the CA bundle and/or client key pair. May be the same Secret as `prometheusAuth.existingSecret`; it is mounted separately, at `/etc/k8s-sustain/prometheus-tls`. |
+| `prometheusAuth.tls.caKey` | `""` | Key holding the CA bundle that signs the Prometheus server certificate (`--prometheus-tls-ca-file`). Appended to the system trust store, never substituted for it. |
+| `prometheusAuth.tls.caFile` | `""` | Absolute path to a CA bundle that **already exists in the pod**, passed verbatim as `--prometheus-tls-ca-file`. No volume is rendered. On OpenShift, `/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt` is the service CA that signs the in-cluster monitoring endpoint. Mutually exclusive with `caKey`. |
+| `prometheusAuth.tls.certKey` | `""` | Key holding the client certificate for mTLS (`--prometheus-tls-cert-file`). Must be set with `keyKey`. The pair is re-read on every TLS handshake, so a renewed certificate in the Secret is used without a restart. |
+| `prometheusAuth.tls.certFile` | `""` | Absolute path to a client certificate that **already exists in the pod** (a service-mesh sidecar's key pair, say), passed verbatim as `--prometheus-tls-cert-file`. No volume is rendered. Mutually exclusive with `certKey`; still needs a key half (`keyFile` or `keyKey`). |
+| `prometheusAuth.tls.keyKey` | `""` | Key holding the client private key for mTLS (`--prometheus-tls-key-file`). Must be set with `certKey`. |
+| `prometheusAuth.tls.keyFile` | `""` | Absolute path to a client private key that **already exists in the pod**, passed verbatim as `--prometheus-tls-key-file`. No volume is rendered. Mutually exclusive with `keyKey`. |
+| `prometheusAuth.tls.serverName` | `""` | Overrides the SNI / certificate name verified against the server certificate (`--prometheus-tls-server-name`). |
+| `prometheusAuth.tls.insecureSkipVerify` | `false` | Disable server-certificate verification (`--prometheus-tls-insecure-skip-verify`). Debug only — it makes every credential above interceptable. Logs a loud warning at startup. |
+
+### How the values are rendered
+
+- **Secret-backed keys become read-only file mounts**, projected with
+  `defaultMode: 288` (`0440`) and with an explicit `items:` list, so only the
+  keys you name are exposed — an unrelated key in the same Secret never reaches
+  the container. Credentials at `/etc/k8s-sustain/prometheus-auth/<key>`, TLS
+  material at `/etc/k8s-sustain/prometheus-tls/<key>`.
+- **A secret-backed file always wins** over its inline counterpart. Setting
+  both is not an error; the inline value simply is not rendered.
+- **Inline values become environment variables**, not arguments — so they stay
+  out of the container's `argv` — with the per-component prefix the binary
+  expects: `K8SSUSTAIN_PROMETHEUS_*` on the controller,
+  `K8SSUSTAIN_DASHBOARD_PROMETHEUS_*` on the dashboard.
+- Naming a `*Key` without the matching `existingSecret` renders **nothing** —
+  no flag, no volume, no mount.
+- **A `*File` value is a raw path, not a source the chart creates.** It renders
+  the flag verbatim and adds **no volume and no volumeMount** — use it for a
+  file the pod already carries (the kubelet's projected service-account token,
+  a secret-store CSI mount, a mesh sidecar's key pair). The path must be
+  absolute, or the template fails.
+- **A `*File` and its `*Key` are mutually exclusive and fail the template**
+  when both are set, rather than being ranked by precedence: both drive the
+  *same* flag with different values, so the rendered Deployment would not show
+  which source was meant. `bearerTokenFile` / `basicAuth.passwordFile` conflict
+  with their inline counterparts too — the binary rejects an inline credential
+  together with its file at construction, so rendering both would only defer
+  the crash to startup. The error names both values.
+- **The binary's own cross-credential rules are checked at template time too**,
+  on the *effective* sources (a `*Key` only counts when its Secret is named):
+  a bearer token together with basic auth, a password without a username, and
+  a client certificate without its key (or vice versa) all fail the template
+  instead of surfacing as a `CrashLoopBackOff` after a green `helm upgrade`.
+- **Every arg carrying a user value is quoted**, so a header value or username
+  containing a colon followed by a space, a space followed by `#`, or a `"`
+  renders as the exact string, instead of turning the args entry into a YAML
+  mapping or being truncated at a comment marker.
+
+!!! warning "Prefer `existingSecret` over inline values"
+    An inline `bearerToken` or `basicAuth.password` is readable through
+    `kubectl get deploy -o yaml`, `helm get values`, and whatever git
+    repository holds the values file. The file form additionally re-reads the
+    credential on **every request**, so a rotated Secret — or a kubelet-rotated
+    service-account token — is picked up with no pod restart. Create the Secret
+    with external-secrets, sealed-secrets, a secret-store CSI driver, or this
+    chart's [`extraManifests`](#extra-manifests).
+
+---
+
 ## Controller
 
 | Value | Default | Description |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -173,6 +174,13 @@ type Client struct {
 	queueTimeout time.Duration
 	// sem bounds concurrent in-flight queries. nil disables the bound.
 	sem chan struct{}
+	// transport holds the auth/TLS settings from WithTransportConfig, and
+	// transportSet records that the option was used at all — an explicitly
+	// passed zero TransportConfig must still conflict with WithRoundTripper.
+	transport    TransportConfig
+	transportSet bool
+	// roundTripper is the explicit transport from WithRoundTripper, if any.
+	roundTripper http.RoundTripper
 }
 
 // Default circuit-breaker tuning: trip after 5 consecutive failures,
@@ -304,13 +312,14 @@ func (c *Client) acquire(ctx context.Context, holdsProbe bool) (func(), error) {
 }
 
 // New creates a Prometheus client targeting addr (e.g. "http://prometheus:9090").
+//
+// Options are applied BEFORE the underlying api.Client is built, because
+// WithTransportConfig / WithRoundTripper decide the RoundTripper that
+// api.Config is constructed with — it cannot be swapped in afterwards.
+// New(addr) with no options passes no RoundTripper at all, so it is identical
+// to the pre-authentication behaviour: api.DefaultRoundTripper, no credentials.
 func New(addr string, opts ...Option) (*Client, error) {
-	c, err := api.NewClient(api.Config{Address: addr})
-	if err != nil {
-		return nil, fmt.Errorf("creating prometheus client: %w", err)
-	}
 	cli := &Client{
-		api:          prometheusv1.NewAPI(c),
 		breaker:      newBreaker(defaultBreakerMaxFailures, defaultBreakerCooldown),
 		queryTimeout: defaultQueryTimeout,
 		queueTimeout: defaultQueueTimeout,
@@ -318,6 +327,15 @@ func New(addr string, opts ...Option) (*Client, error) {
 	for _, opt := range opts {
 		opt(cli)
 	}
+	rt, err := cli.resolveRoundTripper()
+	if err != nil {
+		return nil, fmt.Errorf("creating prometheus client: %w", err)
+	}
+	c, err := api.NewClient(api.Config{Address: addr, RoundTripper: rt})
+	if err != nil {
+		return nil, fmt.Errorf("creating prometheus client: %w", err)
+	}
+	cli.api = prometheusv1.NewAPI(c)
 	return cli, nil
 }
 

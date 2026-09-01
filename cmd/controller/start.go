@@ -38,7 +38,10 @@ var startCmd = &cobra.Command{
 }
 
 func runStart(_ *cobra.Command, _ []string) error {
-	cfg := config.LoadControllerConfig()
+	cfg, err := config.LoadControllerConfig()
+	if err != nil {
+		return err
+	}
 	log := logging.Setup(cfg.LogLevel, "setup")
 
 	log.Info(
@@ -59,7 +62,8 @@ func runStart(_ *cobra.Command, _ []string) error {
 	)
 
 	promClient, err := promclient.New(cfg.PrometheusAddress,
-		promclient.WithMaxInflight(cfg.PrometheusMaxInflight))
+		promclient.WithMaxInflight(cfg.PrometheusMaxInflight),
+		promclient.WithTransportConfig(cfg.PrometheusTransport))
 	if err != nil {
 		log.Error(err, "Unable to create Prometheus client")
 		return err

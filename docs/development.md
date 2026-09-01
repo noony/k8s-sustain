@@ -99,6 +99,81 @@ go run main.go start \
   --log-level=debug
 ```
 
+To develop against an authenticated Prometheus (a shared Thanos/Mimir gateway,
+a staging cluster behind an auth proxy), pass the same auth flags the
+deployment uses:
+
+```bash
+go run main.go start \
+  --prometheus-address=https://mimir-gateway.example.com/prometheus \
+  --prometheus-bearer-token-file=$HOME/.config/mimir/token \
+  --prometheus-headers=X-Scope-OrgID=tenant-a \
+  --log-level=debug
+```
+
+The flag names are identical on `go run main.go dashboard`. The **environment
+variables are not**: the dashboard binds its flags under the `dashboard.` Viper
+key prefix, so it reads `K8SSUSTAIN_DASHBOARD_PROMETHEUS_*` while the
+controller reads `K8SSUSTAIN_PROMETHEUS_*`. See the
+[CLI reference](reference/cli.md#prometheus-authentication-and-tls-flags).
+
+### Prometheus client options
+
+`internal/prometheus.New(addr, opts...)` takes functional options. The
+transport-related ones:
+
+| Option | Purpose |
+|--------|---------|
+| `WithTransportConfig(TransportConfig)` | Bearer token (inline or file), basic auth (inline or password file), arbitrary headers, and TLS (`CAFile`, `CertFile`/`KeyFile`, `ServerName`, `InsecureSkipVerify`). This is what the `start` and `dashboard` call sites use: `config.LoadControllerConfig` / `LoadDashboardConfig` fill a `PrometheusTransport` field of this type directly, and return an error on a malformed `--prometheus-headers` entry so no call site can start with the headers silently dropped. |
+| `WithRoundTripper(http.RoundTripper)` | Escape hatch installing a transport this package does not model (SigV4, an in-memory key pair, a recording transport in tests). **Mutually exclusive** with `WithTransportConfig` — passing both is an error from `New`, not a silent precedence rule. |
+
+Implementation notes worth knowing before touching `internal/prometheus/transport.go`:
+
+- The zero `TransportConfig` is a no-op: `New(addr)` with no options builds the
+  client with no `RoundTripper` at all, byte-identical to the pre-auth
+  behaviour.
+- `RoundTrip` operates on a **clone** of the request. That is required by the
+  `http.RoundTripper` contract and avoids a data race on the shared header map
+  under `-race`.
+- Credential **files are re-read on every request** so a kubelet-rotated
+  projected service-account token keeps working. Do not add a cache here — the
+  client issues a handful of queries per reconcile, bounded by
+  `--prometheus-max-inflight`. The mTLS key pair gets the same property
+  through `tls.Config.GetClientCertificate`, which reloads `CertFile`/`KeyFile`
+  on every handshake; do not put a static entry in `tls.Config.Certificates`,
+  it would shadow the callback.
+- `TransportConfig.validate` checks header names and values with
+  `httpguts` at construction. `http.Transport` would otherwise reject them on
+  every request, tripping the circuit breaker and reading as an outage.
+- This is a deliberate hand-rolled subset of
+  `github.com/prometheus/common/config.HTTPClientConfig`, kept because that
+  package *replaces* the root pool with `CAFile` where this one appends to the
+  system pool, and because it would compile in JWT/OAuth2 and conntrack
+  dependencies the binary does not otherwise use. Revisit if a proxy, OAuth2
+  or SigV4 transport becomes a requirement.
+- Every configured file is *also* read once inside `newTransportRoundTripper`,
+  so a bad path fails `New` and therefore the process, rather than surfacing as
+  a per-query error indistinguishable from a Prometheus outage.
+- `CAFile` is appended to a **copy** of the system pool, and the base transport
+  is a `Clone()` of `api.DefaultRoundTripper` — the package-level default is
+  shared with every other `client_golang` consumer in the process and must
+  never be mutated.
+- Adding a new flag means editing, in `internal/config/config.go`,
+  `bindPrometheusTransportFlags` (called with `""` for the controller and
+  `"dashboard."` for the dashboard, which is what keeps the two flag sets from
+  drifting) and `loadPrometheusTransport`, plus the field on
+  `promclient.TransportConfig`. Mirror it in
+  `charts/k8s-sustain/templates/_helpers.tpl` (`k8s-sustain.prometheusAuthArgs`
+  / `…Env` / `…AuthSecretVolumes`), `values.yaml`, `values.schema.json`, and
+  `charts/k8s-sustain/tests/prometheus-auth_test.yaml`. Any future component
+  that queries Prometheus adds those four includes rather than re-deriving the
+  flags.
+- `--prometheus-headers` is a pflag **StringArray**, not a StringSlice: one
+  element per flag occurrence, no CSV splitting, so a header value may contain
+  a comma. The chart renders one flag per header for that reason. The env-var
+  path (`getStringSlice`) still splits on commas and cannot express such a
+  value.
+
 ### Start the webhook (requires TLS)
 
 The webhook must be reachable from the API server, which makes local development more involved. Use local kind cluster with a self-signed cert.

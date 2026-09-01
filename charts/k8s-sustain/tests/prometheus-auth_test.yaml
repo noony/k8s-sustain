@@ -1,0 +1,847 @@
+# Prometheus transport auth is shared verbatim by every component that queries
+# Prometheus. Both Deployments are rendered in the SAME suite on purpose: with
+# no documentIndex / documentSelector, helm-unittest checks each assertion
+# against every rendered document, so any drift between the controller and the
+# dashboard fails here rather than silently shipping. Only the tests that must
+# name one deployment (the args baseline, which differs per subcommand) carry a
+# documentSelector.
+suite: prometheus auth (controller + dashboard)
+templates:
+  - templates/deployment.yaml
+  - templates/dashboard-deployment.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: renders no auth flags, env, volumes or mounts by default
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notExists:
+          path: spec.template.spec.volumes
+      # The unchanged argument baseline, per component.
+      - template: templates/deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - start
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+            - --leader-elect=true
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
+            - --log-level=error
+            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --workload-concurrency-limit=5
+            - --policy-concurrency-limit=10
+            - --reconcile-interval=5m
+            - --recycle-replacement-timeout=5m
+            - --recommendation-retention=168h
+            - --prometheus-max-inflight=8
+            - --query-shard-max-samples=10000000
+      - template: templates/dashboard-deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - dashboard
+            - --bind-address=:8090
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
+            - --log-level=error
+            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+
+  - it: renders nothing when a key is named but no Secret is
+    set:
+      prometheusAuth.bearerTokenKey: token
+      prometheusAuth.basicAuth.passwordKey: password
+      prometheusAuth.tls.caKey: ca.crt
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notExists:
+          path: spec.template.spec.volumes
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-bearer-token-file=/etc/k8s-sustain/prometheus-auth/token
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-basic-auth-password-file=/etc/k8s-sustain/prometheus-auth/password
+
+  - it: passes an inline bearer token as an env var, never as an arg or a volume
+    set:
+      prometheusAuth.bearerToken: s3cret-token
+    asserts:
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN
+            value: s3cret-token
+      # The dashboard binds every flag under the `dashboard.` Viper key prefix,
+      # so its env var carries the matching K8SSUSTAIN_DASHBOARD_ prefix.
+      - template: templates/dashboard-deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN
+            value: s3cret-token
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: s3cret-token
+
+  - it: mounts the bearer token from an existing Secret and points the file flag at it
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.bearerTokenKey: token
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-bearer-token-file=/etc/k8s-sustain/prometheus-auth/token
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: prometheus-auth
+            mountPath: /etc/k8s-sustain/prometheus-auth
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: prometheus-auth
+            secret:
+              secretName: prometheus-credentials
+              defaultMode: 288
+              items:
+                - key: token
+                  path: token
+      # Nothing sensitive leaks into env when the Secret path is used.
+      - notExists:
+          path: spec.template.spec.containers[0].env
+
+  - it: lets the secret-backed token file win over an inline token
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.bearerTokenKey: token
+      prometheusAuth.bearerToken: s3cret-token
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-bearer-token-file=/etc/k8s-sustain/prometheus-auth/token
+      - notExists:
+          path: spec.template.spec.containers[0].env
+
+  - it: wires basic auth from a Secret — username via secretKeyRef, password via a file
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.basicAuth.usernameKey: username
+      prometheusAuth.basicAuth.passwordKey: password
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-basic-auth-password-file=/etc/k8s-sustain/prometheus-auth/password
+      - template: templates/deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: prometheus-credentials
+                  key: username
+      - template: templates/dashboard-deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: prometheus-credentials
+                  key: username
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: prometheus-auth
+            secret:
+              secretName: prometheus-credentials
+              defaultMode: 288
+              items:
+                - key: password
+                  path: password
+
+  - it: passes a plain basic-auth username as an arg and an inline password as env
+    set:
+      prometheusAuth.basicAuth.username: sustain
+      prometheusAuth.basicAuth.password: hunter2
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-basic-auth-username=sustain
+      - template: templates/deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_PASSWORD
+              value: hunter2
+      - template: templates/dashboard-deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_PASSWORD
+              value: hunter2
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: lets usernameKey win over a plain username
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.basicAuth.username: sustain
+      prometheusAuth.basicAuth.usernameKey: username
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-basic-auth-username=sustain
+      - template: templates/deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: prometheus-credentials
+                  key: username
+      - template: templates/dashboard-deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: prometheus-credentials
+                  key: username
+
+  - it: renders one --prometheus-headers flag per header, sorted by key
+    # Declared out of alphabetical order on purpose: the rendered flags must
+    # not depend on map iteration order, or the pod template hash flaps in CI.
+    # One flag per header (the binary's flag is a repeatable StringArray, not
+    # a CSV list) is what lets a value carry a comma — see the next test.
+    set:
+      prometheusAuth.headers:
+        X-Scope-OrgID: tenant-a
+        Authorization-Hint: none
+        X-Extra: two
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-headers=Authorization-Hint=none
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-headers=X-Extra=two
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-headers=X-Scope-OrgID=tenant-a
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-headers=Authorization-Hint=none,X-Extra=two,X-Scope-OrgID=tenant-a
+
+  - it: quotes arg values so YAML-significant characters survive the round trip
+    # Each of these would break an unquoted plain scalar: `: ` turns the list
+    # item into a mapping (rejected by the apiserver), ` #` starts a comment
+    # that silently truncates the value, and a comma used to be split by the
+    # CSV flag parser. helm-unittest parses the rendered YAML, so `contains`
+    # matching the full value proves the quoting is correct.
+    set:
+      prometheusAuth.basicAuth.username: "bob #x"
+      prometheusAuth.headers:
+        X-Colon: "a: b"
+        Accept: "application/json,text/plain"
+        X-Quote: 'say "hi"'
+      prometheusAuth.tls.serverName: "thanos: internal"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--prometheus-basic-auth-username=bob #x"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--prometheus-headers=X-Colon=a: b"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--prometheus-headers=Accept=application/json,text/plain"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: '--prometheus-headers=X-Quote=say "hi"'
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--prometheus-tls-server-name=thanos: internal"
+
+  - it: fails on a non-string header value instead of rendering it in exponent notation
+    # Helm parses an unquoted 1234567 from a values file as float64; %v would
+    # render 1.234567e+06 and every query would go to the wrong tenant. The
+    # values schema rejects it first; the helper carries the same guard with a
+    # copy-pasteable hint for renders that skip schema validation.
+    set:
+      prometheusAuth.headers:
+        X-Scope-OrgID: 1234567
+    asserts:
+      - failedTemplate:
+          errorPattern: 'prometheusAuth.headers.X-Scope-OrgID: Invalid type. Expected: string'
+
+  - it: mounts the TLS material from its own Secret at its own path
+    set:
+      prometheusAuth.tls.existingSecret: prometheus-ca
+      prometheusAuth.tls.caKey: ca.crt
+      prometheusAuth.tls.certKey: tls.crt
+      prometheusAuth.tls.keyKey: tls.key
+      prometheusAuth.tls.serverName: thanos.internal
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-ca-file=/etc/k8s-sustain/prometheus-tls/ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-cert-file=/etc/k8s-sustain/prometheus-tls/tls.crt
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-key-file=/etc/k8s-sustain/prometheus-tls/tls.key
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-server-name=thanos.internal
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: prometheus-tls
+              mountPath: /etc/k8s-sustain/prometheus-tls
+              readOnly: true
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: prometheus-tls
+              secret:
+                secretName: prometheus-ca
+                defaultMode: 288
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                  - key: tls.crt
+                    path: tls.crt
+                  - key: tls.key
+                    path: tls.key
+
+  - it: mounts only the CA when no client certificate is configured
+    set:
+      prometheusAuth.tls.existingSecret: prometheus-ca
+      prometheusAuth.tls.caKey: ca.crt
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].secret.items
+          value:
+            - key: ca.crt
+              path: ca.crt
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-cert-file=/etc/k8s-sustain/prometheus-tls/tls.crt
+
+  - it: emits the insecure flag only when insecureSkipVerify is true
+    set:
+      prometheusAuth.tls.insecureSkipVerify: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-insecure-skip-verify=true
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: never emits the insecure flag when insecureSkipVerify is false
+    set:
+      prometheusAuth.tls.insecureSkipVerify: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-insecure-skip-verify=true
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-insecure-skip-verify=false
+
+  - it: keeps credentials and TLS in two separate volumes even from one Secret
+    set:
+      prometheusAuth.existingSecret: prometheus-everything
+      prometheusAuth.bearerTokenKey: token
+      prometheusAuth.tls.existingSecret: prometheus-everything
+      prometheusAuth.tls.caKey: ca.crt
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 2
+      - lengthEqual:
+          path: spec.template.spec.containers[0].volumeMounts
+          count: 2
+      - equal:
+          path: spec.template.spec.volumes[0].name
+          value: prometheus-auth
+      - equal:
+          path: spec.template.spec.volumes[1].name
+          value: prometheus-tls
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-bearer-token-file=/etc/k8s-sustain/prometheus-auth/token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-ca-file=/etc/k8s-sustain/prometheus-tls/ca.crt
+
+  - it: points the bearer flag at a raw path and mounts nothing for it
+    # The canonical case: the kubelet's rotating projected service-account
+    # token is already in every pod, so the chart must add the flag and NOT
+    # invent a volume for a file it does not own.
+    set:
+      prometheusAuth.bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    asserts:
+      # No selector: the flag must appear on BOTH Deployments.
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-bearer-token-file=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notExists:
+          path: spec.template.spec.containers[0].env
+
+  - it: renders raw paths for the password and the three TLS files without a volume
+    set:
+      prometheusAuth.basicAuth.username: sustain
+      prometheusAuth.basicAuth.passwordFile: /mnt/csi/prometheus/password
+      prometheusAuth.tls.caFile: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+      prometheusAuth.tls.certFile: /var/run/secrets/workload-spiffe-credentials/cert.pem
+      prometheusAuth.tls.keyFile: /var/run/secrets/workload-spiffe-credentials/key.pem
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-basic-auth-password-file=/mnt/csi/prometheus/password
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-ca-file=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-cert-file=/var/run/secrets/workload-spiffe-credentials/cert.pem
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-key-file=/var/run/secrets/workload-spiffe-credentials/key.pem
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+
+  - it: mixes a raw token path with a secret-backed CA, mounting only the CA
+    set:
+      prometheusAuth.bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      prometheusAuth.tls.existingSecret: prometheus-ca
+      prometheusAuth.tls.caKey: ca.crt
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-bearer-token-file=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-ca-file=/etc/k8s-sustain/prometheus-tls/ca.crt
+      # Exactly one volume: the raw path contributes none.
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: prometheus-tls
+              secret:
+                secretName: prometheus-ca
+                defaultMode: 288
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: prometheus-tls
+              mountPath: /etc/k8s-sustain/prometheus-tls
+              readOnly: true
+
+  - it: renders no file flags when every *File value is left empty
+    set:
+      prometheusAuth.bearerTokenFile: ""
+      prometheusAuth.basicAuth.passwordFile: ""
+      prometheusAuth.tls.caFile: ""
+      prometheusAuth.tls.certFile: ""
+      prometheusAuth.tls.keyFile: ""
+    asserts:
+      # Same argument baseline as the defaults test above, asserted per
+      # component: an empty *File must add nothing at all, not an empty flag.
+      - template: templates/deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - start
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+            - --leader-elect=true
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
+            - --log-level=error
+            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --workload-concurrency-limit=5
+            - --policy-concurrency-limit=10
+            - --reconcile-interval=5m
+            - --recycle-replacement-timeout=5m
+            - --recommendation-retention=168h
+            - --prometheus-max-inflight=8
+            - --query-shard-max-samples=10000000
+      - template: templates/dashboard-deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - dashboard
+            - --bind-address=:8090
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
+            - --log-level=error
+            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+
+  - it: gives the controller and the dashboard the exact same auth wiring
+    # Basic auth rather than a bearer token so the test exercises the env
+    # path too (the username is injected via secretKeyRef); the two cannot be
+    # combined, the chart fails the template on that.
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.basicAuth.usernameKey: username
+      prometheusAuth.basicAuth.passwordKey: password
+      prometheusAuth.headers:
+        X-Scope-OrgID: tenant-a
+      prometheusAuth.tls.existingSecret: prometheus-ca
+      prometheusAuth.tls.caKey: ca.crt
+    asserts:
+      # Asserted without a selector, so it must hold for BOTH documents.
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: prometheus-auth
+              secret:
+                secretName: prometheus-credentials
+                defaultMode: 288
+                items:
+                  - key: password
+                    path: password
+            - name: prometheus-tls
+              secret:
+                secretName: prometheus-ca
+                defaultMode: 288
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: prometheus-auth
+              mountPath: /etc/k8s-sustain/prometheus-auth
+              readOnly: true
+            - name: prometheus-tls
+              mountPath: /etc/k8s-sustain/prometheus-tls
+              readOnly: true
+      # Only the env var NAME legitimately differs between the two: the
+      # dashboard's flags live under the `dashboard.` Viper key prefix.
+      - template: templates/deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_USERNAME
+      - template: templates/dashboard-deployment.yaml
+        equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_USERNAME
+      - equal:
+          path: spec.template.spec.containers[0].env[0].valueFrom
+          value:
+            secretKeyRef:
+              name: prometheus-credentials
+              key: username
+      - lengthEqual:
+          path: spec.template.spec.containers[0].env
+          count: 1
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-basic-auth-password-file=/etc/k8s-sustain/prometheus-auth/password
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-headers=X-Scope-OrgID=tenant-a
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-tls-ca-file=/etc/k8s-sustain/prometheus-tls/ca.crt
+
+# ---------------------------------------------------------------------------
+# Conflicting credential sources.
+#
+# These live in two single-template suites rather than in the shared suite
+# above because a `fail` aborts the whole render: helm reports the error
+# against one template only, so a suite rendering both Deployments can never
+# observe the dashboard's own failure. Rendering each Deployment on its own
+# does. The two lists below are IDENTICAL on purpose — the check comes from
+# k8s-sustain.prometheusAuthArgs, which both components include, and keeping
+# the lists in lockstep makes a controller-only pass impossible.
+# ---------------------------------------------------------------------------
+---
+suite: prometheus auth conflicts (controller)
+templates:
+  - templates/deployment.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: rejects bearerTokenFile together with bearerTokenKey
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.bearerTokenKey: token
+      prometheusAuth.bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.bearerTokenFile and prometheusAuth.bearerTokenKey are mutually exclusive (both name a source for --prometheus-bearer-token-file). Set exactly one.
+
+  - it: rejects bearerTokenFile together with an inline bearerToken
+    set:
+      prometheusAuth.bearerToken: s3cret-token
+      prometheusAuth.bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.bearerTokenFile and prometheusAuth.bearerToken are mutually exclusive (the binary rejects an inline bearer token together with a bearer token file at startup). Set exactly one.
+
+  - it: rejects passwordFile together with passwordKey
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.basicAuth.passwordKey: password
+      prometheusAuth.basicAuth.passwordFile: /mnt/csi/prometheus/password
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.basicAuth.passwordFile and prometheusAuth.basicAuth.passwordKey are mutually exclusive (both name a source for --prometheus-basic-auth-password-file). Set exactly one.
+
+  - it: rejects passwordFile together with an inline password
+    set:
+      prometheusAuth.basicAuth.password: hunter2
+      prometheusAuth.basicAuth.passwordFile: /mnt/csi/prometheus/password
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.basicAuth.passwordFile and prometheusAuth.basicAuth.password are mutually exclusive (the binary rejects an inline password together with a password file at startup). Set exactly one.
+
+  - it: rejects each TLS raw path together with its Secret key
+    set:
+      prometheusAuth.tls.existingSecret: prometheus-ca
+      prometheusAuth.tls.caKey: ca.crt
+      prometheusAuth.tls.caFile: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.tls.caFile and prometheusAuth.tls.caKey are mutually exclusive (both name a source for --prometheus-tls-ca-file). Set exactly one.
+
+  - it: rejects certFile together with certKey
+    set:
+      prometheusAuth.tls.existingSecret: prometheus-client-tls
+      prometheusAuth.tls.certKey: tls.crt
+      prometheusAuth.tls.certFile: /var/run/secrets/workload-spiffe-credentials/cert.pem
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.tls.certFile and prometheusAuth.tls.certKey are mutually exclusive (both name a source for --prometheus-tls-cert-file). Set exactly one.
+
+  - it: rejects keyFile together with keyKey
+    set:
+      prometheusAuth.tls.existingSecret: prometheus-client-tls
+      prometheusAuth.tls.keyKey: tls.key
+      prometheusAuth.tls.keyFile: /var/run/secrets/workload-spiffe-credentials/key.pem
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.tls.keyFile and prometheusAuth.tls.keyKey are mutually exclusive (both name a source for --prometheus-tls-key-file). Set exactly one.
+
+  - it: rejects a path that is not absolute
+    set:
+      prometheusAuth.bearerTokenFile: var/run/secrets/kubernetes.io/serviceaccount/token
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.bearerTokenFile must be an absolute path to a file that already exists in the pod, got "var/run/secrets/kubernetes.io/serviceaccount/token"
+
+  # Cross-credential rules mirrored from transport.go validate(), checked on
+  # the EFFECTIVE sources so a green `helm upgrade` cannot yield a
+  # CrashLoopBackOff.
+  - it: fails on a bearer token combined with basic auth
+    set:
+      prometheusAuth.bearerToken: abc
+      prometheusAuth.basicAuth.username: bob
+    asserts:
+      - failedTemplate:
+          errorPattern: "a bearer token and basic auth are mutually exclusive"
+
+  - it: fails on a secret-backed bearer token combined with a secret-backed username
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.bearerTokenKey: token
+      prometheusAuth.basicAuth.usernameKey: username
+    asserts:
+      - failedTemplate:
+          errorPattern: "a bearer token and basic auth are mutually exclusive"
+
+  - it: fails on a password without a username
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.basicAuth.passwordKey: password
+    asserts:
+      - failedTemplate:
+          errorPattern: "a password is set without a username"
+
+  - it: fails on a client certificate without its key
+    set:
+      prometheusAuth.tls.existingSecret: prometheus-ca
+      prometheusAuth.tls.certKey: tls.crt
+    asserts:
+      - failedTemplate:
+          errorPattern: "the client certificate and key must be set together"
+
+  - it: fails on a client key without its certificate
+    set:
+      prometheusAuth.tls.keyFile: /etc/mesh/tls.key
+    asserts:
+      - failedTemplate:
+          errorPattern: "the client certificate and key must be set together"
+
+  - it: treats a certKey without tls.existingSecret as unset, so keyFile alone still fails
+    # A *Key only counts when its Secret is named — the args helper renders
+    # nothing for it otherwise, so it cannot satisfy the pairing rule.
+    set:
+      prometheusAuth.tls.certKey: tls.crt
+      prometheusAuth.tls.keyFile: /etc/mesh/tls.key
+    asserts:
+      - failedTemplate:
+          errorPattern: "the client certificate and key must be set together"
+
+
+---
+suite: prometheus auth conflicts (dashboard)
+templates:
+  - templates/dashboard-deployment.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: rejects bearerTokenFile together with bearerTokenKey
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.bearerTokenKey: token
+      prometheusAuth.bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.bearerTokenFile and prometheusAuth.bearerTokenKey are mutually exclusive (both name a source for --prometheus-bearer-token-file). Set exactly one.
+
+  - it: rejects bearerTokenFile together with an inline bearerToken
+    set:
+      prometheusAuth.bearerToken: s3cret-token
+      prometheusAuth.bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.bearerTokenFile and prometheusAuth.bearerToken are mutually exclusive (the binary rejects an inline bearer token together with a bearer token file at startup). Set exactly one.
+
+  - it: rejects passwordFile together with passwordKey
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.basicAuth.passwordKey: password
+      prometheusAuth.basicAuth.passwordFile: /mnt/csi/prometheus/password
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.basicAuth.passwordFile and prometheusAuth.basicAuth.passwordKey are mutually exclusive (both name a source for --prometheus-basic-auth-password-file). Set exactly one.
+
+  - it: rejects passwordFile together with an inline password
+    set:
+      prometheusAuth.basicAuth.password: hunter2
+      prometheusAuth.basicAuth.passwordFile: /mnt/csi/prometheus/password
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.basicAuth.passwordFile and prometheusAuth.basicAuth.password are mutually exclusive (the binary rejects an inline password together with a password file at startup). Set exactly one.
+
+  - it: rejects each TLS raw path together with its Secret key
+    set:
+      prometheusAuth.tls.existingSecret: prometheus-ca
+      prometheusAuth.tls.caKey: ca.crt
+      prometheusAuth.tls.caFile: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.tls.caFile and prometheusAuth.tls.caKey are mutually exclusive (both name a source for --prometheus-tls-ca-file). Set exactly one.
+
+  - it: rejects certFile together with certKey
+    set:
+      prometheusAuth.tls.existingSecret: prometheus-client-tls
+      prometheusAuth.tls.certKey: tls.crt
+      prometheusAuth.tls.certFile: /var/run/secrets/workload-spiffe-credentials/cert.pem
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.tls.certFile and prometheusAuth.tls.certKey are mutually exclusive (both name a source for --prometheus-tls-cert-file). Set exactly one.
+
+  - it: rejects keyFile together with keyKey
+    set:
+      prometheusAuth.tls.existingSecret: prometheus-client-tls
+      prometheusAuth.tls.keyKey: tls.key
+      prometheusAuth.tls.keyFile: /var/run/secrets/workload-spiffe-credentials/key.pem
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.tls.keyFile and prometheusAuth.tls.keyKey are mutually exclusive (both name a source for --prometheus-tls-key-file). Set exactly one.
+
+  - it: rejects a path that is not absolute
+    set:
+      prometheusAuth.bearerTokenFile: var/run/secrets/kubernetes.io/serviceaccount/token
+    asserts:
+      - failedTemplate:
+          errorMessage: prometheusAuth.bearerTokenFile must be an absolute path to a file that already exists in the pod, got "var/run/secrets/kubernetes.io/serviceaccount/token"
+
+  # Cross-credential rules mirrored from transport.go validate(), checked on
+  # the EFFECTIVE sources so a green `helm upgrade` cannot yield a
+  # CrashLoopBackOff.
+  - it: fails on a bearer token combined with basic auth
+    set:
+      prometheusAuth.bearerToken: abc
+      prometheusAuth.basicAuth.username: bob
+    asserts:
+      - failedTemplate:
+          errorPattern: "a bearer token and basic auth are mutually exclusive"
+
+  - it: fails on a secret-backed bearer token combined with a secret-backed username
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.bearerTokenKey: token
+      prometheusAuth.basicAuth.usernameKey: username
+    asserts:
+      - failedTemplate:
+          errorPattern: "a bearer token and basic auth are mutually exclusive"
+
+  - it: fails on a password without a username
+    set:
+      prometheusAuth.existingSecret: prometheus-credentials
+      prometheusAuth.basicAuth.passwordKey: password
+    asserts:
+      - failedTemplate:
+          errorPattern: "a password is set without a username"
+
+  - it: fails on a client certificate without its key
+    set:
+      prometheusAuth.tls.existingSecret: prometheus-ca
+      prometheusAuth.tls.certKey: tls.crt
+    asserts:
+      - failedTemplate:
+          errorPattern: "the client certificate and key must be set together"
+
+  - it: fails on a client key without its certificate
+    set:
+      prometheusAuth.tls.keyFile: /etc/mesh/tls.key
+    asserts:
+      - failedTemplate:
+          errorPattern: "the client certificate and key must be set together"
+
+  - it: treats a certKey without tls.existingSecret as unset, so keyFile alone still fails
+    # A *Key only counts when its Secret is named — the args helper renders
+    # nothing for it otherwise, so it cannot satisfy the pairing rule.
+    set:
+      prometheusAuth.tls.certKey: tls.crt
+      prometheusAuth.tls.keyFile: /etc/mesh/tls.key
+    asserts:
+      - failedTemplate:
+          errorPattern: "the client certificate and key must be set together"

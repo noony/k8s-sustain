@@ -43,6 +43,29 @@ At startup, the dashboard validates Prometheus connectivity and logs a warning i
 | `--cors-allowed-origins`  | `(empty — same-origin only)` | Allowed CORS origins (comma-separated). Use `*` to allow all (not recommended). |
 | `--excluded-namespaces`   | `(empty)`                    | Namespaces the controller/webhook never manage (comma-separated). Mirrors their `--excluded-namespaces` flag so the dashboard's policy-scoped workload views stay consistent with what is actually managed. |
 
+The dashboard also accepts the full set of Prometheus authentication and TLS
+flags (`--prometheus-bearer-token-file`, `--prometheus-basic-auth-*`,
+`--prometheus-headers`, `--prometheus-tls-*`), with the same names and
+semantics as on the controller — see the
+[CLI reference](../reference/cli.md#prometheus-authentication-and-tls-flags)
+and the [Authenticated Prometheus guide](authenticated-prometheus.md).
+
+!!! danger "Dashboard environment variables carry the `DASHBOARD` prefix"
+    Every dashboard flag is bound under the `dashboard.` Viper key prefix, so
+    the dashboard reads **`K8SSUSTAIN_DASHBOARD_PROMETHEUS_*`** where the
+    controller reads `K8SSUSTAIN_PROMETHEUS_*`. The flag names are identical;
+    only the environment variables differ.
+
+    ```bash
+    K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE=/etc/prom/token \
+      k8s-sustain dashboard
+    ```
+
+    An unprefixed variable is **silently ignored**: the dashboard starts,
+    queries Prometheus unauthenticated, and every panel reports
+    ["No metrics data available"](#no-metrics-data-available) while the
+    controller works fine.
+
 When a request carries an `Origin` header and a CORS allowlist is configured,
 the dashboard appends `Vary: Origin` to the response. This prevents shared
 caches and CDNs from serving one origin's `Access-Control-Allow-Origin` header
@@ -63,6 +86,18 @@ dashboard:
   service:
     type: ClusterIP
     port: 8090
+```
+
+If that Prometheus needs credentials, add the top-level `prometheusAuth` block —
+the chart applies it to the dashboard and the controller alike, with the correct
+environment-variable prefix for each:
+
+```yaml
+prometheusAuth:
+  existingSecret: prometheus-credentials
+  bearerTokenKey: token
+  headers:
+    X-Scope-OrgID: tenant-a
 ```
 
 Then access it via port-forward:
@@ -219,6 +254,7 @@ This message appears when Prometheus returns no time-series data for the workloa
 
 - **Recording rules not loaded** — k8s-sustain requires recording rules (`k8s_sustain:pod_workload`, `k8s_sustain:container_cpu_usage_by_workload:rate1m`, etc.). Verify they exist by querying `k8s_sustain:pod_workload` in Prometheus. If using the bundled Prometheus subchart, they are embedded automatically. If using an external Prometheus with the Prometheus Operator, set `prometheusRule.enabled=true` to deploy the recording rules as a `PrometheusRule` resource.
 - **Duplicate kube-state-metrics instances** — If multiple kube-state-metrics are scraped, the workload mapping rules can fail with "many-to-many matching not allowed". Either remove the duplicate kube-state-metrics or upgrade the chart (the recording rules deduplicate series automatically since v0.3).
+- **Dashboard querying Prometheus unauthenticated** — if the controller produces recommendations but every dashboard panel is empty, the dashboard is probably missing its Prometheus credentials. The chart wires both components from the same `prometheusAuth` block, so this shows up when credentials were set by hand: the dashboard reads `K8SSUSTAIN_DASHBOARD_PROMETHEUS_*`, not `K8SSUSTAIN_PROMETHEUS_*`, and it never warns about an ignored variable. See [Authenticated Prometheus](authenticated-prometheus.md).
 - **Missing upstream metrics** — The recording rules depend on `kube_pod_owner`, `kube_replicaset_owner`, `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`, and `kube_pod_container_resource_requests` (for historical request lines). Ensure kube-state-metrics and cAdvisor metrics are scraped.
 
 ## HTTP API

@@ -61,6 +61,7 @@ It is honoured on the workload's pod template, on the workload object's own `met
 - **HPA-aware right-sizing** — when a workload is scaled by an HPA or KEDA `ScaledObject`, requests are shaped so the autoscaler's utilization signal stays meaningful (see [Autoscaler Coordination](concepts/autoscaler-coordination.md))
 - **Limit strategies** — keep existing ratio, set equal to request, remove limit, or use a custom multiplier
 - **Prometheus-native** — ships pre-computed recording rules; no external dependency beyond Prometheus
+- **Works with authenticated Prometheus** — bearer token, basic auth, custom headers and TLS (private CA, mTLS), including multi-tenant Thanos / Mimir / Cortex gateways (see [Authenticated Prometheus](guides/authenticated-prometheus.md))
 
 ---
 
