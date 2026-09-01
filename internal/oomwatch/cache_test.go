@@ -724,3 +724,58 @@ func TestRecordReturnValueWithMergedLimit(t *testing.T) {
 		t.Errorf("PodUID = %q, want %q (newest observation)", got.PodUID, "uid-a")
 	}
 }
+
+// TestRecordOutOfOrderKillRefreshesObservedAt pins the freshness half of the
+// per-field merge. An out-of-order observation still reports true — the
+// watcher fans it out and triggers an immediate reconcile — so it must also
+// keep the entry it contributed to alive: ObservedAt is what sweep and
+// RecentByWorkload age entries off, not TerminatedAt. Taking ObservedAt from
+// the identity winner let a kill observed seconds ago be swept on a stored
+// entry's much older clock, losing the memory-floor evidence right after
+// announcing it.
+func TestRecordOutOfOrderKillRefreshesObservedAt(t *testing.T) {
+	now := time.Now()
+	t0 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+
+	const (
+		small = 128 * 1024 * 1024
+		big   = 256 * 1024 * 1024
+	)
+
+	c := NewCache(time.Hour)
+	key := makeKey("web")
+
+	// Seen long ago: the newer kill, on the stale 128Mi spec.
+	c.Record(key, OOMRecord{
+		Container: "web", PolicyName: "policy-a", ObservedAt: now.Add(-50 * time.Minute),
+		TerminatedAt: t1, RestartCount: 3,
+		PodName: "pod-a", PodUID: "uid-a", OOMLimitBytes: small,
+	})
+	// Seen just now: an older kill on another pod, still running the 256Mi
+	// spec — node clock skew, or a status update the watcher only got to now.
+	if isNew := c.Record(key, OOMRecord{
+		Container: "web", PolicyName: "policy-a", ObservedAt: now,
+		TerminatedAt: t0, RestartCount: 9,
+		PodName: "pod-b", PodUID: "uid-b", OOMLimitBytes: big,
+	}); !isNew {
+		t.Fatal("Record reported a distinct kill as a duplicate")
+	}
+
+	// A 5m window is far inside the 50m-old stored clock: the entry is only
+	// visible here if the second observation advanced ObservedAt.
+	got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, 5*time.Minute)[key.Container]
+	if got == nil {
+		t.Fatal("entry aged out of a 5m window although it was observed just now")
+	}
+	if got.ObservedAt.Before(now) {
+		t.Errorf("ObservedAt = %v, want >= %v (the later of the two observations)", got.ObservedAt, now)
+	}
+	// The rest of the merge is unchanged: newest identity, largest limit.
+	if got.PodUID != "uid-a" {
+		t.Errorf("PodUID = %q, want %q (newest observation)", got.PodUID, "uid-a")
+	}
+	if got.OOMLimitBytes != big {
+		t.Errorf("OOMLimitBytes = %d, want %d (largest killed limit)", got.OOMLimitBytes, int64(big))
+	}
+}

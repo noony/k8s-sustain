@@ -120,13 +120,21 @@ func NewCacheWithLimit(ttl time.Duration, maxEntries int) *Cache {
 // Storage is a PER-FIELD MERGE, not a winning record. A Key names a
 // workload+container, not a pod, so every pod of the workload writes to the
 // same slot and the watcher reconciles pods in parallel
-// (maxConcurrentReconciles > 1) — and the slot carries two kinds of field
+// (maxConcurrentReconciles > 1) — and the slot carries three kinds of field
 // whose merge rules differ:
 //
-//   - Identity and timestamps (PodName, PodUID, TerminatedAt, ObservedAt,
+//   - Identity and kill timestamps (PodName, PodUID, TerminatedAt,
 //     RestartCount, PolicyName) come from the newest observation, ordered by
 //     newerThan. Without an explicit ordering "newest" would silently degrade
 //     to "whichever goroutine took the lock last".
+//   - ObservedAt takes the LATER of the two, independently of which identity
+//     won. It is the cache's freshness clock — sweep and RecentByWorkload
+//     both age entries off it — not a kill-ordering field, so an observation
+//     made now has to refresh the entry it just contributed to even when its
+//     TerminatedAt is older. Taking it from the identity winner instead would
+//     let an out-of-order kill be fanned out as new and then swept moments
+//     later on the older stored entry's clock, dropping the memory-floor
+//     evidence for a kill observed seconds earlier.
 //   - OOMLimitBytes — the kernel-applied memory limit at the moment of the
 //     kill, which the recommender anchors its OOM memory floor on — takes the
 //     MAX of the incoming and stored values, because the anchor that matters
@@ -182,6 +190,10 @@ func (c *Cache) Record(key Key, record OOMRecord) bool {
 		// Whichever identity won, the anchor is the largest killed limit —
 		// so it is taken from both sides, not from the winner.
 		merged.OOMLimitBytes = max(record.OOMLimitBytes, existing.OOMLimitBytes)
+		// And the freshness clock is the later of the two: this observation
+		// happened now, so the entry it just contributed to gets a full TTL
+		// from here even when the kill it carries is the older one.
+		merged.ObservedAt = laterOf(record.ObservedAt, existing.ObservedAt)
 	} else if len(c.entries) >= c.maxEntries {
 		// Cap reached on insert of a NEW key — evict the entry with the
 		// oldest ObservedAt. Updates of existing keys do not count against
@@ -197,6 +209,16 @@ func (c *Cache) Record(key Key, record OOMRecord) bool {
 		obs(n)
 	}
 	return true
+}
+
+// laterOf returns the later of two wall-clock times. Used for ObservedAt,
+// which tracks when the watcher last saw evidence for an entry rather than
+// when the kill happened, so it advances on any observation.
+func laterOf(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // newerThan reports whether a is a strictly later observation than b, using
