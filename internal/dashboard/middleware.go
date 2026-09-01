@@ -130,10 +130,9 @@ func alreadyCompressedType(ct string) bool {
 // those so we don't ship gzip framing bytes the client will reject.
 type gzipResponseWriter struct {
 	http.ResponseWriter
-	gz            *gzip.Writer
-	wroteHeader   bool
-	wroteAnything bool
-	passthrough   bool
+	gz          *gzip.Writer
+	wroteHeader bool
+	passthrough bool
 }
 
 func (g *gzipResponseWriter) WriteHeader(status int) {
@@ -182,7 +181,6 @@ func (g *gzipResponseWriter) Write(b []byte) (int, error) {
 	if !g.wroteHeader {
 		g.WriteHeader(http.StatusOK)
 	}
-	g.wroteAnything = true
 	if g.passthrough {
 		return g.ResponseWriter.Write(b)
 	}
@@ -212,13 +210,25 @@ func (s *Server) withGzip(next http.Handler) http.Handler {
 		gz.Reset(w)
 		grw := &gzipResponseWriter{ResponseWriter: w, gz: gz}
 		defer func() {
-			// Only flush gzip framing if we actually wrote a compressed body.
-			// A no-write handler or one that picked passthrough must not
-			// leak the ~10-byte empty-gzip trailer onto the wire — that
-			// would implicitly commit a 200 the handler never sent, and
-			// the client would see garbage with no Content-Encoding header
-			// to tell it how to decode the bytes.
-			if grw.wroteAnything && !grw.passthrough {
+			// Close (and so emit the gzip stream terminator) exactly when the
+			// response was COMMITTED as gzip — the header went out carrying
+			// Content-Encoding: gzip — rather than when the handler happened
+			// to write a byte.
+			//
+			// Both edges matter. A handler that never committed a header at
+			// all, or one that picked passthrough, must not leak the
+			// ~10-byte empty-gzip trailer onto the wire: that would
+			// implicitly commit a 200 the handler never sent, and the client
+			// would see garbage with no Content-Encoding header to tell it
+			// how to decode the bytes. But a handler that committed a gzip
+			// header and then wrote NO body (WriteHeader(200) alone — the
+			// /healthz shape) must still get the framing: gating on
+			// "wrote at least one byte" left such a response advertising
+			// Content-Encoding: gzip over a zero-byte payload, which any
+			// gzip-aware client fails to decode (EOF) — the same
+			// ERR_CONTENT_DECODING_FAILED class passthroughStatus exists to
+			// prevent, reached through a different door.
+			if grw.wroteHeader && !grw.passthrough {
 				_ = gz.Close()
 			} else {
 				// Drop any buffered state before returning to the pool.

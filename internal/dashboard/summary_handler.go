@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
@@ -69,6 +72,27 @@ type summaryResponseV2 struct {
 // as a clean HTTP 200 during a sustained outage.
 const maxSummaryLastGoodAge = 10 * time.Minute
 
+// summaryCacheKey is the single key /api/summary uses in both summaryCache and
+// Server.summarySF — the endpoint is cluster-wide, so there is exactly one
+// snapshot and exactly one in-flight recompute at a time.
+const summaryCacheKey = "summary"
+
+// summaryComputeTimeout bounds ONE shared summary recompute. The fan-out runs
+// on a context detached from any individual request (see
+// computeAndCacheSummary) and
+// therefore needs a ceiling of its own; 15s matches httpx.NewServer's
+// WriteTimeout, past which no client is still listening anyway.
+const summaryComputeTimeout = 15 * time.Second
+
+// summaryComputation is what one shared recompute hands back to every request
+// that joined it: the assembled response plus how many Prometheus queries
+// failed, so each request applies the partial-failure fallback itself (that
+// decision reads the cache, which may have moved on).
+type summaryComputation struct {
+	resp     summaryResponseV2
+	promErrs int32
+}
+
 // ---- Summary handler ----
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
@@ -77,12 +101,108 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	if cached, ok := s.summaryCache.Get("summary"); ok {
+	if cached, ok := s.summaryCache.Get(summaryCacheKey); ok {
 		writeJSON(w, http.StatusOK, cached)
 		return
 	}
 
-	ctx := r.Context()
+	// Cache miss. Join the one in-flight recompute rather than starting
+	// another: the fan-out below is ~16 Prometheus round-trips, so N
+	// simultaneous misses (a dashboard open in N tabs, a just-expired TTL)
+	// used to cost 16N of them. It also made the trailing Set unsafe — a slow
+	// recompute could land after a faster, newer one and overwrite the newer
+	// snapshot with older data while resetting its 60s TTL. With one flight
+	// per key there is exactly one Set per recompute, so neither is possible.
+	ch := s.summarySF.DoChan(summaryCacheKey, s.computeAndCacheSummary)
+	if s.sfJoinHook != nil {
+		s.sfJoinHook(summaryCacheKey)
+	}
+
+	var res singleflight.Result
+	select {
+	case <-r.Context().Done():
+		// This request's own deadline expired (or its client went away) while
+		// waiting on another request's in-flight recompute — do not block past
+		// it just because the leader is slow. The recompute keeps running for
+		// whichever other requests still have budget; only this one returns
+		// early. A recent last-good snapshot is still better than nothing;
+		// without one there is no result to serve at all, and a 503 is honest
+		// where an all-zeroes 200 would not be.
+		if lastGood, ok := s.summaryCache.GetLastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
+			writeJSON(w, http.StatusOK, lastGood)
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, "summary recomputation did not complete before the request was cancelled")
+		return
+	case res = <-ch:
+	}
+
+	if res.Err != nil {
+		// computeAndCacheSummary returns an error only for a recovered panic.
+		// Re-panic on the request's own goroutine so the shared recovery
+		// middleware turns it into the usual 500 and records panicTotal, for
+		// waiters exactly as for the request that led the flight.
+		panic(res.Err)
+	}
+	out := res.Val.(summaryComputation)
+
+	if out.promErrs == 0 {
+		// Full fresh result: already cached by the leader (unchanged behavior).
+		writeJSON(w, http.StatusOK, out.resp)
+		return
+	}
+
+	// Partial failure: never poison the cache. Prefer a recent last-good cached
+	// value (even if its TTL has lapsed) over the fresh-but-partial result, but
+	// only within maxSummaryLastGoodAge so a sustained outage cannot serve an
+	// arbitrarily-old snapshot. When the last-good is too old or absent, fall
+	// back to the fresh partial result, matching today's no-cache behavior.
+	s.Logger.V(1).Info("summary: prometheus errors", "count", out.promErrs)
+	if lastGood, ok := s.summaryCache.GetLastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
+		writeJSON(w, http.StatusOK, lastGood)
+		return
+	}
+	writeJSON(w, http.StatusOK, out.resp)
+}
+
+// computeAndCacheSummary is the singleflight leader: it runs the one shared
+// fan-out and, on a fully successful result, populates summaryCache.
+//
+// It runs on a context detached from any individual request (a fixed
+// summaryComputeTimeout budget) for the same reason the webhook's
+// singleflight leaders do: this work keeps running for as long as OTHER
+// requests may still be waiting on it, even after the particular request that
+// happened to become the leader has itself been cancelled — tying its
+// lifetime to that one request's context would abort the shared recompute for
+// everyone still waiting.
+//
+// The deferred recover is load-bearing, not defensive boilerplate: a panic
+// escaping a singleflight function that has DoChan waiters is unrecoverable
+// and takes the whole process down. Converting it to an error lets every
+// waiter re-panic on its own goroutine, where the HTTP recovery middleware
+// handles it as it always has.
+func (s *Server) computeAndCacheSummary() (val any, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			val = nil
+			err = fmt.Errorf("panic recomputing summary: %v\n%s", rec, debug.Stack())
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), summaryComputeTimeout)
+	defer cancel()
+
+	resp, promErrs := s.computeSummary(ctx)
+	if promErrs == 0 {
+		s.summaryCache.Set(summaryCacheKey, resp)
+	}
+	return summaryComputation{resp: resp, promErrs: promErrs}, nil
+}
+
+// computeSummary runs the Prometheus fan-out and assembles the response,
+// returning it alongside the number of queries that failed. It is called only
+// from computeAndCacheSummary, i.e. once per shared recompute.
+func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) {
 	resp := summaryResponseV2{
 		Headroom:  map[string]headroomBreakdown{},
 		Attention: map[string][]attentionRow{"risk": {}, "drift": {}, "blocked": {}},
@@ -231,24 +351,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	if promErrs == 0 {
-		// Full fresh result: cache it and serve it (unchanged behavior).
-		s.summaryCache.Set("summary", resp)
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-
-	// Partial failure: never poison the cache. Prefer a recent last-good cached
-	// value (even if its TTL has lapsed) over the fresh-but-partial result, but
-	// only within maxSummaryLastGoodAge so a sustained outage cannot serve an
-	// arbitrarily-old snapshot. When the last-good is too old or absent, fall
-	// back to the fresh partial result, matching today's no-cache behavior.
-	s.Logger.V(1).Info("summary: prometheus errors", "count", promErrs)
-	if lastGood, ok := s.summaryCache.GetLastGoodWithin("summary", maxSummaryLastGoodAge); ok {
-		writeJSON(w, http.StatusOK, lastGood)
-		return
-	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp, promErrs
 }
 
 func sparklinePoints(ctx context.Context, p PromQuerier, expr string, r promclient.TimeRange, step string) ([]float64, error) {

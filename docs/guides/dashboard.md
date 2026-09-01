@@ -261,6 +261,18 @@ Clients may forward their own value by sending `X-Request-Id: <id>` on the reque
 
 Responses are gzip-encoded when the request advertises `Accept-Encoding: gzip` (browsers do this automatically; `curl --compressed` opts in). Large endpoints (`/api/workloads/.../metrics`, `/api/summary/trend`, `/api/policies/{name}/batch-simulate`) typically compress 5–10×.
 
+Responses that must not carry a body (`204`, `304`, `1xx`), responses the handler declares empty with `Content-Length: 0`, and already-compressed content types (images, video, audio, archives) bypass compression entirely rather than being advertised as gzip. A response that *is* committed as gzip always carries valid gzip framing even when its body is empty (`GET /healthz`), so a gzip-aware prober never sees a zero-byte payload labelled `Content-Encoding: gzip`.
+
+### Caching
+
+`/api/summary` is the one cached endpoint: its cluster-wide snapshot is held in an in-memory LRU with a 60s TTL, and the response carries `Cache-Control: public, max-age=60`. Everything else is computed per request.
+
+Three behaviours matter when the cache misses:
+
+- **One recompute at a time.** The snapshot costs ~16 Prometheus queries, so concurrent misses (a dashboard open in several tabs, or a TTL that just lapsed under load) are collapsed onto a single shared computation instead of each firing its own fan-out. Each request still honours its own context deadline: a caller that gives up does not abort the shared work for the others, and a slow computation cannot make a fast one wait indefinitely.
+- **A partial Prometheus failure never poisons the cache.** Only a fully successful recompute is stored. When some queries fail, the dashboard prefers the most recent complete snapshot for up to 10 minutes (10x the TTL) so a brief blip is invisible; past that it serves the fresh-but-partial result rather than pretending an arbitrarily old snapshot is current.
+- **A cancelled request** that was waiting on a recompute falls back to that same recent snapshot when one exists, and otherwise returns `503 Service Unavailable` instead of an all-zeroes `200`.
+
 ### Routing and methods
 
 Routes use Go 1.22 method-specific patterns, so the wrong HTTP verb returns `405 Method Not Allowed` with an `Allow` header listing the supported method(s). Path parameters (`{name}`, `{namespace}`, `{kind}`) are URL-decoded by the standard library.
