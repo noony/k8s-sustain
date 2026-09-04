@@ -122,8 +122,14 @@ func (r *PolicyReconciler) buildRecommendations(ctx context.Context, req recRequ
 	// in sequence (no concurrency), so EnrichOOM looks the record up once and
 	// OnResult reuses it — avoiding a second map lookup per container.
 	var liveRec *oomwatch.OOMRecord
-	recs := recommender.BuildContainerRecs(containers, inputs, autoInfo, rsCfg, coordCfg,
-		recommender.BuildContainerRecsOptions{
+	res, err := recommender.Compute(ctx, r.PrometheusClient, recommender.Request{
+		Identity:     req.Identity,
+		Containers:   containers,
+		Resources:    rsCfg,
+		Coordination: coordCfg,
+		AutoInfo:     autoInfo,
+		Inputs:       inputs,
+		Hooks: recommender.BuildContainerRecsOptions{
 			// Anchor on whichever source reports the HIGHER OOM-time limit.
 			// The two have complementary blind spots and neither can be inflated
 			// by k8s-sustain's own resize: Prometheus survives a controller
@@ -151,8 +157,12 @@ func (r *PolicyReconciler) buildRecommendations(ctx context.Context, req recRequ
 				}
 				emitCoordinationFactors(ns, ownerKind, ownerName, coordCfg, autoInfo, res.Base, res.Rec)
 			},
-		})
-	return recs, nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res.Recs, nil
 }
 
 // factorRatio returns adjusted/baseline as a float64. Returns 1.0 (no-op

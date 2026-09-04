@@ -6,12 +6,14 @@ import (
 	"math"
 	"net/http"
 	"sync"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 type batchSimulateResponse struct {
@@ -63,6 +65,8 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 	}
 
 	workloads := s.collectPolicyWorkloads(ctx, policyName, policy)
+	// One snapshot per request: it lists each namespace's autoscalers once.
+	autoSnap := autoscaler.NewNamespacedSnapshot(s.K8sClient)
 
 	type recResult struct {
 		recs map[string]simulationContainerResult
@@ -89,7 +93,7 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 		}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			recs, err := s.computeRecommendations(ctx, wl.Namespace, wl.Kind, wl.Name, policy)
+			recs, err := s.computeRecommendations(ctx, wl, policy, autoSnap)
 			results[i] = recResult{recs: recs, err: err}
 		})
 	}
@@ -176,19 +180,16 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// computeRecommendations is the policy-driven entry point used by the batch
-// simulate handler. It maps Policy.Spec config into the shared
-// buildContainerRecommendations pipeline and discards the OOM signal (the
-// batch handler only needs the request strings + per-container usage).
-func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, name string, policy *sustainv1alpha1.Policy) (map[string]simulationContainerResult, error) {
-	cpuCfg := policy.Spec.RightSizing.ResourcesConfigs.CPU
-	memCfg := policy.Spec.RightSizing.ResourcesConfigs.Memory
-	containers, _, err := s.buildContainerRecommendations(ctx,
-		namespace, kind, name,
-		cpuCfg.Requests, memCfg.Requests,
-		recommender.ResourceWindow(cpuCfg.Window), recommender.ResourceWindow(memCfg.Window),
-	)
-	return containers, err
+// computeRecommendations runs the shared algorithm for one workload under the
+// policy's own configuration, exactly as the controller would.
+func (s *Server) computeRecommendations(ctx context.Context, wl automatedWorkload, policy *sustainv1alpha1.Policy, autoSnap *autoscaler.NamespacedSnapshot) (map[string]simulationContainerResult, error) {
+	spec := policySpec(policy, wl.Namespace, wl.Kind, wl.Name)
+	containers, _ := workload.MergeContainersForRecommendation(wl.Containers, wl.InitContainers, spec.excludeInit)
+	res, err := s.computeWorkloadRecs(ctx, spec, containers, time.Time{}, s.autoscalerInfo(ctx, autoSnap, spec))
+	if err != nil {
+		return nil, err
+	}
+	return simulationContainers(res), nil
 }
 
 func deltaPercent(current, recommended int64) float64 {

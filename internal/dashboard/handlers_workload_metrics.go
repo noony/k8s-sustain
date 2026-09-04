@@ -11,8 +11,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender"
 )
 
 type recommendationResult struct {
@@ -20,6 +20,7 @@ type recommendationResult struct {
 	PolicyName         string                               `json:"policyName,omitempty"`
 	Containers         map[string]simulationContainerResult `json:"containers,omitempty"`
 	InitContainers     []string                             `json:"initContainers,omitempty"`
+	TooYoung           bool                                 `json:"tooYoung,omitempty"`
 	CPURecommendations promclient.ContainerTimeSeries       `json:"cpuRecommendations,omitempty"`
 	MemRecommendations promclient.ContainerTimeSeries       `json:"memoryRecommendations,omitempty"`
 }
@@ -51,13 +52,13 @@ func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Re
 	}
 	policy := policies[policyName]
 
-	req, perr := buildSimulateRequestFromPolicy(r.URL.Query(), policy, namespace, kind, name)
+	spec, perr := chartParams(r.URL.Query(), policySpec(policy, namespace, kind, name))
 	if perr != nil {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return
 	}
 
-	result, err := s.runSimulationWithEntry(ctx, req, entry)
+	result, err := s.runSimulationWithEntry(ctx, spec, entry)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("computing recommendations: %v", err))
 		return
@@ -69,75 +70,30 @@ func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Re
 		PolicyName:         policyName,
 		Containers:         result.Containers,
 		InitContainers:     result.InitContainers,
+		TooYoung:           result.TooYoung,
 		CPURecommendations: result.CPURecommendations,
 		MemRecommendations: result.MemRecommendations,
 	})
 }
 
-// buildSimulateRequestFromPolicy fills a simulateRequest from a policy's
-// resource configs, overriding chart window/step from the query string.
-func buildSimulateRequestFromPolicy(q url.Values, policy *sustainv1alpha1.Policy, namespace, kind, name string) (simulateRequest, *paramError) {
-	cpuCfg := policy.Spec.RightSizing.ResourcesConfigs.CPU
-	memCfg := policy.Spec.RightSizing.ResourcesConfigs.Memory
-
-	cpuWindow := cpuCfg.Window
-	if cpuWindow == "" {
-		cpuWindow = "168h"
+// chartParams overlays the chart window, step and absolute range from the
+// query string onto spec. The chart window defaults to the CPU
+// recommendation window.
+func chartParams(q url.Values, spec simulationSpec) (simulationSpec, *paramError) {
+	var perr *paramError
+	if spec.window, perr = parseDurationParam(q, recommender.ResourceWindow(spec.resources.CPU.Window)); perr != nil {
+		return spec, perr
 	}
-	memWindow := memCfg.Window
-	if memWindow == "" {
-		memWindow = "168h"
-	}
-
-	chartWindow, perr := parseDurationParam(q, cpuWindow)
-	if perr != nil {
-		return simulateRequest{}, perr
-	}
-	step, perr := parseStepParam(q, "5m")
-	if perr != nil {
-		return simulateRequest{}, perr
-	}
-
-	req := simulateRequest{
-		Namespace: namespace,
-		OwnerKind: kind,
-		OwnerName: name,
-		Window:    chartWindow,
-		Step:      step,
-		CPU: simulateResourceConfig{
-			Percentile: cpuCfg.Requests.Percentile,
-			Headroom:   cpuCfg.Requests.Headroom,
-			Window:     cpuWindow,
-		},
-		Memory: simulateResourceConfig{
-			Percentile: memCfg.Requests.Percentile,
-			Headroom:   memCfg.Requests.Headroom,
-			Window:     memWindow,
-		},
-	}
-	if cpuCfg.Requests.MinAllowed != nil {
-		v := cpuCfg.Requests.MinAllowed.String()
-		req.CPU.MinAllowed = &v
-	}
-	if cpuCfg.Requests.MaxAllowed != nil {
-		v := cpuCfg.Requests.MaxAllowed.String()
-		req.CPU.MaxAllowed = &v
-	}
-	if memCfg.Requests.MinAllowed != nil {
-		v := memCfg.Requests.MinAllowed.String()
-		req.Memory.MinAllowed = &v
-	}
-	if memCfg.Requests.MaxAllowed != nil {
-		v := memCfg.Requests.MaxAllowed.String()
-		req.Memory.MaxAllowed = &v
+	if spec.step, perr = parseStepParam(q, "5m"); perr != nil {
+		return spec, perr
 	}
 	if v := q.Get("from"); v != "" {
-		req.FromTs, _ = strconv.ParseInt(v, 10, 64)
+		spec.fromTs, _ = strconv.ParseInt(v, 10, 64)
 	}
 	if v := q.Get("to"); v != "" {
-		req.ToTs, _ = strconv.ParseInt(v, 10, 64)
+		spec.toTs, _ = strconv.ParseInt(v, 10, 64)
 	}
-	return req, nil
+	return spec, nil
 }
 
 func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {

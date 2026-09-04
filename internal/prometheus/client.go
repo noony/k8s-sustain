@@ -251,20 +251,6 @@ func New(addr string, opts ...Option) (*Client, error) {
 	return cli, nil
 }
 
-// QueryCPUByContainer returns per-container CPU (cores) at the given quantile
-// over window, averaged across the workload's pods.
-func (c *Client) QueryCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerCPUUsageByWorkloadRate1m, WorkloadSelector(namespace, ownerKind, ownerName), window))
-	return c.queryByContainer(ctx, expr)
-}
-
-// QueryMemoryByContainer returns per-container memory working set (bytes) at
-// the given quantile over window, averaged across the workload's pods.
-func (c *Client) QueryMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerMemoryByWorkloadBytes, WorkloadSelector(namespace, ownerKind, ownerName), window))
-	return c.queryByContainer(ctx, expr)
-}
-
 // QueryWorkloadCPUByContainer returns the per-container CPU quantile (cores)
 // of the busiest replica over window, from the workload_max_pod_cpu rule.
 func (c *Client) QueryWorkloadCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
@@ -334,19 +320,19 @@ func (c *Client) queryMaxByContainerForWorkload(ctx context.Context, ruleName, n
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
-// QueryCPURecommendationRangeByContainer returns the sliding-window CPU
-// recommendation (cores) per container: at each step, the quantile over the
-// trailing recWindow.
-func (c *Client) QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerCPUUsageByWorkloadRate1m, WorkloadSelector(namespace, ownerKind, ownerName), recWindow))
+// QueryWorkloadCPURecommendationRangeByContainer is the range counterpart of
+// QueryWorkloadCPUByContainer: at each step, the per-container CPU quantile
+// (cores) of the busiest replica over the trailing recWindow.
+func (c *Client) QueryWorkloadCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
+	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodCPUCores, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
-// QueryMemoryRecommendationRangeByContainer returns the sliding-window memory
-// recommendation (bytes) per container: at each step, the quantile over the
-// trailing recWindow.
-func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerMemoryByWorkloadBytes, WorkloadSelector(namespace, ownerKind, ownerName), recWindow))
+// QueryWorkloadMemoryRecommendationRangeByContainer is the range counterpart
+// of QueryWorkloadMemoryByContainer: at each step, the per-container memory
+// quantile (bytes) of the busiest replica over the trailing recWindow.
+func (c *Client) QueryWorkloadMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
+	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodMemoryBytes, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
