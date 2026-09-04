@@ -1,6 +1,7 @@
 package workload
 
 import (
+	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -8,28 +9,28 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// PodTemplateOf extracts the pod template, owner references, and label
-// selector from any supported workload object, returning ok=false for
+// PodTemplateOf extracts the pod template and the label selector the patcher
+// recycles through from any supported workload object, returning ok=false for
 // unsupported types.
 //
-// *Rollout is deliberately absent: every Rollout call site already holds the
-// concrete type and reads Spec.Template/Spec.Selector directly, so a case here
-// would need its own caller to justify it.
+// CronJob and Job return a nil selector: their pods are enumerated through the
+// batch.kubernetes.io/job-name label and are resized in place, never recycled.
 //
-// Returned slices/pointers alias the input object — do not mutate them.
-func PodTemplateOf(obj client.Object) (template *corev1.PodTemplateSpec, ownerRefs []metav1.OwnerReference, selector *metav1.LabelSelector, ok bool) {
+// Returned pointers alias the input object — do not mutate them.
+func PodTemplateOf(obj client.Object) (template *corev1.PodTemplateSpec, selector *metav1.LabelSelector, ok bool) {
 	switch o := obj.(type) {
 	case *appsv1.Deployment:
-		return &o.Spec.Template, o.OwnerReferences, o.Spec.Selector, true
+		return &o.Spec.Template, o.Spec.Selector, true
 	case *appsv1.StatefulSet:
-		return &o.Spec.Template, o.OwnerReferences, o.Spec.Selector, true
+		return &o.Spec.Template, o.Spec.Selector, true
 	case *appsv1.DaemonSet:
-		return &o.Spec.Template, o.OwnerReferences, o.Spec.Selector, true
+		return &o.Spec.Template, o.Spec.Selector, true
+	case *rolloutsv1alpha1.Rollout:
+		return &o.Spec.Template, o.Spec.Selector, true
 	case *batchv1.CronJob:
-		// CronJob has no Pod selector; the JobTemplate owns the pod spec.
-		return &o.Spec.JobTemplate.Spec.Template, o.OwnerReferences, nil, true
+		return &o.Spec.JobTemplate.Spec.Template, nil, true
 	case *batchv1.Job:
-		return &o.Spec.Template, o.OwnerReferences, o.Spec.Selector, true
+		return &o.Spec.Template, nil, true
 	}
-	return nil, nil, nil, false
+	return nil, nil, false
 }

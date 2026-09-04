@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -183,7 +184,7 @@ func TestReconcileWorkload_AgeGateUsesWLRCreationTimestamp(t *testing.T) {
 			}
 			wlr := &sustainv1alpha1.WorkloadRecommendation{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "default", Name: wlrName("Job", "nightly-etl"),
+					Namespace: "default", Name: wlrcache.Name("Job", "nightly-etl"),
 					CreationTimestamp: metav1.NewTime(tc.wlrCreated),
 				},
 			}
@@ -193,7 +194,7 @@ func TestReconcileWorkload_AgeGateUsesWLRCreationTimestamp(t *testing.T) {
 			}
 
 			var got sustainv1alpha1.WorkloadRecommendation
-			key := types.NamespacedName{Namespace: "default", Name: wlrName("Job", "nightly-etl")}
+			key := types.NamespacedName{Namespace: "default", Name: wlrcache.Name("Job", "nightly-etl")}
 			err := r.Get(context.Background(), key, &got)
 			switch {
 			case tc.wantCached && err != nil:

@@ -14,8 +14,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 func TestFactorRatio_GuardsAgainstNaN(t *testing.T) {
@@ -45,7 +45,12 @@ func TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter(t *testing.T) {
 	containers := []corev1.Container{{Name: "app"}}
 
 	// 1 minute old — well under the 10-minute gate.
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Minute), time.Time{}, nil, nil, false)
+	recs, err := r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-time.Minute),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -68,7 +73,12 @@ func TestBuildRecommendations_PodKind_SubjectToYoungWorkloadGate(t *testing.T) {
 
 	// 1 minute old — well under the 10-minute gate that applies to every
 	// other kind (see TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter).
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Pod", "etl-daily", containers, autoscaler.Info{}, time.Now().Add(-time.Minute), time.Time{}, nil, nil, false)
+	recs, err := r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Pod", OwnerName: "etl-daily"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-time.Minute),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -77,7 +87,12 @@ func TestBuildRecommendations_PodKind_SubjectToYoungWorkloadGate(t *testing.T) {
 	}
 
 	// 2 hours old — clears the gate, same as every other kind.
-	recs, err = r.buildRecommendations(context.Background(), policy, "default", "Pod", "etl-daily", containers, autoscaler.Info{}, time.Now().Add(-2*time.Hour), time.Time{}, nil, nil, false)
+	recs, err = r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Pod", OwnerName: "etl-daily"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-2 * time.Hour),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -102,7 +117,12 @@ func TestBuildRecommendations_SparseSignal_StillProducesRecommendation(t *testin
 
 	// 2 hours old — clears the age gate; the mock returns sparse but non-empty
 	// CPU/memory totals, mimicking a cronjob that just finished a run.
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-2*time.Hour), time.Time{}, nil, nil, false)
+	recs, err := r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-2 * time.Hour),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -148,7 +168,12 @@ func TestBuildRecommendations_RecentOOMBypassesHistoryGate(t *testing.T) {
 		},
 	}}
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
+	recs, err := r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-time.Hour),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -214,7 +239,12 @@ func TestBuildRecommendations_RecentOOMRaisesMemoryFloor(t *testing.T) {
 
 	before := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "app")
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
+	recs, err := r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-time.Hour),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -285,7 +315,12 @@ func TestBuildRecommendations_OOMTimeLimitBumpsBeyondLimit(t *testing.T) {
 		},
 	}}
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
+	recs, err := r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-time.Hour),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -342,7 +377,12 @@ func TestBuildRecommendations_SiblingOOMDoesNotFloorInnocentContainer(t *testing
 
 	sideFloorBefore := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "side")
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
+	recs, err := r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-time.Hour),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -394,7 +434,12 @@ func TestBuildRecommendations_YoungWorkload_SiblingOOMBypassesAgeGate(t *testing
 	containers := []corev1.Container{{Name: "app"}, {Name: "side"}}
 
 	// 1 minute old — under the 10-minute gate, but app's OOM bypasses it.
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Minute), time.Time{}, nil, nil, false)
+	recs, err := r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-time.Minute),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -460,7 +505,12 @@ func TestBuildRecommendations_LiveOOMFloorsOnlyOOMedContainer(t *testing.T) {
 	policy := policyForReconcileWorkload(t, "p")
 	containers := []corev1.Container{{Name: "app"}, {Name: "side"}}
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
+	recs, err := r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-time.Hour),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -500,7 +550,12 @@ func TestBuildRecommendations_OOMSignalEmpty_DoesNotApplyFloor(t *testing.T) {
 
 	before := testutilCounterValue(t, oomFloorApplied, "default", "Deployment", "web", "app")
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
+	recs, err := r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-time.Hour),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}
@@ -540,8 +595,13 @@ func TestBuildRecommendations_NilInputsLogsOnlyForGenuineCandidateBug(t *testing
 			lines = append(lines, prefix+" "+args)
 		}, funcr.Options{})
 		ctx := log.IntoContext(context.Background(), logger)
-		if _, err := r.buildRecommendations(ctx, policy, "default", "Deployment", "web", containers,
-			autoscaler.Info{}, time.Now().Add(-2*time.Hour), time.Time{}, nil, nil, snapshotPending); err != nil {
+		if _, err := r.buildRecommendations(ctx, recRequest{
+			Policy:          policy,
+			Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+			Containers:      containers,
+			WorkloadCreated: time.Now().Add(-2 * time.Hour),
+			SnapshotPending: snapshotPending,
+		}); err != nil {
 			t.Fatalf("buildRecommendations: %v", err)
 		}
 		return strings.Join(lines, "\n")
@@ -604,7 +664,12 @@ func TestBuildRecommendations_OOMAnchorTakesMaxOfPrometheusAndLive(t *testing.T)
 	policy := policyForReconcileWorkload(t, "p")
 	containers := []corev1.Container{{Name: "app"}}
 
-	recs, err := r.buildRecommendations(context.Background(), policy, "default", "Deployment", "web", containers, autoscaler.Info{}, time.Now().Add(-time.Hour), time.Time{}, nil, nil, false)
+	recs, err := r.buildRecommendations(context.Background(), recRequest{
+		Policy:          policy,
+		Identity:        promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+		Containers:      containers,
+		WorkloadCreated: time.Now().Add(-time.Hour),
+	})
 	if err != nil {
 		t.Fatalf("buildRecommendations: %v", err)
 	}

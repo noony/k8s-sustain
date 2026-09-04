@@ -31,7 +31,7 @@ func TestRetryTracker_RecordFailure_ThenSkip(t *testing.T) {
 func TestRetryTracker_RecordSuccess_ClearsEntry(t *testing.T) {
 	rt := newRetryTracker()
 	rt.recordFailure("Deployment/prod/web")
-	rt.recordSuccess("Deployment/prod/web")
+	rt.clear("Deployment/prod/web")
 
 	if rt.shouldSkip("Deployment/prod/web") {
 		t.Error("should not skip after success")
@@ -94,7 +94,7 @@ func TestRetryTracker_MaxBackoff_NoOverflow(t *testing.T) {
 func TestRetryTracker_RemoveSilently(t *testing.T) {
 	rt := newRetryTracker()
 	rt.recordFailure("Deployment/prod/web")
-	rt.remove("Deployment/prod/web")
+	rt.clear("Deployment/prod/web")
 
 	if rt.shouldSkip("Deployment/prod/web") {
 		t.Error("should not skip after removal")
@@ -204,7 +204,7 @@ func TestRetryTracker_RecordFailure_RacesRecordSuccess(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			rt.recordSuccess(key)
+			rt.clear(key)
 		}()
 	}
 	wg.Wait()

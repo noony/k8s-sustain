@@ -21,13 +21,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// ContainerRecommendation holds computed resource changes for a single container.
+// ContainerRecommendation holds computed resource changes for a single
+// container. Its field sequence mirrors v1alpha1.ContainerRecommendation so
+// wlrcache can convert between the two with a plain struct conversion; the
+// compiler rejects any drift.
 type ContainerRecommendation struct {
 	CPURequest        *resource.Quantity
-	CPULimit          *resource.Quantity
-	RemoveCPULimit    bool
 	MemoryRequest     *resource.Quantity
+	CPULimit          *resource.Quantity
 	MemoryLimit       *resource.Quantity
+	RemoveCPULimit    bool
 	RemoveMemoryLimit bool
 }
 
@@ -669,23 +672,6 @@ func anyContainerStale(cs []corev1.Container, recs map[string]ContainerRecommend
 // (restartPolicy=Always).
 func isRestartableInitContainer(c corev1.Container) bool {
 	return c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways
-}
-
-// ApplyRecommendationsToPodSpec mutates every container in a PodSpec to match
-// the recommendations, returning whether anything changed.
-func ApplyRecommendationsToPodSpec(spec *corev1.PodSpec, recs map[string]ContainerRecommendation) bool {
-	changed := false
-	for i := range spec.Containers {
-		if applyRecToContainer(&spec.Containers[i], recs[spec.Containers[i].Name]) {
-			changed = true
-		}
-	}
-	for i := range spec.InitContainers {
-		if applyRecToContainer(&spec.InitContainers[i], recs[spec.InitContainers[i].Name]) {
-			changed = true
-		}
-	}
-	return changed
 }
 
 // applyRecsFiltered copies the containers and applies recommendations to

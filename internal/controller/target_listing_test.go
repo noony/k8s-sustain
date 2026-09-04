@@ -97,7 +97,7 @@ func TestListDeploymentTargets_NamespaceScoped(t *testing.T) {
 	d3 := annotatedDeployment("ns-c", "app3", "p")
 	r := makeReconciler(t, d1, d2, d3)
 
-	got, err := r.listDeploymentTargets(context.Background(), []string{"ns-a", "ns-b"}, newNSAnnotations(r.Client))
+	got, err := r.listTargetsOfKind(context.Background(), "Deployment", []string{"ns-a", "ns-b"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestListDeploymentTargets_AllNamespaces(t *testing.T) {
 		annotatedDeployment("a", "x", "p"),
 		annotatedDeployment("b", "y", "p"),
 	)
-	got, err := r.listDeploymentTargets(context.Background(), nil, newNSAnnotations(r.Client))
+	got, err := r.listTargetsOfKind(context.Background(), "Deployment", nil)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestListStatefulSetTargets(t *testing.T) {
 		},
 	}
 	r := makeReconciler(t, ss)
-	got, err := r.listStatefulSetTargets(context.Background(), nil, newNSAnnotations(r.Client))
+	got, err := r.listTargetsOfKind(context.Background(), "StatefulSet", nil)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestListStatefulSetTargets(t *testing.T) {
 func TestListCronJobTargets(t *testing.T) {
 	cj := annotatedCronJob("default", "nightly", "p")
 	r := makeReconciler(t, cj)
-	got, err := r.listCronJobTargets(context.Background(), nil, newNSAnnotations(r.Client))
+	got, err := r.listTargetsOfKind(context.Background(), "CronJob", nil)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestListDaemonSetTargets(t *testing.T) {
 		},
 	}
 	r := makeReconciler(t, ds)
-	got, err := r.listDaemonSetTargets(context.Background(), nil, newNSAnnotations(r.Client))
+	got, err := r.listTargetsOfKind(context.Background(), "DaemonSet", nil)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestListRolloutTargets_NamespaceScoped(t *testing.T) {
 	r2 := annotatedRollout("ns-b", "ro2", "p")
 	r := makeReconciler(t, r1, r2)
 
-	got, err := r.listRolloutTargets(context.Background(), []string{"ns-a"}, newNSAnnotations(r.Client))
+	got, err := r.listTargetsOfKind(context.Background(), "Rollout", []string{"ns-a"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -698,7 +698,7 @@ func TestListKindTargets_DuplicateNamespacesListedOnce(t *testing.T) {
 	d2 := annotatedDeployment("ns-b", "app2", "p")
 	r := makeReconciler(t, d1, d2)
 
-	got, err := r.listDeploymentTargets(context.Background(), []string{"ns-a", "ns-b", "ns-a"}, newNSAnnotations(r.Client))
+	got, err := r.listTargetsOfKind(context.Background(), "Deployment", []string{"ns-a", "ns-b", "ns-a"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

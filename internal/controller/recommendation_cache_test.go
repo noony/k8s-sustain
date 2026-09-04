@@ -24,14 +24,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 func TestWlrName(t *testing.T) {
-	if got := wlrName("Deployment", "web"); got != "deployment-web" {
+	if got := wlrcache.Name("Deployment", "web"); got != "deployment-web" {
 		t.Errorf("wlrName Deployment/web = %q, want deployment-web", got)
 	}
-	if got := wlrName("StatefulSet", "db"); got != "statefulset-db" {
+	if got := wlrcache.Name("StatefulSet", "db"); got != "statefulset-db" {
 		t.Errorf("wlrName StatefulSet/db = %q", got)
 	}
 }
@@ -42,7 +43,7 @@ func TestWlrName(t *testing.T) {
 // must produce it, or controller and webhook disagree on the cache key.
 func TestWlrName_LongNameTruncatedWithHash(t *testing.T) {
 	want := "deployment-" + strings.Repeat("a", 231) + "-55335e7810"
-	got := wlrName("Deployment", strings.Repeat("a", 260))
+	got := wlrcache.Name("Deployment", strings.Repeat("a", 260))
 	if got != want {
 		t.Errorf("wlrName long input = %q, want %q", got, want)
 	}
@@ -112,7 +113,7 @@ func wlrFor(policyName, ns, kind, name string, observedAt time.Time) *sustainv1a
 	return &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns,
-			Name:      wlrName(kind, name),
+			Name:      wlrcache.Name(kind, name),
 			Labels:    map[string]string{wlrPolicyLabel: policyName},
 		},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
@@ -133,8 +134,8 @@ func getWLRFor(t *testing.T, r *PolicyReconciler, ns, kind, name string) *sustai
 	t.Helper()
 	var wlr sustainv1alpha1.WorkloadRecommendation
 	if err := r.Get(context.Background(),
-		types.NamespacedName{Namespace: ns, Name: wlrName(kind, name)}, &wlr); err != nil {
-		t.Fatalf("get WLR %s/%s: %v", ns, wlrName(kind, name), err)
+		types.NamespacedName{Namespace: ns, Name: wlrcache.Name(kind, name)}, &wlr); err != nil {
+		t.Fatalf("get WLR %s/%s: %v", ns, wlrcache.Name(kind, name), err)
 	}
 	return &wlr
 }
@@ -159,7 +160,7 @@ func (c failingWorkloadGetClient) Get(
 func wlrExists(t *testing.T, r *PolicyReconciler, ns, kind, name string) bool {
 	t.Helper()
 	var wlr sustainv1alpha1.WorkloadRecommendation
-	err := r.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: wlrName(kind, name)}, &wlr)
+	err := r.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: wlrcache.Name(kind, name)}, &wlr)
 	if err != nil && !apierrors.IsNotFound(err) {
 		t.Fatalf("get WLR: %v", err)
 	}

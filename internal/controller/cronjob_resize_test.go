@@ -222,7 +222,7 @@ func TestResizeCronJobPods_NeverPatchesCronJob(t *testing.T) {
 		Build()
 	r.patcher = workload.New(r.Client, true /* in-place */)
 
-	target := cronJobToTarget(cj)
+	target := targetFromObject(cj, "CronJob")
 	recs := map[string]workload.ContainerRecommendation{
 		"app": {CPURequest: qty("250m"), MemoryRequest: qty("128Mi")},
 	}
@@ -277,7 +277,7 @@ func TestResizeCronJobPods_ReturnsZeroWhenNothingResized(t *testing.T) {
 	// No active jobs at all.
 	r := makeReconciler(t, cj)
 	r.patcher = workload.New(r.Client, true /* in-place */)
-	target := cronJobToTarget(cj)
+	target := targetFromObject(cj, "CronJob")
 	resized, err := r.resizeCronJobPods(context.Background(), &target, recs, workload.Tolerance{}, nil)
 	if err != nil {
 		t.Fatalf("resizeCronJobPods (no jobs): %v", err)
@@ -344,7 +344,7 @@ func TestResizeCronJobPods_PerPodInvalidNotCounted(t *testing.T) {
 		Build()
 	r.patcher = workload.New(r.Client, true /* in-place */)
 
-	target := cronJobToTarget(cj)
+	target := targetFromObject(cj, "CronJob")
 	recs := map[string]workload.ContainerRecommendation{
 		"app": {CPURequest: qty("250m")},
 	}

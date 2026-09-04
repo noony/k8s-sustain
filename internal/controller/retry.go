@@ -100,15 +100,9 @@ func (rt *retryTracker) pruneLocked(now time.Time) {
 	}
 }
 
-// recordSuccess removes the retry state for the workload.
-func (rt *retryTracker) recordSuccess(key string) {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	delete(rt.states, key)
-}
-
-// remove silently deletes the retry state (used for deleted workloads).
-func (rt *retryTracker) remove(key string) {
+// clear drops the retry state for the workload, after a successful step or
+// when the workload is no longer retried.
+func (rt *retryTracker) clear(key string) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	delete(rt.states, key)

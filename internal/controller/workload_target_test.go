@@ -27,7 +27,7 @@ func TestDeploymentToTarget(t *testing.T) {
 		},
 	}
 
-	target := deploymentToTarget(d)
+	target := targetFromObject(d, "Deployment")
 	if target.Kind != "Deployment" {
 		t.Errorf("expected kind Deployment, got %s", target.Kind)
 	}
@@ -59,7 +59,7 @@ func TestDeploymentToTarget_OwnerNameOverride(t *testing.T) {
 		},
 	}
 
-	target := deploymentToTarget(d)
+	target := targetFromObject(d, "Deployment")
 	if target.Kind != "Deployment" || target.Name != "app-blue" {
 		t.Errorf("real identity changed: Kind=%s Name=%s, want Deployment/app-blue", target.Kind, target.Name)
 	}
@@ -82,7 +82,7 @@ func TestDeploymentToTarget_NoOverride_IdentityMatchesReal(t *testing.T) {
 			},
 		},
 	}
-	target := deploymentToTarget(d)
+	target := targetFromObject(d, "Deployment")
 	if target.IdentityKind != target.Kind || target.IdentityName != target.Name {
 		t.Errorf("no annotation set: identity (%s/%s) should equal real (%s/%s)",
 			target.IdentityKind, target.IdentityName, target.Kind, target.Name)
@@ -102,7 +102,7 @@ func TestStatefulSetToTarget(t *testing.T) {
 		},
 	}
 
-	target := statefulSetToTarget(s)
+	target := targetFromObject(s, "StatefulSet")
 	if target.Kind != "StatefulSet" || target.Name != "db" {
 		t.Errorf("unexpected target: %+v", target)
 	}
@@ -121,7 +121,7 @@ func TestDaemonSetToTarget(t *testing.T) {
 		},
 	}
 
-	target := daemonSetToTarget(ds)
+	target := targetFromObject(ds, "DaemonSet")
 	if target.Kind != "DaemonSet" || target.Name != "agent" {
 		t.Errorf("unexpected target: %+v", target)
 	}
@@ -143,7 +143,7 @@ func TestRolloutToTarget(t *testing.T) {
 		},
 	}
 
-	target := rolloutToTarget(r)
+	target := targetFromObject(r, "Rollout")
 	if target.Kind != "Rollout" {
 		t.Errorf("expected kind Rollout, got %s", target.Kind)
 	}
@@ -166,7 +166,7 @@ func TestDeploymentToTargetCapturesInitContainers(t *testing.T) {
 		},
 	}
 
-	target := deploymentToTarget(d)
+	target := targetFromObject(d, "Deployment")
 	if got, want := len(target.InitContainers), 2; got != want {
 		t.Fatalf("init containers: got %d, want %d", got, want)
 	}

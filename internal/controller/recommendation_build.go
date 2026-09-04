@@ -25,50 +25,34 @@ import (
 // bookkeeping.
 var errPrefetchMissingForBatchedKind = errors.New("prefetched batch inputs missing for an identity that should always be batched")
 
-// recDeps is the slice of reconciler state the recommendation pipeline
-// actually needs. It keeps the pipeline callable as a plain function — the
-// live-target path (computeIdentity) and the departed path
-// (refreshDepartedRecommendation) both drive it, and they write the same
-// WorkloadRecommendation objects, so any divergence here would show up as a
-// workload whose recommendation changes depending on which path computed it.
-type recDeps struct {
-	Prom    *promclient.Client
-	LiveOOM LiveOOMConfig
-}
-
-func (r *PolicyReconciler) buildRecommendations(
-	ctx context.Context,
-	policy *sustainv1alpha1.Policy,
-	ns, ownerKind, ownerName string,
-	containers []corev1.Container,
-	autoInfo autoscaler.Info,
-	workloadCreated, identityFirstSeen time.Time,
-	inputs *recommender.WorkloadInputs,
-	fetchErr error,
-	snapshotPending bool,
-) (map[string]workload.ContainerRecommendation, error) {
-	return buildRecommendations(ctx, recDeps{Prom: r.PrometheusClient, LiveOOM: r.LiveOOM},
-		policy, ns, ownerKind, ownerName, containers, autoInfo, workloadCreated, identityFirstSeen, inputs, fetchErr, snapshotPending)
-}
-
-func buildRecommendations(
-	ctx context.Context,
-	deps recDeps,
-	policy *sustainv1alpha1.Policy,
-	ns, ownerKind, ownerName string,
-	containers []corev1.Container,
-	autoInfo autoscaler.Info,
-	workloadCreated, identityFirstSeen time.Time,
-	inputs *recommender.WorkloadInputs,
-	fetchErr error,
-	// snapshotPending is true when Reconcile's candidate-building loop
+// recRequest is one identity's recommendation computation. Both the live path
+// (computeIdentity) and the departed path (refreshDepartedRecommendation)
+// build one, and they write the same WorkloadRecommendation objects, so any
+// divergence would show up as a workload whose recommendation changes
+// depending on which path computed it.
+type recRequest struct {
+	Policy     *sustainv1alpha1.Policy
+	Identity   promclient.WorkloadIdentity
+	Containers []corev1.Container
+	AutoInfo   autoscaler.Info
+	// WorkloadCreated is the zero time when no live object backs the identity.
+	WorkloadCreated   time.Time
+	IdentityFirstSeen time.Time
+	Inputs            *recommender.WorkloadInputs
+	FetchErr          error
+	// SnapshotPending is true when Reconcile's candidate-building loop
 	// (policy_controller.go's pendingSnapshot) withheld this identity from the
 	// batch for lack of an observed-resources snapshot to size a shard with --
 	// an expected first-cycle state, not a bug, so it suppresses
-	// errPrefetchMissingForBatchedKind below. Callers not exercising that
-	// withholding pass false.
-	snapshotPending bool,
-) (map[string]workload.ContainerRecommendation, error) {
+	// errPrefetchMissingForBatchedKind. Callers not exercising that withholding
+	// leave it false.
+	SnapshotPending bool
+}
+
+func (r *PolicyReconciler) buildRecommendations(ctx context.Context, req recRequest) (map[string]workload.ContainerRecommendation, error) {
+	policy := req.Policy
+	ns, ownerKind, ownerName := req.Identity.Namespace, req.Identity.OwnerKind, req.Identity.OwnerName
+	containers, autoInfo, inputs := req.Containers, req.AutoInfo, req.Inputs
 	rsCfg := policy.Spec.RightSizing.ResourcesConfigs
 	logger := log.FromContext(ctx).WithValues("kind", ownerKind, "name", ownerName, "namespace", ns)
 
@@ -78,8 +62,8 @@ func buildRecommendations(
 	// checked before inputs because a total outage otherwise flows through as
 	// an empty-but-non-nil inputs indistinguishable from "no data yet" --
 	// Ready, no retry, no event, just a V(1) log.
-	if fetchErr != nil {
-		return nil, fetchErr
+	if req.FetchErr != nil {
+		return nil, req.FetchErr
 	}
 
 	// nil means this identity was not prefetched -- NOT "queried, found
@@ -88,20 +72,20 @@ func buildRecommendations(
 	// other nil is a candidate-building bug, logged loudly below so it cannot
 	// hide behind a still-successful fallback.
 	if inputs == nil {
-		if !snapshotPending {
+		if !req.SnapshotPending {
 			logger.Error(errPrefetchMissingForBatchedKind,
 				"falling back to a per-workload Prometheus query; this defeats batching and should be investigated in Reconcile's candidate-building loop")
 		}
 		var err error
-		inputs, err = recommender.FetchWorkloadInputs(ctx, deps.Prom, ns, ownerKind, ownerName, rsCfg)
+		inputs, err = recommender.FetchWorkloadInputs(ctx, r.PrometheusClient, ns, ownerKind, ownerName, rsCfg)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	var liveOOMs map[string]*oomwatch.OOMRecord
-	if deps.LiveOOM.Enabled() {
-		liveOOMs = deps.LiveOOM.Source.RecentByWorkload(ns, ownerKind, ownerName, deps.LiveOOM.EffectiveMaxAge())
+	if r.LiveOOM.Enabled() {
+		liveOOMs = r.LiveOOM.Source.RecentByWorkload(ns, ownerKind, ownerName, r.LiveOOM.EffectiveMaxAge())
 	}
 	// Workload-level recency: only feeds the age-gate bypass below. The
 	// per-container memory floor uses per-container recency (OOMCounts /
@@ -125,10 +109,10 @@ func buildRecommendations(
 	// container. The gate keys on the EARLIEST of the pod's creation time and
 	// the identity's first-seen time, so a recurring identity still clears it
 	// on its long-lived WorkloadRecommendation.
-	if recommender.ShouldSkipYoungWorkload(workloadCreated, identityFirstSeen, recentOOM) {
+	if recommender.ShouldSkipYoungWorkload(req.WorkloadCreated, req.IdentityFirstSeen, recentOOM) {
 		recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "workload_too_young").Inc()
 		logger.Info("skipping recommendation: workload too young",
-			"age", recommender.AgeForLog(workloadCreated), "identityAge", recommender.AgeForLog(identityFirstSeen), "minAge", recommender.MinWorkloadAge)
+			"age", recommender.AgeForLog(req.WorkloadCreated), "identityAge", recommender.AgeForLog(req.IdentityFirstSeen), "minAge", recommender.MinWorkloadAge)
 		return map[string]workload.ContainerRecommendation{}, nil
 	}
 
