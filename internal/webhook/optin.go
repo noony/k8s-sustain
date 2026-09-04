@@ -8,9 +8,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -48,11 +46,9 @@ func (h *Handler) resolveOptIn(ctx context.Context, logger logr.Logger, pod *cor
 		return "", policymatch.LevelNone, owner, nil
 	}
 
-	var ns corev1.Namespace
-	if err := h.Client.Get(ctx, types.NamespacedName{Name: pod.Namespace}, &ns); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return "", policymatch.LevelNone, owner, fmt.Errorf("reading namespace %s: %w", pod.Namespace, err)
-		}
+	nsAnnotations, err := workload.NamespaceAnnotations(ctx, h.Client, pod.Namespace)
+	if err != nil {
+		return "", policymatch.LevelNone, owner, err
 	}
 
 	ownerKind, ownerName, err := h.resolveCachedPodOwner(ctx, pod)
@@ -66,7 +62,7 @@ func (h *Handler) resolveOptIn(ctx context.Context, logger logr.Logger, pod *cor
 		return "", policymatch.LevelNone, owner, err
 	}
 
-	name, level := policymatch.ResolvePolicy(pod.Annotations, workloadAnnotations, ns.Annotations)
+	name, level := policymatch.ResolvePolicy(pod.Annotations, workloadAnnotations, nsAnnotations)
 	return name, level, owner, nil
 }
 
@@ -201,22 +197,13 @@ func (h *Handler) ownerAnnotations(ctx context.Context, namespace, kind, name st
 // burst and populates ownerAnnCache. A NotFound owner is cached as nil; an
 // error is never cached.
 func (h *Handler) fetchAndCacheOwnerAnnotations(namespace, kind, name, key string) (any, error) {
-	obj := workload.ObjectForKind(kind)
-	if obj == nil {
-		var nilAnn map[string]string
-		return nilAnn, nil
-	}
 	getCtx, cancel := context.WithTimeout(context.Background(), apiCallTimeout)
 	defer cancel()
-	if err := h.Client.Get(getCtx, types.NamespacedName{Namespace: namespace, Name: name}, obj); err != nil {
-		if apierrors.IsNotFound(err) {
-			h.ownerAnnCache.set(key, nil, ownerAnnotationsCacheTTL, ownerAnnotationsCacheMaxEntries)
-			var nilAnn map[string]string
-			return nilAnn, nil
-		}
-		return map[string]string(nil), fmt.Errorf("reading %s %s/%s: %w", kind, namespace, name, err)
+	raw, err := workload.OwnerAnnotations(getCtx, h.Client, namespace, kind, name)
+	if err != nil {
+		return map[string]string(nil), err
 	}
-	ann := cacheableOwnerAnnotations(obj.GetAnnotations())
+	ann := cacheableOwnerAnnotations(raw)
 	h.ownerAnnCache.set(key, ann, ownerAnnotationsCacheTTL, ownerAnnotationsCacheMaxEntries)
 	return ann, nil
 }

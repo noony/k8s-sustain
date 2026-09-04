@@ -13,12 +13,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
 func TestWlrName_MatchesController(t *testing.T) {
 	// Webhook and controller must agree on the object name. Drift breaks the
 	// read contract silently.
-	if got := wlrName("Deployment", "web"); got != "deployment-web" {
+	if got := wlrcache.Name("Deployment", "web"); got != "deployment-web" {
 		t.Errorf("wlrName Deployment/web = %q", got)
 	}
 }
@@ -28,7 +29,7 @@ func TestWlrName_MatchesController(t *testing.T) {
 // must produce it, or the two disagree on the cache key.
 func TestWlrName_LongNameMatchesController(t *testing.T) {
 	want := "deployment-" + strings.Repeat("a", 231) + "-55335e7810"
-	got := wlrName("Deployment", strings.Repeat("a", 260))
+	got := wlrcache.Name("Deployment", strings.Repeat("a", 260))
 	if got != want {
 		t.Errorf("wlrName long input = %q, want %q", got, want)
 	}

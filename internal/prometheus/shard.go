@@ -1,9 +1,10 @@
 package prometheus
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -96,16 +97,13 @@ func BuildShards(cands []ShardCandidate, windowMinutes, maxSamples int) (shards 
 		groups[key] = append(groups[key], member{name: name, cost: containers * windowMinutes})
 	}
 
-	sort.Slice(groupOrder, func(i, j int) bool {
-		if groupOrder[i].namespace != groupOrder[j].namespace {
-			return groupOrder[i].namespace < groupOrder[j].namespace
-		}
-		return groupOrder[i].ownerKind < groupOrder[j].ownerKind
+	slices.SortFunc(groupOrder, func(a, b shardGroupKey) int {
+		return cmp.Or(strings.Compare(a.namespace, b.namespace), strings.Compare(a.ownerKind, b.ownerKind))
 	})
 
 	for _, key := range groupOrder {
 		members := groups[key]
-		sort.Slice(members, func(i, j int) bool { return members[i].name < members[j].name })
+		slices.SortFunc(members, func(a, b member) int { return strings.Compare(a.name, b.name) })
 
 		var names []string
 		total := 0
