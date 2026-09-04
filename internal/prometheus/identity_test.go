@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/prometheus/common/model"
@@ -67,4 +68,23 @@ func identitySample(ns, kind, name, container string, v float64) *model.Sample {
 		m["container"] = model.LabelValue(container)
 	}
 	return &model.Sample{Metric: m, Value: model.SampleValue(v)}
+}
+
+func TestCompareIdentity_OrdersByNamespaceKindName(t *testing.T) {
+	ids := []WorkloadIdentity{
+		{"b", "Deployment", "a"},
+		{"a", "StatefulSet", "z"},
+		{"a", "Deployment", "z"},
+		{"a", "Deployment", "a"},
+	}
+	slices.SortFunc(ids, CompareIdentity)
+	want := []WorkloadIdentity{
+		{"a", "Deployment", "a"},
+		{"a", "Deployment", "z"},
+		{"a", "StatefulSet", "z"},
+		{"b", "Deployment", "a"},
+	}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("sorted = %v, want %v", ids, want)
+	}
 }

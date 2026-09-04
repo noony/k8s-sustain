@@ -223,24 +223,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 
 	// Mirror the owner-name annotation onto a label so kube-state-metrics
 	// exposes it for the recording rules. Applied even in recommend-only mode.
-	var labelPatch *jsonPatch
-	if v, ok := pod.Annotations[sustainv1alpha1.OwnerNameAnnotation]; ok && len(apivalidation.IsValidLabelValue(v)) == 0 {
-		if pod.Labels[sustainv1alpha1.OwnerNameAnnotation] != v {
-			if pod.Labels == nil {
-				if valJSON, mErr := json.Marshal(map[string]string{sustainv1alpha1.OwnerNameAnnotation: v}); mErr != nil {
-					logger.Error(mErr, "failed to marshal owner-name label patch")
-				} else {
-					labelPatch = &jsonPatch{Op: "add", Path: "/metadata/labels", Value: valJSON}
-				}
-			} else {
-				if valJSON, mErr := json.Marshal(v); mErr != nil {
-					logger.Error(mErr, "failed to marshal owner-name label patch")
-				} else {
-					labelPatch = &jsonPatch{Op: "add", Path: "/metadata/labels/" + strings.ReplaceAll(sustainv1alpha1.OwnerNameAnnotation, "/", "~1"), Value: valJSON}
-				}
-			}
-		}
-	}
+	labelPatch := ownerNameLabelPatch(&pod)
 
 	ownerKind, ownerName := resolvedOwner.Kind, resolvedOwner.Name
 	if !resolvedOwner.Resolved {
@@ -345,6 +328,22 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		Patch:     patchBytes,
 		PatchType: &pt,
 	}
+}
+
+// ownerNameLabelPatch returns the patch mirroring a valid owner-name
+// annotation onto the pod's labels, or nil when there is nothing to mirror.
+// Marshalling a string or a string map cannot fail.
+func ownerNameLabelPatch(pod *corev1.Pod) *jsonPatch {
+	v, ok := pod.Annotations[sustainv1alpha1.OwnerNameAnnotation]
+	if !ok || len(apivalidation.IsValidLabelValue(v)) != 0 || pod.Labels[sustainv1alpha1.OwnerNameAnnotation] == v {
+		return nil
+	}
+	if pod.Labels == nil {
+		value, _ := json.Marshal(map[string]string{sustainv1alpha1.OwnerNameAnnotation: v})
+		return &jsonPatch{Op: "add", Path: "/metadata/labels", Value: value}
+	}
+	value, _ := json.Marshal(v)
+	return &jsonPatch{Op: "add", Path: "/metadata/labels/" + strings.ReplaceAll(sustainv1alpha1.OwnerNameAnnotation, "/", "~1"), Value: value}
 }
 
 func addMatchingRecs(dst map[string]workload.ContainerRecommendation, containers []corev1.Container, recs map[string]workload.ContainerRecommendation) {
