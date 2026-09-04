@@ -68,10 +68,8 @@ func TestModeForKind(t *testing.T) {
 	}
 }
 
-// TestResolveOwner_RolloutChain verifies the webhook walks
-// Pod → ReplicaSet → Rollout (Argo Rollouts) and reports the Rollout as the
-// top-level workload kind. This is what makes OnCreate injection work for
-// Rollout-owned pods.
+// Walking Pod → ReplicaSet → Rollout is what makes OnCreate injection work for
+// Argo Rollout-owned pods.
 func TestResolveOwner_RolloutChain(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := appsv1.AddToScheme(scheme); err != nil {
@@ -119,8 +117,6 @@ func TestResolveOwner_RolloutChain(t *testing.T) {
 	}
 }
 
-// TestResolveOwner_DeploymentChain verifies the existing
-// Pod → ReplicaSet → Deployment walk still works alongside the Rollout case.
 func TestResolveOwner_DeploymentChain(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := appsv1.AddToScheme(scheme); err != nil {
@@ -278,12 +274,9 @@ func TestBuildPatches_SkipsUnmatchedContainer(t *testing.T) {
 	}
 }
 
-// TestBuildPatches_NameCollisionInitAndRegular verifies the corner case where
-// the same container name appears in both pod.Spec.Containers and
-// pod.Spec.InitContainers. Kubernetes permits this; our model identifies
-// recommendations by name, so the single recommendation must be patched onto
-// BOTH locations. Locking in this behaviour: changes that silently drop one
-// of the two patches would otherwise leave the init copy un-rightsized.
+// Kubernetes permits the same container name in both Containers and
+// InitContainers, and recommendations are keyed by name, so the one
+// recommendation must be patched onto BOTH locations.
 func TestBuildPatches_NameCollisionInitAndRegular(t *testing.T) {
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{
@@ -321,8 +314,6 @@ func TestBuildPatches_NameCollisionInitAndRegular(t *testing.T) {
 	}
 }
 
-// TestBuildPatches_PatchesInitContainers verifies that recommendations whose
-// names match init containers produce JSON patches at /spec/initContainers/N/resources.
 func TestBuildPatches_PatchesInitContainers(t *testing.T) {
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{
@@ -363,10 +354,8 @@ func TestBuildPatches_PatchesInitContainers(t *testing.T) {
 	}
 }
 
-// admitTestEnv bundles the boilerplate for end-to-end admit() tests: scheme,
-// fake client, and a constructed Handler. The webhook reads recommendations
-// exclusively from a WorkloadRecommendation now — there is no Prometheus
-// mock to configure. Tests that need admission to inject something seed one
+// admitTestEnv bundles the boilerplate for end-to-end admit() tests. There is
+// no Prometheus mock: tests that need an injection seed a WorkloadRecommendation
 // via objs, using freshWLR below.
 type admitTestEnv struct {
 	handler *Handler
@@ -408,9 +397,7 @@ func wlrRec(cpu, mem string) sustainv1alpha1.ContainerRecommendation {
 }
 
 // freshWLR builds a WorkloadRecommendation for (kind, ns, name) with a fresh
-// ObservedAt, keyed exactly as the controller writes and the webhook reads
-// (wlrName). Admission tests seed one of these instead of configuring a
-// Prometheus mock — the webhook's only recommendation source now.
+// ObservedAt, keyed exactly as the controller writes and the webhook reads it.
 func freshWLR(kind, ns, name string, containers map[string]sustainv1alpha1.ContainerRecommendation) *sustainv1alpha1.WorkloadRecommendation {
 	return &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: wlrName(kind, name)},
@@ -495,9 +482,8 @@ func admissionRequestFor(t *testing.T, pod *corev1.Pod) *admissionv1.AdmissionRe
 	}
 }
 
-// TestAdmit_EmptyObjectRaw_AllowsWithoutPatch verifies the handler fails open
-// when AdmissionRequest.Object.Raw is nil/empty (a malformed apiserver review
-// or an unrelated subresource where Object is not populated).
+// An empty Object.Raw (malformed review, or a subresource that does not
+// populate Object) must fail open.
 func TestAdmit_EmptyObjectRaw_AllowsWithoutPatch(t *testing.T) {
 	env := newAdmitEnv(t)
 
@@ -516,8 +502,6 @@ func TestAdmit_EmptyObjectRaw_AllowsWithoutPatch(t *testing.T) {
 	}
 }
 
-// TestAdmit_NoAnnotation_AllowsWithoutPatch verifies pods without the policy
-// annotation pass through untouched.
 func TestAdmit_NoAnnotation_AllowsWithoutPatch(t *testing.T) {
 	env := newAdmitEnv(t)
 
@@ -531,8 +515,7 @@ func TestAdmit_NoAnnotation_AllowsWithoutPatch(t *testing.T) {
 	}
 }
 
-// TestAdmit_PolicyNotFound_AllowsWithoutPatch verifies fail-open behaviour
-// when the annotation references a Policy that does not exist.
+// An annotation naming a Policy that does not exist must fail open.
 func TestAdmit_PolicyNotFound_AllowsWithoutPatch(t *testing.T) {
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
 	env := newAdmitEnv(t, rs)
@@ -547,8 +530,8 @@ func TestAdmit_PolicyNotFound_AllowsWithoutPatch(t *testing.T) {
 	}
 }
 
-// TestAdmit_StandalonePod_AllowsWithoutPatch verifies pods without a controller
-// owner are skipped — the webhook can't determine workload kind.
+// A pod without a controller owner is skipped: there is no workload kind to
+// resolve.
 func TestAdmit_StandalonePod_AllowsWithoutPatch(t *testing.T) {
 	env := newAdmitEnv(t, basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate))
 
@@ -569,8 +552,6 @@ func TestAdmit_StandalonePod_AllowsWithoutPatch(t *testing.T) {
 	}
 }
 
-// TestAdmit_KindNotConfigured_AllowsWithoutPatch verifies that a workload kind
-// not listed in the policy's update.types is skipped.
 func TestAdmit_KindNotConfigured_AllowsWithoutPatch(t *testing.T) {
 	mode := sustainv1alpha1.UpdateModeOnCreate
 	policy := &sustainv1alpha1.Policy{
@@ -595,14 +576,11 @@ func TestAdmit_KindNotConfigured_AllowsWithoutPatch(t *testing.T) {
 	}
 }
 
-// TestAdmit_RecommendOnly_AllowsWithoutPatch verifies that recommend-only
-// mode returns allow=true with no patch even when injection would have applied.
 func TestAdmit_RecommendOnly_AllowsWithoutPatch(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	// A WLR is present with data to inject, so the assertion below actually
-	// exercises the recommend-only short-circuit rather than the (also
-	// no-patch) "nothing to inject" path.
+	// Seed injectable data, or the assertion could not tell the recommend-only
+	// short-circuit from the (also no-patch) "nothing to inject" path.
 	wlr := freshWLR("Deployment", "default", "my-app", map[string]sustainv1alpha1.ContainerRecommendation{
 		"app": wlrRec("100m", "64Mi"),
 	})
@@ -619,9 +597,8 @@ func TestAdmit_RecommendOnly_AllowsWithoutPatch(t *testing.T) {
 	}
 }
 
-// TestAdmit_PolicyRecommendOnly_AllowsWithoutPatch verifies that a Policy
-// with spec.rightSizing.recommendOnly=true is admitted without a resource
-// patch even though the handler's global RecommendOnly flag is off.
+// A Policy with recommendOnly=true suppresses the patch even though the
+// handler's global RecommendOnly flag is off.
 func TestAdmit_PolicyRecommendOnly_AllowsWithoutPatch(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	policy.Spec.RightSizing.RecommendOnly = true
@@ -641,11 +618,9 @@ func TestAdmit_PolicyRecommendOnly_AllowsWithoutPatch(t *testing.T) {
 	}
 }
 
-// TestAdmit_BarePodWithOwnerName_InjectsAsPodKind verifies a pod with no
-// controller owner but a valid owner-name annotation is treated as kind
-// "Pod": it gets the label-mirror patch AND, when the policy configures
-// types.pod, a resource injection patch read from the WorkloadRecommendation
-// cached under the overridden identity.
+// A bare pod with a valid owner-name annotation is treated as kind "Pod": it
+// gets the label-mirror patch and, with types.pod configured, an injection read
+// from the WorkloadRecommendation cached under the overridden identity.
 func TestAdmit_BarePodWithOwnerName_InjectsAsPodKind(t *testing.T) {
 	mode := sustainv1alpha1.UpdateModeOnCreate
 	policy := &sustainv1alpha1.Policy{
@@ -692,11 +667,8 @@ func TestAdmit_BarePodWithOwnerName_InjectsAsPodKind(t *testing.T) {
 	}
 }
 
-// TestAdmit_BarePodWithOwnerName_KindNotConfigured_LabelOnly verifies that
-// when the policy does not configure types.pod, a bare pod with a valid
-// owner-name annotation still gets the label mirror patch, but no resource
-// injection (mirrors TestAdmit_KindNotConfigured_AllowsWithoutPatch for every
-// other kind).
+// Without types.pod configured, a bare pod still gets the label-mirror patch
+// but no resource injection.
 func TestAdmit_BarePodWithOwnerName_KindNotConfigured_LabelOnly(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate) // only Deployment configured
 	env := newAdmitEnv(t, policy)
@@ -725,12 +697,9 @@ func TestAdmit_BarePodWithOwnerName_KindNotConfigured_LabelOnly(t *testing.T) {
 	}
 }
 
-// TestAdmit_OwnedPodWithOwnerNameOverride_ReadsOverriddenIdentityWLR verifies
-// that a pod with a real controller owner AND a valid owner-name annotation
-// still gets the label-mirror patch, and that the WorkloadRecommendation read
-// is keyed by the overridden name, not the real Deployment name: two WLRs are
-// seeded (one under each name), and the injected values must come from the
-// overridden one only.
+// With both a real controller owner and an owner-name annotation, the WLR read
+// must be keyed by the overridden name. Two WLRs are seeded, one under each
+// name, so only the overridden one may supply the injected values.
 func TestAdmit_OwnedPodWithOwnerNameOverride_ReadsOverriddenIdentityWLR(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "app-blue-rs", "app-blue")
@@ -760,11 +729,9 @@ func TestAdmit_OwnedPodWithOwnerNameOverride_ReadsOverriddenIdentityWLR(t *testi
 	}
 }
 
-// TestAdmit_RecommendOnly_OwnerNameAnnotation_LabelPatchOnly verifies
 // RecommendOnly's "never mutates the pod" contract is scoped to
-// resources/limits: a valid owner-name annotation still produces the
-// label-mirror patch (the only mechanism that makes the override visible to
-// Prometheus via kube-state-metrics), but never a resource-injection patch.
+// resources/limits: the label-mirror patch still applies, since it is the only
+// thing that makes the override visible to Prometheus via kube-state-metrics.
 func TestAdmit_RecommendOnly_OwnerNameAnnotation_LabelPatchOnly(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
@@ -802,9 +769,8 @@ func TestAdmit_RecommendOnly_OwnerNameAnnotation_LabelPatchOnly(t *testing.T) {
 	}
 }
 
-// TestAdmit_InvalidOwnerNameLabelValue_NoLabelPatch verifies an owner-name
-// annotation value that fails Kubernetes label-value validation is treated
-// as absent: no label patch, today's owner-resolution behavior unchanged.
+// An owner-name value that fails label-value validation is treated as absent:
+// no label patch, owner resolution unchanged.
 func TestAdmit_InvalidOwnerNameLabelValue_NoLabelPatch(t *testing.T) {
 	env := newAdmitEnv(t, basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate))
 
@@ -828,9 +794,6 @@ func TestAdmit_InvalidOwnerNameLabelValue_NoLabelPatch(t *testing.T) {
 	}
 }
 
-// TestAdmit_DeploymentInjection_PatchesResources verifies the happy-path:
-// annotated pod owned by a Deployment-backed ReplicaSet gets a JSON Patch
-// setting CPU and memory requests for the matching container.
 func TestAdmit_DeploymentInjection_PatchesResources(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
@@ -863,9 +826,6 @@ func TestAdmit_DeploymentInjection_PatchesResources(t *testing.T) {
 	}
 }
 
-// TestServeHTTP_RoundTripsAdmissionReview verifies the HTTP handler decodes
-// the request, runs admit, and re-encodes a valid AdmissionReview response
-// keyed by the original UID.
 func TestServeHTTP_RoundTripsAdmissionReview(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
@@ -911,8 +871,6 @@ func TestServeHTTP_RoundTripsAdmissionReview(t *testing.T) {
 	}
 }
 
-// TestServeHTTP_BadBody_Returns400 verifies the handler rejects malformed
-// AdmissionReview JSON with HTTP 400 instead of allowing through.
 func TestServeHTTP_BadBody_Returns400(t *testing.T) {
 	env := newAdmitEnv(t)
 
@@ -952,9 +910,8 @@ func TestIsValidPolicyName(t *testing.T) {
 	}
 }
 
-// TestAdmit_InvalidPolicyAnnotation_AllowsWithoutPatch verifies that a
-// malformed annotation value (uppercase, oversized, etc.) is rejected early,
-// before it is ever used to look up a Policy object.
+// A malformed annotation value is rejected before it is ever used to look up a
+// Policy object.
 func TestAdmit_InvalidPolicyAnnotation_AllowsWithoutPatch(t *testing.T) {
 	env := newAdmitEnv(t, basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate))
 
@@ -968,9 +925,6 @@ func TestAdmit_InvalidPolicyAnnotation_AllowsWithoutPatch(t *testing.T) {
 	}
 }
 
-// TestAdmit_PolicySelectorNamespaces_PodOutsideListSkipped verifies that the
-// webhook honours Policy.Spec.Selector.Namespaces: a pod in a namespace not
-// listed by the policy is admitted without mutation.
 func TestAdmit_PolicySelectorNamespaces_PodOutsideListSkipped(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	policy.Spec.Selector.Namespaces = []string{"production"}
@@ -988,8 +942,6 @@ func TestAdmit_PolicySelectorNamespaces_PodOutsideListSkipped(t *testing.T) {
 	}
 }
 
-// TestAdmit_PolicySelectorNamespaces_PodInsideListInjected verifies the
-// positive case: a pod in a namespace listed by the policy IS mutated.
 func TestAdmit_PolicySelectorNamespaces_PodInsideListInjected(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	policy.Spec.Selector.Namespaces = []string{"production"}
@@ -1010,9 +962,8 @@ func TestAdmit_PolicySelectorNamespaces_PodInsideListInjected(t *testing.T) {
 	}
 }
 
-// TestAdmit_ExcludedNamespaces_Skipped verifies the webhook respects its
-// configured --excluded-namespaces list: a pod in an excluded ns is admitted
-// without mutation regardless of selector configuration.
+// --excluded-namespaces wins regardless of how the policy selector is
+// configured.
 func TestAdmit_ExcludedNamespaces_Skipped(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 
@@ -1030,9 +981,6 @@ func TestAdmit_ExcludedNamespaces_Skipped(t *testing.T) {
 	}
 }
 
-// TestAdmit_LabelSelector_PodLabelsDontMatch_Skipped verifies the webhook
-// honours Policy.Spec.Selector.LabelSelector: a pod whose labels do not match
-// is admitted without mutation.
 func TestAdmit_LabelSelector_PodLabelsDontMatch_Skipped(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{
@@ -1053,8 +1001,6 @@ func TestAdmit_LabelSelector_PodLabelsDontMatch_Skipped(t *testing.T) {
 	}
 }
 
-// TestAdmit_LabelSelector_PodLabelsMatch_Injected verifies the positive case:
-// a pod whose labels match the selector IS mutated.
 func TestAdmit_LabelSelector_PodLabelsMatch_Injected(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{
@@ -1078,8 +1024,7 @@ func TestAdmit_LabelSelector_PodLabelsMatch_Injected(t *testing.T) {
 	}
 }
 
-// TestAdmit_InvalidLabelSelector_FailsOpen verifies the webhook fails open on
-// malformed selectors — the pod is admitted without mutation, never denied.
+// A malformed selector fails open: the pod is admitted unmutated, never denied.
 func TestAdmit_InvalidLabelSelector_FailsOpen(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{
@@ -1102,9 +1047,7 @@ func TestAdmit_InvalidLabelSelector_FailsOpen(t *testing.T) {
 	}
 }
 
-// TestAdmit_NamespaceLevelOptIn_Injects verifies the full admission path for a
-// pod whose only opt-in is on its Namespace: the webhook must resolve it, find
-// the cached WorkloadRecommendation, and patch the pod.
+// The full admission path for a pod whose only opt-in is on its Namespace.
 func TestAdmit_NamespaceLevelOptIn_Injects(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:        "team-a",
@@ -1130,8 +1073,8 @@ func TestAdmit_NamespaceLevelOptIn_Injects(t *testing.T) {
 	}
 }
 
-// TestAdmit_WorkloadOptOutBeatsNamespaceOptIn verifies the escape hatch end to
-// end: the namespace opts everything in, the Deployment opts back out, no patch.
+// The escape hatch end to end: the namespace opts everything in, the Deployment
+// opts back out, no patch.
 func TestAdmit_WorkloadOptOutBeatsNamespaceOptIn(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:        "team-a",
@@ -1160,16 +1103,9 @@ func TestAdmit_WorkloadOptOutBeatsNamespaceOptIn(t *testing.T) {
 	}
 }
 
-// TestAdmit_PodLevelOptOutBeatsNamespaceOptIn verifies the escape hatch at
-// the MOST specific level end to end: a pod carrying its own opt-out
-// annotation is admitted without a resource patch even though its Namespace
-// opts everything in. This is a distinct path from
-// TestAdmit_WorkloadOptOutBeatsNamespaceOptIn (the workload-level opt-out):
-// a pod-level opt-out is caught by admit() itself, directly off
-// pod.Annotations, before resolveOptIn (and therefore before any owner or
-// Namespace read) is ever reached — see the comment on that early return in
-// handler.go. Only the workload-level opt-out was covered end to end before
-// this test.
+// The escape hatch at the most specific level, a distinct path from the
+// workload-level opt-out: admit() catches this one directly off pod.Annotations,
+// before resolveOptIn and therefore before any owner or Namespace read.
 func TestAdmit_PodLevelOptOutBeatsNamespaceOptIn(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:        "team-a",
@@ -1196,8 +1132,7 @@ func TestAdmit_PodLevelOptOutBeatsNamespaceOptIn(t *testing.T) {
 	}
 }
 
-// TestAdmit_OwnerGetFailure_FailsOpen verifies the new lookup keeps the
-// webhook's fail-open contract: a broken read admits the pod unmutated.
+// A broken owner read must still admit the pod unmutated.
 func TestAdmit_OwnerGetFailure_FailsOpen(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:        "team-a",
@@ -1208,11 +1143,9 @@ func TestAdmit_OwnerGetFailure_FailsOpen(t *testing.T) {
 			basicPolicy("p", sustainv1alpha1.UpdateModeOngoing),
 			ns,
 			deploymentReplicaSet("team-a", "web-abc", "web"),
-			// A WLR with data to inject, so the non-error path would produce a
-			// patch: without this, the assertions below would pass whether or
-			// not the injected Deployment-Get error actually fired (the
-			// no-WLR path is ALSO an allow-with-no-patch), and the test would
-			// not discriminate between the two.
+			// Seed injectable data, or the assertions would pass whether or not
+			// the injected Deployment-Get error fired — the no-WLR path is also
+			// an allow-with-no-patch.
 			freshWLR("Deployment", "team-a", "web", map[string]sustainv1alpha1.ContainerRecommendation{
 				"app": wlrRec("100m", "128Mi"),
 			}),
@@ -1237,20 +1170,10 @@ func TestAdmit_OwnerGetFailure_FailsOpen(t *testing.T) {
 	}
 }
 
-// TestAdmit_PodTemplateAnnotated_ConcurrentAdmissionsCollapseToOneReplicaSetGet
-// pins the most valuable of the caching fixes: every EXISTING user annotates
-// the pod template directly (sustainv1alpha1.PolicyAnnotation on the pod
-// itself), so admit() never calls resolveOptIn for them at all — the
-// multi-level opt-in chain (and its caching) is skipped entirely once
-// policyName is already non-empty from the pod's own annotation. That left
-// the pod-template-annotated path — the one every existing user takes —
-// resolving its owner via the uncached workload.ResolvePodOwner, so a
-// rolling restart of a pod-template-annotated Deployment still paid N
-// uncached ReplicaSet Gets on the admission hot path even after
-// resolveOptIn's own walk was cached. admit() must now go through
-// h.resolveCachedPodOwner for this path too, and it must do so without
-// resolving the owner twice or skipping resolution — see the
-// "Already resolved by the multi-level opt-in chain" comment in admit().
+// A pod annotated directly on its template skips resolveOptIn entirely, so it
+// bypasses that path's owner cache. admit() must still route through
+// resolveCachedPodOwner, or a rolling restart pays N uncached ReplicaSet Gets
+// on the admission hot path.
 func TestAdmit_PodTemplateAnnotated_ConcurrentAdmissionsCollapseToOneReplicaSetGet(t *testing.T) {
 	const n = 50
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)

@@ -19,8 +19,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// TestIsOwnedBy_ControllerRefMatch verifies that the ownerRef walk only
-// accepts a controller=true reference matching the given UID.
 func TestIsOwnedBy_ControllerRefMatch(t *testing.T) {
 	uid := types.UID("cj-uid")
 	tests := []struct {
@@ -43,8 +41,6 @@ func TestIsOwnedBy_ControllerRefMatch(t *testing.T) {
 	}
 }
 
-// TestJobIsTerminal_TrueOnCompleteOrFailed verifies that a Job is treated
-// as terminal once it reports a Complete or Failed condition with status=True.
 func TestJobIsTerminal_TrueOnCompleteOrFailed(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -67,9 +63,6 @@ func TestJobIsTerminal_TrueOnCompleteOrFailed(t *testing.T) {
 	}
 }
 
-// TestListActiveJobsForCronJob_FiltersOwnerAndState verifies the listing
-// helper only returns Jobs that (a) are controller-owned by the CronJob and
-// (b) are not in a terminal state.
 func TestListActiveJobsForCronJob_FiltersOwnerAndState(t *testing.T) {
 	cj := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nightly", UID: "cj-uid"},
@@ -109,10 +102,8 @@ func TestListActiveJobsForCronJob_FiltersOwnerAndState(t *testing.T) {
 	}
 }
 
-// TestListPodsForJob_LabelSelector verifies the canonical
-// batch.kubernetes.io/job-name label is used to enumerate a Job's pods, and
-// that label-matching pods without a controller ownerRef to the Job (e.g. a
-// bare pod carrying a forged label) are filtered out.
+// A label-matching pod without a controller ownerRef to the Job (e.g. a bare
+// pod carrying a forged label) must be filtered out.
 func TestListPodsForJob_LabelSelector(t *testing.T) {
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "j1", UID: "j1-uid"}}
 	matching := &corev1.Pod{
@@ -150,10 +141,8 @@ func TestListPodsForJob_LabelSelector(t *testing.T) {
 	}
 }
 
-// TestResizeCronJobPods_NeverPatchesCronJob verifies that the reconcile path
-// for CronJob targets does not mutate the CronJob spec — the CPU/memory
-// requests on the JobTemplate must be untouched after the reconcile call.
-// In-place pod resize handles the running pods; the webhook handles new runs.
+// The CronJob spec must be untouched after reconcile: in-place pod resize
+// handles the running pods, the webhook handles new runs.
 func TestResizeCronJobPods_NeverPatchesCronJob(t *testing.T) {
 	cj := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nightly", UID: "cj-uid"},
@@ -256,10 +245,8 @@ func TestResizeCronJobPods_NeverPatchesCronJob(t *testing.T) {
 	}
 }
 
-// TestResizeCronJobPods_ReturnsZeroWhenNothingResized verifies the resized
-// count is 0 when there are no active jobs or when in-place resize is
-// unsupported — the caller relies on this to suppress the misleading
-// ResourcesUpdated event (the JobTemplate is never mutated).
+// The caller relies on a zero count to suppress the misleading ResourcesUpdated
+// event, since the JobTemplate is never mutated.
 func TestResizeCronJobPods_ReturnsZeroWhenNothingResized(t *testing.T) {
 	cj := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nightly", UID: "cj-uid"},
@@ -311,10 +298,8 @@ func TestResizeCronJobPods_ReturnsZeroWhenNothingResized(t *testing.T) {
 	}
 }
 
-// TestResizeCronJobPods_PerPodInvalidNotCounted verifies that a Running pod
-// whose /resize was rejected as Invalid (per-pod validation failure, e.g. a
-// QoS class change) is not counted as resized — otherwise the caller emits a
-// ResourcesUpdated event for a resize that never happened.
+// A /resize rejected as Invalid (e.g. a QoS class change) must not be counted,
+// or the caller emits a ResourcesUpdated event for a resize that never happened.
 func TestResizeCronJobPods_PerPodInvalidNotCounted(t *testing.T) {
 	cj := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nightly", UID: "cj-uid"},

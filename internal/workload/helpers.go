@@ -2,15 +2,10 @@ package workload
 
 import corev1 "k8s.io/api/core/v1"
 
-// MergeContainersForRecommendation returns the slice of containers that
-// should feed into the recommendation pipeline plus the set of names that
-// originate from initContainers. When excludeInit is true (or the workload
-// has no init containers), the init list is dropped and the returned set is
-// empty.
-//
-// Both the controller's workloadTarget and the admission webhook need this
-// same merge to drive Prometheus queries against every container they may
-// patch.
+// MergeContainersForRecommendation returns the containers that feed the
+// recommendation pipeline plus the set of names originating from
+// initContainers. Shared by the controller and the webhook so both drive
+// queries against every container they may patch.
 func MergeContainersForRecommendation(containers, initContainers []corev1.Container, excludeInit bool) ([]corev1.Container, map[string]struct{}) {
 	if excludeInit || len(initContainers) == 0 {
 		return containers, nil

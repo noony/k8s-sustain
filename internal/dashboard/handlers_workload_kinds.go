@@ -24,14 +24,9 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// supportedWorkloadKinds is the canonical ordering used by responses that
-// iterate over every workload kind the dashboard recognises. "Pod" identifies
-// bare-pod identities formed via api/v1alpha1.OwnerNameAnnotation — see
-// workload.GroupBarePods.
+// supportedWorkloadKinds is the canonical kind ordering; "Pod" means bare-pod
+// identities formed via the owner-name annotation.
 var supportedWorkloadKinds = []string{"Deployment", "StatefulSet", "DaemonSet", "Rollout", "CronJob", "Job", "Pod"}
-
-// containerStatus and coordinationFactors are referenced by multiple handler
-// files; their definitions are kept here as the workload-shaped shared types.
 
 type containerStatus struct {
 	Name          string `json:"name"`
@@ -49,100 +44,33 @@ type coordinationFactors struct {
 	CPUReplica     float64 `json:"cpuReplica,omitempty"`
 }
 
-// workloadEntry is the kind-agnostic view of a workload object: just the
-// identity and the pod template that owns its resource decisions. Handlers
-// consume it instead of branching on the concrete Kubernetes type.
-//
-// Name is the resolved identity (the k8s.sustain.io/owner-name override
-// value when the pod template carries a valid one, otherwise the object's
-// real Kubernetes name) — see groupEntriesByIdentity. This is deliberate:
-// Prometheus and the WorkloadRecommendation are keyed by the same resolved
-// identity (internal/workload.ApplyOwnerNameOverride), so addressing,
-// listing, and signal lookups all need to agree on it, not the real object
-// name, or recommendations/risk/drift would silently fail to match for any
-// overridden workload.
+// workloadEntry is the kind-agnostic view of a workload: identity plus pod
+// template. Name is the resolved identity (owner-name override when present),
+// which is also what Prometheus and WorkloadRecommendation are keyed by.
 type workloadEntry struct {
 	Namespace string
 	Name      string
 	Template  *corev1.PodTemplateSpec
-	// ObjectAnnotations is the workload object's own metadata.annotations and
-	// NamespaceAnnotations its Namespace's — the two opt-in levels that are not
-	// on the pod template. Resolved into the entry at construction so
-	// ResolvedPolicy stays a pure accessor and every call site keeps working
-	// without threading I/O through it.
+	// ObjectAnnotations and NamespaceAnnotations are the opt-in levels that
+	// are not on the pod template.
 	ObjectAnnotations    map[string]string
 	NamespaceAnnotations map[string]string
-	// ObjectLabels is the workload object's own metadata.labels — what
-	// policymatch.Matches evaluates a Policy's LabelSelector against. Needed
-	// alongside ResolvedPolicy because opting in (ResolvePolicy) and matching
-	// (policymatch.Matches) are two different questions: a workload can name a
-	// Policy whose selector does not reach it, and callers that only check
-	// ResolvedPolicy() == policyName render it as managed anyway. See
-	// listPolicyWorkloadRows, collectPolicyWorkloads and collectAllWorkloads,
-	// which all gate on both.
+	// ObjectLabels is what the Policy's LabelSelector is matched against.
 	ObjectLabels map[string]string
-	// Members carries, in fold order, the per-object opt-in and label data
-	// for every REAL object folded into this identity by
-	// groupEntriesByIdentity (see its doc): the representative first (mirror
-	// of the fields above — TemplateAnnotations/ObjectAnnotations/Labels for
-	// the same object this entry already carries on its own fields), then
-	// each grouped sibling. entryMatchesPolicy walks Members and, for EACH
-	// member, resolves that SAME member's own opted-in policy
-	// (policymatch.ResolvePolicy) and checks the Policy's LabelSelector
-	// against that SAME member's own labels (policymatch.Matches) — it never
-	// mixes one member's opt-in with a different member's labels. That
-	// mixing was the bug this field replaced AllObjectLabels to fix: pairing
-	// the representative's opt-in with a sibling's labels (or vice versa)
-	// let a Policy manage an identity via two different real objects when no
-	// single real object satisfied both halves — stricter or looser than the
-	// controller's filterTargets, which evaluates every real object
-	// independently, depending on which half came loose.
-	//
-	// NamespaceAnnotations is deliberately not part of identityMember:
-	// grouping is scoped per namespace (workloadKey embeds e.Namespace, see
-	// groupEntriesByIdentity), so every member folded into one identity
-	// shares this entry's own Namespace and NamespaceAnnotations too — there
-	// is exactly one namespace-level opt-in per identity, not one per
-	// member.
-	//
-	// nil for the overwhelming majority of entries — anything that never went
-	// through grouping (kind "Pod") or whose identity had exactly one real
-	// object behind it — in which case entryMatchesPolicy evaluates this
-	// entry's own Template/ObjectAnnotations/ObjectLabels directly instead of
-	// allocating a length-1 slice, identical to before this field existed.
+	// Members holds the opt-in and label data of every real object folded
+	// into this identity, representative first; nil when a single object backs
+	// it. entryMatchesPolicy evaluates opt-in and selector on the same member.
 	Members   []identityMember
 	OwnerRefs []metav1.OwnerReference
-	// CreationTimestamp is read by groupEntriesByIdentity to pick the most
-	// recently created object as the representative when multiple real
-	// objects share one overridden identity. Unused once grouping is done.
+	// CreationTimestamp picks the representative in groupEntriesByIdentity.
 	CreationTimestamp time.Time
-	// FromRetainedWLR marks an entry synthesized by inactiveWorkloadEntry from
-	// a retained WorkloadRecommendation rather than a live object. Namespace
-	// IS populated on such an entry (inactiveWorkloadEntry sets it from the
-	// lookup's own namespace argument) and safe to gate on. OwnerRefs is
-	// empty — a WLR carries no owner snapshot — but nothing reads it for
-	// these entries. ObjectLabels is the field genuinely unavailable: a WLR
-	// carries no label snapshot either (see inactiveWorkloadEntry), so
-	// evaluating the Policy's LabelSelector against it would test an empty
-	// label set and reject workloads it should not — the WLR's Spec.Policy is
-	// itself the controller's last verdict that this workload matched. See
-	// entryMatchesPolicy: callers must skip only the label half of
-	// policymatch.Matches when this is set, while still evaluating the
-	// namespace half (--excluded-namespaces, Policy.Spec.Selector.Namespaces)
-	// against entry.Namespace, which is checkable and there is no reason to
-	// skip.
+	// FromRetainedWLR marks an entry synthesized from a retained
+	// WorkloadRecommendation. It carries no labels, so only the namespace half
+	// of the selector is checked for it.
 	FromRetainedWLR bool
 }
 
-// identityMember is one real object folded into a workloadEntry's identity by
-// groupEntriesByIdentity — see workloadEntry.Members' doc for how the gate
-// consumes them.
-//
-// The three fields travel together as one struct rather than as separate
-// per-field slices because the gate's whole point is that opt-in and selector
-// match are evaluated against the SAME object: parallel slices would let an
-// index mismatch silently pair one object's annotations with another's labels,
-// which is precisely the bug this type was introduced to fix.
+// identityMember is one real object folded into a workloadEntry identity.
 type identityMember struct {
 	TemplateAnnotations map[string]string
 	ObjectAnnotations   map[string]string
@@ -150,34 +78,9 @@ type identityMember struct {
 }
 
 // entryMatchesPolicy reports whether policy manages entry: some real object
-// behind the identity both opts into policy (policymatch.ResolvePolicy
-// resolves to policy.Name) AND satisfies policy's own selector
-// (policymatch.Matches) — evaluated on that SAME object. Opting in and
-// matching are two different questions (a workload can name a Policy whose
-// selector does not reach it), and for a grouped identity they must be asked
-// of one object at a time: pairing one member's opt-in with a different
-// member's labels is exactly the bug this function used to have — see
-// workloadEntry.Members' doc.
-//
-// For an entry synthesized from a retained WorkloadRecommendation
-// (workloadEntry.FromRetainedWLR — see its doc for why), no member data is
-// available (a WLR snapshot carries no label/annotation history), so only
-// the two namespace-based checks are evaluated: the label check is skipped
-// by passing a nil selector to policymatch.MatchesSelector, which treats nil
-// as "match all labels" (see its doc) — not by skipping the gate entirely,
-// which would also stop honouring --excluded-namespaces and
-// Policy.Spec.Selector.Namespaces for these entries even though
-// entry.Namespace is available and checkable. The WLR's own Spec.Policy IS
-// the controller's last verdict that this workload matched the Policy's
-// LabelSelector before it departed.
-//
-// For an ordinary (live-object) entry, entry.Members holds one member per
-// real object when grouping folded more than one into this identity (see
-// groupEntriesByIdentity's doc); when it is nil (the overwhelming majority
-// of entries: kind "Pod", or any identity backed by exactly one real
-// object), this evaluates entry's own ResolvedPolicy()/ObjectLabels
-// directly instead of allocating a length-1 Members slice, identical in
-// behaviour and allocation profile to before this field existed.
+// behind the identity both opts into policy and satisfies its selector, with
+// both halves evaluated on the same member. A retained-WLR entry has no
+// labels, so only the namespace checks run for it.
 func entryMatchesPolicy(policy *sustainv1alpha1.Policy, entry workloadEntry, excludedNamespaces []string) bool {
 	if entry.FromRetainedWLR {
 		return entry.ResolvedPolicy() == policy.Name &&
@@ -199,9 +102,8 @@ func entryMatchesPolicy(policy *sustainv1alpha1.Policy, entry workloadEntry, exc
 	return false
 }
 
-// ResolvedPolicy returns the Policy this workload opts into, walking all three
-// annotation levels. Named for what it answers rather than for where it reads
-// from, because it is no longer a single annotation lookup.
+// ResolvedPolicy returns the Policy this workload opts into, across all three
+// annotation levels.
 func (e workloadEntry) ResolvedPolicy() string {
 	var template map[string]string
 	if e.Template != nil {
@@ -225,25 +127,10 @@ func (e workloadEntry) InitContainers() []corev1.Container {
 	return e.Template.Spec.InitContainers
 }
 
-// listWorkloadsOfKind lists every workload of the given kind, returning
-// kind-agnostic entries. For "Job" it skips Jobs spawned by a CronJob — those
-// appear under their owning CronJob row, and metrics attribute their pods to
-// owner_kind=CronJob.
-//
-// Every kind except "Pod" goes through groupEntriesByIdentity: real objects
-// whose pod template carries a k8s.sustain.io/owner-name override collapse
-// onto one entry named by the override (see workloadEntry.Name), matching
-// what Prometheus/WorkloadRecommendation already key by. "Pod" doesn't need
-// the extra pass — workload.GroupBarePods already produces final identities.
-//
-// nsAnnotations supplies the namespace-level policy opt-in for every entry
-// this call produces; it is not fetched here. A caller that loops over
-// supportedWorkloadKinds (up to seven kinds) must call
-// (*Server).namespaceAnnotations once before the loop and pass the same map
-// into every listWorkloadsOfKind call, or the one cluster-wide Namespace List
-// that call is meant to be becomes one List per kind per request. See
-// namespaceAnnotations' doc for why that matters against the dashboard's
-// uncached client.
+// listWorkloadsOfKind lists every workload of kind as kind-agnostic entries.
+// CronJob-owned Jobs are skipped; they appear under their CronJob. Callers
+// looping over kinds must fetch nsAnnotations once and pass the same map in,
+// or the cluster-wide Namespace List runs once per kind.
 func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, nsAnnotations map[string]map[string]string, opts ...client.ListOption) ([]workloadEntry, error) {
 	switch kind {
 	case "Deployment":
@@ -391,44 +278,14 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, nsAnnotat
 	}
 }
 
-// groupEntriesByIdentity collapses entries whose pod template carries the
-// same k8s.sustain.io/owner-name override onto one entry, keeping the most
-// recently created one as the representative (its Template/OwnerRefs are
-// what gets displayed) and renaming it to the resolved identity. Entries
-// without a valid override pass through unchanged — their own name is
-// already their identity. kind is the real declared kind (e.g. "Deployment"),
-// passed to workload.ApplyOwnerNameOverride; since it's never empty here, the
-// override never changes kind, only name.
-//
-// Grouping is scoped per namespace (via workloadKey) so identically-named or
-// identically-overridden workloads in different namespaces never collapse
-// onto each other — only entries within the same namespace can share an
-// identity.
-//
-// Order of the returned slice follows first-seen identity, for stable
-// pagination across calls against an unchanged object set.
-//
-// Every real object folded into an identity has its own opt-in/label data
-// recorded on the surviving entry's Members (see workloadEntry's doc on that
-// field), not just the representative's — so a caller gating on both halves
-// of the Policy consent (entryMatchesPolicy) can consider every real object
-// the controller would, not just whichever one this function chose to
-// display. Members is built in fold order — the final representative first,
-// then every other real object in the order this loop processed them (a
-// later object that outranks the current representative on
-// CreationTimestamp bumps the previous representative into that same fold
-// order, it does not reorder anything already folded in) — because
-// resolveManagingPolicy takes the FIRST member that satisfies a Policy, so
-// that order is what decides the identity's displayed policy when more than
-// one member's opt-in would otherwise qualify. (entryMatchesPolicy only ever
-// answers yes/no for one Policy, so member order cannot change its result.)
-// Allocation-sane: an identity backed by exactly one real object — the
-// overwhelming majority — never allocates the extra slice at all.
+// groupEntriesByIdentity collapses entries sharing an owner-name override onto
+// one entry per namespace, keeping the most recently created object as the
+// representative. Members is built in fold order, representative first;
+// resolveManagingPolicy takes the first matching member, so that order
+// decides the displayed policy.
 func groupEntriesByIdentity(entries []workloadEntry, kind string) []workloadEntry {
 	type accum struct {
-		rep workloadEntry
-		// extra holds every other real object folded into this identity, in
-		// fold order — nil until a second real object folds in.
+		rep   workloadEntry
 		extra []identityMember
 	}
 	best := make(map[string]accum, len(entries))
@@ -447,15 +304,7 @@ func groupEntriesByIdentity(entries []workloadEntry, kind string) []workloadEntr
 			order = append(order, key)
 			continue
 		}
-		// A second (or later) real object shares this identity. Its own
-		// opt-in/label data must be considered by entryMatchesPolicy
-		// regardless of which object ends up as the representative — only
-		// the representative's Template/OwnerRefs/etc. are ever displayed,
-		// but every real object's own opt-in and labels are what the
-		// controller actually gates on.
 		if e.CreationTimestamp.After(a.rep.CreationTimestamp) {
-			// e becomes the new representative; the previous one folds into
-			// extra instead.
 			old := a.rep
 			e.Name = identity
 			a.extra = append(a.extra, memberOf(old))
@@ -463,8 +312,7 @@ func groupEntriesByIdentity(entries []workloadEntry, kind string) []workloadEntr
 		} else {
 			a.extra = append(a.extra, memberOf(e))
 		}
-		// accum is stored by value, so the mutated local must be written back
-		// — indexing the map above returned a copy, not a pointer into it.
+		// accum is stored by value; write the mutated copy back.
 		best[key] = a
 	}
 	out := make([]workloadEntry, 0, len(order))
@@ -479,8 +327,7 @@ func groupEntriesByIdentity(entries []workloadEntry, kind string) []workloadEntr
 	return out
 }
 
-// memberOf snapshots e's own opt-in/label data as an identityMember, for
-// groupEntriesByIdentity to record onto a surviving entry's Members.
+// memberOf snapshots e's opt-in and label data as an identityMember.
 func memberOf(e workloadEntry) identityMember {
 	var template map[string]string
 	if e.Template != nil {
@@ -493,13 +340,8 @@ func memberOf(e workloadEntry) identityMember {
 	}
 }
 
-// barePodGroupTemplate synthesizes the PodTemplateSpec workloadEntry expects
-// for a bare-pod group: containers/init-containers come from the group's
-// representative pod (the most recently created one), and annotations/labels
-// (read by workloadEntry.ResolvedPolicy and the policy-selector label match)
-// come from the same pod. There is no real pod template for a bare pod — this
-// exists purely so "Pod" can reuse workloadEntry's existing accessors instead
-// of every caller branching on kind.
+// barePodGroupTemplate synthesizes a PodTemplateSpec for a bare-pod group so
+// "Pod" can reuse workloadEntry's accessors.
 func barePodGroupTemplate(g workload.BarePodGroup) *corev1.PodTemplateSpec {
 	tmpl := &corev1.PodTemplateSpec{
 		Spec: corev1.PodSpec{Containers: g.Containers, InitContainers: g.InitContainers},
@@ -511,39 +353,17 @@ func barePodGroupTemplate(g workload.BarePodGroup) *corev1.PodTemplateSpec {
 	return tmpl
 }
 
-// getWorkloadEntry fetches a single workload by its resolved identity name
-// and returns it as a workloadEntry. Used wherever a handler needs the pod
-// template, container list, or policy annotation for one specific entry.
-//
-// This cannot be a direct client.Get by name: when a pod template carries a
-// k8s.sustain.io/owner-name override, `name` is the override value, not any
-// real object's Kubernetes name (there may be no object actually named
-// that — e.g. two real Deployments grouped under one shared identity). So
-// this lists every object of kind in the namespace (via listWorkloadsOfKind,
-// which already applies the same override resolution) and finds the entry
-// whose resolved Name matches.
-//
-// This is a single-kind, single-namespace lookup, not a loop over
-// supportedWorkloadKinds, so it fetches its own namespace annotations rather
-// than requiring a caller-supplied map — that keeps it exactly one Namespace
-// List, same as before this parameter existed.
+// getWorkloadEntry fetches one workload by resolved identity. It cannot be a
+// client.Get: with an owner-name override, name may not be any real object's
+// name, so it lists the kind in the namespace and matches on resolved Name.
 func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name string) (workloadEntry, error) {
-	// kind is an unvalidated route param (see server.go's route registrations)
-	// reaching all the way down from a request URL, so reject it before the
-	// Namespace List below: an unsupported kind can never match a real
-	// workload, and without this guard GET /api/workloads/x/BogusKind/y paid
-	// for a full cluster-wide Namespace List against the dashboard's uncached
-	// client before listWorkloadsOfKind's kind switch finally rejected it.
-	// handlers_simulate.go validates ownerKind the same way, off the same
-	// supportedWorkloadKinds table.
+	// Reject unsupported kinds before paying for the Namespace List below.
 	if !slices.Contains(supportedWorkloadKinds, kind) {
 		return workloadEntry{}, apierrors.NewNotFound(groupResourceForKind(kind), name)
 	}
 	nsAnnotations, err := s.namespaceAnnotations(ctx)
 	if err != nil {
-		// Degrade to pod-template and workload-level opt-in rather than failing
-		// the lookup: a namespace read failure must not break workload detail
-		// pages.
+		// A namespace read failure must not break detail pages.
 		s.Logger.Error(err, "failed to list namespaces; namespace-level policy opt-in will not be resolved")
 		nsAnnotations = nil
 	}
@@ -562,9 +382,8 @@ func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name str
 	return workloadEntry{}, apierrors.NewNotFound(groupResourceForKind(kind), name)
 }
 
-// groupResourceForKind maps a dashboard workload kind to the GroupResource
-// used to build a NotFound error, since getWorkloadEntry no longer performs
-// a typed client.Get that would otherwise supply one automatically.
+// groupResourceForKind maps a workload kind to the GroupResource used in
+// NotFound errors.
 func groupResourceForKind(kind string) schema.GroupResource {
 	switch kind {
 	case "Deployment":
@@ -585,11 +404,7 @@ func groupResourceForKind(kind string) schema.GroupResource {
 }
 
 // inactiveWorkloadEntry reconstructs a workloadEntry from a retained
-// WorkloadRecommendation so detail endpoints keep working for inactive
-// workloads the list links to. The synthesized template carries the policy
-// annotation and the observed container resources; the Prometheus-driven
-// panels (metrics, recommendations) work off identity and history, which
-// both outlive the object. ok is false when no matching WLR exists.
+// WorkloadRecommendation so detail endpoints work for inactive workloads.
 func (s *Server) inactiveWorkloadEntry(ctx context.Context, namespace, kind, name string) (workloadEntry, bool) {
 	var list sustainv1alpha1.WorkloadRecommendationList
 	if err := s.K8sClient.List(ctx, &list, client.InNamespace(namespace)); err != nil {
@@ -628,7 +443,6 @@ func (s *Server) inactiveWorkloadEntry(ctx context.Context, namespace, kind, nam
 	return workloadEntry{}, false
 }
 
-// requirementsFromObserved rebuilds ResourceRequirements from the snapshot.
 func requirementsFromObserved(res sustainv1alpha1.ObservedContainerResources) corev1.ResourceRequirements {
 	out := corev1.ResourceRequirements{}
 	set := func(dst *corev1.ResourceList, name corev1.ResourceName, q *resource.Quantity) {
@@ -647,9 +461,8 @@ func requirementsFromObserved(res sustainv1alpha1.ObservedContainerResources) co
 	return out
 }
 
-// workloadKey assembles the "namespace|kind|name" key used to address a
-// workload in Prometheus signal maps. Identically-named workloads in different
-// namespaces stay distinct.
+// workloadKey builds the "namespace|kind|name" key used for Prometheus signal
+// maps.
 func workloadKey(namespace, kind, name string) string {
 	return namespace + "|" + kind + "|" + name
 }
@@ -694,9 +507,8 @@ func resourceStrings(c corev1.Container) (cpuReq, cpuLim, memReq, memLim string)
 	return
 }
 
-// containerStatuses concatenates regular and init container statuses for a
-// pod template. Container names are unique across both lists in Kubernetes,
-// so callers can safely key the result by name.
+// containerStatuses concatenates regular and init container statuses; names
+// are unique across both lists.
 func containerStatuses(containers, initContainers []corev1.Container) []containerStatus {
 	out := make([]containerStatus, 0, len(containers)+len(initContainers))
 	for _, c := range containers {
@@ -720,9 +532,8 @@ func containerStatusFor(c corev1.Container, isInit bool) containerStatus {
 	}
 }
 
-// workloadSignals holds the Prometheus-derived per-workload state that
-// dashboard responses overlay onto their list rows (risk badge, drift,
-// autoscaler presence, and coordination factors).
+// workloadSignals is the Prometheus-derived per-workload state overlaid onto
+// list rows.
 type workloadSignals struct {
 	RiskState           string
 	DriftPercent        float64
@@ -730,28 +541,18 @@ type workloadSignals struct {
 	CoordinationFactors *coordinationFactors
 }
 
-// fetchWorkloadSignals batches the five signal queries (oom, drift, blocked,
-// autoscaler, coordination factors) for every workload at once, then indexes
-// the results per row in memory. Returns a map keyed by
-// workloadKey(namespace, kind, name) covering every requested key. The
-// coordination-factor query is grouped by namespace/owner_kind/owner_name plus
-// resource/kind so a single round-trip covers all rows; only rows with an
-// autoscaler present get factors, matching the prior per-row condition.
+// fetchWorkloadSignals batches the signal queries for every workload at once
+// and returns a map keyed by workloadKey covering every requested key.
 func (s *Server) fetchWorkloadSignals(ctx context.Context, keys []string) map[string]workloadSignals {
 	if len(keys) == 0 {
 		return nil
 	}
-	// The OOM rule is per-container; re-aggregate to workload level so one
-	// series per workload reaches the keyed map (otherwise a 0-count sibling
-	// container could overwrite an OOMed one).
+	// The OOM rule is per-container; re-aggregate so a 0-count sibling container
+	// cannot overwrite an OOMed one.
 	oom, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("sum by (namespace, owner_kind, owner_name) (%s)", promclient.MetricWorkloadOOM24h), "namespace", "owner_kind", "owner_name")
 	drift, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("max by (namespace, owner_kind, owner_name) (abs(1 - %s))", promclient.MetricWorkloadDriftRatio), "namespace", "owner_kind", "owner_name")
 	blocked, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricWorkloadRetryState+" == 1", "namespace", "owner_kind", "owner_name")
 	autoscaler, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricAutoscalerPresent, "namespace", "owner_kind", "owner_name")
-	// Single batched coordination-factor query for every workload. Keyed by
-	// namespace|owner_kind|owner_name|resource|kind; the per-workload prefix
-	// (first three labels) matches workloadKey, and the resource|kind suffix
-	// selects which factor field each series fills.
 	coord, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricCoordinationFactor, "namespace", "owner_kind", "owner_name", "resource", "kind")
 
 	out := make(map[string]workloadSignals, len(keys))
@@ -778,12 +579,8 @@ func (s *Server) fetchWorkloadSignals(ctx context.Context, keys []string) map[st
 	return out
 }
 
-// coordinationFactorsFor extracts one workload's coordination factors from the
-// batched coordination-factor map (keyed namespace|owner_kind|owner_name|
-// resource|kind). prefix is the workloadKey (namespace|kind|name); since the
-// metric's owner_kind/owner_name correspond to kind/name, the series keys share
-// that three-component prefix followed by |resource|kind. Returns nil when no
-// series exist for this workload, matching fetchCoordinationFactors.
+// coordinationFactorsFor extracts one workload's factors from the batched
+// map; nil when none exist.
 func coordinationFactorsFor(coord map[string]float64, prefix string) *coordinationFactors {
 	byLabels := map[string]float64{}
 	for _, suffix := range []string{"cpu|overhead", "memory|overhead", "cpu|replica"} {
@@ -797,10 +594,8 @@ func coordinationFactorsFor(coord map[string]float64, prefix string) *coordinati
 	return assembleCoordinationFactors(byLabels)
 }
 
-// assembleCoordinationFactors maps a {resource|kind: value} series map (e.g.
-// "cpu|overhead", "memory|overhead", "cpu|replica") onto a coordinationFactors
-// payload. Unknown keys are ignored; missing keys leave their field at zero.
-// Callers are responsible for the nil-vs-non-nil decision before calling.
+// assembleCoordinationFactors maps {resource|kind: value} series onto a
+// coordinationFactors payload.
 func assembleCoordinationFactors(byLabels map[string]float64) *coordinationFactors {
 	out := &coordinationFactors{Enabled: true}
 	for k, v := range byLabels {
@@ -816,11 +611,8 @@ func assembleCoordinationFactors(byLabels map[string]float64) *coordinationFacto
 	return out
 }
 
-// fetchCoordinationFactors queries `k8s_sustain_coordination_factor` for one
-// workload and assembles a coordinationFactors payload describing the per-
-// resource overhead and replica correction factors the controller applied
-// (the webhook applies overhead only and emits no factor metrics). Returns
-// nil when no series exist for this workload.
+// fetchCoordinationFactors queries the coordination factors for one workload;
+// nil when none exist.
 func (s *Server) fetchCoordinationFactors(ctx context.Context, namespace, kind, name string) *coordinationFactors {
 	expr := fmt.Sprintf(
 		`%s{namespace=%q,owner_kind=%q,owner_name=%q}`,
@@ -833,14 +625,11 @@ func (s *Server) fetchCoordinationFactors(ctx context.Context, namespace, kind, 
 	return assembleCoordinationFactors(byLabels)
 }
 
-// kindEnabledInPolicy reports whether a policy opts in to the given workload
-// kind via its RightSizing.Update.Types map.
 func kindEnabledInPolicy(p *sustainv1alpha1.Policy, kind string) bool {
 	return p.Spec.RightSizing.Update.Types.ModeForKind(kind) != nil
 }
 
-// updateModeForKind returns the policy's per-kind update mode pointer, or nil
-// if the policy doesn't opt this kind in.
+// updateModeForKind returns the policy's per-kind update mode, or nil.
 func updateModeForKind(p *sustainv1alpha1.Policy, kind string) *sustainv1alpha1.UpdateMode {
 	return p.Spec.RightSizing.Update.Types.ModeForKind(kind)
 }

@@ -33,10 +33,8 @@ import (
 //   - status shape (Containers map, ObservedAt, Source)
 //   - staleness threshold (DefaultCacheStaleness)
 //
-// The controller writes via upsertWorkloadRecommendation. The webhook reads
-// via its real ServeHTTP entry point — this is the webhook's only
-// recommendation source, so this test exercises the primary path, not an
-// emergency fallback.
+// The webhook reads via its real ServeHTTP entry point — the WLR is its only
+// recommendation source, so this is the primary path, not a fallback.
 func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {
@@ -71,8 +69,7 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 		WithObjects(policy, rs).
 		Build()
 
-	// Controller side: write the cached recommendation that the webhook will
-	// consume. Mirrors what reconcileWorkload does after a successful pass.
+	// Mirrors what reconcileWorkload does after a successful pass.
 	r := &PolicyReconciler{Client: c, Scheme: scheme}
 	wantCPU := resource.MustParse("250m")
 	wantMem := resource.MustParse("128Mi")
@@ -95,8 +92,7 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 		t.Errorf("WLR sweep label = %q, want %q", got, policy.Name)
 	}
 
-	// Webhook side: admit() must read the WLR we just wrote and inject from
-	// it — the webhook has no Prometheus client at all to fall back from.
+	// The webhook has no Prometheus client at all to fall back from.
 	h := &whhandler.Handler{Client: c}
 
 	pod := &corev1.Pod{
@@ -135,10 +131,8 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 	}
 }
 
-// TestIntegration_StaleCache_WebhookFallsOpen verifies that a WLR older than
-// the webhook's staleness threshold is ignored — no patch is emitted, and the
-// pod is allowed through with template resources. This is the webhook's only
-// defense against injecting from a controller that has stopped reconciling.
+// Staleness is the webhook's only defense against injecting from a controller
+// that has stopped reconciling: an over-age WLR must yield no patch at all.
 func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {

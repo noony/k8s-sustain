@@ -17,10 +17,8 @@ import (
 // and killing it would discard in-flight work. CronJob-owned Jobs are handled
 // by resizeCronJobPods; the listing path already excludes them here.
 //
-// Returns the number of pods whose resize the API server actually accepted, so
-// the caller can suppress the ResourcesUpdated event when nothing was touched
-// (terminal job, no running pods, in-place unsupported, or every resize
-// rejected/skipped).
+// Returns the number of pods the API server actually resized, so the caller can
+// suppress the ResourcesUpdated event when nothing was touched.
 func (r *PolicyReconciler) resizeJobPods(ctx context.Context, t *workloadTarget, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance, observe func(resource string)) (int, error) {
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 

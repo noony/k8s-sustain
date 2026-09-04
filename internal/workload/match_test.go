@@ -267,11 +267,8 @@ func TestClampRecsToTolerance(t *testing.T) {
 	})
 }
 
-// TestChangedContainers-style coverage for a missing container is exercised in
-// the controller package; ContainerMatches itself only sees a container that
-// exists, so "missing container" is handled by the caller mapping. We assert
-// here that a container with a recommendation it does not satisfy is reported
-// as a mismatch, mirroring the missing-vs-present distinction.
+// ContainerMatches only ever sees a container that exists — the missing case is
+// handled by the caller's mapping and covered in the controller package.
 func TestContainerMatches_MissingResourceMapEntries(t *testing.T) {
 	// Current has neither requests nor limits set at all (nil maps).
 	current := corev1.ResourceRequirements{}

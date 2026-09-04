@@ -20,10 +20,6 @@ import (
 // gauge and, when a key file is supplied, hot-reloads the keypair so cert
 // rotation (cert-manager) takes effect without a process restart. The
 // http.Server should plug GetCertificate into its TLSConfig.
-//
-// The gauge name `k8s_sustain_webhook_cert_expiry_seconds` reports the unix
-// timestamp at which the leaf cert expires. Operators alert when
-// (gauge - time()) drops below a threshold.
 type CertExpiry struct {
 	certFile string
 	keyFile  string
@@ -40,11 +36,9 @@ type CertExpiry struct {
 }
 
 // NewCertExpiry returns a CertExpiry watching certFile and registering the
-// gauge with the supplied registerer (use prometheus.DefaultRegisterer to
-// expose via promhttp.Handler). If keyFile is non-empty, Refresh additionally
-// loads the X509 keypair so GetCertificate returns the latest one on each
-// handshake — wire it into http.Server.TLSConfig.GetCertificate to pick up
-// cert-manager rotations without restarting.
+// gauge with registerer. A non-empty keyFile makes Refresh reload the X509
+// keypair too, so GetCertificate serves cert-manager rotations without a
+// restart.
 func NewCertExpiry(certFile, keyFile string, log logr.Logger, registerer prometheus.Registerer) (*CertExpiry, error) {
 	g := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "k8s_sustain_webhook_cert_expiry_seconds",
@@ -68,9 +62,8 @@ func NewCertExpiry(certFile, keyFile string, log logr.Logger, registerer prometh
 }
 
 // Refresh reads the cert (and key, if configured) from disk and updates both
-// the gauge and the cached keypair. Call once at startup and then on a timer.
-// On error, the gauge and the cached cert are left untouched so transient
-// read failures don't reset alerting state or break in-flight handshakes.
+// the gauge and the cached keypair. On error both are left untouched, so a
+// transient read failure resets neither alerting state nor in-flight handshakes.
 func (c *CertExpiry) Refresh() error {
 	exp, err := readCertNotAfter(c.certFile)
 	if err != nil {
@@ -126,10 +119,9 @@ func (c *CertExpiry) ExpiresAt() time.Time {
 	return c.expires
 }
 
-// GetCertificate is suitable for tls.Config.GetCertificate. Returns the most
-// recently loaded keypair. Returns an error if no successful keypair load has
-// happened yet — callers (the http.Server) will fail the handshake, which is
-// the correct behaviour: better than serving an unconfigured cert.
+// GetCertificate is suitable for tls.Config.GetCertificate. It errors until
+// the first successful keypair load, failing the handshake rather than
+// serving an unconfigured cert.
 func (c *CertExpiry) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	cert := c.cert.Load()
 	if cert == nil {

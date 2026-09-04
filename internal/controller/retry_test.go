@@ -129,9 +129,6 @@ func TestIsTransientError(t *testing.T) {
 	}
 }
 
-// Verify unused import guard — net/http is used only to reference http.StatusTooManyRequests
-// in the test table name, but it's actually used in retry.go. The import here is for
-// the apierrors.NewTooManyRequests helper. Keeping the import clean.
 var _ = http.StatusOK
 
 func TestBlockedCountAmong(t *testing.T) {
@@ -150,12 +147,10 @@ func TestBlockedCountAmong(t *testing.T) {
 	}
 }
 
-// TestRetryTracker_RecordFailure_ReturnsResultingState verifies recordFailure
-// hands back the state it just computed under the lock. handleStepError needs
-// the attempt count and next-retry time it produced; reading them back with a
-// second, separate getState call left a window in which a concurrent
-// recordSuccess could delete the entry, so getState returned nil and the
-// caller panicked dereferencing it.
+// recordFailure must hand back the state it computed under the lock: reading it
+// back with a second getState call left a window in which a concurrent
+// recordSuccess deleted the entry, so getState returned nil and the caller
+// panicked dereferencing it.
 func TestRetryTracker_RecordFailure_ReturnsResultingState(t *testing.T) {
 	rt := newRetryTracker()
 	const key = "Deployment/prod/web"
@@ -186,12 +181,10 @@ func TestRetryTracker_RecordFailure_ReturnsResultingState(t *testing.T) {
 	}
 }
 
-// TestRetryTracker_RecordFailure_RacesRecordSuccess drives the exact
-// interleaving that used to panic the operator: the same workload key
-// dispatched to two goroutines (which a duplicated selector namespace made
-// possible), one recording a transient failure while the other records
-// success and deletes the entry. recordFailure must always return usable
-// state; nothing here may nil-deref.
+// Drives the interleaving that used to panic the operator: the same workload key
+// in two goroutines (a duplicated selector namespace made that possible), one
+// recording a failure while the other records success and deletes the entry.
+// recordFailure must always return usable state.
 func TestRetryTracker_RecordFailure_RacesRecordSuccess(t *testing.T) {
 	rt := newRetryTracker()
 	const key = "Deployment/prod/web"

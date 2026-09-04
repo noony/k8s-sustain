@@ -1,4 +1,3 @@
-// src/components/TimeRangePicker.test.ts
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import TimeRangePicker from './TimeRangePicker.vue'
@@ -33,7 +32,6 @@ describe('TimeRangePicker', () => {
     })
     await openCalendar(w)
     expect(w.find('[data-test="cal-month"]').text()).toBe('June 2026')
-    // The seeded range endpoints are marked start/end.
     expect(w.find('[data-test="cal-day-2026-06-10"]').classes()).toContain('is-start')
     expect(w.find('[data-test="cal-day-2026-06-15"]').classes()).toContain('is-end')
   })
@@ -90,10 +88,8 @@ describe('TimeRangePicker', () => {
       })
       await openCalendar(w)
       expect(w.find('[data-test="cal-day-2026-06-21"]').classes()).toContain('is-today')
-      // Today is selectable; tomorrow and beyond are disabled.
       expect(w.find('[data-test="cal-day-2026-06-21"]').attributes('disabled')).toBeUndefined()
       expect(w.find('[data-test="cal-day-2026-06-22"]').attributes('disabled')).toBeDefined()
-      // A future day click is a no-op (button disabled → no selection change).
       await w.find('[data-test="cal-day-2026-06-22"]').trigger('click')
       expect(w.find('[data-test="cal-from-label"]').text()).toBe('2026-06-10')
     } finally {

@@ -89,12 +89,10 @@ func TestNSAnnotations_ForPodsCoversEveryNamespace(t *testing.T) {
 	}
 }
 
-// TestNSAnnotations_NonNotFoundErrorPropagates is the counterpart to
-// TestNSAnnotations_NotFoundIsEmptyNotError: unlike a missing namespace, a
-// genuinely broken read (RBAC gap, apiserver outage) must surface as an
-// error rather than degrade to "no annotations", or collectTargets would
-// silently un-manage every namespace-opted-in workload for as long as the
-// read keeps failing.
+// Counterpart to TestNSAnnotations_NotFoundIsEmptyNotError: a broken read (RBAC
+// gap, apiserver outage) must surface as an error rather than degrade to "no
+// annotations", or collectTargets would silently un-manage every
+// namespace-opted-in workload for as long as the read keeps failing.
 func TestNSAnnotations_NonNotFoundErrorPropagates(t *testing.T) {
 	boom := apierrors.NewInternalError(errors.New("boom"))
 	c := fake.NewClientBuilder().WithScheme(nsScheme(t)).

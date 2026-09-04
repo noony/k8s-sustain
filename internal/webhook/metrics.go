@@ -26,84 +26,47 @@ const (
 	// Handler.requestRecommendation), so a *sustained* missing rate for the
 	// same identity means the controller is not computing it.
 	RecSourceMissing = "missing"
-	// RecSourceNoData means a WorkloadRecommendation exists and was evaluated
-	// but the identity produced nothing recommendable (too young, no metrics,
-	// or the workload object is gone) — the "nodata" state. Distinct from
-	// "missing" because it is NOT a request for work: the object is already in
-	// the controller's work-list and is recomputed every reconcile interval,
-	// so no stub is created on this path. A sustained rate here on a workload
-	// you expect to be sized is the signal that its identity is not
-	// accumulating history — e.g. a Job whose name changes every run.
+	// RecSourceNoData means a WorkloadRecommendation exists but the identity
+	// produced nothing recommendable (too young, no metrics, workload gone).
+	// Distinct from "missing" because no stub is created — the object is
+	// already in the controller's work-list. A sustained rate here means the
+	// identity is not accumulating history, e.g. a Job renamed every run.
 	RecSourceNoData = "nodata"
 	// RecSourceError means the WorkloadRecommendation read itself failed
 	// (apiserver error other than NotFound) — distinct from "missing"
 	// because it points at an apiserver/RBAC/cache problem rather than an
 	// unreconciled workload.
 	RecSourceError = "error"
-	// RecSourceRetained means the injected recommendation came from an object
-	// the controller is deliberately keeping for a workload identity that has
-	// departed — a completed Job, a bare-pod group between runs. The pod WAS
-	// rightsized, so this is a success like "hit", but it is counted separately
-	// because the data is last-known-good rather than fresh. The identity IS
-	// still recomputed every reconcile interval — computation is driven by the
-	// WorkloadRecommendation list, not by a workload listing — but a recompute
-	// that produced data would have cleared Departed, so reaching this outcome
-	// means none has since the sweep confirmed the absence. ObservedAt is
-	// deliberately left frozen in that state, so the value's age is bounded
-	// only by --recommendation-retention (default 168h), not by the staleness
-	// budget. The webhook applies that bound itself (Handler.RecommendationRetention)
-	// rather than assuming the controller's sweep has deleted anything past it:
-	// the sweep lives inside Reconcile, which returns early when the target
-	// listing fails, so a wedged controller would otherwise leave the waiver
-	// unbounded. Past the window the read reports "stale" instead.
-	//
-	// Steady traffic here is the expected, healthy shape for recurring
-	// ephemeral workloads. It is worth watching only against
-	// --recommendation-retention: an identity whose gap between runs exceeds
-	// that window has its object reaped in between, and its counts move to
-	// "missing" instead.
+	// RecSourceRetained means the injection came from an object the controller
+	// is deliberately keeping for a departed identity — a completed Job, a
+	// bare-pod group between runs. A success like "hit", but counted separately
+	// because the data is last-known-good rather than fresh: ObservedAt is
+	// frozen, so its age is bounded by --recommendation-retention (168h) rather
+	// than by the staleness budget, and past that window the read reports
+	// "stale". Steady traffic here is the healthy shape for recurring ephemeral
+	// workloads; an identity whose gap between runs exceeds the retention window
+	// is reaped in between and moves to "missing".
 	RecSourceRetained = "retained"
 )
 
-// Panic label values for PanicTotal that are not HTTP routes. The two
-// singleflight leader functions in optin.go run their owner Get on the
-// group's own goroutine rather than the request goroutine, so a panic there
-// is recovered by sfPanicSafe instead of the httpx middleware — but it is
-// still a webhook panic, and an operator alerting on
-// k8s_sustain_webhook_panic_total must see it. Both values are constants, so
-// they add exactly two bounded series to the label rather than anything
-// caller-controlled.
+// Panic label values for PanicTotal that are not HTTP routes. The singleflight
+// leaders in optin.go run off the request goroutine, so their panics are
+// recovered by sfPanicSafe rather than the httpx middleware — still webhook
+// panics an operator alerting on k8s_sustain_webhook_panic_total must see.
+// Constants, so they add exactly two bounded series.
 const (
-	// panicLabelOwnerRef labels a panic recovered inside
-	// fetchAndCacheOwnerRef — the pod's ownerRef walk.
-	panicLabelOwnerRef = "singleflight/ownerRef"
-	// panicLabelOwnerAnnotations labels a panic recovered inside
-	// fetchAndCacheOwnerAnnotations — the owning workload's annotations Get.
+	panicLabelOwnerRef         = "singleflight/ownerRef"
 	panicLabelOwnerAnnotations = "singleflight/ownerAnnotations"
 )
 
-// RequestDuration tracks how long each webhook HTTP request takes, labelled
-// by route and HTTP status text. PanicTotal counts panics the webhook
-// recovered: those caught by the httpx recovery middleware, labelled by
-// route pattern, plus those caught by sfPanicSafe on a singleflight leader
-// goroutine, labelled with one of the panicLabel* constants above.
-//
-// RecommendationSourceTotal is the operator-facing signal for whether the
-// WorkloadRecommendation pipeline the webhook now depends on exclusively is
-// actually keeping up. Since Prometheus was removed from the admission path,
-// a WLR read is the *only* way a pod can get rightsized resources at
-// creation time — if the controller falls behind (stale) or a workload's WLR
-// was never populated (missing) or the read itself fails (error), pods start
-// on template resources with nothing in their own status to reveal it. A pod
-// spec never says "I would have been rightsized but the recommendation
-// pipeline was unhealthy" — this counter is the only place that fact is
-// visible. A rising stale-or-missing rate (relative to hit) is the alerting
-// signal an operator should watch for that condition.
+// RecommendationSourceTotal is the only place the health of the
+// WorkloadRecommendation pipeline is visible: a WLR read is the sole way a pod
+// gets rightsized at creation time, and a pod that missed out carries nothing
+// in its own spec to say so. A rising stale-or-missing rate relative to hit is
+// the signal to alert on.
 //
 // The collectors are declared at package scope but not auto-registered; the
-// webhook serve command builds a dedicated prometheus.Registry and wires
-// these (alongside the cert-expiry gauge) into it. Tests that exercise the
-// handler in isolation can ignore them.
+// webhook serve command wires them into its own registry.
 var (
 	RequestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "k8s_sustain_webhook_request_duration_seconds",

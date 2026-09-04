@@ -1,6 +1,5 @@
-// Package dashboard registers the "dashboard" subcommand with the root cobra command.
-// It starts an HTTP server that serves the k8s-sustain web UI for exploring policies,
-// viewing workload metrics, and simulating policy changes.
+// Package dashboard registers the "dashboard" subcommand, an HTTP server for
+// the k8s-sustain web UI.
 package dashboard
 
 import (
@@ -52,7 +51,6 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("creating prometheus client: %w", err)
 	}
 
-	// Validate Prometheus connectivity at startup
 	if err := promClient.Ping(context.Background()); err != nil {
 		log.Error(err, "Prometheus is not reachable at startup — metrics queries will fail until it becomes available", "address", cfg.PrometheusAddress)
 	} else {
@@ -75,14 +73,8 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 	httpSrv := srv.NewHTTPServer(cfg.BindAddress)
 	log.Info("Starting dashboard server", "version", version.Version, "addr", cfg.BindAddress)
 
-	// The dashboard's only shutdown-sensitive component is the HTTP server
-	// itself — its Kubernetes client is uncached and its Prometheus client
-	// holds no background loop — so unlike the webhook there is nothing here
-	// that has to outlive the drain. It still owns its signal handler
-	// explicitly rather than letting httpx register one, so that every binary
-	// in this repo has exactly one signal source and shutdown ordering is
-	// always visible at the call site. SetupSignalHandler may only be called
-	// once per process; the three subcommands never share one.
+	// The subcommand owns the process's only signal source: SetupSignalHandler
+	// may be called once per process, and httpx deliberately registers none.
 	return httpx.ListenAndServeWithShutdown(
 		ctrl.SetupSignalHandler(), httpSrv, log, "dashboard", 10*time.Second, httpSrv.ListenAndServe)
 }

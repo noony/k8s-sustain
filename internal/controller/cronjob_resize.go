@@ -23,10 +23,8 @@ const jobPodNameLabel = "batch.kubernetes.io/job-name"
 // New scheduled runs pick up the latest resources from the webhook at
 // admission time.
 //
-// Returns the number of pods whose resize the API server actually accepted,
-// so the caller can suppress the ResourcesUpdated event when nothing was
-// touched (no active pods, in-place resize unsupported on this cluster, or
-// every resize rejected/skipped).
+// Returns the number of pods the API server actually resized, so the caller can
+// suppress the ResourcesUpdated event when nothing was touched.
 func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTarget, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance, observe func(resource string)) (int, error) {
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 

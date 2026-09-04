@@ -21,14 +21,9 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// --- Flag registration helpers ---------------------------------------------
-//
-// Each helper registers a pflag on the given flagset under flagName and binds
-// it to the given Viper key in a single call, so the flag-name string is
-// written once instead of being repeated (and hand-aligned) across a separate
-// pflag declaration and BindPFlag call. The Viper key may differ from the flag
-// name (e.g. the "tls-cert-file" flag binds to the "webhook.tls-cert-file"
-// key).
+// The bind* helpers register a pflag and bind it to a Viper key in one call.
+// The key may differ from the flag name (e.g. flag "tls-cert-file" binds to key
+// "webhook.tls-cert-file").
 
 func bindString(flags *pflag.FlagSet, key, flagName, def, usage string) {
 	flags.String(flagName, def, usage)
@@ -50,26 +45,20 @@ func bindDuration(flags *pflag.FlagSet, key, flagName string, def time.Duration,
 	_ = viper.BindPFlag(key, flags.Lookup(flagName))
 }
 
-// bindStringSlice always registers a nil (empty) default: every current
-// caller wants "unset means empty list," and unparam correctly flags a def
-// parameter that is never anything else. Add it back if a caller genuinely
-// needs a non-empty default.
+// bindStringSlice hardcodes a nil default: every caller wants "unset means
+// empty list", and unparam flags a def parameter that is never anything else.
 func bindStringSlice(flags *pflag.FlagSet, key, flagName, usage string) {
 	flags.StringSlice(flagName, nil, usage)
 	_ = viper.BindPFlag(key, flags.Lookup(flagName))
 }
 
-// bindStringArray is bindStringSlice without CSV splitting: each occurrence of
-// the flag contributes exactly one element, verbatim, so a value may contain a
-// comma or a double quote. Use it for values the caller does not control the
-// grammar of (HTTP header values); keep bindStringSlice for lists of simple
-// identifiers where --flag=a,b is the friendlier syntax.
+// bindStringArray is bindStringSlice without CSV splitting: one element per
+// occurrence, verbatim, so a value may contain a comma. Use it for values whose
+// grammar the caller does not control (HTTP header values).
 func bindStringArray(flags *pflag.FlagSet, key, flagName, usage string) {
 	flags.StringArray(flagName, nil, usage)
 	_ = viper.BindPFlag(key, flags.Lookup(flagName))
 }
-
-// --- Global (persistent) flags, shared by every subcommand -----------------
 
 // BindGlobalFlags registers global persistent flags on the root command.
 func BindGlobalFlags(root *cobra.Command) {
@@ -100,7 +89,6 @@ func InitViper() {
 }
 
 // Scheme returns the shared runtime.Scheme with all k8s-sustain types registered.
-// Safe to call from any subcommand.
 func Scheme() *runtime.Scheme {
 	return scheme
 }
@@ -119,14 +107,10 @@ func RecommendOnly() bool {
 	return viper.GetBool("recommend-only")
 }
 
-// getStringSlice reads a string-slice key, accepting comma-separated values
-// from environment variables. Viper hands env values back as a single raw
-// string, and GetStringSlice splits strings on whitespace — so
-// K8SSUSTAIN_EXCLUDED_NAMESPACES=kube-system,monitoring would surface as the
-// single bogus element "kube-system,monitoring". Detect the raw-string case
-// and split on commas (trimming spaces) so env overrides behave exactly like
-// --flag=a,b. Flag- and config-file-backed values arrive as slices and pass
-// through to GetStringSlice unchanged.
+// getStringSlice splits comma-separated env values manually: viper hands env
+// values back as one raw string and GetStringSlice splits on whitespace, so
+// K8SSUSTAIN_EXCLUDED_NAMESPACES=kube-system,monitoring would surface as a
+// single bogus element. Flag- and file-backed values already arrive as slices.
 func getStringSlice(key string) []string {
 	raw, ok := viper.Get(key).(string)
 	if !ok {
@@ -141,18 +125,13 @@ func getStringSlice(key string) []string {
 	return out
 }
 
-// --- Prometheus transport (auth / TLS) flags -------------------------------
-
-// bindPrometheusTransportFlags registers the Prometheus authentication and TLS
-// flags on flags, binding them under keyPrefix ("" for the controller,
-// "dashboard." for the dashboard).
+// bindPrometheusTransportFlags registers the Prometheus auth and TLS flags
+// under keyPrefix ("" for the controller, "dashboard." for the dashboard).
 //
-// Two subcommands need byte-identical flags under different Viper keys because
-// viper.BindPFlag maps one key to exactly one pflag: a shared flat key would
-// leave whichever subcommand registered last owning it, and the other would
-// read its value off an unset flagset (the same trap documented on
-// BindWebhookFlags). Registering them from one function is what keeps the two
-// flag sets from drifting.
+// The two subcommands need identical flags under DIFFERENT viper keys:
+// BindPFlag maps one key to exactly one pflag, so a shared flat key would leave
+// whichever subcommand registered last owning it and the other reading an unset
+// flagset. One registration function keeps the two sets from drifting.
 func bindPrometheusTransportFlags(flags *pflag.FlagSet, keyPrefix string) {
 	bindString(flags, keyPrefix+"prometheus-bearer-token", "prometheus-bearer-token", "",
 		"Static bearer token sent as `Authorization: Bearer <token>` on every Prometheus request. Mutually exclusive with --prometheus-bearer-token-file; prefer the file form for Kubernetes service-account tokens, which rotate.")
@@ -200,12 +179,10 @@ func parseHeaders(entries []string) (map[string]string, error) {
 	return out, nil
 }
 
-// loadPrometheusTransport reads the Prometheus transport keys under keyPrefix
-// straight into the client's own config type. The only thing that can fail is
-// the --prometheus-headers grammar, and it is returned as an error rather than
-// stashed in a field precisely so no call site can forget to check it: a
-// forgotten check would start the process with NO headers, i.e. querying the
-// wrong tenant, instead of failing.
+// loadPrometheusTransport reads the Prometheus transport keys under keyPrefix.
+// Only the --prometheus-headers grammar can fail, and it is returned as an
+// error so no call site can start the process with headers silently missing —
+// i.e. querying the wrong tenant.
 func loadPrometheusTransport(keyPrefix string) (promclient.TransportConfig, error) {
 	headers, err := parseHeaders(getStringSlice(keyPrefix + "prometheus-headers"))
 	if err != nil {
@@ -228,32 +205,19 @@ func loadPrometheusTransport(keyPrefix string) (promclient.TransportConfig, erro
 	}, nil
 }
 
-// --- Controller (start) flags ------------------------------------------------
-
 // DefaultQueryShardMaxSamples is the default --query-shard-max-samples value:
-// the projected Prometheus sample budget (containers x window-minutes summed
-// across a shard's workloads) that internal/prometheus.BuildShards packs
-// against when deciding where to close one batched shard query and start the
-// next. Prometheus's own --query.max-samples defaults to 50_000_000 and
-// REJECTS an over-budget query outright, failing every workload sharing that
-// shard -- this default leaves a 5x safety margin under that ceiling.
-//
-// Exported (rather than an inline literal in BindControllerFlags) so
-// internal/prometheus/shardscale_test.go's scale assertion can reference the
-// exact shipped value instead of duplicating it as a second literal that
-// could silently drift out of sync -- see that test's doc comment for why it
-// pulls this constant in via an external (_test package) import rather than
-// internal/prometheus depending on this package directly.
+// the projected Prometheus sample budget BuildShards packs a batched query
+// against. Prometheus's own --query.max-samples (default 50_000_000) REJECTS an
+// over-budget query outright, failing every workload in the shard, so this
+// leaves a 5x margin. Exported so internal/prometheus/shardscale_test.go can
+// assert against the shipped value rather than a second literal.
 const DefaultQueryShardMaxSamples = 10_000_000
 
-// DefaultRecommendationRetention is the default --recommendation-retention
-// value, shared by the controller and the webhook.
-//
-// One constant for both bindings on purpose: the controller decides how long a
-// departed WorkloadRecommendation is kept, and the webhook refuses to inject
-// from one older than that (internal/webhook.Handler.RecommendationRetention).
-// Two literals could drift into a window where the webhook serves what the
-// controller considers expired, or refuses what it still retains.
+// DefaultRecommendationRetention is shared by the controller and webhook
+// bindings on purpose: the controller decides how long a departed
+// WorkloadRecommendation is kept and the webhook refuses to inject from one
+// older than that, so two literals could drift into a window where the webhook
+// serves what the controller considers expired.
 const DefaultRecommendationRetention = 168 * time.Hour
 
 // BindControllerFlags registers flags for the "start" subcommand.
@@ -328,8 +292,6 @@ func LoadControllerConfig() (ControllerConfig, error) {
 	}, nil
 }
 
-// --- Webhook flags ---------------------------------------------------------
-
 // BindWebhookFlags registers flags for the "webhook" subcommand.
 func BindWebhookFlags(cmd *cobra.Command) {
 	flags := cmd.Flags()
@@ -338,12 +300,9 @@ func BindWebhookFlags(cmd *cobra.Command) {
 	bindInt(flags, "webhook.port", "port", 9443, "Port the webhook server listens on")
 	bindString(flags, "webhook.log-level", "log-level", "info", "Log level (debug, info, warn, error)")
 	bindStringSlice(flags, "webhook.excluded-namespaces", "excluded-namespaces", "Namespaces the webhook should never mutate (mirrors the controller flag)")
-	// Bound under a "webhook."-prefixed Viper key even though the flag name
-	// matches the controller's: viper.BindPFlag maps a key to exactly one
-	// pflag, so reusing the flat "recommendation-retention" key would leave
-	// whichever subcommand registered last owning it, and the webhook's own
-	// --recommendation-retention would be read off the controller's (unset)
-	// flagset. The DEFAULT is shared, which is the part that must not drift.
+	// Prefixed key despite the shared flag name: BindPFlag maps a key to exactly
+	// one pflag, so a flat key would leave the webhook reading the controller's
+	// unset flagset. The DEFAULT is shared, which is what must not drift.
 	bindDuration(flags, "webhook.recommendation-retention", "recommendation-retention", DefaultRecommendationRetention,
 		"Must match the controller's --recommendation-retention. It bounds the one case where the webhook injects from a WorkloadRecommendation older than the staleness budget: an identity the controller marked departed, whose ObservedAt is frozen by design. Past this window the object is one the controller's sweep should already have deleted, so the webhook treats it as stale instead of injecting it forever. The chart renders both flags from the single controller.recommendationRetention value.")
 }
@@ -363,8 +322,7 @@ type WebhookConfig struct {
 
 // LoadWebhookConfig reads the current Viper state and returns a WebhookConfig.
 // viper.UnmarshalKey would be tidier but does not see BindPFlag-bound nested
-// keys (viper.Sub("webhook") returns nil even though AllSettings exposes the
-// subtree). Explicit Get calls are uglier but reliable.
+// keys (viper.Sub("webhook") returns nil), hence the explicit Get calls.
 func LoadWebhookConfig() WebhookConfig {
 	return WebhookConfig{
 		TLSCertFile:        viper.GetString("webhook.tls-cert-file"),
@@ -377,8 +335,6 @@ func LoadWebhookConfig() WebhookConfig {
 		RecommendationRetention: viper.GetDuration("webhook.recommendation-retention"),
 	}
 }
-
-// --- Dashboard flags -------------------------------------------------------
 
 // BindDashboardFlags registers flags for the "dashboard" subcommand.
 func BindDashboardFlags(cmd *cobra.Command) {

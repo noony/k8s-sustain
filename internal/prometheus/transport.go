@@ -14,17 +14,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// TransportConfig describes authentication and TLS settings for reaching Prometheus.
+// TransportConfig describes authentication and TLS settings for reaching
+// Prometheus. The zero value means "no authentication, default transport".
 //
-// The zero value means "no authentication, default transport" and is exactly
-// what New has always used, so a client constructed without
-// WithTransportConfig is byte-for-byte unchanged.
-//
-// It covers the two deployments that plain unauthenticated HTTP cannot reach:
-// a Prometheus behind an auth proxy (bearer or basic credentials, custom CA)
-// and a Thanos/Mimir/Cortex query gateway, which additionally needs a tenant
-// header — hence Headers rather than a fixed X-Scope-OrgID field, since the
-// header name differs across gateways and deployments.
+// Headers is a free-form map rather than a fixed X-Scope-OrgID field because
+// the tenant header name differs across Thanos/Mimir/Cortex gateways.
 type TransportConfig struct {
 	// BearerToken is a static token sent as `Authorization: Bearer <token>`.
 	// Mutually exclusive with BearerTokenFile.
@@ -64,8 +58,8 @@ type TLSConfig struct {
 	InsecureSkipVerify bool
 }
 
-// isZero reports whether the config asks for nothing at all, in which case the
-// client is built with no RoundTripper — identical to the pre-auth behaviour.
+// isZero reports whether the config asks for nothing, in which case the client
+// is built with no RoundTripper at all.
 func (t TransportConfig) isZero() bool {
 	return t.BearerToken == "" &&
 		t.BearerTokenFile == "" &&
@@ -76,8 +70,6 @@ func (t TransportConfig) isZero() bool {
 		t.TLS == TLSConfig{}
 }
 
-// hasTLS reports whether any TLS field was set, i.e. whether the default
-// transport has to be cloned and given a tls.Config at all.
 func (t TransportConfig) hasTLS() bool {
 	return t.TLS != TLSConfig{}
 }
@@ -162,21 +154,15 @@ func buildTLSConfig(cfg TLSConfig) (*tls.Config, error) {
 	}
 
 	if cfg.CAFile != "" {
-		// The custom CA is APPENDED to a copy of the system pool rather than
-		// installed as the only root. A single Prometheus address is commonly
-		// fronted by a public-CA ingress while an internal CA signs something
-		// else on the same path (redirects, sidecar proxies); replacing the
-		// pool would break those with a bewildering "unknown authority" for a
-		// certificate the host already trusts. Appending is strictly additive:
-		// it grants trust to the operator's CA without revoking any.
+		// Append to a copy of the system pool rather than replacing it: a
+		// Prometheus address is commonly fronted by a public-CA ingress while
+		// an internal CA signs something else on the same path, and replacing
+		// the pool breaks those with "unknown authority".
 		pool, err := x509.SystemCertPool()
 		if err != nil || pool == nil {
-			// A platform without a readable system store is not an error here;
-			// fall back to a pool containing only the configured CA. It IS
-			// worth a log line, though: from here on the CA file is the only
-			// root, so a public-CA ingress in front of the same address will
-			// fail with "unknown authority" — the failure appending exists to
-			// prevent — and nothing else in the startup log would explain why.
+			// Not fatal, but worth logging: from here the CA file is the only
+			// root, so a public-CA ingress on the same address will now fail
+			// with "unknown authority" and nothing else would explain why.
 			log.Log.WithName("prometheus").Info(
 				"WARNING: system certificate pool unavailable; the Prometheus TLS CA file is the ONLY trusted root",
 				"caFile", cfg.CAFile, "error", err)
@@ -193,11 +179,9 @@ func buildTLSConfig(cfg TLSConfig) (*tls.Config, error) {
 	}
 
 	if cfg.CertFile != "" {
-		// Read once now so a broken pair fails at startup, then again on every
+		// Read once now so a broken pair fails at startup, then again per
 		// handshake via GetClientCertificate so a rotated pair is picked up
-		// without a restart — the same property the bearer-token and password
-		// files have (see authRoundTripper.RoundTrip). A handshake happens
-		// once per connection, not per request, so the reload cost is nil.
+		// without a restart. Handshakes are per connection, not per request.
 		if _, err := loadKeyPair(cfg.CertFile, cfg.KeyFile); err != nil {
 			return nil, err
 		}
@@ -210,7 +194,6 @@ func buildTLSConfig(cfg TLSConfig) (*tls.Config, error) {
 	return out, nil
 }
 
-// loadKeyPair reads the mTLS client certificate and key from disk.
 func loadKeyPair(certFile, keyFile string) (*tls.Certificate, error) {
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -220,9 +203,8 @@ func loadKeyPair(certFile, keyFile string) (*tls.Certificate, error) {
 }
 
 // baseRoundTripper returns the transport the auth layer wraps: a clone of
-// api.DefaultRoundTripper so the Prometheus client's own defaults (env proxy,
-// dial/handshake timeouts, idle-conn pooling, HTTP/2) are preserved, with the
-// TLS config applied when one is configured.
+// api.DefaultRoundTripper, so client_golang's own defaults (env proxy, dial
+// timeouts, idle-conn pooling, HTTP/2) are preserved.
 func baseRoundTripper(cfg TransportConfig) (http.RoundTripper, error) {
 	if !cfg.hasTLS() {
 		return api.DefaultRoundTripper, nil
@@ -248,9 +230,8 @@ type authRoundTripper struct {
 	cfg  TransportConfig
 }
 
-// readSecretFile reads a credential file and trims surrounding whitespace,
-// which a token/password file almost always carries as a trailing newline and
-// which would otherwise be sent as part of the credential.
+// readSecretFile reads a credential file, trimming the trailing newline such
+// files almost always carry and that would otherwise be sent as credential.
 func readSecretFile(path string) (string, error) {
 	b, err := os.ReadFile(path) //nolint:gosec // G304: operator-supplied config path, by design.
 	if err != nil {
@@ -259,21 +240,16 @@ func readSecretFile(path string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-// RoundTrip applies headers and credentials to a CLONE of req.
+// RoundTrip applies headers and credentials to a clone of req.
 //
-// Cloning is mandatory, not defensive: http.RoundTripper's contract forbids
-// modifying the request, and the caller (and any retry logic above us) may
-// reuse it. Mutating the shared Header map would also race under -race with
-// concurrent in-flight queries built from the same request.
+// Cloning is mandatory: http.RoundTripper's contract forbids modifying the
+// request, and mutating the shared Header map races with concurrent in-flight
+// queries built from the same request.
 //
-// Credential FILES are re-read on every request rather than cached. Kubernetes
-// projected service-account tokens are rotated in place roughly hourly, so a
-// token read once at construction silently starts returning 401 after the
-// first rotation — the failure mode this file exists to avoid. A read of a
-// small local file costs microseconds and this client issues at most a handful
-// of queries per reconcile (bounded by --prometheus-max-inflight, default 8),
-// so a cache with its own staleness window and invalidation rules would add
-// a correctness hazard to save nothing measurable.
+// Credential files are re-read per request, not cached: projected
+// service-account tokens rotate in place roughly hourly, so a token read once
+// at construction starts returning 401 after the first rotation. Query volume
+// is bounded by --prometheus-max-inflight, so the reads cost nothing.
 func (a *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	r := req.Clone(req.Context())
 
@@ -306,12 +282,9 @@ func (a *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // newTransportRoundTripper validates cfg and returns the RoundTripper it
-// describes, or nil when cfg asks for nothing.
-//
-// Every file it names is read once here so an unreadable CA, a malformed key
-// pair, or a missing token file fails the process at startup — visible in a
-// CrashLoopBackOff — instead of degrading into per-query errors that look like
-// a Prometheus outage.
+// describes, or nil when cfg asks for nothing. Every file it names is read
+// once here so a bad path fails at startup rather than degrading into
+// per-query errors that look like a Prometheus outage.
 func newTransportRoundTripper(cfg TransportConfig) (http.RoundTripper, error) {
 	if cfg.isZero() {
 		return nil, nil

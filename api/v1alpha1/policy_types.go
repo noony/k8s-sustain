@@ -6,61 +6,35 @@ import (
 )
 
 const (
-	// PolicyAnnotation is the annotation key set on a workload's pod template
-	// (spec.template.metadata.annotations) to declare which Policy governs it.
-	// Pods inherit the annotation, so the admission webhook reads the same value.
+	// PolicyAnnotation names the Policy governing a workload. Pods inherit
+	// it from the pod template, so the webhook reads the same value.
 	//
 	// Example: k8s.sustain.io/policy: my-rightsizing-policy
 	PolicyAnnotation = "k8s.sustain.io/policy"
 
-	// OwnerNameAnnotation overrides the workload identity (used for Prometheus
-	// queries and WorkloadRecommendation naming) that would otherwise be
-	// derived from a pod's ownerReferences chain. Two uses: (1) a bare pod
-	// with no controller owner (e.g. Airflow's KubernetesPodOperator) sets
-	// this to get treated as kind "Pod" with the given name; (2) a pod with a
-	// real owner sets this to group multiple workloads (e.g. blue/green
-	// Deployments) under one shared identity, while still keeping its real
-	// kind. The same string is reused as a Kubernetes LABEL key once the
-	// admission webhook mirrors it onto the pod (see internal/webhook) — so
-	// the value must validate as a label value (RFC 1123, <=63 chars), not
-	// just an annotation value.
+	// OwnerNameAnnotation overrides the workload identity derived from the
+	// ownerReferences chain: a bare pod becomes kind "Pod" with this name, a
+	// pod with a real owner is grouped under this shared identity. The webhook
+	// mirrors it to a pod label, so the value must be a valid label value
+	// (RFC 1123, at most 63 chars).
 	//
 	// Example: k8s.sustain.io/owner-name: etl-daily
 	OwnerNameAnnotation = "k8s.sustain.io/owner-name"
 
-	// OptOutAnnotation excludes a workload from a Policy it would otherwise
-	// inherit from a less specific annotation level (its Namespace, or its own
-	// metadata when the pod template is what is being evaluated). Only the
-	// literal string "true" opts out; any other value is ignored.
-	//
-	// It exists because namespace-level opt-in is all-or-nothing: without an
-	// escape hatch, one workload that must keep its hand-tuned resources would
-	// force the whole namespace to stay un-annotated. A dedicated key rather
-	// than a reserved PolicyAnnotation value ("none", "") so it can never
-	// collide with a real Policy name, and so an empty templated value stays
-	// what it has always been — no opt-in at all, not an opt-out.
+	// OptOutAnnotation excludes a workload from a Policy inherited from a less
+	// specific level (Namespace, or metadata when the pod template is
+	// evaluated). Only the literal string "true" opts out.
 	//
 	// Example: k8s.sustain.io/opt-out: "true"
 	OptOutAnnotation = "k8s.sustain.io/opt-out"
 
 	// WLRPolicyLabel labels each WorkloadRecommendation with the Policy that
-	// produced it, so writers and consumers (controller, webhook, dashboard) can
-	// scope list calls server-side instead of post-filtering by spec.policy.
+	// produced it, so list calls can be scoped server-side.
 	WLRPolicyLabel = "k8s.sustain.io/policy"
 
-	// WLRStubLabel marks a WorkloadRecommendation the webhook created at
-	// admission, rather than one the controller created during discovery.
-	//
-	// It is provenance, not control flow: nothing reads it to decide what to
-	// do with the object. Both writers produce the same shape, and the
-	// computation phase recomputes every WorkloadRecommendation regardless of
-	// which one created it. The label survives because "empty status" alone
-	// cannot tell the two apart — wlrcache.Upsert is necessarily two-step
-	// (Create, then Status().Patch, since a status subresource discards status
-	// supplied at Create), so a controller-created object is *transiently*
-	// empty-status too — and knowing which component first saw an identity is
-	// worth a `kubectl get wlrec -l k8s.sustain.io/stub` when an ephemeral
-	// workload is not being sized.
+	// WLRStubLabel marks a WorkloadRecommendation created by the webhook at
+	// admission rather than by the controller. Provenance only; nothing reads
+	// it to decide behavior.
 	WLRStubLabel = "k8s.sustain.io/stub"
 )
 
@@ -91,9 +65,7 @@ type ResourceRequestsConfig struct {
 	// MinAllowed floors the recommended request value.
 	// +optional
 	MinAllowed *resource.Quantity `json:"minAllowed,omitempty"`
-	// Percentile is the histogram percentile used for the recommendation (e.g. 95).
-	// p100 is allowed and resolves to the maximum sample over the window —
-	// useful for memory on workloads where you never want to undershoot peak.
+	// Percentile is the histogram percentile used for the recommendation (e.g. 95); 100 resolves to the maximum sample over the window.
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=100
@@ -115,8 +87,7 @@ type ResourceLimitsConfig struct {
 	// NoLimit removes the limit entirely.
 	// +optional
 	NoLimit bool `json:"noLimit,omitempty"`
-	// RequestsLimitsRatio explicitly sets the limit as a multiple of the request.
-	// Must be >= 1 so the derived limit is never below the request.
+	// RequestsLimitsRatio sets the limit as a multiple (>= 1) of the request.
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	RequestsLimitsRatio *float64 `json:"requestsLimitsRatio,omitempty"`
@@ -124,9 +95,7 @@ type ResourceLimitsConfig struct {
 
 // ResourceConfig holds the recommendation configuration for one resource dimension (CPU or memory).
 type ResourceConfig struct {
-	// Window is the historical observation window used for recommendation (e.g. "96h").
-	// Must be a Prometheus duration: integer followed by one of m, h, d, w, y
-	// (compounds like "1h30m" are also allowed).
+	// Window is the Prometheus duration of the observation window used for recommendation (e.g. "96h").
 	// +optional
 	// +kubebuilder:validation:Pattern=`^([0-9]+(m|h|d|w|y))+$`
 	Window string `json:"window,omitempty"`
@@ -136,26 +105,20 @@ type ResourceConfig struct {
 	// Limits configures how resource limits are derived from requests.
 	// +optional
 	Limits ResourceLimitsConfig `json:"limits,omitempty"`
-	// DownsizeThreshold suppresses pod recycling for resource DECREASES smaller
-	// than max(percent% of current, minDecrease). Increases always apply
-	// immediately. Defaults apply when unset (percent 5; minDecrease 10m for
-	// CPU, 15Mi for memory). Set both percent and minDecrease to 0 to disable.
+	// DownsizeThreshold suppresses decreases smaller than max(percent% of current, minDecrease); defaults to 5% and 10m CPU / 15Mi memory when unset.
 	// +optional
 	DownsizeThreshold *DownsizeThreshold `json:"downsizeThreshold,omitempty"`
 }
 
-// DownsizeThreshold gates whether a resource DECREASE is large enough to justify
-// recycling a pod. A decrease is applied only when it meets or exceeds
-// max(Percent% of the current value, MinDecrease). Increases are never gated.
+// DownsizeThreshold gates whether a resource decrease is large enough to
+// justify recycling a pod. Increases are never gated.
 type DownsizeThreshold struct {
-	// Percent is the minimum decrease as a percentage of the current value.
-	// Defaults to 5 when unset.
+	// Percent is the minimum decrease as a percentage of the current value (default 5).
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	Percent *int32 `json:"percent,omitempty"`
-	// MinDecrease is the minimum decrease as an absolute quantity. Defaults to
-	// 10m (CPU) or 15Mi (memory) when unset.
+	// MinDecrease is the minimum decrease as an absolute quantity (default 10m for CPU, 15Mi for memory).
 	// +optional
 	MinDecrease *resource.Quantity `json:"minDecrease,omitempty"`
 }
@@ -172,25 +135,18 @@ type ResourcesConfigs struct {
 
 // EvictionPolicy controls eviction-related behaviour during right-sizing.
 type EvictionPolicy struct {
-	// IgnoreAutoscalerSafeToEvictAnnotations, when true, evicts pods during
-	// right-sizing even if they carry the cluster-autoscaler annotation
-	// `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`. By default
-	// (false) such pods are never evicted. Only the literal value "false"
-	// blocks; in-place resizes are unaffected by the annotation either way.
+	// IgnoreAutoscalerSafeToEvictAnnotations evicts pods even when they carry cluster-autoscaler.kubernetes.io/safe-to-evict: "false".
 	// +optional
 	IgnoreAutoscalerSafeToEvictAnnotations bool `json:"ignoreAutoscalerSafeToEvictAnnotations,omitempty"`
 }
 
 // AutoscalerCoordination configures HPA/ScaledObject-aware request shaping.
 type AutoscalerCoordination struct {
-	// Enabled turns on the overhead formula for any resource the autoscaler
-	// targets on averageUtilization (HPA Resource metric or KEDA cpu/memory trigger).
+	// Enabled turns on the overhead formula for any resource the autoscaler targets on averageUtilization.
 	// +optional
 	Enabled bool `json:"enabled,omitempty"`
 
-	// ReplicaBudgetAnchor enables CPU replica-budget correction. Value is the
-	// fraction into [minReplicas, maxReplicas] at which the workload should sit
-	// at steady state. Typical value: 0.10. Nil disables replica correction.
+	// ReplicaBudgetAnchor is the fraction into [minReplicas, maxReplicas] the workload should sit at steady state (typically 0.10); nil disables replica correction.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=1
@@ -208,17 +164,10 @@ type RightSizingSpec struct {
 	// AutoscalerCoordination configures HPA/ScaledObject-aware request shaping.
 	// +optional
 	AutoscalerCoordination AutoscalerCoordination `json:"autoscalerCoordination,omitempty"`
-	// ExcludeInitContainers skips init containers (including restartable
-	// sidecar init containers) for any workload this policy targets. Defaults
-	// to false: init containers are recommended and resized like regular ones.
+	// ExcludeInitContainers skips init containers, including restartable sidecars, for every workload this policy targets.
 	// +optional
 	ExcludeInitContainers bool `json:"excludeInitContainers,omitempty"`
-	// RecommendOnly, when true, puts every workload governed by this policy
-	// in dry-run: recommendations are still computed, exported as metrics and
-	// cached as WorkloadRecommendations, but the controller never recycles or
-	// resizes pods and the webhook never injects resources. ORed with the
-	// global --recommend-only flag — the flag is a master switch, so an
-	// explicit false here cannot override it.
+	// RecommendOnly puts every workload governed by this policy in dry-run; it is ORed with the global --recommend-only flag.
 	// +optional
 	RecommendOnly bool `json:"recommendOnly,omitempty"`
 }
@@ -236,11 +185,7 @@ type UpdateTypes struct {
 	DaemonSet *UpdateMode `json:"daemonSet,omitempty"`
 	// +optional
 	// +kubebuilder:validation:Enum=OnCreate;Ongoing
-	// CronJob never mutates the CronJob spec (no GitOps drift). OnCreate
-	// injects resources at pod admission for each spawned job pod. Ongoing
-	// additionally resizes currently-running job pods in place via
-	// pods/resize when the cluster supports it; new runs are always handled
-	// by the webhook at admission.
+	// CronJob never mutates the CronJob spec: OnCreate injects resources at pod admission, Ongoing additionally resizes running job pods in place.
 	CronJob *UpdateMode `json:"cronJob,omitempty"`
 	// +optional
 	// +kubebuilder:validation:Enum=OnCreate;Ongoing
@@ -250,27 +195,12 @@ type UpdateTypes struct {
 	ArgoRollout *UpdateMode `json:"argoRollout,omitempty"`
 	// +optional
 	// +kubebuilder:validation:Enum=OnCreate;Ongoing
-	// Pod targets bare pods that opt in via OwnerNameAnnotation (no controller
-	// owner — e.g. Airflow's KubernetesPodOperator). OnCreate injects
-	// resources at admission like every other kind. Ongoing additionally
-	// resizes the running pods of the identity in place (k8s >= 1.33), which
-	// is the only way to correct a long-running task pod after creation, with
-	// full coverage of restartPolicy Never/OnFailure only on k8s >= 1.35 —
-	// KubernetesPodOperator creates restartPolicy: Never pods by default, so
-	// on 1.33/1.34 the resize is rejected per pod and the running task keeps
-	// its admitted resources.
-	// Bare pods are NEVER evicted in either mode: no controller would
-	// recreate the pod. Note that an in-place memory resize can restart the
-	// container, the same tradeoff Job and CronJob already make; use OnCreate
-	// if your pods cannot tolerate that.
+	// Pod targets bare pods that opt in via the owner-name annotation: OnCreate injects resources at admission, Ongoing additionally resizes running pods in place (k8s >= 1.33); bare pods are never evicted.
 	Pod *UpdateMode `json:"pod,omitempty"`
 }
 
 // ModeForKind returns the update mode configured for the given workload
-// kind, or nil if the policy doesn't opt that kind in. The string keys here
-// match the values that internal/webhook.resolveOwner, the controller's
-// reconcile loop, and the dashboard handlers all use, so callers can plug
-// owner_kind labels straight in.
+// kind, or nil if the policy does not opt that kind in.
 func (t UpdateTypes) ModeForKind(kind string) *UpdateMode {
 	switch kind {
 	case "Deployment":
@@ -292,10 +222,8 @@ func (t UpdateTypes) ModeForKind(kind string) *UpdateMode {
 }
 
 // EffectiveRecommendOnly reports whether recommendations for this policy
-// must not be applied: the global --recommend-only flag is a master switch,
-// the per-policy spec.rightSizing.recommendOnly field opts a single Policy
-// into dry-run. Both injection paths (controller reconcile and admission
-// webhook) must gate on this — never on the flag or the field alone.
+// must not be applied: the global flag is a master switch ORed with the
+// per-policy field. Both injection paths must gate on this.
 func (p *Policy) EffectiveRecommendOnly(global bool) bool {
 	return global || p.Spec.RightSizing.RecommendOnly
 }
@@ -312,12 +240,10 @@ type UpdateSpec struct {
 
 // PolicySelector defines which namespaces and workloads a Policy applies to.
 type PolicySelector struct {
-	// Namespaces is a list of namespaces to target.
-	// An empty list targets all namespaces.
+	// Namespaces is a list of namespaces to target; an empty list targets all namespaces.
 	// +optional
 	Namespaces []string `json:"namespaces,omitempty"`
-	// LabelSelector restricts the set of workloads targeted by this policy.
-	// An empty selector matches all workloads in the targeted namespaces.
+	// LabelSelector restricts the set of workloads targeted by this policy; an empty selector matches all.
 	// +optional
 	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
 }

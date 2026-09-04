@@ -8,20 +8,17 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// defaultTTL is the fallback retention horizon when the caller passes a
-// non-positive ttl to NewCache. Picked to comfortably outlast the recommender's
-// typical reconcile interval while not retaining stale data for so long that
-// memory growth becomes a concern on large clusters.
+// defaultTTL comfortably outlasts the recommender's typical reconcile interval
+// without retaining stale data long enough to matter for memory on big clusters.
 const defaultTTL = 30 * time.Minute
 
 // minSweepInterval bounds the active-eviction tick so that very small TTLs
 // (typical in tests) do not turn the sweeper into a hot loop in production.
 const minSweepInterval = 30 * time.Second
 
-// defaultMaxEntries caps the cache so a misbehaving fleet (thousands of pods
-// OOMing into distinct workloads) cannot grow the map without bound. When the
-// cap is hit, the oldest entry by ObservedAt is evicted to make room. Picked
-// high enough that real clusters will never hit it.
+// defaultMaxEntries caps the cache so a misbehaving fleet cannot grow the map
+// without bound; on overflow the oldest entry by ObservedAt is evicted. High
+// enough that real clusters will never hit it.
 const defaultMaxEntries = 5_000
 
 // workloadKey is the (ns, kind, name) tuple used as the secondary-index key so
@@ -49,9 +46,8 @@ type resolvedEventKey struct {
 }
 
 // Cache is an in-memory store of OOM observations keyed by workload+container.
-// It implements both Source (read API consumed by the recommender) and Sink
-// (write API consumed by the watcher), letting both sides share a single
-// dedup-aware map without leaking their concrete dependency on each other.
+// It implements both Source (read by the recommender) and Sink (written by the
+// watcher) so both sides share one dedup-aware map.
 type Cache struct {
 	ttl        time.Duration
 	maxEntries int
@@ -59,36 +55,26 @@ type Cache struct {
 	mu         sync.RWMutex
 	entries    map[Key]OOMRecord
 	byWorkload map[workloadKey]map[string]struct{}
-	// resolved backs AlreadyResolved/MarkResolved: value is the time the
-	// event was marked resolved, aged out under the same ttl as entries (see
-	// sweep and evictOldestResolvedLocked). Guarded by the same mu as
-	// entries/byWorkload rather than a separate lock — there is no hot path
-	// here that needs them to be independent, and one lock is one less thing
-	// to get wrong.
+	// resolved backs AlreadyResolved/MarkResolved: value is the mark time,
+	// aged out under the same ttl as entries and guarded by the same mu.
 	resolved map[resolvedEventKey]time.Time
 
 	// SizeObserver, if set, is invoked with the current entry count after
-	// every mutation (Record, sweep). The controller wires it to the
+	// every mutation. The controller wires it to the
 	// k8s_sustain_oom_cache_entries gauge.
 	//
-	// The count is snapshotted under mu but the call is made after Unlock,
-	// on purpose: this is a caller-supplied callback that ends in a
-	// Prometheus gauge write (its own lock), and invoking it under mu would
-	// both serialize every cache mutation behind it and create a
-	// mu -> observer lock order that a callback touching the cache could
-	// close into a deadlock. The cost is that two concurrent mutations may
-	// reach the observer out of order, leaving the gauge off by the handful
-	// of entries between them; it self-corrects on the next mutation and at
-	// worst on the next sweep tick, which is well within what a size gauge
-	// needs to be good for.
+	// The count is snapshotted under mu but called after Unlock: this
+	// callback takes its own lock, so calling it under mu would serialize
+	// every mutation behind it and open a mu -> observer deadlock order.
+	// Concurrent mutations may therefore reach it out of order, which
+	// self-corrects on the next mutation or sweep.
 	SizeObserver func(int)
 
 	runOnce sync.Once
 }
 
-// NewCache returns a Cache with the given retention TTL. A non-positive ttl is
-// silently replaced by defaultTTL so that misconfigured callers still get a
-// working cache instead of one that evicts on every read.
+// NewCache returns a Cache with the given retention TTL. A non-positive ttl
+// falls back to defaultTTL rather than evicting on every read.
 func NewCache(ttl time.Duration) *Cache {
 	return NewCacheWithLimit(ttl, defaultMaxEntries)
 }
@@ -112,59 +98,37 @@ func NewCacheWithLimit(ttl time.Duration, maxEntries int) *Cache {
 	}
 }
 
-// Record upserts an observation. It returns false when the existing entry for
-// the same Key has the same (RestartCount, TerminatedAt) tuple, which is how
-// the watcher distinguishes "we already told the controller about this kill"
-// from "this is a brand new kill"; any other tuple reports true.
+// Record upserts an observation, returning false only when the stored entry
+// has the same (RestartCount, TerminatedAt) tuple — how the watcher tells an
+// already-reported kill from a new one.
 //
-// Storage is a PER-FIELD MERGE, not a winning record. A Key names a
-// workload+container, not a pod, so every pod of the workload writes to the
-// same slot and the watcher reconciles pods in parallel
-// (maxConcurrentReconciles > 1) — and the slot carries three kinds of field
-// whose merge rules differ:
+// A Key names a workload+container, not a pod, so every pod of the workload
+// writes the same slot from parallel reconciles. Storage is therefore a
+// per-field merge, not a winning record:
 //
-//   - Identity and kill timestamps (PodName, PodUID, TerminatedAt,
-//     RestartCount, PolicyName) come from the newest observation, ordered by
-//     newerThan. Without an explicit ordering "newest" would silently degrade
-//     to "whichever goroutine took the lock last".
-//   - ObservedAt takes the LATER of the two, independently of which identity
-//     won. It is the cache's freshness clock — sweep and RecentByWorkload
-//     both age entries off it — not a kill-ordering field, so an observation
-//     made now has to refresh the entry it just contributed to even when its
-//     TerminatedAt is older. Taking it from the identity winner instead would
-//     let an out-of-order kill be fanned out as new and then swept moments
-//     later on the older stored entry's clock, dropping the memory-floor
-//     evidence for a kill observed seconds earlier.
-//   - OOMLimitBytes — the kernel-applied memory limit at the moment of the
-//     kill, which the recommender anchors its OOM memory floor on — takes the
-//     MAX of the incoming and stored values, because the anchor that matters
-//     is the largest limit that still got OOM-killed. Recency is the wrong
-//     rule here: a workload whose limit was bumped 128Mi -> 256Mi can have an
-//     old un-resized pod (128Mi) OOM *after* an already-resized one (256Mi),
-//     and anchoring on the newer 128Mi would bump the floor to a value 256Mi
-//     just proved insufficient. internal/controller/recommendation_build.go
-//     already max()es this record against the Prometheus anchor for exactly
-//     that reason; keeping only the newest limit here discarded evidence the
-//     consumer would have maxed anyway.
+//   - Identity and kill timestamps come from the newest observation by
+//     newerThan; without an explicit order "newest" degrades to "whichever
+//     goroutine took the lock last".
+//   - ObservedAt takes the later of the two regardless of which identity won.
+//     It is the freshness clock sweep and RecentByWorkload age entries off,
+//     so an out-of-order kill must still refresh the entry — otherwise it is
+//     fanned out as new and then swept moments later on the older clock.
+//   - OOMLimitBytes takes the max, because the useful memory-floor anchor is
+//     the largest limit that still got OOM-killed. A workload bumped
+//     128Mi -> 256Mi can have a stale 128Mi pod OOM after a resized 256Mi
+//     one, and anchoring on the newer 128Mi would bump the floor to a value
+//     256Mi just disproved.
 //
-// The one accepted cost is on a deliberate downsize: after the limit is
-// lowered on purpose, an older larger limit keeps anchoring the floor high
-// until it ages out. That is bounded (the cache TTL, and RecentByWorkload's
-// maxAge window on top of it) and self-healing, and it errs in the
-// conservative direction — a brief over-provision rather than an under-bump
-// into another OOM. It does not reintroduce the runaway fixed in 8c44b62:
-// that one compounded because the anchor was read from our own spec output,
-// whereas every value merged here is a limit the kernel actually applied.
+// The accepted cost is a deliberate downsize: an older larger limit anchors
+// the floor high until it ages out. That is bounded by the TTL, self-healing,
+// and conservative. It cannot reintroduce the runaway fixed in 8c44b62, which
+// compounded because the anchor came from our own spec output; every value
+// merged here is a limit the kernel actually applied.
 //
-// A distinct-but-older observation therefore contributes its limit but not its
-// identity, and still reports true. That is deliberate: it is a real kill this
-// cache had never seen, so the watcher should still fan it out and trigger an
-// immediate reconcile — the same thing it did before ordering was enforced.
-// Suppressing it would lose the signal outright whenever node clock skew makes
-// a genuinely new kill on another pod look older. Reporting true costs at most
-// one extra (idempotent) Policy reconcile, and the storm protection that
-// actually matters lives one level up in AlreadyResolved/MarkResolved, which
-// dedups per pod UID before Reconcile ever reaches this call.
+// A distinct-but-older observation contributes its limit but not its identity
+// and still reports true: it is a real kill nothing has seen, and suppressing
+// it would lose the signal whenever clock skew makes a new kill look older.
+// Per-pod storm protection lives in AlreadyResolved/MarkResolved instead.
 func (c *Cache) Record(key Key, record OOMRecord) bool {
 	c.mu.Lock()
 	merged := record
@@ -211,9 +175,6 @@ func (c *Cache) Record(key Key, record OOMRecord) bool {
 	return true
 }
 
-// laterOf returns the later of two wall-clock times. Used for ObservedAt,
-// which tracks when the watcher last saw evidence for an entry rather than
-// when the kill happened, so it advances on any observation.
 func laterOf(a, b time.Time) time.Time {
 	if b.After(a) {
 		return b
@@ -227,12 +188,10 @@ func laterOf(a, b time.Time) time.Time {
 // origin makes common: it is truncated to whole seconds, so two kills inside
 // one second are indistinguishable by time alone.
 //
-// This ordering governs the record's identity and timestamps ONLY — see
-// Record, which merges OOMLimitBytes by max() instead of taking it from the
-// winner. That split is what makes the tie-break harmless: restart counts from
-// two different pods of one workload are unrelated counters, so on a cross-pod
-// tie this picks arbitrarily between two equally-recent identity stamps, and
-// nothing the recommender computes from depends on which one it picks.
+// This governs identity and timestamps only; Record merges OOMLimitBytes by
+// max(). That split makes the tie-break harmless: restart counts from two pods
+// of one workload are unrelated counters, so a cross-pod tie picks arbitrarily
+// between two equally-recent identity stamps.
 func newerThan(a, b OOMRecord) bool {
 	if a.TerminatedAt.Equal(b.TerminatedAt) {
 		return a.RestartCount > b.RestartCount
@@ -240,18 +199,14 @@ func newerThan(a, b OOMRecord) bool {
 	return a.TerminatedAt.After(b.TerminatedAt)
 }
 
-// AlreadyResolved implements Sink. See the interface doc for the full
-// contract; this is a plain TTL-bounded lookup guarded by the same lock as
-// entries/byWorkload.
+// AlreadyResolved implements Sink. See the interface doc for the contract.
 func (c *Cache) AlreadyResolved(podUID types.UID, container string, restartCount int32, terminatedAt time.Time) bool {
 	return c.alreadyResolvedAt(time.Now(), podUID, container, restartCount, terminatedAt)
 }
 
-// alreadyResolvedAt is AlreadyResolved with an injectable "now", following
-// the same explicit-parameter pattern sweep(now) already establishes for
-// testing this type deterministically (Sink's interface signature is fixed,
-// so the clock can't be a constructor argument the way ttlLRUCache's is in
-// internal/webhook — it has to be threaded through like sweep's is).
+// alreadyResolvedAt is AlreadyResolved with an injectable "now". Sink's
+// signature is fixed, so the clock is threaded through like sweep(now)'s
+// rather than held as a constructor argument.
 func (c *Cache) alreadyResolvedAt(now time.Time, podUID types.UID, container string, restartCount int32, terminatedAt time.Time) bool {
 	key := resolvedEventKey{PodUID: podUID, Container: container, RestartCount: restartCount, TerminatedAt: terminatedAt}
 	c.mu.RLock()
@@ -269,8 +224,7 @@ func (c *Cache) MarkResolved(podUID types.UID, container string, restartCount in
 }
 
 // markResolvedAt is MarkResolved with an injectable "now" — see
-// alreadyResolvedAt's doc for why this mirrors sweep(now) instead of a
-// struct-level clock field.
+// alreadyResolvedAt.
 func (c *Cache) markResolvedAt(now time.Time, podUID types.UID, container string, restartCount int32, terminatedAt time.Time) {
 	key := resolvedEventKey{PodUID: podUID, Container: container, RestartCount: restartCount, TerminatedAt: terminatedAt}
 	c.mu.Lock()
@@ -324,9 +278,8 @@ func (c *Cache) RecentByWorkload(ns, kind, name string, maxAge time.Duration) ma
 	return out
 }
 
-// Size returns the current number of cached entries, including any that may
-// be stale but not yet evicted. Intended for the metrics gauge; callers that
-// need an "only fresh" count should iterate via RecentByWorkload instead.
+// Size returns the number of cached entries, including stale-but-not-yet-swept
+// ones. For a fresh-only count, use RecentByWorkload.
 func (c *Cache) Size() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -359,9 +312,8 @@ func (c *Cache) Run(ctx context.Context) {
 	}
 }
 
-// sweep drops every entry older than ttl, in both entries and resolved.
-// Exposed (unexported) so tests can drive eviction deterministically without
-// waiting on a real ticker.
+// sweep drops every entry older than ttl, in both entries and resolved. now is
+// a parameter so tests can drive eviction without a real ticker.
 func (c *Cache) sweep(now time.Time) {
 	c.mu.Lock()
 	for key := range c.entries {
@@ -403,10 +355,8 @@ func (c *Cache) removeIndexLocked(key Key) {
 }
 
 // evictOldestLocked drops the entry with the smallest ObservedAt. Caller must
-// hold mu in write mode. O(N) — at the default cap (a few thousand entries) a
-// full scan is on the order of microseconds; a min-heap would shave it to
-// O(log N) but at the cost of an auxiliary structure to keep in sync with
-// entries on every mutation.
+// hold mu in write mode. The O(N) scan is microseconds at the default cap; a
+// min-heap would only add a structure to keep in sync on every mutation.
 func (c *Cache) evictOldestLocked() {
 	var oldestKey Key
 	var oldestAt time.Time
@@ -423,10 +373,8 @@ func (c *Cache) evictOldestLocked() {
 	}
 }
 
-// evictOldestResolvedLocked drops the resolved mark with the smallest
-// mark-time. Caller must hold mu in write mode. Same O(N) full-scan trade-off
-// as evictOldestLocked, and for the same reason: cheap enough at this cap not
-// to warrant an auxiliary heap.
+// evictOldestResolvedLocked drops the oldest resolved mark. Caller must hold
+// mu in write mode. Same O(N) trade-off as evictOldestLocked.
 func (c *Cache) evictOldestResolvedLocked() {
 	var oldestKey resolvedEventKey
 	var oldestAt time.Time

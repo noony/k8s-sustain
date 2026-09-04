@@ -17,18 +17,12 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// errPrefetchMissingForBatchedKind is logged (never returned to a caller,
-// since the fallback query below still runs and may well succeed) when
-// buildRecommendations receives a nil inputs that Reconcile's
-// candidate-building loop did NOT itself mark as deliberately withheld
-// (snapshotPending false). Every kind batches now, so the only legitimate
-// source of a nil inputs is that loop's own pendingSnapshot bookkeeping (an
-// identity with no observed-resources snapshot yet to size a shard with). A
-// nil inputs that is not that means some future change desynced this guard
-// from the candidate-building loop's own withholding logic, silently
-// degrading back to a per-workload query for every affected workload — a real
-// performance regression that would otherwise be invisible because the
-// recommendation itself still succeeds via the fallback.
+// errPrefetchMissingForBatchedKind is logged, never returned: the fallback
+// query still runs and usually succeeds, which is exactly why a desync between
+// this guard and Reconcile's candidate-building loop would otherwise be
+// invisible while silently degrading back to a per-workload query. The only
+// legitimate source of a nil inputs is that loop's own pendingSnapshot
+// bookkeeping.
 var errPrefetchMissingForBatchedKind = errors.New("prefetched batch inputs missing for an identity that should always be batched")
 
 // recDeps is the slice of reconciler state the recommendation pipeline
@@ -68,47 +62,31 @@ func buildRecommendations(
 	inputs *recommender.WorkloadInputs,
 	fetchErr error,
 	// snapshotPending is true when Reconcile's candidate-building loop
-	// (policy_controller.go's pendingSnapshot) itself withheld this identity
-	// from the batch because it had no observed-resources snapshot yet to
-	// size a shard with -- a legitimate, expected first-cycle state, not a
-	// bug. It suppresses errPrefetchMissingForBatchedKind's log below for
-	// exactly that case. Callers outside Reconcile's loop (buildRecommendations'
-	// direct unit tests, refreshDepartedRecommendation invoked synthetically)
-	// that are not exercising that withholding should pass false.
+	// (policy_controller.go's pendingSnapshot) withheld this identity from the
+	// batch for lack of an observed-resources snapshot to size a shard with --
+	// an expected first-cycle state, not a bug, so it suppresses
+	// errPrefetchMissingForBatchedKind below. Callers not exercising that
+	// withholding pass false.
 	snapshotPending bool,
 ) (map[string]workload.ContainerRecommendation, error) {
 	rsCfg := policy.Spec.RightSizing.ResourcesConfigs
 	logger := log.FromContext(ctx).WithValues("kind", ownerKind, "name", ownerName, "namespace", ns)
 
-	// fetchErr is non-nil only when Reconcile's batch prefetch genuinely
-	// failed to reach Prometheus for this identity: its shard query failed,
-	// was retried, and its per-workload fallback (inside
-	// recommender.FetchWorkloadInputsBatch) ALSO failed -- see
-	// recommender.BatchStats' doc comment. Surfacing it here, before even
-	// looking at inputs, restores exactly the behaviour the old unconditional
-	// FetchWorkloadInputs call used to have: the caller's existing
-	// handleStepError("prometheus", ...) path picks this error up, which is
-	// what re-establishes retry tracking, the ReconciliationRetryScheduled
-	// warning event, and the policy's PartialFailure condition. Without this
-	// check, a total Prometheus outage would flow through as an empty (but
-	// non-nil) inputs and look identical to "no data yet" -- Ready:
-	// ReconciliationSucceeded, no retry, no event, nothing but a V(1) log.
+	// fetchErr is non-nil only when the batch prefetch genuinely failed to
+	// reach Prometheus for this identity: the shard query failed, was retried,
+	// and its per-workload fallback failed too (recommender.BatchStats). It is
+	// checked before inputs because a total outage otherwise flows through as
+	// an empty-but-non-nil inputs indistinguishable from "no data yet" --
+	// Ready, no retry, no event, just a V(1) log.
 	if fetchErr != nil {
 		return nil, fetchErr
 	}
 
-	// nil means this identity was not prefetched by Reconcile's
-	// FetchWorkloadInputsBatch call -- NOT "queried, found nothing" (the
-	// batch guarantees a non-nil entry for every candidate it was given, see
-	// BatchInputs's doc comment). Every kind batches now, so the one
-	// legitimate reason for a nil inputs is that Reconcile's
-	// candidate-building loop had no observed-resources snapshot yet to size a
-	// shard with and marked this identity accordingly (snapshotPending). We
-	// fall back to the original single-workload fetch here, exactly as every
-	// caller did before batching existed. A nil inputs that is not that would
-	// be a bug in the candidate-building loop, not a legitimate "no data" case
-	// -- logged loudly below so that bug can't hide behind a still-successful
-	// recommendation.
+	// nil means this identity was not prefetched -- NOT "queried, found
+	// nothing" (the batch guarantees a non-nil entry for every candidate it was
+	// given, see BatchInputs). The one legitimate cause is snapshotPending; any
+	// other nil is a candidate-building bug, logged loudly below so it cannot
+	// hide behind a still-successful fallback.
 	if inputs == nil {
 		if !snapshotPending {
 			logger.Error(errPrefetchMissingForBatchedKind,
@@ -140,17 +118,13 @@ func buildRecommendations(
 	// gate so a crash-looping container can still get a memory recommendation
 	// from the OOM peak below.
 	//
-	// "Pod"-kind targets (bare pods opted in via k8s.sustain.io/owner-name)
-	// are gated like every other kind. They used to be exempt, back when a
-	// bare pod could never be recycled at all and a near-zero percentile had
-	// nothing to act on; that stopped being true once Ongoing bare pods
-	// started being resized in place (see resizeBarePods) — a brand-new
-	// identity with partial warm-up samples can now produce a near-zero
-	// percentile that floors to the hard minimum and gets applied in place,
-	// which for memory can kill the container. The gate keys on the EARLIEST
-	// of the pod's creation time and the identity's first-seen time, so a
-	// recurring identity still clears it on its long-lived
-	// WorkloadRecommendation regardless of this gate.
+	// "Pod"-kind targets (bare pods) are gated like every other kind: since
+	// Ongoing bare pods are resized in place (see resizeBarePods), a brand-new
+	// identity with partial warm-up samples could otherwise floor to the hard
+	// minimum and be applied in place — which for memory can kill the
+	// container. The gate keys on the EARLIEST of the pod's creation time and
+	// the identity's first-seen time, so a recurring identity still clears it
+	// on its long-lived WorkloadRecommendation.
 	if recommender.ShouldSkipYoungWorkload(workloadCreated, identityFirstSeen, recentOOM) {
 		recommendationSkipped.WithLabelValues(ns, ownerKind, ownerName, "workload_too_young").Inc()
 		logger.Info("skipping recommendation: workload too young",
@@ -166,27 +140,14 @@ func buildRecommendations(
 	var liveRec *oomwatch.OOMRecord
 	recs := recommender.BuildContainerRecs(containers, inputs, autoInfo, rsCfg, coordCfg,
 		recommender.BuildContainerRecsOptions{
-			// Construct the per-container OOM context: prometheus signal + any
-			// live OOM observation, anchoring on whichever reports the HIGHER
-			// OOM-time limit.
-			//
-			// The two anchors have complementary blind spots and neither can be
-			// inflated by k8s-sustain's own resize any more, so max() is safe
-			// and strictly better than preferring either one:
-			//
-			//   - Prometheus survives a controller restart (the live cache is
-			//     in-memory only) but is windowed: the recording rule reads the
-			//     limit around a restart, so right after a resize-then-OOM it
-			//     can still report the PREVIOUS limit for a cycle.
-			//   - The live record carries the exact limit the kubelet had
-			//     applied at that kill, with no windowing lag, but is lost on
-			//     restart and expires with the cache TTL.
-			//
-			// Preferring Prometheus whenever it holds any value anchors on the
-			// stale, lower limit during that window and under-bumps a container
-			// that is still OOM-looping — resizing it back down into another
-			// kill. Taking the max keeps the most recent limit it genuinely
-			// died at, from whichever source noticed first.
+			// Anchor on whichever source reports the HIGHER OOM-time limit.
+			// The two have complementary blind spots and neither can be inflated
+			// by k8s-sustain's own resize: Prometheus survives a controller
+			// restart but is windowed, so right after a resize-then-OOM it can
+			// still report the PREVIOUS limit; the live record has the exact
+			// limit applied at that kill but is lost on restart. Preferring
+			// Prometheus anchors on the stale, lower limit and under-bumps a
+			// container that is still OOM-looping.
 			EnrichOOM: func(name string, oom recommender.OOMSignal) recommender.OOMSignal {
 				liveRec = liveOOMs[name]
 				if liveRec != nil {

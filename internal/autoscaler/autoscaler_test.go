@@ -284,10 +284,9 @@ func TestDetect_KEDACurrentReplicas(t *testing.T) {
 	}
 }
 
-// TestSnapshotLookup_MatchesDetect proves Snapshot.Lookup returns byte-for-byte
-// the same Info that the per-workload Detect path returns, across every match
-// case: HPA-only, ScaledObject-only, both-present (KEDA precedence), neither,
-// and a scaleTargetRef mismatch. Snapshot must preserve EXACT detection results.
+// Snapshot.Lookup must return byte-for-byte the same Info as Detect across
+// every match case: HPA-only, ScaledObject-only, both (KEDA precedence),
+// neither, and a scaleTargetRef mismatch.
 func TestSnapshotLookup_MatchesDetect(t *testing.T) {
 	hpaSet := []client.Object{newHPAWithTargets("default", "web-hpa", "Deployment", "web", 2, 10, ptr.To[int32](70), ptr.To[int32](80))}
 	soSet := []client.Object{newScaledObjectWithTriggers("default", "api-so", "Deployment", "api", 1, 8, []any{
@@ -334,9 +333,6 @@ func TestSnapshotLookup_MatchesDetect(t *testing.T) {
 	}
 }
 
-// TestNamespacedSnapshotLookup_MatchesDetect confirms the lazy per-namespace
-// wrapper used by the controller resolves identically to Detect and spans
-// namespaces correctly.
 func TestNamespacedSnapshotLookup_MatchesDetect(t *testing.T) {
 	hpaA := newHPA("ns-a", "a-hpa", "Deployment", "a", 1, 5)
 	soB := newScaledObject("ns-b", "b-so", "Deployment", "b", 2, 9)
@@ -364,10 +360,8 @@ func TestNamespacedSnapshotLookup_MatchesDetect(t *testing.T) {
 	}
 }
 
-// TestNamespacedSnapshotLookup_FailThenRecover proves a transient List failure on
-// the first Lookup in a namespace is NOT cached: the next Lookup retries
-// BuildSnapshot and succeeds. The old sync.Once design poisoned every subsequent
-// Lookup in the namespace with the cached error.
+// A transient List failure on the first Lookup must not be cached. The old
+// sync.Once design poisoned every subsequent Lookup in the namespace with it.
 func TestNamespacedSnapshotLookup_FailThenRecover(t *testing.T) {
 	hpa := newHPA("default", "web-hpa", "Deployment", "web", 2, 10)
 	base := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(hpa).Build()
@@ -385,12 +379,10 @@ func TestNamespacedSnapshotLookup_FailThenRecover(t *testing.T) {
 
 	m := NewNamespacedSnapshot(c)
 
-	// First Lookup hits the blip and returns an error.
 	if _, err := m.Lookup(context.Background(), "default", "Deployment", "web"); err == nil {
 		t.Fatalf("expected first Lookup to return the transient error")
 	}
 
-	// Second Lookup must retry BuildSnapshot and succeed.
 	got, err := m.Lookup(context.Background(), "default", "Deployment", "web")
 	if err != nil {
 		t.Fatalf("expected second Lookup to recover, got error: %v", err)
@@ -400,9 +392,6 @@ func TestNamespacedSnapshotLookup_FailThenRecover(t *testing.T) {
 	}
 }
 
-// TestNamespacedSnapshotLookup_CachesSuccess proves a successful build is cached:
-// after the first Lookup, further Lookups in the same namespace do not re-List
-// (the HPA and ScaledObject Lists happen exactly once each).
 func TestNamespacedSnapshotLookup_CachesSuccess(t *testing.T) {
 	hpa := newHPA("default", "web-hpa", "Deployment", "web", 2, 10)
 	base := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(hpa).Build()
@@ -423,17 +412,15 @@ func TestNamespacedSnapshotLookup_CachesSuccess(t *testing.T) {
 		}
 	}
 
-	// BuildSnapshot issues exactly two Lists (HPAs + ScaledObjects); caching the
-	// success means three Lookups still cost only those two.
+	// BuildSnapshot issues two Lists; caching means three Lookups still cost two.
 	if n := lists.Load(); n != 2 {
 		t.Errorf("expected exactly 2 List calls (HPA+ScaledObject, once), got %d", n)
 	}
 }
 
-// TestNamespacedSnapshotLookup_ConcurrentFailThenRecover stresses concurrent
-// same-namespace Lookups with -race while the first List fails. It asserts no
-// data race and eventual consistency: once the storm settles, a fresh Lookup
-// succeeds (the failed build was never cached).
+// Concurrent same-namespace Lookups under -race while the first List fails:
+// asserts no data race, and that a fresh Lookup afterwards succeeds because the
+// failed build was never cached.
 func TestNamespacedSnapshotLookup_ConcurrentFailThenRecover(t *testing.T) {
 	hpa := newHPA("default", "web-hpa", "Deployment", "web", 2, 10)
 	base := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(hpa).Build()
@@ -456,15 +443,14 @@ func TestNamespacedSnapshotLookup_ConcurrentFailThenRecover(t *testing.T) {
 	for range goroutines {
 		go func() {
 			defer wg.Done()
-			// Result is intentionally ignored — under concurrency some may hit the
-			// blip and some may succeed; we only assert race-freedom here.
+			// Ignored on purpose: under concurrency some hit the blip and some do
+			// not; only race-freedom is asserted here.
 			_, _ = m.Lookup(context.Background(), "default", "Deployment", "web")
 		}()
 	}
 	wg.Wait()
 
-	// Eventual consistency: a fresh Lookup after the storm must succeed, proving no
-	// goroutine poisoned the namespace with the cached error.
+	// No goroutine may have poisoned the namespace with the cached error.
 	got, err := m.Lookup(context.Background(), "default", "Deployment", "web")
 	if err != nil {
 		t.Fatalf("expected post-storm Lookup to succeed, got error: %v", err)
@@ -486,7 +472,6 @@ func TestDetect_ScaledObjectCRDMissing(t *testing.T) {
 	if got.Kind != KindHPA {
 		t.Errorf("expected fallback to HPA when ScaledObject CRD is missing, got %+v", got)
 	}
-	// Sanity: confirm the fake client really would have errored on ScaledObject list.
 	var soList unstructured.UnstructuredList
 	soList.SetGroupVersionKind(schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "ScaledObjectList"})
 	if err := c.List(context.Background(), &soList); err == nil {

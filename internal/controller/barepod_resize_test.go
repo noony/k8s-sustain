@@ -42,16 +42,11 @@ func barePod(ns, name, ownerName string) *corev1.Pod {
 	}
 }
 
-// barePodTarget builds the target the way listBarePodTargets does — by running
-// workload.GroupBarePods over the namespace's pods and taking the group for
-// ownerName — so the membership carried on the target is produced by the
-// production rule rather than hand-assembled. pods is what the namespace holds;
-// pods belonging to other identities, or disqualified by the grouping rule
-// (controller ownerRef, missing annotation), are passed in too and must not end
-// up as members.
-//
-// An identity with no live pods yields a target with no members, which is the
-// common bare-pod shape between runs.
+// barePodTarget builds the target the way listBarePodTargets does — running
+// workload.GroupBarePods over the namespace's pods — so membership comes from
+// the production rule rather than being hand-assembled. pods is everything the
+// namespace holds, including pods of other identities and pods disqualified by
+// the grouping rule, which must not end up as members.
 func barePodTarget(ns, ownerName string, pods ...*corev1.Pod) *workloadTarget {
 	items := make([]corev1.Pod, 0, len(pods))
 	for _, p := range pods {
@@ -112,11 +107,8 @@ func newResizeRecorderClient(t *testing.T, r *PolicyReconciler, objs ...client.O
 	return rec
 }
 
-// TestResizeBarePods_SkipsControlledPod is the ownerRef guard: a pod carrying
-// the mirrored owner-name label but owned by a ReplicaSet is not a member of
-// the bare-pod identity and must never be resized by this path. Membership
-// comes from workload.GroupBarePods precisely so that a shared label cannot
-// pull a controlled pod in.
+// The ownerRef guard: membership comes from workload.GroupBarePods precisely so
+// that a shared owner-name label cannot pull a ReplicaSet-owned pod in.
 func TestResizeBarePods_SkipsControlledPod(t *testing.T) {
 	member := barePod("ns", "member", "dag-task")
 	impostor := member.DeepCopy()
@@ -149,9 +141,6 @@ func TestResizeBarePods_SkipsControlledPod(t *testing.T) {
 	}
 }
 
-// TestResizeBarePods_ResizesEveryMemberNeverEvicts verifies every live pod of
-// the identity is corrected, not just the representative, and that no other
-// identity in the namespace is touched.
 func TestResizeBarePods_ResizesEveryMemberNeverEvicts(t *testing.T) {
 	a := barePod("airflow", "etl-run-1", "etl-daily")
 	b := barePod("airflow", "etl-run-2", "etl-daily")
@@ -181,9 +170,7 @@ func TestResizeBarePods_ResizesEveryMemberNeverEvicts(t *testing.T) {
 	}
 }
 
-// TestResizeBarePods_ZeroWhenNoInPlaceSupport pins the k8s < 1.33 behaviour:
-// the whole path is a no-op there, so bare pods stay exactly as untouched as
-// they were before in-place resize existed.
+// On k8s < 1.33 the whole path is a no-op, so bare pods stay untouched.
 func TestResizeBarePods_ZeroWhenNoInPlaceSupport(t *testing.T) {
 	pod := barePod("airflow", "etl-run-1", "etl-daily")
 	r := makeReconciler(t, pod)
@@ -201,9 +188,8 @@ func TestResizeBarePods_ZeroWhenNoInPlaceSupport(t *testing.T) {
 	}
 }
 
-// TestResizeBarePods_NoLivePodsForIdentity covers the common bare-pod shape:
-// the identity is known from its cached recommendation but no pod of it is
-// currently running.
+// The common bare-pod shape: the identity is known from its cached
+// recommendation but no pod of it is currently running.
 func TestResizeBarePods_NoLivePodsForIdentity(t *testing.T) {
 	other := barePod("airflow", "other-run-1", "other-task")
 	r := makeReconciler(t, other)
@@ -221,15 +207,10 @@ func TestResizeBarePods_NoLivePodsForIdentity(t *testing.T) {
 	}
 }
 
-// TestResizeBarePods_DoesNotReListTheNamespace pins the grouping to the
-// listing phase. Re-deriving membership here meant one namespace-wide,
-// cache-backed pod List per bare-pod identity per cycle — issued concurrently
-// under the errgroup, each deep-copying every pod — to recompute what
-// listBarePodTargets had already computed once. An Airflow namespace with
-// hundreds of pods and dozens of DAG-task identities paid it M times over.
-//
-// A List interceptor that always fails makes the regression loud: with the
-// members carried on the target no List is needed, so the resize succeeds.
+// Pins the grouping to the listing phase: re-deriving membership here cost one
+// namespace-wide, cache-backed pod List per identity per cycle, concurrently
+// under the errgroup. A List interceptor that always fails makes the regression
+// loud — with the members carried on the target no List is needed.
 func TestResizeBarePods_DoesNotReListTheNamespace(t *testing.T) {
 	pod := barePod("airflow", "etl-run-1", "etl-daily")
 	target := barePodTarget("airflow", "etl-daily", pod)
@@ -266,9 +247,6 @@ func TestResizeBarePods_DoesNotReListTheNamespace(t *testing.T) {
 	}
 }
 
-// TestReconcileWorkload_BarePodOngoing_ResizesRunningPod is the end-to-end
-// dispatch check: an Ongoing bare-pod identity reaches the in-place resize
-// path and never the eviction path.
 func TestReconcileWorkload_BarePodOngoing_ResizesRunningPod(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -294,9 +272,8 @@ func TestReconcileWorkload_BarePodOngoing_ResizesRunningPod(t *testing.T) {
 	}
 }
 
-// TestReconcileWorkload_BarePodOnCreate_NeverResizes pins the mode
-// distinction: the OnCreate early return sits above the bare-pod branch, so
-// an OnCreate identity is computed and cached but never resized.
+// The OnCreate early return sits above the bare-pod branch, so an OnCreate
+// identity is computed and cached but never resized.
 func TestReconcileWorkload_BarePodOnCreate_NeverResizes(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -322,15 +299,12 @@ func TestReconcileWorkload_BarePodOnCreate_NeverResizes(t *testing.T) {
 	}
 }
 
-// A bare-pod group is claimed by ONE policy, but every other kind verifies
-// ownerRef UID and selector before the patcher touches a pod and this path has
-// neither. A pod annotated for a different policy that happens to share the
-// group's (namespace, owner-name) must not be resized under this group's
-// recommendation — for memory an in-place resize can restart the container.
-//
-// Harmless while bare pods were computed but never applied; this branch made
-// them resizable, and resizeBarePods feeds the whole member list straight to
-// ResizePodsInPlace.
+// Every other kind verifies ownerRef UID and selector before the patcher
+// touches a pod; this path has neither, and resizeBarePods feeds the whole
+// member list straight to ResizePodsInPlace. A pod annotated for a different
+// policy that happens to share the group's (namespace, owner-name) must not be
+// resized under this group's recommendation — for memory an in-place resize can
+// restart the container.
 func TestResizeBarePods_SkipsPodOfAnotherPolicy(t *testing.T) {
 	mine := barePod("airflow", "etl-run-1", "etl-daily")
 	theirs := barePod("airflow", "etl-run-2", "etl-daily")

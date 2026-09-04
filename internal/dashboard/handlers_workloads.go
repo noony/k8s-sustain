@@ -13,8 +13,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/policymatch"
 )
 
-// ---- Workloads scoped to one policy ----
-
 type workloadSummary struct {
 	Namespace           string               `json:"namespace"`
 	Kind                string               `json:"kind"`
@@ -55,11 +53,9 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 
 	workloads := s.listPolicyWorkloadRows(ctx, policy, policyName)
 
-	// Namespace dropdown is derived from the full, unfiltered list.
 	namespaces := uniqueNamespaces(workloads)
 
-	// Narrow to the requested namespace before the (potentially N+1) signal
-	// decoration so we only do that work for the rows we will return.
+	// Narrow before the signal decoration so it only covers returned rows.
 	if nsFilter != "" {
 		workloads = filterByNamespace(workloads, nsFilter)
 	}
@@ -79,22 +75,9 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 }
 
 // listPolicyWorkloadRows gathers workload rows for every kind the policy
-// opts in to. Per-kind list errors are logged and skipped.
-//
-// Namespace annotations are fetched once, before the per-kind loop, and
-// threaded into every listWorkloadsOfKind call: this loops over
-// supportedWorkloadKinds (up to seven kinds), and each call would otherwise
-// re-List every Namespace in the cluster against the dashboard's uncached
-// client. A List failure degrades to nil (no namespace-level opt-in) rather
-// than failing the whole request.
-//
-// entryMatchesPolicy is the sole gate: opting in (policymatch.ResolvePolicy)
-// is necessary but not sufficient, since the Policy's own
-// selector.namespaces/labelSelector (or the operator's --excluded-namespaces)
-// may not reach the workload that opted in — see policymatch.ResolvePolicy's
-// doc comment ("Namespace opt-in is delegated, not sovereign") for why both
-// checks are required, and entryMatchesPolicy's doc for why both must be
-// evaluated against the same real object for a grouped identity.
+// opts in to. Per-kind list errors are logged and skipped. Namespace
+// annotations are fetched once, before the per-kind loop; entryMatchesPolicy
+// is the sole gate, since opting in is necessary but not sufficient.
 func (s *Server) listPolicyWorkloadRows(ctx context.Context, policy *sustainv1alpha1.Policy, policyName string) []workloadSummary {
 	nsAnnotations, err := s.namespaceAnnotations(ctx)
 	if err != nil {
@@ -154,9 +137,7 @@ func uniqueNamespaces(workloads []workloadSummary) []string {
 	return uniqueValues(workloads, func(w workloadSummary) string { return w.Namespace })
 }
 
-// uniqueValues collects the distinct, unordered values produced by valueOf over
-// rows. It backs the per-kind unique-set helpers, which differ only in the row
-// type and which field(s) they pull.
+// uniqueValues collects the distinct, unordered values of valueOf over rows.
 func uniqueValues[T any](rows []T, valueOf func(T) string) []string {
 	seen := make(map[string]struct{})
 	for _, r := range rows {
@@ -192,10 +173,7 @@ func applyWorkloadSignals(ctx context.Context, s *Server, workloads []workloadSu
 }
 
 // applySignals batches the signal queries for every row and overlays the
-// result back onto each row. keyOf derives the Prometheus workload key for a
-// row; set copies the fetched signals onto a row in place. It is the shared
-// body behind applyWorkloadSignals and applyAllWorkloadSignals, which differ
-// only in their row struct type.
+// result onto each row in place.
 func applySignals[T any](ctx context.Context, s *Server, rows []T, keyOf func(T) string, set func(*T, workloadSignals)) {
 	keys := make([]string, len(rows))
 	for i, r := range rows {
@@ -206,8 +184,6 @@ func applySignals[T any](ctx context.Context, s *Server, rows []T, keyOf func(T)
 		set(&rows[i], signals[keys[i]])
 	}
 }
-
-// ---- All workloads (cluster-wide) ----
 
 type allWorkloadSummary struct {
 	Namespace           string               `json:"namespace"`
@@ -294,17 +270,13 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 
 	workloads := s.collectAllWorkloads(ctx)
 
-	// Namespace/kind dropdowns are derived from the full, unfiltered list so
-	// picking one value doesn't collapse the other options (mirrors
-	// handlePolicyWorkloads).
+	// Facets come from the full, unfiltered list.
 	namespaces, kinds := uniqueNamespacesAndKinds(workloads)
 
-	// Narrow by namespace/kind before the signal decoration so that work only
-	// covers the rows we may return.
+	// Narrow before the signal decoration so it only covers returned rows.
 	workloads = filterByNamespaceAndKind(workloads, filters)
 	applyAllWorkloadSignals(ctx, s, workloads)
 
-	// Filters that depend on signal data run after decoration.
 	workloads = applyAllWorkloadFilters(workloads, filters)
 
 	counts := countAllWorkloads(workloads)
@@ -324,27 +296,17 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 }
 
 // collectAllWorkloads lists workloads of every supported kind, cluster-wide.
-// Namespace/kind narrowing happens in the handler after the facet sets are
-// derived, so the dropdowns always reflect the full population.
-//
-// Namespace annotations are fetched once, before the per-kind loop, and
-// threaded into every listWorkloadsOfKind call — see listPolicyWorkloadRows
-// for why: this loops over supportedWorkloadKinds too, and each call would
-// otherwise re-List every Namespace in the cluster.
+// Namespace/kind narrowing happens in the handler after the facets are
+// derived. Namespace annotations are fetched once, before the per-kind loop.
 func (s *Server) collectAllWorkloads(ctx context.Context) []allWorkloadSummary {
 	nsAnnotations, err := s.namespaceAnnotations(ctx)
 	if err != nil {
 		s.Logger.Error(err, "failed to list namespaces; namespace-level policy opt-in will not be resolved")
 		nsAnnotations = nil
 	}
-	// policies backs the same "opt-in is necessary but not sufficient" check
-	// listPolicyWorkloadRows applies — see its doc comment. This is the
-	// cluster-wide view, so there is no single *Policy already in hand: every
-	// resolved policy name is looked up here instead, off one List rather
-	// than one Get per row. A List failure degrades to nil (distinct from a
-	// successful List of zero Policies, which is a non-nil empty map) and
-	// falls back to trusting each workload's own opt-in alone, rather than
-	// marking every workload in the cluster unmanaged over a transient error.
+	// A Policies List failure degrades to nil (a successful empty List is a
+	// non-nil map) and falls back to each workload's own opt-in, rather than
+	// marking every workload unmanaged over a transient error.
 	policies, err := s.policiesByName(ctx)
 	if err != nil {
 		s.Logger.Error(err, "failed to list policies; Policy selector consent will not be checked, falling back to each workload's own opt-in")
@@ -363,10 +325,6 @@ func (s *Server) collectAllWorkloads(ctx context.Context) []allWorkloadSummary {
 			if policies != nil {
 				policyName, automated = resolveManagingPolicy(e, policies, s.ExcludedNamespaces)
 			} else {
-				// Policies List failed (see the doc above): fall back to
-				// trusting each workload's own opt-in alone, rather than
-				// marking every workload in the cluster unmanaged over a
-				// transient error.
 				policyName = e.ResolvedPolicy()
 				automated = policyName != ""
 			}
@@ -405,19 +363,9 @@ func (s *Server) collectAllWorkloads(ctx context.Context) []allWorkloadSummary {
 	return out
 }
 
-// resolveManagingPolicy finds the first member of e (see workloadEntry.Members's
-// doc for fold order) whose own resolved policy also consents to that same
-// member via policymatch.Matches — collectAllWorkloads' counterpart to
-// entryMatchesPolicy's per-member conjunction, needed because this is the
-// one caller with no single Policy already in hand: every candidate name has
-// to be looked up in policies, the policiesByName map collectAllWorkloads
-// already built, rather than checked against one fixed *Policy. Returns
-// ("", false) when no member's opt-in survives its own Policy's selector.
-//
-// e.Members is nil for the overwhelming majority of entries (see its doc);
-// this evaluates e's own ResolvedPolicy() directly in that case, via
-// entryMatchesPolicy, without allocating anything — identical to before
-// Members existed.
+// resolveManagingPolicy returns the first member of e whose resolved policy
+// also matches that same member, looked up in policies. Returns ("", false)
+// when no member's opt-in survives its own Policy's selector.
 func resolveManagingPolicy(e workloadEntry, policies map[string]*sustainv1alpha1.Policy, excludedNamespaces []string) (string, bool) {
 	if len(e.Members) == 0 {
 		name := e.ResolvedPolicy()
@@ -475,9 +423,8 @@ func uniqueNamespacesAndKinds(workloads []allWorkloadSummary) (namespaces, kinds
 	return
 }
 
-// filterByNamespaceAndKind applies the identity filters that don't depend on
-// signal decoration. Kept separate from applyAllWorkloadFilters so the rows
-// passed to the (potentially expensive) signal queries are already narrowed.
+// filterByNamespaceAndKind applies the identity filters that do not depend on
+// signal decoration, so the signal queries see already-narrowed rows.
 func filterByNamespaceAndKind(workloads []allWorkloadSummary, f allWorkloadFilters) []allWorkloadSummary {
 	if f.namespace != "" {
 		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.Namespace == f.namespace })

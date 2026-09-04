@@ -3,9 +3,9 @@ package prometheus
 import "github.com/prometheus/common/model"
 
 // WorkloadIdentity is the (namespace, owner_kind, owner_name) tuple that
-// identifies a workload in every k8s_sustain recording rule. It is the map key
-// for batched query results, where a single response carries many workloads and
-// the container label alone is no longer unique.
+// identifies a workload in every k8s_sustain recording rule. It keys batched
+// query results, where one response carries many workloads and the container
+// label alone is not unique.
 type WorkloadIdentity struct {
 	Namespace string
 	OwnerKind string
@@ -18,27 +18,16 @@ type IdentityValues map[WorkloadIdentity]ContainerValues
 // vectorToIdentityValues unpacks a batched instant-query vector, grouping by
 // the full workload identity.
 //
-// This is the batched counterpart of vectorToContainerValues, which reads only
-// the container label because its query was pinned to one workload by the
-// selector. Here many workloads share one response, so container alone is not a
-// unique key: prod/api/app and staging/api/app would overwrite each other.
+// Series missing any identity label are dropped rather than folded into a
+// neighbouring identity, which would silently corrupt that workload's
+// recommendation.
 //
-// Series missing ANY identity label, or missing container, are dropped. They
-// cannot be attributed to a requesting workload, and folding them into a
-// neighbouring identity would silently corrupt that workload's recommendation —
-// far worse than the workload simply having no data this cycle, which callers
-// already handle.
-//
-// Unlike foldOOMVector, this does NOT aggregate multiple samples that land on
-// the same (identity, container) key — it last-write-wins. That is safe only
-// because the CPU/memory recording rules this feeds are already aggregated
-// server-side by `by (namespace, owner_kind, owner_name, container)` (see
-// avgByContainer/maxByContainer and the rule definitions in
-// charts/k8s-sustain/values.yaml), so at most one series per key can ever be
-// returned — the same invariant vectorToContainerValues has relied on all
-// along. If a rule's `by()` clause ever drops one of those labels, this stops
-// being true silently; treat that invariant as load-bearing before touching
-// this function or those rules.
+// Duplicate (identity, container) keys are last-write-wins. That is safe only
+// because the recording rules this feeds already aggregate server-side by
+// `by (namespace, owner_kind, owner_name, container)` (see
+// charts/k8s-sustain/values.yaml), so at most one series per key can be
+// returned. If a rule's `by()` clause ever drops one of those labels, this
+// breaks silently.
 func vectorToIdentityValues(vec model.Vector) IdentityValues {
 	out := make(IdentityValues)
 	for _, s := range vec {

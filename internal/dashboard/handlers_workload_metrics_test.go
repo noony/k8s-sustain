@@ -19,8 +19,6 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// ---- handleWorkloadRecommendations ----
-
 func TestHandleWorkloadRecommendations_WorkloadNotFound(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
 	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
@@ -37,7 +35,6 @@ func TestHandleWorkloadRecommendations_WorkloadNotFound(t *testing.T) {
 
 func TestHandleWorkloadRecommendations_UnmanagedWorkload(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
-	// Pod template has no policy annotation → unmanaged.
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d).Build()
 	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
 
@@ -59,13 +56,8 @@ func TestHandleWorkloadRecommendations_UnmanagedWorkload(t *testing.T) {
 	}
 }
 
-// TestHandleWorkloadRecommendations_PolicyMissing pins this endpoint's
-// candidate-policy resolution to the same s.policiesByName + resolveManagingPolicy
-// path collectAllWorkloads uses, rather than a single Get keyed on the
-// workload's own opt-in name: a workload naming a Policy that does not exist
-// in the cluster resolves no managing policy from a List either way, so this
-// must agree with /api/workloads (Automated: false), not surface a 404 that
-// /api/workloads never would for the same workload.
+// A workload naming a Policy that does not exist must agree with
+// /api/workloads (Automated: false), not 404.
 func TestHandleWorkloadRecommendations_PolicyMissing(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
 	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "ghost"}
@@ -104,10 +96,8 @@ func TestHandleWorkloadRecommendations_BadWindow(t *testing.T) {
 	}
 }
 
-// When the workload OOM'd within the last 24h and the kernel high-water peak
-// is above the percentile-based recommendation, the dashboard must surface the
-// peak-floored value — same behavior the controller applies — so users don't
-// see a recommendation that just got the workload killed.
+// After a recent OOM the kernel peak must floor the recommendation, as the
+// controller does.
 func TestHandleWorkloadRecommendations_AppliesOOMFloor(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "stress"}}
 	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
@@ -117,9 +107,7 @@ func TestHandleWorkloadRecommendations_AppliesOOMFloor(t *testing.T) {
 
 	const mib = 1 << 20
 	prom := &fakePromClient{
-		// p95 says 100 MiB is enough...
 		memByContainer: promclient.ContainerValues{"app": 100 * mib},
-		// ...but the workload OOM'd and the kernel saw 200 MiB.
 		oomSignal: promclient.OOMSignal{
 			OOMCounts:       promclient.ContainerValues{"app": 1},
 			PeakMemoryBytes: promclient.ContainerValues{"app": 200 * mib},
@@ -141,7 +129,6 @@ func TestHandleWorkloadRecommendations_AppliesOOMFloor(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing app container in response: %+v", got.Containers)
 	}
-	// Expected: peak (200 MiB) wins over p95 (100 MiB).
 	if app.MemoryRequest != "200Mi" {
 		t.Errorf("MemoryRequest = %q, want 200Mi (OOM floor)", app.MemoryRequest)
 	}
@@ -172,13 +159,8 @@ func TestHandleWorkloadRecommendations_HappyPath(t *testing.T) {
 	}
 }
 
-// TestHandleWorkloadRecommendations_SelectorExcludesWorkload pins the fix for
-// a review finding: this endpoint used to report Automated: true (and a
-// PolicyName) from entry.ResolvedPolicy() alone, never consulting
-// policymatch.Matches — so a workload whose Policy selector excludes it could
-// show Automated: true here while /api/workloads (which does gate on
-// Matches) correctly reported it as unmanaged. Two endpoints, same workload,
-// must never disagree.
+// Automated must reflect the Policy's selector, so this endpoint agrees with
+// /api/workloads.
 func TestHandleWorkloadRecommendations_SelectorExcludesWorkload(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"team": "b"}}
@@ -209,19 +191,10 @@ func TestHandleWorkloadRecommendations_SelectorExcludesWorkload(t *testing.T) {
 	}
 }
 
-// TestHandleWorkloadRecommendations_DepartedWorkloadSkipsSelectorGate pins
-// the fix for a regression: the selector gate added to guard against
-// SelectorExcludesWorkload was applied unconditionally, including to entries
-// synthesized from a retained WorkloadRecommendation for a departed workload
-// (inactiveWorkloadEntry). Such entries carry no ObjectLabels, so evaluating
-// the Policy's LabelSelector against them (an empty label set) always failed
-// — even though the WLR's Spec.Policy is the controller's own record that
-// this workload matched before it departed. That made
-// /api/policies/<p>/workloads (which lists straight off the WLR label,
-// ungated) and this endpoint disagree for the exact same departed workload.
+// A retained-WLR entry has no labels; the selector gate must skip the label
+// half for it or departed workloads always fail it.
 func TestHandleWorkloadRecommendations_DepartedWorkloadSkipsSelectorGate(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
-	// A selector that would reject an empty/nil label set.
 	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"team": "b"}}
 	wlr := retainedWLR("p", "airflow", "Pod", "etl")
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, wlr).Build()
@@ -245,14 +218,7 @@ func TestHandleWorkloadRecommendations_DepartedWorkloadSkipsSelectorGate(t *test
 	}
 }
 
-// TestHandleWorkloadRecommendations_DepartedWorkloadInExcludedNamespace pins
-// the other half of the same gate: a retained-WLR entry
-// (workloadEntry.FromRetainedWLR) has no ObjectLabels, so
-// entryMatchesPolicy skips the LabelSelector check for it — but
-// entry.Namespace IS available, so --excluded-namespaces must still be
-// honoured. Skipping the whole policymatch.Matches gate (rather than only
-// its label half) would wrongly report a departed workload in an excluded
-// namespace as still managed.
+// The namespace half of the gate still applies to a retained-WLR entry.
 func TestHandleWorkloadRecommendations_DepartedWorkloadInExcludedNamespace(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	wlr := retainedWLR("p", "airflow", "Pod", "etl")
@@ -279,19 +245,8 @@ func TestHandleWorkloadRecommendations_DepartedWorkloadInExcludedNamespace(t *te
 	}
 }
 
-// TestHandleWorkloadRecommendations_GroupedIdentitySiblingOptsInAndMatches
-// pins the fix for the gap left open by commit b45a168: that commit made
-// /api/workloads (collectAllWorkloads/resolveManagingPolicy) search every
-// real object behind a grouped identity for one that both opts into a
-// Policy and satisfies its selector, but left this endpoint picking its
-// candidate policy name from the representative alone
-// (entry.ResolvedPolicy()) and gating only that one name. That made the two
-// endpoints disagree for an identity whose representative opts into a
-// Policy it does NOT match, while a grouped sibling opts into a DIFFERENT
-// Policy it DOES match: /api/workloads reported it managed under the
-// sibling's Policy, this endpoint reported it unmanaged (or worse, managed
-// under the wrong Policy). Both must report the same verdict for the same
-// workload.
+// Both endpoints must report the same verdict when only a grouped sibling
+// opts into and matches a Policy.
 func TestHandleWorkloadRecommendations_GroupedIdentitySiblingOptsInAndMatches(t *testing.T) {
 	p := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	p.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"track": "green"}}
@@ -299,12 +254,8 @@ func TestHandleWorkloadRecommendations_GroupedIdentitySiblingOptsInAndMatches(t 
 	q.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"track": "nonexistent"}}
 
 	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	// Representative (newer, "checkout-blue"): opts into q, but its own
-	// labels ("track": "blue") don't satisfy q's selector.
 	newer := deploymentWithOwnerNamePolicyAndLabels("team-a", "checkout-blue", "checkout", "q",
 		map[string]string{"track": "blue"}, baseTime.Add(time.Hour))
-	// Sibling (older, "checkout-green"): opts into p AND satisfies p's
-	// selector on its own labels.
 	older := deploymentWithOwnerNamePolicyAndLabels("team-a", "checkout-green", "checkout", "p",
 		map[string]string{"track": "green"}, baseTime)
 
@@ -325,7 +276,6 @@ func TestHandleWorkloadRecommendations_GroupedIdentitySiblingOptsInAndMatches(t 
 			"(the sibling opts into p and satisfies p's own selector)", got.Automated, got.PolicyName, "p")
 	}
 
-	// /api/workloads must agree.
 	rec2 := httptest.NewRecorder()
 	srv.handleAllWorkloads(rec2, httptest.NewRequest(http.MethodGet, "/api/workloads", nil))
 	var listResp struct {
@@ -352,20 +302,12 @@ func TestHandleWorkloadRecommendations_GroupedIdentitySiblingOptsInAndMatches(t 
 	}
 }
 
-// TestHandleWorkloadRecommendations_PoliciesListFails verifies that a failed
-// Policy List fails the request (500), rather than silently degrading to
-// Automated: false — reporting a workload as unmanaged because of an
-// apiserver problem would be a different lie than the one the selector gate
-// exists to prevent. Contrast collectAllWorkloads, which deliberately
-// degrades open on the same List failure for its cluster-wide list view;
-// that asymmetry is intentional and out of scope here.
+// A failed Policy List must fail the request rather than report Automated:
+// false.
 func TestHandleWorkloadRecommendations_PoliciesListFails(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
 	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
-	// The Policy itself exists and would satisfy a plain Get: this isolates
-	// the failure to the List path specifically, so a reverted (single-Get)
-	// implementation would succeed here instead of failing for an unrelated
-	// reason (e.g. the Policy not existing).
+	// The Policy exists, so only the List path can fail here.
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d, policy).
 		WithInterceptorFuncs(interceptor.Funcs{
@@ -387,8 +329,6 @@ func TestHandleWorkloadRecommendations_PoliciesListFails(t *testing.T) {
 		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
 	}
 }
-
-// ---- getWorkloadPolicyAnnotation ----
 
 func TestGetWorkloadPolicyAnnotation_Managed(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
@@ -420,11 +360,8 @@ func TestGetWorkloadPolicyAnnotation_Unmanaged(t *testing.T) {
 	}
 }
 
-// TestGetWorkloadPolicyAnnotation_GroupedIdentitySiblingOptsInAndMatches is
-// the getWorkloadPolicyAnnotation counterpart to the same disagreement case
-// pinned above for handleWorkloadRecommendations — used by
-// lookupUpdateMode/handleWorkloadDetail, this must also search every member
-// behind a grouped identity rather than only the representative.
+// getWorkloadPolicyAnnotation must also search every member behind a grouped
+// identity.
 func TestGetWorkloadPolicyAnnotation_GroupedIdentitySiblingOptsInAndMatches(t *testing.T) {
 	p := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	p.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"track": "green"}}
@@ -452,10 +389,7 @@ func TestGetWorkloadPolicyAnnotation_GroupedIdentitySiblingOptsInAndMatches(t *t
 func TestGetWorkloadPolicyAnnotation_PoliciesListFails(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
 	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
-	// The Policy itself exists and would satisfy a plain Get: this isolates
-	// the failure to the List path specifically, so a reverted (single-Get)
-	// implementation would succeed here instead of failing for an unrelated
-	// reason (e.g. the Policy not existing).
+	// The Policy exists, so only the List path can fail here.
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d, policy).
 		WithInterceptorFuncs(interceptor.Funcs{
@@ -473,8 +407,6 @@ func TestGetWorkloadPolicyAnnotation_PoliciesListFails(t *testing.T) {
 		t.Fatalf("expected an error when the Policy List fails")
 	}
 }
-
-// ---- handleWorkloadMetrics ----
 
 func TestHandleWorkloadMetrics_BadWindow(t *testing.T) {
 	srv := &Server{

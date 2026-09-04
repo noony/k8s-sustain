@@ -29,12 +29,9 @@ type Key struct {
 type OOMRecord struct {
 	// Container is the container name within the pod that was OOM-killed.
 	Container string
-	// PolicyName is the name of the Policy the source pod's workload opted
-	// into, resolved across all three annotation levels — pod template,
-	// owning workload, Namespace (see policymatch.ResolvePolicy) — not
-	// necessarily the pod's own annotation. Never empty on a recorded event:
-	// Reconcile returns before recording when resolution yields no policy at
-	// any level.
+	// PolicyName is the Policy the source pod's workload opted into, resolved
+	// across all three annotation levels (see policymatch.ResolvePolicy) — not
+	// necessarily the pod's own annotation. Never empty on a recorded event.
 	PolicyName string
 	// ObservedAt is the wall-clock time at which the watcher first saw the
 	// kill. Distinct from TerminatedAt because the watcher may lag a few
@@ -75,15 +72,12 @@ type Sink interface {
 	// RestartCount + TerminatedAt). Returns false for duplicates so the
 	// watcher can skip notifying downstream subscribers.
 	//
-	// A Key names a workload+container, so concurrent reconciles of several
-	// pods of one workload write to it. What the Key retains is a per-field
-	// merge, never simply the last-written record: identity and timestamps
-	// come from the newest observation by (TerminatedAt, RestartCount), while
-	// OOMLimitBytes is the max across every pod that wrote to the slot — the
-	// largest limit that still got OOM-killed is the only useful anchor for
-	// the memory floor. An out-of-order observation is still reported as new
-	// (it is a real kill nothing has seen) but contributes only its limit.
-	// See Cache.Record for the full rationale.
+	// Concurrent reconciles of several pods of one workload share a Key, so
+	// the slot holds a per-field merge, not the last write: identity and
+	// timestamps come from the newest observation by (TerminatedAt,
+	// RestartCount), while OOMLimitBytes is the max across every writer — the
+	// largest limit that still got OOM-killed is the only useful memory-floor
+	// anchor. See Cache.Record.
 	Record(key Key, record OOMRecord) bool
 
 	// AlreadyResolved reports whether this exact container termination —
@@ -92,22 +86,15 @@ type Sink interface {
 	// has already been fully resolved by an earlier Reconcile pass, whether
 	// or not that pass found a managing Policy.
 	//
-	// This exists so Reconcile can skip the owner/Namespace walk on a repeat
-	// status event for a kill it has already dealt with: Pod status updates
-	// fire on every unrelated field change (readiness, IP, ...), but
-	// LastTerminationState only changes on an actual new container restart,
-	// so RestartCount+TerminatedAt staying put means nothing new happened.
-	// It cannot reuse Record's own Key-based dedup because that Key names
-	// the resolved workload — the very thing the owner walk this check
-	// exists to skip would have to produce first.
+	// It lets Reconcile skip the owner/Namespace walk on repeat status events:
+	// Pod status updates fire on every unrelated field change, but
+	// LastTerminationState only changes on a real restart. It cannot reuse
+	// Record's Key-based dedup, because that Key names the resolved workload
+	// the owner walk would first have to produce.
 	//
-	// Never marks anything; MarkResolved does that. Keeping the check and
-	// the mark as two calls (rather than one Record-style check-and-mark)
-	// matters for correctness: Reconcile only calls MarkResolved after the
-	// owner/Namespace reads have actually succeeded, so a transient read
-	// failure — which returns an error and lets controller-runtime retry
-	// with backoff — gets retried for real instead of being permanently
-	// suppressed by a mark made before resolution was known to succeed.
+	// Checking and marking are deliberately two calls: MarkResolved runs only
+	// after the owner/Namespace reads succeed, so a transient read failure is
+	// retried with backoff instead of being permanently suppressed.
 	AlreadyResolved(podUID types.UID, container string, restartCount int32, terminatedAt time.Time) bool
 
 	// MarkResolved records that this exact container termination (see

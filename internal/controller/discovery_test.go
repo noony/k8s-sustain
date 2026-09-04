@@ -79,13 +79,9 @@ func TestDiscoverCreatesWLRForEveryTarget(t *testing.T) {
 	}
 }
 
-// TestReconcileSurfacesDiscoveryFailures covers the branch where
-// EnsureExists fails. That is not cosmetic under WLR-driven computation: the
-// identity is still computed and applied this cycle (collectComputeItems
-// reconciles the WLR List against the discovery index), but its recommendation
-// has nowhere to be cached, so the webhook keeps injecting the previous value.
-// A persistent cause — missing RBAC on workloadrecommendations, a rejecting
-// admission webhook, a namespace quota — must not leave the Policy reporting
+// When EnsureExists fails the identity is still computed and applied, but its
+// recommendation has nowhere to be cached. A persistent cause (missing RBAC, a
+// rejecting admission webhook, a quota) must not leave the Policy reporting
 // Ready while the cache silently goes stale.
 func TestReconcileSurfacesDiscoveryFailures(t *testing.T) {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
@@ -166,17 +162,11 @@ func TestReconcileSurfacesDiscoveryFailures(t *testing.T) {
 	}
 }
 
-// Under owner-name grouping several workload objects report as one identity
-// ("api-blue" and "api-green" both as Deployment/api) and share ONE
-// WorkloadRecommendation. Writing the snapshot once per TARGET makes the group
-// members overwrite each other's status.observedResources forever whenever
-// their container resources differ at all: every cycle costs one status write
-// per member, permanently, and the snapshot that survives is whichever member
-// happened to be listed last — which is also what containersFromObserved
-// reconstructs the container set and the shard size from.
-//
-// So: one write per identity, from a snapshot that does not depend on listing
-// order, and no write at all on a second cycle that changed nothing.
+// Members of an owner-name group share ONE WorkloadRecommendation, so writing
+// the snapshot once per TARGET makes them overwrite each other's
+// status.observedResources every cycle, forever, with the survivor decided by
+// listing order. One write per identity, from an order-independent snapshot,
+// and no write at all on a second cycle that changed nothing.
 func TestDiscoverWritesOneStableSnapshotPerIdentity(t *testing.T) {
 	statusPatches := 0
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).

@@ -95,12 +95,10 @@ func TestGroupBarePods_OwnedPod_NotDiscovered(t *testing.T) {
 	}
 }
 
-// TestGroupBarePods_CollectsMembers verifies the group carries every pod that
-// belongs to it, not just the representative: callers that resize the identity
-// in place act on all of them, and they must not re-derive membership
-// themselves. A pod carrying a controller ownerRef must never appear as a
-// member even when it shares the owner-name annotation — that exclusion is the
-// bare-pod analogue of the ownerRef-UID check protecting every other kind.
+// The group must carry every pod, not just the representative: callers resize
+// all of them in place. A pod with a controller ownerRef is never a member even
+// when it shares the owner-name — the bare-pod analogue of the ownerRef-UID
+// check that protects every other kind.
 func TestGroupBarePods_CollectsMembers(t *testing.T) {
 	mk := func(name string, controlled bool) corev1.Pod {
 		p := corev1.Pod{
@@ -137,9 +135,8 @@ func TestGroupBarePods_CollectsMembers(t *testing.T) {
 	}
 }
 
-// TestGroupBarePods_MembersAreNamespaceScoped guards the grouping key: two
-// namespaces sharing an owner-name must not pool their pods into one group's
-// member list, or a resize would reach across namespaces.
+// Two namespaces sharing an owner-name must not pool their pods, or a resize
+// would reach across namespaces.
 func TestGroupBarePods_MembersAreNamespaceScoped(t *testing.T) {
 	mk := func(ns, name string) corev1.Pod {
 		return corev1.Pod{
@@ -179,12 +176,9 @@ func TestGroupBarePods_NoPolicyAnnotation_NotDiscovered(t *testing.T) {
 	}
 }
 
-// GroupBarePods takes the group's PolicyName from the first pod encountered but
-// used to admit every pod sharing (namespace, owner-name) that carried ANY
-// non-empty policy annotation. Two policies claiming one identity is a genuine
-// ambiguity — both map to the same wlrcache.Name — so the group stays claimed
-// by the first pod's policy and the mismatched pods are excluded from it
-// entirely, not silently absorbed as members.
+// Two policies claiming one identity is a genuine ambiguity — both map to the
+// same wlrcache.Name — so the group stays claimed by the first pod's policy and
+// the mismatched pods are excluded entirely, not absorbed as members.
 func TestGroupBarePods_ExcludesPodsOfAnotherPolicy(t *testing.T) {
 	mk := func(name, policy string, created time.Time) corev1.Pod {
 		return corev1.Pod{
@@ -229,10 +223,8 @@ func TestGroupBarePods_ExcludesPodsOfAnotherPolicy(t *testing.T) {
 	}
 }
 
-// TestGroupBarePods_NamespaceLevelOptIn verifies a bare pod with a valid
-// owner-name but no policy annotation of its own is grouped when its Namespace
-// opts in. Bare pods are the one kind with no pod template, so the Pod's own
-// annotations serve as the template level and the namespace supplies the rest.
+// Bare pods are the one kind with no pod template, so the Pod's own annotations
+// serve as the template level and the Namespace supplies the rest.
 func TestGroupBarePods_NamespaceLevelOptIn(t *testing.T) {
 	pods := []corev1.Pod{{
 		ObjectMeta: metav1.ObjectMeta{
@@ -258,8 +250,6 @@ func TestGroupBarePods_NamespaceLevelOptIn(t *testing.T) {
 	}
 }
 
-// TestGroupBarePods_PodOptOutBeatsNamespace verifies a bare pod can opt out of
-// a namespace-wide opt-in.
 func TestGroupBarePods_PodOptOutBeatsNamespace(t *testing.T) {
 	pods := []corev1.Pod{{
 		ObjectMeta: metav1.ObjectMeta{
@@ -281,8 +271,8 @@ func TestGroupBarePods_PodOptOutBeatsNamespace(t *testing.T) {
 	}
 }
 
-// TestGroupBarePods_NilNamespaceAnnotationsUnchanged pins that passing nil
-// preserves the pre-existing rule: only a pod's own policy annotation opts in.
+// Passing nil namespace annotations leaves only a pod's own annotation to opt
+// in.
 func TestGroupBarePods_NilNamespaceAnnotationsUnchanged(t *testing.T) {
 	pods := []corev1.Pod{{
 		ObjectMeta: metav1.ObjectMeta{

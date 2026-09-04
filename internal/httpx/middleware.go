@@ -41,8 +41,8 @@ func DefaultRouteLabeler(r *http.Request) string {
 	return r.Pattern
 }
 
-// routeLabel resolves the low-cardinality route label for r, normalizing a nil
-// labeler or an empty result to "unknown" so metric labels stay bounded.
+// routeLabel normalizes a nil labeler or an empty result to "unknown" so metric
+// labels stay bounded.
 func routeLabel(r *http.Request, labelRoute RouteLabeler) string {
 	if labelRoute != nil {
 		if v := labelRoute(r); v != "" {
@@ -52,14 +52,9 @@ func routeLabel(r *http.Request, labelRoute RouteLabeler) string {
 	return "unknown"
 }
 
-// WithRequestID accepts an inbound X-Request-Id (so a frontend can stitch
-// together its own correlation chain) or generates one. The value is then
-// available three ways:
-//
-//   - on the response headers (echoed back to the client)
-//   - on the request context for handlers
-//   - through WriteJSON / WriteError which copy it into the response body's
-//     meta so a UI error report can include it without inspecting headers
+// WithRequestID accepts an inbound X-Request-Id or generates one, then exposes
+// it on the response headers, on the request context, and (via WriteJSON /
+// WriteError) in the response body's meta.
 func WithRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rid := r.Header.Get(RequestIDHeader)
@@ -132,16 +127,13 @@ func (rw *statusResponseWriter) Flush() {
 	}
 }
 
-// WithTelemetry records request duration and emits a verbose access-log
-// line. The status histogram is supplied through observe; pass nil to log
-// without exporting a metric.
+// WithTelemetry records request duration and emits a verbose access-log line.
+// Pass a nil observe to log without exporting a metric.
 //
-// labelRoute is called after the inner handler has run to derive the low-
-// cardinality route label that's reported to the observer. Passing nil
-// collapses every request onto a single "unknown" bucket — useful for tests
-// but never what you want in production, where the raw URL path (an
-// attacker-controlled value on the dashboard's SPA catch-all) is an OOM
-// footgun against Prometheus.
+// labelRoute runs after the inner handler so it can read router-populated
+// fields. Passing nil collapses everything onto "unknown" — fine for tests, but
+// never pass the raw URL path in production: on the dashboard's SPA catch-all
+// it is attacker-controlled and an OOM footgun against Prometheus.
 func WithTelemetry(next http.Handler, logger logr.Logger, observe LatencyObserver, labelRoute RouteLabeler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

@@ -17,8 +17,6 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// ---- Summary types ----
-
 // summaryKPI is the top-row of cluster-wide KPIs surfaced by /api/summary.
 type summaryKPI struct {
 	CPUSavedCores float64   `json:"cpuSavedCores"`
@@ -63,37 +61,23 @@ type summaryResponseV2 struct {
 	Policies  []policyRollup               `json:"policies"`
 }
 
-// maxSummaryLastGoodAge bounds how stale the last-good /api/summary fallback may
-// be when fresh Prometheus queries partially fail. It is 10x the cache TTL (the
-// summary cache uses a 60s TTL, so this is ~10 minutes). Within this window a
-// brief Prometheus blip is masked by serving the most recent complete snapshot;
-// beyond it we stop pretending the data is current and serve the fresh-but-
-// partial result instead, so clients are never shown an arbitrarily-old snapshot
-// as a clean HTTP 200 during a sustained outage.
+// maxSummaryLastGoodAge bounds how stale the last-good /api/summary fallback
+// may be when fresh queries partially fail; 10x the 60s cache TTL.
 const maxSummaryLastGoodAge = 10 * time.Minute
 
-// summaryCacheKey is the single key /api/summary uses in both summaryCache and
-// Server.summarySF — the endpoint is cluster-wide, so there is exactly one
-// snapshot and exactly one in-flight recompute at a time.
+// summaryCacheKey is the single cache and singleflight key for /api/summary.
 const summaryCacheKey = "summary"
 
-// summaryComputeTimeout bounds ONE shared summary recompute. The fan-out runs
-// on a context detached from any individual request (see
-// computeAndCacheSummary) and
-// therefore needs a ceiling of its own; 15s matches httpx.NewServer's
-// WriteTimeout, past which no client is still listening anyway.
+// summaryComputeTimeout bounds one shared recompute; it matches
+// httpx.NewServer's WriteTimeout, past which no client is listening.
 const summaryComputeTimeout = 15 * time.Second
 
 // summaryComputation is what one shared recompute hands back to every request
-// that joined it: the assembled response plus how many Prometheus queries
-// failed, so each request applies the partial-failure fallback itself (that
-// decision reads the cache, which may have moved on).
+// that joined it.
 type summaryComputation struct {
 	resp     summaryResponseV2
 	promErrs int32
 }
-
-// ---- Summary handler ----
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -106,13 +90,8 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cache miss. Join the one in-flight recompute rather than starting
-	// another: the fan-out below is ~16 Prometheus round-trips, so N
-	// simultaneous misses (a dashboard open in N tabs, a just-expired TTL)
-	// used to cost 16N of them. It also made the trailing Set unsafe — a slow
-	// recompute could land after a faster, newer one and overwrite the newer
-	// snapshot with older data while resetting its 60s TTL. With one flight
-	// per key there is exactly one Set per recompute, so neither is possible.
+	// Join the one in-flight recompute; one flight per key also guarantees a
+	// single cache Set per recompute, so a slow one cannot overwrite a newer.
 	ch := s.summarySF.DoChan(summaryCacheKey, s.computeAndCacheSummary)
 	if s.sfJoinHook != nil {
 		s.sfJoinHook(summaryCacheKey)
@@ -121,22 +100,12 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	var res singleflight.Result
 	select {
 	case <-r.Context().Done():
-		// This request's own deadline expired (or its client went away) while
-		// waiting on another request's in-flight recompute — do not block past
-		// it just because the leader is slow. The recompute keeps running for
-		// whichever other requests still have budget; only this one returns
-		// early. A recent last-good snapshot is still better than nothing;
-		// without one there is no result to serve at all, and a 503 is honest
-		// where an all-zeroes 200 would not be.
+		// Do not block past this request's own deadline waiting on the leader.
 		if lastGood, ok := s.summaryCache.GetLastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
 			writeJSON(w, http.StatusOK, lastGood)
 			return
 		}
-		// The max-age=60 set above belongs to the summary payload. A 503 is
-		// not heuristically cacheable, but that explicit header makes it so,
-		// and WriteFieldError never clears it — leaving it set would let a
-		// browser or an intermediary re-serve this error for a full minute
-		// after a single slow recompute, long after Prometheus recovered.
+		// Drop the payload's max-age so the 503 is not cached for a minute.
 		w.Header().Del("Cache-Control")
 		writeError(w, http.StatusServiceUnavailable, "summary recomputation did not complete before the request was cancelled")
 		return
@@ -144,28 +113,20 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if res.Err != nil {
-		// computeAndCacheSummary returns an error only for a recovered panic.
-		// Re-panic on the request's own goroutine so the shared recovery
-		// middleware turns it into the usual 500 and records panicTotal, for
-		// waiters exactly as for the request that led the flight. Drop the
-		// payload's Cache-Control first for the same reason as above: the
-		// middleware's 500 must not be served from a cache for 60s.
+		// Only a recovered panic reaches here; re-panic on the request goroutine
+		// so the recovery middleware handles it, and drop max-age first.
 		w.Header().Del("Cache-Control")
 		panic(res.Err)
 	}
 	out := res.Val.(summaryComputation)
 
 	if out.promErrs == 0 {
-		// Full fresh result: already cached by the leader (unchanged behavior).
 		writeJSON(w, http.StatusOK, out.resp)
 		return
 	}
 
-	// Partial failure: never poison the cache. Prefer a recent last-good cached
-	// value (even if its TTL has lapsed) over the fresh-but-partial result, but
-	// only within maxSummaryLastGoodAge so a sustained outage cannot serve an
-	// arbitrarily-old snapshot. When the last-good is too old or absent, fall
-	// back to the fresh partial result, matching today's no-cache behavior.
+	// Partial failure: never poison the cache. Prefer a recent last-good
+	// snapshot over the fresh-but-partial result.
 	s.Logger.V(1).Info("summary: prometheus errors", "count", out.promErrs)
 	if lastGood, ok := s.summaryCache.GetLastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
 		writeJSON(w, http.StatusOK, lastGood)
@@ -174,22 +135,10 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out.resp)
 }
 
-// computeAndCacheSummary is the singleflight leader: it runs the one shared
-// fan-out and, on a fully successful result, populates summaryCache.
-//
-// It runs on a context detached from any individual request (a fixed
-// summaryComputeTimeout budget) for the same reason the webhook's
-// singleflight leaders do: this work keeps running for as long as OTHER
-// requests may still be waiting on it, even after the particular request that
-// happened to become the leader has itself been cancelled — tying its
-// lifetime to that one request's context would abort the shared recompute for
-// everyone still waiting.
-//
-// The deferred recover is load-bearing, not defensive boilerplate: a panic
-// escaping a singleflight function that has DoChan waiters is unrecoverable
-// and takes the whole process down. Converting it to an error lets every
-// waiter re-panic on its own goroutine, where the HTTP recovery middleware
-// handles it as it always has.
+// computeAndCacheSummary is the singleflight leader. It runs on a detached
+// context because other requests may still be waiting after the leading
+// request is cancelled. The recover is load-bearing: a panic escaping a
+// singleflight function with DoChan waiters takes the whole process down.
 func (s *Server) computeAndCacheSummary() (val any, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -209,8 +158,7 @@ func (s *Server) computeAndCacheSummary() (val any, err error) {
 }
 
 // computeSummary runs the Prometheus fan-out and assembles the response,
-// returning it alongside the number of queries that failed. It is called only
-// from computeAndCacheSummary, i.e. once per shared recompute.
+// returning it alongside the number of queries that failed.
 func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) {
 	resp := summaryResponseV2{
 		Headroom:  map[string]headroomBreakdown{},
@@ -218,10 +166,6 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 		Policies:  []policyRollup{},
 	}
 
-	// Fan the independent Prometheus queries out concurrently so end-to-end
-	// latency is bounded by the slowest single query, not their sum. Each
-	// goroutine writes its own result slot; promErrs is aggregated atomically.
-	// Mirrors the sync.WaitGroup / wg.Go idiom in handleWorkloadMetrics.
 	var promErrs int32
 	recordErr := func(err error) {
 		if err != nil {
@@ -292,8 +236,7 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 		recordErr(err)
 	})
 	wg.Go(func() {
-		// The OOM rule is per-container; re-aggregate to workload level so
-		// each at-risk workload yields exactly one attention row.
+		// The OOM rule is per-container; re-aggregate to one row per workload.
 		v, err := collectAttention(ctx, s.PromClient, fmt.Sprintf("sum by (namespace, owner_kind, owner_name) (%s) > 0", promclient.MetricWorkloadOOM24h), "OOM")
 		riskRows = v
 		recordErr(err)
@@ -325,20 +268,17 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 	})
 	wg.Wait()
 
-	// Assemble shared maps single-threaded after the fan-out to avoid racing
-	// concurrent writes to the same map.
 	resp.Headroom["cpu"] = cpuHeadroom
 	resp.Headroom["memory"] = memHeadroom
 	resp.Attention["risk"] = riskRows
 	resp.Attention["drift"] = driftRows
 	resp.Attention["blocked"] = blockedRows
 
-	// AtRiskCount aggregates the per-policy at-risk gauge produced above.
 	for _, n := range atRiskByPolicy {
 		resp.KPI.AtRiskCount += int(n)
 	}
 
-	// Iterate union of policy keys so partial-data rollups still surface.
+	// Union of policy keys so partial-data rollups still surface.
 	policyNames := make(map[string]struct{}, len(wlByPolicy)+len(cpuByPolicy)+len(memByPolicy))
 	for n := range wlByPolicy {
 		policyNames[n] = struct{}{}
@@ -388,10 +328,8 @@ func readHeadroom(ctx context.Context, p PromQuerier, expr string) (headroomBrea
 
 func collectAttention(ctx context.Context, p PromQuerier, expr, signal string) ([]attentionRow, error) {
 	rows := []attentionRow{}
-	// Key by the full namespace|kind|name triple (the workloadKey format) so
-	// identically-named workloads in different namespaces stay distinct and
-	// each row carries everything the UI's /workloads/{ns}/{kind}/{name}
-	// click-through link needs.
+	// Key by the full namespace|kind|name triple so identically-named workloads
+	// in different namespaces stay distinct.
 	bySeries, err := p.QueryByLabels(ctx, expr, "namespace", "owner_kind", "owner_name")
 	if err != nil {
 		return rows, err
@@ -399,7 +337,6 @@ func collectAttention(ctx context.Context, p PromQuerier, expr, signal string) (
 	if len(bySeries) == 0 {
 		return rows, nil
 	}
-	// Sort deterministically: descending by value, ties broken alphabetically.
 	keys := slices.Collect(maps.Keys(bySeries))
 	slices.SortFunc(keys, func(a, b string) int {
 		if c := cmp.Compare(bySeries[b], bySeries[a]); c != 0 {

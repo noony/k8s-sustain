@@ -7,20 +7,11 @@ import (
 )
 
 // ErrCircuitOpen is returned when the breaker has tripped and is shedding load.
-// Callers can detect this with errors.Is to choose fast-fail behaviour
-// (e.g. skip this reconcile and retry on the next tick).
 var ErrCircuitOpen = errors.New("prometheus: circuit breaker open")
 
-// breaker is a simple consecutive-failure circuit breaker.
-//
-// State machine:
-//   - closed: queries flow; each failure increments a counter.
-//   - open: failures reached MaxFailures; all queries are rejected with
-//     ErrCircuitOpen until Cooldown elapses.
-//   - half-open (implicit): after cooldown, the next call is allowed; a
-//     success closes the circuit, a failure re-opens it for another cooldown.
-//
-// MaxFailures=0 disables the breaker (Allow always returns true).
+// breaker is a consecutive-failure circuit breaker with an implicit half-open
+// state: after the cooldown one probe call is allowed, and its outcome closes
+// or re-opens the circuit. maxFailures=0 disables the breaker entirely.
 type breaker struct {
 	maxFailures int
 	cooldown    time.Duration
@@ -39,22 +30,13 @@ func newBreaker(maxFailures int, cooldown time.Duration) *breaker {
 	}
 }
 
-// allow reports whether a call may proceed. When the circuit is open,
-// allowed is false until the cooldown elapses.
+// allow reports whether a call may proceed, and whether this caller consumed
+// the half-open probe.
 //
-// probe reports whether THIS caller is the one that consumed the half-open
-// probe — i.e. the cooldown had just elapsed and this call is the single
-// attempt the circuit is granting before it decides to close or re-open. It is
-// false on the ordinary closed-circuit path and false when the call is
-// rejected.
-//
-// The distinction exists because allow() ADVANCES openUntil when it hands out
-// the probe (see below), so a probe holder that re-checks isOpen() afterwards
-// would see the deadline IT just set and reject itself. That is a permanent
-// deadlock, not a race: the probe never reaches Prometheus, success() is never
-// called, and the circuit stays open for every subsequent cooldown too. Callers
-// that re-check must therefore skip the check when probe is true — see
-// Client.acquire.
+// A probe holder must never re-check isOpen(): allow advances openUntil when it
+// hands the probe out, so the holder would see the deadline it just set and
+// reject itself. The probe would then never reach Prometheus, success() would
+// never run, and the circuit would stay open forever. See Client.acquire.
 func (b *breaker) allow() (allowed, probe bool) {
 	if b == nil || b.maxFailures <= 0 {
 		return true, false
@@ -67,41 +49,19 @@ func (b *breaker) allow() (allowed, probe bool) {
 	if b.now().Before(b.openUntil) {
 		return false, false
 	}
-	// Cooldown elapsed — half-open: allow one probe. ADVANCE openUntil by
-	// another cooldown rather than clearing it. Both forms stop a concurrent
-	// caller racing past the same probe, but only this one is safe when the
-	// probe never reports back.
-	//
-	// allow() consumes the probe, yet several callers can return between here
-	// and any success()/failure(): execInstant's in-flight semaphore acquire
-	// can fail, and two range-query paths parse a step duration that can error.
-	// Clearing openUntil in those cases left the circuit wide open — failures
-	// still at maxFailures, Prometheus still down, but every subsequent caller
-	// admitted until some unrelated query happened to record a failure.
-	//
-	// Advancing instead makes the abandoned case self-healing: the circuit
-	// simply stays open for one more cooldown, which is the safe direction and
-	// needs no release discipline from callers. The healthy paths are
-	// unaffected — success() clears openUntil outright, and failure() re-arms
-	// it to the same value this line sets.
+	// Advance openUntil rather than clearing it: a probe holder can return
+	// without ever calling success()/failure() (semaphore acquire failure, step
+	// parse errors), and clearing would then leave the circuit wide open with
+	// Prometheus still down. Advancing keeps it open for one more cooldown,
+	// which is self-healing and needs no release discipline from callers.
 	b.openUntil = b.now().Add(b.cooldown)
 	return true, true
 }
 
-// isOpen reports whether the circuit is currently open, WITHOUT consuming the
-// half-open probe that allow() would.
-//
-// The distinction matters: allow() is a claim ("I am the one call going
-// through this cooldown"), whereas isOpen is an observation ("is it still worth
-// proceeding?"). Callers that already passed allow() and simply want to
-// re-check after a delay — acquire(), after a long wait for an in-flight slot —
-// must use this, or each re-check would burn a probe the backend never actually
-// gets.
-//
-// It is only a meaningful observation for a caller that passed allow() while
-// the circuit was CLOSED. A caller holding the half-open probe always sees this
-// return true, because allow() advanced openUntil to hand the probe out; such a
-// caller must not consult isOpen at all (see allow's probe return value).
+// isOpen observes whether the circuit is open without consuming the half-open
+// probe, for callers that already passed allow() and want to re-check after a
+// delay. It is only meaningful to a caller that passed allow() while the
+// circuit was closed — a probe holder always sees true (see allow).
 func (b *breaker) isOpen() bool {
 	if b == nil || b.maxFailures <= 0 {
 		return false

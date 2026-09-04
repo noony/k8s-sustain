@@ -20,61 +20,35 @@ type BarePodGroup struct {
 	// Representative is the most recently created pod in the group, used by
 	// callers that need its full ObjectMeta (e.g. annotations) or identity.
 	Representative *corev1.Pod
-	// Members is every pod in the group, in list order. Callers that act on
-	// the group (in-place resize) need all of them, not just the
-	// representative — and they must not re-derive membership themselves,
-	// because the rule (no controller owner, valid owner-name, matching
-	// policy annotation) is exactly the kind of logic that drifts when it has
-	// two implementations. The pods are pointers into the slice passed to
-	// GroupBarePods, like Representative.
+	// Members is every pod in the group, in list order, pointing into the slice
+	// passed to GroupBarePods. Callers that act on the group must use this
+	// rather than re-deriving membership, so the rule has one implementation.
 	Members []*corev1.Pod
-	// PolicyMismatched holds the pods that share this group's
-	// (namespace, owner-name) but name a DIFFERENT policy in their
-	// k8s.sustain.io/policy annotation. They are excluded from Members,
-	// Representative and Containers — see GroupBarePods — and recorded here so
-	// the caller can tell an operator, because a pod that opted in and is then
-	// silently ignored is its own bug.
+	// PolicyMismatched holds pods sharing this group's (namespace, owner-name)
+	// that name a different policy. They are excluded from Members,
+	// Representative and Containers, and recorded here so the caller can report
+	// them — a pod that opted in and is then silently ignored is its own bug.
 	PolicyMismatched []*corev1.Pod
 }
 
 // GroupBarePods groups pods with no controller owner and a valid owner-name
-// annotation by (namespace, owner-name), per the spec's namespace-scoping
-// rule. A pod opts in through its own annotations or through its Namespace's
-// (see policymatch.ResolvePolicy and the nsAnnotations parameter). Pods with a
-// real controller owner, or without a valid owner-name annotation, are
-// excluded — they're either handled by another kind's listing, or are
-// anonymous bare pods that opt into nothing.
+// annotation by (namespace, owner-name). A pod opts in through its own
+// annotations or its Namespace's (nsAnnotations maps namespace name to those
+// annotations; nil simply means no namespace-level opt-in). Shared by the
+// controller and the dashboard so the grouping rule has one implementation.
 //
-// The most recently created pod in each group supplies the representative
-// containers: an older pod's spec may be stale (e.g. after a DAG code
-// change), and the newest admitted pod is the freshest signal of what the
-// workload's containers currently look like. Shared by the controller's
-// listBarePodTargets and the dashboard's listWorkloadsOfKind/getWorkloadEntry
-// so the grouping rule has exactly one implementation.
+// The most recently created pod supplies the representative containers: an
+// older pod's spec may be stale, e.g. after a DAG code change.
 //
 // # One identity, one policy
 //
 // A group is claimed by the policy of the FIRST qualifying pod seen; pods
-// sharing its (namespace, owner-name) that name a different policy are put in
-// PolicyMismatched and excluded from Members, Representative and Containers.
-//
-// They cannot simply form their own group: the identity IS (namespace,
-// owner-name), so both would map to the same wlrcache.Name and fight over one
-// WorkloadRecommendation. Two policies claiming one owner-name is a genuine
-// ambiguity in the cluster's configuration, and the only safe resolution is to
-// let one win and report the other rather than to average them.
-//
-// Excluding rather than absorbing matters because the group is now WRITTEN to,
-// not just read: the controller feeds Members straight to ResizePodsInPlace
-// (see internal/controller/barepod_resize.go), so an absorbed pod would be
-// resized in place under another policy's recommendation — and for memory an
-// in-place resize can restart the container. Every other kind checks ownerRef
-// UID and selector before the patcher touches a pod; this is that check.
-//
-// nsAnnotations maps namespace name to that Namespace's annotations, supplying
-// the least-specific opt-in level (see policymatch.ResolvePolicy). A nil map,
-// or a namespace absent from it, simply means no namespace-level opt-in —
-// callers that have not fetched namespaces may pass nil.
+// naming a different policy go to PolicyMismatched. They cannot form their own
+// group — the identity IS (namespace, owner-name), so both would fight over one
+// WorkloadRecommendation. Excluding rather than absorbing them matters because
+// the controller feeds Members straight to ResizePodsInPlace, so an absorbed
+// pod would be resized under another policy's recommendation, which for memory
+// can restart the container.
 func GroupBarePods(pods []corev1.Pod, nsAnnotations map[string]map[string]string) []BarePodGroup {
 	groups := map[string]*BarePodGroup{} // key: namespace + "/" + owner-name
 	var order []string
@@ -101,12 +75,8 @@ func GroupBarePods(pods []corev1.Pod, nsAnnotations map[string]map[string]string
 		g, ok := groups[key]
 		if !ok {
 			g = &BarePodGroup{
-				Namespace: p.Namespace,
-				Name:      effName,
-				// Taken from the first pod encountered in the group. Pods
-				// within a group are expected to reference the same Policy;
-				// the ones that do not are excluded below rather than
-				// absorbed, because this group is applied to, not just read.
+				Namespace:  p.Namespace,
+				Name:       effName,
 				PolicyName: policyName,
 				Labels:     p.Labels,
 			}

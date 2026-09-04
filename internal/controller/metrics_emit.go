@@ -49,9 +49,8 @@ const (
 // take max(abs(1 - ratio)) across containers anyway, so collapsing here
 // eliminates a 3–5× cardinality multiplier on this gauge.
 func EmitWorkloadMetrics(w WorkloadMetrics) {
-	// Collect the most-drifted ratio per resource across all containers in
-	// this workload. "Most drifted" = largest abs(1 - ratio); we keep the
-	// signed ratio so consumers can still tell over- from under-provisioning.
+	// "Most drifted" = largest abs(1 - ratio); the ratio stays signed so
+	// consumers can still tell over- from under-provisioning.
 	var (
 		haveCPUDrift, haveMemDrift bool
 		cpuDrift, memDrift         float64
@@ -156,14 +155,12 @@ func EmitPolicyRollup(policy string, workloadCount, atRiskCount int) {
 
 // EmitPolicyBatchCoverage records how many workload identities a policy's
 // sharded Prometheus batch prefetch requested this cycle versus how many
-// resolved with at least one usable CPU or memory sample
-// (recommender.BatchInputs). This is a capacity/health signal, not a failure
-// signal: a workload resolving with zero samples because it legitimately has
-// no history yet looks the same here as one Prometheus never had a chance to
-// answer for -- see EmitPolicyBatchFailures for the metric that actually
-// carries "something is wrong". Deliberately kept as two gauges rather than
-// a single ratio so a caller can tell "0 requested" (nothing to cover) apart
-// from "N requested, 0 resolved" (total miss) without doing division first.
+// resolved with at least one usable sample (recommender.BatchInputs).
+//
+// A capacity signal, not a failure signal: a workload with no history yet looks
+// the same here as one Prometheus never answered for -- see
+// EmitPolicyBatchFailures. Kept as two gauges rather than one ratio so
+// "0 requested" stays distinguishable from "N requested, 0 resolved".
 func EmitPolicyBatchCoverage(policy string, requested, resolved int) {
 	policyBatchRequested.WithLabelValues(policy).Set(float64(requested))
 	policyBatchResolved.WithLabelValues(policy).Set(float64(resolved))
@@ -171,11 +168,9 @@ func EmitPolicyBatchCoverage(policy string, requested, resolved int) {
 
 // EmitPolicyBatchFailures adds to the cumulative count of workload identities
 // whose batch Prometheus fetch genuinely failed for a policy this cycle (see
-// recommender.BatchStats.Failures). Kept as its own counter -- never merged
-// with EmitPolicyBatchCoverage's gauges -- so "Prometheus is unwell" stays
-// distinguishable from "workloads legitimately have no data yet", which is
-// exactly the distinction recommender.BatchStats exists to preserve. A
-// no-op on failures<=0 so a healthy cycle never creates a zero-valued series.
+// recommender.BatchStats.Failures). Never merged with EmitPolicyBatchCoverage's
+// gauges, so "Prometheus is unwell" stays distinguishable from "no data yet".
+// A no-op on failures<=0 so a healthy cycle never creates a zero-valued series.
 func EmitPolicyBatchFailures(policy string, failures int) {
 	if failures <= 0 {
 		return
@@ -186,20 +181,13 @@ func EmitPolicyBatchFailures(policy string, failures int) {
 // DeletePolicyMetrics removes every series carrying this policy's label, for
 // use when the Policy itself is deleted.
 //
-// Without it, a Policy's series outlive the object forever: a gauge keeps
+// Without it a Policy's series outlive the object forever: a gauge keeps
 // exporting its last value, so a deleted policy is indistinguishable from a
-// live one that happens to match nothing, and cardinality grows with every
-// policy the controller has ever seen rather than with the number that exist.
-// Measured on a kind cluster: after running 20 scenarios and deleting all 20
-// Policies, each of policy_workload_count, policy_at_risk_count,
-// policy_batch_requested_count, policy_batch_resolved_count and
-// reconcile_total still exported 20 series with zero Policies in the cluster.
+// live one matching nothing, and cardinality grows with every policy ever seen.
 //
-// This deliberately covers the per-WORKLOAD vectors too. Their policy label
-// names the policy that produced them, so once it is gone those series are
-// stale by the same argument -- and unlike the workload-scoped cleanup in
-// EmitWorkload, nothing else will ever revisit them: the reconcile that would
-// have refreshed or removed them is exactly the one that stops happening.
+// The per-WORKLOAD vectors are covered deliberately: their policy label names
+// the policy that produced them, and the reconcile that would have refreshed or
+// removed them is exactly the one that stops happening.
 //
 // DeletePartialMatch is used uniformly so the single-label and multi-label
 // vectors (reconcile_total carries policy+result) are handled the same way.

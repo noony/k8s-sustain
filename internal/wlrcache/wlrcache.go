@@ -1,35 +1,20 @@
-// Package wlrcache centralizes writes of WorkloadRecommendation cache
-// objects. Two writers share it: the controller (every reconcile) and the
-// admission webhook (pod creation, for ephemeral identities that can live
-// and die entirely between two reconciles). A single implementation keeps
-// object naming, no-op write suppression, and the observed-resources
-// snapshot identical across both — the webhook fallback contract breaks
-// silently if naming ever diverges.
+// Package wlrcache centralizes writes of WorkloadRecommendation cache objects.
+// The controller (every reconcile) and the webhook (pod creation, for ephemeral
+// identities that live and die between two reconciles) share it so object
+// naming, no-op suppression and the observed-resources snapshot cannot diverge
+// — the webhook fallback contract breaks silently if naming does.
 //
 // # Never re-read after a successful Create
 //
-// Both writers here run against a CACHE-BACKED client
-// (internal/k8s.NewCached caches WorkloadRecommendation deliberately, and its
-// DisableFor list covers the owner-chain kinds instead — ReplicaSet, Job,
-// Deployment, StatefulSet, DaemonSet, CronJob and Rollout, see
-// k8s.OwnerChainDisableFor; the controller manager's client caches every
-// watched kind). A Get issued immediately after a
+// Both writers run against a CACHE-BACKED client, so a Get issued right after a
 // successful Create races the informer's watch event and reliably returns
-// NotFound — this was observed in production, on every genuinely new identity,
-// as "re-reading recommendation stub …: WorkloadRecommendation … not found".
-// The consequence is not a retried write, it is an object stranded with an
-// empty status.observedResources, which internal/controller's computation
-// phase then skips: the identity stays inert until some later writer happens
-// to find the object warm in cache. For a once-a-day bare pod that is a day.
-//
-// So: Create populates the passed object in place with the server-assigned UID
-// and resourceVersion, and every function below patches status straight off
-// that object. A Get is reserved for the paths where somebody else wrote the
-// object — the initial lookup, and the AlreadyExists branch — where a cache
-// read is the only way to learn what it already holds. Tests for this live in
-// ensure_exists_test.go behind a lagging-reader interceptor, because
-// fake.NewClientBuilder is read-your-writes and structurally cannot express
-// cache lag.
+// NotFound. The result is not a retried write but an object stranded with an
+// empty status.observedResources, which the computation phase then skips — for
+// a once-a-day bare pod, for a day. So Create populates the passed object in
+// place and every function below patches status off that object; a Get is
+// reserved for the paths where somebody else wrote the object (the initial
+// lookup, the AlreadyExists branch). The tests use a lagging-reader interceptor
+// because fake.NewClientBuilder is read-your-writes and cannot express cache lag.
 package wlrcache
 
 import (
@@ -55,9 +40,9 @@ import (
 // maxNameLength is the Kubernetes object-name limit (DNS subdomain).
 const maxNameLength = 253
 
-// Name builds the WorkloadRecommendation object name for a workload
-// identity. Format: "<lowercase-kind>-<name>"; names exceeding the 253-char
-// limit are truncated with a short stable hash appended.
+// Name builds the WorkloadRecommendation object name for a workload identity:
+// "<lowercase-kind>-<name>", truncated with a short stable hash when it exceeds
+// the 253-char limit.
 func Name(kind, name string) string {
 	n := fmt.Sprintf("%s-%s", strings.ToLower(kind), name)
 	if len(n) <= maxNameLength {
@@ -73,17 +58,14 @@ func Name(kind, name string) string {
 // timestamp. Must stay well under the webhook's DefaultCacheStaleness (30m).
 const RefreshInterval = 10 * time.Minute
 
-// Upsert writes (or updates) the WorkloadRecommendation for ref. Idempotent:
-// if the existing status matches, no API call is made (subject to
-// RefreshInterval for the ObservedAt bump).
+// Upsert writes (or updates) the WorkloadRecommendation for ref. Idempotent: an
+// unchanged status makes no API call, subject to RefreshInterval.
 //
-// Every failure is logged at V(1) AND returned. The reconcile path that just
-// wants visibility can keep ignoring the result — a failed cache write does
-// not invalidate the recycle it accompanies. The departed-refresh path must
-// not: for an identity with no live workload object this write IS the whole
-// deliverable, and reporting success when the status patch failed would leave
-// the recommendation unwritten while k8s_sustain_wlr_refresh_total counts it
-// as computed — the very metric operators are told to watch.
+// Every failure is both logged at V(1) and returned. The reconcile path may
+// ignore the result — a failed cache write does not invalidate the recycle it
+// accompanies — but the departed-refresh path must not: there the write IS the
+// deliverable, and swallowing the error would have
+// k8s_sustain_wlr_refresh_total count an unwritten recommendation as computed.
 func Upsert(
 	ctx context.Context,
 	c client.Client,
@@ -153,19 +135,15 @@ func Upsert(
 	return nil
 }
 
-// EnsureExists creates the WorkloadRecommendation for ref if it is missing and
-// keeps its spec, policy label and observed-resources snapshot current. It
-// never writes Containers, Source or ObservedAt.
+// EnsureExists creates the WorkloadRecommendation for ref if missing and keeps
+// its spec, policy label and observed-resources snapshot current. It never
+// writes Containers, Source or ObservedAt.
 //
-// This is the discovery half of the write path, and it exists because Upsert
-// deliberately refuses to create an object with no recommendation in it. Under
-// WLR-driven computation the object must exist BEFORE anything can compute it,
-// so a newly matched workload needs a home for its identity on the cycle it is
-// first seen, not on the cycle it first produces data.
-//
-// Clearing Departed here is what makes discovery the authority on the flag: an
-// identity present in a target listing is by definition not departed, whatever
-// a previous sweep concluded.
+// It is the discovery half of the write path: Upsert deliberately refuses to
+// create an object with no recommendation in it, but under WLR-driven
+// computation the object must exist BEFORE anything can compute it. Clearing
+// Departed here makes discovery the authority on that flag — an identity in a
+// target listing is by definition not departed.
 func EnsureExists(
 	ctx context.Context,
 	c client.Client,
@@ -242,18 +220,11 @@ func EnsureExists(
 // MarkNoData records that a computation produced nothing for an identity that
 // has never produced anything.
 //
-// It is a no-op when Containers is already populated. That guard is the whole
-// contract: under WLR-driven refresh every identity is recomputed every cycle,
-// including departed ones whose data will eventually age out of the query
-// window. Overwriting a retained last-known-good with an empty status the
-// moment its samples expire would silently strip exactly the recommendation
-// the retention window exists to preserve. Not bumping ObservedAt matters for
-// the same reason: it is the webhook's freshness signal, and a bump would
-// claim data that is no longer there.
-//
-// Unlike the old stub flow this state is NOT terminal. The next cycle
-// recomputes the identity, so an identity that simply has no history yet
-// converges as soon as Prometheus has enough of it.
+// The no-op when Containers is already populated is the whole contract: every
+// identity is recomputed every cycle, including departed ones whose samples
+// eventually age out of the query window, and overwriting a retained
+// last-known-good would strip exactly the recommendation retention exists to
+// preserve. The state is NOT terminal — the next cycle recomputes.
 func MarkNoData(
 	ctx context.Context,
 	c client.Client,
@@ -286,9 +257,7 @@ func MarkNoData(
 	return nil
 }
 
-// observedEquivalent reports whether two observed-resource snapshots convey
-// the same thing, so discovery does not write on every cycle for an unchanged
-// workload.
+// observedEquivalent suppresses a write every cycle for an unchanged workload.
 func observedEquivalent(a, b map[string]sustainv1alpha1.ObservedContainerResources) bool {
 	if b == nil {
 		return true // caller had nothing to snapshot; leave what is there
@@ -332,7 +301,6 @@ func BuildObservedResources(containers, initContainers []corev1.Container) map[s
 	return out
 }
 
-// quantityFrom returns a copy of rl[name] as a pointer, nil when absent.
 func quantityFrom(rl corev1.ResourceList, name corev1.ResourceName) *resource.Quantity {
 	q, ok := rl[name]
 	if !ok {
@@ -341,7 +309,6 @@ func quantityFrom(rl corev1.ResourceList, name corev1.ResourceName) *resource.Qu
 	return &q
 }
 
-// buildStatus converts the in-memory recommendation map into the CRD shape.
 func buildStatus(
 	recs map[string]workload.ContainerRecommendation,
 	observed map[string]sustainv1alpha1.ObservedContainerResources,
@@ -366,21 +333,17 @@ func buildStatus(
 	return out
 }
 
-// statusEquivalent reports whether two WLR statuses convey the same
-// recommendation values, ignoring ObservedAt. Used to suppress no-op writes
-// so write amplification scales with *change*, not workload count.
+// statusEquivalent compares two statuses ignoring ObservedAt, so write
+// amplification scales with change rather than workload count.
 func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
 	if a.Source != b.Source {
 		return false
 	}
-	// A departed identity coming back to life must always write, even when its
-	// recommendation values are unchanged: the write is what clears Departed,
-	// and leaving it set would keep the webhook waiving the freshness gate for
-	// a workload that is running again. In practice ObservedAt is always older
-	// than RefreshInterval by the time anything is marked departed (the sweep
-	// waits sweepGracePeriod first), so the caller's second condition already
-	// forces the write — but that is a coincidence of two independently-tuned
-	// constants, not a guarantee, so the difference is made explicit here.
+	// A departed identity coming back must write even with unchanged values: the
+	// write is what clears Departed, and leaving it set keeps the webhook
+	// waiving the freshness gate for a workload that is running again. The
+	// caller's RefreshInterval condition happens to force this today, but that
+	// is a coincidence of two independently-tuned constants.
 	if a.Departed != b.Departed {
 		return false
 	}
@@ -418,13 +381,10 @@ func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
 	return true
 }
 
-// quantityEqual reports whether two stored recommendation quantities are
-// equal, treating a nil pointer and an explicit zero as the same "unset"
-// value. Copied from internal/controller (rather than shared) because that
-// package's own quantityEqual (internal/controller/diff.go) has other
-// in-package callers/tests and comparing a stored recommendation against
-// another stored recommendation is a distinct concern from
-// workload.ContainerMatches (live container vs. recommendation).
+// quantityEqual treats a nil pointer and an explicit zero as the same "unset"
+// value. Deliberately not shared with internal/controller/diff.go: comparing two
+// stored recommendations is a distinct concern from comparing a live container
+// against one.
 func quantityEqual(a, b *resource.Quantity) bool {
 	aZero := a == nil || a.IsZero()
 	bZero := b == nil || b.IsZero()

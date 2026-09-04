@@ -15,12 +15,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/httpx"
 )
 
-// TestGzip_NotModifiedNoEncodingNoBody pins the fix for the RFC 9110
-// violation: a handler that ServeContent-returns 304 must not get
-// Content-Encoding: gzip, and must not have any gzip framing in its body.
-// The previous wrapper unconditionally set the header and the deferred
-// gz.Close() wrote ~10 bytes of empty-gzip trailer, which browsers reported
-// as ERR_CONTENT_DECODING_FAILED on reload.
+// A 304 must carry neither Content-Encoding: gzip nor gzip framing.
 func TestGzip_NotModifiedNoEncodingNoBody(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -43,7 +38,6 @@ func TestGzip_NotModifiedNoEncodingNoBody(t *testing.T) {
 	}
 }
 
-// TestGzip_NoContentNoEncodingNoBody is the 204 analogue of the 304 case.
 func TestGzip_NoContentNoEncodingNoBody(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -66,15 +60,10 @@ func TestGzip_NoContentNoEncodingNoBody(t *testing.T) {
 	}
 }
 
-// TestGzip_NoWriteHandlerDoesNotLeakFraming pins the second leak: a handler
-// that returns without calling Write or WriteHeader must not produce a
-// response body at all. The previous deferred gz.Close() emitted ~10 bytes
-// of empty-gzip header and committed an implicit 200 without
-// Content-Encoding — a client would see those bytes and choke.
+// A handler that never writes must not produce an empty-gzip trailer.
 func TestGzip_NoWriteHandlerDoesNotLeakFraming(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
 	inner := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-		// intentionally write nothing
 	})
 
 	rec := httptest.NewRecorder()
@@ -90,9 +79,6 @@ func TestGzip_NoWriteHandlerDoesNotLeakFraming(t *testing.T) {
 	}
 }
 
-// TestGzip_OKResponseIsCompressed sanity-checks the happy path: a real 200
-// with a body still goes through gzip, the wire bytes are a valid gzip
-// stream, and Content-Encoding + Vary headers are set.
 func TestGzip_OKResponseIsCompressed(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
 	payload := strings.Repeat("hello world ", 50)
@@ -126,9 +112,6 @@ func TestGzip_OKResponseIsCompressed(t *testing.T) {
 	}
 }
 
-// TestGzip_AlreadyCompressedTypeBypassed verifies the small skip-list: an
-// image/png response should pass through unmodified rather than getting
-// pointless re-compression.
 func TestGzip_AlreadyCompressedTypeBypassed(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
 	payload := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
@@ -150,12 +133,8 @@ func TestGzip_AlreadyCompressedTypeBypassed(t *testing.T) {
 	}
 }
 
-// TestCORS_VaryOriginAlwaysSetWhenOriginPresent is the regression fix for
-// the missing Vary: Origin: any time a CORS-enabled response can vary by
-// the request's Origin header, the middleware MUST advertise that. Without
-// it, a downstream cache or CDN can serve origin-A's
-// Access-Control-Allow-Origin back to origin-B and break the same-origin
-// policy.
+// Vary: Origin must be set whenever a CORS allowlist is configured and the
+// request carries an Origin, or a shared cache can leak the allow header.
 func TestCORS_VaryOriginAlwaysSetWhenOriginPresent(t *testing.T) {
 	srv := &Server{
 		Logger:      testLogger(t),
@@ -198,9 +177,6 @@ func TestCORS_VaryOriginAlwaysSetWhenOriginPresent(t *testing.T) {
 	}
 }
 
-// TestCORS_VaryOriginNotSetWhenNoAllowlist verifies we don't gratuitously
-// emit Vary: Origin on the default (no-CORS) configuration — same-origin
-// responses don't vary by Origin.
 func TestCORS_VaryOriginNotSetWhenNoAllowlist(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)} // no CORSOrigins
 	rec := httptest.NewRecorder()
@@ -217,10 +193,8 @@ func TestCORS_VaryOriginNotSetWhenNoAllowlist(t *testing.T) {
 	}
 }
 
-// TestTelemetry_AccessLogCarriesRequestID pins the middleware ordering fix:
-// withRequestID must sit outside withTelemetry, otherwise the access-log line
-// is emitted before the request ID lands on the context and always logs
-// requestId="".
+// withRequestID must sit outside withTelemetry or the access log always
+// logs requestId="".
 func TestTelemetry_AccessLogCarriesRequestID(t *testing.T) {
 	var lines []string
 	log := funcr.New(func(_, args string) { lines = append(lines, args) }, funcr.Options{Verbosity: 1})
@@ -242,16 +216,11 @@ func TestTelemetry_AccessLogCarriesRequestID(t *testing.T) {
 	t.Fatalf("no access log line emitted; lines=%v", lines)
 }
 
-// TestTelemetry_UnknownPathLabelsAsUnknown is the cardinality fix: any
-// request that doesn't match a registered route pattern (i.e. an attacker
-// hitting random URLs on the SPA catch-all) must land in a single
-// "unknown" or pattern-bounded bucket. The raw URL path must NEVER appear
-// as a histogram label.
+// Unmatched paths must land in one bounded label; the raw URL path never
+// becomes a histogram label.
 func TestTelemetry_UnknownPathLabelsAsUnknown(t *testing.T) {
-	// Build a tiny handler chain that mirrors the dashboard's mux + telemetry
-	// wiring. We don't use Server.Handler() because the dashboard's catch-all
-	// "/" pattern would match every request — what we want to test is the
-	// fallback when nothing matches.
+	// Server.Handler()'s catch-all "/" would match everything; mirror the
+	// mux + telemetry wiring without it.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /known", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -282,16 +251,8 @@ func TestTelemetry_UnknownPathLabelsAsUnknown(t *testing.T) {
 	}
 }
 
-// TestGzip_EmptyBody200EmitsDecodableStream pins a framing bug reached
-// through a different door than the 204/304 cases above: a handler that
-// calls WriteHeader(200) and writes NO body (GET /healthz) still gets
-// Content-Encoding: gzip committed onto the wire, but the deferred close
-// used to be gated on "the handler wrote at least one byte" — so nothing at
-// all was emitted. The client saw a 200 that claims to be gzip with a
-// zero-byte payload, and gzip.NewReader on it fails with EOF: the same
-// ERR_CONTENT_DECODING_FAILED class the passthrough logic exists to prevent.
-// A response committed as gzip must always carry the ~20 bytes of empty-gzip
-// framing that make it a valid, empty gzip stream.
+// A 200 with no body committed as gzip must still carry the empty-gzip
+// framing, or gzip-aware clients fail with EOF.
 func TestGzip_EmptyBody200EmitsDecodableStream(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -323,11 +284,7 @@ func TestGzip_EmptyBody200EmitsDecodableStream(t *testing.T) {
 	}
 }
 
-// TestGzip_HealthzRoundTripDecodes is the real-route regression for the same
-// bug: /healthz is exactly the "WriteHeader, no body" shape, and it is what a
-// gzip-aware prober (curl --compressed, a browser, a kubelet-style probe)
-// actually hits. It goes through the full middleware chain rather than
-// withGzip alone.
+// /healthz is the "WriteHeader, no body" shape through the full chain.
 func TestGzip_HealthzRoundTripDecodes(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
 
@@ -356,11 +313,8 @@ func TestGzip_HealthzRoundTripDecodes(t *testing.T) {
 	}
 }
 
-// TestGzip_ContentLengthZeroPassthroughNoFraming guards the other side of the
-// same fix: a handler that explicitly declares an empty body stays in
-// passthrough mode, so it must get neither Content-Encoding: gzip nor any
-// gzip framing bytes. Emitting the terminator for every committed header —
-// rather than only for committed-as-gzip ones — would break this.
+// A handler declaring Content-Length: 0 stays in passthrough and gets no
+// gzip framing.
 func TestGzip_ContentLengthZeroPassthroughNoFraming(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -10,22 +10,13 @@ import (
 	"github.com/noony/k8s-sustain/internal/controller"
 )
 
-// PolicyReconciler.SetupWithManager applies its own fallback defaults for the
-// tuning knobs, so a reconciler constructed without them (in tests, or by any
-// future embedder) still behaves sanely. Those fallbacks are hardcoded
-// literals, duplicating the CLI defaults in internal/config — the reconciler
-// deliberately does not import the config/Viper layer in production code.
+// SetupWithManager's tuning fallbacks are hardcoded literals duplicating the
+// CLI defaults in internal/config, because the reconciler deliberately does not
+// import the config/Viper layer. Drift between the two would silently make the
+// documented default stop matching an unconfigured reconciler.
 //
-// Duplication is fine as long as the two agree. Drift is not: if someone tunes
-// a CLI default and misses the reconciler fallback, the operator's documented
-// default silently stops matching what an unconfigured reconciler actually
-// does, and the discrepancy shows up only as a behaviour difference nobody
-// traces back here.
-//
-// This lives in an EXTERNAL test package (controller_test) on purpose: it lets
-// the assertion import internal/config without the production internal/controller
-// package gaining any dependency on the CLI layer. The dependency is
-// test-only, verifiable with `go list -deps` versus `go list -test -deps`.
+// This lives in an EXTERNAL test package so the assertion can import
+// internal/config without the production package gaining that dependency.
 func TestSetupDefaultsAgreeWithConfigDefaults(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()

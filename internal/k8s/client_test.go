@@ -26,40 +26,25 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
-// TestNewCached_SignatureContract is a compile-level contract test only: it
-// assigns NewCached to a variable of the exact expected function type. If the
-// signature drifts (argument order, added/removed return value, etc.) this
-// file fails to compile and CI catches it immediately.
+// Compile-level contract test only. The two contexts are the load-bearing part
+// of the signature: the first is the cache's lifetime, the second bounds the
+// blocking startup phase. Collapsing them back into one would let a caller hand
+// the blocking wait a context its shutdown signal never cancels — how the
+// webhook came to ignore SIGTERM for its whole (up to 2m) startup window.
 //
-// The two contexts are the load-bearing part of that signature: the first is
-// the informer cache's lifetime, the second bounds the blocking startup phase.
-// Collapsing them back into one would let a caller hand the blocking wait a
-// context its shutdown signal never cancels, which is how the webhook came to
-// ignore SIGTERM for its entire (up to 2 minute) startup window.
-//
-// This is deliberately NOT a behavioural test. Exercising the real cache
-// requires a live apiserver (envtest or a kind cluster) to open a watch
-// against, which is out of scope for this package's unit tests -- see
-// cmd/webhook, which is the actual consumer, for where that kind of
-// integration coverage would live if added later. Do not read this test as
-// evidence that cache-sync blocking, context cancellation, or read-through
-// behavior are covered anywhere in this suite.
+// Exercising the real cache needs a live apiserver, so nothing here covers
+// cache-sync blocking, cancellation, or read-through behavior.
 var _ func(context.Context, context.Context, *runtime.Scheme) (client.Client, error) = NewCached
 
-// cachedKinds drives the pre-warm loop in NewCached, and the pre-warm is the
-// only reason its WaitForCacheSync means anything: cache.New registers no
-// informers on its own, so an empty list would make the wait a silent no-op
-// and push a blocking cluster-wide LIST onto the first admission Get, inside
-// that call's 2s timeout.
+// cachedKinds drives the pre-warm loop, and the pre-warm is the only reason
+// WaitForCacheSync means anything: cache.New registers no informers on its own,
+// so an empty list makes the wait a silent no-op and pushes a cluster-wide LIST
+// onto the first admission Get, inside that call's 2s timeout.
 //
-// Pinning the exact contents rather than just "non-empty" is deliberate. The
-// webhook reads Policy and WorkloadRecommendation on every admission, and
-// Namespace on the multi-level opt-in path (now three kinds, not two);
-// dropping any of them would reintroduce the startup stall for it, and
-// adding an owner-chain kind here (ReplicaSet, Job, Deployment, StatefulSet,
-// DaemonSet, CronJob, Rollout — see OwnerChainDisableFor) would stand up an
-// informer over every such object in the cluster — precisely what DisableFor
-// in NewCached exists to prevent.
+// The exact contents are pinned: dropping a kind the webhook reads per
+// admission reintroduces the stall, and adding an owner-chain kind (see
+// OwnerChainDisableFor) stands up an informer over every such object in the
+// cluster — what DisableFor exists to prevent.
 func TestCachedKindsArePreWarmed(t *testing.T) {
 	got := cachedKinds()
 	if len(got) != 3 {
@@ -77,9 +62,8 @@ func TestCachedKindsArePreWarmed(t *testing.T) {
 }
 
 // stubCache implements just enough of cache.Cache to drive
-// registerInformerWithRetry. Embedding the interface leaves every other method
-// nil — calling one panics, which is the intended signal that this stub is
-// only valid for the GetInformer path.
+// registerInformerWithRetry. Every other method is nil — calling one panics,
+// which is the intended signal that this stub is only valid for GetInformer.
 type stubCache struct {
 	cache.Cache
 	mu      sync.Mutex
@@ -111,14 +95,11 @@ func (s *stubCache) callCount() int {
 	return s.calls
 }
 
-// GetInformer needs the apiserver to already serve the kind, and on a fresh
-// install it may not yet: the chart renders CRDs as ordinary templates, so
-// establishment (the apiserver serving the type plus a discovery refresh) lags
-// creation, and installCRDs=false lets a cluster start the webhook before its
-// CRDs exist at all. Failing immediately turned that race into
-// CrashLoopBackOff, whose backoff climbs to five minutes — far longer than the
-// establishment it waits on, and with failurePolicy=Fail a crash-looping
-// webhook blocks pod creation across its scope.
+// On a fresh install the apiserver may not serve the kind yet: CRD
+// establishment lags creation, and installCRDs=false lets the webhook start
+// before its CRDs exist at all. Failing immediately turned that race into
+// CrashLoopBackOff, whose backoff climbs to five minutes, and with
+// failurePolicy=Fail a crash-looping webhook blocks pod creation in its scope.
 func TestRegisterInformerWithRetry_WaitsForCRDEstablishment(t *testing.T) {
 	c := &stubCache{failFor: 3}
 	err := registerInformerWithRetry(context.Background(), c,
@@ -167,17 +148,11 @@ func TestRegisterInformerWithRetry_GivesUpAfterTimeout(t *testing.T) {
 	}
 }
 
-// The wait NewCached does before the HTTPS listener exists is the process's
-// longest unresponsive stretch — up to crdWaitTimeout with nothing answering
-// /healthz — so it has to come back the moment the context it was given for
-// that phase is cancelled, rather than sleeping out its retry interval or
-// running to the deadline. That context is the caller's shutdown signal (see
-// NewCached's startCtx and cmd/webhook/serve.go); a wait that ignored it would
-// leave SIGTERM unanswered until the SIGKILL at the end of the pod's grace
-// period.
-//
-// The generous deadline and interval here are the point: neither may be what
-// ends the call.
+// The wait before the HTTPS listener exists is the process's longest
+// unresponsive stretch — up to crdWaitTimeout with nothing answering /healthz —
+// so it must return the moment startCtx (the caller's shutdown signal) is
+// cancelled rather than sleeping out its retry interval. The generous deadline
+// and interval here are the point: neither may be what ends the call.
 func TestRegisterInformerWithRetry_ReturnsPromptlyOnCancelledContext(t *testing.T) {
 	c := &stubCache{failFor: 1 << 30} // never becomes servable
 	ctx, cancel := context.WithCancel(context.Background())
@@ -199,18 +174,11 @@ func TestRegisterInformerWithRetry_ReturnsPromptlyOnCancelledContext(t *testing.
 	}
 }
 
-// The webhook's HTTPS listener does not start until NewCached returns, so
-// nothing answers /healthz for as long as the CRD-establishment wait lasts.
-// The chart therefore gives the webhook container a startupProbe whose budget
-// exceeds crdWaitTimeout; without it the container is killed at
-// initialDelaySeconds + periodSeconds*failureThreshold of the liveness probe
-// (10 + 10*3 = 40s) on exactly the fresh-install race the wait exists for, and
-// the pod still ends in CrashLoopBackOff.
-//
-// This reads the chart rather than a copy of its numbers, so raising
-// crdWaitTimeout without raising the chart budget fails here. The rendered
-// values are pinned from the chart side in
-// charts/k8s-sustain/tests/webhook-deployment_test.yaml.
+// Nothing answers /healthz while the CRD-establishment wait lasts, so the chart
+// gives the webhook a startupProbe whose budget exceeds crdWaitTimeout; without
+// it the liveness probe kills the container at 40s on exactly the fresh-install
+// race the wait exists for. This reads the chart rather than a copy of its
+// numbers, so raising crdWaitTimeout alone fails here.
 func TestCRDWaitFitsInsideChartStartupProbeBudget(t *testing.T) {
 	const valuesPath = "../../charts/k8s-sustain/values.yaml"
 	raw, err := os.ReadFile(valuesPath)
@@ -242,18 +210,13 @@ func TestCRDWaitFitsInsideChartStartupProbeBudget(t *testing.T) {
 	}
 }
 
-// The chart's values.yaml defaults are NOT the only copy of these numbers. A
-// `helm upgrade --reuse-values` from a release predating the webhook.startupProbe
-// key reuses that release's values and never picks up a newly added default, so
-// the template carries its own fallback copy (webhook-deployment.yaml's
-// mergeOverwrite dict). That copy is the one the upgrade path actually renders.
-//
-// Nothing tied it to crdWaitTimeout: the sibling test above reads values.yaml
-// only, and the chart test pins the rendered numbers to bare literals. Raising
-// crdWaitTimeout and values.yaml together therefore left every test green while
-// the upgrade path — the exact path the template defaults exist to protect — was
-// silently under budget. This asserts the same relationship from the template's
-// side, and that the two copies still agree.
+// values.yaml is not the only copy of these numbers: `helm upgrade
+// --reuse-values` from a release predating webhook.startupProbe never picks up
+// a newly added default, so the template carries its own fallback copy
+// (webhook-deployment.yaml's mergeOverwrite dict) and that is what the upgrade
+// path renders. Nothing tied it to crdWaitTimeout, so raising crdWaitTimeout
+// and values.yaml together left every test green while the upgrade path was
+// silently under budget. This pins the same relationship from the template side.
 func TestCRDWaitFitsInsideChartTemplateStartupProbeDefaults(t *testing.T) {
 	const templatePath = "../../charts/k8s-sustain/templates/webhook-deployment.yaml"
 	raw, err := os.ReadFile(templatePath)
@@ -262,9 +225,8 @@ func TestCRDWaitFitsInsideChartTemplateStartupProbeDefaults(t *testing.T) {
 	}
 
 	// The defaults live in a Go-template `mergeOverwrite (dict "k" v ...)`
-	// literal, which no YAML parser can see: the file is a template, not a
-	// document. Scoping the field scan to that dict is what keeps this from
-	// matching the liveness/readiness probes rendered further down.
+	// literal that no YAML parser can see. Scoping the scan to that dict keeps
+	// this from matching the liveness/readiness probes rendered further down.
 	const marker = "$startupProbe := mergeOverwrite (dict"
 	start := strings.Index(string(raw), marker)
 	if start < 0 {
@@ -336,28 +298,15 @@ func startupProbeBudget(initialDelaySeconds, periodSeconds, failureThreshold int
 	return time.Duration(initialDelaySeconds+periodSeconds*failureThreshold) * time.Second
 }
 
-// NewCached starts the informer cache in a goroutine whose lifetime is runCtx,
-// and runCtx is deliberately NOT the caller's shutdown signal (see the doc
-// comment): the webhook keeps it alive past SIGTERM so draining admissions
-// still read a cache that is being updated. That makes every error return a
-// place NewCached has to stop that goroutine itself — a caller whose
-// construction failed has no client, no reason to keep a cache, and under the
-// signature may legally have passed context.Background() as runCtx, in which
-// case nothing ever cancels it and a full informer set leaks on every startup
-// failure. The CRD-not-established path that crdWaitTimeout exists for is the
-// likely one, and it is precisely the path a webhook retries on.
+// runCtx is deliberately not the caller's shutdown signal, and a caller may
+// legally pass context.Background(), so every error return is a place NewCached
+// must stop the cache goroutine itself or leak a full informer set per failed
+// startup — precisely the path a webhook retries on.
 //
 // The failure is forced with a scheme that knows none of the cached kinds, so
-// GetInformer fails on the first kind with no apiserver traffic at all. The
-// error is not what is under test — the surviving goroutine is.
-//
-// This covers the registration error path, which is the one that reaches
-// production. The two returns AFTER the cache starts (a failed cache sync, a
-// failed client.New) are held by the deferred guard in NewCached and cannot be
-// driven from here: reaching them needs informers that register successfully
-// and therefore a live apiserver, which this package's unit tests do not have
-// (see TestNewCached_SignatureContract). The package-wide goleak TestMain is
-// the backstop for those.
+// GetInformer fails with no apiserver traffic. The error is not under test —
+// the surviving goroutine is. The two returns after the cache starts need a
+// live apiserver to reach; the package-wide goleak TestMain backstops those.
 func TestNewCached_FailedStartupDoesNotLeakCacheGoroutine(t *testing.T) {
 	t.Setenv("KUBECONFIG", writeStubKubeconfig(t))
 
@@ -376,10 +325,9 @@ func TestNewCached_FailedStartupDoesNotLeakCacheGoroutine(t *testing.T) {
 	goleak.VerifyNone(t, notLeaked)
 }
 
-// writeStubKubeconfig gives ctrl.GetConfigOrDie something to parse — it exits
-// the process rather than returning an error when it finds nothing, which
-// would take the whole test binary with it. The server address is never
-// dialled by the tests using this: they fail before any request is issued.
+// writeStubKubeconfig gives ctrl.GetConfigOrDie something to parse: finding
+// nothing, it exits the process and takes the test binary with it. The server
+// address is never dialled — these tests fail before any request is issued.
 func writeStubKubeconfig(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "kubeconfig")

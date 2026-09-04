@@ -15,11 +15,9 @@ import (
 // fail-open OOM signal, then the OOM-aware request computation for every
 // observed container.
 //
-// Returned fields populated: CPURequest, MemoryRequest, CPUUsageCores,
-// MemoryUsageBytes. Limits and chart series are not computed here — callers
-// that need them layer that on top (see runSimulation). The OOM signal is
-// returned so simulate.go can reuse it (per-container recency included) when
-// clamping recommendation time-series.
+// Limits and chart series are deliberately left to callers (see runSimulation).
+// The OOM signal is returned so simulate.go can reuse its per-container recency
+// when clamping recommendation time-series.
 func (s *Server) buildContainerRecommendations(
 	ctx context.Context,
 	namespace, kind, name string,
@@ -32,12 +30,6 @@ func (s *Server) buildContainerRecommendations(
 	// The CPU, memory, and OOM queries are independent Prometheus round-trips,
 	// so overlap them to cut dashboard latency from the sum of three trips to
 	// the slowest one (mirrors the webhook handler's FetchWorkloadInputs path).
-	//
-	// Error semantics are preserved exactly:
-	//   - CPU/memory query errors are fatal and propagate out of g.Wait().
-	//   - The OOM query is fail-open: its goroutine always returns nil so a
-	//     failure never cancels the others, leaving oomSignal at its empty
-	//     zero value just as the sequential code did.
 	var (
 		cpuValues map[string]float64
 		memValues map[string]float64
@@ -61,11 +53,8 @@ func (s *Server) buildContainerRecommendations(
 		return nil
 	})
 	g.Go(func() error {
-		// OOM signal — best-effort, fail-open. Mirrors the controller so the
-		// per-workload recommendation reflects the OOM-driven memory floor (peak
-		// observed bytes) the controller would actually apply. The error is
-		// swallowed (never returned to the errgroup) so it stays non-fatal and
-		// does not cancel the CPU/memory queries.
+		// Fail-open, mirroring the controller's OOM-driven memory floor: the
+		// error is swallowed so it never cancels the CPU/memory queries.
 		signal, err := s.PromClient.QueryWorkloadOOMSignal(gctx, namespace, kind, name)
 		if err == nil {
 			oomSignal = signal

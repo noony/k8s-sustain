@@ -1,12 +1,8 @@
 // Package httpx provides HTTP server building blocks shared by the dashboard
 // and the admission webhook: a uniform JSON envelope, request-ID correlation,
 // panic recovery, telemetry, body-size limiting, and a graceful-shutdown
-// helper.
-//
-// The envelope shape and middleware semantics here match the dashboard's
-// original implementation. Components that need a different response shape
-// (the webhook's AdmissionReview) can opt out of the envelope while still
-// reusing the middleware chain.
+// helper. Components needing a different response shape (the webhook's
+// AdmissionReview) can skip the envelope and still reuse the middleware chain.
 package httpx
 
 import (
@@ -17,10 +13,9 @@ import (
 	"net/http"
 )
 
-// RequestIDHeader is the canonical name of the request correlation header.
-// Clients may supply their own value; the server generates one when absent
-// and echoes it on every response so operators can grep logs for a single
-// request across components.
+// RequestIDHeader is the request correlation header. Clients may supply their
+// own value; the server generates one when absent and echoes it on every
+// response.
 const RequestIDHeader = "X-Request-Id"
 
 type ctxKey int
@@ -28,8 +23,7 @@ type ctxKey int
 const requestIDKey ctxKey = 1
 
 // Envelope wraps every successful JSON response so the wire shape is uniform
-// regardless of endpoint: clients always destructure `data` and may inspect
-// `meta.requestId` when reporting issues.
+// regardless of endpoint.
 type Envelope struct {
 	Data any  `json:"data"`
 	Meta Meta `json:"meta"`

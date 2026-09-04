@@ -6,10 +6,9 @@ import (
 	"github.com/noony/k8s-sustain/internal/policymatch"
 )
 
-// The table every component's wiring test replays is only worth anything if it
-// agrees with the resolver itself. Without this, a drift in the fixture would
-// silently weaken all three component tests that consume it rather than
-// failing anything.
+// The table is only worth anything if it agrees with the resolver itself:
+// without this, fixture drift would silently weaken all three component tests
+// that consume it rather than failing anything.
 func TestAnnotationCasesAgreeWithResolvePolicy(t *testing.T) {
 	cases := AnnotationCases()
 	if len(cases) < 6 {

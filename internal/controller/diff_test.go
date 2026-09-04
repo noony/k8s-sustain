@@ -31,9 +31,6 @@ func TestQuantityEqual(t *testing.T) {
 	}
 }
 
-// TestChangedContainers_DetectsRequestAndLimitDrift verifies that
-// changedContainers flags every container whose request or limit drifts from
-// the recommendation, ignoring containers without a recommendation entry.
 func TestChangedContainers_DetectsRequestAndLimitDrift(t *testing.T) {
 	containers := []corev1.Container{
 		{

@@ -33,10 +33,9 @@ func TestFactorRatio_GuardsAgainstNaN(t *testing.T) {
 	}
 }
 
-// TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter verifies that a
-// workload created less than minWorkloadAge ago is skipped — the CPU rate
-// hasn't stabilized yet, so the percentile would floor to ~0 and trigger an
-// immediate recycle on the next reconcile.
+// A workload younger than minWorkloadAge is skipped: the CPU rate has not
+// stabilized, so the percentile would floor to ~0 and trigger an immediate
+// recycle on the next reconcile.
 func TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -55,16 +54,10 @@ func TestBuildRecommendations_YoungWorkload_SkipsAndEmitsCounter(t *testing.T) {
 	}
 }
 
-// TestBuildRecommendations_PodKind_SubjectToYoungWorkloadGate verifies that
-// the age gate applies to "Pod"-kind targets (bare pods opted in via
-// k8s.sustain.io/owner-name) exactly like every other kind. Bare pods used to
-// bypass this gate unconditionally; that exception was written when a bare
-// pod could never be recycled at all, so a near-zero percentile had nothing
-// to act on. That premise stopped holding once Ongoing bare pods started
-// being resized in place (pods/resize, k8s >= 1.33): a brand-new identity
-// with partial warm-up samples can now produce a near-zero percentile that
-// floors to the hard minimum (1m CPU / 1Mi memory) and gets applied in
-// place — for memory, that can kill the container. See buildRecommendations.
+// The age gate applies to "Pod"-kind targets like every other kind: since
+// Ongoing bare pods are resized in place, a brand-new identity with partial
+// warm-up samples could otherwise floor to the hard minimum (1m / 1Mi) and have
+// it applied in place — which for memory can kill the container.
 func TestBuildRecommendations_PodKind_SubjectToYoungWorkloadGate(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -96,10 +89,9 @@ func TestBuildRecommendations_PodKind_SubjectToYoungWorkloadGate(t *testing.T) {
 	}
 }
 
-// TestBuildRecommendations_SparseSignal_StillProducesRecommendation verifies
-// that a workload with only a few samples in the policy window (e.g. a daily
-// CronJob with a 2d window) still gets a recommendation as long as it's old
-// enough — the percentile queries handle sparseness, the gate must not.
+// A workload with only a few samples in the policy window (a daily CronJob on a
+// 2d window) still gets a recommendation once it is old enough: the percentile
+// queries handle sparseness, so the gate must not second-guess them.
 func TestBuildRecommendations_SparseSignal_StillProducesRecommendation(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -122,11 +114,8 @@ func TestBuildRecommendations_SparseSignal_StillProducesRecommendation(t *testin
 	}
 }
 
-// TestBuildRecommendations_RecentOOMBypassesHistoryGate verifies that a
-// crash-looping workload (insufficient CPU rate samples) still produces a memory
-// recommendation when a recent OOM is observed — the OOM floor must override
-// the history gate, otherwise the workload is permanently locked at its
-// (broken) current request.
+// The OOM floor must override the history gate, or a crash-looping workload
+// (too few CPU rate samples) stays permanently locked at its broken request.
 func TestBuildRecommendations_RecentOOMBypassesHistoryGate(t *testing.T) {
 	const peakBytes = 80 * 1024 * 1024 // 80Mi
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -178,10 +167,8 @@ func TestBuildRecommendations_RecentOOMBypassesHistoryGate(t *testing.T) {
 	_ = peakBytes
 }
 
-// TestBuildRecommendations_RecentOOMRaisesMemoryFloor verifies that when
-// k8s_sustain:workload_oom_24h reports a recent OOM, the memory recommendation
-// is floored at max(peak_working_set_24h, current_request) instead of using the
-// (lower) percentile value, and that the oom-floor counter increments.
+// On a recent OOM the memory recommendation is floored at
+// max(peak_working_set_24h, current_request) rather than the lower percentile.
 func TestBuildRecommendations_RecentOOMRaisesMemoryFloor(t *testing.T) {
 	const (
 		oomCount     = 2.0
@@ -259,11 +246,9 @@ func TestBuildRecommendations_RecentOOMRaisesMemoryFloor(t *testing.T) {
 	}
 }
 
-// TestBuildRecommendations_OOMTimeLimitBumpsBeyondLimit verifies that when
-// peak working-set is unreliable (cgroup v2 / sub-scrape OOM kill) but the
-// OOM-time memory limit signal is present, the recommendation is bumped above
-// the limit the kernel killed at. Without this floor the recommendation would
-// drop to the percentile and the workload would OOM forever.
+// When peak working-set is unreliable (cgroup v2 / sub-scrape OOM kill) the
+// OOM-time limit signal must bump the recommendation above the limit the kernel
+// killed at; otherwise it drops to the percentile and the workload OOMs forever.
 func TestBuildRecommendations_OOMTimeLimitBumpsBeyondLimit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -315,11 +300,10 @@ func TestBuildRecommendations_OOMTimeLimitBumpsBeyondLimit(t *testing.T) {
 	}
 }
 
-// TestBuildRecommendations_SiblingOOMDoesNotFloorInnocentContainer pins the
-// per-container OOM scoping end to end: container "app" OOMed but its sidecar
-// "side" did not. The OOM recording rule keeps the container label, so only
-// app gets the peak floor; the sidecar keeps its pure percentile value even
-// though the (non-OOM-scoped) peak rule reports a 24h high-water mark for it.
+// Per-container OOM scoping: the OOM recording rule keeps the container label,
+// so only the container that OOMed gets the peak floor — the sidecar keeps its
+// percentile value even though the non-OOM-scoped peak rule reports a 24h
+// high-water mark for it too.
 func TestBuildRecommendations_SiblingOOMDoesNotFloorInnocentContainer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -385,10 +369,8 @@ func TestBuildRecommendations_SiblingOOMDoesNotFloorInnocentContainer(t *testing
 	}
 }
 
-// TestBuildRecommendations_YoungWorkload_SiblingOOMBypassesAgeGate verifies
-// the age-gate bypass stays workload-level: any container's OOM (here, "app")
-// unblocks the too-young skip so the crash-looping container can get a
-// recommendation immediately.
+// The age-gate bypass stays workload-level: any container's OOM unblocks the
+// too-young skip so the crash-looping container gets a recommendation at once.
 func TestBuildRecommendations_YoungWorkload_SiblingOOMBypassesAgeGate(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -438,10 +420,8 @@ func (f *fakeOOMSource) RecentByWorkload(_, _, _ string, _ time.Duration) map[st
 	return f.records
 }
 
-// TestBuildRecommendations_LiveOOMFloorsOnlyOOMedContainer verifies the live
-// OOM watcher merge stays per-container: a live OOM record for "app" floors
-// app's memory (bump above the captured cgroup limit) while the sidecar keeps
-// its percentile recommendation.
+// The live OOM watcher merge stays per-container: a live record for "app" floors
+// app's memory while the sidecar keeps its percentile recommendation.
 func TestBuildRecommendations_LiveOOMFloorsOnlyOOMedContainer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -503,9 +483,6 @@ func TestBuildRecommendations_LiveOOMFloorsOnlyOOMedContainer(t *testing.T) {
 	}
 }
 
-// TestBuildRecommendations_OOMSignalEmpty_DoesNotApplyFloor verifies that when
-// no OOM is reported, the percentile value flows through unchanged and the
-// floor counter is not incremented.
 func TestBuildRecommendations_OOMSignalEmpty_DoesNotApplyFloor(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -544,23 +521,11 @@ func TestBuildRecommendations_OOMSignalEmpty_DoesNotApplyFloor(t *testing.T) {
 	}
 }
 
-// TestBuildRecommendations_NilInputsLogsOnlyForGenuineCandidateBug covers the
-// consequence of removing the Job/Pod kind check from the nil-inputs guard:
-// with every kind now batched, the ONLY thing that still legitimately
-// produces a nil inputs is Reconcile's own candidate-building loop marking an
-// identity as snapshotPending (no observed-resources snapshot yet -- see
-// policy_controller.go's pendingSnapshot). Before snapshotPending existed,
-// widening the guard to every kind would have made
-// errPrefetchMissingForBatchedKind fire on the cycle where an identity first
-// reaches the work-list without a snapshot -- the SECOND cycle after
-// discovery, not the first: on the first the object is usually still absent
-// from the cached List, so the identity is not processed at all and nothing
-// logs. On the second it is normally already snapshotted, since EnsureExists
-// writes one at discovery time, so what this would actually have misreported
-// is the narrower set pendingSnapshot exists for -- a webhook stub create, or
-// an EnsureExists whose status patch never landed (the two causes named at
-// policy_controller.go's pendingSnapshot). Routine, benign states either way.
-// This pins that the guard tells the two apart.
+// With every kind batched, the ONLY legitimate source of a nil inputs is
+// Reconcile's candidate-building loop marking an identity snapshotPending (see
+// policy_controller.go's pendingSnapshot) -- a routine, benign state. This pins
+// that errPrefetchMissingForBatchedKind fires for a genuine candidate bug and
+// stays quiet for that state.
 func TestBuildRecommendations_NilInputsLogsOnlyForGenuineCandidateBug(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -591,17 +556,13 @@ func TestBuildRecommendations_NilInputsLogsOnlyForGenuineCandidateBug(t *testing
 	}
 }
 
-// TestBuildRecommendations_OOMAnchorTakesMaxOfPrometheusAndLive pins how the
-// two OOM-time-limit anchors combine.
-//
 // Prometheus's anchor is windowed: k8s_sustain:container_oom_limit_24h:bytes
 // samples the limit around a restart, so right after a resize-then-OOM it can
-// still report the PREVIOUS limit for a cycle. The live watcher captures the
-// exact applied limit at each kill with no windowing at all. Neither anchor can
-// be inflated by k8s-sustain's own write any more, so the higher of the two is
-// the limit the container most recently and genuinely died at. Preferring
-// Prometheus whenever it holds any value anchors on the stale, lower one and
-// under-bumps a container that is still OOM-looping.
+// still report the PREVIOUS limit. The live watcher captures the exact applied
+// limit at each kill. Neither can be inflated by k8s-sustain's own write, so the
+// higher of the two is the limit the container genuinely died at; preferring
+// Prometheus anchors on the stale, lower one and under-bumps a container that is
+// still OOM-looping.
 func TestBuildRecommendations_OOMAnchorTakesMaxOfPrometheusAndLive(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()

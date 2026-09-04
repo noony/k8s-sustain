@@ -10,8 +10,6 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
-// TestStatusEquivalent_DistinguishesSameValuesFromDifferentSources verifies
-// the equivalence check ignores ObservedAt but respects Source.
 func TestStatusEquivalent_DistinguishesSameValuesFromDifferentSources(t *testing.T) {
 	cpu := resource.MustParse("250m")
 	now := metav1.NewTime(time.Now())

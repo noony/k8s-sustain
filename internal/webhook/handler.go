@@ -24,45 +24,22 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// maxAdmissionBodyBytes caps the AdmissionReview payload the webhook will
-// decode. Pod specs in real clusters are kilobytes; 1 MiB is a generous
-// ceiling that still defends against a malicious or malformed apiserver
-// pushing an unbounded body.
+// maxAdmissionBodyBytes caps the AdmissionReview payload the webhook decodes.
 const maxAdmissionBodyBytes = 1 << 20
 
-// maxPolicyNameLen mirrors the Kubernetes resource-name limit (DNS subdomain).
-// Anything longer cannot be a real Policy object.
+// maxPolicyNameLen is the Kubernetes DNS-subdomain name limit.
 const maxPolicyNameLen = 253
 
-// apiCallTimeout bounds each individual Kubernetes API Get inside the
-// admission path (Policy lookup, owner resolution, WorkloadRecommendation
-// read). The webhook's HTTP WriteTimeout (10s) is the outer ceiling; without
-// per-call deadlines, one slow apiserver round-trip could eat the whole
-// budget.
-//
-// 2s is a generous bound for direct apiserver reads through the uncached
-// controller-runtime client (built with client.New). Set high enough to
-// absorb a brief apiserver hiccup, low enough to leave room for the other
-// calls in admit() and the AdmissionReview encode/decode on either side.
-// Now that admission never talks to Prometheus, this bound will rarely be
-// approached in practice — it remains as a backstop against a slow
-// apiserver, not because it is load-bearing for a Prometheus round-trip
-// anymore.
+// apiCallTimeout bounds each Kubernetes API Get inside the admission path, so
+// one slow apiserver round-trip cannot eat the whole admission budget.
 const apiCallTimeout = 2 * time.Second
 
-// admissionTimeout caps the whole admit() handler. The apiserver's
-// MutatingWebhookConfiguration timeout is 5s by default; we keep a 1s headroom
-// for HTTP round-trip and JSON encode/decode so a stuck downstream (apiserver
-// Get) cannot push us past the upstream deadline. Failing open inside the
-// budget is strictly better than letting the apiserver time out and fall back
-// to failurePolicy. As with apiCallTimeout, this backstop is now sized
-// against the apiserver alone — Prometheus is no longer in the admission
-// path at all.
+// admissionTimeout caps the whole admit() handler. The apiserver's webhook
+// timeout is 5s by default; failing open inside that budget beats letting the
+// apiserver time out and fall back to failurePolicy.
 const admissionTimeout = 4 * time.Second
 
-// isValidPolicyName guards against malformed annotation values being used as
-// a Policy object name in the apiserver Get below. Accepts only DNS-1123
-// subdomains up to 253 chars.
+// isValidPolicyName reports whether name is a DNS-1123 subdomain.
 func isValidPolicyName(name string) bool {
 	if name == "" || len(name) > maxPolicyNameLen {
 		return false
@@ -70,133 +47,53 @@ func isValidPolicyName(name string) bool {
 	return len(apivalidation.IsDNS1123Subdomain(name)) == 0
 }
 
-// Handler is the HTTP handler for the mutating admission webhook.
-// It intercepts Pod CREATE requests and injects resource requests/limits
-// read from the WorkloadRecommendation the controller already computed and
-// cached on its reconcile cadence. The webhook itself never queries
-// Prometheus: doing so would make its query load scale with pod churn
-// (mass scale-outs, node drains, crash loops) instead of workload count.
-// Both OnCreate and Ongoing policies are handled so that pods start with
-// the latest recommendation immediately, without waiting for the controller
-// to reconcile.
+// Handler is the mutating admission handler. On Pod CREATE it injects the
+// resources cached in the controller-written WorkloadRecommendation; it never
+// queries Prometheus itself, so its load scales with workload count rather
+// than pod churn.
 type Handler struct {
 	Client        client.Client
 	RecommendOnly bool
 
-	// ExcludedNamespaces lists namespaces the webhook must never mutate.
-	// Mirrors the controller's --excluded-namespaces flag so a workload in,
-	// say, kube-system is left untouched by both components.
 	ExcludedNamespaces []string
 
-	// CacheStaleness bounds how old a WorkloadRecommendation may be before
-	// the webhook stops trusting it. This used to gate an emergency fallback
-	// (used only when a live Prometheus query had already failed); now that
-	// the WLR is the webhook's only recommendation source, it gates every
-	// injection: once the controller falls this far behind — a stuck
-	// reconcile loop, an outage, a huge backlog — the webhook stops injecting
-	// from stale data and lets the pod through with template resources
-	// instead. Zero falls back to DefaultCacheStaleness.
+	// CacheStaleness bounds how old a WorkloadRecommendation may be before the
+	// webhook stops injecting from it. Zero falls back to DefaultCacheStaleness.
 	CacheStaleness time.Duration
 
-	// RecommendationRetention bounds the one path that waives CacheStaleness:
-	// a WorkloadRecommendation the controller marked Departed, whose ObservedAt
-	// is frozen by design (see fetchRecommendations). It must mirror the
-	// controller's --recommendation-retention, because that is the window after
-	// which the controller's sweep deletes the object — past it, the webhook is
-	// serving something only a stuck controller could still be offering.
-	//
-	// The chart renders both from the single .Values.controller.recommendationRetention
-	// key, so the two cannot drift in a chart-managed install. Zero falls back
-	// to DefaultRecommendationRetention.
+	// RecommendationRetention bounds the age of a Departed WorkloadRecommendation,
+	// whose ObservedAt is frozen. It must mirror the controller's
+	// --recommendation-retention. Zero falls back to DefaultRecommendationRetention.
 	RecommendationRetention time.Duration
 
-	// Stub-request rate limiting and shutdown tracking. Lazily initialised
-	// (see initStubStateLocked) because Handler is built as a plain struct
-	// literal everywhere, so the zero value must work.
-	//
-	// stubMu guards every field below, INCLUDING stubWG's Add and the
-	// stubStopping flag: registering a detached goroutine and deciding that
-	// no more may start have to be one atomic step, or Shutdown can start
-	// waiting on a WaitGroup that is about to be incremented again. See
-	// beginStubRequest.
+	// stubMu guards every stub field below, including stubWG.Add and
+	// stubStopping: registering a goroutine and deciding no more may start must
+	// be one atomic step or Shutdown can wait on a WaitGroup about to grow.
 	stubMu        sync.Mutex
 	stubRequested map[string]time.Time
 	stubInflight  chan struct{}
 	stubLastPrune time.Time
 
-	// stubCtx is the parent of every detached stub goroutine's context, and
-	// stubStop cancels it. Cancelling is what makes Shutdown's wait short: a
-	// goroutine parked for up to stubRequestQueueTimeout (30s) on a write slot,
-	// or mid-apiserver-call, gives up at once instead of being waited out.
+	// stubCtx is the parent of every detached stub goroutine; stubStop cancels it.
 	stubCtx  context.Context
 	stubStop context.CancelFunc
 
-	// stubStopping records that Shutdown has begun, so no further detached
-	// goroutine is registered. Distinct from stubCtx.Err() only for
-	// readability: both flip in the same critical section.
 	stubStopping bool
+	stubWG       sync.WaitGroup
 
-	// stubWG counts the detached stub-create goroutines currently in flight,
-	// so Shutdown can join them before cmd/webhook cancels the informer cache
-	// they read from.
-	stubWG sync.WaitGroup
-
-	// ownerAnnCache caches Gets of an owning workload object's own
-	// metadata.annotations (see ownerAnnotations in optin.go), keyed by
-	// (namespace, kind, name). See ownerAnnotationsCache's doc for why this
-	// exists: the pre-gate (anyPolicyCovers) does not bound cost when a
-	// Policy has no namespace/label selector, so without this cache every
-	// unannotated pod CREATE on such a cluster pays for an uncached owner Get.
+	// ownerAnnCache and ownerRefCache bound the per-admission owner Gets on
+	// clusters where a selector-less Policy covers every pod.
 	ownerAnnCache ownerAnnotationsCache
-
-	// ownerRefCache caches the pod→owner ownerRef walk (see
-	// resolveCachedPodOwner in optin.go), keyed by the pod's own immediate
-	// controller ownerRef (namespace/kind/name/UID — e.g. its ReplicaSet or
-	// Job). Bounds the same uncovered-Policy cost as ownerAnnCache, but one
-	// Get earlier in the chain: workload.ResolvePodOwner's ReplicaSet/Job
-	// Get, which every pod behind one owner shares, was previously uncached
-	// on this hot path even though ownerAnnCache already memoised the Get one
-	// step further up (the resolved Deployment/CronJob/...).
 	ownerRefCache ttlLRUCache[resolvedOwnerRef]
 
 	// ownerAnnSF and ownerRefSF collapse a concurrent burst of cache misses
-	// for the SAME key into one in-flight Get, with every other caller
-	// waiting on its result instead of each issuing its own redundant Get —
-	// see ownerAnnotations and resolveCachedPodOwner in optin.go. Without
-	// this, ownerAnnCache/ownerRefCache only bound the STEADY-STATE cost (a
-	// warm cache turns repeat lookups into map reads); a genuinely
-	// concurrent cold-start burst — a rolling restart, which is the exact
-	// case these caches exist for — still lets every one of the N
-	// simultaneous misses issue its own Get before any of them has a chance
-	// to populate the cache. The zero value of singleflight.Group is usable
-	// (its map is lazily initialised), matching every other field here and
-	// Handler's plain-struct-literal construction throughout the test suite.
+	// for the same key into one in-flight Get.
 	ownerAnnSF singleflight.Group
 	ownerRefSF singleflight.Group
 
-	// sfJoinHook, if non-nil, is invoked with the singleflight key
-	// immediately after optin.go's DoChan call registers a caller (the leader
-	// or a follower, indistinguishably) with ownerAnnSF or ownerRefSF.
-	// DoChan registers the caller synchronously, under the group's own mutex,
-	// before it returns, so calling the hook only after DoChan returns is
-	// what makes "N concurrent callers have all joined the same in-flight
-	// resolution" an actually true statement by the time the hook fires —
-	// calling it before DoChan would let a caller be preempted between the
-	// hook and DoChan, so a barrier built on it could release while that
-	// caller had not joined yet. It exists purely so tests can
-	// deterministically detect that join without relying on sleeps or
-	// scheduler luck — see the burst-collapse tests in optin_test.go and
-	// handler_test.go. Always nil outside tests.
-	//
-	// It is a field rather than a package-level var deliberately. As a
-	// global it was written by one test while another test's still-running
-	// goroutine read it — a data race under -race, and worse, a straggler
-	// from a finished test would fire the NEXT test's barrier counter, so
-	// that test's barrier could release before all N of its own callers had
-	// joined and a late caller would start a second singleflight round,
-	// failing the "exactly one Get" assertion. Per-Handler, a test's hook is
-	// reachable only through the Handler that test built, and is set once at
-	// construction before any goroutine touches it.
+	// sfJoinHook, if non-nil, is called with the singleflight key right after
+	// DoChan registers a caller. Test-only; a per-Handler field rather than a
+	// global so one test's stragglers cannot fire another test's barrier.
 	sfJoinHook func(key string)
 }
 
@@ -206,11 +103,8 @@ type jsonPatch struct {
 	Value json.RawMessage `json:"value,omitempty"`
 }
 
-// allowWithLabelPatch returns an allow response carrying only the
-// owner-name label-mirror patch (if any) — used by every early-return path
-// from owner resolution onward, so a valid owner-name annotation always
-// reaches Prometheus via kube-state-metrics even when the rest of admission
-// has nothing else to inject.
+// allowWithLabelPatch returns an allow response carrying only the owner-name
+// label-mirror patch, if any.
 func allowWithLabelPatch(labelPatch *jsonPatch) *admissionv1.AdmissionResponse {
 	if labelPatch == nil {
 		return &admissionv1.AdmissionResponse{Allowed: true}
@@ -223,11 +117,9 @@ func allowWithLabelPatch(labelPatch *jsonPatch) *admissionv1.AdmissionResponse {
 	return &admissionv1.AdmissionResponse{Allowed: true, Patch: b, PatchType: &pt}
 }
 
-// ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logger := log.FromContext(r.Context())
 
-	// Reject an oversized AdmissionReview before it lands in memory.
 	r.Body = http.MaxBytesReader(w, r.Body, maxAdmissionBodyBytes)
 
 	var review admissionv1.AdmissionReview
@@ -252,8 +144,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// admit processes a single AdmissionRequest. On any error it fails open
-// (allows the pod) to avoid blocking the cluster.
+// admit processes a single AdmissionRequest. On any error it fails open and
+// allows the pod unmutated.
 func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) *admissionv1.AdmissionResponse {
 	ctx, cancel := context.WithTimeout(ctx, admissionTimeout)
 	defer cancel()
@@ -264,9 +156,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	logger.V(1).Info("admit invoked", "operation", req.Operation, "kind", req.Kind.Kind)
 
 	if len(req.Object.Raw) == 0 {
-		// AdmissionRequest.Object is optional on the wire (e.g. DELETE has Raw
-		// empty; a malformed apiserver review could also set it to nil). Bail
-		// out fail-open rather than json.Unmarshal panicking on a nil slice.
 		logger.V(1).Info("admission request has empty Object.Raw, allowing without injection")
 		return allow
 	}
@@ -277,8 +166,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 	pod.Namespace = req.Namespace
 
-	// resolvedOwner is filled in by the multi-level chain below when it runs,
-	// so the owner resolution further down is not paid for twice.
 	var resolvedOwner podOwner
 
 	policyName := pod.Annotations[sustainv1alpha1.PolicyAnnotation]
@@ -287,10 +174,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allow
 	}
 	if policyName == "" {
-		// The pod carries no annotation of its own, but its workload or its
-		// namespace may. Pods inherit neither, so this costs lookups — see
-		// resolveOptIn for the cheapest-first ordering that keeps them off the
-		// common path. Fails open like every other error here.
 		optInCtx, optInCancel := context.WithTimeout(ctx, optInTimeout)
 		name, level, owner, err := h.resolveOptIn(optInCtx, logger, &pod)
 		optInCancel()
@@ -306,9 +189,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		logger = logger.WithValues("optInLevel", level)
 	}
 	if !isValidPolicyName(policyName) {
-		// A malformed annotation value cannot be a real Policy object name —
-		// reject early to avoid a wasted apiserver Get and to refuse to act
-		// on a name we couldn't safely look up.
 		logger.Info("pod has invalid policy annotation, allowing without injection", "policy", policyName)
 		return allow
 	}
@@ -322,22 +202,13 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	if policyErr != nil {
 		if client.IgnoreNotFound(policyErr) == nil {
 			logger.V(1).Info("policy not found, allowing pod")
-			return allow // policy deleted — let pod through
+			return allow
 		}
 		logger.Error(policyErr, "failed to fetch policy")
 		return allow
 	}
 
-	// Enforce the Policy's selector and the operator's excluded-namespaces
-	// list. The controller applies the same predicate when listing
-	// reconciliation targets (internal/controller/workload_target.go
-	// filterTargets), so a workload outside the policy's scope is left alone
-	// by both components.
-	//
-	// SelectorOK fails open: a malformed label selector is logged and
-	// treated as non-matching, never as a pod denial. Compile the selector
-	// once here and reuse it below, rather than calling Matches (which would
-	// recompile the same selector a second time on this hot path).
+	// A malformed label selector is treated as non-matching, never as a denial.
 	sel, selErr := policymatch.SelectorOK(policy.Spec.Selector.LabelSelector)
 	if selErr != nil {
 		logger.Info("policy has invalid labelSelector; allowing pod without injection (fail-open)", "err", selErr)
@@ -350,13 +221,8 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allow
 	}
 
-	// Mirror a valid owner-name annotation onto a pod label so kube-state-metrics
-	// (configured with metricLabelsAllowlist — see charts/k8s-sustain/values.yaml)
-	// can expose it as kube_pod_labels for the recording rules to pick up.
-	// Computed once, used by every return below from here on — independent of
-	// RecommendOnly: the label is the only mechanism that makes the override
-	// visible to Prometheus, and RecommendOnly's "never mutates the pod"
-	// contract is about resources/limits, not this metadata label.
+	// Mirror the owner-name annotation onto a label so kube-state-metrics
+	// exposes it for the recording rules. Applied even in recommend-only mode.
 	var labelPatch *jsonPatch
 	if v, ok := pod.Annotations[sustainv1alpha1.OwnerNameAnnotation]; ok && len(apivalidation.IsValidLabelValue(v)) == 0 {
 		if pod.Labels[sustainv1alpha1.OwnerNameAnnotation] != v {
@@ -376,15 +242,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		}
 	}
 
-	// Already resolved by the multi-level opt-in chain when that path ran;
-	// resolving again would double the apiserver reads for every workload that
-	// opts in above the pod template. Otherwise — the common case, since
-	// every existing user annotates the pod template — go through the same
-	// cached, singleflight-collapsed walk resolveOptIn uses
-	// (h.resolveCachedPodOwner, see optin.go) rather than the uncached
-	// workload.ResolvePodOwner: a rolling restart of a pod-template-annotated
-	// Deployment creates N pods behind the same ReplicaSet, and this is the
-	// path all of them take.
 	ownerKind, ownerName := resolvedOwner.Kind, resolvedOwner.Name
 	if !resolvedOwner.Resolved {
 		ownerCtx, ownerCancel := context.WithTimeout(ctx, 2*apiCallTimeout)
@@ -399,14 +256,11 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	ownerKind, ownerName = workload.ApplyOwnerNameOverride(ownerKind, ownerName, pod.Annotations)
 	if ownerKind == "" {
 		logger.V(1).Info("standalone pod (no controller owner), skipping injection")
-		return allowWithLabelPatch(labelPatch) // standalone pod — no workload type to determine mode
+		return allowWithLabelPatch(labelPatch)
 	}
 	logger = logger.WithValues("ownerKind", ownerKind, "ownerName", ownerName)
 	logger.V(1).Info("resolved pod owner")
 
-	// Act on both OnCreate and Ongoing policies so that pods always start
-	// with the latest recommendation. Without this, Ongoing pods would start
-	// with whatever the template currently has and only be resized later.
 	mode := policy.Spec.RightSizing.Update.Types.ModeForKind(ownerKind)
 	if mode == nil {
 		logger.V(1).Info("policy does not configure this workload kind, skipping")
@@ -414,11 +268,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 	logger.V(1).Info("policy configured for workload kind", "mode", *mode)
 
-	// Read the recommendation the controller already computed and cached in
-	// the WorkloadRecommendation on its reconcile cadence — the webhook
-	// performs no computation and issues no Prometheus queries of its own.
-	// A missing or stale WLR (see CacheStaleness) means we simply have
-	// nothing to inject; fail open with the pod's template resources.
 	staleness := h.CacheStaleness
 	if staleness == 0 {
 		staleness = DefaultCacheStaleness
@@ -426,13 +275,8 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	cacheCtx, cacheCancel := context.WithTimeout(ctx, apiCallTimeout)
 	recs, departed, err := h.fetchRecommendations(cacheCtx, ownerKind, req.Namespace, ownerName, time.Now(), staleness)
 	cacheCancel()
-	// RecommendationSourceTotal is incremented here, at the read outcome,
-	// rather than at the eventual patch/no-patch return further down: it
-	// answers "is the WLR pipeline keeping up", which is a property of this
-	// read, not of what admit() goes on to do with a usable result (e.g.
-	// recommend-only mode still counts as a "hit" even though it never
-	// patches — the pipeline worked, the operator config just chose not to
-	// apply it).
+	// RecommendationSourceTotal counts the read outcome, not whether a patch
+	// is eventually emitted.
 	if err != nil {
 		if errors.Is(err, ErrRecommendationStale) {
 			RecommendationSourceTotal.WithLabelValues(RecSourceStale).Inc()
@@ -440,15 +284,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 			return allowWithLabelPatch(labelPatch)
 		}
 		if errors.Is(err, ErrRecommendationNoData) {
-			// Already evaluated and found to have nothing recommendable. No
-			// stub request: MarkNoData (wlrcache.go) is only ever reached
-			// after the computation found a non-empty observed-resources
-			// snapshot, so a nodata WLR already has one — createStub's
-			// AlreadyExists path would have nothing to fill in even though
-			// it now also attempts a snapshot write. Nothing here has to
-			// prompt a retry either: nodata is not terminal, and the
-			// computation phase recomputes this identity on every reconcile
-			// interval for as long as the object exists.
 			RecommendationSourceTotal.WithLabelValues(RecSourceNoData).Inc()
 			logger.V(1).Info("WorkloadRecommendation has no recommendable data; allowing pod with template resources")
 			return allowWithLabelPatch(labelPatch)
@@ -459,34 +294,17 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 	if recs == nil {
 		RecommendationSourceTotal.WithLabelValues(RecSourceMissing).Inc()
-		// Nothing has computed this workload identity yet. Ask the controller
-		// to, by creating a stub WorkloadRecommendation it will fill in. Only
-		// the missing path does this: on the stale path the object already
-		// exists, so the Create is a guaranteed AlreadyExists — and createStub
-		// no longer stops there, it follows up with a Get and possibly a
-		// status Patch. That is up to three apiserver calls per admission to
-		// discover there is nothing to do, since a stale object is one the
-		// controller has already written and therefore already has an
-		// observed-resources snapshot.
-		//
-		// This pod still starts on template resources; the stub is for the
-		// next one. That is unavoidable — admission cannot wait for a
-		// Prometheus query it is no longer allowed to make.
+		// Only the missing path requests a stub; a stale object already exists.
 		h.requestRecommendation(logger, req.Namespace, ownerKind, ownerName, policyName, pod.Spec.Containers, pod.Spec.InitContainers)
 		logger.V(1).Info("no WorkloadRecommendation for workload; requested one, allowing pod with template resources")
 		return allowWithLabelPatch(labelPatch)
 	}
-	// Both outcomes injected a recommendation; they differ in its provenance —
-	// "retained" is last-known-good for an identity that has departed, so its
-	// age is bounded by --recommendation-retention rather than by staleness.
 	if departed {
 		RecommendationSourceTotal.WithLabelValues(RecSourceRetained).Inc()
 	} else {
 		RecommendationSourceTotal.WithLabelValues(RecSourceHit).Inc()
 	}
 
-	// Always inject the latest recommendation regardless of mode.
-	// The workload is annotated with a policy — the intent is to apply it.
 	filtered := make(map[string]workload.ContainerRecommendation)
 	addMatchingRecs(filtered, pod.Spec.Containers, recs)
 	if !policy.Spec.RightSizing.ExcludeInitContainers {
@@ -498,14 +316,8 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allowWithLabelPatch(labelPatch)
 	}
 
-	// Dry-run is the OR of the global flag and the policy's own
-	// spec.rightSizing.recommendOnly.
 	recommendOnly := policy.EffectiveRecommendOnly(h.RecommendOnly)
 
-	// Recommend-only records the recommendation but never mutates the pod, so
-	// the response is always an allow with no patch. Short-circuit here to skip
-	// buildPatches' per-container DeepCopy + json.Marshal — wasted work on the
-	// pod-create hot path when the result is discarded.
 	if recommendOnly {
 		source := "policy"
 		if h.RecommendOnly {
@@ -521,8 +333,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allowWithLabelPatch(labelPatch)
 	}
 	if patchBytes == nil {
-		// Safe as plain allow: buildPatches folds labelPatch into patches, so
-		// patchBytes is only nil when labelPatch was also nil.
 		logger.V(1).Info("no patch needed (recommendations match current pod spec)")
 		return allow
 	}
@@ -537,8 +347,6 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 }
 
-// addMatchingRecs copies into dst the recommendations whose container name
-// appears in containers, leaving non-matching recommendations out.
 func addMatchingRecs(dst map[string]workload.ContainerRecommendation, containers []corev1.Container, recs map[string]workload.ContainerRecommendation) {
 	for _, c := range containers {
 		if rec, ok := recs[c.Name]; ok {
@@ -547,10 +355,8 @@ func addMatchingRecs(dst map[string]workload.ContainerRecommendation, containers
 	}
 }
 
-// buildPatches generates an RFC 6902 JSON Patch that sets resources on the
-// containers (and init containers) listed in recs, plus the owner-name
-// label-mirror patch when present. Uses "add" which replaces any existing
-// value at the path.
+// buildPatches generates an RFC 6902 JSON Patch setting resources on the
+// containers listed in recs, plus the owner-name label patch when present.
 func buildPatches(pod *corev1.Pod, recs map[string]workload.ContainerRecommendation, labelPatch *jsonPatch) ([]byte, error) {
 	var patches []jsonPatch
 	if labelPatch != nil {
@@ -582,16 +388,13 @@ func patchesForContainers(cs []corev1.Container, recs map[string]workload.Contai
 		if !ok {
 			continue
 		}
-		// DeepCopy so the source pod object isn't mutated; ApplyRecommendation
-		// writes the resource list in place.
 		copyC := c.DeepCopy()
 		if !workload.ApplyRecommendation(copyC, rec) {
 			continue
 		}
 		newRes := copyC.Resources
-		// ApplyRecommendation always seeds non-nil Limits; drop it back to nil
-		// when empty so the generated patch leaves the wire identical to a pod
-		// that never had limits set.
+		// ApplyRecommendation seeds non-nil Limits; drop it back to nil when
+		// empty so the patch matches a pod that never had limits.
 		if len(newRes.Limits) == 0 {
 			newRes.Limits = nil
 		}

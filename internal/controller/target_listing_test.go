@@ -42,10 +42,6 @@ func TestFilterTargets_PolicyAndNamespace(t *testing.T) {
 	}
 }
 
-// TestFilterTargets_SelectorNamespaces verifies that
-// policy.Spec.Selector.Namespaces narrows the target list to only the listed
-// namespaces; this is the controller-side enforcement that mirrors the
-// webhook's new check.
 func TestFilterTargets_SelectorNamespaces(t *testing.T) {
 	targets := []workloadTarget{
 		{Kind: "Deployment", Namespace: "production", Name: "a", PolicyName: "p"},
@@ -66,9 +62,6 @@ func TestFilterTargets_SelectorNamespaces(t *testing.T) {
 	}
 }
 
-// TestFilterTargets_LabelSelector verifies that
-// policy.Spec.Selector.LabelSelector is enforced — targets whose workload
-// labels do not satisfy the selector are dropped.
 func TestFilterTargets_LabelSelector(t *testing.T) {
 	targets := []workloadTarget{
 		{Kind: "Deployment", Namespace: "default", Name: "matching", PolicyName: "p", Labels: map[string]string{"team": "platform"}},
@@ -98,9 +91,6 @@ func TestWorkloadTargetKey_IsStable(t *testing.T) {
 	}
 }
 
-// TestListDeploymentTargets_NamespaceScoped verifies that when a namespace
-// list is provided the controller only fetches matching namespaces (and the
-// helper iterates over each).
 func TestListDeploymentTargets_NamespaceScoped(t *testing.T) {
 	d1 := annotatedDeployment("ns-a", "app1", "p")
 	d2 := annotatedDeployment("ns-b", "app2", "p")
@@ -124,8 +114,6 @@ func TestListDeploymentTargets_NamespaceScoped(t *testing.T) {
 	}
 }
 
-// TestListDeploymentTargets_AllNamespaces verifies the empty-namespace path
-// (cluster-wide list).
 func TestListDeploymentTargets_AllNamespaces(t *testing.T) {
 	r := makeReconciler(t,
 		annotatedDeployment("a", "x", "p"),
@@ -174,9 +162,8 @@ func TestListCronJobTargets(t *testing.T) {
 	if len(got) != 1 || got[0].Kind != "CronJob" || got[0].Name != "nightly" {
 		t.Errorf("unexpected: %+v", got)
 	}
-	// listCronJobTargets no longer resolves PolicyName itself — collectTargets
-	// does, from the three annotation levels — but it must still carry the
-	// JobTemplate's pod-template annotations through for that resolution.
+	// PolicyName is resolved by collectTargets from the three annotation levels;
+	// the JobTemplate's pod-template annotations only have to be carried here.
 	if got[0].TemplateAnnotations[sustainv1alpha1.PolicyAnnotation] != "p" {
 		t.Errorf("policy annotation not propagated from JobTemplate: %q", got[0].TemplateAnnotations[sustainv1alpha1.PolicyAnnotation])
 	}
@@ -209,9 +196,6 @@ func TestListDaemonSetTargets(t *testing.T) {
 	}
 }
 
-// TestListRolloutTargets_NamespaceScoped covers the Argo Rollouts list path
-// — important now that OnCreate works for Rollouts and we want regression
-// confidence in the Ongoing-mode controller iteration.
 func TestListRolloutTargets_NamespaceScoped(t *testing.T) {
 	r1 := annotatedRollout("ns-a", "ro1", "p")
 	r2 := annotatedRollout("ns-b", "ro2", "p")
@@ -226,10 +210,6 @@ func TestListRolloutTargets_NamespaceScoped(t *testing.T) {
 	}
 }
 
-// TestCollectTargets_RespectsUpdateModeAndExcludedNamespaces ties the listing
-// helpers and filterTargets together: a policy in Ongoing mode for Deployment
-// + Rollout, with one excluded namespace, should return the matched workloads
-// only.
 func TestCollectTargets_RespectsUpdateModeAndExcludedNamespaces(t *testing.T) {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
 
@@ -278,12 +258,9 @@ func TestCollectTargets_RespectsUpdateModeAndExcludedNamespaces(t *testing.T) {
 	}
 }
 
-// TestCollectTargets_OnCreateModeIsCollectedWithMode verifies that workloads
-// configured for OnCreate-only mode ARE now returned by the controller (so
-// reconcileWorkload can compute+cache a recommendation for them) but are
-// stamped with UpdateModeOnCreate so reconcileWorkload's mode gate can stop
-// before recycling/resizing — the webhook remains the only mutation path for
-// OnCreate.
+// OnCreate-mode workloads ARE collected, so a recommendation is computed and
+// cached for them, but they are stamped with UpdateModeOnCreate so
+// reconcileWorkload stops before recycling or resizing.
 func TestCollectTargets_OnCreateModeIsCollectedWithMode(t *testing.T) {
 	onCreate := sustainv1alpha1.UpdateModeOnCreate
 	policy := &sustainv1alpha1.Policy{
@@ -310,9 +287,6 @@ func TestCollectTargets_OnCreateModeIsCollectedWithMode(t *testing.T) {
 	}
 }
 
-// TestCollectTargets_IncludesOnCreateKindsWithMode verifies OnCreate-mode
-// kinds are collected (so they get recommendations + WLR cache writes) and
-// stamped with their mode.
 func TestCollectTargets_IncludesOnCreateKindsWithMode(t *testing.T) {
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "ci", Name: "hook"}}
 	job.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
@@ -455,14 +429,9 @@ func TestListBarePodTargets_OwnedPod_NotDiscovered(t *testing.T) {
 	}
 }
 
-// TestCollectTargets_BarePodPolicyMismatchLoggedOnlyByOwningPolicy pins the
-// F4 follow-up fix: the "bare pods share an owner-name identity but name a
-// different policy" log must fire exactly once per reconcile, from the
-// policy that actually owns the group -- not from every policy whose
-// selector merely happens to cover the namespace. Before the fix,
-// listBarePodTargets logged this itself, BEFORE filterTargets narrowed the
-// result down to the group's own policy, so a policy uninvolved on either
-// side of the conflict would still report it, every reconcile, forever.
+// The "bare pods share an owner-name identity but name a different policy" log
+// must fire exactly once per reconcile, from the policy that owns the group --
+// not from every policy whose selector merely covers the namespace.
 func TestCollectTargets_BarePodPolicyMismatchLoggedOnlyByOwningPolicy(t *testing.T) {
 	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	newer := older.Add(time.Hour)
@@ -524,11 +493,9 @@ func TestCollectTargets_BarePodPolicyMismatchLoggedOnlyByOwningPolicy(t *testing
 	}
 }
 
-// TestCollectTargets_AnnotationLevels replays the shared contract table
-// (policymatchtest.AnnotationCases) against the controller's own wiring: a
-// Deployment whose pod template, own metadata and Namespace carry the case's
-// annotations must be collected under policy "p" exactly when the shared
-// resolver says so.
+// Replays the shared contract table (policymatchtest.AnnotationCases) against
+// the controller's own wiring, so the three annotation levels resolve here
+// exactly as the shared resolver says.
 func TestCollectTargets_AnnotationLevels(t *testing.T) {
 	for _, tc := range policymatchtest.AnnotationCases() {
 		t.Run(tc.Name, func(t *testing.T) {
@@ -561,23 +528,14 @@ func TestCollectTargets_AnnotationLevels(t *testing.T) {
 	}
 }
 
-// TestCollectTargets_NamespaceOptInStillHonoursSelector pins the delegated
-// opt-in rule: a Namespace naming a Policy whose selector does not reach it
-// gets nothing. The Namespace chooses among the policies offered to it; it
-// cannot grant itself one.
+// A Namespace naming a Policy whose selector does not reach it gets nothing: the
+// Namespace chooses among the policies offered to it, it cannot grant itself one.
 //
-// Selector.Namespaces is deliberately left EMPTY (cluster-wide) here rather
-// than scoped away from team-a. An earlier version of this test set
-// Selector.Namespaces = []string{"other-namespace"}, which made
-// listKindTargets scope its List away from team-a before the Deployment was
-// ever listed — the assertion passed with filterTargets never evaluating
-// anything, on the one invariant here with a security flavour (a namespace
-// owner must not grant itself a policy). The rejection is routed through
-// filterTargets instead by using a LabelSelector the Deployment's own labels
-// do not satisfy, so the Deployment IS listed and Matches is what excludes it
-// (verified by temporarily deleting the policymatch.Matches call from
-// filterTargets and confirming this test then fails — see the fix report for
-// that evidence).
+// Selector.Namespaces is deliberately left EMPTY (cluster-wide) rather than
+// scoped away from team-a: scoping it there would make listKindTargets skip the
+// namespace before the Deployment is ever listed, and the test would pass with
+// filterTargets never evaluating anything. The rejection is routed through
+// filterTargets' policymatch.Matches call via a LabelSelector instead.
 func TestCollectTargets_NamespaceOptInStillHonoursSelector(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:        "team-a",
@@ -609,14 +567,10 @@ func TestCollectTargets_NamespaceOptInStillHonoursSelector(t *testing.T) {
 	}
 }
 
-// TestCollectTargets_PodTemplateOptIn_NoNamespaceReads pins the fix for a
-// review finding: collectTargets used to fetch the Namespace unconditionally
-// for every non-Pod target, even when the pod template annotation alone
-// already decides the outcome. That coupled every existing pod-template-only
-// user to a Namespace read it never needed — a read failure there would now
-// abort a reconcile for a workload untouched by this branch's Namespace
-// feature. The walk must be lazy: zero Namespace reads when the pod template
-// decides.
+// The annotation walk must be lazy: zero Namespace reads when the pod template
+// already decides. Fetching the Namespace unconditionally would couple every
+// pod-template-only workload to a read it never needed, so a failure there
+// would abort a reconcile for workloads untouched by the Namespace level.
 func TestCollectTargets_PodTemplateOptIn_NoNamespaceReads(t *testing.T) {
 	d := annotatedDeployment("team-a", "web", "p")
 
@@ -659,12 +613,10 @@ func TestCollectTargets_PodTemplateOptIn_NoNamespaceReads(t *testing.T) {
 	}
 }
 
-// TestCollectTargets_NamespaceReadError_Propagates drives a non-NotFound
-// Namespace Get failure through collectTargets end to end (namespace_annotations_test.go
-// covers the same failure at the nsAnnotations.get level in isolation). The
-// Deployment carries no pod-template or workload-level annotation, so the
-// lazy walk (see collectTargets) must fall through to the Namespace — that is
-// what makes the failing Get reachable at all.
+// A non-NotFound Namespace Get failure must propagate through collectTargets
+// (namespace_annotations_test.go covers the same failure in isolation). The
+// Deployment carries no pod-template or workload-level annotation, so the lazy
+// walk falls through to the Namespace — which is what makes the Get reachable.
 func TestCollectTargets_NamespaceReadError_Propagates(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
 	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
@@ -738,11 +690,9 @@ func TestDedupeNamespaces(t *testing.T) {
 	}
 }
 
-// TestListKindTargets_DuplicateNamespacesListedOnce verifies a namespace named
-// twice in spec.selector.namespaces yields one target per workload, not two.
-// Two copies of the same target are dispatched to two errgroup goroutines that
-// then race each other over the per-workload retry state and the
-// WorkloadRecommendation write.
+// A namespace named twice in spec.selector.namespaces must yield one target per
+// workload: two copies are dispatched to two errgroup goroutines that then race
+// over the per-workload retry state and the WorkloadRecommendation write.
 func TestListKindTargets_DuplicateNamespacesListedOnce(t *testing.T) {
 	d1 := annotatedDeployment("ns-a", "app1", "p")
 	d2 := annotatedDeployment("ns-b", "app2", "p")
@@ -761,9 +711,6 @@ func TestListKindTargets_DuplicateNamespacesListedOnce(t *testing.T) {
 	}
 }
 
-// TestCollectTargets_DuplicateSelectorNamespaces verifies the dedup survives
-// the full collection path: one workload must appear exactly once in the
-// target set even when its namespace is repeated in the policy selector.
 func TestCollectTargets_DuplicateSelectorNamespaces(t *testing.T) {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
 	policy := &sustainv1alpha1.Policy{

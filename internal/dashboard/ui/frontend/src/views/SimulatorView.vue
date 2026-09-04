@@ -36,7 +36,6 @@ const props = defineProps<{
   name?: string
 }>()
 
-// Form state
 const simNs = ref(props.namespace || '')
 const simKind = ref(props.kind || 'Deployment')
 const simName = ref(props.name || '')
@@ -63,7 +62,6 @@ const cpuLimitRatio = ref(1)
 const memLimitMode = ref<LimitMode>('keepLimit')
 const memLimitRatio = ref(1)
 
-// State
 const policies = ref<PolicySummary[]>([])
 const selectedPolicy = ref('')
 const simData = ref<SimulationResult | null>(null)
@@ -360,7 +358,6 @@ function renderCharts(data: SimulationResult) {
   containers.forEach((cname) => {
     const res = simResources[cname] || {}
 
-    // CPU chart
     if (data.cpuSeries?.[cname]) {
       const cpuAnnotations: ChartAnnotation[] = []
       const cpuExtra: ExtraSeries[] = []
@@ -402,7 +399,6 @@ function renderCharts(data: SimulationResult) {
       })
     }
 
-    // Memory chart
     if (data.memorySeries?.[cname]) {
       const memAnnotations: ChartAnnotation[] = []
       const memExtra: ExtraSeries[] = []
@@ -516,7 +512,6 @@ async function trySample() {
   }
 }
 
-// Watch all form inputs for debounced auto-simulation
 watch(
   [
     simNs,

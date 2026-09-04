@@ -22,10 +22,8 @@ export class ApiError extends Error {
   }
 }
 
-// Every dashboard response is wrapped as `{data, meta}` on success or
-// `{error}` on failure. api() unwraps that envelope so each call site can
-// keep treating the response as the bare payload, and throws ApiError on
-// HTTP errors so callers can inspect `.code` or `.field` if they want.
+// Every dashboard response is wrapped as `{data, meta}` on success or `{error}`
+// on failure; api() unwraps that envelope and throws ApiError on HTTP errors.
 export async function api<T = unknown>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(API_BASE + path, opts)
   const requestId = res.headers.get('X-Request-Id') || undefined
@@ -40,9 +38,7 @@ export async function api<T = unknown>(path: string, opts?: RequestInit): Promis
     })
   }
   const body = (await res.json()) as { data?: T } & T
-  // Tolerate non-enveloped responses too (e.g. UI development against an
-  // older server). When `body.data` is present, prefer it; otherwise the
-  // body itself is the payload.
+  // Tolerate non-enveloped responses (UI development against an older server).
   return (body && typeof body === 'object' && 'data' in body ? (body.data as T) : body) as T
 }
 
@@ -61,8 +57,6 @@ export const timeRangeOptions: TimeRangeOption[] = [
   { label: '7d', window: '168h', step: '10m' },
   { label: '30d', window: '720h', step: '20m' },
 ]
-
-// --- Types ---
 
 export interface Condition {
   type: string
@@ -411,7 +405,6 @@ export interface WorkloadDetailSnapshot {
   coordinationFactors?: CoordinationFactors
 }
 
-// Extend WorkloadItem with the new fields exposed by /api/workloads:
 export interface WorkloadItemV2 extends WorkloadItem {
   riskState: 'safe' | 'drifted' | 'at-risk' | 'blocked'
   driftPercent: number

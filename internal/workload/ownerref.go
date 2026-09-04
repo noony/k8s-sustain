@@ -58,18 +58,13 @@ func ResolvePodOwner(ctx context.Context, c client.Client, pod *corev1.Pod) (kin
 	return ResolveControllerOwner(ctx, c, pod.Namespace, *ref)
 }
 
-// ResolveControllerOwner resolves a single controller ownerReference (as
-// returned by metav1.GetControllerOf) to the top-level workload kind+name,
-// performing at most one apiserver Get — for ReplicaSet or Job, to look one
-// level further up; every other kind (StatefulSet, DaemonSet, a custom
-// controller) is already terminal and costs no Get at all.
+// ResolveControllerOwner resolves a single controller ownerReference to the
+// top-level workload kind+name, performing at most one apiserver Get (for
+// ReplicaSet or Job); every other kind is already terminal.
 //
-// Split out of ResolvePodOwner so a caller that wants to cache the walk
-// (internal/webhook's Handler.ownerRefCache, on the admission hot path) can
-// key its cache by this one ref — namespace/kind/name/UID of the pod's
-// immediate controller owner, the identity that repeats across every pod
-// behind one ReplicaSet/Job during a rolling restart — without duplicating
-// the switch below.
+// Split out of ResolvePodOwner so the webhook can cache the walk keyed by this
+// one ref — the identity repeated across every pod behind a ReplicaSet or Job
+// during a rolling restart — without duplicating the switch below.
 func ResolveControllerOwner(ctx context.Context, c client.Client, namespace string, ref metav1.OwnerReference) (kind, name string, err error) {
 	switch ref.Kind {
 	case "ReplicaSet":

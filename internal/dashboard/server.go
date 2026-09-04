@@ -1,5 +1,5 @@
-// Package dashboard provides an HTTP server that serves a web UI for exploring
-// k8s-sustain policies, workload metrics, and simulating policy changes.
+// Package dashboard serves the read-only web UI and JSON API for exploring
+// policies, workload metrics and simulated policy changes.
 package dashboard
 
 import (
@@ -22,18 +22,16 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// PromQuerier is the subset of the Prometheus client used by the dashboard.
-// Defining it as an interface lets tests inject fakes.
+// PromQuerier is the subset of the Prometheus client the dashboard uses;
+// tests inject fakes.
 type PromQuerier interface {
 	Ping(ctx context.Context) error
 
-	// Generic helpers used by /api/summary.
 	QueryInstant(ctx context.Context, expr string) (float64, error)
 	QueryRange(ctx context.Context, expr string, r promclient.TimeRange, step string) ([]promclient.TimeValue, error)
 	QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error)
 	QueryByLabels(ctx context.Context, query string, labels ...string) (map[string]float64, error)
 
-	// Per-workload helpers used by /api/workloads/* and /api/simulate.
 	QueryCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
 	QueryMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
 	QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
@@ -64,55 +62,28 @@ type Server struct {
 	K8sClient  client.Client
 	PromClient PromQuerier
 	Logger     logr.Logger
-	// CORSOrigins is the allowed CORS origin allowlist.
-	//
-	//   - nil / empty: no Access-Control-Allow-Origin header is set
-	//     (same-origin requests only — the safe default).
-	//   - ["*"]: explicit wildcard, every origin allowed.
-	//   - other: the request's Origin must match one of the listed values.
+	// CORSOrigins is the allowed origin allowlist: empty means same-origin
+	// only, ["*"] allows every origin.
 	CORSOrigins []string
 
-	// ExcludedNamespaces mirrors the controller's and webhook's
-	// --excluded-namespaces flag: a hard deny that policymatch.Matches applies
-	// ahead of a Policy's own selector. Without this, the dashboard's
-	// policy-scoped workload views (listPolicyWorkloadRows,
-	// collectPolicyWorkloads, collectAllWorkloads) could render a workload in
-	// an operator-excluded namespace as managed even though neither the
-	// controller nor the webhook would ever touch it.
+	// ExcludedNamespaces mirrors the controller's --excluded-namespaces flag,
+	// a hard deny applied ahead of a Policy's own selector.
 	ExcludedNamespaces []string
 
 	cacheInit    sync.Once
 	summaryCache *Cache
 
-	// summarySF collapses concurrent /api/summary recomputes onto a single
-	// shared computation. summaryCache alone only bounds the STEADY-STATE
-	// cost: its entries exist only once a recompute has completed, so on a
-	// cold or just-expired key every concurrent miss used to run its own
-	// ~16-query Prometheus fan-out (16N round-trips for N clients), and the
-	// unconditional Set that followed let a slow one overwrite a newer
-	// snapshot and hand the older data a fresh 60s TTL. One flight per key
-	// fixes both at once. The zero value of singleflight.Group is usable (its
-	// map is lazily initialised), matching Server's plain-struct-literal
-	// construction throughout the test suite.
+	// summarySF collapses concurrent /api/summary recomputes onto one shared
+	// computation, so a slow recompute cannot overwrite a newer snapshot.
 	summarySF singleflight.Group
 
-	// sfJoinHook, if non-nil, is invoked with the singleflight key by every
-	// request just after it joins summarySF. Tests use it as a barrier so a
-	// concurrent-burst assertion exercises real concurrency instead of
-	// scheduler luck. Always nil outside tests.
-	//
-	// It is a field rather than a package-level var for the same reason
-	// webhook.Handler.sfJoinHook is: as a global it would be written by one
-	// test while another test's still-running goroutine read it — a data race
-	// under -race, and a straggler from a finished test would fire the NEXT
-	// test's barrier counter.
+	// sfJoinHook, if non-nil, is invoked with the key by every request just
+	// after it joins summarySF. Tests use it as a barrier; a field rather than
+	// a global so stragglers from one test cannot race the next.
 	sfJoinHook func(key string)
 }
 
 // Handler returns an http.Handler with all dashboard routes registered.
-// Routes use Go 1.22 method-specific patterns so the stdlib mux returns a
-// proper 405 with an `Allow` header when callers use the wrong verb, and
-// path variables are read with r.PathValue rather than hand-parsed.
 func (s *Server) Handler() http.Handler {
 	s.cacheInit.Do(func() {
 		if s.summaryCache == nil {
@@ -122,7 +93,6 @@ func (s *Server) Handler() http.Handler {
 
 	mux := http.NewServeMux()
 
-	// Policy routes.
 	mux.HandleFunc("GET /api/policies", s.handlePolicies)
 	mux.HandleFunc("GET /api/policies/{name}", func(w http.ResponseWriter, r *http.Request) {
 		s.handlePolicyDetail(w, r, r.PathValue("name"))
@@ -134,7 +104,6 @@ func (s *Server) Handler() http.Handler {
 		s.handlePolicyBatchSimulate(w, r, r.PathValue("name"))
 	})
 
-	// Workload routes.
 	mux.HandleFunc("GET /api/workloads", s.handleAllWorkloads)
 	mux.HandleFunc("GET /api/workloads/{namespace}/{kind}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		s.handleWorkloadDetail(w, r, r.PathValue("namespace"), r.PathValue("kind"), r.PathValue("name"))
@@ -146,25 +115,20 @@ func (s *Server) Handler() http.Handler {
 		s.handleWorkloadRecommendations(w, r, r.PathValue("namespace"), r.PathValue("kind"), r.PathValue("name"))
 	})
 
-	// Simulation.
 	mux.HandleFunc("POST /api/simulate", s.handleSimulate)
 
-	// Summary routes.
 	mux.HandleFunc("GET /api/summary", s.handleSummary)
 	mux.HandleFunc("GET /api/summary/trend", s.handleSummaryTrend)
 	mux.HandleFunc("GET /api/summary/activity", s.handleSummaryActivity)
 
-	// Health.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 
-	// Embedded UI catch-all.
 	mux.HandleFunc("/", s.handleUI)
 
-	// Request-ID assignment must sit outermost so the telemetry and recovery
-	// middlewares (which log the request ID) see a populated context.
+	// Request-ID must sit outermost so telemetry and recovery see it.
 	return s.withRequestID(s.withTelemetry(s.withRecovery(s.withCORS(s.withGzip(mux)))))
 }
 
@@ -180,11 +144,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 // NewHTTPServer creates an http.Server for the dashboard bound to addr.
-// The caller is responsible for calling ListenAndServe and Shutdown.
 func (s *Server) NewHTTPServer(addr string) *http.Server {
-	// Hardened timeouts come from httpx.NewServer's shared defaults
-	// (ReadHeaderTimeout 5s, Read/WriteTimeout 15s, IdleTimeout 60s) — the
-	// same values this used to set inline.
 	return httpx.NewServer(addr, s.Handler())
 }
 
@@ -196,7 +156,6 @@ func formatQuantity(milliValue int64, format string) string {
 		}
 		return fmt.Sprintf("%.0f Mi", mib)
 	}
-	// CPU
 	if milliValue >= 1000 {
 		return fmt.Sprintf("%.2f", float64(milliValue)/1000.0)
 	}

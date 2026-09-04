@@ -122,13 +122,10 @@ var (
 		Help: "Resource decreases not applied because they fell below the policy's downsizeThreshold, by resource. Counted once per resource per pod processed per reconcile.",
 	}, []string{"namespace", "owner_kind", "owner_name", "resource"})
 
-	// policyBatchRequested and policyBatchResolved are a coverage/capacity
-	// pair, deliberately separate from policyBatchFailuresTotal below: a
-	// workload identity can resolve with zero samples because it is
-	// legitimately new, which is not the same thing as a genuine Prometheus
-	// fetch failure. Collapsing the two would recreate exactly the ambiguity
-	// recommender.BatchStats was introduced to eliminate -- see its doc
-	// comment.
+	// policyBatchRequested and policyBatchResolved are a coverage pair, kept
+	// separate from policyBatchFailuresTotal below: an identity can resolve
+	// with zero samples because it is legitimately new, which is not the same
+	// thing as a Prometheus fetch failure. See recommender.BatchStats.
 	policyBatchRequested = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_policy_batch_requested_count",
 		Help: "Number of workload identities requested in a policy's sharded Prometheus batch prefetch this reconcile cycle.",
@@ -140,11 +137,9 @@ var (
 	}, []string{"policy"})
 
 	// policyBatchFailuresTotal is the "Prometheus is unwell" signal: it only
-	// grows when a batch shard query AND its per-workload fallback both
-	// genuinely failed for an identity (recommender.BatchStats.Failures).
-	// It must never be derived from policyBatchRequested/policyBatchResolved
-	// -- a low resolved count on its own says nothing about failures, only
-	// this counter does.
+	// grows when a batch shard query AND its per-workload fallback both failed
+	// for an identity (recommender.BatchStats.Failures). Never derive it from
+	// requested/resolved -- a low resolved count says nothing about failures.
 	policyBatchFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_policy_batch_failures_total",
 		Help: "Cumulative count of workload identities whose batch Prometheus fetch (shard query and its per-workload fallback) genuinely failed, per policy. Distinct from batch_requested/batch_resolved: a workload resolving with zero samples because it has no history yet is never counted here.",
@@ -233,11 +228,8 @@ const (
 	WLRRefreshNoData = "nodata"
 	// WLRRefreshRetainedEmpty: the identity HAS a recommendation but produced
 	// nothing this cycle, so the previous values were deliberately left in
-	// place. This is the value worth alerting on: it is the moment a served
-	// recommendation stops having live data behind it, and without a counter
-	// it is completely silent — the webhook keeps injecting, the WLR keeps
-	// looking populated, and nothing in the object records that its samples
-	// aged out of the query window.
+	// place. The value worth alerting on — a served recommendation has stopped
+	// having live data behind it and nothing else in the object records that.
 	WLRRefreshRetainedEmpty = "retained-empty"
 	// WLRRefreshError: the computation failed (Prometheus unreachable, write
 	// rejected). Distinct from nodata, which is a healthy Prometheus with
@@ -245,15 +237,10 @@ const (
 	WLRRefreshError = "error"
 	// WLRRefreshNoSnapshot: the identity's WLR carries no
 	// status.observedResources, so there is no container list to compute
-	// against and the refresh is skipped before it starts. Distinct from
-	// nodata, which is about Prometheus having nothing to say — this one is
-	// about k8s-sustain not knowing what to ask about.
-	//
-	// It exists because this branch used to return silently, which is how a
-	// read-after-write bug that stranded every genuinely new identity in
-	// exactly this state shipped unnoticed. Transient on a healthy cluster (a
-	// discovery or webhook write is one cycle behind); sustained for the same
-	// identity means the snapshot write is failing.
+	// against. Distinct from nodata, which is Prometheus having nothing to say
+	// — this one is k8s-sustain not knowing what to ask about. Transient on a
+	// healthy cluster; sustained for the same identity means the snapshot write
+	// is failing.
 	WLRRefreshNoSnapshot = "no-snapshot"
 )
 

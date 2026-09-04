@@ -11,16 +11,10 @@ import (
 	"github.com/go-logr/logr"
 )
 
-// ListenAndServeWithShutdown used to install its own signal.Notify. That made
-// it a second, independent signal handler in any process whose caller already
-// had one — the webhook, which drives an informer cache and a cert watcher from
-// ctrl.SetupSignalHandler. Both fired on the same SIGTERM, so the cache could
-// stop while the server was still draining and late admissions would read a
-// store that had stopped updating.
-//
-// Driving shutdown from the caller's context is what makes that ordering the
-// caller's explicit choice, so this pins it: cancelling ctx, and nothing else,
-// must trigger the graceful shutdown.
+// ListenAndServeWithShutdown used to install its own signal.Notify, making it a
+// second handler in any process whose caller already had one. Both fired on the
+// same SIGTERM, so the webhook's informer cache could stop mid-drain. This pins
+// that cancelling ctx, and nothing else, triggers the graceful shutdown.
 func TestListenAndServeWithShutdown_ShutsDownOnContextCancel(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -35,7 +29,6 @@ func TestListenAndServeWithShutdown_ShutsDownOnContextCancel(t *testing.T) {
 			func() error { return srv.Serve(ln) })
 	}()
 
-	// Still serving while ctx is alive.
 	select {
 	case err := <-done:
 		t.Fatalf("returned before ctx was cancelled: %v", err)

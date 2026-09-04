@@ -23,12 +23,10 @@ import (
 //
 // recs is that shared recommendation, covering the union of the identity's
 // members' containers; this function narrows it to the containers this member
-// actually runs. computeErr is computeIdentity's failure for the identity, and
-// is surfaced through the same handleStepError("prometheus", ...) path the
-// in-line computation used to take, so retry tracking, the
-// ReconciliationRetryScheduled event and the policy's PartialFailure condition
-// all behave as before — per real workload object, which is what retry state is
-// keyed on.
+// actually runs. computeErr is computeIdentity's failure for the identity,
+// surfaced through handleStepError("prometheus", ...) so retry tracking, the
+// ReconciliationRetryScheduled event and the PartialFailure condition stay
+// keyed per real workload object, which is what retry state is keyed on.
 func (r *PolicyReconciler) reconcileWorkload(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
@@ -58,8 +56,8 @@ func (r *PolicyReconciler) reconcileWorkload(
 		"excludeInitContainers", excludeInit,
 		"recommending", len(containers))
 
-	// Detect HPA / KEDA ScaledObject (read-only). Used as a replica-count
-	// fallback for workload-level recommendations and for observability.
+	// Read-only: a replica-count fallback for workload-level recommendations,
+	// and observability.
 	autoInfo, autoErr := autoSnap.Lookup(ctx, t.Namespace, t.Kind, t.Name)
 	if autoErr != nil {
 		logger.Error(autoErr, "autoscaler detection failed, proceeding without it")
@@ -89,7 +87,6 @@ func (r *PolicyReconciler) reconcileWorkload(
 	logger.Info("computed recommendations", "containers", len(recs))
 	logger.V(1).Info("recommendation details", "recommendations", recs)
 
-	// Emit per-container recommendation/drift metrics before recycling pods.
 	emitWorkloadFromRecs(t, policy.Name, recs, initNames)
 
 	if policy.EffectiveRecommendOnly(r.RecommendOnly) {
@@ -115,7 +112,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 	// clusters that support it the running pods are corrected directly —
 	// otherwise a long-running Airflow task would stay on whatever it was
 	// admitted with, forever. Below k8s 1.33 resizeInPlaceTarget is a no-op
-	// and bare pods stay untouched, exactly as before.
+	// and bare pods stay untouched.
 	//
 	// OnCreate bare pods never reach here: that early return sits above this
 	// branch, so the mode distinction needs no new API surface.

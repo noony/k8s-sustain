@@ -88,20 +88,12 @@ func metricsRegistry() interface {
 }
 
 // seedMetricsForRegistrationCheck creates one child series per vector asserted
-// by TestNewMetricsRegistered.
+// by TestNewMetricsRegistered. A *Vec with no children is absent from Gather()
+// output, so an unseeded vector is indistinguishable from an unregistered one.
 //
-// This is mandatory, not cosmetic: a *Vec with no children is absent from
-// Gather() output, so an unseeded vector is indistinguishable from an
-// unregistered one. It also has to run inside the test rather than in a
-// package init(), because the cleanup paths under test delete series --
-// DeletePolicyMetrics wipes every series carrying a given policy label, and
-// EmitWorkloadMetrics / EmitAutoscalerPresent drop stale per-workload series.
-// Seeding once at init() left the assertions at the mercy of -shuffle: any
-// test reconciling a deleted Policy named "p" removed the seeds first and the
-// gather below reported the metrics as unregistered.
-//
-// The label values are deliberately unique to this test so no other test's
-// cleanup can match and remove them.
+// It must run inside the test, not a package init(): the cleanup paths under
+// test delete series, so under -shuffle another test could wipe the seeds
+// first. The label values are unique to this test for the same reason.
 func seedMetricsForRegistrationCheck() {
 	const (
 		ns     = "metrics-registration-probe-ns"
@@ -121,15 +113,11 @@ func seedMetricsForRegistrationCheck() {
 	autoscalerPresent.WithLabelValues(ns, "Deployment", name, "HPA").Set(0)
 }
 
-// Asserts the DELTA this call contributes, not an absolute counter value.
-// wlrRefreshTotal is a counter on the process-global registry, so it is
-// monotonic for the lifetime of the test binary: under `go test -count=N` —
-// the shape of a stress run hunting a flake — the same process runs this test
-// N times against the same counter, and an absolute assertion holds only on
-// the first iteration. Reading a delta rather than resetting the child is
-// deliberate: seedMetricsForRegistrationCheck above documents that removing
-// series from this registry mid-run is what broke the registration probe once
-// already.
+// Asserts the DELTA this call contributes, not an absolute value: wlrRefreshTotal
+// lives on the process-global registry, so under `go test -count=N` an absolute
+// assertion only holds on the first iteration. Reading a delta rather than
+// resetting the child is deliberate — see seedMetricsForRegistrationCheck for
+// what removing series from this registry mid-run broke once already.
 func TestEmitWLRRefreshRecordsOutcome(t *testing.T) {
 	c := wlrRefreshTotal.WithLabelValues("ns", "Pod", WLRRefreshRetainedEmpty)
 	before := testutil.ToFloat64(c)

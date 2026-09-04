@@ -15,8 +15,6 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// ---- Workload recommendations ----
-
 type recommendationResult struct {
 	Automated          bool                                 `json:"automated"`
 	PolicyName         string                               `json:"policyName,omitempty"`
@@ -29,47 +27,17 @@ type recommendationResult struct {
 func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
 	ctx := r.Context()
 
-	// Fetch the workload entry once: it supplies the policy annotation here and
-	// is threaded into runSimulationWithEntry below so the simulation does not
-	// re-Get the same object.
+	// The entry is threaded into runSimulationWithEntry so the simulation does
+	// not re-Get the object.
 	entry, err := s.getWorkloadEntry(ctx, namespace, kind, name)
 	if err != nil {
 		writeK8sGetError(w, err, fmt.Sprintf("workload %s/%s/%s: %v", namespace, kind, name, err))
 		return
 	}
 
-	// Opting in is necessary but not sufficient: the candidate Policy's own
-	// selector (or --excluded-namespaces) may not reach this workload — the
-	// same check listPolicyWorkloadRows, collectPolicyWorkloads and
-	// collectAllWorkloads apply before ever reporting a workload as managed.
-	// For a grouped identity (entry.Members set), the candidate policy name
-	// itself can differ per real object behind the identity, so picking one
-	// name off the representative alone and gating only that name — the bug
-	// this endpoint used to have — can disagree with /api/workloads, which
-	// searches every member. resolveManagingPolicy runs that same full
-	// member search here, off one Policy List, so both endpoints ask
-	// exactly the same question: is there some real object o behind this
-	// identity with ResolvePolicy(o) == p.Name AND Matches(p, o) — and reach
-	// the same verdict for it.
-	//
-	// Entries synthesized from a retained WorkloadRecommendation carry no
-	// ObjectLabels/Members (see workloadEntry.FromRetainedWLR), so
-	// resolveManagingPolicy's single-entry fallback (len(Members) == 0)
-	// applies, which in turn skips only the label half of the gate via
-	// entryMatchesPolicy: the WLR's Spec.Policy already IS the controller's
-	// verdict that this workload matched its LabelSelector, and evaluating
-	// that selector against an empty label set would wrongly report a
-	// departed, still-in-window workload as unmanaged. The namespace half
-	// (--excluded-namespaces, Policy.Spec.Selector.Namespaces) is still
-	// evaluated against entry.Namespace, which these entries do carry.
-	//
-	// A Policy List failure fails the request outright, unlike
-	// collectAllWorkloads (which degrades to trusting each workload's own
-	// opt-in for its cluster-wide list view, documented there as a
-	// deliberate list-view trade-off): silently reporting Automated: false
-	// here would blame an apiserver problem on the workload being
-	// unmanaged, which is a different lie than the one this gate exists to
-	// prevent.
+	// resolveManagingPolicy searches every member behind a grouped identity so
+	// this endpoint and /api/workloads reach the same verdict. A Policy List
+	// failure fails the request; Automated: false would blame the workload.
 	policies, err := s.policiesByName(ctx)
 	if err != nil {
 		writeK8sGetError(w, err, fmt.Sprintf("listing policies: %v", err))
@@ -106,9 +74,8 @@ func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// buildSimulateRequestFromPolicy fills out a simulateRequest using a policy's
-// resource configs as defaults, then overrides the chart window/step from the
-// query string. Returns a paramError on invalid query input.
+// buildSimulateRequestFromPolicy fills a simulateRequest from a policy's
+// resource configs, overriding chart window/step from the query string.
 func buildSimulateRequestFromPolicy(q url.Values, policy *sustainv1alpha1.Policy, namespace, kind, name string) (simulateRequest, *paramError) {
 	cpuCfg := policy.Spec.RightSizing.ResourcesConfigs.CPU
 	memCfg := policy.Spec.RightSizing.ResourcesConfigs.Memory
@@ -173,8 +140,6 @@ func buildSimulateRequestFromPolicy(q url.Values, policy *sustainv1alpha1.Policy
 	return req, nil
 }
 
-// ---- Workload metrics ----
-
 func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
 	q := r.URL.Query()
 	tr, perr := parseTimeRange(q, "168h", time.Now())
@@ -190,10 +155,8 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 
 	ctx := r.Context()
 
-	// Fan out the seven Prometheus queries so chart-load latency is bounded
-	// by the slowest single query, not their sum. cpu/memory usage are the
-	// only two whose failure aborts the response; the rest are best-effort
-	// supplementary series and tolerate a Prometheus blip.
+	// Only cpu/memory usage failures abort the response; the rest are
+	// best-effort.
 	var (
 		cpuSeries, memSeries                           promclient.ContainerTimeSeries
 		cpuRequests, memRequests, cpuLimits, memLimits promclient.ContainerTimeSeries
@@ -233,9 +196,7 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		return
 	}
 
-	// Fetch the workload entry once and derive both resources and init-container
-	// names from it. A failed Get is tolerated (nil results), matching the prior
-	// behavior where each helper swallowed its own error.
+	// A failed Get is tolerated: resources and init containers come back nil.
 	entry, err := s.getWorkloadEntry(ctx, namespace, kind, name)
 	if err != nil {
 		s.Logger.Error(err, "failed to get workload entry", "namespace", namespace, "kind", kind, "name", name)
@@ -258,8 +219,6 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	})
 }
 
-// ---- Container resources / helpers used by metrics + simulate handlers ----
-
 type containerResources struct {
 	CPURequest    string `json:"cpuRequest,omitempty"`
 	CPULimit      string `json:"cpuLimit,omitempty"`
@@ -267,29 +226,9 @@ type containerResources struct {
 	MemoryLimit   string `json:"memoryLimit,omitempty"`
 }
 
-// getWorkloadPolicyAnnotation resolves the Policy that manages a workload —
-// some real object behind its identity both opts into the Policy
-// (policymatch.ResolvePolicy) AND satisfies that Policy's own selector or
-// --excluded-namespaces (policymatch.Matches), evaluated on that SAME
-// object — the same check listPolicyWorkloadRows, collectPolicyWorkloads,
-// collectAllWorkloads and handleWorkloadRecommendations apply before ever
-// reporting a workload as managed. An opted-in workload the Policy's own
-// selector does not reach is reported as unmanaged ("", nil), not as managed
-// under a Policy that never claimed it. For a grouped identity
-// (workloadEntry.Members), resolveManagingPolicy searches every member
-// rather than only the representative, so this agrees with /api/workloads
-// even when different real objects behind the identity opt into different
-// Policies.
-//
-// Entries synthesized from a retained WorkloadRecommendation
-// (workloadEntry.FromRetainedWLR) carry no ObjectLabels/Members, so
-// resolveManagingPolicy's single-entry fallback applies, which in turn skips
-// only the label half of the gate via entryMatchesPolicy: the WLR's own
-// Spec.Policy — the controller's last verdict on the LabelSelector — is used
-// as-is instead of being wrongly re-derived from an empty label set. The
-// namespace half (--excluded-namespaces, Policy.Spec.Selector.Namespaces) is
-// still evaluated, since entry.Namespace is available. See the longer
-// comment in handleWorkloadRecommendations.
+// getWorkloadPolicyAnnotation resolves the Policy that manages a workload, or
+// "" when no real object behind its identity both opts into a Policy and
+// matches its selector.
 func (s *Server) getWorkloadPolicyAnnotation(ctx context.Context, namespace, kind, name string) (string, error) {
 	e, err := s.getWorkloadEntry(ctx, namespace, kind, name)
 	if err != nil {
@@ -310,8 +249,7 @@ func containerResourcesFromEntry(e workloadEntry) map[string]containerResources 
 	all := append([]corev1.Container{}, e.Containers()...)
 	all = append(all, e.InitContainers()...)
 	if len(all) == 0 {
-		// Preserve the nil map returned when the workload could not be resolved
-		// (no template / failed Get), so the JSON stays `null` rather than `{}`.
+		// Keep the nil map so the JSON stays null rather than {}.
 		return nil
 	}
 	result := make(map[string]containerResources, len(all))

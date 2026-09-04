@@ -51,27 +51,22 @@ type workloadTarget struct {
 	// BarePodMembers is every live pod of a bare-pod identity, set only for
 	// Kind == "Pod" targets by listBarePodTargets.
 	//
-	// It is carried on the target rather than re-derived at apply time because
-	// listBarePodTargets already Lists the namespace's pods and already runs
-	// workload.GroupBarePods over them. Re-deriving meant one namespace-wide
-	// pod List per bare-pod identity per cycle, issued concurrently under the
-	// errgroup — and each cache-backed List deep-copies every pod it returns.
-	// An Airflow namespace with hundreds of pods and dozens of DAG-task
-	// identities paid that M times over for a grouping already computed once.
+	// It is carried on the target rather than re-derived at apply time: the
+	// listing already Lists the namespace's pods and runs workload.GroupBarePods
+	// over them, so re-deriving cost one namespace-wide, cache-backed pod List
+	// per identity per cycle, issued concurrently under the errgroup.
 	//
 	// Every other kind resolves its pods from a label selector at apply time;
 	// bare pods cannot, because membership is the (no controller owner, valid
-	// owner-name, matching policy) rule rather than a selector — which is
-	// exactly why the grouping has to be shared rather than repeated.
+	// owner-name, matching policy) rule rather than a selector.
 	BarePodMembers []*corev1.Pod
 	// BarePodPolicyMismatched carries workload.BarePodGroup.PolicyMismatched
 	// through to collectTargets, set only for Kind == "Pod" targets whose group
 	// excluded at least one pod naming a different policy. It rides on the
-	// target rather than being logged where it is discovered
-	// (listBarePodTargets) because listBarePodTargets runs once per policy
-	// whose selector covers the namespace, before filterTargets narrows the
-	// result to the group's own policy — logging there fires once per
-	// uninvolved policy too. See the log call in collectTargets.
+	// target rather than being logged in listBarePodTargets, which runs once per
+	// policy whose selector merely covers the namespace — before filterTargets
+	// narrows the result to the group's own policy. See the log call in
+	// collectTargets.
 	BarePodPolicyMismatched []*corev1.Pod
 }
 

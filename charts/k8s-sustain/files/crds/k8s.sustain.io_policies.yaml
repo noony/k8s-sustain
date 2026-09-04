@@ -51,33 +51,25 @@ spec:
                       request shaping.
                     properties:
                       enabled:
-                        description: |-
-                          Enabled turns on the overhead formula for any resource the autoscaler
-                          targets on averageUtilization (HPA Resource metric or KEDA cpu/memory trigger).
+                        description: Enabled turns on the overhead formula for any
+                          resource the autoscaler targets on averageUtilization.
                         type: boolean
                       replicaBudgetAnchor:
-                        description: |-
-                          ReplicaBudgetAnchor enables CPU replica-budget correction. Value is the
-                          fraction into [minReplicas, maxReplicas] at which the workload should sit
-                          at steady state. Typical value: 0.10. Nil disables replica correction.
+                        description: ReplicaBudgetAnchor is the fraction into [minReplicas,
+                          maxReplicas] the workload should sit at steady state (typically
+                          0.10); nil disables replica correction.
                         maximum: 1
                         minimum: 0
                         type: number
                     type: object
                   excludeInitContainers:
-                    description: |-
-                      ExcludeInitContainers skips init containers (including restartable
-                      sidecar init containers) for any workload this policy targets. Defaults
-                      to false: init containers are recommended and resized like regular ones.
+                    description: ExcludeInitContainers skips init containers, including
+                      restartable sidecars, for every workload this policy targets.
                     type: boolean
                   recommendOnly:
-                    description: |-
-                      RecommendOnly, when true, puts every workload governed by this policy
-                      in dry-run: recommendations are still computed, exported as metrics and
-                      cached as WorkloadRecommendations, but the controller never recycles or
-                      resizes pods and the webhook never injects resources. ORed with the
-                      global --recommend-only flag — the flag is a master switch, so an
-                      explicit false here cannot override it.
+                    description: RecommendOnly puts every workload governed by this
+                      policy in dry-run; it is ORed with the global --recommend-only
+                      flag.
                     type: boolean
                   resourcesConfigs:
                     description: ResourcesConfigs holds per-resource-dimension recommendation
@@ -87,25 +79,22 @@ spec:
                         description: CPU holds the recommendation config for CPU resources.
                         properties:
                           downsizeThreshold:
-                            description: |-
-                              DownsizeThreshold suppresses pod recycling for resource DECREASES smaller
-                              than max(percent% of current, minDecrease). Increases always apply
-                              immediately. Defaults apply when unset (percent 5; minDecrease 10m for
-                              CPU, 15Mi for memory). Set both percent and minDecrease to 0 to disable.
+                            description: DownsizeThreshold suppresses decreases smaller
+                              than max(percent% of current, minDecrease); defaults
+                              to 5% and 10m CPU / 15Mi memory when unset.
                             properties:
                               minDecrease:
                                 anyOf:
                                 - type: integer
                                 - type: string
-                                description: |-
-                                  MinDecrease is the minimum decrease as an absolute quantity. Defaults to
-                                  10m (CPU) or 15Mi (memory) when unset.
+                                description: MinDecrease is the minimum decrease as
+                                  an absolute quantity (default 10m for CPU, 15Mi
+                                  for memory).
                                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                 x-kubernetes-int-or-string: true
                               percent:
-                                description: |-
-                                  Percent is the minimum decrease as a percentage of the current value.
-                                  Defaults to 5 when unset.
+                                description: Percent is the minimum decrease as a
+                                  percentage of the current value (default 5).
                                 format: int32
                                 maximum: 100
                                 minimum: 0
@@ -130,9 +119,8 @@ spec:
                                 description: NoLimit removes the limit entirely.
                                 type: boolean
                               requestsLimitsRatio:
-                                description: |-
-                                  RequestsLimitsRatio explicitly sets the limit as a multiple of the request.
-                                  Must be >= 1 so the derived limit is never below the request.
+                                description: RequestsLimitsRatio sets the limit as
+                                  a multiple (>= 1) of the request.
                                 minimum: 1
                                 type: number
                             type: object
@@ -178,10 +166,9 @@ spec:
                                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                 x-kubernetes-int-or-string: true
                               percentile:
-                                description: |-
-                                  Percentile is the histogram percentile used for the recommendation (e.g. 95).
-                                  p100 is allowed and resolves to the maximum sample over the window —
-                                  useful for memory on workloads where you never want to undershoot peak.
+                                description: Percentile is the histogram percentile
+                                  used for the recommendation (e.g. 95); 100 resolves
+                                  to the maximum sample over the window.
                                 format: int32
                                 maximum: 100
                                 minimum: 1
@@ -199,10 +186,8 @@ spec:
                                 || (!has(self.headroom) && !has(self.percentile) &&
                                 !has(self.minAllowed) && !has(self.maxAllowed))'
                           window:
-                            description: |-
-                              Window is the historical observation window used for recommendation (e.g. "96h").
-                              Must be a Prometheus duration: integer followed by one of m, h, d, w, y
-                              (compounds like "1h30m" are also allowed).
+                            description: Window is the Prometheus duration of the
+                              observation window used for recommendation (e.g. "96h").
                             pattern: ^([0-9]+(m|h|d|w|y))+$
                             type: string
                         type: object
@@ -211,25 +196,22 @@ spec:
                           resources.
                         properties:
                           downsizeThreshold:
-                            description: |-
-                              DownsizeThreshold suppresses pod recycling for resource DECREASES smaller
-                              than max(percent% of current, minDecrease). Increases always apply
-                              immediately. Defaults apply when unset (percent 5; minDecrease 10m for
-                              CPU, 15Mi for memory). Set both percent and minDecrease to 0 to disable.
+                            description: DownsizeThreshold suppresses decreases smaller
+                              than max(percent% of current, minDecrease); defaults
+                              to 5% and 10m CPU / 15Mi memory when unset.
                             properties:
                               minDecrease:
                                 anyOf:
                                 - type: integer
                                 - type: string
-                                description: |-
-                                  MinDecrease is the minimum decrease as an absolute quantity. Defaults to
-                                  10m (CPU) or 15Mi (memory) when unset.
+                                description: MinDecrease is the minimum decrease as
+                                  an absolute quantity (default 10m for CPU, 15Mi
+                                  for memory).
                                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                 x-kubernetes-int-or-string: true
                               percent:
-                                description: |-
-                                  Percent is the minimum decrease as a percentage of the current value.
-                                  Defaults to 5 when unset.
+                                description: Percent is the minimum decrease as a
+                                  percentage of the current value (default 5).
                                 format: int32
                                 maximum: 100
                                 minimum: 0
@@ -254,9 +236,8 @@ spec:
                                 description: NoLimit removes the limit entirely.
                                 type: boolean
                               requestsLimitsRatio:
-                                description: |-
-                                  RequestsLimitsRatio explicitly sets the limit as a multiple of the request.
-                                  Must be >= 1 so the derived limit is never below the request.
+                                description: RequestsLimitsRatio sets the limit as
+                                  a multiple (>= 1) of the request.
                                 minimum: 1
                                 type: number
                             type: object
@@ -302,10 +283,9 @@ spec:
                                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                 x-kubernetes-int-or-string: true
                               percentile:
-                                description: |-
-                                  Percentile is the histogram percentile used for the recommendation (e.g. 95).
-                                  p100 is allowed and resolves to the maximum sample over the window —
-                                  useful for memory on workloads where you never want to undershoot peak.
+                                description: Percentile is the histogram percentile
+                                  used for the recommendation (e.g. 95); 100 resolves
+                                  to the maximum sample over the window.
                                 format: int32
                                 maximum: 100
                                 minimum: 1
@@ -323,10 +303,8 @@ spec:
                                 || (!has(self.headroom) && !has(self.percentile) &&
                                 !has(self.minAllowed) && !has(self.maxAllowed))'
                           window:
-                            description: |-
-                              Window is the historical observation window used for recommendation (e.g. "96h").
-                              Must be a Prometheus duration: integer followed by one of m, h, d, w, y
-                              (compounds like "1h30m" are also allowed).
+                            description: Window is the Prometheus duration of the
+                              observation window used for recommendation (e.g. "96h").
                             pattern: ^([0-9]+(m|h|d|w|y))+$
                             type: string
                         type: object
@@ -339,12 +317,9 @@ spec:
                         description: Eviction controls eviction behaviour during right-sizing.
                         properties:
                           ignoreAutoscalerSafeToEvictAnnotations:
-                            description: |-
-                              IgnoreAutoscalerSafeToEvictAnnotations, when true, evicts pods during
-                              right-sizing even if they carry the cluster-autoscaler annotation
-                              `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`. By default
-                              (false) such pods are never evicted. Only the literal value "false"
-                              blocks; in-place resizes are unaffected by the annotation either way.
+                            description: 'IgnoreAutoscalerSafeToEvictAnnotations evicts
+                              pods even when they carry cluster-autoscaler.kubernetes.io/safe-to-evict:
+                              "false".'
                             type: boolean
                         type: object
                       types:
@@ -359,12 +334,9 @@ spec:
                             - Ongoing
                             type: string
                           cronJob:
-                            description: |-
-                              CronJob never mutates the CronJob spec (no GitOps drift). OnCreate
-                              injects resources at pod admission for each spawned job pod. Ongoing
-                              additionally resizes currently-running job pods in place via
-                              pods/resize when the cluster supports it; new runs are always handled
-                              by the webhook at admission.
+                            description: 'CronJob never mutates the CronJob spec:
+                              OnCreate injects resources at pod admission, Ongoing
+                              additionally resizes running job pods in place.'
                             enum:
                             - OnCreate
                             - Ongoing
@@ -391,20 +363,10 @@ spec:
                             - Ongoing
                             type: string
                           pod:
-                            description: |-
-                              Pod targets bare pods that opt in via OwnerNameAnnotation (no controller
-                              owner — e.g. Airflow's KubernetesPodOperator). OnCreate injects
-                              resources at admission like every other kind. Ongoing additionally
-                              resizes the running pods of the identity in place (k8s >= 1.33), which
-                              is the only way to correct a long-running task pod after creation, with
-                              full coverage of restartPolicy Never/OnFailure only on k8s >= 1.35 —
-                              KubernetesPodOperator creates restartPolicy: Never pods by default, so
-                              on 1.33/1.34 the resize is rejected per pod and the running task keeps
-                              its admitted resources.
-                              Bare pods are NEVER evicted in either mode: no controller would
-                              recreate the pod. Note that an in-place memory resize can restart the
-                              container, the same tradeoff Job and CronJob already make; use OnCreate
-                              if your pods cannot tolerate that.
+                            description: 'Pod targets bare pods that opt in via the
+                              owner-name annotation: OnCreate injects resources at
+                              admission, Ongoing additionally resizes running pods
+                              in place (k8s >= 1.33); bare pods are never evicted.'
                             enum:
                             - OnCreate
                             - Ongoing
@@ -424,9 +386,8 @@ spec:
                   policy applies to.
                 properties:
                   labelSelector:
-                    description: |-
-                      LabelSelector restricts the set of workloads targeted by this policy.
-                      An empty selector matches all workloads in the targeted namespaces.
+                    description: LabelSelector restricts the set of workloads targeted
+                      by this policy; an empty selector matches all.
                     properties:
                       matchExpressions:
                         description: matchExpressions is a list of label selector
@@ -472,9 +433,8 @@ spec:
                     type: object
                     x-kubernetes-map-type: atomic
                   namespaces:
-                    description: |-
-                      Namespaces is a list of namespaces to target.
-                      An empty list targets all namespaces.
+                    description: Namespaces is a list of namespaces to target; an
+                      empty list targets all namespaces.
                     items:
                       type: string
                     type: array

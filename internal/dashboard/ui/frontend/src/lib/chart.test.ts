@@ -1,4 +1,3 @@
-// src/lib/chart.test.ts
 import { describe, it, expect } from 'vitest'
 import { zoomedRangeSeconds } from './chart'
 import type { Chart } from 'chart.js'

@@ -14,7 +14,6 @@ const rootEl = ref<HTMLElement | null>(null)
 // viewport, so it grows leftward and stays on screen instead of overflowing.
 const alignRight = ref(false)
 
-// --- Calendar state -------------------------------------------------------
 const viewYear = ref(0)
 const viewMonth = ref(0) // 0-11
 const selStart = ref<Date | null>(null) // date-only (local midnight)
@@ -53,7 +52,6 @@ function hhmm(d: Date): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-// Seed the calendar from the current model (absolute → preselect, else today).
 function seedCalendar() {
   const r = props.modelValue
   let anchor = new Date()
@@ -116,7 +114,6 @@ function dayClasses(d: Date) {
 
 function clickDay(d: Date) {
   if (!selStart.value || selEnd.value) {
-    // Start a fresh range.
     selStart.value = d
     selEnd.value = null
   } else if (d.getTime() < selStart.value.getTime()) {
@@ -177,7 +174,6 @@ function applyCalendar() {
   open.value = false
 }
 
-// --- Popover open/close ---------------------------------------------------
 function onMousedown(e: MouseEvent) {
   if (open.value && !rootEl.value?.contains(e.target as Node)) {
     open.value = false
@@ -200,12 +196,10 @@ onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
 })
 
-// Re-seed whenever the calendar is revealed so it reflects the current model.
 watch(showCalendar, (visible) => {
   if (visible) seedCalendar()
 })
 
-// Decide horizontal alignment each time the popover opens.
 watch(open, async (isOpen) => {
   if (!isOpen) return
   await nextTick()

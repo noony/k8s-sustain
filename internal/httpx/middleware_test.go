@@ -9,26 +9,20 @@ import (
 	"github.com/go-logr/logr/testr"
 )
 
-// TestDefaultRouteLabeler_UnmatchedPathIsUnknown is the cardinality fix:
-// when a request didn't match a registered ServeMux pattern (r.Pattern is
-// empty), the labeler must emit a single bounded value rather than echo
-// back the attacker-controlled URL path.
+// A request that matched no registered ServeMux pattern must get a single
+// bounded label rather than the attacker-controlled URL path.
 func TestDefaultRouteLabeler_UnmatchedPathIsUnknown(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/whatever/random/path", nil)
-	// r.Pattern is zero on a synthetic request — what the middleware sees
-	// for any URL that doesn't hit a registered handler.
+	// r.Pattern is zero on a synthetic request — what the middleware sees for
+	// any URL that doesn't hit a registered handler.
 	if got := DefaultRouteLabeler(r); got != "unknown" {
 		t.Errorf("DefaultRouteLabeler unmatched = %q, want %q", got, "unknown")
 	}
 }
 
-// TestDefaultRouteLabeler_MatchedPathUsesPattern verifies that requests
-// which DID match a pattern get the pattern back — that's the whole point
-// of having low-cardinality labels.
 func TestDefaultRouteLabeler_MatchedPathUsesPattern(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/policies/{name}", func(w http.ResponseWriter, r *http.Request) {
-		// r.Pattern is set by the mux when the request enters this handler.
 		if got := DefaultRouteLabeler(r); got != "GET /api/policies/{name}" {
 			t.Errorf("DefaultRouteLabeler matched = %q, want %q", got, "GET /api/policies/{name}")
 		}
@@ -40,11 +34,9 @@ func TestDefaultRouteLabeler_MatchedPathUsesPattern(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 }
 
-// TestWithTelemetry_LabelsViaRouter pins the end-to-end wiring: after the
-// inner handler runs, WithTelemetry must read r.Pattern (set by the mux) to
-// label the histogram. The previous implementation passed r.URL.Path
-// directly, blowing up Prometheus label cardinality on the dashboard's SPA
-// catch-all.
+// WithTelemetry must read r.Pattern (set by the mux) after the inner handler
+// runs. Passing r.URL.Path directly blew up Prometheus label cardinality on the
+// dashboard's SPA catch-all.
 func TestWithTelemetry_LabelsViaRouter(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /known", func(w http.ResponseWriter, _ *http.Request) {
@@ -85,10 +77,8 @@ func TestWithTelemetry_LabelsViaRouter(t *testing.T) {
 	}
 }
 
-// TestWithRecovery_PanicLabelIsBounded pins the analogous fix for the
-// panic counter. The previous implementation passed r.URL.Path to the
-// counter callback; a single attacker hitting bogus paths could explode
-// the metric.
+// Same hazard on the panic counter: passing r.URL.Path let a single attacker
+// hitting bogus paths explode the metric.
 func TestWithRecovery_PanicLabelIsBounded(t *testing.T) {
 	var seen []string
 	count := func(path string) { seen = append(seen, path) }
@@ -100,8 +90,6 @@ func TestWithRecovery_PanicLabelIsBounded(t *testing.T) {
 
 	pipeline := WithRecovery(mux, testr.New(t), count, DefaultRouteLabeler)
 
-	// Hit the boom route directly: r.Pattern is set, so the label should be
-	// the bounded pattern.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
 	pipeline.ServeHTTP(rec, req)

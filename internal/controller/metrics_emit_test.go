@@ -105,12 +105,10 @@ func TestEmitRetryStateClearsAllReasons(t *testing.T) {
 	EmitRetryState(ns, kind, name, "prometheus", true)
 	EmitRetryState(ns, kind, name, "patch", true)
 
-	// Sanity check: both reason variants should be present at this point.
 	if got := len(seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, kind, name)); got != 2 {
 		t.Fatalf("expected 2 retry_state series before clear, got %d", got)
 	}
 
-	// Clear: should remove every reason variant for this workload.
 	EmitRetryState(ns, kind, name, "", false)
 
 	if got := len(seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, kind, name)); got != 0 {
@@ -211,11 +209,8 @@ func TestEmitPolicyRollup(t *testing.T) {
 	}
 }
 
-// TestEmitPolicyBatchCoverage pins the two batch-coverage gauges: how many
-// workload identities a policy's batch prefetch requested versus how many
-// resolved with at least one usable sample. Gauges are Set(), not Add(), so
-// re-running this test under -count>1 in the same process is safe -- each
-// call just re-asserts the same value, unlike a counter's cumulative total.
+// The coverage metrics are Gauges (Set, not Add), so re-running under -count>1
+// in the same process just re-asserts the same value.
 func TestEmitPolicyBatchCoverage(t *testing.T) {
 	const policyName = "batch-coverage-test"
 	EmitPolicyBatchCoverage(policyName, 9, 4)
@@ -230,19 +225,14 @@ func TestEmitPolicyBatchCoverage(t *testing.T) {
 	}
 }
 
-// TestEmitPolicyBatchFailures pins the batch-failures counter in isolation
-// from coverage -- see TestEmitPolicyBatchCoverage for that half, and
+// Pins the batch-failures counter in isolation from coverage; see
 // policy_controller_test.go's TestReconcile_TotalOutage_* /
-// TestReconcile_EmptySuccessfulResponse_* for the end-to-end proof that the
-// two move independently.
+// TestReconcile_EmptySuccessfulResponse_* for the end-to-end proof that the two
+// move independently.
 //
-// Because this is a Counter (cumulative, unlike the coverage gauges above),
-// this test uses a before/after delta rather than an absolute value -- the
-// same idiom as TestEmitRecycleSuppressed -- so it stays correct under
-// `go test -count>1`, where package-level Prometheus collectors persist
-// across repeated runs in the same process. Asserting an absolute value here
-// (as TestIncrementRetryAttempt does, which predates this change and is a
-// known, separately-tracked flake) would fail on the second run.
+// This is a Counter, so the assertion is a before/after delta: package-level
+// Prometheus collectors persist across `go test -count>1` runs in the same
+// process and an absolute value would fail on the second.
 func TestEmitPolicyBatchFailures(t *testing.T) {
 	const policyName = "batch-failures-test"
 	before := testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues(policyName))
@@ -254,11 +244,9 @@ func TestEmitPolicyBatchFailures(t *testing.T) {
 		t.Fatalf("batch_failures_total delta = %v, want 3 (before=%v after=%v)", after-before, before, after)
 	}
 
-	// A zero-failure call must be a true no-op: EmitPolicyBatchCoverage
-	// already carries the "nothing failed" case (see its own doc comment for
-	// why coverage and failures are deliberately separate metrics), so this
-	// counter should never even create a zero-valued series for a healthy
-	// cycle.
+	// A zero-failure call must be a true no-op: coverage already carries the
+	// "nothing failed" case, so this counter must never create a zero-valued
+	// series for a healthy cycle.
 	before = testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues(policyName))
 	EmitPolicyBatchFailures(policyName, 0)
 	after = testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues(policyName))
@@ -322,9 +310,6 @@ func TestContainerRequestMemoryBytes(t *testing.T) {
 	}
 }
 
-// TestEmitWorkloadFromRecs_HappyPath drives emitWorkloadFromRecs and verifies
-// the resulting recommended/template gauges and drift ratio for a workload
-// with both CPU and memory recommendations.
 func TestEmitWorkloadFromRecs_HappyPath(t *testing.T) {
 	const ns, kind, name, container = "ns", "Deployment", "rec-test", "app"
 
@@ -361,9 +346,8 @@ func TestEmitWorkloadFromRecs_HappyPath(t *testing.T) {
 	}
 }
 
-// TestEmitWorkloadFromRecs_EmptyRecsIsNoOp verifies that when no container
-// has a recommendation, the emitter does nothing — important to avoid
-// emitting zero-valued gauges that would corrupt dashboards.
+// With no recommendation on any container the emitter must do nothing, or
+// zero-valued gauges would corrupt dashboards.
 func TestEmitWorkloadFromRecs_EmptyRecsIsNoOp(t *testing.T) {
 	t1 := &workloadTarget{
 		Namespace: "ns", Kind: "Deployment", Name: "no-recs",
@@ -409,16 +393,9 @@ func seriesCountForPolicy(t *testing.T, name, policy string) int {
 	return n
 }
 
-// TestDeletePolicyMetricsRemovesEverySeriesForThePolicy pins the cleanup that
-// runs when a Policy is deleted.
-//
-// Without it a deleted Policy's series live forever: a gauge keeps exporting
-// its last value, so "deleted" is indistinguishable from "live but matching
-// nothing", and cardinality tracks every policy ever seen. Measured on a kind
-// cluster before this fix: after 20 scenarios were applied and all 20 Policies
-// deleted, policy_workload_count, policy_at_risk_count,
-// policy_batch_requested_count, policy_batch_resolved_count and
-// reconcile_total each still exported 20 series against zero Policies.
+// Without this cleanup a deleted Policy's series live forever: a gauge keeps
+// exporting its last value, so "deleted" is indistinguishable from "live but
+// matching nothing", and cardinality tracks every policy ever seen.
 //
 // The per-workload vectors are included deliberately: their policy label names
 // the policy that produced them, and after deletion no reconcile will ever

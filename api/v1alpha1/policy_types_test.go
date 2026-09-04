@@ -2,10 +2,8 @@ package v1alpha1
 
 import "testing"
 
-// TestEffectiveRecommendOnly pins the OR semantics: the global
-// --recommend-only flag is a master switch, the per-policy field opts a
-// single Policy into dry-run, and an explicit false on the policy cannot
-// override the global flag.
+// TestEffectiveRecommendOnly pins the OR semantics: an explicit false on
+// the policy cannot override the global flag.
 func TestEffectiveRecommendOnly(t *testing.T) {
 	cases := []struct {
 		name   string

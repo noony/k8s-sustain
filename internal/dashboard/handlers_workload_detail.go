@@ -98,13 +98,9 @@ func (s *Server) fillDetailPrometheusSignals(ctx context.Context, resp *workload
 // workload, most-recent first.
 func (s *Server) recentSustainEvents(ctx context.Context, namespace, kind, name string, limit int) []activityItem {
 	var list corev1.EventList
-	// Push the workload identity into the field selector so the API server
-	// returns only THIS workload's events. The Event field selectors
-	// involvedObject.name/involvedObject.kind are built in, and InNamespace
-	// scopes involvedObject.namespace. With the result already narrowed to one
-	// workload, the activityListLimit cap can no longer truncate the target's
-	// events the way a namespace-wide >500 backlog could. The source filter is
-	// kept so only k8s-sustain's own events surface (mirrors handleSummaryActivity).
+	// Narrow server-side via the built-in involvedObject.* field selectors, so
+	// the activityListLimit cap cannot truncate this workload's events the way a
+	// namespace-wide backlog could.
 	_ = s.K8sClient.List(ctx, &list,
 		client.InNamespace(namespace),
 		client.Limit(activityListLimit),
@@ -114,9 +110,8 @@ func (s *Server) recentSustainEvents(ctx context.Context, namespace, kind, name 
 			"involvedObject.name": name,
 		},
 	)
-	// Defensive sort: the API server does not guarantee Events come back ordered
-	// by recency, so sort newest-first before applying the keep-limit cap (mirrors
-	// the sort in handleSummaryActivity).
+	// The API server does not guarantee Events come back ordered by recency, so
+	// sort newest-first before applying the keep-limit cap.
 	slices.SortFunc(list.Items, func(a, b corev1.Event) int {
 		return cmp.Compare(eventTimestamp(b).UnixNano(), eventTimestamp(a).UnixNano())
 	})

@@ -207,7 +207,6 @@ func TestHandleSimulate_RejectsOutOfRangePercentile(t *testing.T) {
 // TestSimulateRejectsInvalidAbsoluteRange covers the POST /api/simulate
 // validation of fromTs/toTs pairs added in validateAbsoluteRange.
 func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
-	// from >= to must yield 400
 	t.Run("from_equals_to", func(t *testing.T) {
 		srv := &Server{Logger: testLogger(t)}
 		body := mustJSON(t, simulateRequest{
@@ -236,7 +235,6 @@ func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
 		}
 	})
 
-	// only one of fromTs/toTs set must yield 400
 	t.Run("only_from_set", func(t *testing.T) {
 		srv := &Server{Logger: testLogger(t)}
 		body := mustJSON(t, simulateRequest{
@@ -265,7 +263,6 @@ func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
 		}
 	})
 
-	// valid fromTs < toTs (recent, not too far in future) must NOT be rejected
 	t.Run("valid_range_passes_validation", func(t *testing.T) {
 		srv := &Server{
 			K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),

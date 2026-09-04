@@ -14,8 +14,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender"
 )
 
-// ---- Batch simulate types ----
-
 type batchSimulateResponse struct {
 	PolicyName string                `json:"policyName"`
 	CPU        savingsAggregate      `json:"cpu"`
@@ -50,8 +48,6 @@ type savingsAggregate struct {
 	SavingsFormatted     string  `json:"savingsFormatted"`
 }
 
-// ---- Batch simulate handler ----
-
 func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Request, policyName string) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -77,12 +73,10 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 	var wg sync.WaitGroup
 
 	for i, wl := range workloads {
-		// Bound goroutine creation, not just in-flight queries, and bail out of
-		// dispatching once the request is cancelled: a disconnected client must
-		// not keep spawning recommendation queries as slots free up. Undispatched
-		// workloads record the cancellation error so the assembly loop below emits
-		// an Error entry for them. Already-spawned goroutines still run to
-		// completion under wg.Wait(), so there is no leak.
+		// Bound goroutine creation, not just in-flight queries: a disconnected
+		// client must not keep spawning queries as slots free up. Undispatched
+		// workloads record the cancellation error so the assembly loop emits an
+		// Error entry for them.
 		if ctx.Err() != nil {
 			results[i] = recResult{err: ctx.Err()}
 			continue
@@ -196,8 +190,6 @@ func (s *Server) computeRecommendations(ctx context.Context, namespace, kind, na
 	)
 	return containers, err
 }
-
-// ---- Utility functions ----
 
 func deltaPercent(current, recommended int64) float64 {
 	if current == 0 {

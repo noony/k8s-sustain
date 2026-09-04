@@ -110,12 +110,9 @@ func TestBuildShardsEscapesRegexMetacharacterNames(t *testing.T) {
 		}
 	}
 
-	// The selector escapes each name TWICE: once with regexp.QuoteMeta so RE2
-	// treats the metacharacter literally, and again because the result is
-	// PromQL source text that Prometheus's own lexer un-escapes before handing
-	// the value to the regex engine — a single backslash there is a parse
-	// error (verified against promql/parser/lex.go's lexEscape), so a literal
-	// "\." must appear in the query text as "\\.". See Selector's doc comment.
+	// Names are escaped twice: QuoteMeta for RE2, then again because PromQL's
+	// lexer un-escapes string literals before the regex engine sees them — a
+	// lone backslash there is a parse error. See Selector's doc comment.
 	sel := shards[0].Selector()
 	for _, escaped := range []string{`bad\\|name`, `\\.\\*`, "good"} {
 		if !strings.Contains(sel, escaped) {
@@ -141,9 +138,8 @@ func TestBuildShardsRoundTripsDottedName(t *testing.T) {
 		t.Fatalf("want one shard containing raw name %q: %+v", "payments.worker", shards)
 	}
 	got := shards[0].Selector()
-	// Double backslash, not single: QuoteMeta produces "payments\.worker", and
-	// that then survives PromQL's own string-literal un-escaping only if the
-	// query text doubles the backslash. See Selector's doc comment.
+	// Double backslash, not single: QuoteMeta's "payments\.worker" survives
+	// PromQL's string-literal un-escaping only if the query text doubles it.
 	want := `{namespace="prod",owner_kind="Deployment",owner_name=~"payments\\.worker"}`
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)

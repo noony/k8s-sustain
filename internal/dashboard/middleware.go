@@ -11,8 +11,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/httpx"
 )
 
-// ---- Request ID / Recovery / Telemetry: delegate to internal/httpx ----
-
 func (s *Server) withRequestID(next http.Handler) http.Handler {
 	return httpx.WithRequestID(next)
 }
@@ -29,13 +27,9 @@ func (s *Server) withTelemetry(next http.Handler) http.Handler {
 	}, httpx.DefaultRouteLabeler)
 }
 
-// ---- CORS ----
-
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Default: no CORS headers — same-origin only. Operators must opt
-		// into cross-origin access by listing trusted origins (or "*"
-		// explicitly) in --cors-allowed-origins.
+		// No CORS headers unless --cors-allowed-origins opts in.
 		reqOrigin := r.Header.Get("Origin")
 		origin := ""
 		switch {
@@ -51,13 +45,8 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 				}
 			}
 		}
-		// Advertise that the response varies by Origin whenever the request
-		// carries one AND a CORS allowlist is configured. Without Vary:
-		// Origin, a downstream cache or CDN that key on URL + Cache-Control
-		// alone can serve origin-A's Access-Control-Allow-Origin header to
-		// a request from origin-B, breaking the browser's same-origin policy.
-		// Append (Add) rather than overwrite so a handler-set Vary entry
-		// (e.g. Accept-Encoding from the gzip wrapper) is preserved.
+		// Without Vary: Origin a shared cache can serve origin-A's allow header
+		// to origin-B. Add rather than Set to keep the gzip wrapper's Vary.
 		if reqOrigin != "" && len(s.CORSOrigins) > 0 {
 			w.Header().Add("Vary", "Origin")
 		}
@@ -75,29 +64,21 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 	})
 }
 
-// ---- Gzip ----
-
 var gzipWriterPool = sync.Pool{
 	New: func() any { return gzip.NewWriter(io.Discard) },
 }
 
-// passthroughStatus reports whether the response status MUST NOT carry a
-// body, per RFC 9110 §6.4.1 (204, 304, all 1xx). For those statuses the
-// gzip wrapper bypasses compression entirely: setting Content-Encoding: gzip
-// and then emitting the ~10 bytes of empty-gzip framing onto a 304 (returned
-// by http.ServeContent for a fresh index.html reload) makes the browser
-// surface ERR_CONTENT_DECODING_FAILED.
+// passthroughStatus reports whether status must carry no body (RFC 9110:
+// 204, 304, 1xx). Gzip framing on a 304 makes browsers fail with
+// ERR_CONTENT_DECODING_FAILED.
 func passthroughStatus(status int) bool {
 	return status == http.StatusNoContent ||
 		status == http.StatusNotModified ||
 		(status >= 100 && status < 200)
 }
 
-// alreadyCompressedType reports whether a Content-Type is for a payload
-// that's already compressed at rest. Re-compressing is CPU for no gain and
-// occasionally hurts (PNGs, MP4 chunks). The skip list is intentionally
-// short — the dashboard serves JSON and a tiny embedded UI bundle; this is
-// defense-in-depth for whatever asset types the SPA build happens to ship.
+// alreadyCompressedType reports whether a Content-Type is already compressed
+// at rest, so re-compressing would be wasted CPU.
 func alreadyCompressedType(ct string) bool {
 	ct = strings.ToLower(ct)
 	if i := strings.IndexByte(ct, ';'); i >= 0 {
@@ -105,7 +86,7 @@ func alreadyCompressedType(ct string) bool {
 	}
 	switch {
 	case strings.HasPrefix(ct, "image/"):
-		// SVG is XML text and compresses very well — keep it on.
+		// SVG is XML text and compresses well.
 		return ct != "image/svg+xml"
 	case strings.HasPrefix(ct, "video/"), strings.HasPrefix(ct, "audio/"):
 		return true
@@ -119,15 +100,8 @@ func alreadyCompressedType(ct string) bool {
 	return false
 }
 
-// gzipResponseWriter wraps http.ResponseWriter so handler-written bytes get
-// transparently compressed. It is intentionally light: it does not buffer
-// to decide whether compression is worthwhile — JSON responses from this
-// API are uniformly large enough (time series, paginated lists) that
-// compressing unconditionally is the right default.
-//
-// A few responses MUST NOT carry a body (204, 304, 1xx) and a few content
-// types are already compressed — the writer flips into passthrough mode for
-// those so we don't ship gzip framing bytes the client will reject.
+// gzipResponseWriter compresses handler-written bytes unconditionally, and
+// flips into passthrough for bodiless statuses and already-encoded content.
 type gzipResponseWriter struct {
 	http.ResponseWriter
 	gz          *gzip.Writer
@@ -138,9 +112,6 @@ type gzipResponseWriter struct {
 func (g *gzipResponseWriter) WriteHeader(status int) {
 	h := g.Header()
 
-	// RFC 9110: 204, 304, and 1xx must carry no body. Going gzip on these
-	// produces a 304 with a 10-byte empty-gzip trailer that the browser
-	// then fails to decode (ERR_CONTENT_DECODING_FAILED on reload).
 	if passthroughStatus(status) {
 		g.passthrough = true
 		h.Del("Content-Encoding")
@@ -149,8 +120,6 @@ func (g *gzipResponseWriter) WriteHeader(status int) {
 		return
 	}
 
-	// Handler explicitly declared an empty body — passthrough so we don't
-	// inject gzip framing where there's nothing to encode.
 	if h.Get("Content-Length") == "0" {
 		g.passthrough = true
 		g.ResponseWriter.WriteHeader(status)
@@ -158,9 +127,6 @@ func (g *gzipResponseWriter) WriteHeader(status int) {
 		return
 	}
 
-	// Handler already encoded the body (pre-compressed static asset, or
-	// upstream-proxied response) — don't double-encode. Same for content
-	// types that are already compressed.
 	if h.Get("Content-Encoding") != "" || alreadyCompressedType(h.Get("Content-Type")) {
 		g.passthrough = true
 		g.ResponseWriter.WriteHeader(status)
@@ -170,8 +136,7 @@ func (g *gzipResponseWriter) WriteHeader(status int) {
 
 	h.Set("Content-Encoding", "gzip")
 	h.Add("Vary", "Accept-Encoding")
-	// Length of the original payload no longer matches what's on the wire;
-	// let the runtime use chunked transfer instead.
+	// Content-Length no longer matches the wire; let the runtime chunk.
 	h.Del("Content-Length")
 	g.ResponseWriter.WriteHeader(status)
 	g.wroteHeader = true
@@ -197,9 +162,6 @@ func (g *gzipResponseWriter) Flush() {
 }
 
 // withGzip compresses responses when the client advertises gzip support.
-// The wrapper is no-op on requests that don't ask for it, so older HTTP
-// clients (curl without --compressed, our integration tests) still get
-// plain JSON.
 func (s *Server) withGzip(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
@@ -210,28 +172,12 @@ func (s *Server) withGzip(next http.Handler) http.Handler {
 		gz.Reset(w)
 		grw := &gzipResponseWriter{ResponseWriter: w, gz: gz}
 		defer func() {
-			// Close (and so emit the gzip stream terminator) exactly when the
-			// response was COMMITTED as gzip — the header went out carrying
-			// Content-Encoding: gzip — rather than when the handler happened
-			// to write a byte.
-			//
-			// Both edges matter. A handler that never committed a header at
-			// all, or one that picked passthrough, must not leak the
-			// ~10-byte empty-gzip trailer onto the wire: that would
-			// implicitly commit a 200 the handler never sent, and the client
-			// would see garbage with no Content-Encoding header to tell it
-			// how to decode the bytes. But a handler that committed a gzip
-			// header and then wrote NO body (WriteHeader(200) alone — the
-			// /healthz shape) must still get the framing: gating on
-			// "wrote at least one byte" left such a response advertising
-			// Content-Encoding: gzip over a zero-byte payload, which any
-			// gzip-aware client fails to decode (EOF) — the same
-			// ERR_CONTENT_DECODING_FAILED class passthroughStatus exists to
-			// prevent, reached through a different door.
+			// Close exactly when the response was committed as gzip: closing after a
+			// passthrough or a never-committed header leaks an empty-gzip trailer,
+			// while a committed gzip header with no body (/healthz) still needs it.
 			if grw.wroteHeader && !grw.passthrough {
 				_ = gz.Close()
 			} else {
-				// Drop any buffered state before returning to the pool.
 				gz.Reset(io.Discard)
 			}
 			gzipWriterPool.Put(gz)

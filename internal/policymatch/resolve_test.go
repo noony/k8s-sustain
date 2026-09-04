@@ -50,12 +50,9 @@ func TestResolvePolicy(t *testing.T) {
 	}
 }
 
-// TestDecidesAt pins DecidesAt against the exact per-level test ResolvePolicy
-// applies internally (resolve.go's loop body): an opt-out or a non-empty
-// policy name decides; a nil map, an absent key, or an empty policy value all
-// fall through. Callers that skip a Namespace/owner read when DecidesAt is
-// true depend on this matching ResolvePolicy exactly — any divergence would
-// either pay for a read ResolvePolicy never needed, or skip one it did.
+// Callers that skip a Namespace/owner read when DecidesAt is true depend on it
+// matching ResolvePolicy's loop body exactly: any divergence either pays for a
+// read ResolvePolicy never needed, or skips one it did.
 func TestDecidesAt(t *testing.T) {
 	policy := sustainv1alpha1.PolicyAnnotation
 	optOut := sustainv1alpha1.OptOutAnnotation
@@ -83,12 +80,8 @@ func TestDecidesAt(t *testing.T) {
 	}
 }
 
-// TestDecidesAt_AgreesWithResolvePolicy is a property check across the
-// resolve_test.go table: for every case, DecidesAt on the template level must
-// agree with whether ResolvePolicy(template, nil, nil) alone already produced
-// the same outcome as the full three-level resolution — i.e. that a caller
-// which stops early because DecidesAt(template) is true never gets a
-// different answer than resolving all three levels together.
+// Property check: a caller that stops early because DecidesAt(template) is true
+// must never get a different answer than resolving all three levels together.
 func TestDecidesAt_AgreesWithResolvePolicy(t *testing.T) {
 	policy := sustainv1alpha1.PolicyAnnotation
 	optOut := sustainv1alpha1.OptOutAnnotation

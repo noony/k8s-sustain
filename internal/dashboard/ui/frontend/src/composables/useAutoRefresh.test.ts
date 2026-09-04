@@ -1,4 +1,3 @@
-// src/composables/useAutoRefresh.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useAutoRefresh } from './useAutoRefresh'
 

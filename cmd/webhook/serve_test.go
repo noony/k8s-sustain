@@ -13,32 +13,16 @@ import (
 	"github.com/noony/k8s-sustain/internal/config"
 )
 
-// ctrl.SetupSignalHandler REPLACES Go's default "SIGTERM terminates the
-// process" with "cancel this context". Everything that can block after it is
-// installed therefore has to honour that context, or the signal is swallowed
-// for as long as the block lasts and the pod is only removed by the SIGKILL at
-// the end of terminationGracePeriodSeconds.
-//
-// The startup phase is the one that blocks hardest: NewCached waits up to
-// crdWaitTimeout (2m) for the CRDs to become servable, plus an unbounded
-// WaitForCacheSync, and nothing answers /healthz for any of it. Reproduce with
-// installCRDs=false or a CRD that never establishes, then `kubectl rollout
-// restart` and watch the pod sit there. Before the informer cache existed the
-// signal handler was registered inside ListenAndServeWithShutdown — i.e. only
-// once the server was actually serving — so this window did not exist.
-//
-// The deps context deliberately does NOT track the signal (the informer cache
-// and cert watcher must outlive the drain), which is exactly why the startup
-// phase needs a context of its own rather than borrowing either one.
+// Regression: the startup phase blocks for up to crdWaitTimeout (2m) plus an
+// unbounded WaitForCacheSync with nothing answering /healthz, so it must observe
+// the signal context or SIGTERM is swallowed for that whole window. The deps
+// context deliberately does not track the signal (the cache and cert watcher
+// outlive the drain), which is why startup needs a context of its own.
 func TestServe_AbortsStartupWhenTheSignalContextIsCancelled(t *testing.T) {
-	// Unblocks the stub if the assertion below fails, and JOINS serve before
-	// the stub is uninstalled again. Releasing alone is not enough: on the
-	// timeout path below, serve is still running when the test returns, and
-	// newCachedClient is a package-level var that this cleanup writes — a
-	// straggler still reading it would be a data race against that write, and
-	// would run concurrently with whatever test the -shuffle order puts next.
-	// Cleanups run LIFO, so the restore is registered FIRST and therefore runs
-	// LAST, after the join below.
+	// The cleanup must JOIN serve before newCachedClient is restored: on the
+	// timeout path serve is still running, and a straggler reading that
+	// package-level var would race the restore. Cleanups run LIFO, so the
+	// restore is registered first and therefore runs last.
 	release := make(chan struct{})
 	finished := make(chan struct{})
 	done := make(chan error, 1)
@@ -53,8 +37,7 @@ func TestServe_AbortsStartupWhenTheSignalContextIsCancelled(t *testing.T) {
 			t.Error("serve is still running after the test finished")
 		}
 	})
-	// Stands in for NewCached's blocking startup: it returns when the context
-	// it was handed for that phase is cancelled, and not before.
+	// Stands in for NewCached's blocking startup.
 	newCachedClient = func(_, startupCtx context.Context, _ *runtime.Scheme) (client.Client, error) {
 		select {
 		case <-startupCtx.Done():
@@ -75,8 +58,6 @@ func TestServe_AbortsStartupWhenTheSignalContextIsCancelled(t *testing.T) {
 
 	select {
 	case err := <-done:
-		// A shutdown signal during startup is not a failure: the process is
-		// being asked to go away before it ever served anything.
 		if err != nil {
 			t.Errorf("serve returned %v, want nil: a shutdown signal during startup is an "+
 				"ordinary exit, not a crash", err)

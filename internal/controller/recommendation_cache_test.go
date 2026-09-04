@@ -51,10 +51,8 @@ func TestWlrName_LongNameTruncatedWithHash(t *testing.T) {
 	}
 }
 
-// TestUpsertWorkloadRecommendation_UsesIdentityOverride verifies that when a
-// target's IdentityKind/IdentityName differ from its real Kind/Name (the
-// owner-name grouping override), the WorkloadRecommendation is named and
-// spec'd using the override, not the real object identity.
+// When the owner-name override makes IdentityKind/IdentityName differ from the
+// real Kind/Name, the WLR must be named and spec'd from the override.
 func TestUpsertWorkloadRecommendation_UsesIdentityOverride(t *testing.T) {
 	r := reconcilerForCache(t)
 	target := &workloadTarget{
@@ -168,8 +166,6 @@ func wlrExists(t *testing.T, r *PolicyReconciler, ns, kind, name string) bool {
 	return err == nil
 }
 
-// TestUpsertWorkloadRecommendation_CreatesObjectOnFirstCall verifies the
-// controller creates a new WLR when one doesn't exist for a workload.
 func TestUpsertWorkloadRecommendation_CreatesObjectOnFirstCall(t *testing.T) {
 	r := reconcilerForCache(t)
 	cpu := resource.MustParse("250m")
@@ -206,10 +202,9 @@ func TestUpsertWorkloadRecommendation_CreatesObjectOnFirstCall(t *testing.T) {
 	}
 }
 
-// TestUpsertWorkloadRecommendation_PersistsRemoveFlags verifies that the
-// NoLimit intent (RemoveCPULimit / RemoveMemoryLimit) is persisted on the
-// status. The webhook reads these on Prometheus outage — losing them silently
-// reverts NoLimit policies to "leave template alone" during outages.
+// The NoLimit intent (RemoveCPULimit / RemoveMemoryLimit) must persist on the
+// status: the webhook reads it on Prometheus outage, and losing it silently
+// reverts NoLimit policies to "leave template alone".
 func TestUpsertWorkloadRecommendation_PersistsRemoveFlags(t *testing.T) {
 	r := reconcilerForCache(t)
 	cpu := resource.MustParse("250m")
@@ -242,9 +237,8 @@ func TestUpsertWorkloadRecommendation_PersistsRemoveFlags(t *testing.T) {
 	}
 }
 
-// TestUpsertWorkloadRecommendation_NoOpWhenUnchanged verifies that calling
-// upsert twice with the same recommendation does NOT bump the resourceVersion
-// — the compare-before-write guard skips the etcd round-trip.
+// The compare-before-write guard must skip the etcd round-trip: a second upsert
+// of the same recommendation may not bump the resourceVersion.
 func TestUpsertWorkloadRecommendation_NoOpWhenUnchanged(t *testing.T) {
 	r := reconcilerForCache(t)
 	cpu := resource.MustParse("250m")
@@ -271,11 +265,10 @@ func TestUpsertWorkloadRecommendation_NoOpWhenUnchanged(t *testing.T) {
 	}
 }
 
-// TestUpsertWorkloadRecommendation_RefreshesStaleObservedAt verifies that an
-// equivalent recommendation still triggers a status write once ObservedAt is
-// older than wlrRefreshInterval — otherwise stable workloads would freeze
-// ObservedAt and the webhook would reject the cache as stale (>30m) exactly
-// when the Prometheus-outage fallback is needed.
+// An equivalent recommendation still triggers a status write once ObservedAt is
+// older than wlrRefreshInterval: otherwise stable workloads freeze ObservedAt
+// and the webhook rejects the cache as stale exactly when the Prometheus-outage
+// fallback is needed.
 func TestUpsertWorkloadRecommendation_RefreshesStaleObservedAt(t *testing.T) {
 	r := reconcilerForCache(t)
 	cpu := resource.MustParse("250m")
@@ -297,8 +290,6 @@ func TestUpsertWorkloadRecommendation_RefreshesStaleObservedAt(t *testing.T) {
 	}
 }
 
-// TestUpsertWorkloadRecommendation_UpdatesOnChange verifies that a different
-// recommendation triggers a status patch.
 func TestUpsertWorkloadRecommendation_UpdatesOnChange(t *testing.T) {
 	r := reconcilerForCache(t)
 	cpu1 := resource.MustParse("250m")
@@ -320,8 +311,6 @@ func TestUpsertWorkloadRecommendation_UpdatesOnChange(t *testing.T) {
 	}
 }
 
-// TestSweepWorkloadRecommendations_RemovesOrphans verifies the sweeper deletes
-// WLRs whose target workload is no longer in the policy's matched set.
 func TestSweepWorkloadRecommendations_RemovesOrphans(t *testing.T) {
 	live := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{
@@ -373,11 +362,8 @@ func TestSweepWorkloadRecommendations_RemovesOrphans(t *testing.T) {
 	}
 }
 
-// TestSweepWorkloadRecommendations_KeepsOverriddenIdentitySharedByTwoTargets
-// verifies sweep does not delete a WorkloadRecommendation that two different
-// real targets (e.g. app-blue and app-green) both write to via the same
-// owner-name override — sweep's "wanted" set must be keyed by the override
-// identity, not each target's real identity.
+// Sweep's "wanted" set must be keyed by the override identity, not each target's
+// real identity, or a WLR two members share is deleted out from under them.
 func TestSweepWorkloadRecommendations_KeepsOverriddenIdentitySharedByTwoTargets(t *testing.T) {
 	r := reconcilerForCache(t)
 	targets := []workloadTarget{
@@ -398,10 +384,6 @@ func TestSweepWorkloadRecommendations_KeepsOverriddenIdentitySharedByTwoTargets(
 	}
 }
 
-// TestDeleteAllRecommendationsForPolicy_DeletesAllForPolicy verifies the
-// strategy-1 cleanup path (called from the deletion branch of Reconcile)
-// removes every WLR for the named policy and leaves other policies' WLRs
-// untouched.
 func TestDeleteAllRecommendationsForPolicy_DeletesAllForPolicy(t *testing.T) {
 	mine := []*sustainv1alpha1.WorkloadRecommendation{
 		{
@@ -444,10 +426,8 @@ func TestDeleteAllRecommendationsForPolicy_DeletesAllForPolicy(t *testing.T) {
 	}
 }
 
-// TestReapOrphanedRecommendations_DeletesOnlyOrphans verifies the strategy-2
-// periodic sweep: WLRs whose policy still exists are kept; WLRs referencing
-// a vanished policy are deleted; entries with empty spec.policy are left
-// alone.
+// The strategy-2 periodic sweep: a WLR referencing a vanished policy is deleted,
+// but one with an empty spec.policy is left alone.
 func TestReapOrphanedRecommendations_DeletesOnlyOrphans(t *testing.T) {
 	livePolicy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "live"}}
 	live := &sustainv1alpha1.WorkloadRecommendation{
@@ -479,13 +459,11 @@ func TestReapOrphanedRecommendations_DeletesOnlyOrphans(t *testing.T) {
 	}
 }
 
-// TestReapKeepsNoDataRecommendations pins the reaper's single remaining rule:
-// it collects orphans and nothing else. "nodata" used to be a terminal state
-// aged out after 24h, which was the only thing that ever gave such an identity
-// another attempt. Under WLR-driven refresh nodata means "nothing computed
-// YET" and the computation phase retries it every cycle, so deleting one on
-// age would throw away the observed-resources snapshot that keeps the identity
-// in the work-list — turning a self-healing state back into a cold start.
+// The reaper collects orphans and nothing else. Under WLR-driven refresh
+// "nodata" means "nothing computed YET" and the computation phase retries every
+// cycle, so ageing one out would throw away the observed-resources snapshot that
+// keeps the identity in the work-list — turning a self-healing state into a cold
+// start.
 func TestReapKeepsNoDataRecommendations(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p1"}}
 
@@ -537,9 +515,6 @@ func assertWLRAbsent(t *testing.T, r *PolicyReconciler, ns, name string) {
 	}
 }
 
-// TestReconcile_PolicyDeletion_RemovesItsRecommendations is an end-to-end
-// check that the strategy-1 hook fires on deletion: a Policy with associated
-// WLRs is deleted, after which no WLRs remain for that policy.
 func TestReconcile_PolicyDeletion_RemovesItsRecommendations(t *testing.T) {
 	now := metav1.Now()
 	policy := &sustainv1alpha1.Policy{
@@ -579,9 +554,8 @@ func TestReconcile_PolicyDeletion_RemovesItsRecommendations(t *testing.T) {
 	}
 }
 
-// TestUpsertWorkloadRecommendation_SnapshotsObservedResources verifies the
-// upsert records what the containers actually ran with, including the init
-// marker, so inactive dashboard rows can show current-vs-recommended after
+// The upsert records what the containers actually ran with, including the init
+// marker, so inactive dashboard rows can still show current-vs-recommended after
 // the workload object is gone.
 func TestUpsertWorkloadRecommendation_SnapshotsObservedResources(t *testing.T) {
 	r := reconcilerForCache(t)
@@ -626,10 +600,9 @@ func TestUpsertWorkloadRecommendation_SnapshotsObservedResources(t *testing.T) {
 	}
 }
 
-// TestUpsertWorkloadRecommendation_RewritesWhenObservedResourcesChange
-// verifies that a change in the container's actual resources alone (same
-// recommendation) still triggers a status write — the equivalence check must
-// compare the snapshot, or inactive rows would show stale "current" values.
+// A change in the container's actual resources alone must still trigger a status
+// write: the equivalence check has to compare the snapshot, or inactive rows
+// show stale "current" values.
 func TestUpsertWorkloadRecommendation_RewritesWhenObservedResourcesChange(t *testing.T) {
 	r := reconcilerForCache(t)
 	recs := map[string]workload.ContainerRecommendation{"main": {CPURequest: qtyp("250m")}}
@@ -669,13 +642,11 @@ func TestSweep_RetainsDepartedWorkloadWithinRetention(t *testing.T) {
 	}
 }
 
-// Retaining the object is only half of what a departed identity needs. Its
-// ObservedAt stops advancing as soon as the recompute stops finding data — the
-// samples age out of the query window and the write rules deliberately keep the
-// last-known-good rather than bumping the timestamp — so the webhook would read
-// it as stale and admit every subsequent run on template resources, for the
-// entire retention window, with the recommendation sitting right there. The
-// sweep therefore records the departure it just confirmed.
+// Retaining the object is only half of what a departed identity needs: its
+// ObservedAt stops advancing once the recompute finds no data, so the webhook
+// would read it as stale and admit every subsequent run on template resources
+// for the whole retention window. The sweep therefore records the departure it
+// just confirmed.
 func TestSweep_MarksRetainedDepartedWorkload(t *testing.T) {
 	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "nightly", time.Now().Add(-1*time.Hour)))
 	r.RecommendationRetention = 72 * time.Hour
@@ -773,18 +744,13 @@ func TestSweep_ZeroRetentionSweepsDepartedAfterGrace(t *testing.T) {
 	}
 }
 
-// TestSweep_GracePeriodProtectsFreshWrites: a WLR created moments ago (e.g.
-// by the webhook for a pod created after this cycle's target listing) must
-// never be swept — even with retention disabled and even when its workload
-// exists but is missing from the (stale) target list.
+// A WLR created moments ago (e.g. by the webhook for a pod created after this
+// cycle's target listing) must never be swept — even with retention disabled and
+// even when its workload exists but is missing from the stale target list.
 //
-// The freshness is expressed as a fresh CreationTimestamp on both objects,
-// which is what "written moments ago" actually looks like in the API. It used
-// to be expressed as a fresh status.ObservedAt with both CreationTimestamps
-// left at the zero time — a fixture that cannot occur, and one that made this
-// test pass for the wrong reason: ObservedAt is rewritten by the controller's
-// own computation phase for identities that are NOT in the target set, so it
-// cannot distinguish a fresh write from this pass's own refresh. See
+// Freshness is expressed as a fresh CreationTimestamp, not a fresh ObservedAt:
+// ObservedAt is rewritten by the computation phase for identities NOT in the
+// target set, so it cannot tell a fresh write from this pass's own refresh. See
 // sweepGracePeriod.
 func TestSweep_GracePeriodProtectsFreshWrites(t *testing.T) {
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
@@ -831,18 +797,13 @@ func TestSweep_KeepsWLROnExistenceCheckError(t *testing.T) {
 	}
 }
 
-// TestSweep_DeletesWLRForOptedOutWorkloadStillRunning is the regression test
-// for the sweep's grace anchor.
+// The regression test for the sweep's grace anchor. It must go through a full
+// Reconcile: the bug was that the computation phase rewrote status.ObservedAt
+// for the now-unmatched identity and the sweep at the end of the SAME pass read
+// that as proof of freshness. A direct sweep call with a stale ObservedAt passes
+// either way and proves nothing.
 //
-// It must go through a full Reconcile rather than calling
-// sweepWorkloadRecommendations directly: the bug was that phase 2 recomputed
-// the now-unmatched identity and rewrote status.ObservedAt, and the sweep at
-// the end of the SAME pass then read that timestamp as proof of freshness. A
-// direct sweep call with a stale ObservedAt passes either way and proves
-// nothing.
-//
-// Retention is disabled so nothing but the grace period could keep the object:
-// the assertion is unambiguous.
+// Retention is disabled so nothing but the grace period could keep the object.
 func TestSweep_DeletesWLRForOptedOutWorkloadStillRunning(t *testing.T) {
 	const ns = "optout"
 	ongoing := sustainv1alpha1.UpdateModeOngoing

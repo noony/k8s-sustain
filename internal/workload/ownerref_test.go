@@ -13,10 +13,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// TestPodOwnedByWorkload covers the ownerRef chains the recycle path relies
-// on: direct controller refs (StatefulSet/DaemonSet/Job), the indirect
-// pod → ReplicaSet → Deployment chain, orphan pods, and a vanished
-// ReplicaSet (treated as unowned rather than an error).
+// Covers the ownerRef chains the recycle path relies on, including a vanished
+// ReplicaSet — treated as unowned rather than as an error.
 func TestPodOwnedByWorkload(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)

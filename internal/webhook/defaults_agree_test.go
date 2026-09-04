@@ -10,21 +10,13 @@ import (
 	"github.com/noony/k8s-sustain/internal/webhook"
 )
 
-// The webhook refuses to inject from a departed WorkloadRecommendation older
-// than the controller's retention window. Handler.RecommendationRetention
-// carries that window, and a handler built without one falls back to
-// webhook.DefaultRecommendationRetention — a literal duplicating the CLI
-// default, because the webhook deliberately does not depend on the flag/Viper
-// layer (same reasoning as internal/controller's tuning fallbacks).
+// webhook.DefaultRecommendationRetention duplicates the CLI default rather than
+// importing the flag/Viper layer, so drift has to be pinned here: too small and
+// the webhook rejects recommendations the controller still retains; too large
+// and it serves objects the sweep should already have deleted.
 //
-// Drift between the two is not cosmetic: too small and the webhook rejects
-// recommendations the controller is still retaining, so every run of a
-// recurring ephemeral workload cold-starts on template resources; too large and
-// it keeps serving objects the controller's sweep should already have deleted,
-// which is the unbounded waiver this bound was added to close.
-//
-// External test package (webhook_test) so the assertion can import
-// internal/config without the production package gaining that dependency.
+// External test package so the assertion can import internal/config without the
+// production package gaining that dependency.
 func TestRetentionDefaultAgreesWithConfigDefault(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -39,9 +31,7 @@ func TestRetentionDefaultAgreesWithConfigDefault(t *testing.T) {
 			"from the shipped binary", cfg.RecommendationRetention, webhook.DefaultRecommendationRetention)
 	}
 
-	// And the controller's, which is the value that actually decides when the
-	// object is swept: the webhook's whole bound is "do not serve what the
-	// controller would already have deleted".
+	// The controller's value is what actually decides when the object is swept.
 	ctrlCmd := &cobra.Command{}
 	config.BindControllerFlags(ctrlCmd)
 	ctrlCfg, err := config.LoadControllerConfig()

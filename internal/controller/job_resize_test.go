@@ -67,9 +67,8 @@ func TestJobToTarget_FromPodTemplate(t *testing.T) {
 	if got.Name != "batch-1" || got.Namespace != "default" {
 		t.Errorf("Name/Namespace = %q/%q, want batch-1/default", got.Name, got.Namespace)
 	}
-	// newTargetFromTemplate no longer resolves PolicyName itself (that moved to
-	// collectTargets, which also consults the workload/namespace levels); it
-	// still carries the pod-template annotation through for that resolution.
+	// PolicyName is resolved by collectTargets, which also consults the
+	// workload/namespace levels; the template annotation is only carried here.
 	if got.TemplateAnnotations[sustainv1alpha1.PolicyAnnotation] != "p" {
 		t.Errorf("TemplateAnnotations[PolicyAnnotation] = %q, want p", got.TemplateAnnotations[sustainv1alpha1.PolicyAnnotation])
 	}
@@ -81,7 +80,6 @@ func TestJobToTarget_FromPodTemplate(t *testing.T) {
 	}
 }
 
-// helper: a standalone Job plus one running pod owned by it.
 func standaloneJobWithPod() (*batchv1.Job, *corev1.Pod) {
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "batch-1", UID: "job-uid"},

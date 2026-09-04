@@ -36,9 +36,8 @@ type simulationContainerResult struct {
 }
 
 func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simulationResult, error) {
-	// Fetch the workload entry once up front. Errors are tolerated (the entry
-	// stays zero-valued) to preserve the prior behavior where getContainerResources
-	// and getInitContainerNames each swallowed a failed Get and returned nil.
+	// A failed Get is tolerated: the zero entry yields nil resources and init
+	// containers rather than failing the whole simulation.
 	entry, err := s.getWorkloadEntry(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
 	if err != nil {
 		s.Logger.Error(err, "failed to get workload entry", "namespace", req.Namespace, "kind", req.OwnerKind, "name", req.OwnerName)
@@ -59,7 +58,6 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, req simulateRequest
 	cpuQuantile := recommender.PercentileQuantile(cpuCfg.Percentile)
 	memQuantile := recommender.PercentileQuantile(memCfg.Percentile)
 
-	// Per-resource windows for recommendation computation
 	cpuWindowStr := req.CPU.Window
 	if cpuWindowStr == "" {
 		cpuWindowStr = req.Window
@@ -71,7 +69,6 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, req simulateRequest
 	cpuWindow := recommender.ResourceWindow(cpuWindowStr)
 	memWindow := recommender.ResourceWindow(memWindowStr)
 
-	// Chart time range: use absolute from/to if provided, else derive from Window.
 	var tr promclient.TimeRange
 	var err error
 	if req.FromTs > 0 && req.ToTs > 0 {
@@ -92,7 +89,6 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, req simulateRequest
 		return nil, err
 	}
 
-	// Query time-series for graphs (use chart time range)
 	step := req.Step
 	if step == "" {
 		step = "5m"
@@ -108,7 +104,6 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, req simulateRequest
 
 	resources := containerResourcesFromEntry(entry)
 
-	// Layer per-container limit recommendations on top of the request map.
 	// The request strings are already final (clamped, MiB-rounded); reparsing
 	// them is cheap and keeps the shared builder limit-agnostic.
 	for name, result := range containers {
@@ -136,11 +131,9 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, req simulateRequest
 		containers[name] = result
 	}
 
-	// Fetch historical resource request time-series (best-effort, use chart time range)
 	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, tr, step)
 	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, tr, step)
 
-	// Sliding-window recommendation time-series
 	cpuRecSeries, _ := s.PromClient.QueryCPURecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, cpuQuantile, cpuWindow, tr, step)
 	memRecSeries, _ := s.PromClient.QueryMemoryRecommendationRangeByContainer(ctx, req.Namespace, req.OwnerKind, req.OwnerName, memQuantile, memWindow, tr, step)
 
@@ -214,11 +207,9 @@ func buildRequestsConfig(cfg simulateResourceConfig) sustainv1alpha1.ResourceReq
 		Percentile: cfg.Percentile,
 		Headroom:   cfg.Headroom,
 	}
-	// Quantity parsing tolerated to fail silently here — handleSimulate
-	// pre-validates with ParseQuantity, so reaching this code with an
-	// unparseable value is impossible. Use ParseQuantity instead of
-	// MustParse so a future caller that skips the handler can't trigger a
-	// panic and surface as an HTTP 500.
+	// handleSimulate pre-validates these, so a parse failure is unreachable;
+	// ParseQuantity rather than MustParse keeps a caller that skips the handler
+	// from panicking into an HTTP 500.
 	if cfg.MinAllowed != nil {
 		if q, err := resource.ParseQuantity(*cfg.MinAllowed); err == nil {
 			rc.MinAllowed = &q

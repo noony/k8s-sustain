@@ -109,8 +109,6 @@ func runStart(_ *cobra.Command, _ []string) error {
 		select {
 		case triggerCh <- event.GenericEvent{Object: &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: rec.PolicyName}}}:
 		default:
-			// Channel full: the next reconcile interval will catch up via
-			// Prometheus. Better than blocking the watcher.
 		}
 	})
 	watcher := &oomwatch.Watcher{
@@ -163,12 +161,10 @@ func runStart(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-// detectInPlaceSupport returns true when the cluster is k8s >= 1.33, where the
-// InPlacePodVerticalScaling feature gate is beta and enabled by default and
-// the pods/resize subresource is served. Earlier versions had the gate as
-// alpha (disabled by default) and no /resize subresource, so we don't enable
-// in-place updates there to avoid silent patch rejections.
-// On any error it logs a warning and returns false (safe default).
+// detectInPlaceSupport reports whether the cluster is k8s >= 1.33, where
+// InPlacePodVerticalScaling is beta-on-by-default and pods/resize is served.
+// Earlier versions would silently reject the patch, so anything else (parse or
+// discovery failure included) returns false.
 func detectInPlaceSupport(cfg *rest.Config, log logr.Logger) bool {
 	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {

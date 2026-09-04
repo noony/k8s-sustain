@@ -38,17 +38,14 @@ func optInFixture(t *testing.T, tmplAnn, workloadAnn, nsAnn map[string]string, p
 	pod := podWithRSOwner("team-a", "web-abc-1", "web-abc", "")
 	pod.Annotations = tmplAnn
 
-	// config.Scheme() is the full manager scheme (core, apps, batch, rollouts,
-	// k8s.sustain.io). internal/webhook's stub_test.go already builds fake
-	// clients this way; the ad-hoc scheme in newAdmitEnv does not register
-	// corev1, which the Namespace read now needs.
+	// The ad-hoc scheme in newAdmitEnv does not register corev1, which the
+	// Namespace read needs; config.Scheme() is the full manager scheme.
 	objs := append([]client.Object{ns, d, rs}, policies...)
 	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(objs...).Build()
 	return &Handler{Client: c}, pod
 }
 
-// TestResolveOptIn_AnnotationLevels replays the shared contract table against
-// the webhook's own wiring.
+// Replays the shared contract table against the webhook's own wiring.
 func TestResolveOptIn_AnnotationLevels(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	for _, tc := range policymatchtest.AnnotationCases() {
@@ -122,15 +119,9 @@ func TestResolveOptIn_ExcludedNamespaceShortCircuits(t *testing.T) {
 	}
 }
 
-// TestResolveOptIn_CachesReplicaSetGetAcrossPodsBehindSameOwner pins the fix
-// for a review finding: resolveOptIn's owner-chain walk
-// (workload.ResolvePodOwner, now resolveCachedPodOwner) issued an uncached
-// ReplicaSet Get, even though the second Get one level further up (the
-// resolved Deployment, via h.ownerAnnCache) was already cached. With the
-// Quick Start Policy's empty selector — which is what makes anyPolicyCovers
-// return true unconditionally here — every pod CREATE in the cluster paid
-// that Get; a rolling restart of an N-replica Deployment is N pods behind the
-// SAME ReplicaSet, so this must collapse to one Get, not N.
+// Under a selector-less Policy, anyPolicyCovers is unconditionally true, so
+// every pod CREATE reaches the owner-chain walk. A rolling restart is N pods
+// behind the SAME ReplicaSet and must collapse to one Get, not N.
 func TestResolveOptIn_CachesReplicaSetGetAcrossPodsBehindSameOwner(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}} // empty selector: covers every pod
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}}
@@ -171,14 +162,9 @@ func TestResolveOptIn_CachesReplicaSetGetAcrossPodsBehindSameOwner(t *testing.T)
 	}
 }
 
-// TestResolveCachedPodOwner_KeyIncludesUID pins the fix for a review finding:
-// the cache key used to be namespace/kind/name alone, so a ReplicaSet or Job
-// name reused under a DIFFERENT top-level owner within the TTL would resolve
-// to the stale owner's cached result. This simulates that exact race: a
-// ReplicaSet "web-abc" owned by Deployment "web" is deleted and replaced,
-// under the SAME name, by a ReplicaSet "web-abc" owned by a different
-// Deployment "web2" — the only thing that changes for a pod behind the new
-// one is the ownerRef UID.
+// A ReplicaSet or Job name reused under a DIFFERENT top-level owner within the
+// TTL must not resolve to the stale owner: the ownerRef UID is the only thing
+// that changes for a pod behind the replacement, so it has to be in the key.
 func TestResolveCachedPodOwner_KeyIncludesUID(t *testing.T) {
 	ctrl := true
 	rs1 := &appsv1.ReplicaSet{
@@ -244,18 +230,10 @@ func TestResolveCachedPodOwner_KeyIncludesUID(t *testing.T) {
 	}
 }
 
-// TestOwnerAnnotations_ConcurrentMissesCollapseToOneGet pins the fix for a
-// review finding: ownerAnnCache only bounded the STEADY-STATE cost, since
-// every cache entry is populated only after a completed Get. A genuinely
-// concurrent cold-start burst — a rolling restart, exactly the case this
-// cache exists for — could still let every one of N simultaneous misses
-// issue its own Get before any of them had populated the cache.
-//
-// Handler.sfJoinHook lets this test hold the Get open until all N callers
-// have joined the same in-flight resolution, so it genuinely exercises
-// concurrency rather than passing by timing luck: if the fix were reverted
-// (no singleflight), every one of the N goroutines would reach the
-// interceptor's Get independently and this test would report N Gets, not 1.
+// ownerAnnCache alone bounds only steady-state cost — entries populate after a
+// completed Get — so a cold-start burst could still issue N simultaneous Gets.
+// sfJoinHook holds the Get open until all N callers have joined, so this
+// exercises real concurrency rather than passing on timing luck.
 func TestOwnerAnnotations_ConcurrentMissesCollapseToOneGet(t *testing.T) {
 	const n = 50
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
@@ -310,11 +288,8 @@ func TestOwnerAnnotations_ConcurrentMissesCollapseToOneGet(t *testing.T) {
 	}
 }
 
-// TestResolveCachedPodOwner_ConcurrentMissesCollapseToOneGet is
-// TestOwnerAnnotations_ConcurrentMissesCollapseToOneGet's counterpart for
-// ownerRefCache/ownerRefSF: N pods behind the same ReplicaSet, admitted
-// concurrently on a genuinely cold cache, must collapse to one ReplicaSet
-// Get, not N.
+// The ownerRefCache/ownerRefSF counterpart: N pods behind the same ReplicaSet,
+// admitted concurrently on a cold cache, must collapse to one Get.
 func TestResolveCachedPodOwner_ConcurrentMissesCollapseToOneGet(t *testing.T) {
 	const n = 50
 	rs := deploymentReplicaSet("team-a", "web-abc", "web")
@@ -367,19 +342,12 @@ func TestResolveCachedPodOwner_ConcurrentMissesCollapseToOneGet(t *testing.T) {
 	}
 }
 
-// TestOwnerAnnotations_LeaderPanicFailsOpenForEveryWaiter pins the fix for a
-// review finding about the move of the owner Get behind singleflight. That Get
-// used to run inline on the request goroutine, where httpx.WithRecovery turned
-// any panic into a 500 — i.e. into the webhook's fail-open contract. Behind
-// DoChan it runs on singleflight's own goroutine instead, and singleflight
-// deliberately makes a leader panic UNRECOVERABLE as soon as any caller has
-// joined via DoChan: it re-raises it with a bare `go panic(e)` that has no
-// recover on its stack. A nil map, a nil deref in the owner walk or a client
-// bug would therefore abort the whole process — every in-flight admission dies
-// with it, and under failurePolicy: Fail every Pod CREATE in the cluster blocks
-// until the pod is back. That is the exact opposite of failing open.
+// singleflight re-raises a leader panic with a bare `go panic(e)` once a DoChan
+// caller has joined, with no recover on its stack — so the owner Get running
+// off the request goroutine escapes httpx.WithRecovery and would abort the
+// process, blocking every Pod CREATE under failurePolicy: Fail.
 //
-// Without the fix this test does not fail, it CRASHES the test binary.
+// Without sfPanicSafe this test does not fail, it CRASHES the test binary.
 func TestOwnerAnnotations_LeaderPanicFailsOpenForEveryWaiter(t *testing.T) {
 	const n = 2 // the leader, plus one caller parked on the shared channel
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
@@ -440,10 +408,8 @@ func TestOwnerAnnotations_LeaderPanicFailsOpenForEveryWaiter(t *testing.T) {
 	}
 }
 
-// TestResolveCachedPodOwner_LeaderPanicFailsOpenForEveryWaiter is
-// TestOwnerAnnotations_LeaderPanicFailsOpenForEveryWaiter's counterpart for
-// ownerRefSF: the pod→owner walk's Get runs on the same singleflight
-// goroutine and must contain a panic the same way.
+// The ownerRefSF counterpart: the pod→owner walk's Get runs on the same
+// singleflight goroutine and must contain a panic the same way.
 func TestResolveCachedPodOwner_LeaderPanicFailsOpenForEveryWaiter(t *testing.T) {
 	const n = 2
 	rs := deploymentReplicaSet("team-a", "web-abc", "web")
@@ -503,12 +469,8 @@ func TestResolveCachedPodOwner_LeaderPanicFailsOpenForEveryWaiter(t *testing.T) 
 	}
 }
 
-// TestOwnerAnnotations_WaiterRespectsOwnContextDeadline pins the other half
-// of the singleflight contract: a caller that joins an in-flight resolution
-// as a follower must not block past its OWN context deadline just because
-// the leader's Get is slow. Admission's opt-in budget is per-admission, not
-// per-leader, so a slow leader must not borrow budget from every follower
-// waiting on it.
+// A follower must not block past its OWN context deadline when the leader's Get
+// is slow: the opt-in budget is per-admission, not per-leader.
 func TestOwnerAnnotations_WaiterRespectsOwnContextDeadline(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
 
@@ -527,17 +489,11 @@ func TestOwnerAnnotations_WaiterRespectsOwnContextDeadline(t *testing.T) {
 		}).Build()
 	h := &Handler{Client: c}
 
-	// The leader goroutine must be JOINED before this test returns, not
-	// merely released: a goroutine still inside ownerAnnotations after its
-	// own test has finished runs concurrently with whatever test -shuffle
-	// puts next, and while it is in there it reads Handler.sfJoinHook. Back
-	// when that hook was a package-level var, this straggler read it while
-	// the next test was writing it — a data race, and one that also fired
-	// that test's barrier counter, releasing its barrier a caller early so a
-	// late caller opened a second singleflight round and broke its
-	// "exactly one Get" assertion. Releasing the leader is also done here
-	// rather than only on the happy path, so an early t.Fatal above cannot
-	// strand it forever and trip the package's goleak check.
+	// The leader must be JOINED before this test returns, not merely released:
+	// a straggler inside ownerAnnotations runs concurrently with whatever test
+	// -shuffle puts next and reads Handler.sfJoinHook while it is in there.
+	// Releasing here rather than only on the happy path also keeps an early
+	// t.Fatal from stranding it and tripping the package's goleak check.
 	leaderDone := make(chan struct{})
 	var releaseOnce sync.Once
 	releaseLeader := func() { releaseOnce.Do(func() { close(leaderCanProceed) }) }
@@ -575,16 +531,10 @@ func TestOwnerAnnotations_WaiterRespectsOwnContextDeadline(t *testing.T) {
 	}
 }
 
-// TestOwnerAnnotations_CachesAcrossCallsBehindSameOwner pins the fix for a
-// review finding: on a cluster where the pre-gate can't bound cost (a Policy
-// with no namespace/label selector covers every pod), every unannotated pod
-// CREATE was issuing an uncached owner Get. A rolling restart creates N pods
-// behind the SAME owner, so the fix is a small TTL cache keyed by
-// (namespace, kind, name) of the resolved top-level object — unlike
-// ownerRefCache (see TestResolveCachedPodOwner_KeyIncludesUID above), this
-// key needs no UID: it is keyed by the already-resolved workload identity
-// itself, not by a ReplicaSet/Job ref that a deletion-and-recreate could
-// reuse under a different owner. N calls for one owner must cost one Get.
+// N calls for one owner must cost one Get. Unlike ownerRefCache (see
+// TestResolveCachedPodOwner_KeyIncludesUID), this key needs no UID: it names
+// the already-resolved workload identity, not a ReplicaSet/Job ref that a
+// delete-and-recreate could reuse under a different owner.
 func TestOwnerAnnotations_CachesAcrossCallsBehindSameOwner(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 		Namespace:   "team-a",
@@ -617,10 +567,9 @@ func TestOwnerAnnotations_CachesAcrossCallsBehindSameOwner(t *testing.T) {
 	}
 }
 
-// TestOwnerAnnotations_CachesNegativeResult pins that an unmanaged owner (no
-// annotations, or the owner not existing at all — NotFound) is cached too:
-// unmanaged workloads are the common case, so a Policy with no selector would
-// otherwise re-Get every unmanaged owner on every one of its pods' admissions.
+// An unmanaged owner (no annotations, or NotFound) must be cached too:
+// unmanaged workloads are the common case, so a selector-less Policy would
+// otherwise re-Get every one of them on every admission.
 func TestOwnerAnnotations_CachesNegativeResult(t *testing.T) {
 	var gets int
 	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
@@ -648,10 +597,8 @@ func TestOwnerAnnotations_CachesNegativeResult(t *testing.T) {
 	}
 }
 
-// TestOwnerAnnotations_TTLExpiryRefetches pins the other half of the cache
-// contract: an entry past its TTL must be re-fetched, so a workload that
-// gains an annotation is picked up within the TTL rather than staying stale
-// forever.
+// An entry past its TTL must be re-fetched, so a workload that gains an
+// annotation is picked up rather than staying stale forever.
 func TestOwnerAnnotations_TTLExpiryRefetches(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
 	var gets int
@@ -690,19 +637,11 @@ func TestOwnerAnnotations_TTLExpiryRefetches(t *testing.T) {
 	}
 }
 
-// TestOwnerAnnotations_CacheRetainsOnlyPolicyKeys pins the fix for a review
-// finding: the cache used to store the owner's ENTIRE annotations map, so a
-// kubectl-apply-managed owner — which carries
-// kubectl.kubernetes.io/last-applied-configuration, the whole serialized
-// object, up to Kubernetes' 256KB per-object annotation ceiling — could
-// balloon the cache's real memory footprint far past what its bounded entry
-// count (ownerAnnotationsCacheMaxEntries) suggests. Only
-// sustainv1alpha1.PolicyAnnotation and OptOutAnnotation are ever read back
-// out of a cached entry (policymatch.ResolvePolicy's decidesAt), so those
-// are the only keys the fix (cacheableOwnerAnnotations) may retain. This
-// test seeds an owner with a large unrelated annotation plus an unrelated
-// short one alongside the policy annotation, and would fail if
-// ownerAnnotations ever went back to caching obj.GetAnnotations() directly.
+// Caching the owner's entire annotations map would balloon the footprint far
+// past what ownerAnnotationsCacheMaxEntries suggests — a kubectl-apply-managed
+// owner carries last-applied-configuration, up to Kubernetes' 256KB ceiling.
+// Only PolicyAnnotation and OptOutAnnotation are ever read back out, so those
+// are the only keys cacheableOwnerAnnotations may retain.
 func TestOwnerAnnotations_CacheRetainsOnlyPolicyKeys(t *testing.T) {
 	large := strings.Repeat("x", 8192)
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
@@ -749,17 +688,11 @@ func mapKeys(m map[string]string) []string {
 	return keys
 }
 
-// TestDisableForCoversOwnerAnnotationKinds locks the invariant flagged in
-// review: every kind ownerAnnotations can Get (via workload.ObjectForKind)
-// must appear in NewCached's DisableFor (k8s.OwnerChainDisableFor), or the
-// webhook's first pod CREATE that reaches that kind after a restart stands up
-// a cluster-wide informer over it instead of costing a single apiserver Get —
-// the informer's LIST is charged against optInTimeout, so on a large cluster
-// it can silently time out and fail open, and it leaves the process holding a
-// watch over every object of that kind for reads that happen at most once per
-// pod CREATE. workload.OwnerChainKinds and OwnerChainDisableFor are
-// maintained in two different packages with nothing else forcing them to
-// agree; this test is that force.
+// Every kind ownerAnnotations can Get must appear in k8s.OwnerChainDisableFor,
+// or the first pod CREATE reaching that kind stands up a cluster-wide informer
+// instead of costing one Get — its LIST is charged against optInTimeout, so on
+// a large cluster it silently times out and fails open. The two lists live in
+// different packages with nothing else forcing them to agree.
 func TestDisableForCoversOwnerAnnotationKinds(t *testing.T) {
 	disabled := map[reflect.Type]bool{}
 	for _, obj := range k8sclient.OwnerChainDisableFor() {

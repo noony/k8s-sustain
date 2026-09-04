@@ -1,4 +1,3 @@
-// src/composables/useTimeRange.test.ts
 import { describe, it, expect, beforeEach } from 'vitest'
 import { nextTick } from 'vue'
 import { useTimeRange } from './useTimeRange'

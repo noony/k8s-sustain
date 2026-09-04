@@ -134,17 +134,11 @@ func TestCollectComputeItemsIgnoresOtherPolicies(t *testing.T) {
 	}
 }
 
-// TestJobAndPodIdentitiesBecomeShardCandidates is a collectComputeItems +
-// containersFromObserved smoke check, NOT a pin on the Job/Pod
-// shard-candidacy exclusion: collectComputeItems has no kind filter of its
-// own, and the candidate-building loop this simulates below re-implements
-// only the empty-containers half of Reconcile's real filter, so it cannot
-// observe whether Reconcile's own kind-exclusion branch exists in either
-// direction. It passes identically with or without that branch. The test
-// that actually pins the exclusion's removal is
-// TestReconcileBatchesJobAndPodIdentities in policy_controller_test.go
-// (policy_controller_test.go:253-270 at the time of writing), which drives a
-// real Reconcile() and reads the real candidate count.
+// A collectComputeItems + containersFromObserved smoke check, NOT a pin on the
+// Job/Pod shard-candidacy exclusion: the loop simulated below re-implements only
+// the empty-containers half of Reconcile's filter, so it passes identically with
+// or without the kind-exclusion branch. TestReconcileBatchesJobAndPodIdentities
+// in policy_controller_test.go is what actually pins that.
 func TestJobAndPodIdentitiesBecomeShardCandidates(t *testing.T) {
 	mk := func(kind, name string) *sustainv1alpha1.WorkloadRecommendation {
 		return &sustainv1alpha1.WorkloadRecommendation{
@@ -211,20 +205,14 @@ func TestContainersFromObservedRespectsExcludeInit(t *testing.T) {
 	}
 }
 
-// TestReconcileAppliesToEveryMemberOfAnOwnerNameGroup pins the guarantee
-// documented in docs/guides/standalone-pods-and-grouping.md: "Recycling stays
-// per-real-Deployment — each Deployment's own pods are evicted or resized
-// independently, using the shared computed recommendation."
+// Pins the guarantee in docs/guides/standalone-pods-and-grouping.md: owner-name
+// grouping collapses api-blue and api-green into ONE identity, recommendation
+// and computation, but must not collapse the APPLY phase — a member that is
+// never applied to drifts forever while looking healthy, neither skipped nor
+// failed nor logged.
 //
-// Owner-name grouping collapses api-blue and api-green into ONE identity, one
-// WorkloadRecommendation and one Prometheus computation. It must not collapse
-// the APPLY phase: each Deployment owns its own pods, and a group member that
-// is never applied to drifts forever while looking healthy — it is not
-// skipped, not failed, and not logged.
-//
-// The query-count bound is the other half of the invariant: fanning out over
-// members must reuse the identity's already-batched inputs rather than
-// re-querying Prometheus per member.
+// The query-count bound is the other half: fanning out over members must reuse
+// the identity's already-batched inputs, not re-query per member.
 func TestReconcileAppliesToEveryMemberOfAnOwnerNameGroup(t *testing.T) {
 	const ns = "grouped"
 	ongoing := sustainv1alpha1.UpdateModeOngoing
@@ -320,15 +308,11 @@ func TestReconcileAppliesToEveryMemberOfAnOwnerNameGroup(t *testing.T) {
 	}
 }
 
-// TestDepartedRefreshWithNilInputsFetchesPerWorkload covers the departed half
-// of buildRecommendations' nil-inputs fallback: whenever a departed identity
-// reaches refreshDepartedRecommendation with a nil inputs (whether because
-// Reconcile's candidate loop had no snapshot to batch it with yet, or -- as
-// simulated directly here -- any other reason), it must fall back to
-// buildRecommendations' own per-workload fetch rather than treating nil as
-// "no data". A departed bare pod is the single most common shape on this path,
-// so a nil that silently produced nothing would re-freeze exactly the
-// recommendations this change exists to refresh.
+// A departed identity reaching refreshDepartedRecommendation with nil inputs
+// must fall back to the per-workload fetch rather than treat nil as "no data".
+// A departed bare pod is the most common shape here, so a nil that silently
+// produced nothing would re-freeze exactly the recommendations this refresh
+// exists to update.
 func TestDepartedRefreshWithNilInputsFetchesPerWorkload(t *testing.T) {
 	const ns = "airflow"
 	server := promServerForReconcile(t)
@@ -364,9 +348,6 @@ func TestDepartedRefreshWithNilInputsFetchesPerWorkload(t *testing.T) {
 		Identity: promclient.WorkloadIdentity{Namespace: ns, OwnerKind: "Pod", OwnerName: "dag-task"},
 	}
 	// nil inputs: simulating a nil the batch never covered.
-	// refreshDepartedRecommendation no longer takes a snapshotPending
-	// parameter -- see its call site in computeAndApply for why one would
-	// always be false there anyway.
 	if err := r.refreshDepartedRecommendation(
 		context.Background(), policyForReconcileWorkload(t, "pol"), it, nil, nil); err != nil {
 		t.Fatalf("refreshDepartedRecommendation: %v", err)
@@ -387,19 +368,15 @@ func TestDepartedRefreshWithNilInputsFetchesPerWorkload(t *testing.T) {
 	}
 }
 
-// TestDepartedRefreshNeverWipesGoodRecommendation pins the empty-recs write
-// rule, which is the load-bearing behaviour of WLR-driven refresh: recomputing
-// every identity every cycle means a departed identity WILL eventually produce
-// nothing, because its samples age out of the query window while the retention
-// window still holds the recommendation. Writing anything at all on that path
-// — even just ObservedAt — would either wipe the retained last-known-good or
-// tell the admission webhook that data still exists behind it.
+// Recomputing every identity every cycle means a departed one WILL eventually
+// produce nothing: its samples age out of the query window while the retention
+// window still holds the recommendation. Writing anything on that path — even
+// just ObservedAt — would either wipe the retained last-known-good or tell the
+// webhook that data still exists behind it.
 //
-// The namespace is deliberately not "ns": this path emits the
-// (namespace, ownerKind, outcome) = ("ns", "Pod", retained-empty) series that
-// TestEmitWLRRefreshRecordsOutcome counts from zero, and wlrRefreshTotal is a
-// package-level collector shared across the suite. With -shuffle=on the two
-// tests would otherwise collide depending on execution order.
+// The namespace is deliberately not "ns": that series is counted from zero by
+// TestEmitWLRRefreshRecordsOutcome, and wlrRefreshTotal is a package-level
+// collector the two tests would otherwise collide on under -shuffle=on.
 func TestDepartedRefreshNeverWipesGoodRecommendation(t *testing.T) {
 	const ns = "airflow"
 	q := resource.MustParse("250m")
@@ -459,17 +436,13 @@ func TestDepartedRefreshNeverWipesGoodRecommendation(t *testing.T) {
 }
 
 // discover() Creates the WorkloadRecommendation objects and collectComputeItems
-// immediately Lists them back through the same cache-backed manager client.
-// That is the read-after-write race internal/wlrcache documents and that was
-// already fixed for Get at three sites; the List was missed. Nothing watches
+// immediately Lists them back through the same cache-backed client — the
+// read-after-write race internal/wlrcache documents. Nothing watches
 // WorkloadRecommendation, so an identity the cache has not caught up on gets no
-// recommendation at all until the next --reconcile-interval.
+// recommendation until the next --reconcile-interval.
 //
-// The interceptor below models exactly that lag: the first
-// WorkloadRecommendationList of the process comes back empty even though
-// discovery just created an object. A fake client is read-your-writes and
-// structurally cannot express this on its own, which is why the defect was
-// invisible to the whole suite.
+// The interceptor models that lag. A fake client is read-your-writes and cannot
+// express it on its own, which is why the defect was invisible to the suite.
 func TestReconcile_ComputesIdentityMissingFromLaggingWLRList(t *testing.T) {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
 	const policyName = "lagging"
@@ -521,26 +494,16 @@ func TestReconcile_ComputesIdentityMissingFromLaggingWLRList(t *testing.T) {
 	}
 }
 
-// TestGroupedIdentityStopsWritingStatusAfterTheFirstCycle is the write-path
-// control for owner-name grouping.
-//
 // A group shares ONE WorkloadRecommendation, so exactly one thing may decide
-// what that object holds. Writing it once per TARGET made every member patch
-// the identity's status back to its own view on every cycle: two members whose
-// container specs differ at all produced a permanent per-cycle write storm, and
-// the surviving content — both status.observedResources and, because each
-// member computed its own recommendation, status.containers — was decided by
-// whichever member's goroutine finished last. Those run in parallel, so it was
-// a race, not listing order: half a group's containers could be missing from
-// the stored recommendation depending on scheduling.
+// what it holds. Writing it once per TARGET made every member patch the status
+// back to its own view every cycle, with the surviving content decided by
+// whichever goroutine finished last — a race, so half a group's containers could
+// be missing depending on scheduling.
 //
-// The invariant this pins: a STABLE group writes nothing after the first cycle,
-// and what is stored is the identity's own view (the union of the members'
-// containers) rather than any single member's.
-//
-// A discovery-only test cannot see this — discovery already writes one merged
-// snapshot per identity. Only a full Reconcile, which runs the computation
-// write path too, discriminates.
+// The invariant: a STABLE group writes nothing after the first cycle, and what
+// is stored is the union of the members' containers rather than any one
+// member's. Only a full Reconcile discriminates — discovery alone already writes
+// one merged snapshot per identity.
 func TestGroupedIdentityStopsWritingStatusAfterTheFirstCycle(t *testing.T) {
 	const ns = "flapgroup"
 	ongoing := sustainv1alpha1.UpdateModeOngoing
@@ -667,17 +630,13 @@ func TestRecsForTargetDropsContainersTheMemberDoesNotRun(t *testing.T) {
 	}
 }
 
-// TestComputeIdentity_MarksNoDataForLiveIdentityWithoutSamples: a LIVE
-// identity whose Prometheus queries come back empty must be recorded as
+// A LIVE identity whose Prometheus queries come back empty must be recorded as
 // nodata, exactly as the departed path records it.
 //
-// The failure this guards against is not in the controller but downstream: a
-// zero status.observedAt is what the webhook reads as "no recommendation
-// exists yet" (RecSourceMissing), and it answers that by asking the
-// controller for one — a stub Create/Get per identity per dedup window, for
-// an object discovery had already created. Left unmarked, that is the steady
-// state for any workload whose series never appear, and it keeps the nodata
-// bucket that ErrRecommendationNoData exists to fill permanently empty.
+// The cost of leaving it unmarked is downstream: a zero status.observedAt reads
+// to the webhook as "no recommendation exists yet", which it answers with a stub
+// Create/Get per identity per dedup window for an object discovery had already
+// created — and it keeps the nodata bucket permanently empty.
 func TestComputeIdentity_MarksNoDataForLiveIdentityWithoutSamples(t *testing.T) {
 	const ns = "nodata"
 	ongoing := sustainv1alpha1.UpdateModeOngoing

@@ -196,9 +196,7 @@ func TestPodIsStale_NotStaleWhenMatching(t *testing.T) {
 	}
 }
 
-// TestPodIsStale_RestartableInitContainerDriftCountsAsStale verifies that
-// drift in a sidecar (restartable init) container's resources triggers a
-// pod recycle, since sidecars run for the pod's lifetime.
+// Sidecars run for the pod's lifetime, so drift in one must trigger a recycle.
 func TestPodIsStale_RestartableInitContainerDriftCountsAsStale(t *testing.T) {
 	always := corev1.ContainerRestartPolicyAlways
 	pod := &corev1.Pod{
@@ -223,10 +221,8 @@ func TestPodIsStale_RestartableInitContainerDriftCountsAsStale(t *testing.T) {
 	}
 }
 
-// TestPodIsStale_DetectsChangedLimit verifies that a recommendation that only
-// changes a container's limit (request unchanged) still marks the pod stale.
-// Without this the eviction-mode reconcile would skip the pod and the stale
-// limit would persist indefinitely.
+// A recommendation that changes only a limit must still mark the pod stale, or
+// eviction-mode reconcile skips it and the stale limit persists forever.
 func TestPodIsStale_DetectsChangedLimit(t *testing.T) {
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{
@@ -250,9 +246,6 @@ func TestPodIsStale_DetectsChangedLimit(t *testing.T) {
 	}
 }
 
-// TestPodIsStale_DetectsRemovedLimit verifies that a recommendation asking to
-// remove a limit (RemoveCPULimit) marks the pod stale when the container still
-// has the limit set.
 func TestPodIsStale_DetectsRemovedLimit(t *testing.T) {
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{
@@ -276,10 +269,8 @@ func TestPodIsStale_DetectsRemovedLimit(t *testing.T) {
 	}
 }
 
-// TestPodIsStale_ClassicInitContainerDriftIsIgnored verifies that drift in a
-// classic (non-restartable) init container does NOT trigger a pod recycle —
-// the init container has already exited by the time the pod is Running, and
-// the new requests will land via webhook injection on the next pod creation.
+// Drift in a classic init container must NOT recycle: it has already exited by
+// the time the pod is Running, and the webhook injects on the next creation.
 func TestPodIsStale_ClassicInitContainerDriftIsIgnored(t *testing.T) {
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{
@@ -302,9 +293,8 @@ func TestPodIsStale_ClassicInitContainerDriftIsIgnored(t *testing.T) {
 	}
 }
 
-// TestApplyRecommendationsToSidecars_OnlyMutatesRestartableContainers verifies
-// the sidecar-only path skips classic init containers (which have already exited)
-// while updating restartable ones.
+// The sidecar-only path skips classic init containers, which have already
+// exited, while updating restartable ones.
 func TestApplyRecommendationsToSidecars_OnlyMutatesRestartableContainers(t *testing.T) {
 	always := corev1.ContainerRestartPolicyAlways
 	in := []corev1.Container{
@@ -361,9 +351,8 @@ func runningPod(name string, requests corev1.ResourceList) *corev1.Pod {
 	}
 }
 
-// TestRecyclePods_Eviction_HappyPath verifies that on a non-in-place cluster
-// the patcher iterates running pods and creates an Eviction subresource for
-// stale ones. Pods already at target are left alone.
+// On a non-in-place cluster stale pods are evicted; pods already at target are
+// left alone.
 func TestRecyclePods_Eviction_HappyPath(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	fresh := runningPod("fresh", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")})
@@ -391,11 +380,9 @@ func TestRecyclePods_Eviction_HappyPath(t *testing.T) {
 	}
 }
 
-// TestRecyclePods_SkipsTerminatingAndTerminal verifies that pods being deleted
-// or already in Succeeded/Failed phase are skipped. Pending pods are eligible
-// for eviction so a pod stuck Pending because its request is too large gets
-// recycled — the webhook re-injects the smaller recommendation on the next
-// scheduling attempt.
+// Terminating and terminal pods are skipped, but Pending ones stay eligible: a
+// pod stuck Pending on an oversized request is exactly what the webhook should
+// re-inject a smaller recommendation for.
 func TestRecyclePods_SkipsTerminatingAndTerminal(t *testing.T) {
 	terminating := runningPod("terminating", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	now := metav1.Now()
@@ -435,9 +422,8 @@ func TestRecyclePods_SkipsTerminatingAndTerminal(t *testing.T) {
 	}
 }
 
-// TestEvictPod_PDBBlocked_ReturnsNil verifies that a 429 from the Eviction API
-// (PodDisruptionBudget blocking) is treated as a no-op so the next reconcile
-// can retry. The patcher must not return an error in this case.
+// A 429 from the Eviction API (PDB blocking) is a no-op, not an error, so the
+// next reconcile retries.
 func TestEvictPod_PDBBlocked_ReturnsNil(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
@@ -467,8 +453,6 @@ func TestEvictPod_PDBBlocked_ReturnsNil(t *testing.T) {
 	}
 }
 
-// TestEvictPod_NotFound_ReturnsNil verifies that evicting a pod which no
-// longer exists is treated as a successful no-op.
 func TestEvictPod_NotFound_ReturnsNil(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
@@ -498,8 +482,6 @@ func TestEvictPod_NotFound_ReturnsNil(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_HappyPath verifies the in-place path uses the /resize
-// subresource patch when available and does not fall back to eviction.
 func TestPatchPodInPlace_HappyPath(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
@@ -566,12 +548,10 @@ func withResizeErrorCondition(pod *corev1.Pod) *corev1.Pod {
 	return pod
 }
 
-// TestPatchPodInPlace_InfeasibleConditionFallsBackToEviction verifies that
-// when the kubelet reports the staged resize as infeasible through the
-// PodResizePending condition and the pod spec already carries the target
-// resources (the resize was accepted by the apiserver but cannot land on the
-// node), the patcher evicts the pod even though the spec looks fresh — the
-// spec lies about what is actually allocated.
+// An Infeasible verdict on a spec that already carries the target means the
+// apiserver accepted the resize but it cannot land on the node. The pod is
+// evicted even though the spec looks fresh — the spec lies about what is
+// actually allocated.
 func TestPatchPodInPlace_InfeasibleConditionFallsBackToEviction(t *testing.T) {
 	stale := withResizePendingCondition(
 		runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
@@ -619,11 +599,9 @@ func TestPatchPodInPlace_InfeasibleConditionFallsBackToEviction(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_ErroredResizeFallsBackToEviction verifies that a pod
-// whose accepted resize failed during actuation (PodResizeInProgress
-// condition with reason Error, kubelet ≥ 1.34) is evicted: the kubelet does
-// not retry errored resizes on its own, so without the fallback the pod
-// would run on its old allocation forever while the spec claims the target.
+// The kubelet does not retry an errored resize on its own, so without this
+// eviction the pod runs on its old allocation forever while the spec claims the
+// target.
 func TestPatchPodInPlace_ErroredResizeFallsBackToEviction(t *testing.T) {
 	stale := withResizeErrorCondition(
 		runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
@@ -670,11 +648,8 @@ func TestPatchPodInPlace_ErroredResizeFallsBackToEviction(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_InfeasibleWithNewTargetRetriesResize verifies that an
-// Infeasible verdict for an OLD target does not block a NEW recommendation:
-// when the spec differs from the current recs, the patcher submits the new
-// resize (the kubelet re-evaluates it — e.g. a lower request may now fit)
-// instead of evicting.
+// An Infeasible verdict for an OLD target must not block a NEW recommendation:
+// the kubelet re-evaluates a resubmitted resize, and a lower request may fit.
 func TestPatchPodInPlace_InfeasibleWithNewTargetRetriesResize(t *testing.T) {
 	// Spec carries 400m (the old, infeasible target); the new recommendation
 	// is 200m, which the node may well be able to satisfy.
@@ -722,10 +697,8 @@ func TestPatchPodInPlace_InfeasibleWithNewTargetRetriesResize(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_ResizeNotFoundSkips verifies that a NotFound response
-// from /resize is treated as "pod gone between List and patch": no direct pod
-// patch is attempted (the subresource always exists on supported clusters),
-// no eviction is triggered, and no error surfaces.
+// NotFound from /resize means the pod went away between List and patch: no
+// direct pod patch, no eviction, no error.
 func TestPatchPodInPlace_ResizeNotFoundSkips(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
@@ -776,13 +749,10 @@ func TestPatchPodInPlace_ResizeNotFoundSkips(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_ResizeInvalidFallsBackToEviction verifies per-pod
-// Invalid handling on the /resize subresource: when the subresource exists,
-// the InPlacePodVerticalScaling feature is on by definition, so an Invalid
-// response means THIS resize is invalid for THIS pod (QoS class change,
-// memory-limit decrease with a NotRequired resize policy, ...). The pod is
-// evicted so the webhook re-injects on the replacement, but in-place mode
-// must stay enabled for the other pods: each one gets its own /resize try.
+// If /resize exists, InPlacePodVerticalScaling is on by definition, so Invalid
+// means THIS resize is invalid for THIS pod (QoS class change, memory-limit
+// decrease under a NotRequired policy). The pod is evicted, but in-place mode
+// must stay enabled: every other pod still gets its own /resize try.
 func TestPatchPodInPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
 	stale1 := runningPod("stale1", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	stale2 := runningPod("stale2", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
@@ -839,9 +809,8 @@ func TestPatchPodInPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_SidecarResizeRejected_BestEffort verifies that a
-// sidecar resize failure (older clusters / disabled gate for sidecars) does
-// NOT fail the reconcile. Regular containers must still be patched in place.
+// A sidecar resize failure (older cluster, gate disabled for sidecars) must not
+// fail the reconcile: regular containers are still patched in place.
 func TestPatchPodInPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
 	always := corev1.ContainerRestartPolicyAlways
 	stale := &corev1.Pod{
@@ -935,10 +904,8 @@ func TestPatchPodInPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_DeferredIsNoOp verifies that when the kubelet has
-// deferred the resize (PodResizePending condition, k8s ≥ 1.33) and the pod
-// spec already carries the target resources, the patcher leaves the pod
-// alone — the kubelet will apply it when conditions allow.
+// A deferred resize on a spec already at target is left alone: the kubelet
+// applies it when conditions allow.
 func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
 	// Spec already at the recommended 200m: the resize was accepted but the
 	// kubelet is waiting for room to apply it.
@@ -983,10 +950,8 @@ func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_DeferredWithNewTargetPatches verifies that a Deferred
-// verdict for an OLD target does not block a NEW recommendation: updating the
-// desired resources is always allowed, and the kubelet re-evaluates the
-// deferred resize against the new values.
+// A Deferred verdict for an OLD target must not block a NEW recommendation: the
+// kubelet re-evaluates the deferred resize against the new values.
 func TestPatchPodInPlace_DeferredWithNewTargetPatches(t *testing.T) {
 	stale := withResizePendingCondition(
 		runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("400m")}),
@@ -1032,11 +997,8 @@ func TestPatchPodInPlace_DeferredWithNewTargetPatches(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_AlreadyAtTarget_NoPatch verifies that a pod whose
-// containers already carry the recommended resources triggers no /resize (or
-// direct pod) patch at all: applyRecToContainer compares before setting, so
-// the "pod already at target" short-circuit holds on every reconcile instead
-// of submitting an empty patch each cycle.
+// applyRecToContainer compares before setting, so a pod already at target must
+// submit no patch at all rather than an empty one every cycle.
 func TestPatchPodInPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
 	fresh := runningPod("fresh", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")})
 
@@ -1081,9 +1043,7 @@ func TestPatchPodInPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_PodGoneDuringResize_NoError verifies that a pod deleted
-// between List and patch is skipped as a no-op: both the /resize subresource
-// and the direct-pod-patch fallback return NotFound, which must not surface as
+// A pod deleted between List and patch is a no-op: NotFound must not surface as
 // a reconcile error, trigger an eviction, or disable in-place mode.
 func TestPatchPodInPlace_PodGoneDuringResize_NoError(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
@@ -1130,9 +1090,6 @@ func TestPatchPodInPlace_PodGoneDuringResize_NoError(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_HappyPath verifies that ResizePodsInPlace patches
-// the /resize subresource for each Running, non-terminating pod and never
-// triggers eviction.
 func TestResizePodsInPlace_HappyPath(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
@@ -1178,10 +1135,8 @@ func TestResizePodsInPlace_HappyPath(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_ReturnsAppliedCount verifies the returned count
-// reflects resizes the API server actually accepted: a pod rejected with a
-// per-pod Invalid must not be counted, otherwise the caller reports a
-// ResourcesUpdated event for a resize that never happened.
+// The returned count must reflect resizes the API server accepted, or the
+// caller reports a ResourcesUpdated event for a resize that never happened.
 func TestResizePodsInPlace_ReturnsAppliedCount(t *testing.T) {
 	ok := runningPod("ok", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	rejected := runningPod("rejected", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
@@ -1215,11 +1170,8 @@ func TestResizePodsInPlace_ReturnsAppliedCount(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_ErroredResizeSkipsNoEviction verifies that a Job pod
-// whose accepted resize errored during actuation (PodResizeInProgress
-// condition with reason Error) is left alone — never evicted, never counted
-// as resized. The next scheduled run inherits the new resources via the
-// webhook.
+// A Job pod whose resize errored during actuation is left alone — never
+// evicted, never counted. The next run inherits the resources via the webhook.
 func TestResizePodsInPlace_ErroredResizeSkipsNoEviction(t *testing.T) {
 	pod := withResizeErrorCondition(
 		runningPod("errored", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
@@ -1261,11 +1213,8 @@ func TestResizePodsInPlace_ErroredResizeSkipsNoEviction(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_NoOpWhenInPlaceDisabled verifies that when the
-// patcher was constructed with inPlace=false (older cluster), ResizePodsInPlace
-// silently no-ops instead of falling back to eviction. Job pods must finish
-// on their existing resources; the next run inherits new resources via the
-// webhook.
+// With inPlace=false there is no eviction fallback: Job pods must finish on
+// their existing resources, and the next run inherits new ones via the webhook.
 func TestResizePodsInPlace_NoOpWhenInPlaceDisabled(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
@@ -1305,9 +1254,6 @@ func TestResizePodsInPlace_NoOpWhenInPlaceDisabled(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_SkipsTerminatingAndNonRunning verifies that pods
-// with a deletion timestamp or non-Running phase are skipped without any
-// API call.
 func TestResizePodsInPlace_SkipsTerminatingAndNonRunning(t *testing.T) {
 	deletionTime := metav1.Now()
 	terminating := runningPod("terminating", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
@@ -1347,10 +1293,8 @@ func TestResizePodsInPlace_SkipsTerminatingAndNonRunning(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_InfeasibleSkipsNoEviction verifies that a pod whose
-// pending resize is Infeasible and whose spec already carries the target is
-// left alone — Job pods must not be evicted. The next scheduled run will
-// inherit the new resources via the webhook.
+// Job pods are never evicted, so an Infeasible resize on a spec already at
+// target is left alone; the next run inherits the resources via the webhook.
 func TestResizePodsInPlace_InfeasibleSkipsNoEviction(t *testing.T) {
 	pod := withResizePendingCondition(
 		runningPod("infeasible", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
@@ -1396,9 +1340,8 @@ func TestResizePodsInPlace_InfeasibleSkipsNoEviction(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_InfeasibleWithNewTargetRetries verifies that an
-// Infeasible verdict on an old target does not stop a NEW recommendation from
-// being submitted for a Job pod — the kubelet re-evaluates the new values.
+// An Infeasible verdict on an old target must not stop a NEW recommendation
+// from being submitted — the kubelet re-evaluates the new values.
 func TestResizePodsInPlace_InfeasibleWithNewTargetRetries(t *testing.T) {
 	pod := withResizePendingCondition(
 		runningPod("infeasible", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("400m")}),
@@ -1444,10 +1387,8 @@ func TestResizePodsInPlace_InfeasibleWithNewTargetRetries(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_PerPodInvalidSkipsWithoutDisabling verifies that an
-// Invalid response on the /resize subresource (a per-pod validation failure,
-// e.g. QoS class change) skips the pod without evicting it and WITHOUT
-// disabling in-place mode — other pods must still get their resize.
+// An Invalid response is a per-pod verdict: skip that pod without evicting it,
+// and without disabling in-place mode for the others.
 func TestResizePodsInPlace_PerPodInvalidSkipsWithoutDisabling(t *testing.T) {
 	pod := runningPod("rejected", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
@@ -1493,10 +1434,8 @@ func TestResizePodsInPlace_PerPodInvalidSkipsWithoutDisabling(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_PodGoneSkips verifies the no-evict path when /resize
-// returns NotFound (the pod disappeared between List and patch): the pod is
-// skipped without eviction, not counted as resized, and no direct pod patch
-// is attempted.
+// NotFound from /resize (pod gone between List and patch) skips without
+// eviction, is not counted as resized, and attempts no direct pod patch.
 func TestResizePodsInPlace_PodGoneSkips(t *testing.T) {
 	pod := runningPod("gone", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
@@ -1602,15 +1541,10 @@ func statefulSetEvictionInterceptor(evictedNames *[]string, recs map[string]Cont
 	}
 }
 
-// TestRecyclePods_StatefulSetEvictsByDescendingOrdinal verifies that pods
-// owned by a StatefulSet are evicted in descending ordinal order, AND that
-// the post-eviction wait recognises the replacement when the StatefulSet
-// controller re-uses the evicted pod's name (different UID).
-//
-// This is the regression test for bug 1: the wait used to key on pod name
-// and would never see a same-named replacement, so every StatefulSet pod
-// recycle would only finish via the readyTimeout fallback (and then halt
-// the loop).
+// StatefulSet pods evict in descending ordinal order, and the post-eviction
+// wait must recognise a replacement that reuses the evicted name under a new
+// UID — keyed on name, the wait would never see it and every recycle would
+// finish only via the readyTimeout fallback.
 func TestRecyclePods_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	pods := []*corev1.Pod{
@@ -1639,11 +1573,9 @@ func TestRecyclePods_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
 	p := New(c, false, testEvictionOpts()...)
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 
-	// Cap wall-clock duration with a tight per-call timeout. Each
-	// waitForReplacement call must return promptly because the replacement
-	// is already Ready at observation time. If bug 1 regresses, this test
-	// would have to wait readyTimeout * 3 — but the deadline below would
-	// catch that long before the standard `go test` timeout.
+	// Each waitForReplacement call must return promptly because the replacement
+	// is already Ready at observation time. A regression would take
+	// readyTimeout * 3, which the deadline below catches early.
 	start := time.Now()
 	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
@@ -1664,11 +1596,9 @@ func TestRecyclePods_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
 	}
 }
 
-// TestSortPodsForRecycle_DetectsStatefulSetFromAnyPod verifies that the
-// recycle order is StatefulSet-ordinal as long as ANY pod in the slice
-// carries the StatefulSet ownerRef. Regression for bug 2: the sort used to
-// inspect only pods[0]; if that pod's ownerRef was transiently missing the
-// slice degraded to alphabetical (web-0, web-1, web-10, web-2) — wrong.
+// Ordinal order must hold as long as ANY pod carries the StatefulSet ownerRef:
+// inspecting only pods[0] degrades to alphabetical (web-0, web-1, web-10,
+// web-2) whenever that pod's ownerRef is transiently missing.
 func TestSortPodsForRecycle_DetectsStatefulSetFromAnyPod(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	// pods[0] has NO ownerRef. pods[1..3] carry the StatefulSet ownerRef.
@@ -1693,12 +1623,8 @@ func TestSortPodsForRecycle_DetectsStatefulSetFromAnyPod(t *testing.T) {
 	}
 }
 
-// TestRecyclePods_InPlaceInvalidFallback_WaitsForReplacement is the
-// regression test for bug 3. When /resize returns IsInvalid (per-pod
-// validation failure) and the patcher falls back to eviction inside the
-// in-place path, the outer recycle loop used to skip the post-eviction wait
-// for that pod. After the fix, the very first eviction in an in-place
-// fallback also goes through waitForReplacement.
+// An eviction that happens inside the in-place path's Invalid fallback must
+// still go through the outer loop's post-eviction wait.
 func TestRecyclePods_InPlaceInvalidFallback_WaitsForReplacement(t *testing.T) {
 	stale1 := runningPod("a", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	stale1.UID = types.UID("uid-a")
@@ -1771,10 +1697,8 @@ func TestRecyclePods_InPlaceInvalidFallback_WaitsForReplacement(t *testing.T) {
 	}
 }
 
-// TestRecyclePods_DefaultOrderIsAlphabetical verifies that pods not owned by
-// a StatefulSet are evicted in alphabetical order. The order itself is less
-// important than determinism — operators reading logs and tests asserting
-// behavior both benefit from a stable sequence.
+// Non-StatefulSet pods evict alphabetically. The order matters less than the
+// determinism, for operators reading logs and for tests.
 func TestRecyclePods_DefaultOrderIsAlphabetical(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	pods := []*corev1.Pod{
@@ -1817,12 +1741,9 @@ func TestRecyclePods_DefaultOrderIsAlphabetical(t *testing.T) {
 	}
 }
 
-// TestRecyclePods_CrashLoopBackOffAbortsLoop verifies that the post-eviction
-// wait halts the recycle loop as soon as it sees a CrashLoopBackOff in the
-// selector. Without this guard, a bad recommendation that causes pods to
-// crashloop on the new resources would cascade through every pod in the
-// workload before the next reconcile gets a chance to revise the
-// recommendation.
+// A CrashLoopBackOff in the selector halts the loop: otherwise a bad
+// recommendation cascades through every pod in the workload before the next
+// reconcile can revise it.
 func TestRecyclePods_CrashLoopBackOffAbortsLoop(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	pod1 := runningPod("a", stale)
@@ -1864,12 +1785,9 @@ func TestRecyclePods_CrashLoopBackOffAbortsLoop(t *testing.T) {
 	}
 }
 
-// TestRecyclePods_HPAScaleDownDoesNotStallEvictionLoop verifies that the
-// post-eviction wait does NOT hang when an external controller (e.g. HPA)
-// scales the workload down below the pre-eviction Ready count. The wait
-// looks for a quiescent selector (no Pending peers), not for the original
-// Ready-count baseline — otherwise an HPA scale-down concurrent with our
-// eviction would block the loop until readyTimeout fires.
+// The wait looks for a quiescent selector, not for the pre-eviction Ready-count
+// baseline: an HPA scale-down concurrent with an eviction would otherwise block
+// the loop until readyTimeout.
 func TestRecyclePods_HPAScaleDownDoesNotStallEvictionLoop(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	// Mark the surviving peer as Ready so isProgressing returns false. The
@@ -1909,12 +1827,8 @@ func TestRecyclePods_HPAScaleDownDoesNotStallEvictionLoop(t *testing.T) {
 	}
 }
 
-// TestRecyclePods_TimesOutWhenReplacementMissing verifies that when the
-// workload controller fails to bring a replacement up (here: the interceptor
-// accepts the eviction but never deletes the pod, simulating a stuck
-// workload), the recycle loop aborts rather than continuing to evict into a
-// broken state. Only the first pod should be evicted; subsequent pods are
-// spared until the next reconcile cycle can re-evaluate.
+// When no replacement comes up the loop must abort rather than evict into a
+// broken state: only the first pod goes, the rest wait for the next reconcile.
 func TestRecyclePods_TimesOutWhenReplacementMissing(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	pod1 := runningPod("a", stale)
@@ -1991,14 +1905,10 @@ func replicaSetOwnedBy(name, deployName string, deployUID types.UID) *appsv1.Rep
 	}
 }
 
-// TestRecyclePods_Eviction_SkipsPodsNotOwnedByTarget verifies the ownership
-// filter on the eviction path: only pods whose ownerRef chain resolves to
-// the target Deployment (pod → ReplicaSet → Deployment) are evicted. A bare
-// debug pod carrying the same labels and a pod owned by a different
-// Deployment's ReplicaSet with an overlapping selector are left untouched —
-// the opt-in contract is per-workload. Also verifies the ReplicaSet→owner
-// lookup is memoized per recycle pass (one GET per distinct ReplicaSet, not
-// one per pod).
+// The opt-in contract is per-workload, so a bare debug pod with the same labels
+// and a pod behind another Deployment's ReplicaSet must be left untouched. The
+// ReplicaSet→owner lookup is memoized per pass: one GET per distinct
+// ReplicaSet, not per pod.
 func TestRecyclePods_Eviction_SkipsPodsNotOwnedByTarget(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	owned1 := replicaSetOwnedPod("owned-1", "web-abc", stale)
@@ -2056,11 +1966,8 @@ func TestRecyclePods_Eviction_SkipsPodsNotOwnedByTarget(t *testing.T) {
 	}
 }
 
-// TestRecyclePods_InPlace_SkipsPodsNotOwnedByTarget verifies the ownership
-// filter on the in-place path (shared pod listing with the eviction path):
-// a StatefulSet-owned pod whose controller ownerRef UID matches the target
-// is resized, while a bare pod and a pod owned by a different StatefulSet
-// with the same labels are not.
+// The same ownership filter on the in-place path: only a pod whose controller
+// ownerRef UID matches the target is resized.
 func TestRecyclePods_InPlace_SkipsPodsNotOwnedByTarget(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	owned := statefulSetPod("web-0", stale)
@@ -2162,9 +2069,8 @@ func TestRecyclePods_AppliesIncrease(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_SuppressesSmallDecrease verifies the in-place path
-// honours the downsize tolerance: a sub-threshold decrease must not produce a
-// /resize patch, and the suppression must be reported to the observer.
+// The in-place path honours the downsize tolerance: a sub-threshold decrease
+// produces no /resize patch and is reported to the observer.
 func TestResizePodsInPlace_SuppressesSmallDecrease(t *testing.T) {
 	// Pod at 1000m CPU. Rec 995m (-5m) is below the band max(50m,10m)=50m.
 	pod := runningPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m")})
@@ -2202,10 +2108,9 @@ func TestResizePodsInPlace_SuppressesSmallDecrease(t *testing.T) {
 	}
 }
 
-// TestResizePodsInPlace_MixedRecAppliesCrossingDimensionOnly verifies per-dimension
-// tolerance end-to-end: when CPU crosses the threshold but memory does not, the
-// /resize patch carries the new CPU request and leaves memory at its current
-// value, and only memory is reported suppressed.
+// Tolerance is per-dimension: when CPU crosses the threshold but memory does
+// not, the patch carries the new CPU request only and memory alone is reported
+// suppressed.
 func TestResizePodsInPlace_MixedRecAppliesCrossingDimensionOnly(t *testing.T) {
 	// current CPU 1000m, memory 1Gi (1024Mi).
 	// rec CPU 900m: delta 100m >= band max(50m,10m)=50m -> applied.
@@ -2265,9 +2170,6 @@ func withSafeToEvictAnnotation(pod *corev1.Pod, value string) *corev1.Pod {
 	return pod
 }
 
-// TestRecyclePods_SafeToEvictFalseBlocksEviction verifies that a stale pod
-// annotated safe-to-evict=false is skipped by default and the loop continues
-// to the next stale pod.
 func TestRecyclePods_SafeToEvictFalseBlocksEviction(t *testing.T) {
 	blocked := withSafeToEvictAnnotation(
 		runningPod("blocked", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}), "false")
@@ -2296,9 +2198,6 @@ func TestRecyclePods_SafeToEvictFalseBlocksEviction(t *testing.T) {
 	}
 }
 
-// TestRecyclePods_SafeToEvictIgnoredWhenOptionSet verifies the Policy
-// override: WithIgnoreSafeToEvictAnnotations(true) evicts annotated pods
-// like any other.
 func TestRecyclePods_SafeToEvictIgnoredWhenOptionSet(t *testing.T) {
 	blocked := withSafeToEvictAnnotation(
 		runningPod("blocked", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}), "false")
@@ -2327,9 +2226,7 @@ func TestRecyclePods_SafeToEvictIgnoredWhenOptionSet(t *testing.T) {
 	}
 }
 
-// TestRecyclePods_SafeToEvictNonFalseValueDoesNotBlock pins the convention:
-// only the literal value "false" blocks eviction (matching
-// cluster-autoscaler); "true" or garbage changes nothing.
+// Only the literal value "false" blocks eviction, matching cluster-autoscaler.
 func TestRecyclePods_SafeToEvictNonFalseValueDoesNotBlock(t *testing.T) {
 	safeTrue := withSafeToEvictAnnotation(
 		runningPod("safe-true", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}), "true")
@@ -2359,9 +2256,7 @@ func TestRecyclePods_SafeToEvictNonFalseValueDoesNotBlock(t *testing.T) {
 	}
 }
 
-// TestPatchPodInPlace_InfeasibleFallbackHonorsSafeToEvict verifies the gate
-// covers the in-place path's eviction fallback too: an annotated pod whose
-// staged resize is Infeasible is left alone instead of being evicted.
+// The safe-to-evict gate covers the in-place path's eviction fallback too.
 func TestPatchPodInPlace_InfeasibleFallbackHonorsSafeToEvict(t *testing.T) {
 	blocked := withSafeToEvictAnnotation(
 		withResizePendingCondition(

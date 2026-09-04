@@ -53,12 +53,9 @@ func TestCreateStubWritesEmptyStatusObject(t *testing.T) {
 	if wlr.Labels[sustainv1alpha1.WLRPolicyLabel] != "p1" {
 		t.Fatalf("stub must carry the policy label for reaping: %+v", wlr.Labels)
 	}
-	// Provenance marker: it records that the webhook created this object at
-	// admission rather than the controller during discovery, which "empty
-	// status" cannot say on its own — a controller-created WLR is transiently
-	// empty-status too. Nothing branches on it (see WLRStubLabel), so what
-	// this pins is the write itself, not a behaviour that depends on reading
-	// it back.
+	// Provenance marker: "empty status" cannot say on its own that the webhook
+	// created this object, since a controller-created WLR is transiently
+	// empty-status too. Nothing branches on it, so this pins the write only.
 	if wlr.Labels[sustainv1alpha1.WLRStubLabel] != "true" {
 		t.Fatalf("stub must carry the webhook-provenance marker: %+v", wlr.Labels)
 	}
@@ -245,18 +242,14 @@ func (c *countingCreateClient) count() int {
 	return c.creates
 }
 
-// AlreadyExists makes duplicate stub creates harmless, but it does not make
-// them free. A stub is only visible to this webhook's informer after the create
-// AND watch propagation, so during that window every pod of a scaling workload
-// still reads "missing" and fires its own create: a 500-replica scale-out
-// issues 500 concurrent creates of one object name, 499 rejected. That is
-// apiserver write volume driven by pod churn — the very coupling this component
-// exists to remove, aimed at a different server — and it is worst during an
-// outage, when the stub's status stays empty and every admission keeps
-// classifying as "missing".
+// AlreadyExists makes duplicate creates harmless, not free. A stub is invisible
+// to the informer until watch propagation, so without dedup a 500-replica
+// scale-out issues 500 concurrent creates of one object name — apiserver write
+// volume driven by pod churn, worst during the outage that keeps every
+// admission classifying as "missing".
 //
-// Note the fake client here never lags, so it is a LOWER bound on the real
-// duplicate count; a real informer's propagation delay makes the burst larger.
+// The fake client never lags, so this is a LOWER bound on the real duplicate
+// count; a real informer's propagation delay makes the burst larger.
 func TestRequestRecommendation_DeduplicatesBurstForSameIdentity(t *testing.T) {
 	counter := &countingCreateClient{Client: fake.NewClientBuilder().WithScheme(config.Scheme()).
 		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()}
@@ -373,18 +366,14 @@ func TestCreateStubRecordsObservedResources(t *testing.T) {
 }
 
 func TestCreateStubFillsSnapshotOnAlreadyExistsForPreExistingEmptyStub(t *testing.T) {
-	// Reachable state only: an object that already exists with an empty
-	// status and no Source. Two real causes land here — a stub created by a
-	// webhook binary that predates this behaviour (its Create ran before
-	// this snapshot logic existed), or a stub whose snapshot patch failed
-	// after its Create already succeeded. Either way the dedup TTL guarantees
-	// a later admission's Create returns AlreadyExists, and this is its only
-	// remaining chance to fill the snapshot.
+	// Reachable state only: an object that already exists with an empty status
+	// and no Source — an older webhook binary's stub, or one whose snapshot
+	// patch failed after its Create succeeded. A later admission's Create
+	// returns AlreadyExists, and this is its only remaining chance to fill it.
 	//
-	// A nodata WLR is deliberately NOT modelled here: MarkNoData
-	// (wlrcache.go) is only reached after the computation already found a
-	// non-empty observed-resources snapshot, so that state is unreachable
-	// with an empty snapshot and would not exercise this path honestly.
+	// A nodata WLR is deliberately not modelled: MarkNoData is only reached
+	// after computation found a non-empty snapshot, so that state is
+	// unreachable here.
 	existing := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "ns",
@@ -460,17 +449,10 @@ func TestCreateStubNeverOverwritesPopulatedSnapshot(t *testing.T) {
 	}
 }
 
-// laggingCacheReader models the one property fake.NewClientBuilder does not
-// have: the webhook's client is informer-backed for WorkloadRecommendation
-// (internal/k8s.NewCached caches this kind on purpose; its DisableFor list
-// covers the owner-chain kinds instead — ReplicaSet, Job, Deployment,
-// StatefulSet, DaemonSet, CronJob and Rollout, see k8s.OwnerChainDisableFor),
-// so it is NOT read-your-writes. A Get issued immediately after a Create
-// races the watch event and returns NotFound.
-//
-// It fails the first Get of any key that has been Created and not yet warmed;
-// warm() models the watch event landing so assertions can see what was really
-// persisted.
+// laggingCacheReader models the one property fake.NewClientBuilder lacks: the
+// webhook's client is informer-backed for WorkloadRecommendation and so is NOT
+// read-your-writes — a Get right after a Create races the watch event and
+// returns NotFound. warm() models the watch event landing.
 type laggingCacheReader struct {
 	mu   sync.Mutex
 	cold map[string]struct{}
@@ -512,15 +494,11 @@ func (l *laggingCacheReader) warm() {
 }
 
 // The production failure this pins: createStub re-read the object it had just
-// created, the cache had not seen the watch event yet, and the Get 404'd. The
-// stub was therefore left with an empty status.observedResources —
-// internal/controller's computation phase skips exactly that — so the identity
-// stayed inert until some later admission, at least one dedup TTL and for a
-// daily Airflow pod roughly a day away, hit AlreadyExists and patched off a
-// by-then-warm cache.
-//
-// Every other TestCreateStub* case uses a bare fake client, which is
-// read-your-writes and structurally cannot express this.
+// created, the cache had not seen the watch event, and the Get 404'd — leaving
+// an empty status.observedResources, which computation skips, so the identity
+// stayed inert until some later admission hit AlreadyExists. Every other
+// TestCreateStub* case uses a read-your-writes fake client and cannot express
+// this.
 func TestCreateStubWritesSnapshotWhenTheCacheLagsBehindTheCreate(t *testing.T) {
 	lag := newLaggingCacheReader()
 	c := fake.NewClientBuilder().WithScheme(config.Scheme()).

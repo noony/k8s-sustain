@@ -12,62 +12,35 @@ import (
 )
 
 // targetIndex maps a workload identity to EVERY live target that reports into
-// it. Computation consults it to tell a live identity from a departed one: an
-// identity with no entry has no workload object in the listing, which is
-// exactly the population that used to be uncomputable.
+// it. Computation consults it to tell a live identity (has an entry) from a
+// departed one.
 //
 // The value is a slice, not a single target, because owner-name grouping is
-// many-to-one: Deployments "api-blue" and "api-green" both report as
-// "Deployment/api". They share one identity, one WorkloadRecommendation and
-// one Prometheus computation — but each owns its own pods and must be recycled
-// or resized independently, which is the guarantee documented in
-// docs/guides/standalone-pods-and-grouping.md. Collapsing to a single target
-// here would silently strip every group member but one from the apply phase.
+// many-to-one: "api-blue" and "api-green" both report as "Deployment/api" and
+// share one identity, one WorkloadRecommendation and one Prometheus
+// computation — but each owns its own pods and must be recycled or resized
+// independently (docs/guides/standalone-pods-and-grouping.md).
 type targetIndex map[promclient.WorkloadIdentity][]*workloadTarget
 
 // discover is the first phase of a reconcile: it indexes the listed targets by
-// identity and guarantees a WorkloadRecommendation exists for each.
-//
-// It issues NO Prometheus queries. Keeping discovery free of them is what
-// allows computation to be driven by the WLR list instead of this one — an
-// identity only has to be discovered once, whereas it must be computed on
+// identity and guarantees a WorkloadRecommendation exists for each. It issues
+// NO Prometheus queries, which is what lets computation be driven by the WLR
+// list instead of this index — an identity is discovered once but computed
 // every cycle.
 //
-// Several targets can share one identity when owner-name grouping is in use
-// (Deployments "api-blue" and "api-green" both reporting as "Deployment/api").
-// They collapse to a single WLR — the same thing the Prometheus queries and
-// the cache naming already do — but ALL of them are kept in the index, because
-// the apply phase must still reach each one's pods. The WLR write happens once
-// per IDENTITY, from a snapshot merged across the group (see
-// mergedObservedResources); writing once per target instead had the members
-// overwriting each other's snapshot on every cycle, forever.
+// Targets sharing an identity under owner-name grouping collapse to a single
+// WLR, written once per IDENTITY from a snapshot merged across the group (see
+// mergedObservedResources); all of them stay in the index because the apply
+// phase must still reach each one's pods.
 //
-// Errors are logged and skipped rather than aborting the phase: one identity
-// whose WLR cannot be written must not stop every other workload in the policy
-// from being computed. The count of such failures is returned rather than
-// swallowed, because a persistent cause (missing RBAC on
-// workloadrecommendations, an admission webhook rejecting the create, a
-// namespace quota) would otherwise leave the policy reporting success forever
-// while doing nothing.
-//
-// What a failure costs is bounded by the index this returns. collectComputeItems
-// reconciles the WLR List against it, and computeItem.Observed is built from the
-// index rather than read back off the object, so an identity here is computed
-// and applied this cycle from its members' own container sets whether or not the
-// write landed — the failure costs the CACHE WRITE (the webhook keeps serving
-// the previous value), not the reconcile, and not the snapshot the computation
-// runs against.
-//
-// The follow-up wlrcache.Upsert in computeIdentity does not reliably repair that
-// cache write this same cycle. If the object still does not exist, Upsert's own
-// Create hits the same underlying error this EnsureExists did. If it does exist
-// — this EnsureExists lost a race with another writer — Upsert's Create gets
-// AlreadyExists, and unlike EnsureExists (which re-reads on exactly that race)
-// Upsert's Create has no such branch, so it returns an error that is logged at
-// V(1) and discarded by its caller. Either way the write is only retried for
-// real on the NEXT reconcile's EnsureExists call. A transient cause self-heals
-// next cycle; a persistent one (RBAC, quota, a rejecting admission webhook) is
-// what the returned count exists to surface.
+// Errors are logged and skipped so one unwritable WLR cannot stop the rest of
+// the policy, but the count is returned: a persistent cause (missing RBAC, a
+// rejecting admission webhook, a namespace quota) would otherwise leave the
+// policy reporting success forever while doing nothing. The failure costs only
+// the cache write — collectComputeItems reconciles the WLR List against this
+// index, so the identity is still computed and applied this cycle. The retry
+// lands on the next reconcile's EnsureExists; computeIdentity's follow-up
+// Upsert cannot reliably repair it.
 func (r *PolicyReconciler) discover(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
@@ -86,12 +59,10 @@ func (r *PolicyReconciler) discover(
 		idx[id] = append(idx[id], t)
 	}
 
-	// ONE EnsureExists per identity, not per target. An identity owns exactly
+	// ONE EnsureExists per identity, not per target: an identity owns exactly
 	// one WorkloadRecommendation, so calling it per target made every member of
 	// an owner-name group patch status.observedResources back to its own spec
-	// on every cycle whenever the members differed at all — two permanent
-	// status writes per group per reconcile, and a snapshot whose content was
-	// decided by whichever member the listing happened to return last.
+	// on every cycle.
 	//
 	// Iterated in sorted identity order so a cycle's writes and logs are
 	// reproducible; map iteration order is not.
@@ -135,8 +106,7 @@ func sortedIdentities(idx targetIndex) []promclient.WorkloadIdentity {
 // sortedTargets returns a copy of targets ordered by key(), so every decision
 // taken across an identity's members — which snapshot entry wins, which
 // member's autoscaler shapes the recommendation — depends on the members' own
-// names rather than on the order the API server listed them in or the order
-// their goroutines happened to finish.
+// names rather than the listing or goroutine-completion order.
 func sortedTargets(targets []*workloadTarget) []*workloadTarget {
 	ordered := make([]*workloadTarget, len(targets))
 	copy(ordered, targets)
@@ -147,30 +117,19 @@ func sortedTargets(targets []*workloadTarget) []*workloadTarget {
 // mergedObservedResources builds the ONE observed-resources snapshot an
 // identity carries, from every target that reports into it.
 //
-// Container names are UNIONED across the group. The identity has a single
-// WorkloadRecommendation, and everything downstream reads the container set off
-// it: containersFromObserved sizes the Prometheus shard and reconstructs what
-// gets recommended, and the webhook injects the result into the pods of ANY
-// member. Taking one member's set instead would silently drop every container
-// only its siblings declare — for a group mid-migration, a recommendation
-// covering half the group.
+// Container names are UNIONED across the group: everything downstream reads the
+// container set off the identity's single WorkloadRecommendation, so taking one
+// member's set would silently drop every container only its siblings declare.
 //
 // Where two members declare the SAME container name, the whole entry from the
-// first member in sorted key() order wins, rather than a per-field maximum.
-// The requests and limits in one entry are read as a pair by
-// recommender.ComputeLimit (limit strategies that preserve the current
-// request:limit ratio), so mixing fields across members would synthesize a pair
-// no workload ever actually ran with. First-wins keeps every entry internally
-// consistent and, because the order is the members' own keys rather than the
-// listing order, produces the same snapshot on every cycle regardless of which
-// member's goroutine finishes first or how the API server orders the listing.
+// first member in sorted key() order wins rather than a per-field maximum. One
+// entry's requests and limits are read as a pair by recommender.ComputeLimit,
+// so mixing fields across members would synthesize a pair no workload ever ran
+// with.
 //
-// That determinism is NOT what stops the members from flapping the status
-// back and forth forever — a deterministic merge was measured in place on its
-// own and still produced three status writes per cycle. What stops the flap
-// is that discovery and the computation phase both write the exact same
-// Observed value for the identity (see computeItem.Observed), so the two
-// writers can never disagree with each other.
+// Determinism alone is not what stops the members flapping the status; that is
+// discovery and the computation phase writing the exact same Observed value for
+// the identity (see computeItem.Observed).
 func mergedObservedResources(targets []*workloadTarget) map[string]sustainv1alpha1.ObservedContainerResources {
 	if len(targets) == 0 {
 		return nil

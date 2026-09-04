@@ -1,4 +1,3 @@
-// src/lib/timerange.ts
 export interface Preset {
   window: string
   badge: string
@@ -24,7 +23,6 @@ export const DEFAULT_RANGE: TimeRange = { kind: 'relative', window: '1w' }
 
 const PRESET_WINDOWS = new Set(PRESETS.map((p) => p.window))
 
-// milliseconds per preset window id (also used for step/label math)
 const WINDOW_MS: Record<string, number> = {
   '5m': 5 * 60_000,
   '15m': 15 * 60_000,

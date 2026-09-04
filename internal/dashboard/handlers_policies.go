@@ -145,13 +145,10 @@ func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name
 	})
 }
 
-// policiesByName lists every Policy once and indexes it by name, for callers
-// that need to check policymatch.Matches against a resolved policy name for
-// many workloads without a *Policy already in hand (a single Get per row
-// would scale with workload count instead of Policy count). Returns a
-// non-nil map — possibly empty — on success; a nil return always means the
-// List failed, which callers use to distinguish "no Policies exist" from
-// "could not check".
+// policiesByName lists every Policy once and indexes it by name, so per-row
+// policymatch checks scale with Policy count rather than workload count.
+// A nil return always means the List failed, which callers use to distinguish
+// "no Policies exist" from "could not check".
 func (s *Server) policiesByName(ctx context.Context) (map[string]*sustainv1alpha1.Policy, error) {
 	var list sustainv1alpha1.PolicyList
 	if err := s.K8sClient.List(ctx, &list); err != nil {

@@ -30,52 +30,28 @@ const MinWorkloadAge = 10 * time.Minute
 // ShouldSkipYoungWorkload reports whether a workload is too young to have
 // produced stable rate samples and has no recent OOM to bypass the gate.
 //
-// The effective birth is the earliest known signal among the workload object's
-// creation time and identityFirstSeen, when k8s-sustain first recorded the
-// identity (each zero when unknown). The split matters for ephemeral
-// identities: a standalone Job is re-created on every run, so its object is
-// always seconds old, and a bare pod's identity has no object at all — for
-// both, how long the identity has been KNOWN is what proves the workload is
-// old enough.
+// Birth is the earliest of the workload object's creation time and
+// identityFirstSeen (the WorkloadRecommendation's CreationTimestamp). The
+// split matters for ephemeral identities: a standalone Job's object is always
+// seconds old and a bare pod has no object at all, so how long the identity
+// has been known is the only usable age.
 //
-// Callers pass the WorkloadRecommendation's CreationTimestamp. That measures
-// elapsed time since first discovery, which is the quantity this gate actually
-// compares: time.Since(start) against MinWorkloadAge — "how long has this
-// existed", not "how many samples are there".
+// Wall-clock age is a PROXY for sample stability, and the two come apart for
+// duty-cycled workloads: a bare pod running ~35s every 2 minutes clears the
+// 10-minute gate on ~3 minutes of runtime and lands on the hard floor anyway
+// (measurements in hack/scenarios/recurring.yaml). Left as is deliberately —
+// the alternative signal is a per-identity Prometheus subquery that cannot be
+// sharded, which is exactly what was removed to cut query load. The mitigation
+// is the configured window; see docs/guides/standalone-pods-and-grouping.md.
 //
-// Elapsed time is a PROXY for sample stability, and the two come apart for a
-// duty-cycled workload. Observed on a kind cluster: a bare pod running ~35s
-// every 2 minutes cleared the 10-minute gate on roughly three minutes of
-// cumulative runtime, of which the CPU rate rule's first samples per run are
-// the unstable ones — and the resulting recommendation sat at the hard floor,
-// exactly the outcome the gate exists to prevent. The gate is a floor on
-// WALL-CLOCK age, so a workload that is only alive for a fraction of that wall
-// clock can pass it with proportionally less data. The behaviour is deliberately
-// left as is (see hack/scenarios/recurring.yaml for the measurements): the
-// alternative signal, sample count or coverage, is a per-identity Prometheus
-// subquery that cannot be sharded, which is precisely what was removed to get
-// the query load down. The mitigation is the configured window, not the gate —
-// see the caveat in docs/guides/standalone-pods-and-grouping.md.
+// Usually the two ages diverge with the WLR younger (fresh install, new
+// Policy, WLR recreated), which errs toward waiting a cycle — the safe
+// direction. The narrow hole runs the other way: losing Prometheus data resets
+// first observation while the WLR keeps its old age, so the gate can pass an
+// identity whose samples are minutes old.
 //
-// Usually the two diverge because an identity predates its WLR — fresh
-// install, new Policy, WLR recreated after retention lapsed. In all of those
-// the WLR is YOUNGER, so the gate errs toward waiting one more cycle, which is
-// the safe direction; the unsafe one is recommending from unstable near-zero
-// samples, which is what this gate exists to prevent.
-//
-// One divergence runs the other way, and it is a real (if narrow) hole: losing
-// the Prometheus data itself — retention loss, a reinstall — resets first
-// observation to now while the WLR keeps its old age. The gate then passes an
-// identity whose samples are minutes old. It is narrow because total absence
-// of data produces no recommendation at all, so only the partial-refill window
-// is exposed, and because long-lived kinds were never protected here anyway
-// (their object age is unaffected by anything happening in Prometheus). The
-// old query-based signal did cover this case for Job and Pod identities; that
-// is what was traded away for making the gate independent of Prometheus.
-//
-// When neither signal exists the gate is disabled: with no object age and no
-// known identity there is nothing to recommend from anyway, so skipping would
-// only mask the no-data outcome.
+// With neither signal the gate is disabled: there is nothing to recommend
+// from anyway, so skipping would only mask the no-data outcome.
 func ShouldSkipYoungWorkload(workloadCreated, identityFirstSeen time.Time, recentOOM bool) bool {
 	if recentOOM {
 		return false
@@ -103,13 +79,9 @@ type WorkloadInputs struct {
 	OOM promclient.OOMSignal
 }
 
-// HasRecentOOM reports whether the workload has any recent OOM activity in
-// the Prometheus signal, in ANY container. Callers may OR this with their own
-// in-process OOM observations (e.g. the controller's live OOM watcher) before
-// deciding whether to bypass the workload-age gate — a workload that OOMed
-// anywhere is not "too young to have data". Per-container OOM recency (which
-// drives the memory floor) is derived from OOM.OOMCounts in BuildContainerRecs
-// instead.
+// HasRecentOOM reports recent OOM activity in any container, for deciding
+// whether to bypass the workload-age gate. Per-container recency, which drives
+// the memory floor, comes from OOM.OOMCounts in BuildContainerRecs instead.
 func (w *WorkloadInputs) HasRecentOOM() bool {
 	return w.OOM.TotalOOMs() > 0
 }
@@ -124,13 +96,11 @@ func AgeForLog(start time.Time) string {
 	return time.Since(start).String()
 }
 
-// FetchWorkloadInputs runs the Prometheus queries shared by the controller
-// and webhook recommendation paths. All three queries run in parallel so the
-// total wall time is bounded by the slowest single query rather than the sum
-// — important on the webhook hot path. The OOM-signal failure is non-fatal: it
-// logs at V(1) and degrades to an empty value so the workload still produces a
-// recommendation. The CPU and memory per-pod percentiles are fatal — they're
-// the recommendation's primary inputs.
+// FetchWorkloadInputs runs the Prometheus queries shared by the controller and
+// webhook paths, in parallel so wall time is bounded by the slowest query
+// rather than the sum — important on the webhook hot path. An OOM-signal
+// failure degrades to an empty value; the CPU and memory percentiles are fatal
+// because they are the recommendation's primary inputs.
 func FetchWorkloadInputs(
 	ctx context.Context,
 	pc *promclient.Client,
@@ -239,19 +209,13 @@ type BuildContainerRecsOptions struct {
 }
 
 // BuildContainerRecs runs the per-container recommendation loop shared by the
-// controller and the webhook. For each container it slices the per-pod inputs,
-// builds the OOM signal (NewOOMSignal, optionally enriched via
-// opts.EnrichOOM), computes the recommendation (ComputeContainerRec), and
-// collects the results with HasData. Each container's OOM recency is derived
-// from inputs.OOM.OOMCounts — only containers that actually OOMed get the
-// memory floor, never innocent siblings. Callers fold their own per-container
-// OOM observations in via opts.EnrichOOM (the controller stamps LiveEventAt
-// for containers with a live OOM record, which is treated as recent).
+// controller and the webhook. OOM recency is per container, from
+// inputs.OOM.OOMCounts, so only containers that actually OOMed get the memory
+// floor — never innocent siblings. Callers fold in their own observations via
+// opts.EnrichOOM.
 //
-// This is the single source of truth for skip/threshold semantics on both
-// injection paths — the workload-age gate (ShouldSkipYoungWorkload) is applied
-// by the caller, but the per-container HasData handling lives here so the two
-// paths cannot drift.
+// The workload-age gate is applied by the caller, but the per-container
+// HasData handling lives here so the two injection paths cannot drift.
 func BuildContainerRecs(
 	containers []corev1.Container,
 	inputs *WorkloadInputs,

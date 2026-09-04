@@ -7,79 +7,40 @@ import (
 )
 
 // ownerAnnotationsCacheTTL bounds how long a cached owner-annotations lookup
-// (see Handler.ownerAnnotations) is trusted before it is re-fetched.
+// (see Handler.ownerAnnotations) is trusted. 30s is sized against the
+// read-amplification this cache exists to fix — a rolling restart creates N
+// pods behind the same owner in a burst — and is deliberately far shorter than
+// CacheStaleness: this is load-shedding for a hot read, not a source of truth.
 //
-// 30s is chosen against the read-amplification pattern this cache exists to
-// fix: a rolling restart creates N pods behind the SAME owner in a burst, so
-// even a short TTL collapses that burst from ~N Gets to ~1-2. It is
-// deliberately much shorter than CacheStaleness (WorkloadRecommendation
-// freshness) or RecommendationRetention — this cache is a load-shedding
-// measure for a hot read, not a source of truth.
-//
-// Staleness window, stated honestly: a workload whose OWN metadata.annotations
-// gains (or loses) the policy annotation may take up to this TTL to be seen
-// by admission, because admission is reading a cached copy of that object's
-// annotations rather than the live one. This is acceptable because the
-// controller reconciles independently of admission and will pick up the
-// change on its own schedule regardless of what the webhook does; a pod
-// admitted with template resources during the staleness window is resized
-// (in place, or via eviction) once the controller catches up, and the webhook
-// injects correctly for every pod created after the TTL elapses.
+// The cost is that a workload gaining or losing the policy annotation may take
+// up to this TTL to be seen by admission. Acceptable because the controller
+// reconciles independently and resizes such a pod once it catches up.
 const ownerAnnotationsCacheTTL = 30 * time.Second
 
-// ownerAnnotationsCacheMaxEntries bounds the cache's memory footprint
-// independent of TTL, so a cluster with many distinct owners (or a slow
-// leak of never-reused keys) cannot grow this without bound between
-// expiries. Entries are small NOT because a shallow copy of the owner's
-// annotations map is small — an owner's full metadata.annotations can be
-// arbitrarily large (a kubectl-apply-managed object carries
-// kubectl.kubernetes.io/last-applied-configuration, the whole serialized
-// object, routinely a few KB and up to Kubernetes' 256KB per-object
-// annotation ceiling) — but because the populate site (optin.go's
-// ownerAnnotations, via cacheableOwnerAnnotations) copies out only the two
-// keys ResolvePolicy ever reads, sustainv1alpha1.PolicyAnnotation and
-// OptOutAnnotation, before a value ever reaches set. A cached entry never
-// holds more than those two short strings, so this ceiling is genuinely
-// bounded rather than merely generous.
+// ownerAnnotationsCacheMaxEntries bounds the cache's footprint independent of
+// TTL, so many distinct owners cannot grow it without bound between expiries.
+// Entries stay small only because cacheableOwnerAnnotations copies out just the
+// two keys ResolvePolicy reads — an owner's raw annotations can carry
+// last-applied-configuration, up to Kubernetes' 256KB per-object ceiling.
 const ownerAnnotationsCacheMaxEntries = 4096
 
 // ownerRefCacheTTL and ownerRefCacheMaxEntries govern Handler.ownerRefCache
-// (see resolveCachedPodOwner in optin.go), the cache over the pod→owner
-// ownerRef walk (workload.ResolveControllerOwner). Same values and the same
-// reasoning as ownerAnnotationsCacheTTL/MaxEntries: a rolling restart is the
-// read-amplification pattern both caches exist to bound, and there is no
-// reason for the two to drift apart. Named separately (rather than reusing
-// the ownerAnnotations* constants directly) so either can be retuned on its
-// own later without implying the other must move too.
+// (resolveCachedPodOwner in optin.go). Same values and reasoning as the
+// ownerAnnotations pair — a rolling restart is the pattern both bound — but
+// named separately so either can be retuned on its own.
 const (
 	ownerRefCacheTTL        = ownerAnnotationsCacheTTL
 	ownerRefCacheMaxEntries = ownerAnnotationsCacheMaxEntries
 )
 
-// ttlLRUCache is a small thread-safe LRU-with-TTL, generic over the cached
-// value shape. It backs two independent caches in this package —
-// Handler.ownerAnnCache (map[string]string) and Handler.ownerRefCache
-// (resolvedOwnerRef) — that would otherwise be near-identical copies of the
-// same container/list + map + one mutex, lazy-expiry-on-read pattern.
+// ttlLRUCache is a small thread-safe LRU-with-TTL backing both owner caches in
+// this package. It does not reuse internal/dashboard.Cache: importing the
+// dashboard from the admission hot path would be a backwards dependency.
 //
-// It is not sigs.k8s.io or internal/dashboard.Cache verbatim: importing
-// internal/dashboard from internal/webhook would be a backwards dependency
-// (the dashboard is a read-only consumer, not something the admission hot
-// path should depend on).
-//
-// Safe for concurrent use: admission handlers run concurrently, and every
-// method takes the mutex. Bounded: the maxEntries passed to set on first use
-// per instance evicts the least-recently-used entry on overflow — see get/set
-// below; each instance is parameterised by its own TTL/max-entries constants
-// at the call site rather than storing them on the struct, keeping the zero
-// value simple. No goroutines: eviction of expired entries is lazy (on the
-// next Get/Set that touches that slot, or via LRU pressure), never a
-// background sweeper — nothing here needs a Stop or a context, and the
-// package's goroutine-leak test has nothing to catch.
-//
-// The zero value is usable (get/set lazily initialise the map/list), because
-// Handler — which embeds these by value — is built as a plain struct literal
-// throughout the test suite and must keep working that way.
+// TTL and max-entries are passed per call rather than stored, so the zero value
+// is usable — Handler embeds these by value and is built as a plain struct
+// literal throughout the tests. Expiry is lazy, never a background sweeper, so
+// there is nothing to Stop and nothing for the goroutine-leak test to catch.
 type ttlLRUCache[V any] struct {
 	mu    sync.Mutex
 	ll    *list.List
@@ -95,12 +56,8 @@ type ttlLRUCacheEntry[V any] struct {
 }
 
 // get returns the cached value for key if present and not expired. A stored
-// zero value (e.g. nil map, or a struct zero value used as a legitimate
-// negative result by the caller) is still a hit — ok is still true.
-//
-// The returned value is the same instance held by the cache entry, shared
-// across every concurrent admission that hits this key — callers must treat
-// it as read-only and never mutate it in place.
+// zero value is still a hit. The returned value is the instance the entry
+// holds, shared across concurrent admissions — callers must not mutate it.
 func (c *ttlLRUCache[V]) get(key string) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -118,10 +75,8 @@ func (c *ttlLRUCache[V]) get(key string) (V, bool) {
 }
 
 // set stores value at key with the given ttl, evicting the least-recently-used
-// entry if the cache is at or over maxEntries. value may be a nil map (or any
-// other zero value) to cache a negative result. set does not copy value: the
-// caller owns whatever it passes in and must not mutate or alias it elsewhere
-// afterwards.
+// entry when the cache is over maxEntries. A zero value caches a negative
+// result. value is not copied — the caller must not mutate or alias it after.
 func (c *ttlLRUCache[V]) set(key string, value V, ttl time.Duration, maxEntries int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -155,20 +110,13 @@ func (c *ttlLRUCache[V]) nowFn() time.Time {
 	return time.Now()
 }
 
-// ownerAnnotationsCache is Handler.ownerAnnCache's concrete type: see
-// ownerAnnotations in optin.go for the populate site and
-// cacheableOwnerAnnotations for why a cached value is always a small,
-// private-to-the-cache map holding at most the two keys ResolvePolicy reads.
+// ownerAnnotationsCache is Handler.ownerAnnCache's concrete type; see
+// cacheableOwnerAnnotations for why a cached value is always small.
 type ownerAnnotationsCache = ttlLRUCache[map[string]string]
 
-// resolvedOwnerRef is the value type cached by Handler.ownerRefCache: the
-// (kind, name) pair workload.ResolveControllerOwner resolved for one
-// controller ownerRef. A zero value ({"", ""}) is itself a legitimate
-// negative result — the "no controller owner" case ResolveControllerOwner
-// itself never actually returns (it always has a ref to work from, by
-// construction of the caller), and orphan pods (no controller ownerRef at
-// all) never reach the cache in the first place — see
-// resolveCachedPodOwner's short-circuit in optin.go.
+// resolvedOwnerRef is the (kind, name) pair workload.ResolveControllerOwner
+// resolved for one controller ownerRef, as cached by Handler.ownerRefCache.
+// Orphan pods never reach the cache — see resolveCachedPodOwner.
 type resolvedOwnerRef struct {
 	Kind, Name string
 }

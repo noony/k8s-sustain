@@ -54,7 +54,6 @@ func TestBreaker_HalfOpenAfterCooldown(t *testing.T) {
 		t.Fatal("expected breaker open immediately after trip")
 	}
 
-	// Advance past cooldown.
 	now = now.Add(60 * time.Millisecond)
 	if !allowOK(b) {
 		t.Fatal("expected half-open probe allowed after cooldown")
@@ -112,9 +111,8 @@ func TestBreaker_ConcurrentFailuresOpenOnce(t *testing.T) {
 	if allowOK(b) {
 		t.Fatal("breaker should be open after concurrent failures")
 	}
-	// Sanity: the counter shouldn't have gone berserk and tripped multiple
-	// times — failures field is unbounded by design, but openUntil should be
-	// in the future and within (now, now+cooldown].
+	// failures is unbounded by design, but openUntil must stay within
+	// (now, now+cooldown].
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.openUntil.IsZero() {
@@ -182,7 +180,6 @@ func TestClient_CircuitOpensOnRepeatedFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// Tighten breaker for the test.
 	c.breaker = newBreaker(3, time.Hour)
 
 	ctx := context.Background()
@@ -196,7 +193,6 @@ func TestClient_CircuitOpensOnRepeatedFailures(t *testing.T) {
 		}
 	}
 
-	// 4th call should short-circuit.
 	_, err = c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "foo", 0.95, "1h")
 	if !errors.Is(err, ErrCircuitOpen) {
 		t.Fatalf("expected ErrCircuitOpen after threshold, got %v", err)

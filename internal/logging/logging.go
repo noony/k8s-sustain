@@ -8,10 +8,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-// Setup configures a production zap logger (JSON, sampling, caller info,
-// stacktraces on error) at the given level, sets it as the controller-runtime
-// global logger, and returns a named child logger.
-// Safe to call once per process.
+// Setup installs a production zap logger at the given level as the
+// controller-runtime global logger and returns a named child. Call once.
 func Setup(level, name string) logr.Logger {
 	cfg := zap.NewProductionConfig()
 
@@ -23,7 +21,6 @@ func Setup(level, name string) logr.Logger {
 
 	zapLogger, err := cfg.Build()
 	if err != nil {
-		// Fallback to nop — should never happen with a valid production config.
 		return logr.Discard()
 	}
 

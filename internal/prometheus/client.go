@@ -14,9 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// logWarnings emits Prometheus query Warnings at log level 0 so callers can
-// notice partial results, hit cardinality limits, or remote-read failures
-// instead of silently computing recommendations from incomplete data.
+// logWarnings logs Prometheus query warnings so partial results are visible.
 func logWarnings(ctx context.Context, expr string, warnings prometheusv1.Warnings) {
 	if len(warnings) == 0 {
 		return
@@ -24,55 +22,31 @@ func logWarnings(ctx context.Context, expr string, warnings prometheusv1.Warning
 	log.FromContext(ctx).Info("prometheus query returned warnings", "expr", expr, "warnings", warnings)
 }
 
-// ContainerValues maps container name → metric value (cores for CPU, bytes for memory).
+// ContainerValues maps container name to metric value (cores or bytes).
 type ContainerValues map[string]float64
 
-// workloadSelector builds the shared `{namespace=...,owner_kind=...,owner_name=...}`
-// PromQL label-selector fragment used to scope queries to a single workload.
-// The output is byte-identical to the inline `%q`-quoted selectors it replaces.
 func workloadSelector(namespace, ownerKind, ownerName string) string {
 	return fmt.Sprintf("{namespace=%q,owner_kind=%q,owner_name=%q}", namespace, ownerKind, ownerName)
 }
 
-// quantileOverTimeExpr builds `quantile_over_time(<q>, <rule>{selector}[<window>])`,
-// the percentile used by the recommendation queries.
-//
-// This reads the rule as a plain RANGE VECTOR, not as a `[window:1m]` subquery.
-// The rules it targets (k8s_sustain:workload_max_pod_cpu:cores and friends) are
-// themselves materialised at `interval: 1m`, so a 1m-step subquery would
-// re-evaluate, point by point, a series that already has exactly that
-// resolution — paying window/1m nested evaluations for no additional fidelity.
-//
-// The two are equivalent but not bit-identical: a subquery carries the last
-// sample forward across gaps up to the 5m staleness lookback, whereas a range
-// vector reports the gap. Over a multi-thousand-sample window the effect on a
-// percentile is noise, and this is validated against real data in the kind
-// scenario harness before release.
+// quantileOverTimeExpr reads the rule as a plain range vector, not a
+// `[window:1m]` subquery: the rules are already materialised at 1m, so a
+// subquery adds cost, not fidelity.
 func quantileOverTimeExpr(quantile float64, rule, selector, window string) string {
 	return fmt.Sprintf("quantile_over_time(%.2f, %s%s[%s])", quantile, rule, selector, window)
 }
 
-// avgByContainer wraps an inner expression in `avg by (container) (...)`.
 func avgByContainer(inner string) string {
 	return fmt.Sprintf("avg by (container) (%s)", inner)
 }
 
-// maxByContainer wraps an inner expression in `max by (container) (...)`.
 func maxByContainer(inner string) string {
 	return fmt.Sprintf("max by (container) (%s)", inner)
 }
 
-// recordQueryFailure attributes a single failed query to the circuit breaker
-// using the same rules as QueryWorkloadOOMSignal. ctx must be the per-call
-// WithTimeout child the query ran under:
-//   - Genuine query error (ctx still live): a real Prometheus failure, counted.
-//   - Per-call timeout or parent cancellation (context.Cause is a context
-//     sentinel): counted, parity with QueryWorkloadOOMSignal's documented rules.
-//   - Collateral abort from an errgroup sibling failing (these queries run
-//     inside errgroups in recommender/build.go): counted ZERO times. The
-//     sibling's error propagates through the WithTimeout child as a NON-context
-//     cause, so the outage is attributed to the sibling — which already counted
-//     its own failure — not to Prometheus.
+// recordQueryFailure counts a failed query against the breaker. ctx must be
+// the per-call WithTimeout child. A collateral abort from an errgroup sibling
+// (a non-context cause) is not counted; the sibling already counted its own.
 func (c *Client) recordQueryFailure(ctx context.Context) {
 	if ctx.Err() == nil {
 		c.breaker.failure()
@@ -83,20 +57,9 @@ func (c *Client) recordQueryFailure(ctx context.Context) {
 	}
 }
 
-// execInstant runs an instant query through the circuit breaker: it gates on
-// breaker.allow(), applies the given per-call timeout, records failure/success
-// (failures attributed via recordQueryFailure), and logs warnings — exactly the
-// preamble the query methods used to inline. On an open breaker it returns
-// ErrCircuitOpen with a nil value; on a query error it returns the raw API
-// error (callers wrap it with their own prefix).
-//
-// The in-flight semaphore is acquired BEFORE the per-call context.WithTimeout
-// is created, not after. If it were acquired after, time spent queueing for a
-// semaphore slot would be charged against the query's own timeout budget —
-// under load that turns the throttle into a failure amplifier, timing out
-// queries that never actually got a chance to run against Prometheus. The
-// queue wait is bounded independently inside acquire, so keeping it out of this
-// budget does not make it unbounded.
+// execInstant runs an instant query through the breaker, in-flight semaphore
+// and per-call timeout. The semaphore is acquired before the timeout starts so
+// queue time is never charged against the query budget.
 func (c *Client) execInstant(ctx context.Context, expr string, ts time.Time, timeout time.Duration) (model.Value, error) {
 	allowed, probe := c.breaker.allow()
 	if !allowed {
@@ -119,22 +82,9 @@ func (c *Client) execInstant(ctx context.Context, expr string, ts time.Time, tim
 	return v, nil
 }
 
-// runRange runs a range query through the circuit breaker without the
-// breaker.allow() gate, for callers that must parse durations or share a single
-// allow() gate before querying. It applies the per-call timeout, records
-// failure/success (failures attributed via recordQueryFailure), and logs
-// warnings — the same preamble execInstant inlines.
-//
-// holdsProbe is the second return value of the caller's own breaker.allow()
-// call: it says whether this query IS the half-open probe. It has to be
-// threaded down rather than re-derived, because acquire's re-check would
-// otherwise reject the probe holder using the deadline allow() set for it —
-// see breaker.allow.
-//
-// As in execInstant, the in-flight semaphore is acquired BEFORE
-// context.WithTimeout so time spent queueing for a slot is never charged
-// against the query's own timeout budget — see execInstant's comment for why
-// getting this ordering backwards turns the throttle into a failure amplifier.
+// runRange is execInstant's range-query counterpart, minus the breaker.allow()
+// gate, which callers run themselves. holdsProbe is allow()'s second return
+// value; acquire needs it so it does not reject the half-open probe holder.
 func (c *Client) runRange(ctx context.Context, expr string, r prometheusv1.Range, timeout time.Duration, holdsProbe bool) (model.Value, error) {
 	release, err := c.acquire(ctx, holdsProbe)
 	if err != nil {
@@ -153,8 +103,6 @@ func (c *Client) runRange(ctx context.Context, expr string, r prometheusv1.Range
 	return v, nil
 }
 
-// vectorToContainerValues unpacks an instant-query vector into per-container
-// values, dropping samples whose `container` label is empty.
 func vectorToContainerValues(vec model.Vector) ContainerValues {
 	values := make(ContainerValues, len(vec))
 	for _, sample := range vec {
@@ -174,22 +122,13 @@ type Client struct {
 	queueTimeout time.Duration
 	// sem bounds concurrent in-flight queries. nil disables the bound.
 	sem chan struct{}
-	// transport holds the auth/TLS settings from WithTransportConfig, and
-	// transportSet records that the option was used at all — an explicitly
-	// passed zero TransportConfig must still conflict with WithRoundTripper.
+	// transportSet records that WithTransportConfig was used, even with a zero
+	// config, so it still conflicts with WithRoundTripper.
 	transport    TransportConfig
 	transportSet bool
-	// roundTripper is the explicit transport from WithRoundTripper, if any.
 	roundTripper http.RoundTripper
 }
 
-// Default circuit-breaker tuning: trip after 5 consecutive failures,
-// stay open for 30 seconds. Sized so a sustained Prometheus outage opens the
-// breaker within a couple of reconcile passes without over-counting a single
-// outage: every query path attributes at most one breaker failure per genuine
-// error or per-call timeout, and collateral errgroup-sibling cancellations
-// count zero (see recordQueryFailure and QueryWorkloadOOMSignal), so a few
-// stuck reconciles (each ≈ one queryTimeout long) reach the threshold.
 const (
 	defaultBreakerMaxFailures = 5
 	defaultBreakerCooldown    = 30 * time.Second
@@ -198,11 +137,7 @@ const (
 // Option configures a Client at construction time.
 type Option func(*Client)
 
-// WithQueryTimeout overrides the default per-query timeout. Callers with a
-// tight upstream budget (e.g. the admission webhook, which must respond within
-// the apiserver's webhook timeout) should set this to a value that fits within
-// that budget; the controller uses the default which is sized for background
-// reconciles.
+// WithQueryTimeout overrides the default per-query timeout.
 func WithQueryTimeout(d time.Duration) Option {
 	return func(c *Client) {
 		if d > 0 {
@@ -211,17 +146,9 @@ func WithQueryTimeout(d time.Duration) Option {
 	}
 }
 
-// WithMaxInflight bounds the number of queries this client will have in flight
-// at once. Prometheus's own --query.max-concurrency defaults to 20 and is
-// shared with every other consumer of that server (dashboards, alerting), so
-// k8s-sustain deliberately stays well under it rather than saturating the gate.
-// n <= 0 leaves the client unbounded.
-//
-// The default (8, see --prometheus-max-inflight) is sized for the current
-// one-query-per-workload pattern, where a reconcile burst can put hundreds of
-// small queries in flight. Batched shard queries change that profile — far
-// fewer queries, each individually heavier and slower — so this value is worth
-// re-deriving rather than assuming once batching ships.
+// WithMaxInflight bounds concurrent in-flight queries; n <= 0 leaves the client
+// unbounded. Prometheus's --query.max-concurrency defaults to 20 and is shared
+// with every other consumer, so the default 8 stays well under it.
 func WithMaxInflight(n int) Option {
 	return func(c *Client) {
 		if n > 0 {
@@ -230,9 +157,7 @@ func WithMaxInflight(n int) Option {
 	}
 }
 
-// WithQueueTimeout overrides how long a query may wait for an in-flight slot
-// before being abandoned. See defaultQueueTimeout for why this is bounded
-// separately from the query timeout.
+// WithQueueTimeout overrides how long a query may wait for an in-flight slot.
 func WithQueueTimeout(d time.Duration) Option {
 	return func(c *Client) {
 		if d > 0 {
@@ -242,42 +167,19 @@ func WithQueueTimeout(d time.Duration) Option {
 }
 
 // ErrInflightQueueAborted reports that a query never reached Prometheus because
-// its context ended while it was queued behind the in-flight semaphore.
-//
-// This is deliberately distinguishable from a context error raised by a query
-// that genuinely ran: the two are operationally opposite. The first means
-// k8s-sustain throttled itself and Prometheus may be perfectly healthy; the
-// second is evidence about Prometheus. Without a sentinel an operator reading
-// logs cannot tell "we are backpressured by our own cap" from "Prometheus is
-// slow", and would reach for the wrong remedy. Note that this path also
-// bypasses breaker accounting by construction — a self-imposed wait must never
-// trip the circuit breaker.
+// its context ended while queued behind the in-flight semaphore. It is kept
+// distinct from a real query error and never counts against the breaker.
 var ErrInflightQueueAborted = errors.New("prometheus: aborted while queued for an in-flight slot")
 
-// acquire takes a slot from the in-flight semaphore, returning the release
-// func. Honours ctx cancellation so a caller that has already blown its
-// deadline does not queue behind a saturated Prometheus.
-//
-// holdsProbe says the caller won the breaker's half-open probe (the second
-// return value of breaker.allow). Such a caller is exempt from the post-queue
-// re-check below — see the comment there.
+// acquire takes a slot from the in-flight semaphore and returns the release
+// func. holdsProbe exempts the breaker's half-open probe holder from the
+// post-queue re-check.
 func (c *Client) acquire(ctx context.Context, holdsProbe bool) (func(), error) {
 	if c.sem == nil {
 		return func() {}, nil
 	}
-	// The wait gets its OWN deadline rather than inheriting only the caller's.
-	// The controller's reconcile context carries no deadline at all, so without
-	// this the queue wait is unbounded: a saturated semaphore parks the
-	// goroutine indefinitely and ErrInflightQueueAborted is unreachable unless
-	// the caller happened to bring a deadline of its own.
-	//
-	// This deadline is deliberately NOT the query timeout, and the two must not
-	// be merged: queue time is not query time, and charging it against the
-	// query's budget turns the throttle into a failure amplifier, timing out
-	// queries that never got a chance to run (see execInstant's doc comment).
-	// It only has to guarantee termination, so it is generous — a query still
-	// queued this long has already missed the reconcile it belonged to, and the
-	// next cycle will reissue it.
+	// The wait gets its own deadline: the reconcile context carries none, so
+	// a saturated semaphore would otherwise park the goroutine forever.
 	ctx, cancel := context.WithTimeout(ctx, c.queueTimeout)
 	defer cancel()
 
@@ -287,23 +189,10 @@ func (c *Client) acquire(ctx context.Context, holdsProbe bool) (func(), error) {
 		return nil, fmt.Errorf("%w: %w", ErrInflightQueueAborted, ctx.Err())
 	}
 
-	// The breaker was checked before queuing, and the queue can be long. If
-	// Prometheus went down while this query waited, sending it anyway spends a
-	// slot on a call that is already known to fail. isOpen re-checks WITHOUT
-	// consuming the half-open probe: this is a "should I still bother" test,
-	// not a claim on the one probe a cooldown expiry grants.
-	//
-	// The probe holder is exempt, and that exemption is what keeps the circuit
-	// able to close at all. allow() hands out the probe by ADVANCING openUntil
-	// (so an abandoned probe self-heals), so isOpen necessarily returns true for
-	// the very caller the cooldown just admitted. Without this guard that caller
-	// returns ErrCircuitOpen without ever reaching Prometheus, success() is
-	// never called, and the breaker stays open forever — permanently, across
-	// every later cooldown, even after Prometheus recovers.
-	//
-	// The check still does its job for the caller it was written for: one that
-	// passed allow() while the circuit was CLOSED and then queued while it
-	// tripped. That caller holds no probe, so it still bails here.
+	// Re-check the breaker after queuing without consuming the half-open probe.
+	// The probe holder is exempt: allow() advances openUntil when handing out
+	// the probe, so isOpen is true for it, and rejecting it here would keep the
+	// breaker open forever.
 	if !holdsProbe && c.breaker.isOpen() {
 		<-c.sem
 		return nil, ErrCircuitOpen
@@ -311,13 +200,8 @@ func (c *Client) acquire(ctx context.Context, holdsProbe bool) (func(), error) {
 	return func() { <-c.sem }, nil
 }
 
-// New creates a Prometheus client targeting addr (e.g. "http://prometheus:9090").
-//
-// Options are applied BEFORE the underlying api.Client is built, because
-// WithTransportConfig / WithRoundTripper decide the RoundTripper that
-// api.Config is constructed with — it cannot be swapped in afterwards.
-// New(addr) with no options passes no RoundTripper at all, so it is identical
-// to the pre-authentication behaviour: api.DefaultRoundTripper, no credentials.
+// New creates a Prometheus client targeting addr. Options are applied before
+// the api.Client is built because they decide its RoundTripper.
 func New(addr string, opts ...Option) (*Client, error) {
 	cli := &Client{
 		breaker:      newBreaker(defaultBreakerMaxFailures, defaultBreakerCooldown),
@@ -339,37 +223,29 @@ func New(addr string, opts ...Option) (*Client, error) {
 	return cli, nil
 }
 
-// QueryCPUByContainer returns per-container CPU usage (cores) at the given quantile,
-// averaged across pods of the workload, over the specified window.
-// Relies on the k8s_sustain:container_cpu_usage_by_workload:rate1m recording rule.
+// QueryCPUByContainer returns per-container CPU (cores) at the given quantile
+// over window, averaged across the workload's pods.
 func (c *Client) QueryCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
 	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerCPUUsageByWorkloadRate1m, workloadSelector(namespace, ownerKind, ownerName), window))
 	return c.queryByContainer(ctx, expr)
 }
 
-// QueryMemoryByContainer returns per-container memory working set (bytes) at the given quantile,
-// averaged across pods of the workload, over the specified window.
-// Relies on the k8s_sustain:container_memory_by_workload:bytes recording rule.
+// QueryMemoryByContainer returns per-container memory working set (bytes) at
+// the given quantile over window, averaged across the workload's pods.
 func (c *Client) QueryMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
 	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerMemoryByWorkloadBytes, workloadSelector(namespace, ownerKind, ownerName), window))
 	return c.queryByContainer(ctx, expr)
 }
 
-// QueryWorkloadCPUByContainer returns the per-pod CPU recommendation basis (cores)
-// per container: the given-quantile over the window of the busiest replica's CPU
-// rate at each instant. Reads the k8s_sustain:workload_max_pod_cpu:cores recording
-// rule, which collapses per-pod usage to the hottest live pod, so the result is a
-// genuine percentile that covers the busiest replica — no replica division needed.
+// QueryWorkloadCPUByContainer returns the per-container CPU quantile (cores)
+// of the busiest replica over window, from the workload_max_pod_cpu rule.
 func (c *Client) QueryWorkloadCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
 	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodCPUCores, workloadSelector(namespace, ownerKind, ownerName), window)
 	return c.queryByContainer(ctx, expr)
 }
 
-// QueryWorkloadMemoryByContainer returns the per-pod memory recommendation basis
-// (bytes) per container: the given-quantile over the window of the busiest
-// replica's memory working set at each instant. Reads the
-// k8s_sustain:workload_max_pod_memory:bytes recording rule. Same per-pod-percentile
-// semantics as QueryWorkloadCPUByContainer.
+// QueryWorkloadMemoryByContainer returns the per-container memory quantile
+// (bytes) of the busiest replica over window, from the workload_max_pod_memory rule.
 func (c *Client) QueryWorkloadMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
 	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodMemoryBytes, workloadSelector(namespace, ownerKind, ownerName), window)
 	return c.queryByContainer(ctx, expr)
@@ -387,7 +263,7 @@ type TimeValue struct {
 	Value     float64   `json:"value"`
 }
 
-// ContainerTimeSeries maps container name → time-series data points.
+// ContainerTimeSeries maps container name to time-series data points.
 type ContainerTimeSeries map[string][]TimeValue
 
 // QueryCPURangeByContainer returns per-container CPU usage time-series (cores)
@@ -414,10 +290,8 @@ func (c *Client) QueryMemoryRequestRangeByContainer(ctx context.Context, namespa
 	return c.queryMaxByContainerForWorkload(ctx, MetricContainerMemoryRequestsByWorkloadBytes, namespace, ownerKind, ownerName, r, step)
 }
 
-// QueryCPULimitRangeByContainer returns per-container CPU limit time-series (cores).
-// Reads the per-pod cgroup limit (which the webhook updates on pod creation),
-// not the workload spec — the dashboard needs the value pods are actually
-// running with.
+// QueryCPULimitRangeByContainer returns per-container CPU limit time-series
+// (cores) from the per-pod cgroup limit, not the workload spec.
 func (c *Client) QueryCPULimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	return c.queryMaxByContainerForWorkload(ctx, MetricContainerCPULimitsByWorkloadCores, namespace, ownerKind, ownerName, r, step)
 }
@@ -427,22 +301,22 @@ func (c *Client) QueryMemoryLimitRangeByContainer(ctx context.Context, namespace
 	return c.queryMaxByContainerForWorkload(ctx, MetricContainerMemoryLimitsByWorkloadBytes, namespace, ownerKind, ownerName, r, step)
 }
 
-// queryMaxByContainerForWorkload runs `max by (container) (<rule>{workload labels})`
-// against a recording rule and returns the per-container time-series.
 func (c *Client) queryMaxByContainerForWorkload(ctx context.Context, ruleName, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := maxByContainer(ruleName + workloadSelector(namespace, ownerKind, ownerName))
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
-// QueryCPURecommendationRangeByContainer returns per-container sliding-window CPU recommendation
-// time-series (cores) — at each step, the quantile is computed over the trailing recWindow.
+// QueryCPURecommendationRangeByContainer returns the sliding-window CPU
+// recommendation (cores) per container: at each step, the quantile over the
+// trailing recWindow.
 func (c *Client) QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerCPUUsageByWorkloadRate1m, workloadSelector(namespace, ownerKind, ownerName), recWindow))
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
-// QueryMemoryRecommendationRangeByContainer returns per-container sliding-window memory recommendation
-// time-series (bytes) — at each step, the quantile is computed over the trailing recWindow.
+// QueryMemoryRecommendationRangeByContainer returns the sliding-window memory
+// recommendation (bytes) per container: at each step, the quantile over the
+// trailing recWindow.
 func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerMemoryByWorkloadBytes, workloadSelector(namespace, ownerKind, ownerName), recWindow))
 	return c.queryRangeByContainer(ctx, expr, r, step)
@@ -450,22 +324,16 @@ func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, 
 
 // OOMSignal carries the OOM context for a single workload over the past 24h.
 type OOMSignal struct {
-	// OOMCounts is the per-container OOM event count over the past 24h.
-	// Per-container so the recommender only floors the memory of containers
-	// that actually OOMed — an innocent sidecar in the same pod keeps its
-	// pure percentile recommendation.
+	// OOMCounts is the per-container OOM count over 24h, so only containers
+	// that OOMed get a memory floor.
 	OOMCounts       ContainerValues
 	PeakMemoryBytes ContainerValues
-	// OOMLimitBytes is the cgroup memory limit observed at the moment a
-	// recent OOM event fired, per container. Used by the recommender as a
-	// bump anchor when peak working-set is unreliable (cgroup v2,
-	// sub-scrape spikes can hide the real high-water mark).
+	// OOMLimitBytes is the cgroup limit observed at OOM time, per container.
+	// Used as the bump anchor because peak working set can miss sub-scrape spikes.
 	OOMLimitBytes ContainerValues
 }
 
-// TotalOOMs sums the per-container OOM counts into the workload-level count.
-// Used by consumers that need workload-level recency (e.g. the young-workload
-// age-gate bypass — a workload that OOMed anywhere is not too young to have data).
+// TotalOOMs sums the per-container OOM counts.
 func (s OOMSignal) TotalOOMs() float64 {
 	var total float64
 	for _, v := range s.OOMCounts {
@@ -474,48 +342,31 @@ func (s OOMSignal) TotalOOMs() float64 {
 	return total
 }
 
-// oomMetricNames are the three recording rules that jointly make up the OOM
-// signal. They share the {namespace,owner_kind,owner_name,container} label
-// set, so one __name__ regex selector fetches all of them in a single query.
+// oomMetricNames are the recording rules fetched together by one __name__ regex.
 var oomMetricNames = []string{
 	MetricWorkloadOOM24h,
 	MetricContainerPeakMemory24hBytes,
 	MetricContainerOOMLimit24hBytes,
 }
 
-// oomSignalSelector builds the combined selector
-// `{__name__=~"a|b|c",namespace=…,owner_kind=…,owner_name=…}`.
-//
-// The names are interpolated into an RE2 alternation unescaped. That is safe
-// only while every name in oomMetricNames consists of characters RE2 treats as
-// literals — today they are `[a-z_]` plus ':', which is not a metacharacter.
-// Renaming a recording rule to include '.', '(', '+' or similar would silently
-// widen what this selector matches, with no compile or test failure to catch
-// it. TestOOMSignalSelectorUsesLiteralAlternation pins that invariant.
+// oomSignalSelector builds the combined __name__ regex plus identity selector.
+// Rule names are interpolated unescaped, so they must stay RE2-literal.
 func oomSignalSelector(namespace, ownerKind, ownerName string) string {
 	return fmt.Sprintf("{__name__=~%q,namespace=%q,owner_kind=%q,owner_name=%q}",
 		strings.Join(oomMetricNames, "|"), namespace, ownerKind, ownerName)
 }
 
-// foldOOMVector reproduces, in Go, the aggregation the three separate probes
-// used to ask Prometheus for: `sum by (container)` over the OOM counts and
-// `max by (container)` over the peak and OOM-time limit. The aggregation exists
-// to collapse duplicate series emitted by multiple kube-state-metrics replicas.
-//
-// Presence is tracked explicitly rather than inferred from a non-zero value:
-// ComputeContainerRec gates memory emission on whether the container has a key
-// in PeakMemoryBytes, so a legitimately-zero sample must still create the key.
+// foldOOMVector aggregates the OOM vector client-side: sum by container for
+// counts, max by container for peak and OOM-time limit, collapsing duplicate
+// series from multiple kube-state-metrics replicas.
 func foldOOMVector(vec model.Vector) OOMSignal {
 	sig := OOMSignal{
 		OOMCounts:       ContainerValues{},
 		PeakMemoryBytes: ContainerValues{},
 		OOMLimitBytes:   ContainerValues{},
 	}
-	// The `!ok` is load-bearing: do NOT simplify this to `if v > m[key]`.
-	// That form never stores a first sample whose value is 0 (because 0 > 0 is
-	// false), so the key is never created — and ComputeContainerRec gates
-	// memory emission on key PRESENCE, not value. A container reporting a
-	// legitimate zero peak would silently stop receiving recommendations.
+	// The !ok check is load-bearing: a first sample of 0 must still create the
+	// key, because ComputeContainerRec gates on key presence.
 	maxInto := func(m ContainerValues, key string, v float64) {
 		if cur, ok := m[key]; !ok || v > cur {
 			m[key] = v
@@ -539,16 +390,8 @@ func foldOOMVector(vec model.Vector) OOMSignal {
 	return sig
 }
 
-// QueryWorkloadOOMSignal returns the recent per-container OOM counts (24h) and
-// the peak per-container memory working-set bytes observed alongside them, plus
-// the cgroup limit in force at OOM time. Used as a floor signal: if a container
-// OOM'd, never recommend its memory below max(peak, current).
-//
-// All three metric families are fetched in ONE query via a __name__ regex
-// selector and folded client-side (see foldOOMVector). This replaces three
-// concurrent probes, and with them the per-call atomic that existed solely to
-// guarantee at-most-one breaker failure across those probes — a single query
-// through execInstant records at most one failure by construction.
+// QueryWorkloadOOMSignal returns the 24h per-container OOM counts, peak memory
+// and OOM-time limit for a workload, fetched in one query and folded client-side.
 func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKind, ownerName string) (OOMSignal, error) {
 	expr := oomSignalSelector(namespace, ownerKind, ownerName)
 	result, err := c.execInstant(ctx, expr, time.Now(), c.queryTimeout)
@@ -569,39 +412,22 @@ type OOMEvent struct {
 	Pod       string    `json:"pod"`
 }
 
-// QueryOOMKillEvents returns OOM kill events for a workload over the specified range.
-// Uses kube_pod_container_status_restarts_total joined with
-// kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} to detect
-// restart events caused by OOM kills.
+// QueryOOMKillEvents returns OOM kill events for a workload over r, from
+// restart increases gated on last_terminated_reason="OOMKilled".
 func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) ([]OOMEvent, error) {
 	stepDur, err := model.ParseDuration(step)
 	if err != nil {
 		return nil, fmt.Errorf("parsing step %q: %w", step, err)
 	}
 
-	// `increase()` needs ≥2 samples inside its lookback range to return anything.
-	// kube-state-metrics typically scrapes every 30–60s, so when the UI picks a
-	// short step (e.g. step=1m for the 1h window), `increase(restarts[step])`
-	// silently drops real OOM kills because only one scrape lands in the
-	// lookback. Floor the lookback at 5m so the query is resilient to ordinary
-	// scrape intervals regardless of the chart step.
+	// increase() needs at least two samples in its lookback; kube-state-metrics
+	// scrapes every 30-60s, so floor the lookback at 5m regardless of step.
 	lookback := max(time.Duration(stepDur), 5*time.Minute)
 	lookbackExpr := model.Duration(lookback).String()
 
-	// Per-event detection: increase(restarts[lookback]) gated on
-	// last_terminated_reason==OOMKilled. Each restart bumps the value
-	// (0→1, 1→2, …); the value-bump dedup below turns each bump into one
-	// event. A max_over_time fallback on the reason would keep the signal
-	// positive for the entire CrashLoopBackOff tail and collapse subsequent
-	// OOMs into one continuous run — fine for the workload_oom_24h boolean,
-	// not for per-event markers.
-	//
-	// Both sides are aggregated with `max by (namespace, pod, container)` to
-	// drop kube-state-metrics scrape-target labels (instance, service, …).
-	// Without this, a KSM rollout inside the chart window produces overlapping
-	// series for the same pod, and the `group_left()` join fails with
-	// "many-to-many matching not allowed", aborting the whole query — which
-	// the dashboard then swallows as an empty OOM list.
+	// Both sides are aggregated with max by (namespace, pod, container) to drop
+	// KSM scrape-target labels; otherwise a KSM rollout inside the window makes
+	// the group_left join fail with many-to-many matching.
 	expr := fmt.Sprintf(
 		`max by (namespace, pod, container, owner_kind, owner_name) (
 		   max by (namespace, pod, container) (
@@ -631,9 +457,8 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		Step:  time.Duration(stepDur),
 	}, c.queryTimeout, probe)
 	if err != nil {
-		// Non-fatal: OOM data may not be available (missing kube-state-metrics etc.),
-		// so the dashboard still renders. runRange already recorded the breaker
-		// failure; swallowing the error here is the documented contract.
+		// Non-fatal: OOM data may be missing (no kube-state-metrics); keep the
+		// dashboard rendering. runRange already recorded the breaker failure.
 		return nil, nil //nolint:nilerr // intentional non-fatal swallow, see comment above
 	}
 
@@ -642,12 +467,9 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		return nil, nil
 	}
 
-	// Value-bump dedup per (pod, container). `increase()` smears each
-	// restart across the lookback (flat 1, 1, 1), but a SECOND OOM inside
-	// the lookback bumps the value up (1 → 2). Emit on each upward step;
-	// skip flat smears and the downward tail as the counter ages out. The
-	// 0.5 threshold absorbs extrapolation noise without missing the next
-	// integer bump (~1.0).
+	// increase() smears each restart flat across the lookback; a second OOM
+	// bumps the value by ~1. Emit on each upward step above 0.5 to absorb
+	// extrapolation noise.
 	const valueBumpThreshold = 0.5
 	var events []OOMEvent
 	for _, stream := range matrix {
@@ -719,24 +541,12 @@ func (c *Client) queryRangeByContainer(ctx context.Context, expr string, r TimeR
 	return series, nil
 }
 
-// defaultQueryTimeout is the default per-query timeout used when WithQueryTimeout
-// is not passed to New. Sized for background controller reconciles; the webhook
-// overrides this with a tighter value.
+// defaultQueryTimeout is sized for background reconciles; the webhook overrides it.
 const defaultQueryTimeout = 30 * time.Second
 
-// defaultQueueTimeout bounds how long a query waits for an in-flight slot.
-//
-// It exists to guarantee termination, not to be aggressive. The controller's
-// reconcile context has no deadline, so without a bound here a saturated
-// semaphore parks a goroutine forever. Sized well above any legitimate wait —
-// with the default 8 slots and a 30s query timeout, even a fully backed-up
-// client drains a queue of tens of queries inside this window — so it converts
-// "hangs indefinitely" into "fails visibly" without rejecting queries that
-// would have run.
-//
-// Separate from defaultQueryTimeout on purpose: queue time is not query time.
-// Sharing one budget would make a busy client time out queries that never
-// reached Prometheus at all.
+// defaultQueueTimeout bounds how long a query waits for an in-flight slot. It
+// only guarantees termination, since the reconcile context has no deadline,
+// and is kept separate from the query timeout: queue time is not query time.
 const defaultQueueTimeout = 2 * time.Minute
 
 // Ping checks that the Prometheus server is reachable by executing a trivial query.
@@ -822,8 +632,7 @@ func (c *Client) QueryRange(ctx context.Context, expr string, r TimeRange, step 
 	return out, nil
 }
 
-// QueryByLabel runs an instant query and returns a map of label-value -> sample value.
-// Used for per-policy and per-workload aggregates.
+// QueryByLabel runs an instant query and returns a map of label value to sample value.
 func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error) {
 	v, err := c.execInstant(ctx, expr, time.Now(), dashboardQueryTimeout)
 	if err != nil {
@@ -845,8 +654,7 @@ func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[stri
 }
 
 // QueryByLabels runs an instant query and returns a map keyed by the named
-// labels joined with '|'. Samples missing any of the requested labels are
-// skipped. Useful when several labels jointly identify a series.
+// labels joined with '|'. Samples missing any requested label are skipped.
 func (c *Client) QueryByLabels(ctx context.Context, query string, labels ...string) (map[string]float64, error) {
 	v, err := c.execInstant(ctx, query, time.Now(), dashboardQueryTimeout)
 	if err != nil {

@@ -1,8 +1,7 @@
-// Package policymatch holds the predicate that decides whether a Policy
-// applies to a given namespace + workload label set. It lives in its own
-// package so the controller (when listing/filtering targets) and the webhook
-// (at pod admission time) can stay in lockstep on selector semantics without
-// either side depending on the other.
+// Package policymatch holds the predicate that decides whether a Policy applies
+// to a given namespace + workload label set. It is its own package so the
+// controller and the webhook stay in lockstep on selector semantics without
+// either depending on the other.
 package policymatch
 
 import (

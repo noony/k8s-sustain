@@ -7,9 +7,8 @@ import (
 	"github.com/prometheus/common/model"
 )
 
-// TimeRange is an explicit, absolute query window. Resolving "what time is it"
-// happens once, at the HTTP edge, so the range methods below stay deterministic
-// and easy to test.
+// TimeRange is an explicit, absolute query window. "Now" is resolved once, at
+// the HTTP edge, so downstream queries stay deterministic and testable.
 type TimeRange struct {
 	Start time.Time
 	End   time.Time

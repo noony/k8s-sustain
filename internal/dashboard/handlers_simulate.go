@@ -57,8 +57,6 @@ type simulateLimitsConfig struct {
 	RequestsLimitsRatio   *float64 `json:"requestsLimitsRatio,omitempty"`
 }
 
-// handleSimulate validates the request, fills defaults, dispatches to
-// runSimulation in simulate.go, and returns the JSON result.
 func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

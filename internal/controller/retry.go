@@ -57,12 +57,10 @@ func (rt *retryTracker) shouldSkip(key string) bool {
 // with exponential backoff capped at maxRetryDelay. It returns a copy of the
 // resulting state, never nil.
 //
-// The return value is what callers must use to report the attempt: reading the
-// state back with a separate getState call leaves a window in which another
-// goroutine handling the SAME workload key can call recordSuccess and delete
-// the entry, so the read comes back nil. Computing and returning it under the
-// one lock makes that pair atomic, and a copy keeps the caller off the map's
-// live value.
+// Callers must use the returned value rather than a separate getState call: a
+// concurrent recordSuccess for the same key can delete the entry in between, so
+// the read comes back nil. Computing it under the one lock makes the pair
+// atomic, and the copy keeps the caller off the map's live value.
 func (rt *retryTracker) recordFailure(key string) *retryState {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
@@ -73,11 +71,10 @@ func (rt *retryTracker) recordFailure(key string) *retryState {
 		rt.states[key] = s
 	}
 	s.attempts++
-	// Cap the shift exponent before shifting: time.Duration is an int64 of
-	// nanoseconds, so `baseRetryDelay << shift` overflows when shift is large
-	// (and becomes undefined / wraps to zero once shift >= 64). maxShift=16
-	// is plenty: baseRetryDelay (30s) << 16 ≈ 23 days, far above
-	// maxRetryDelay, yet nowhere near int64 overflow.
+	// time.Duration is an int64 of nanoseconds, so `baseRetryDelay << shift`
+	// overflows for a large shift and wraps to zero once shift >= 64.
+	// maxShift=16 puts 30s << 16 ≈ 23 days: far above maxRetryDelay, nowhere
+	// near overflow.
 	const maxShift = 16
 	shift := min(s.attempts-1, maxShift)
 	delay := min(baseRetryDelay<<shift, maxRetryDelay)

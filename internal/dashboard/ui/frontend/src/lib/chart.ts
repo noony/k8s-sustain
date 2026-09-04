@@ -15,7 +15,6 @@ import 'chartjs-adapter-date-fns'
 import zoomPlugin from 'chartjs-plugin-zoom'
 import type { TimeValue } from './api'
 
-// Register Chart.js components
 Chart.register(
   LineController,
   LineElement,
@@ -113,7 +112,6 @@ function themeColors() {
   }
 }
 
-// OOM event plugin
 const OOM_MARKER_LIMIT = 50
 const oomEventPlugin: Plugin = {
   id: 'oomEvents',
@@ -225,7 +223,6 @@ function withGaps(
   return out
 }
 
-// Global chart instance registry
 const chartInstances: Record<string, Chart> = {}
 
 export function getChartInstance(id: string): Chart | undefined {
@@ -252,7 +249,6 @@ export function createTimeSeriesChart(
   const canvas = document.getElementById(canvasId) as HTMLCanvasElement | null
   if (!canvas) return null
 
-  // Clean up previous instance
   destroyChart(canvasId)
 
   const transform = opts.transform || ((v: number) => v)
@@ -283,7 +279,6 @@ export function createTimeSeriesChart(
     },
   ]
 
-  // Extra time-series
   ;(opts.extraSeries || []).forEach((s) => {
     if (!s.data || !s.data.length) return
     const seriesData = withGaps(s.data, transform, opts.stepMs)
@@ -300,7 +295,6 @@ export function createTimeSeriesChart(
     datasets.push(ds)
   })
 
-  // Annotation lines (flat horizontal)
   const annotations = [...(opts.annotations || [])]
   annotations.forEach((anno) => {
     if (anno.value == null || isNaN(anno.value)) return
@@ -316,7 +310,6 @@ export function createTimeSeriesChart(
     })
   })
 
-  // OOM markers
   const oomMarkers = (opts.oomEvents || []).map((ev) => ({
     x: new Date(ev.timestamp),
     pod: ev.pod || '',
@@ -346,10 +339,8 @@ export function createTimeSeriesChart(
           boxPadding: 6,
           usePointStyle: true,
           callbacks: {
-            // Fill the tooltip's circle with the series color. The main
-            // dataset's backgroundColor is a gradient function (the area
-            // fill), so without this the swatch renders hollow/wrong; use
-            // the line color for both fill and ring instead.
+            // The main dataset's backgroundColor is a gradient function (the
+            // area fill), so the swatch would otherwise render hollow.
             labelColor: (ctx: any) => ({
               borderColor: ctx.dataset.borderColor,
               backgroundColor: ctx.dataset.borderColor,
@@ -399,7 +390,6 @@ export function createTimeSeriesChart(
   const chart = new Chart(canvas, config)
   chartInstances[canvasId] = chart
 
-  // Double-click to reset zoom
   canvas.addEventListener('dblclick', () => resetZoom(canvasId))
 
   return chart

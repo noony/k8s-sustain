@@ -9,17 +9,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// ownerKindObjects maps every workload kind ObjectForKind knows how to
-// construct to a constructor for the client.Object it fetches. Kept as a
-// table rather than inlined in a switch so callers that need to read a
-// workload owner's own metadata.annotations — the webhook's opt-in resolution
-// and the OOM watcher's Reconcile alike — can enumerate it via
-// OwnerChainKinds. TestDisableForCoversOwnerAnnotationKinds
-// (internal/webhook/optin_test.go) cross-checks that enumeration against
-// k8s.OwnerChainDisableFor: every kind read this way must be there, or its
-// first Get stands up a cluster-wide informer on a hot path instead of
-// costing one Get (see NewCached's doc comment for why that is a silent,
-// self-healing failure that is very hard to diagnose after the fact).
+// ownerKindObjects maps each workload kind to a constructor for the
+// client.Object it fetches. A table rather than a switch so callers can
+// enumerate it via OwnerChainKinds. TestDisableForCoversOwnerAnnotationKinds
+// cross-checks that enumeration against k8s.OwnerChainDisableFor: a kind read
+// this way but missing there stands up a cluster-wide informer on a hot path
+// instead of costing one Get — a silent, self-healing failure.
 var ownerKindObjects = map[string]func() client.Object{
 	"Deployment":  func() client.Object { return &appsv1.Deployment{} },
 	"StatefulSet": func() client.Object { return &appsv1.StatefulSet{} },

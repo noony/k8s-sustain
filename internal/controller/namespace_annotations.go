@@ -11,12 +11,9 @@ import (
 )
 
 // nsAnnotations memoises Namespace annotation lookups for the span of one
-// target-collection pass.
-//
-// The memoisation is the point, not an optimisation detail: policy opt-in is
-// now resolved per workload, and a namespace with N Deployments would
-// otherwise issue N identical reads per reconcile, per policy. One entry per
-// distinct namespace bounds it to the number of namespaces in play.
+// target-collection pass: opt-in is resolved per workload, so a namespace with
+// N Deployments would otherwise issue N identical reads per reconcile, per
+// policy.
 //
 // Not safe for concurrent use — it is built and consumed inside a single
 // collectTargets call, before the errgroup fan-out that processes targets.
@@ -31,11 +28,10 @@ func newNSAnnotations(c client.Client) *nsAnnotations {
 
 // get returns the Namespace's annotations, or nil when the Namespace does not
 // exist. A missing namespace is deliberately NOT an error: namespaces are
-// deleted while reconciles are in flight, and failing the whole pass because
-// one workload's namespace vanished would stall every other workload the
-// policy governs. Any other read failure IS returned, so a genuinely broken
-// read (RBAC, apiserver outage) surfaces as a requeue rather than silently
-// un-managing every namespace-opted-in workload in the cluster.
+// deleted while reconciles are in flight, and failing the pass would stall
+// every other workload the policy governs. Any other read failure IS returned,
+// so a broken read (RBAC, apiserver outage) surfaces as a requeue rather than
+// silently un-managing every namespace-opted-in workload.
 func (n *nsAnnotations) get(ctx context.Context, namespace string) (map[string]string, error) {
 	if a, ok := n.cache[namespace]; ok {
 		return a, nil

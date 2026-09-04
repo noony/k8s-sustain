@@ -10,15 +10,12 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// Constants used by autoscaler-coordination math. ApplyOverhead scales the
-// request by safetyMargin / target_pct, so steady-state utilisation
-// (usage / request) lands at target_pct / safetyMargin.
-//
-// With safetyMargin = 110 and target_pct = 80, the workload settles at
-// 80/110 ≈ 72.7% utilisation — about 7 percentage points (≈ 9% relative)
-// below the HPA threshold. The headroom absorbs short-lived spikes without
-// triggering scale-up. The target clamp protects against degenerate
-// configurations (e.g. averageUtilization=0 or 100).
+// Autoscaler-coordination tuning. Scaling a request by
+// safetyMargin / target_pct settles steady-state utilisation at
+// target_pct / safetyMargin — with 110 and a target of 80, ≈72.7%, some 7
+// points under the HPA threshold, enough to absorb short spikes without
+// triggering scale-up. The target clamp guards against degenerate configs
+// (averageUtilization of 0 or 100).
 const (
 	overheadSafetyMarginPct int32 = 110
 	overheadTargetMin       int32 = 1

@@ -167,7 +167,6 @@ function renderCharts() {
   containers().forEach((cname) => {
     const res = resources[cname] || {}
 
-    // CPU chart
     if (metrics.value!.cpu?.[cname]) {
       const cpuAnnotations: ChartAnnotation[] = []
       const cpuExtra: ExtraSeries[] = []
@@ -222,7 +221,6 @@ function renderCharts() {
       })
     }
 
-    // Memory chart
     if (metrics.value!.memory?.[cname]) {
       const memAnnotations: ChartAnnotation[] = []
       const memExtra: ExtraSeries[] = []

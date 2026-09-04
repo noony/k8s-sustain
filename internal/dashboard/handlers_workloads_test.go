@@ -140,9 +140,7 @@ func TestAllWorkloadsIncludesStandaloneJobButSkipsCronJobOwned(t *testing.T) {
 	}
 }
 
-// TestAllWorkloadsNamespaceFilterKeepsFacets pins the facet fix: filtering by
-// namespace (or kind) must not collapse the namespace/kind dropdowns to the
-// filtered subset — they are derived from the full, unfiltered list.
+// Facets are derived from the full list, not the filtered subset.
 func TestAllWorkloadsNamespaceFilterKeepsFacets(t *testing.T) {
 	dA := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-a", Name: "web"}}
 	dB := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-b", Name: "api"}}
@@ -175,10 +173,8 @@ func TestAllWorkloadsNamespaceFilterKeepsFacets(t *testing.T) {
 	}
 }
 
-// TestPolicyWorkloadsMissingPolicyIs404WithoutCacheControl pins two error-path
-// contracts at once: a missing policy is a 404 (not a 500), and error
-// responses must not carry Cache-Control — intermediaries could otherwise pin
-// a transient failure for the success max-age.
+// Error responses must not carry Cache-Control, or intermediaries pin a
+// transient failure for the success max-age.
 func TestPolicyWorkloadsMissingPolicyIs404WithoutCacheControl(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
 	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
@@ -193,9 +189,6 @@ func TestPolicyWorkloadsMissingPolicyIs404WithoutCacheControl(t *testing.T) {
 	}
 }
 
-// TestPolicyWorkloadsAPIServerErrorIs500 verifies that a non-NotFound Get
-// failure (apiserver outage, RBAC, timeout) is reported as a 500, not
-// disguised as a 404.
 func TestPolicyWorkloadsAPIServerErrorIs500(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(Scheme()).
 		WithInterceptorFuncs(interceptor.Funcs{
@@ -244,8 +237,7 @@ func TestPolicyWorkloadsIncludesStandaloneJob(t *testing.T) {
 	}
 }
 
-// retainedWLR builds a WorkloadRecommendation as the retention sweep leaves
-// it: labeled, policy set, observed resources snapshotted.
+// retainedWLR builds a WorkloadRecommendation as the retention sweep leaves it.
 func retainedWLR(policy, ns, kind, name string) *sustainv1alpha1.WorkloadRecommendation {
 	cpu := resource.MustParse("500m")
 	return &sustainv1alpha1.WorkloadRecommendation{
@@ -267,9 +259,6 @@ func retainedWLR(policy, ns, kind, name string) *sustainv1alpha1.WorkloadRecomme
 	}
 }
 
-// TestAllWorkloadsIncludesInactiveFromRetainedWLR: a retained WLR with no
-// live object becomes an inactive row with lastSeenAt and the observed
-// container resources.
 func TestAllWorkloadsIncludesInactiveFromRetainedWLR(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(Scheme()).
 		WithObjects(retainedWLR("p", "airflow", "Pod", "etl")).Build()
@@ -315,8 +304,6 @@ func TestAllWorkloadsIncludesInactiveFromRetainedWLR(t *testing.T) {
 	}
 }
 
-// TestAllWorkloadsLiveRowSuppressesWLRTwin: when the workload object still
-// exists, its WLR must NOT produce a duplicate row.
 func TestAllWorkloadsLiveRowSuppressesWLRTwin(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web"}}
 	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
@@ -340,8 +327,6 @@ func TestAllWorkloadsLiveRowSuppressesWLRTwin(t *testing.T) {
 	}
 }
 
-// TestAllWorkloadsActiveFilter: ?active=false returns only inactive rows,
-// ?active=true only live ones.
 func TestAllWorkloadsActiveFilter(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web"}}
 	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
@@ -364,8 +349,6 @@ func TestAllWorkloadsActiveFilter(t *testing.T) {
 	}
 }
 
-// TestPolicyWorkloadsIncludesInactiveScopedToPolicy: the policy-scoped list
-// only merges that policy's retained WLRs.
 func TestPolicyWorkloadsIncludesInactiveScopedToPolicy(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	onCreate := sustainv1alpha1.UpdateModeOnCreate
@@ -391,10 +374,6 @@ func TestPolicyWorkloadsIncludesInactiveScopedToPolicy(t *testing.T) {
 	}
 }
 
-// TestAllWorkloads_AnnotationLevels replays the shared contract table against
-// the dashboard's own wiring. The dashboard is a third independent reader of
-// the annotation — a workload the controller manages but the dashboard reports
-// as unmanaged is a bug users see before anyone sees the metric.
 func TestAllWorkloads_AnnotationLevels(t *testing.T) {
 	for _, tc := range policymatchtest.AnnotationCases() {
 		t.Run(tc.Name, func(t *testing.T) {
@@ -426,11 +405,8 @@ func TestAllWorkloads_AnnotationLevels(t *testing.T) {
 	}
 }
 
-// TestAllWorkloads_AnnotationLevels_Job replays the same contract table
-// against the "Job" branch of listWorkloadsOfKind, which builds its entries
-// with append rather than indexed assignment — a different construction
-// shape from every other kind, and the one most likely to silently drop a
-// newly added workloadEntry field in a future change.
+// The "Job" branch builds entries with append rather than indexed assignment,
+// so it is the one most likely to drop a newly added workloadEntry field.
 func TestAllWorkloads_AnnotationLevels_Job(t *testing.T) {
 	for _, tc := range policymatchtest.AnnotationCases() {
 		t.Run(tc.Name, func(t *testing.T) {
@@ -462,9 +438,6 @@ func TestAllWorkloads_AnnotationLevels_Job(t *testing.T) {
 	}
 }
 
-// TestPolicyWorkloads_NamespaceLevelOptIn verifies the policy-scoped endpoint —
-// the one that filters on the resolved policy — includes a workload whose only
-// opt-in is on its namespace.
 func TestPolicyWorkloads_NamespaceLevelOptIn(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
@@ -485,14 +458,8 @@ func TestPolicyWorkloads_NamespaceLevelOptIn(t *testing.T) {
 
 func ptrMode(m sustainv1alpha1.UpdateMode) *sustainv1alpha1.UpdateMode { return &m }
 
-// TestPolicyWorkloads_NamespaceOptIn_SelectorExcludesIt pins the fix for a
-// review finding: the dashboard used to filter policy-scoped workload rows
-// purely on e.ResolvedPolicy() == policyName, never consulting
-// policymatch.Matches. A Namespace naming a Policy whose own selector does
-// not reach it must not make every workload in that namespace show up as
-// Automated under that policy — ResolvePolicy answers the workload's opt-in,
-// Matches answers the Policy's consent, and callers must apply both (see
-// policymatch.ResolvePolicy's doc comment).
+// Opting in (ResolvePolicy) and the Policy's consent (Matches) are two
+// different questions; the policy-scoped list must apply both.
 func TestPolicyWorkloads_NamespaceOptIn_SelectorExcludesIt(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
@@ -513,10 +480,6 @@ func TestPolicyWorkloads_NamespaceOptIn_SelectorExcludesIt(t *testing.T) {
 	}
 }
 
-// TestPolicyWorkloads_LabelSelectorExcludesWorkload is the label-selector
-// half of the same gate: a workload whose own labels do not satisfy the
-// Policy's LabelSelector must not appear even though it resolves to that
-// policy's name.
 func TestPolicyWorkloads_LabelSelectorExcludesWorkload(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
@@ -538,21 +501,8 @@ func TestPolicyWorkloads_LabelSelectorExcludesWorkload(t *testing.T) {
 	}
 }
 
-// TestPolicyWorkloads_GroupedIdentity_SiblingLabelSatisfiesSelector pins the
-// fix for a review finding: groupEntriesByIdentity (handlers_workload_kinds.go)
-// collapses several real Deployments sharing a k8s.sustain.io/owner-name
-// override onto one entry, keeping the most recently created as the
-// representative — but the label-selector gate used to be evaluated against
-// that representative's labels ALONE, while the controller's filterTargets
-// evaluates every real object independently. So a Policy whose LabelSelector
-// missed only the representative, while still matching a grouped sibling the
-// controller manages, made the whole identity vanish from the dashboard —
-// stricter than the controller.
-//
-// Here "web-green" (newer, becomes the representative) does NOT satisfy the
-// selector; "web-blue" (older, folded into the same "web" identity) DOES.
-// The identity must still appear, because at least one real object behind it
-// matches.
+// The representative "web-green" does not satisfy the selector but the
+// grouped sibling "web-blue" does; the identity must still appear.
 func TestPolicyWorkloads_GroupedIdentity_SiblingLabelSatisfiesSelector(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
@@ -577,10 +527,8 @@ func TestPolicyWorkloads_GroupedIdentity_SiblingLabelSatisfiesSelector(t *testin
 	}
 }
 
-// deploymentWithOwnerNamePolicyAndLabels is like deploymentWithOwnerName but
-// lets the caller pick the pod-template policy annotation and the object's
-// own labels independently, so grouped-identity tests can put a DIFFERENT
-// policy opt-in on each real object sharing an owner-name override.
+// deploymentWithOwnerNamePolicyAndLabels lets grouped-identity tests put a
+// different policy opt-in and labels on each object sharing an override.
 func deploymentWithOwnerNamePolicyAndLabels(ns, name, ownerName, policyName string, labels map[string]string, created time.Time) *appsv1.Deployment {
 	d := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: labels, CreationTimestamp: metav1.NewTime(created)},
@@ -600,22 +548,8 @@ func deploymentWithOwnerNamePolicyAndLabels(ns, name, ownerName, policyName stri
 	return d
 }
 
-// TestPolicyWorkloads_GroupedIdentity_MixedOptInAndLabelDoesNotManage pins
-// the fix for the review finding this branch exists to fix: the dashboard's
-// gate used to be split across two places that read DIFFERENT real objects
-// behind a grouped identity — the opt-in half read only the representative's
-// annotations, the label half accepted ANY member's labels. That let a
-// Policy manage an identity via two different objects — one supplying the
-// opt-in, another supplying the label match — even when no single real
-// object satisfied both halves, which the controller's filterTargets (which
-// evaluates every real object independently) would never do.
-//
-// "checkout-blue" (newer, becomes the representative) opts into "p" but its
-// own labels ("track": "blue") don't satisfy p's selector ("track": "green").
-// "checkout-green" (older, folds into the same "checkout" identity) DOES
-// have labels that satisfy p's selector, but it opts into "q", not "p". No
-// single real object opts into p AND satisfies p's selector, so p manages
-// nothing here — the identity must not appear in p's workload list.
+// No single real object both opts into p and satisfies p's selector, so the
+// identity must not appear in p's workload list.
 func TestPolicyWorkloads_GroupedIdentity_MixedOptInAndLabelDoesNotManage(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
@@ -638,15 +572,8 @@ func TestPolicyWorkloads_GroupedIdentity_MixedOptInAndLabelDoesNotManage(t *test
 	}
 }
 
-// TestPolicyWorkloads_GroupedIdentity_SiblingOptsInAndMatches pins the mirror
-// case: the representative opts into a DIFFERENT policy ("q"), but a grouped
-// sibling opts into "p" AND satisfies p's own selector on its own labels.
-// The controller manages that sibling under p (filterTargets evaluates every
-// real object independently), so the dashboard must report the identity as
-// managed under p too — both in the policy-scoped list and in the
-// cluster-wide /api/workloads view, which must report the same verdict for
-// the same identity (see collectAllWorkloads' doc on why the two must never
-// disagree).
+// The representative opts into "q" but a grouped sibling opts into "p" and
+// matches p's selector; both list views must report the identity under p.
 func TestPolicyWorkloads_GroupedIdentity_SiblingOptsInAndMatches(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	policy.Spec.RightSizing.Update.Types.Deployment = ptrMode(sustainv1alpha1.UpdateModeOngoing)
@@ -687,9 +614,6 @@ func TestPolicyWorkloads_GroupedIdentity_SiblingOptsInAndMatches(t *testing.T) {
 	}
 }
 
-// TestAllWorkloads_NamespaceOptIn_SelectorExcludesIt is the /api/workloads
-// (collectAllWorkloads) counterpart: Automated must reflect the Policy's
-// consent, not merely the workload's opt-in.
 func TestAllWorkloads_NamespaceOptIn_SelectorExcludesIt(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	policy.Spec.Selector.Namespaces = []string{"other-namespace"}
@@ -719,14 +643,7 @@ func TestAllWorkloads_NamespaceOptIn_SelectorExcludesIt(t *testing.T) {
 	}
 }
 
-// TestNamespaceAnnotations_FetchedOnceAcrossMultiKindRequest guards the
-// fan-out regression a Task 5 review caught: listWorkloadsOfKind originally
-// fetched its own namespace-annotation map, so a request that loops over
-// every workload kind — collectAllWorkloads iterates supportedWorkloadKinds
-// unconditionally, up to seven kinds — issued one cluster-wide Namespace List
-// per kind instead of one per request, against the dashboard's uncached
-// client. Namespace annotations must be fetched once by the looping caller
-// and threaded through every listWorkloadsOfKind call.
+// Namespace annotations must be fetched once per request, not once per kind.
 func TestNamespaceAnnotations_FetchedOnceAcrossMultiKindRequest(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:        "team-a",

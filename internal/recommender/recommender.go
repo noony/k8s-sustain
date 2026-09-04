@@ -105,7 +105,6 @@ func ComputeMemoryRequest(rawBytes float64, cfg sustainv1alpha1.ResourceRequests
 		b = b * int64(100+*cfg.Headroom) / 100
 	}
 
-	// Round up to the nearest MiB.
 	mib := max((b+mebibyte-1)/mebibyte, int64(minMemoryMiB))
 	qty := resource.NewQuantity(mib*mebibyte, resource.BinarySI)
 	clampQuantity(qty, cfg.MinAllowed, cfg.MaxAllowed)
@@ -125,19 +124,15 @@ func ComputeMemoryRequest(rawBytes float64, cfg sustainv1alpha1.ResourceRequests
 //     fired. Always available (it's the limit the kernel killed at), and the
 //     BumpFactor multiplier pushes the recommendation above it.
 //
-// The container's current request is intentionally NOT a floor: it would
-// compound the previous reco's already-headroomed value on each reconcile,
-// causing the limit to grow by `(1 + headroom)` per cycle even after the
-// workload fits. The OOM-time-limit anchor avoids this because it only
-// refreshes when a NEW OOM event fires; once the workload fits after a bump,
-// no new OOM events occur and the recorded limit stays at the pre-bump value.
-// To enforce a hard "never go below X", use cfg.MinAllowed.
+// The container's current request is deliberately NOT a floor: it would
+// compound the previous reco's already-headroomed value, growing the limit by
+// (1 + headroom) per cycle even after the workload fits. The OOM-time-limit
+// anchor only refreshes when a new OOM fires, so it converges. For a hard
+// "never go below X", use cfg.MinAllowed.
 //
-// LiveEventAt is non-zero when an in-memory OOM observation (from the
-// active Pod watcher) corroborates or replaces the Prometheus signal. The
-// floor logic treats `LiveEventAt non-zero` as equivalent to `Recent==true`
-// so a freshly-observed kill drives a bump without waiting for the recording
-// rule to surface it.
+// LiveEventAt is set when the active Pod watcher observed a kill; the floor
+// logic treats it as equivalent to Recent so a bump does not wait for the
+// recording rule to surface it.
 type OOMSignal struct {
 	Recent            bool
 	PeakBytes         float64

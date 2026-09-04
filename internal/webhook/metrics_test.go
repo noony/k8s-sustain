@@ -18,13 +18,9 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
-// recSourceDelta reads RecommendationSourceTotal for source now, calls fn,
-// then returns how much the counter moved. This is the delta pattern used
-// elsewhere in the codebase (see internal/controller/metrics_emit_test.go)
-// for asserting against a package-global collector: the collector is shared
-// across every test in the package, so an absolute-value assertion is a
-// standing invitation to flake the moment test order or count changes
-// (-count=3, -shuffle=on in CI). A before/after delta is immune to that.
+// recSourceDelta returns how much the source counter moved across fn. The
+// collector is a package global shared by every test, so an absolute-value
+// assertion would flake under -count>1 and -shuffle=on.
 func recSourceDelta(t *testing.T, source string, fn func()) float64 {
 	t.Helper()
 	before := testutil.ToFloat64(RecommendationSourceTotal.WithLabelValues(source))
@@ -33,8 +29,6 @@ func recSourceDelta(t *testing.T, source string, fn func()) float64 {
 	return after - before
 }
 
-// TestAdmit_RecommendationSourceMetric_Hit verifies a fresh, usable WLR
-// increments the "hit" bucket exactly once.
 func TestAdmit_RecommendationSourceMetric_Hit(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
@@ -57,10 +51,8 @@ func TestAdmit_RecommendationSourceMetric_Hit(t *testing.T) {
 	}
 }
 
-// TestAdmit_RecommendationSourceMetric_Stale verifies a stale WLR increments
-// the "stale" bucket (not "hit" or "missing") and, critically, never
-// produces a resource-injection patch -- only the metric label changes; the
-// fail-open admission behaviour for stale data must be unchanged.
+// A stale WLR must change only the metric label: the fail-open admission
+// behaviour (no injection patch) stays unchanged.
 func TestAdmit_RecommendationSourceMetric_Stale(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
@@ -92,8 +84,6 @@ func TestAdmit_RecommendationSourceMetric_Stale(t *testing.T) {
 	}
 }
 
-// TestAdmit_RecommendationSourceMetric_Missing verifies the absence of any
-// WorkloadRecommendation increments the "missing" bucket.
 func TestAdmit_RecommendationSourceMetric_Missing(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
@@ -113,11 +103,9 @@ func TestAdmit_RecommendationSourceMetric_Missing(t *testing.T) {
 	}
 }
 
-// TestAdmit_RecommendationSourceMetric_Error verifies a WorkloadRecommendation
-// read failure (anything other than NotFound) increments the "error" bucket,
-// distinct from "missing". Simulated with an interceptor that returns a
-// generic error for WorkloadRecommendation Gets only, so the Policy and
-// ReplicaSet lookups earlier in admit() still succeed normally.
+// A WLR read failure other than NotFound must land in "error", not "missing".
+// The interceptor fails only WorkloadRecommendation Gets, so the Policy and
+// ReplicaSet lookups earlier in admit() still succeed.
 func TestAdmit_RecommendationSourceMetric_Error(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")

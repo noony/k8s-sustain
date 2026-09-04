@@ -84,8 +84,7 @@ func TestCertExpiry_GetCertificate_ReloadsOnRefresh(t *testing.T) {
 		t.Fatal("expected non-nil certificate after Refresh")
 	}
 
-	// Rotate: overwrite both files with a freshly generated keypair on the
-	// same paths and re-Refresh. The cached cert pointer must change.
+	// A rotation on the same paths must swap the cached cert pointer.
 	second := time.Now().Add(96 * time.Hour).Truncate(time.Second)
 	newCertPath, newKeyPath := writeTestCertAndKey(t, second, true)
 	if err := os.Rename(newCertPath, certPath); err != nil {

@@ -1,6 +1,5 @@
-// Package webhook registers the "webhook" subcommand with the root cobra command.
-// It starts a TLS HTTPS server that handles mutating admission requests for Pods,
-// injecting resource recommendations from policies with OnCreate update mode.
+// Package webhook registers the "webhook" subcommand, a TLS mutating-admission
+// server that injects resource recommendations on Pod CREATE.
 package webhook
 
 import (
@@ -43,32 +42,18 @@ Use cert-manager or provide a pre-existing Secret mounted at /tls.`,
 	RunE: runWebhook,
 }
 
-// newCachedClient is the seam cmd/webhook builds its Kubernetes client
-// through. Production is k8sclient.NewCached; tests replace it, because the
-// real one reaches for a kubeconfig via ctrl.GetConfigOrDie (which exits the
-// process when there is none) and then opens watches against an apiserver.
+// Test seam: the real NewCached calls ctrl.GetConfigOrDie (which exits the
+// process without a kubeconfig) and opens watches against an apiserver.
 var newCachedClient = k8sclient.NewCached
 
 func runWebhook(_ *cobra.Command, _ []string) error {
 	cfg := config.LoadWebhookConfig()
 	log := logging.Setup(cfg.LogLevel, "webhook")
 
-	// One signal-handler context for the whole process. It is the ONLY signal
-	// source: httpx.ListenAndServeWithShutdown takes this ctx rather than
-	// registering a handler of its own, so shutdown ordering in serve() is an
-	// explicit choice rather than a race between two handlers.
-	//
-	// ctrl.SetupSignalHandler panics if called a second time in the same
-	// process, so this must be the only call site -- the "start" subcommand
-	// (cmd/controller/start.go) has its own, but that only runs when the
-	// process is invoked as "k8s-sustain start", never in the same run as
-	// "k8s-sustain webhook".
-	//
-	// It is also, from the moment it is installed, the process's ONLY response
-	// to SIGTERM: SetupSignalHandler replaces Go's default "terminate" with
-	// "cancel this context". Everything that can block from here on has to
-	// honour it, or the signal is silently swallowed for as long as that block
-	// lasts -- see serve().
+	// The process's only signal source: SetupSignalHandler panics if called
+	// twice, and it replaces Go's default SIGTERM handling with "cancel this
+	// context", so everything that can block downstream must honour ctx or the
+	// signal is swallowed for as long as the block lasts.
 	return serve(ctrl.SetupSignalHandler(), cfg, log)
 }
 
@@ -76,44 +61,25 @@ func runWebhook(_ *cobra.Command, _ []string) error {
 // listener fails. Split out from runWebhook so tests can drive it with a
 // context they control instead of a real signal.
 func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error {
-	// The informer cache and cert watcher run on a SEPARATE context that
-	// outlives ctx on purpose. They are cancelled only after the HTTP server
-	// has finished draining AND the handler's detached stub writes have been
-	// drained with it (see the deferred stopDeps and the ordering at the end of
-	// this function).
-	//
-	// Deriving them from ctx instead would stop the cache the instant SIGTERM
-	// arrives, while the server is still serving admissions for up to its
-	// shutdown timeout — those requests would read a store that had stopped
-	// receiving updates. Serving is the thing that must stop first; everything
-	// admission depends on has to still be there while it does.
+	// The informer cache and cert watcher run on a context that outlives ctx on
+	// purpose: deriving them from ctx would stop the cache the instant SIGTERM
+	// arrives, while admissions are still being served for up to the shutdown
+	// timeout, and those requests would read a store that stopped updating.
 	depsCtx, stopDeps := context.WithCancel(context.Background())
 	defer stopDeps()
 
-	// Cached rather than direct-to-apiserver: with Prometheus out of the
-	// admission path (see internal/webhook/recommendations.go), the
-	// apiserver is the only remaining source of per-pod latency, and admit()
-	// does a Get for the Policy, the owner chain, and the
-	// WorkloadRecommendation on every single Pod CREATE. At thousands of
-	// pods that is a per-pod apiserver round trip the cluster does not need.
-	// See k8sclient.NewCached's doc comment for the startup-ordering and
-	// memory-cost tradeoffs this brings.
+	// Cached because admit() Gets the Policy, the owner chain and the
+	// WorkloadRecommendation on every Pod CREATE.
 	//
-	// TWO contexts, and the second one is not decoration. This call BLOCKS —
-	// up to crdWaitTimeout (2m) waiting for the CRDs to be servable, plus the
-	// informer sync — and the HTTPS listener does not exist yet, so nothing
-	// answers /healthz and nothing is watching for a shutdown signal. depsCtx
-	// deliberately does not track ctx (see above), so handing it the startup
-	// phase as well would mean the process ignores SIGTERM for that entire
-	// window and is removed only by the SIGKILL at the end of
-	// terminationGracePeriodSeconds — a `kubectl rollout restart` on a cluster
-	// where the CRDs are absent (installCRDs=false) hangs for the full grace
-	// period. So: depsCtx for the cache's lifetime, ctx for the wait.
+	// The two contexts are not decoration: this call BLOCKS for up to
+	// crdWaitTimeout (2m) plus the informer sync, before the HTTPS listener
+	// exists. depsCtx deliberately does not track ctx, so the startup wait gets
+	// ctx instead — otherwise SIGTERM is ignored for that whole window and the
+	// pod only dies at the end of terminationGracePeriodSeconds.
 	k8sClient, err := newCachedClient(depsCtx, ctx, config.Scheme())
 	if err != nil {
-		// A shutdown signal that arrived mid-startup is not a failure. Exiting
-		// non-zero here would have the container restart-loop on what is simply
-		// a rollout: nothing has been served, so there is nothing to report.
+		// A shutdown signal mid-startup is not a failure: exiting non-zero would
+		// restart-loop the container on what is simply a rollout.
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			log.Info("Shutdown signal received during startup; exiting before the server started")
 			return nil
@@ -122,7 +88,6 @@ func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error
 		return err
 	}
 
-	// Validate TLS files exist before starting the server.
 	if _, err := os.Stat(cfg.TLSCertFile); err != nil {
 		return fmt.Errorf("tls cert file %q: %w", cfg.TLSCertFile, err)
 	}
@@ -135,8 +100,7 @@ func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error
 		RecommendOnly:      cfg.RecommendOnly,
 		ExcludedNamespaces: cfg.ExcludedNamespaces,
 		// Bounds the departed-identity path, which waives the staleness gate.
-		// Must be the controller's own retention window — the chart renders both
-		// flags from one value; see config.BindWebhookFlags.
+		// Must match the controller's retention window; see config.BindWebhookFlags.
 		RecommendationRetention: cfg.RecommendationRetention,
 	}
 
@@ -147,8 +111,7 @@ func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error
 		log.Error(err, "Unable to register cert expiry gauge; continuing without it")
 	} else {
 		if err := certWatcher.Refresh(); err != nil {
-			// Refresh failed: we have no keypair loaded, so the server cannot
-			// serve TLS. Bail out rather than starting a broken listener.
+			// No keypair loaded means the listener could not serve TLS at all.
 			return fmt.Errorf("initial TLS cert load: %w", err)
 		}
 	}
@@ -160,16 +123,10 @@ func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Shared HTTP stack: request-ID correlation, panic recovery, telemetry,
-	// matching what the dashboard exposes. Order matters — request-ID sits
-	// outermost so telemetry/recovery log a populated requestId, and
-	// telemetry wraps recovery so a recovered request is still observed.
-	//
-	// Route labels are derived via DefaultRouteLabeler so the histogram and
-	// panic counter only ever see the registered patterns (/mutate, /metrics,
-	// /healthz). Without that, an attacker hitting bogus URLs would blow up
-	// Prometheus label cardinality on the webhook the same way it would on
-	// the dashboard.
+	// Order matters: request-ID outermost so telemetry/recovery log a populated
+	// requestId, and telemetry wraps recovery so a recovered request is still
+	// observed. DefaultRouteLabeler keeps the metric labels to registered
+	// patterns — the raw path is attacker-controlled cardinality.
 	wrapped := httpx.WithRequestID(httpx.WithTelemetry(
 		httpx.WithRecovery(
 			mux,
@@ -185,16 +142,12 @@ func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error
 	))
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	// Hardened timeouts come from httpx.NewServer's shared defaults
-	// (ReadHeaderTimeout 5s, Read/WriteTimeout 15s, IdleTimeout 60s). This
-	// widens the webhook's old 10s Read/WriteTimeout to the shared 15s; the
-	// webhook's effective deadline is still enforced upstream by the
-	// apiserver's MutatingWebhookConfiguration timeout, so this is safe.
+	// The shared httpx timeouts are wider than the webhook needs; its effective
+	// deadline is enforced upstream by the MutatingWebhookConfiguration timeout.
 	srv := httpx.NewServer(addr, wrapped)
 	if certWatcher != nil {
-		// Hot-reload path: GetCertificate is consulted on every TLS handshake,
-		// so cert-manager rotations are picked up at the next Refresh tick
-		// without a process restart.
+		// GetCertificate is consulted per handshake, so cert-manager rotations
+		// land at the next Refresh tick without a restart.
 		srv.TLSConfig = &tls.Config{
 			GetCertificate: certWatcher.GetCertificate,
 			MinVersion:     tls.VersionTLS12,
@@ -203,18 +156,15 @@ func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error
 
 	log.Info("Starting webhook server", "version", version.Version, "addr", addr, "certFile", cfg.TLSCertFile)
 
-	// Shares depsCtx with the informer cache: the cert watcher supplies the
-	// keypair for every TLS handshake, so it too must outlive the drain — a
-	// watcher stopped at SIGTERM would leave in-flight handshakes during
-	// shutdown without a certificate.
+	// depsCtx, not ctx: a watcher stopped at SIGTERM would leave handshakes
+	// during the drain without a certificate.
 	if certWatcher != nil {
 		go certWatcher.Run(depsCtx, time.Hour)
 	}
 
 	err = httpx.ListenAndServeWithShutdown(ctx, srv, log, "webhook", 10*time.Second, func() error {
-		// Empty cert/key paths: the keypair comes from TLSConfig.GetCertificate.
-		// Falls back to disk-loading paths when GetCertificate isn't wired
-		// (e.g. cert watcher init failed).
+		// Empty paths mean the keypair comes from TLSConfig.GetCertificate;
+		// fall back to disk when the cert watcher failed to initialize.
 		certPath, keyPath := "", ""
 		if certWatcher == nil {
 			certPath, keyPath = cfg.TLSCertFile, cfg.TLSKeyFile
@@ -222,23 +172,12 @@ func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error
 		return srv.ListenAndServeTLS(certPath, keyPath)
 	})
 
-	// The HTTP drain ends the REQUESTS, not everything they started. An
-	// admission that found no WorkloadRecommendation dispatches the stub create
-	// on a goroutine that deliberately outlives its AdmissionResponse
-	// (internal/webhook/stub.go): it can be parked on a write slot, or inside an
-	// apiserver call whose read is served by the informer cache below. So the
-	// handler is drained first — it cancels those goroutines and joins them,
-	// bounded by its own timeout so this can never eat the grace period — and
-	// only then, with no request able to arrive AND nothing still reading, is it
-	// safe to stop the informer cache and cert watcher.
-	//
-	// A stub write abandoned here is not lost work: the next admission for the
-	// same identity requests it again.
-	//
-	// The deferred stopDeps covers the early-return paths above; this call makes
-	// the ordering explicit on the path that actually serves traffic. ctx is
-	// already cancelled by the time we get here (that is what ended the serve),
-	// so the drain gets a context of its own.
+	// The HTTP drain ends the requests, not the goroutines they started: a stub
+	// create (internal/webhook/stub.go) outlives its AdmissionResponse and may
+	// still be reading through the informer cache. Drain the handler first, then
+	// stop the cache and cert watcher. ctx is already cancelled here (that is
+	// what ended the serve), so the drain needs a context of its own. An
+	// abandoned stub write is not lost — the next admission requests it again.
 	if drainErr := handler.Shutdown(context.Background()); drainErr != nil {
 		log.Info("Gave up waiting for in-flight recommendation-stub writes", "err", drainErr)
 	}

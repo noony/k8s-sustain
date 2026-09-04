@@ -22,8 +22,6 @@ var rootCmd = &cobra.Command{
 	SilenceErrors: true,
 }
 
-// versionCmd prints the build-time version. Handy for confirming which image is
-// running in-cluster (`kubectl exec ... -- /k8s-sustain version`).
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the k8s-sustain version",

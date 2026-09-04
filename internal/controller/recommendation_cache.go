@@ -21,43 +21,19 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// sweepGracePeriod protects freshly CREATED WorkloadRecommendations from the
-// sweep, regardless of the retention setting. An identity first written just
-// after this cycle's target listing was built is absent from that listing
-// through no fault of its own, and would otherwise be deleted moments after
-// being created — by the sweep at the end of the very same pass. This assumes
-// a reconcile pass (target listing → sweep) completes within the grace
-// window; a pass longer than 10 minutes could misclassify a mid-pass write as
-// opted out. (The controller is currently the only writer; this also covers
-// whatever mechanism eventually replaces the webhook's removed
-// ephemeral-identity write path, which raced the sweep the same way.)
-//
-// Anchored on the object's CreationTimestamp, NOT on status.ObservedAt, and
-// that distinction is the whole point. Under WLR-driven computation the
-// controller recomputes every identity in its own list each cycle — departed
-// ones included — so ObservedAt now means "this controller recently ran a
-// query", not "something recently observed this workload alive". Anchoring
-// grace on it made the guard self-satisfying: phase 2 rewrote ObservedAt,
-// then the sweep at the end of the same pass read the timestamp it had just
-// written and always concluded the object was fresh. That made
-// retainDepartedWLR unreachable for any identity whose samples were still
-// flowing, so a workload that opted out (annotation removed, labels changed,
-// namespace excluded) kept its WorkloadRecommendation, and its shard
-// membership, forever. A CreationTimestamp cannot be refreshed by the writer
-// it is meant to be independent of.
+// sweepGracePeriod protects freshly created WorkloadRecommendations from the
+// sweep: an identity first written after this cycle's target listing was
+// built would otherwise be deleted by the same pass. Anchored on
+// CreationTimestamp, not ObservedAt, which the computation phase rewrites
+// every cycle and would make the guard self-satisfying.
 const sweepGracePeriod = 10 * time.Minute
 
-// wlrName delegates to the shared cache package — controller and webhook
-// must agree on WLR object names or the read contract breaks.
+// wlrName delegates to the shared cache package so controller and webhook
+// agree on names.
 func wlrName(kind, name string) string { return wlrcache.Name(kind, name) }
 
-// wlrLastSeen returns the anchor for RETENTION decisions — how long a
-// departed identity's last-known-good has been sitting in the cache. A WLR
-// that was just Created but whose status patch hasn't landed yet has a zero
-// ObservedAt, so its CreationTimestamp stands in.
-//
-// Not used for the grace period: see sweepGracePeriod for why that one must
-// be anchored on the CreationTimestamp alone.
+// wlrLastSeen returns the retention anchor: ObservedAt, or CreationTimestamp
+// when the status patch has not landed yet.
 func wlrLastSeen(wlr *sustainv1alpha1.WorkloadRecommendation) time.Time {
 	seen := wlr.Status.ObservedAt.Time
 	if wlr.CreationTimestamp.After(wlr.Status.ObservedAt.Time) {
@@ -66,34 +42,17 @@ func wlrLastSeen(wlr *sustainv1alpha1.WorkloadRecommendation) time.Time {
 	return seen
 }
 
-// wlrRefreshInterval bounds how long an unchanged WorkloadRecommendation
-// status may keep its old ObservedAt before the controller rewrites it just
-// to bump the timestamp. Must stay well under the webhook's
-// DefaultCacheStaleness (30m): without the periodic bump, stable workloads
-// would freeze ObservedAt at their last value change and the webhook would
-// reject the cache as stale and admit pods with template resources —
-// exactly the workloads this refresh keeps injectable.
+// wlrRefreshInterval bounds how long an unchanged status keeps its old
+// ObservedAt. Must stay well under the webhook's DefaultCacheStaleness or
+// stable workloads are rejected as stale.
 const wlrRefreshInterval = wlrcache.RefreshInterval
 
-// wlrPolicyLabel labels each WorkloadRecommendation with the Policy that
-// produced it. Shared via the exported constant in api/v1alpha1.
+// wlrPolicyLabel labels each WorkloadRecommendation with its Policy.
 const wlrPolicyLabel = sustainv1alpha1.WLRPolicyLabel
 
-// upsertWorkloadRecommendation persists an IDENTITY's recommendation via the
-// shared write path. Called once per computeItem, never once per group member.
-//
-// The observed-resources snapshot it writes is the identity's own
-// (computeItem.Observed), which is the same value discovery wrote through
-// EnsureExists moments earlier — the two writers of that field agree by
-// construction, so a converged identity costs no write here at all. Passing a
-// single member's snapshot instead is what used to make the members of an
-// owner-name group patch the field back and forth forever, each cycle, with the
-// winner decided by goroutine scheduling.
-//
-// The error is returned rather than swallowed. The recycle path treats a failed
-// cache write as non-fatal and drops it (the webhook keeps serving the previous
-// value until the next successful write); refreshDepartedRecommendation, where
-// the write IS the deliverable, must not.
+// upsertWorkloadRecommendation persists an identity's recommendation. Called
+// once per computeItem; it writes the identity's own snapshot so the two
+// writers of status.observedResources agree.
 func (r *PolicyReconciler) upsertWorkloadRecommendation(
 	ctx context.Context,
 	it computeItem,
@@ -109,58 +68,26 @@ func (r *PolicyReconciler) upsertWorkloadRecommendation(
 	return wlrcache.Upsert(ctx, r.Client, ref, policyName, recs, it.Observed, now)
 }
 
-// wlrDeleteGuard says how strongly a cleanup path conditions its deletes —
-// and, inseparably, what a conflict means on that path. Both follow from one
-// question: does the decision keep() made depend on the REVISION it read, or
-// only on the object's identity?
+// wlrDeleteGuard says how strongly a cleanup path conditions its deletes, and
+// what a conflict means on that path.
 type wlrDeleteGuard int
 
 const (
-	// deleteIfUnchanged conditions the delete on the UID *and* the
-	// ResourceVersion observed in the List. For a decision that depends on
-	// mutable contents: keep() judges a copy read from the informer cache and
-	// that copy can be obsolete by the time the Delete lands. With
-	// MaxConcurrentReconciles > 1, a workload re-annotated from policy P1 to P2
-	// is rewritten by Reconcile(P2) — new label, freshly computed
-	// recommendation — while Reconcile(P1)'s sweep still holds the pre-rewrite
-	// copy that says the target has left P1's set. Unconditioned, that delete
-	// destroys live state and the webhook falls back to template resources
-	// until P2's next cycle. The precondition turns it into a conflict, which
-	// is benign here: the decision was made against a revision that no longer
-	// exists, so the object is left alone (not counted as deleted) and
-	// re-judged on fresh data by the next pass.
+	// deleteIfUnchanged conditions on UID and ResourceVersion, for decisions
+	// that depend on mutable contents. A conflict is benign: the object is
+	// re-judged next pass.
 	deleteIfUnchanged wlrDeleteGuard = iota
 
-	// deleteIfSameObject conditions the delete on the UID alone. For a decision
-	// that does not depend on the revision at all — "this object belongs to the
-	// policy being deleted" stays true however often the object is rewritten —
-	// so the only real hazard is a delete+recreate that reused the name, which
-	// the UID already covers. Adding the ResourceVersion there would buy
-	// nothing and cost a failure mode: a rewrite inside the informer cache's
-	// propagation window would turn into a conflict and the object would
-	// survive. A conflict on this guard is consequently NOT benign — it is
-	// unexpected, and it is returned so the caller can retry rather than
-	// declare the cleanup finished.
+	// deleteIfSameObject conditions on the UID alone, for decisions that do not
+	// depend on the revision at all — "this object belongs to the policy being
+	// deleted" stays true however often it is rewritten. A conflict is
+	// unexpected and returned.
 	deleteIfSameObject
 )
 
-// deleteWLRsWhere lists WorkloadRecommendation objects with the given options
-// and deletes every item for which keep returns false, conditioning each delete
-// as the guard prescribes (see wlrDeleteGuard for why the caller chooses).
-//
-// IsNotFound is benign on every path: the object is already gone, which is the
-// intended end state, so it counts as deleted. IsConflict is benign only under
-// deleteIfUnchanged, where it is the expected outcome of a stale decision;
-// under deleteIfSameObject it is reported like any other failure.
-//
-// Any other delete failure is logged at V(1) via logger and the first such
-// error is returned alongside the count of successful deletions. A list failure
-// is returned (wrapped) with a zero count so callers can distinguish it from a
-// partial delete failure.
-//
-// This is the shared core of the three WLR cleanup paths (per-cycle sweep,
-// per-policy delete, orphan reaper); each wraps it with its own list options,
-// keep predicate, guard, error handling and aggregate logging.
+// deleteWLRsWhere lists WorkloadRecommendations and deletes those keep
+// rejects. NotFound counts as deleted; Conflict is benign only under
+// deleteIfUnchanged. A list failure returns a zero count.
 func (r *PolicyReconciler) deleteWLRsWhere(
 	ctx context.Context,
 	logger logr.Logger,
@@ -178,8 +105,7 @@ func (r *PolicyReconciler) deleteWLRsWhere(
 		if keep(wlr) {
 			continue
 		}
-		// Copied out of the listed item: the preconditions must describe the
-		// exact object keep() judged, not whatever it looks like now.
+		// Preconditions must describe the object keep() judged.
 		uid := wlr.UID
 		preconditions := client.Preconditions{UID: &uid}
 		if guard == deleteIfUnchanged {
@@ -204,18 +130,9 @@ func (r *PolicyReconciler) deleteWLRsWhere(
 	return deleted, nil, deleteErr
 }
 
-// sweepWorkloadRecommendations deletes WorkloadRecommendation objects that
-// were created by this policy but whose target workload no longer appears in
-// the current target set. Called once per Reconcile after a successful pass.
-//
-// A WLR whose target is absent is not deleted outright: a recent
-// CreationTimestamp (within sweepGracePeriod) protects it — this guards
-// against an identity first written mid-cycle, after the target list was
-// built — and beyond that retainDepartedWLR decides based on whether the
-// workload object is actually gone, and if so on RecommendationRetention.
-//
-// Best-effort: errors are logged, never returned. A missed sweep just leaves
-// a stale cache entry until the next cycle.
+// sweepWorkloadRecommendations deletes this policy's WorkloadRecommendations
+// whose target is absent from the current set, subject to the grace period
+// and retainDepartedWLR. Best-effort.
 func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, policyName string, targets []workloadTarget) {
 	logger := log.FromContext(ctx).WithValues("policy", policyName)
 
@@ -229,8 +146,7 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, deleteIfUnchanged,
 		[]client.ListOption{client.MatchingLabels{wlrPolicyLabel: policyName}},
 		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
-			// Defensive: if the label is stale relative to spec.policy (e.g. on
-			// WLRs migrated mid-rename), keep filtering by spec.policy too.
+			// Guard against a label stale relative to spec.policy.
 			if wlr.Spec.Policy != policyName {
 				return true
 			}
@@ -251,53 +167,26 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 	}
 }
 
-// retainDepartedWLR decides whether a WorkloadRecommendation whose target
-// left the policy's target set should be kept.
-//
-// A target can be absent for three different reasons, and the object's own
-// existence is what tells them apart:
-//
-//   - The workload is GONE (deleted, or a terminal Job): departed. Kept while
-//     within the retention window, which is what keeps ephemeral workloads
-//     (bare pods, argocd-hook Jobs) on the dashboard after they end.
-//   - The workload still EXISTS and is older than the grace period: it opted
-//     out — annotation removed, labels changed, namespace excluded. Deleted,
-//     and this is the only path that ever removes such an entry.
-//   - The workload still EXISTS but was created within the grace period: it
-//     simply postdates this cycle's target listing. Kept.
-//
-// Fails open: an existence-check error keeps the object so a later sweep can
-// decide.
-//
-// Note the retention window is measured from ObservedAt, which the
-// computation phase refreshes for as long as the identity's samples remain
-// inside the query window. A departed identity is therefore retained for
-// roughly (window + retention), not retention alone — see
-// docs/reference/cli.md.
+// retainDepartedWLR decides whether a WorkloadRecommendation whose target left
+// the target set is kept: a gone workload is retained for the retention
+// window, an existing one older than the grace period has opted out and is
+// deleted, and a check error fails open.
 func (r *PolicyReconciler) retainDepartedWLR(ctx context.Context, logger logr.Logger, wlr *sustainv1alpha1.WorkloadRecommendation, now time.Time) bool {
 	gone, created, err := r.workloadGone(ctx, wlr.Spec.WorkloadRef)
 	if err != nil {
-		// Deliberately NOT marked departed. This branch keeps the object on an
-		// inconclusive check, not a confirmed departure, and the mark waives the
-		// webhook's freshness gate — applying it here would let a live workload
-		// whose existence check merely errored be served arbitrarily old data.
+		// Not marked departed: the check was inconclusive, and the mark waives the
+		// webhook's freshness gate.
 		logger.V(1).Info("workload existence check failed; keeping WorkloadRecommendation",
 			"name", wlr.Name, "namespace", wlr.Namespace, "err", err)
 		return true
 	}
 	if !gone {
-		// The workload is still running but is no longer matched: it opted
-		// out, and its cache entry goes. Unless the OBJECT is itself younger
-		// than the grace period — then it was created after this cycle's
-		// target listing was built, and the next listing will pick it up.
-		// The WLR's own age cannot answer this: a workload recreated under a
-		// name k8s-sustain already knows reuses the existing object.
+		// Still running but unmatched: opted out, unless the object postdates this
+		// cycle's listing.
 		return now.Sub(created) < sweepGracePeriod
 	}
-	// Retention is only consulted for genuinely departed identities. Checked
-	// here rather than at the top of the function so that disabling retention
-	// cannot short-circuit the opt-out branch above into deleting a workload
-	// that merely raced the listing.
+	// Checked after the opt-out branch so disabling retention cannot delete a
+	// workload that merely raced the listing.
 	if r.RecommendationRetention <= 0 {
 		return false
 	}
@@ -308,18 +197,9 @@ func (r *PolicyReconciler) retainDepartedWLR(ctx context.Context, logger logr.Lo
 	return true
 }
 
-// markDeparted records that this recommendation is being retained for a
-// workload identity confirmed gone, so the webhook serves it instead of
-// rejecting it as stale — see WorkloadRecommendationStatus.Departed for why
-// that distinction exists at all.
-//
-// Idempotent by design: the sweep runs every reconcile, but the patch is
-// issued only on the transition, so a departed identity costs one write for
-// its whole retention window rather than one per cycle.
-//
-// Best-effort, like the rest of the sweep. A failed patch leaves the object
-// unmarked and the next sweep retries; the only consequence in between is that
-// the webhook keeps treating it as stale, which is the pre-existing behaviour.
+// markDeparted flags a retained recommendation as departed so the webhook
+// serves it instead of rejecting it as stale. Patched only on the
+// transition; best-effort.
 func (r *PolicyReconciler) markDeparted(ctx context.Context, logger logr.Logger, wlr *sustainv1alpha1.WorkloadRecommendation) {
 	if wlr.Status.Departed {
 		return
@@ -336,18 +216,8 @@ func (r *PolicyReconciler) markDeparted(ctx context.Context, logger logr.Logger,
 }
 
 // workloadGone reports whether the referenced workload object no longer
-// exists. Jobs in a terminal state count as gone: they leave the target set
-// while the object lingers until TTL/hook deletion, and that is not an
-// opt-out. Bare-pod identities (kind "Pod") always count as gone — the ref
-// name is the owner-name annotation value, not a real object name, so
-// existence cannot be checked with a GET. Owner-name-overridden identities
-// on other kinds hit the same limit and resolve to NotFound → gone.
-//
-// The second return is the surviving object's CreationTimestamp, zero when
-// the object is gone. retainDepartedWLR needs it to tell the two reasons a
-// live workload can be absent from the target set apart: it opted out, or it
-// was created after this cycle's listing was built. Only the object's own age
-// separates them, and nothing on the WLR can stand in for it.
+// exists, and its CreationTimestamp when it does. Terminal Jobs and bare-pod
+// identities count as gone.
 func (r *PolicyReconciler) workloadGone(
 	ctx context.Context,
 	ref sustainv1alpha1.WorkloadReference,
@@ -382,28 +252,15 @@ func (r *PolicyReconciler) workloadGone(
 	return false, obj.GetCreationTimestamp().Time, nil
 }
 
-// deleteAllRecommendationsForPolicy removes every WorkloadRecommendation tied
-// to the named policy. Called from the deletion branch of Reconcile before
-// the cleanup finalizer is dropped — guarantees the cache doesn't outlive
-// the parent Policy on the normal `kubectl delete policy` path.
-//
-// Returns an error so the finalizer is only removed once cleanup finishes;
-// otherwise a transient API failure mid-delete would orphan WLRs. That is why
-// this path uses deleteIfSameObject and, unlike the sweep, reports a conflict
-// instead of absorbing it: its keep predicate is `spec.policy != policyName`,
-// which does not depend on the object's revision, so a ResourceVersion
-// precondition would buy nothing while letting a WLR rewritten inside the
-// informer cache's propagation window survive a cleanup this caller has
-// already been told finished. Swallowing the conflict on top of that would
-// drop the finalizer and delete the Policy, leaving the orphan reaper's next
-// tick as the only remaining collector — the guarantee this path exists for.
+// deleteAllRecommendationsForPolicy removes every WorkloadRecommendation for
+// the policy before the finalizer is dropped. Uses deleteIfSameObject and
+// returns conflicts so the finalizer only goes once cleanup finished.
 func (r *PolicyReconciler) deleteAllRecommendationsForPolicy(ctx context.Context, policyName string) error {
 	logger := log.FromContext(ctx).WithValues("policy", policyName)
 
 	deleted, listErr, deleteErr := r.deleteWLRsWhere(ctx, logger, deleteIfSameObject,
 		[]client.ListOption{client.MatchingLabels{wlrPolicyLabel: policyName}},
 		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
-			// Defensive: belt-and-braces against label drift on legacy WLRs.
 			return wlr.Spec.Policy != policyName
 		})
 	if listErr != nil {
@@ -415,30 +272,10 @@ func (r *PolicyReconciler) deleteAllRecommendationsForPolicy(ctx context.Context
 	return deleteErr
 }
 
-// reapOrphanedRecommendations is the belt-and-braces sweeper: it lists every
-// WorkloadRecommendation in the cluster and deletes any whose spec.policy
-// does not reference an existing Policy. Catches:
-//   - WLRs left behind by `kubectl delete policy --grace-period=0 --force`
-//     (which skips finalizers entirely).
-//   - WLRs from a controller crash mid-delete.
-//   - WLRs orphaned by a Policy renamed before the per-policy sweep ran.
-//
-// It no longer ages out "nodata" recommendations. Under WLR-driven refresh a
-// nodata status means "nothing computed YET" and is retried on every cycle, so
-// there is no terminal state to collect. An identity that never materialises is
-// removed by the per-policy sweep once its target is absent and the retention
-// window lapses.
-//
-// Best-effort and idempotent. Safe to run on a tick — which is also why it
-// keeps the strict deleteIfUnchanged guard. Its predicate reads spec.policy,
-// a field the migration path rewrites in place (wlrcache.Upsert re-points a
-// re-annotated workload's WLR at its new policy), so a stale copy can say
-// "orphan" about an object that has just been adopted and recomputed; reaping
-// it destroys live state exactly as it would in the sweep. Unlike the
-// finalizer path this one guarantees nothing, so a conflict costs only a
-// 10-minute wait — and it is self-limiting, because the only thing that
-// rewrites a WLR is a reconcile of the policy that owns it, i.e. an object
-// that keeps conflicting is an object that is not an orphan.
+// reapOrphanedRecommendations deletes every WorkloadRecommendation whose
+// spec.policy names no existing Policy, catching force deletes and crashes
+// mid-delete. Runs on a tick with the deleteIfUnchanged guard, since a stale
+// copy can call a just-adopted object an orphan.
 func (r *PolicyReconciler) reapOrphanedRecommendations(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("orphan-reaper")
 
@@ -454,7 +291,7 @@ func (r *PolicyReconciler) reapOrphanedRecommendations(ctx context.Context) erro
 	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, deleteIfUnchanged, nil,
 		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
 			if wlr.Spec.Policy == "" {
-				// Untracked entry — leave it; some other writer may own it.
+				// Untracked entry; some other writer may own it.
 				return true
 			}
 			_, ok := known[wlr.Spec.Policy]

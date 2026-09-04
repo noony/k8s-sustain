@@ -32,15 +32,9 @@ func mustLoadDashboard(t *testing.T) DashboardConfig {
 	return cfg
 }
 
-// TestInitViper_EnvBinding_DotAndDashKeys verifies that environment variables
-// with the K8SSUSTAIN_ prefix bind to viper keys that contain dots (subkey
-// separators) and dashes (kebab-case), as used throughout this package.
-//
-// Without an env key replacer, viper looks up env vars by upper-casing the key
-// as-is, so `dashboard.bind-address` -> `K8SSUSTAIN_DASHBOARD.BIND-ADDRESS`,
-// which is not a legal POSIX env var name and never matches what users set.
-// The replacer maps `.` and `-` to `_` so users can sensibly export
-// `K8SSUSTAIN_DASHBOARD_BIND_ADDRESS`.
+// Without an env key replacer, viper upper-cases the key as-is, so
+// `dashboard.bind-address` -> `K8SSUSTAIN_DASHBOARD.BIND-ADDRESS`, which is not
+// a legal POSIX env var name and never matches what users set.
 func TestInitViper_EnvBinding_DotAndDashKeys(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -70,8 +64,7 @@ func TestInitViper_EnvBinding_DotAndDashKeys(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Use a clean global viper instance and restore it after the test
-			// since InitViper operates on the package-level singleton.
+			// InitViper operates on the package-level viper singleton.
 			t.Cleanup(viper.Reset)
 			viper.Reset()
 
@@ -87,8 +80,6 @@ func TestInitViper_EnvBinding_DotAndDashKeys(t *testing.T) {
 	}
 }
 
-// TestLoadWebhookConfig_RoundTripsBoundFlags verifies BindWebhookFlags +
-// LoadWebhookConfig surface bound-flag defaults and env overrides correctly.
 func TestLoadWebhookConfig_RoundTripsBoundFlags(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -112,11 +103,9 @@ func TestLoadWebhookConfig_RoundTripsBoundFlags(t *testing.T) {
 	}
 }
 
-// TestBindWebhookFlags_NoPrometheusAddress verifies the webhook subcommand no
-// longer registers --prometheus-address. The webhook's Prometheus client was
-// removed (it now reads recommendations exclusively from the cached
-// WorkloadRecommendation); leaving the flag bound would be a dead knob that
-// looks like it does something and does nothing.
+// The webhook reads recommendations exclusively from the cached
+// WorkloadRecommendation; a bound --prometheus-address would be a dead knob
+// that looks like it does something.
 func TestBindWebhookFlags_NoPrometheusAddress(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -129,11 +118,8 @@ func TestBindWebhookFlags_NoPrometheusAddress(t *testing.T) {
 	}
 }
 
-// TestStringSlice_EnvOverride verifies that string-slice flags can be
-// overridden via environment variable using the same comma-separated syntax
-// as --flag=a,b. Viper hands env values back as a single raw string (and
-// GetStringSlice splits strings on whitespace, not commas), so getStringSlice
-// has to do the comma splitting itself.
+// Viper hands env values back as a single raw string, and GetStringSlice splits
+// on whitespace rather than commas, so getStringSlice splits them itself.
 func TestStringSlice_EnvOverride(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -164,8 +150,6 @@ func TestStringSlice_EnvOverride(t *testing.T) {
 	}
 }
 
-// TestStringSlice_EnvOverride_SubcommandKey covers the dotted-key variant
-// (webhook.excluded-namespaces) of the comma-separated env override.
 func TestStringSlice_EnvOverride_SubcommandKey(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -183,8 +167,8 @@ func TestStringSlice_EnvOverride_SubcommandKey(t *testing.T) {
 	}
 }
 
-// TestStringSlice_FlagStillWorks ensures the comma-splitting env fix does not
-// regress the flag path, which already parses CSV via pflag.
+// The flag path already parses CSV via pflag; the env-side comma splitting must
+// not regress it.
 func TestStringSlice_FlagStillWorks(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -203,8 +187,6 @@ func TestStringSlice_FlagStillWorks(t *testing.T) {
 	}
 }
 
-// TestLoadDashboardConfig_RoundTripsBoundFlags mirrors the webhook test for
-// the dashboard subcommand.
 func TestLoadDashboardConfig_RoundTripsBoundFlags(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -224,14 +206,10 @@ func TestLoadDashboardConfig_RoundTripsBoundFlags(t *testing.T) {
 	}
 }
 
-// TestControllerConfig_RecommendationRetentionDefault verifies the flag
-// registers with its 168h (7d) default and threads into ControllerConfig.
-//
-// The value is not arbitrary. Since the webhook's only recommendation source
-// is the WorkloadRecommendation object, this window decides whether a
-// recurring ephemeral identity is rightsized at admission on its next run: if
-// the object is reaped between two runs, every run cold starts. 7d clears the
-// weekly batch cycle that 72h did not.
+// The 7d default is not arbitrary: the WorkloadRecommendation is the webhook's
+// only recommendation source, so an object reaped between two runs of a
+// recurring ephemeral identity makes every run cold start. 7d clears the weekly
+// batch cycle that 72h did not.
 func TestControllerConfig_RecommendationRetentionDefault(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -242,8 +220,6 @@ func TestControllerConfig_RecommendationRetentionDefault(t *testing.T) {
 	}
 }
 
-// TestControllerConfig_PolicyConcurrencyLimitDefault verifies the flag
-// registers with its 10 default and threads into ControllerConfig.
 func TestControllerConfig_PolicyConcurrencyLimitDefault(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -254,8 +230,6 @@ func TestControllerConfig_PolicyConcurrencyLimitDefault(t *testing.T) {
 	}
 }
 
-// TestControllerConfig_PolicyConcurrencyLimitEnvOverride verifies the flag can
-// be overridden via K8SSUSTAIN_POLICY_CONCURRENCY_LIMIT.
 func TestControllerConfig_PolicyConcurrencyLimitEnvOverride(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -268,11 +242,9 @@ func TestControllerConfig_PolicyConcurrencyLimitEnvOverride(t *testing.T) {
 	}
 }
 
-// TestControllerConfig_PrometheusMaxInflightDefault verifies the
-// --prometheus-max-inflight flag registers with its default of 8 and threads
-// into ControllerConfig. The default is kept well under Prometheus's own
-// --query.max-concurrency (20) so the controller does not starve dashboards
-// and alerting sharing the same Prometheus server.
+// The default of 8 is kept well under Prometheus's own --query.max-concurrency
+// (20) so the controller does not starve dashboards and alerting sharing the
+// same server.
 func TestControllerConfig_PrometheusMaxInflightDefault(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -284,12 +256,8 @@ func TestControllerConfig_PrometheusMaxInflightDefault(t *testing.T) {
 	}
 }
 
-// TestControllerConfig_QueryShardMaxSamplesDefault verifies the
-// --query-shard-max-samples flag registers with the shared
-// DefaultQueryShardMaxSamples constant and threads into ControllerConfig.
 // internal/prometheus/shardscale_test.go asserts its shard-collapsing scale
-// property against this same exported constant, so the two can never drift
-// apart silently -- see that test's doc comment.
+// property against this same exported constant, so the two cannot drift.
 func TestControllerConfig_QueryShardMaxSamplesDefault(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -304,8 +272,6 @@ func TestControllerConfig_QueryShardMaxSamplesDefault(t *testing.T) {
 	}
 }
 
-// TestControllerConfig_QueryShardMaxSamplesEnvOverride verifies the flag can
-// be overridden via K8SSUSTAIN_QUERY_SHARD_MAX_SAMPLES.
 func TestControllerConfig_QueryShardMaxSamplesEnvOverride(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -317,8 +283,6 @@ func TestControllerConfig_QueryShardMaxSamplesEnvOverride(t *testing.T) {
 		t.Errorf("QueryShardMaxSamples = %d, want 1000000 (env override)", got)
 	}
 }
-
-// --- Prometheus transport (auth / TLS) -------------------------------------
 
 // TestParseHeaders covers the --prometheus-headers Key=Value grammar,
 // including the values a Thanos/Mimir tenant id can legitimately take.
@@ -389,9 +353,6 @@ func TestParseHeaders(t *testing.T) {
 	}
 }
 
-// TestControllerConfig_PrometheusTransportEnvOverrides verifies every
-// Prometheus auth/TLS flag binds to its K8SSUSTAIN_-prefixed env var and lands
-// in the promclient.TransportConfig the call site passes to New.
 func TestControllerConfig_PrometheusTransportEnvOverrides(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -424,9 +385,8 @@ func TestControllerConfig_PrometheusTransportEnvOverrides(t *testing.T) {
 	}
 }
 
-// TestControllerConfig_PrometheusBasicAuthEnvOverrides covers the basic-auth
-// trio, which the bearer-token test above deliberately leaves unset (the two
-// are mutually exclusive in the client).
+// The bearer-token test above leaves these unset: the two are mutually
+// exclusive in the client.
 func TestControllerConfig_PrometheusBasicAuthEnvOverrides(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -449,10 +409,8 @@ func TestControllerConfig_PrometheusBasicAuthEnvOverrides(t *testing.T) {
 	}
 }
 
-// TestControllerConfig_PrometheusTransportDefaultIsEmpty pins that an install
-// that sets none of these flags produces the zero TransportConfig, which
-// internal/prometheus resolves to "no RoundTripper" — i.e. the pre-auth
-// behaviour is unchanged by default.
+// An install setting none of these flags must produce the zero TransportConfig,
+// which internal/prometheus resolves to "no RoundTripper".
 func TestControllerConfig_PrometheusTransportDefaultIsEmpty(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -464,9 +422,8 @@ func TestControllerConfig_PrometheusTransportDefaultIsEmpty(t *testing.T) {
 	}
 }
 
-// TestControllerConfig_PrometheusHeadersParseError verifies a malformed entry
-// fails LoadControllerConfig itself rather than being silently dropped, so no
-// call site can start the process with the headers missing.
+// A malformed entry must fail LoadControllerConfig itself, so no call site can
+// start the process with the headers silently missing.
 func TestControllerConfig_PrometheusHeadersParseError(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -483,10 +440,9 @@ func TestControllerConfig_PrometheusHeadersParseError(t *testing.T) {
 	}
 }
 
-// TestDashboardConfig_PrometheusTransportEnvOverrides verifies the dashboard
-// binds the same flag names under "dashboard."-prefixed viper keys, so the two
-// subcommands can be configured independently (see bindPrometheusTransportFlags
-// for why they cannot share one flat key).
+// The dashboard binds the same flag names under "dashboard."-prefixed viper
+// keys so the two subcommands are configurable independently; see
+// bindPrometheusTransportFlags for why they cannot share one flat key.
 func TestDashboardConfig_PrometheusTransportEnvOverrides(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -510,9 +466,8 @@ func TestDashboardConfig_PrometheusTransportEnvOverrides(t *testing.T) {
 	}
 }
 
-// TestPrometheusTransportFlagsRegisteredOnBothCommands pins the exact flag
-// names, so a rename here is a deliberate act rather than a silent break of
-// the Helm chart and docs that reference them.
+// Pins the exact flag names, so a rename is a deliberate act rather than a
+// silent break of the Helm chart and docs that reference them.
 func TestPrometheusTransportFlagsRegisteredOnBothCommands(t *testing.T) {
 	want := []string{
 		"prometheus-bearer-token",
@@ -549,10 +504,9 @@ func TestPrometheusTransportFlagsRegisteredOnBothCommands(t *testing.T) {
 	}
 }
 
-// TestPrometheusHeadersFlagIsRepeatableAndCommaSafe pins the flag's grammar:
 // --prometheus-headers is a StringArray (one header per occurrence, verbatim),
-// NOT a CSV StringSlice, so a header value may itself contain a comma. The
-// chart renders one flag per header and relies on exactly this.
+// NOT a CSV StringSlice, so a header value may contain a comma. The chart
+// renders one flag per header and relies on exactly this.
 func TestPrometheusHeadersFlagIsRepeatableAndCommaSafe(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()

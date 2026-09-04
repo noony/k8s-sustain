@@ -28,10 +28,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods
-// drives reconcileWorkload end-to-end: Prometheus mock returns sample data,
-// the recommender produces requests, the patcher patches pods in place.
-// Verifies the per-container request was rewritten on the live pod.
 func TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -65,9 +61,6 @@ func TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods(t *te
 	}
 }
 
-// TestReconcileWorkload_RecommendOnly_DoesNotRecyclePods verifies that the
-// RecommendOnly flag short-circuits the recycle path: pods stay untouched
-// even when the recommendation differs from current resources.
 func TestReconcileWorkload_RecommendOnly_DoesNotRecyclePods(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -105,10 +98,8 @@ func TestReconcileWorkload_RecommendOnly_DoesNotRecyclePods(t *testing.T) {
 	}
 }
 
-// TestReconcileWorkload_PolicyRecommendOnly_DoesNotRecyclePods verifies the
-// per-policy spec.rightSizing.recommendOnly field short-circuits the recycle
-// path exactly like the global flag, while the recommendation is still
-// computed and cached as a WorkloadRecommendation.
+// The per-policy spec.rightSizing.recommendOnly field must short-circuit the
+// recycle path exactly like the global flag.
 func TestReconcileWorkload_PolicyRecommendOnly_DoesNotRecyclePods(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -153,17 +144,11 @@ func TestReconcileWorkload_PolicyRecommendOnly_DoesNotRecyclePods(t *testing.T) 
 	}
 }
 
-// TestReconcileWorkload_AgeGateUsesWLRCreationTimestamp pins which signal the
-// workload-age gate reads for an ephemeral identity. A standalone Job is
-// re-created on every run, so its object is always seconds old however long
-// the identity has been producing samples; the identity's
-// WorkloadRecommendation is what records when k8s-sustain first saw it, and
-// reconcileWorkload threads that object's CreationTimestamp into the gate.
-//
-// The two cases discriminate the plumbing: identical seconds-old Job objects,
-// differing only in how long their WLR has existed. Feeding the gate anything
-// but the WLR timestamp (a zero time, or the object age) collapses both cases
-// onto the same outcome.
+// A standalone Job is re-created on every run, so its object is always seconds
+// old however long the identity has been producing samples; its
+// WorkloadRecommendation is what records when k8s-sustain first saw it. The two
+// cases are identical seconds-old Jobs differing only in WLR age, so feeding the
+// gate anything but the WLR timestamp collapses them onto one outcome.
 func TestReconcileWorkload_AgeGateUsesWLRCreationTimestamp(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -224,9 +209,6 @@ func TestReconcileWorkload_AgeGateUsesWLRCreationTimestamp(t *testing.T) {
 	}
 }
 
-// TestReconcileWorkload_TransientPromError_RecordsRetry verifies that a 500
-// from Prometheus is treated as transient: the retry tracker records the
-// failure and reconcileWorkload returns the error so the caller can count it.
 func TestReconcileWorkload_TransientPromError_RecordsRetry(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -248,10 +230,8 @@ func TestReconcileWorkload_TransientPromError_RecordsRetry(t *testing.T) {
 	}
 }
 
-// TestHandleStepError_NonTransient_EmitsWarningEventAndReturnsNil verifies a
-// permanent error (e.g. 403 from missing RBAC) is surfaced via a Warning
-// event instead of being silently swallowed, while still returning nil so
-// retry semantics are unchanged.
+// A permanent error (e.g. 403 from missing RBAC) must be surfaced via a Warning
+// event rather than swallowed, while still returning nil.
 func TestHandleStepError_NonTransient_EmitsWarningEventAndReturnsNil(t *testing.T) {
 	rec := events.NewFakeRecorder(10)
 	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
@@ -272,8 +252,6 @@ func TestHandleStepError_NonTransient_EmitsWarningEventAndReturnsNil(t *testing.
 	}
 }
 
-// TestHandleStepError_ContextCanceled_StaysSilent verifies graceful-shutdown
-// cancellation does not produce a ReconciliationFailed event.
 func TestHandleStepError_ContextCanceled_StaysSilent(t *testing.T) {
 	rec := events.NewFakeRecorder(10)
 	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
@@ -289,9 +267,8 @@ func TestHandleStepError_ContextCanceled_StaysSilent(t *testing.T) {
 	}
 }
 
-// TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing
-// verifies that empty Prometheus results are NOT treated as a failure: the
-// reconcile returns nil, retry state is cleared, and no patch is attempted.
+// Empty Prometheus results are NOT a failure: retry state is cleared and no
+// patch is attempted.
 func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -314,21 +291,15 @@ func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *test
 	}
 }
 
-// TestReconcileWorkload_PodKind_NeverRecycles verifies that a target with
-// Kind == "Pod" computes and caches a recommendation but never reaches the
-// selector-driven recycle path — there is no controller that could recreate
-// the pod after an eviction.
+// A Kind == "Pod" target must never reach the selector-driven recycle path —
+// no controller could recreate the pod after an eviction.
 //
-// The target's Selector is deliberately populated (unlike production
-// listBarePodTargets, which never sets it) and matches a real, running pod
-// whose CPU request differs sharply from what the mock Prometheus data would
-// recommend. That pod carries neither the policy nor the owner-name
-// annotation, so it is not a member of any bare-pod group either (see
-// workload.GroupBarePods). Both facts have to hold for it to stay at 999m: if
-// the Kind == "Pod" branch fell through to the generic path, or if the
-// bare-pod resize path resolved its members from the target's selector
-// instead of the grouping rule, the patcher would resize this pod. Either
-// regression fails this test.
+// The target's Selector is deliberately populated (production
+// listBarePodTargets never sets it) and matches a running pod that carries
+// neither the policy nor the owner-name annotation, so it belongs to no bare-pod
+// group either. It stays at 999m only if the Kind == "Pod" branch holds AND the
+// bare-pod resize path resolves members from the grouping rule rather than the
+// selector.
 func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -396,10 +367,8 @@ func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
 	}
 }
 
-// TestReconcileWorkload_OnCreateMode_CachesButNeverRecycles verifies the
-// OnCreate gate: the recommendation is computed and persisted as a WLR (the
-// dashboard/webhook need it) but no pod is recycled or resized — the webhook
-// is the only mutation path for OnCreate.
+// The OnCreate gate: the recommendation is computed and persisted as a WLR (the
+// dashboard/webhook need it) but no pod is recycled or resized.
 func TestReconcileWorkload_OnCreateMode_CachesButNeverRecycles(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
@@ -426,7 +395,6 @@ func TestReconcileWorkload_OnCreateMode_CachesButNeverRecycles(t *testing.T) {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 
-	// Pod untouched.
 	var got corev1.Pod
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "web-pod"}, &got); err != nil {
 		t.Fatalf("get pod: %v", err)
@@ -435,21 +403,17 @@ func TestReconcileWorkload_OnCreateMode_CachesButNeverRecycles(t *testing.T) {
 		t.Errorf("OnCreate must not resize pods; cpu request = %s, want 999m", cpu)
 	}
 
-	// WLR written.
 	var wlr sustainv1alpha1.WorkloadRecommendation
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &wlr); err != nil {
 		t.Fatalf("expected WLR to be cached for OnCreate target: %v", err)
 	}
 }
 
-// TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring pins the wiring of
-// spec.rightSizing.update.eviction.ignoreAutoscalerSafeToEvictAnnotations
-// from the Policy through reconcileWorkload into the patcher's recycle call.
-// RecycleOptions are variadic, so a refactor that drops the
-// WithIgnoreSafeToEvictAnnotations option from the RecyclePods call would
-// still compile — this test is the regression gate: by default a pod
-// annotated safe-to-evict=false must never be evicted, and setting the
-// policy override must evict it.
+// RecycleOptions are variadic, so a refactor dropping
+// WithIgnoreSafeToEvictAnnotations from the RecyclePods call would still
+// compile. This pins the wiring end to end: by default a pod annotated
+// safe-to-evict=false must never be evicted, and the policy override must
+// evict it.
 func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -524,14 +488,12 @@ func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
 	}
 }
 
-// TestHandleStepError_ConcurrentSuccess_NoPanic reproduces the crash that
-// killed the operator process: the same workload target reaching two errgroup
-// goroutines at once (a namespace repeated in spec.selector.namespaces used to
-// make that possible), one taking the transient-error path while the other
-// clears the retry state on success. handleStepError used to record the
-// failure and then read the state back in a second, unsynchronised call, so
-// the intervening recordSuccess made that read return nil and the deref
-// panicked inside an errgroup closure, which does not recover.
+// Reproduces the crash that killed the operator process: the same target in two
+// errgroup goroutines (a namespace repeated in spec.selector.namespaces made
+// that possible), one on the transient-error path while the other clears retry
+// state. handleStepError used to read the state back in a second, unsynchronised
+// call, so the intervening recordSuccess made it nil and the deref panicked
+// inside an errgroup closure, which does not recover.
 func TestHandleStepError_ConcurrentSuccess_NoPanic(t *testing.T) {
 	rec := events.NewFakeRecorder(1024)
 	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}

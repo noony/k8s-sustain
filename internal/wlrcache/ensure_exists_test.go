@@ -56,7 +56,6 @@ func TestEnsureExistsCreatesEmptyWLR(t *testing.T) {
 	if _, ok := got.Status.ObservedResources["main"]; !ok {
 		t.Error("observedResources not written")
 	}
-	// The whole point: created with no recommendation at all.
 	if len(got.Status.Containers) != 0 {
 		t.Errorf("containers = %d, want 0", len(got.Status.Containers))
 	}
@@ -67,9 +66,8 @@ func TestEnsureExistsCreatesEmptyWLR(t *testing.T) {
 
 func TestEnsureExistsClearsDeparted(t *testing.T) {
 	ref := sustainv1alpha1.WorkloadReference{Kind: "Pod", Namespace: "ns", Name: "dag-task"}
-	// Rfc3339Copy: see the comment in TestMarkNoDataLeavesPopulatedStatusAlone
-	// — the fake client's tracker round-trips through a codec that truncates
-	// metav1.Time to second precision, same as a real apiserver.
+	// Rfc3339Copy: the fake client's tracker truncates metav1.Time to second
+	// precision, same as a real apiserver.
 	observedAt := metav1.NewTime(time.Now().Add(-30 * time.Minute)).Rfc3339Copy()
 	q := resource.MustParse("250m")
 	existing := &sustainv1alpha1.WorkloadRecommendation{
@@ -104,10 +102,9 @@ func TestEnsureExistsClearsDeparted(t *testing.T) {
 	if got.Status.Departed {
 		t.Error("Departed must be cleared: the identity is in the target listing again")
 	}
-	// EnsureExists must never write Containers, Source or ObservedAt — this is
-	// the realistic path (a WLR that already has a computed recommendation),
-	// unlike TestEnsureExistsCreatesEmptyWLR where those fields are zero by
-	// construction and the assertion would be vacuous.
+	// The realistic path for "never writes Containers, Source or ObservedAt":
+	// in TestEnsureExistsCreatesEmptyWLR those fields are zero by construction
+	// and the assertion would be vacuous.
 	if len(got.Status.Containers) != 1 {
 		t.Fatalf("containers = %d, want 1: EnsureExists must not touch Containers", len(got.Status.Containers))
 	}
@@ -124,10 +121,9 @@ func TestEnsureExistsClearsDeparted(t *testing.T) {
 
 func TestMarkNoDataLeavesPopulatedStatusAlone(t *testing.T) {
 	ref := sustainv1alpha1.WorkloadReference{Kind: "Job", Namespace: "ns", Name: "nightly"}
-	// Rfc3339Copy: the fake client's object tracker round-trips through a
-	// codec, which serializes metav1.Time at RFC3339/second precision (same
-	// as a real apiserver). Comparing against a sub-second value would fail
-	// for that reason alone, independent of MarkNoData's behavior.
+	// Rfc3339Copy: the fake tracker serializes metav1.Time at second precision
+	// (as a real apiserver does), so a sub-second value would fail the compare
+	// for that reason alone.
 	observedAt := metav1.NewTime(time.Now().Add(-2 * time.Hour)).Rfc3339Copy()
 	q := resource.MustParse("100m")
 	existing := &sustainv1alpha1.WorkloadRecommendation{
@@ -202,19 +198,12 @@ func TestMarkNoDataWritesWhenNeverPopulated(t *testing.T) {
 }
 
 // laggingCacheReader models the one thing fake.NewClientBuilder cannot: a
-// cache-backed client is NOT read-your-writes. Both production writers here run
-// against an informer-backed reader (internal/k8s.NewCached caches
-// WorkloadRecommendation, and the manager's client caches every watched kind),
-// so a Get issued straight after a Create races the watch event and returns
-// NotFound.
+// cache-backed client is NOT read-your-writes, so a Get straight after a Create
+// races the watch event and returns NotFound. It fails the first Get of each
+// created-but-unwarmed key and succeeds for every other read.
 //
-// It fails the first Get of each key that has been Created and not yet warmed,
-// and succeeds for every other read. warm() models the watch event landing, so
-// a test can assert on what was actually persisted.
-//
-// Without this the whole class of bug is invisible to the suite: the pre-fix
-// code re-read after Create and shipped, because every test it had used a
-// read-your-writes fake.
+// Without this the bug class is invisible: the pre-fix code re-read after
+// Create and shipped, because every test it had used a read-your-writes fake.
 type laggingCacheReader struct {
 	mu   sync.Mutex
 	cold map[string]struct{}
@@ -249,19 +238,18 @@ func (l *laggingCacheReader) funcs() interceptor.Funcs {
 	}
 }
 
-// warm makes every created-but-unwatched key visible again, so assertions read
-// the persisted object rather than the lag.
+// warm models the watch event landing, so assertions read the persisted object
+// rather than the lag.
 func (l *laggingCacheReader) warm() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.cold = map[string]struct{}{}
 }
 
-// A create is only half the write: the snapshot has to reach status, and the
-// status subresource discards whatever Create carried. Re-reading to get an
-// object to patch is what broke — the read 404s off the cold cache, and the
-// identity is left with an empty status.observedResources, which
-// internal/controller's computation phase silently skips forever.
+// A create is only half the write: the status subresource discards whatever
+// Create carried, and re-reading to get an object to patch 404s off the cold
+// cache — leaving an empty status.observedResources that the computation phase
+// silently skips forever.
 func TestEnsureExistsWritesSnapshotWhenTheCacheLagsBehindTheCreate(t *testing.T) {
 	lag := newLaggingCacheReader()
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).

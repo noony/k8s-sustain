@@ -53,7 +53,6 @@ describe('OverviewView', () => {
     expect(w.findComponent({ name: 'HeadroomBar' }).exists()).toBe(true)
     expect(w.findComponent({ name: 'AttentionQueue' }).exists()).toBe(true)
     expect(w.text()).toContain('p') // policy row
-    // Single "Savings" card splits CPU and Memory trends side-by-side
     expect(w.text()).not.toContain('Cluster savings')
     const headers = w.findAll('.card-header h2').map((h) => h.text())
     expect(headers).toContain('Savings')

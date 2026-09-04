@@ -495,25 +495,16 @@ func TestFallbackShardPerWorkload_QueriesOverlapWithinBound(t *testing.T) {
 		// short enough to keep the test quick.
 		time.Sleep(20 * time.Millisecond)
 
-		// The decrement happens BEFORE the response is written, and the
-		// fallback queries SUCCEED. Both are load-bearing for the upper-bound
-		// assertion, because this handler measures the bound from the server
-		// side while the bound itself is enforced client-side:
+		// Both details below are load-bearing: the bound is enforced
+		// client-side but measured here, server-side.
 		//
-		//   - Succeeding avoids errgroup cancellation. FetchWorkloadInputs runs
-		//     its CPU/memory/OOM sub-queries under an errgroup, so one failure
-		//     cancels its siblings; the client goroutine then releases its slot
-		//     and the next workload starts while the abandoned workload's
-		//     handlers are still running here, still counted. That is a
-		//     measurement artifact, not a breach of the bound -- instrumenting
-		//     an earlier version of this test showed every spurious peak of 5
-		//     had exactly one in-flight owner whose request context was already
-		//     cancelled.
-		//   - Decrementing before the write orders this owner's removal ahead
-		//     of the client receiving its response, so by the time the client
-		//     can free its errgroup slot and admit a fifth workload, this one
-		//     is already uncounted. A deferred decrement runs after the write
-		//     and loses that race under load.
+		//   - The fallback queries must SUCCEED. A failure cancels its
+		//     errgroup siblings, so the client frees its slot and starts the
+		//     next workload while the abandoned handlers are still counted
+		//     here — a measurement artifact that shows up as spurious peaks.
+		//   - The decrement must happen BEFORE the response is written, so
+		//     this owner is uncounted by the time the client can admit
+		//     another. A deferred decrement loses that race under load.
 		mu.Lock()
 		if inFlight[m[1]]--; inFlight[m[1]] <= 0 {
 			delete(inFlight, m[1])

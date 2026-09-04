@@ -5,35 +5,17 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// ContainerMatches reports whether a container's current resources already
-// match the recommendation — i.e. whether applying rec to the container would
-// leave its CPU/memory requests and limits unchanged.
+// ContainerMatches reports whether applying rec to a container would leave its
+// CPU/memory requests and limits unchanged.
 //
-// This is the single source of truth for the "is this container already at the
-// recommended size?" question. Both the controller (deciding whether a
-// workload's pods are stale and need recycling) and the patcher (deciding
-// whether a live pod needs patching) MUST gate their recycle/resize decision on
-// this predicate, so they never disagree (which would cause oscillation: one
-// side recycles while the other skips).
+// It is the single source of truth for "is this container already at the
+// recommended size?": both the controller's recycle decision and the patcher's
+// resize decision MUST gate on it, or they oscillate against each other.
 //
-// The semantics are defined by what applyRecToContainer actually DOES, so that
-// ContainerMatches is true exactly when applying rec is a no-op on values:
-//
-//   - A nil rec field (CPURequest/MemoryRequest/CPULimit/MemoryLimit) means
-//     "leave this dimension alone" — the patcher never touches it — so it can
-//     never cause a mismatch.
-//   - A non-nil request/limit rec matches iff the container's current value
-//     equals it numerically. An UNSET request/limit reads as a zero Quantity
-//     (ResourceList.Cpu()/Memory() return a zero-valued, non-nil Quantity when
-//     the key is absent), so an unset value and an explicit zero value are
-//     treated as equal — consistent with how Kubernetes itself compares them.
-//   - RemoveCPULimit/RemoveMemoryLimit means "the limit should not be present".
-//     It matches iff the current limit is unset/zero; any non-zero current
-//     limit is a mismatch (applying would delete it).
-//
-// The comparison is numeric (resource.Quantity.Cmp), so an off-by-one-milli
-// difference (e.g. 100m vs 101m) is a mismatch, while equal quantities written
-// in different forms (e.g. 1000m vs 1) match.
+// A nil rec field means "leave alone" and never mismatches. An unset
+// request/limit reads as a zero Quantity, so unset and explicit zero compare
+// equal. Remove*Limit matches only when the current limit is unset or zero.
+// Comparison is numeric, so 1000m and 1 match while 100m and 101m do not.
 func ContainerMatches(current corev1.ResourceRequirements, rec ContainerRecommendation) bool {
 	if !requestMatches(current.Requests.Cpu(), rec.CPURequest) {
 		return false

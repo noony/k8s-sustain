@@ -8,8 +8,6 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
-// ---- Internal types ----
-
 type automatedWorkload struct {
 	Namespace  string
 	Kind       string
@@ -18,23 +16,13 @@ type automatedWorkload struct {
 	Containers []corev1.Container
 }
 
-// ---- Workload collection helpers ----
-
-// Namespace annotations are fetched once, before the per-kind loop, and
-// threaded into every listWorkloadsOfKind call — see listPolicyWorkloadRows
-// for why: this loops over supportedWorkloadKinds too, and each call would
-// otherwise re-List every Namespace in the cluster.
+// Namespace annotations are fetched once, before the per-kind loop: each
+// listWorkloadsOfKind call would otherwise re-List every Namespace.
 //
-// Like listPolicyWorkloadRows, entryMatchesPolicy is the sole gate — opting
-// in is necessary but not sufficient, see its doc. This function's only
-// caller is handlePolicyBatchSimulate (batch_simulate.go), NOT the summary page's
-// per-policy rollups — those come from Prometheus via fetchPolicyRollups
-// (handlers_policies.go), reading controller-emitted metrics, which is why
-// they were never affected by the dashboard-gating review finding in the
-// first place. The gate here is still correct and worth keeping for batch
-// simulate: without it, a Namespace naming this Policy would have every one
-// of its workloads included in the simulation even when the Policy's own
-// selector (or --excluded-namespaces) does not reach it.
+// entryMatchesPolicy is the sole gate — opting in is necessary but not
+// sufficient. Without it, a Namespace naming this Policy would pull all of its
+// workloads into the simulation even when the Policy's own selector (or
+// --excluded-namespaces) does not reach them.
 func (s *Server) collectPolicyWorkloads(ctx context.Context, policyName string, policy *sustainv1alpha1.Policy) []automatedWorkload {
 	var workloads []automatedWorkload
 
