@@ -318,6 +318,23 @@
   
   
     <li class="md-tabs__item">
+      <a href="../../security/" class="md-tabs__link">
+        
+  
+    
+  
+  Security
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
       <a href="../../development/" class="md-tabs__link">
         
   
@@ -1456,6 +1473,26 @@
   
   
     <li class="md-nav__item">
+      <a href="../../security/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Security
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../development/" class="md-nav__link">
         
   
@@ -1596,6 +1633,10 @@
 <div class="admonition note">
 <p class="admonition-title">No version ranges</p>
 <p>OCI registries don't support the caret/tilde ranges a classic Helm repo does — <code>--version</code> must be an exact chart version (e.g. <code>0.4.0</code>).</p>
+</div>
+<div class="admonition tip">
+<p class="admonition-title">Verify before you install</p>
+<p>Images, charts and release binaries are signed with cosign in keyless mode, and images carry an SPDX SBOM and SLSA build provenance. See <a href="../../security/">Security</a> for copy-pasteable <code>cosign verify</code> and <code>gh attestation verify</code> commands, and for pinning the image by digest.</p>
 </div>
 <h2 id="install-with-bundled-prometheus">Install with bundled Prometheus<a class="headerlink" href="#install-with-bundled-prometheus" title="Permanent link">&para;</a></h2>
 <p>The default installation deploys the controller, the admission webhook, and a <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">Prometheus</a> instance with the required recording rules pre-configured.</p>
