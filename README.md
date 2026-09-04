@@ -33,6 +33,27 @@ metadata:
 - [Policy CRD Reference](https://noony.github.io/k8s-sustain/reference/policy/)
 - [Helm Values](https://noony.github.io/k8s-sustain/reference/helm-values/)
 
+## Security & supply chain
+
+Release artifacts are signed with [cosign](https://docs.sigstore.dev/) in keyless mode — no private key, with the signing event recorded in the public Rekor transparency log:
+
+- **Container images** (`ghcr.io/noony/k8s-sustain`, amd64 + arm64) — cosign signature, SLSA build provenance and an SPDX SBOM, all attached in the registry
+- **Release binaries** — a cosign-signed `sha256sums.txt`, an SPDX SBOM, and per-binary build provenance
+- **Helm charts** (`oci://ghcr.io/noony/helm-charts`) — cosign-signed by digest
+
+Verify an image before you deploy it:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp '^https://github\.com/noony/k8s-sustain/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/noony/k8s-sustain:<version>
+```
+
+Full verification instructions — provenance, SBOM, binaries, charts, and enforcing signatures at admission — are in the [Security documentation](https://noony.github.io/k8s-sustain/security/).
+
+To report a vulnerability, open a [private security advisory](https://github.com/noony/k8s-sustain/security/advisories/new) rather than a public issue.
+
 ## License
 
 ISC License

@@ -5,15 +5,38 @@ on:
     tags:
       - "v*"
 
+# Deliberately read-only at the top level: a workflow-wide write token would be
+# handed to every job (and every action they call) whether they need it or not.
+# Each job below re-grants exactly the scopes it uses.
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   docker:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push the image to GHCR
+      id-token: write # keyless (OIDC) cosign signing + attestation signing
+      attestations: write # publish SBOM/provenance attestations
+    outputs:
+      # The immutable digest of the multi-arch image this run published, which
+      # every signature and attestation below is bound to. Exposed as a job
+      # output so a later job can consume it without re-resolving the tag.
+      digest: ${{ steps.build.outputs.digest }}
     steps:
+      - name: Harden the runner
+        # `audit` records every egress destination instead of blocking unknown
+        # ones: a wrong allowlist here would break releases, not just a test
+        # run. The recorded destinations are the prerequisite for tightening
+        # this to `block` once a release has been observed end to end.
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Docker meta
         id: meta
@@ -38,6 +61,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -47,17 +71,94 @@ jobs:
             VERSION=${{ github.ref_name }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # BuildKit's own attestations are off because we publish GitHub /
+          # cosign attestations instead. Two reasons: BuildKit wraps the result
+          # in an extra multi-arch index that some registries and older tools
+          # mishandle, and provenance should have a single canonical source
+          # rather than two subtly different documents for the same digest.
+          provenance: false
+          sbom: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign the image with cosign (keyless)
+        # Signed by digest, never by tag: a tag can be re-pointed after signing,
+        # a digest cannot. --recursive also signs each platform manifest inside
+        # the index, so a consumer that pins the linux/arm64 digest directly
+        # (mirrors and some admission policies do) still finds a signature.
+        # Values reach the shell through env so nothing from the workflow
+        # context is expanded into the script body.
+        env:
+          IMAGE: ghcr.io/noony/k8s-sustain
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes --recursive "${IMAGE}@${DIGEST}"
+
+      - name: Prepare SBOM output directory
+        # syft writes the SBOM with a plain file create and will not make the
+        # parent directory itself.
+        run: mkdir -p sbom
+
+      - name: Generate image SBOM
+        # syft resolves a multi-arch index to the runner's own platform, so
+        # this document describes the linux/amd64 image. That is accepted
+        # rather than worked around: the base is distroless static (no
+        # per-arch packages) and the Go module graph is identical for both
+        # architectures, so an arm64 document would list the same components.
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ghcr.io/noony/k8s-sustain@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom/image.spdx.json
+          # The SBOM is published as a registry attestation below; a duplicate
+          # copy as a workflow artifact would just go stale.
+          upload-artifact: false
+
+      - name: Attest the image SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ghcr.io/noony/k8s-sustain
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom/image.spdx.json
+          push-to-registry: true
+
+      - name: Attest image build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/noony/k8s-sustain
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   helm:
     runs-on: ubuntu-latest
-    needs: docker
+    # gh-release creates the GitHub release; this job only attaches to it.
+    # Ordering them removes the create/create race the two jobs used to have
+    # when both could be first to the tag.
+    needs: [docker, gh-release]
+    permissions:
+      contents: write # attach the packaged charts to the GitHub release
+      packages: write # helm push to GHCR
+      id-token: write # keyless cosign signing of the pushed charts
     steps:
+      - name: Harden the runner
+        # See the docker job: audit records egress instead of breaking a
+        # release on an incomplete allowlist; `block` comes after the audit.
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Build chart dependencies
         # The prometheus subchart tarball is gitignored, so it is absent in a
@@ -72,31 +173,83 @@ jobs:
           helm package charts/k8s-sustain --version "${GITHUB_REF_NAME#v}" --app-version "${GITHUB_REF_NAME#v}"
           helm package charts/k8s-sustain-policies --version "${GITHUB_REF_NAME#v}" --app-version "${GITHUB_REF_NAME#v}"
 
-      - name: Upload chart to release
-        uses: softprops/action-gh-release@7c4723f7a335432393329f8f1c564994ce50185d # v3
-        with:
-          # Tags containing a hyphen (e.g. v0.1.0-rc.1) are SemVer prereleases.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: "*.tgz"
-
-      - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Push charts to GHCR
+      - name: Upload charts to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
+          gh release upload "${TAG}" --clobber ./*.tgz
+
+      - name: Log in to GHCR for helm
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "${GHCR_TOKEN}" | helm registry login ghcr.io -u "${GHCR_USER}" --password-stdin
+
+      - name: Log in to GHCR for cosign
+        # Separate from the helm login above, and not redundant: `helm registry
+        # login` writes Helm's own registry config, while cosign reads the
+        # Docker keychain (~/.docker/config.json). Without this step cosign has
+        # no credentials and fails to push the signature layer.
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push and sign charts
+        # `helm push` reports the pushed digest on stderr, so the output is
+        # merged into stdout and teed before parsing. An unparseable digest is
+        # fatal rather than silently skipping the signature.
+        env:
+          CHART_REPO: ghcr.io/noony/helm-charts
+        run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          helm push "k8s-sustain-${VERSION}.tgz" oci://ghcr.io/noony/helm-charts
-          helm push "k8s-sustain-policies-${VERSION}.tgz" oci://ghcr.io/noony/helm-charts
+          for chart in k8s-sustain k8s-sustain-policies; do
+            helm push "${chart}-${VERSION}.tgz" "oci://${CHART_REPO}" 2>&1 | tee push.log
+            # `|| true` keeps `set -e` from killing the step on a non-matching
+            # grep, so the explicit check below reports what actually failed.
+            digest="$(grep -oE 'Digest: sha256:[0-9a-f]{64}' push.log | head -n1 | awk '{print $2}' || true)"
+            if [ -z "${digest}" ]; then
+              echo "could not parse pushed digest for ${chart} from helm push output" >&2
+              exit 1
+            fi
+            # cosign takes a plain OCI reference, without the oci:// prefix.
+            cosign sign --yes "${CHART_REPO}/${chart}@${digest}"
+          done
 
   gh-release:
     runs-on: ubuntu-latest
     needs: docker
+    permissions:
+      contents: write # create the release and upload its assets
+      id-token: write # keyless cosign signing of the checksum file
+      attestations: write # publish SLSA provenance for the binaries
     steps:
+      - name: Harden the runner
+        # See the docker job: audit records egress instead of breaking a
+        # release on an incomplete allowlist; `block` comes after the audit.
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # No module/build cache on the release path: a cache entry is
+          # writable by any workflow run on the default branch, so restoring
+          # one here would let poisoned cache contents end up inside a signed
+          # release binary. A cold build costs a minute; the signature is
+          # worth more than that.
+          cache: false
 
       - name: Build release binaries
         env:
@@ -122,15 +275,58 @@ jobs:
           sha256sum k8s-sustain-* > sha256sums.txt
           cat sha256sums.txt
 
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@7c4723f7a335432393329f8f1c564994ce50185d # v3
+      - name: Generate binary SBOM
+        # Cataloged from the built binary, not the source tree. Go's embedded
+        # buildinfo lists exactly the modules that were linked; a scan of the
+        # checkout would instead report every go.mod requirement (including
+        # indirect ones nothing imports) plus the frontend and docs lockfiles,
+        # none of which are in the binary. One document for all three
+        # binaries: they are cross-compilations of the same package set.
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
+          file: bin/k8s-sustain-linux-amd64
+          format: spdx-json
+          output-file: bin/k8s-sustain.spdx.json
+          # Published as a release asset below, so a second copy as a workflow
+          # artifact would only go stale.
+          upload-artifact: false
+
+      - name: Attest binary build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: bin/k8s-sustain-*
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign the checksum file (keyless)
+        # Only the checksum file is signed: it already pins the SHA256 of every
+        # released binary, so one signature transitively covers all of them.
+        # --bundle emits a self-contained bundle (signature, certificate and
+        # transparency-log entry) that verifies without extra downloads.
+        working-directory: bin
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes --bundle sha256sums.txt.cosign.bundle sha256sums.txt
+
+      - name: Create GitHub release
+        # `gh` ships on the runner, so no third-party action needs to hold the
+        # contents:write token. Re-runs are handled: if the release already
+        # exists its assets are replaced rather than the step failing.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          assets=(bin/k8s-sustain-* bin/sha256sums.txt bin/k8s-sustain.spdx.json bin/sha256sums.txt.cosign.bundle)
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" --clobber "${assets[@]}"
+            exit 0
+          fi
+          args=(--verify-tag --generate-notes)
           # Tags containing a hyphen (e.g. v0.1.0-rc.1) are SemVer prereleases.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
-          files: |
-            bin/k8s-sustain-*
-            bin/sha256sums.txt
+          case "${TAG}" in *-*) args+=(--prerelease) ;; esac
+          gh release create "${TAG}" "${args[@]}" "${assets[@]}"
 
   docs:
     runs-on: ubuntu-latest
@@ -147,6 +343,13 @@ jobs:
       group: pages
       cancel-in-progress: false
     steps:
+      - name: Harden the runner
+        # See the docker job: audit records egress instead of breaking a
+        # release on an incomplete allowlist; `block` comes after the audit.
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

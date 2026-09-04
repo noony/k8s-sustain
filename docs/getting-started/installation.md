@@ -14,6 +14,9 @@ helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
 !!! note "No version ranges"
     OCI registries don't support the caret/tilde ranges a classic Helm repo does — `--version` must be an exact chart version (e.g. `0.4.0`).
 
+!!! tip "Verify before you install"
+    Images, charts and release binaries are signed with cosign in keyless mode, and images carry an SPDX SBOM and SLSA build provenance. See [Security](../security.md) for copy-pasteable `cosign verify` and `gh attestation verify` commands, and for pinning the image by digest.
+
 ## Install with bundled Prometheus
 
 The default installation deploys the controller, the admission webhook, and a [Prometheus](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) instance with the required recording rules pre-configured.
