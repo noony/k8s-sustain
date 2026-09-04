@@ -35,7 +35,7 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		"pod", types.Pod)
 
 	nsAnn := newNSAnnotations(r.Client)
-	for _, kind := range listedKinds {
+	for _, kind := range workload.SupportedKinds {
 		mode := types.ModeForKind(kind)
 		if mode == nil {
 			continue
@@ -155,10 +155,6 @@ func dedupeNamespaces(namespaces []string) []string {
 	}
 	return out
 }
-
-// listedKinds is the order kinds are listed in; "Pod" means bare-pod
-// identities formed via the owner-name annotation.
-var listedKinds = []string{"Deployment", "StatefulSet", "DaemonSet", "Rollout", "CronJob", "Job", "Pod"}
 
 // listInNamespaces runs list once per namespace (or once cluster-wide when
 // namespaces is empty) and concatenates the results.

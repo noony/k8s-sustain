@@ -13,7 +13,9 @@ import (
 	"github.com/noony/k8s-sustain/internal/policymatch"
 )
 
-type workloadSummary struct {
+// workloadRow is what every list endpoint returns per workload; endpoints
+// that need more embed it.
+type workloadRow struct {
 	Namespace           string               `json:"namespace"`
 	Kind                string               `json:"kind"`
 	Name                string               `json:"name"`
@@ -26,12 +28,31 @@ type workloadSummary struct {
 	LastSeenAt          string               `json:"lastSeenAt,omitempty"`
 }
 
+func (r *workloadRow) key() string { return workloadKey(r.Namespace, r.Kind, r.Name) }
+
+func (r *workloadRow) setSignals(sig workloadSignals) {
+	r.RiskState = sig.RiskState
+	r.DriftPercent = sig.DriftPercent
+	r.AutoscalerPresent = sig.AutoscalerPresent
+	r.CoordinationFactors = sig.CoordinationFactors
+}
+
+func liveRow(kind string, e workloadEntry) workloadRow {
+	return workloadRow{
+		Namespace:  e.Namespace,
+		Kind:       kind,
+		Name:       e.Name,
+		Containers: containerStatuses(e.Containers(), e.InitContainers()),
+		Active:     true,
+	}
+}
+
 type paginatedWorkloads struct {
-	Items      []workloadSummary `json:"items"`
-	Total      int               `json:"total"`
-	Page       int               `json:"page"`
-	PageSize   int               `json:"pageSize"`
-	Namespaces []string          `json:"namespaces"`
+	Items      []workloadRow `json:"items"`
+	Total      int           `json:"total"`
+	Page       int           `json:"page"`
+	PageSize   int           `json:"pageSize"`
+	Namespaces []string      `json:"namespaces"`
 }
 
 func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, policyName string) {
@@ -53,13 +74,13 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 
 	workloads := s.listPolicyWorkloadRows(ctx, policy, policyName)
 
-	namespaces := uniqueNamespaces(workloads)
+	namespaces := uniqueValues(workloads, func(w workloadRow) string { return w.Namespace })
 
 	// Narrow before the signal decoration so it only covers returned rows.
 	if nsFilter != "" {
-		workloads = filterByNamespace(workloads, nsFilter)
+		workloads = filterInPlace(workloads, func(w workloadRow) bool { return w.Namespace == nsFilter })
 	}
-	applyWorkloadSignals(ctx, s, workloads)
+	applySignals(ctx, s, workloads, func(w *workloadRow) *workloadRow { return w })
 
 	total := len(workloads)
 	start, end := paginateRange(total, page, pageSize)
@@ -74,17 +95,40 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 	})
 }
 
-// listPolicyWorkloadRows gathers workload rows for every kind the policy
-// opts in to. Per-kind list errors are logged and skipped. Namespace
-// annotations are fetched once, before the per-kind loop; entryMatchesPolicy
-// is the sole gate, since opting in is necessary but not sufficient.
-func (s *Server) listPolicyWorkloadRows(ctx context.Context, policy *sustainv1alpha1.Policy, policyName string) []workloadSummary {
+// listPolicyWorkloadRows gathers a row for every live workload the policy
+// manages, then the retained WorkloadRecommendations that are not live.
+func (s *Server) listPolicyWorkloadRows(ctx context.Context, policy *sustainv1alpha1.Policy, policyName string) []workloadRow {
+	out := []workloadRow{}
+	s.forEachPolicyEntry(ctx, policy, policyName, func(kind string, e workloadEntry) {
+		out = append(out, liveRow(kind, e))
+	})
+
+	inactive, err := s.collectInactiveWorkloads(ctx, liveKeys(out, func(w *workloadRow) *workloadRow { return w }),
+		client.MatchingLabels{sustainv1alpha1.WLRPolicyLabel: policyName})
+	if err != nil {
+		s.Logger.Error(err, "failed to list retained WorkloadRecommendations", "policy", policyName)
+		return out
+	}
+	for _, iw := range inactive {
+		if iw.PolicyName != policyName { // defensive vs label drift
+			continue
+		}
+		out = append(out, iw.workloadRow)
+	}
+	return out
+}
+
+// forEachPolicyEntry visits every live workload entry the policy manages, in
+// supportedWorkloadKinds order. Per-kind list errors are logged and skipped.
+// Namespace annotations are fetched once, before the per-kind loop;
+// entryMatchesPolicy is the sole gate, since opting in is necessary but not
+// sufficient.
+func (s *Server) forEachPolicyEntry(ctx context.Context, policy *sustainv1alpha1.Policy, policyName string, visit func(kind string, e workloadEntry)) {
 	nsAnnotations, err := s.namespaceAnnotations(ctx)
 	if err != nil {
 		s.Logger.Error(err, "failed to list namespaces; namespace-level policy opt-in will not be resolved", "policy", policyName)
 		nsAnnotations = nil
 	}
-	out := []workloadSummary{}
 	for _, kind := range supportedWorkloadKinds {
 		if !kindEnabledInPolicy(policy, kind) {
 			continue
@@ -95,46 +139,11 @@ func (s *Server) listPolicyWorkloadRows(ctx context.Context, policy *sustainv1al
 			continue
 		}
 		for _, e := range entries {
-			if !entryMatchesPolicy(policy, e, s.ExcludedNamespaces) {
-				continue
+			if entryMatchesPolicy(policy, e, s.ExcludedNamespaces) {
+				visit(kind, e)
 			}
-			out = append(out, workloadSummary{
-				Namespace:  e.Namespace,
-				Kind:       kind,
-				Name:       e.Name,
-				Containers: containerStatuses(e.Containers(), e.InitContainers()),
-				Active:     true,
-			})
 		}
 	}
-
-	live := make(map[string]struct{}, len(out))
-	for _, w := range out {
-		live[workloadKey(w.Namespace, w.Kind, w.Name)] = struct{}{}
-	}
-	inactive, err := s.collectInactiveWorkloads(ctx, live,
-		client.MatchingLabels{sustainv1alpha1.WLRPolicyLabel: policyName})
-	if err != nil {
-		s.Logger.Error(err, "failed to list retained WorkloadRecommendations", "policy", policyName)
-		return out
-	}
-	for _, iw := range inactive {
-		if iw.PolicyName != policyName { // defensive vs label drift
-			continue
-		}
-		out = append(out, workloadSummary{
-			Namespace:  iw.Namespace,
-			Kind:       iw.Kind,
-			Name:       iw.Name,
-			Containers: iw.Containers,
-			LastSeenAt: iw.LastSeenAt,
-		})
-	}
-	return out
-}
-
-func uniqueNamespaces(workloads []workloadSummary) []string {
-	return uniqueValues(workloads, func(w workloadSummary) string { return w.Namespace })
 }
 
 // uniqueValues collects the distinct, unordered values of valueOf over rows.
@@ -150,55 +159,46 @@ func uniqueValues[T any](rows []T, valueOf func(T) string) []string {
 	return out
 }
 
-func filterByNamespace(workloads []workloadSummary, ns string) []workloadSummary {
-	out := workloads[:0]
-	for _, w := range workloads {
-		if w.Namespace == ns {
-			out = append(out, w)
+// filterInPlace keeps the rows keep accepts, reusing the input's backing array.
+func filterInPlace[T any](rows []T, keep func(T) bool) []T {
+	out := rows[:0]
+	for _, r := range rows {
+		if keep(r) {
+			out = append(out, r)
 		}
 	}
 	return out
 }
 
-// applyWorkloadSignals overlays Prometheus-derived signals onto each row.
-func applyWorkloadSignals(ctx context.Context, s *Server, workloads []workloadSummary) {
-	applySignals(ctx, s, workloads,
-		func(w workloadSummary) string { return workloadKey(w.Namespace, w.Kind, w.Name) },
-		func(w *workloadSummary, sig workloadSignals) {
-			w.RiskState = sig.RiskState
-			w.DriftPercent = sig.DriftPercent
-			w.AutoscalerPresent = sig.AutoscalerPresent
-			w.CoordinationFactors = sig.CoordinationFactors
-		})
+// liveKeys returns the workloadKey set of rows, for collectInactiveWorkloads.
+func liveKeys[T any](rows []T, rowOf func(*T) *workloadRow) map[string]struct{} {
+	live := make(map[string]struct{}, len(rows))
+	for i := range rows {
+		live[rowOf(&rows[i]).key()] = struct{}{}
+	}
+	return live
 }
 
 // applySignals batches the signal queries for every row and overlays the
 // result onto each row in place.
-func applySignals[T any](ctx context.Context, s *Server, rows []T, keyOf func(T) string, set func(*T, workloadSignals)) {
+func applySignals[T any](ctx context.Context, s *Server, rows []T, rowOf func(*T) *workloadRow) {
 	keys := make([]string, len(rows))
-	for i, r := range rows {
-		keys[i] = keyOf(r)
+	for i := range rows {
+		keys[i] = rowOf(&rows[i]).key()
 	}
 	signals := s.fetchWorkloadSignals(ctx, keys)
 	for i := range rows {
-		set(&rows[i], signals[keys[i]])
+		rowOf(&rows[i]).setSignals(signals[keys[i]])
 	}
 }
 
 type allWorkloadSummary struct {
-	Namespace           string               `json:"namespace"`
-	Kind                string               `json:"kind"`
-	Name                string               `json:"name"`
-	Containers          []containerStatus    `json:"containers"`
-	Automated           bool                 `json:"automated"`
-	PolicyName          string               `json:"policyName,omitempty"`
-	RiskState           string               `json:"riskState"` // safe | drifted | at-risk | blocked
-	DriftPercent        float64              `json:"driftPercent"`
-	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
-	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
-	Active              bool                 `json:"active"`
-	LastSeenAt          string               `json:"lastSeenAt,omitempty"`
+	workloadRow
+	Automated  bool   `json:"automated"`
+	PolicyName string `json:"policyName,omitempty"`
 }
+
+func allRowOf(w *allWorkloadSummary) *workloadRow { return &w.workloadRow }
 
 type paginatedAllWorkloads struct {
 	Items      []allWorkloadSummary `json:"items"`
@@ -271,11 +271,12 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	workloads := s.collectAllWorkloads(ctx)
 
 	// Facets come from the full, unfiltered list.
-	namespaces, kinds := uniqueNamespacesAndKinds(workloads)
+	namespaces := uniqueValues(workloads, func(w allWorkloadSummary) string { return w.Namespace })
+	kinds := uniqueValues(workloads, func(w allWorkloadSummary) string { return w.Kind })
 
 	// Narrow before the signal decoration so it only covers returned rows.
 	workloads = filterByNamespaceAndKind(workloads, filters)
-	applyAllWorkloadSignals(ctx, s, workloads)
+	applySignals(ctx, s, workloads, allRowOf)
 
 	workloads = applyAllWorkloadFilters(workloads, filters)
 
@@ -329,35 +330,23 @@ func (s *Server) collectAllWorkloads(ctx context.Context) []allWorkloadSummary {
 				automated = policyName != ""
 			}
 			out = append(out, allWorkloadSummary{
-				Namespace:  e.Namespace,
-				Kind:       kind,
-				Name:       e.Name,
-				Containers: containerStatuses(e.Containers(), e.InitContainers()),
-				Automated:  automated,
-				PolicyName: policyName,
-				Active:     true,
+				workloadRow: liveRow(kind, e),
+				Automated:   automated,
+				PolicyName:  policyName,
 			})
 		}
 	}
 
-	live := make(map[string]struct{}, len(out))
-	for _, w := range out {
-		live[workloadKey(w.Namespace, w.Kind, w.Name)] = struct{}{}
-	}
-	inactive, err := s.collectInactiveWorkloads(ctx, live)
+	inactive, err := s.collectInactiveWorkloads(ctx, liveKeys(out, allRowOf))
 	if err != nil {
 		s.Logger.Error(err, "failed to list retained WorkloadRecommendations")
 		return out
 	}
 	for _, iw := range inactive {
 		out = append(out, allWorkloadSummary{
-			Namespace:  iw.Namespace,
-			Kind:       iw.Kind,
-			Name:       iw.Name,
-			Containers: iw.Containers,
-			Automated:  true,
-			PolicyName: iw.PolicyName,
-			LastSeenAt: iw.LastSeenAt,
+			workloadRow: iw.workloadRow,
+			Automated:   true,
+			PolicyName:  iw.PolicyName,
 		})
 	}
 	return out
@@ -394,43 +383,14 @@ func resolveManagingPolicy(e workloadEntry, policies map[string]*sustainv1alpha1
 	return "", false
 }
 
-func applyAllWorkloadSignals(ctx context.Context, s *Server, workloads []allWorkloadSummary) {
-	applySignals(ctx, s, workloads,
-		func(w allWorkloadSummary) string { return workloadKey(w.Namespace, w.Kind, w.Name) },
-		func(w *allWorkloadSummary, sig workloadSignals) {
-			w.RiskState = sig.RiskState
-			w.DriftPercent = sig.DriftPercent
-			w.AutoscalerPresent = sig.AutoscalerPresent
-			w.CoordinationFactors = sig.CoordinationFactors
-		})
-}
-
-func uniqueNamespacesAndKinds(workloads []allWorkloadSummary) (namespaces, kinds []string) {
-	seenNamespaces := make(map[string]struct{})
-	seenKinds := make(map[string]struct{})
-	for _, w := range workloads {
-		seenNamespaces[w.Namespace] = struct{}{}
-		seenKinds[w.Kind] = struct{}{}
-	}
-	namespaces = make([]string, 0, len(seenNamespaces))
-	for ns := range seenNamespaces {
-		namespaces = append(namespaces, ns)
-	}
-	kinds = make([]string, 0, len(seenKinds))
-	for k := range seenKinds {
-		kinds = append(kinds, k)
-	}
-	return
-}
-
 // filterByNamespaceAndKind applies the identity filters that do not depend on
 // signal decoration, so the signal queries see already-narrowed rows.
 func filterByNamespaceAndKind(workloads []allWorkloadSummary, f allWorkloadFilters) []allWorkloadSummary {
 	if f.namespace != "" {
-		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.Namespace == f.namespace })
+		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.Namespace == f.namespace })
 	}
 	if f.kind != "" {
-		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.Kind == f.kind })
+		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.Kind == f.kind })
 	}
 	return workloads
 }
@@ -438,35 +398,25 @@ func filterByNamespaceAndKind(workloads []allWorkloadSummary, f allWorkloadFilte
 func applyAllWorkloadFilters(workloads []allWorkloadSummary, f allWorkloadFilters) []allWorkloadSummary {
 	if f.automated != nil {
 		want := *f.automated
-		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.Automated == want })
+		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.Automated == want })
 	}
 	if f.active != nil {
 		want := *f.active
-		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.Active == want })
+		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.Active == want })
 	}
 	if f.search != "" {
-		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool {
+		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool {
 			return strings.Contains(strings.ToLower(w.Name), f.search)
 		})
 	}
 	if f.risk != "" {
-		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.RiskState == f.risk })
+		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.RiskState == f.risk })
 	}
 	if f.autoscaler != "" {
 		want := f.autoscaler == "has-autoscaler"
-		workloads = filterAllWorkloads(workloads, func(w allWorkloadSummary) bool { return w.AutoscalerPresent == want })
+		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.AutoscalerPresent == want })
 	}
 	return workloads
-}
-
-func filterAllWorkloads(workloads []allWorkloadSummary, keep func(allWorkloadSummary) bool) []allWorkloadSummary {
-	out := workloads[:0]
-	for _, w := range workloads {
-		if keep(w) {
-			out = append(out, w)
-		}
-	}
-	return out
 }
 
 func countAllWorkloads(workloads []allWorkloadSummary) workloadCounts {

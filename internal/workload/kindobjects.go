@@ -62,6 +62,12 @@ var ownerKinds = map[string]kindSpec{
 	},
 }
 
+// SupportedKinds is the canonical ordering of the kinds a Policy can target.
+// "Pod" means bare-pod identities formed via the owner-name annotation; it is
+// deliberately absent from ownerKinds, since a bare pod has no separate owner
+// object to read.
+var SupportedKinds = []string{"Deployment", "StatefulSet", "DaemonSet", "Rollout", "CronJob", "Job", "Pod"}
+
 // ObjectForKind returns a fresh, empty client.Object for a workload kind, or
 // nil when the kind is unknown — an unknown kind (a custom controller) is not
 // an error, it simply has no workload-level annotations to read.

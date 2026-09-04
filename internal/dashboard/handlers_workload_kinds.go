@@ -4,29 +4,25 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
-	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/policymatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// supportedWorkloadKinds is the canonical kind ordering; "Pod" means bare-pod
-// identities formed via the owner-name annotation.
-var supportedWorkloadKinds = []string{"Deployment", "StatefulSet", "DaemonSet", "Rollout", "CronJob", "Job", "Pod"}
+var supportedWorkloadKinds = workload.SupportedKinds
 
 type containerStatus struct {
 	Name          string `json:"name"`
@@ -60,8 +56,7 @@ type workloadEntry struct {
 	// Members holds the opt-in and label data of every real object folded
 	// into this identity, representative first; nil when a single object backs
 	// it. entryMatchesPolicy evaluates opt-in and selector on the same member.
-	Members   []identityMember
-	OwnerRefs []metav1.OwnerReference
+	Members []identityMember
 	// CreationTimestamp picks the representative in groupEntriesByIdentity.
 	CreationTimestamp time.Time
 	// FromRetainedWLR marks an entry synthesized from a retained
@@ -132,131 +127,10 @@ func (e workloadEntry) InitContainers() []corev1.Container {
 // looping over kinds must fetch nsAnnotations once and pass the same map in,
 // or the cluster-wide Namespace List runs once per kind.
 func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, nsAnnotations map[string]map[string]string, opts ...client.ListOption) ([]workloadEntry, error) {
-	switch kind {
-	case "Deployment":
-		var list appsv1.DeploymentList
-		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
-			return nil, err
-		}
-		out := make([]workloadEntry, len(list.Items))
-		for i := range list.Items {
-			d := &list.Items[i]
-			out[i] = workloadEntry{
-				Namespace:            d.Namespace,
-				Name:                 d.Name,
-				Template:             &d.Spec.Template,
-				ObjectAnnotations:    d.Annotations,
-				ObjectLabels:         d.Labels,
-				NamespaceAnnotations: nsAnnotations[d.Namespace],
-				OwnerRefs:            d.OwnerReferences,
-				CreationTimestamp:    d.CreationTimestamp.Time,
-			}
-		}
-		return groupEntriesByIdentity(out, kind), nil
-	case "StatefulSet":
-		var list appsv1.StatefulSetList
-		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
-			return nil, err
-		}
-		out := make([]workloadEntry, len(list.Items))
-		for i := range list.Items {
-			st := &list.Items[i]
-			out[i] = workloadEntry{
-				Namespace:            st.Namespace,
-				Name:                 st.Name,
-				Template:             &st.Spec.Template,
-				ObjectAnnotations:    st.Annotations,
-				ObjectLabels:         st.Labels,
-				NamespaceAnnotations: nsAnnotations[st.Namespace],
-				OwnerRefs:            st.OwnerReferences,
-				CreationTimestamp:    st.CreationTimestamp.Time,
-			}
-		}
-		return groupEntriesByIdentity(out, kind), nil
-	case "DaemonSet":
-		var list appsv1.DaemonSetList
-		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
-			return nil, err
-		}
-		out := make([]workloadEntry, len(list.Items))
-		for i := range list.Items {
-			ds := &list.Items[i]
-			out[i] = workloadEntry{
-				Namespace:            ds.Namespace,
-				Name:                 ds.Name,
-				Template:             &ds.Spec.Template,
-				ObjectAnnotations:    ds.Annotations,
-				ObjectLabels:         ds.Labels,
-				NamespaceAnnotations: nsAnnotations[ds.Namespace],
-				OwnerRefs:            ds.OwnerReferences,
-				CreationTimestamp:    ds.CreationTimestamp.Time,
-			}
-		}
-		return groupEntriesByIdentity(out, kind), nil
-	case "Rollout":
-		var list rolloutsv1alpha1.RolloutList
-		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
-			return nil, err
-		}
-		out := make([]workloadEntry, len(list.Items))
-		for i := range list.Items {
-			r := &list.Items[i]
-			out[i] = workloadEntry{
-				Namespace:            r.Namespace,
-				Name:                 r.Name,
-				Template:             &r.Spec.Template,
-				ObjectAnnotations:    r.Annotations,
-				ObjectLabels:         r.Labels,
-				NamespaceAnnotations: nsAnnotations[r.Namespace],
-				OwnerRefs:            r.OwnerReferences,
-				CreationTimestamp:    r.CreationTimestamp.Time,
-			}
-		}
-		return groupEntriesByIdentity(out, kind), nil
-	case "CronJob":
-		var list batchv1.CronJobList
-		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
-			return nil, err
-		}
-		out := make([]workloadEntry, len(list.Items))
-		for i := range list.Items {
-			cj := &list.Items[i]
-			out[i] = workloadEntry{
-				Namespace:            cj.Namespace,
-				Name:                 cj.Name,
-				Template:             &cj.Spec.JobTemplate.Spec.Template,
-				ObjectAnnotations:    cj.Annotations,
-				ObjectLabels:         cj.Labels,
-				NamespaceAnnotations: nsAnnotations[cj.Namespace],
-				OwnerRefs:            cj.OwnerReferences,
-				CreationTimestamp:    cj.CreationTimestamp.Time,
-			}
-		}
-		return groupEntriesByIdentity(out, kind), nil
-	case "Job":
-		var list batchv1.JobList
-		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
-			return nil, err
-		}
-		out := make([]workloadEntry, 0, len(list.Items))
-		for i := range list.Items {
-			j := &list.Items[i]
-			if workload.IsOwnedByKind(j.OwnerReferences, "CronJob") {
-				continue
-			}
-			out = append(out, workloadEntry{
-				Namespace:            j.Namespace,
-				Name:                 j.Name,
-				Template:             &j.Spec.Template,
-				ObjectAnnotations:    j.Annotations,
-				ObjectLabels:         j.Labels,
-				NamespaceAnnotations: nsAnnotations[j.Namespace],
-				OwnerRefs:            j.OwnerReferences,
-				CreationTimestamp:    j.CreationTimestamp.Time,
-			})
-		}
-		return groupEntriesByIdentity(out, kind), nil
-	case "Pod":
+	if !slices.Contains(supportedWorkloadKinds, kind) {
+		return nil, fmt.Errorf("unsupported kind %q", kind)
+	}
+	if kind == "Pod" {
 		var list corev1.PodList
 		if err := s.K8sClient.List(ctx, &list, opts...); err != nil {
 			return nil, err
@@ -273,9 +147,34 @@ func (s *Server) listWorkloadsOfKind(ctx context.Context, kind string, nsAnnotat
 			}
 		}
 		return out, nil
-	default:
-		return nil, fmt.Errorf("unsupported kind %q", kind)
 	}
+
+	list := workload.ListForKind(kind)
+	if err := s.K8sClient.List(ctx, list, opts...); err != nil {
+		return nil, err
+	}
+	out := []workloadEntry{}
+	err := meta.EachListItem(list, func(o runtime.Object) error {
+		obj := o.(client.Object)
+		if job, ok := obj.(*batchv1.Job); ok && workload.IsOwnedByKind(job.OwnerReferences, "CronJob") {
+			return nil
+		}
+		tmpl, _, _ := workload.PodTemplateOf(obj)
+		out = append(out, workloadEntry{
+			Namespace:            obj.GetNamespace(),
+			Name:                 obj.GetName(),
+			Template:             tmpl,
+			ObjectAnnotations:    obj.GetAnnotations(),
+			ObjectLabels:         obj.GetLabels(),
+			NamespaceAnnotations: nsAnnotations[obj.GetNamespace()],
+			CreationTimestamp:    obj.GetCreationTimestamp().Time,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return groupEntriesByIdentity(out, kind), nil
 }
 
 // groupEntriesByIdentity collapses entries sharing an owner-name override onto
@@ -359,7 +258,7 @@ func barePodGroupTemplate(g workload.BarePodGroup) *corev1.PodTemplateSpec {
 func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name string) (workloadEntry, error) {
 	// Reject unsupported kinds before paying for the Namespace List below.
 	if !slices.Contains(supportedWorkloadKinds, kind) {
-		return workloadEntry{}, apierrors.NewNotFound(groupResourceForKind(kind), name)
+		return workloadEntry{}, apierrors.NewNotFound(workload.GroupResourceForKind(kind), name)
 	}
 	nsAnnotations, err := s.namespaceAnnotations(ctx)
 	if err != nil {
@@ -379,28 +278,7 @@ func (s *Server) getWorkloadEntry(ctx context.Context, namespace, kind, name str
 	if e, ok := s.inactiveWorkloadEntry(ctx, namespace, kind, name); ok {
 		return e, nil
 	}
-	return workloadEntry{}, apierrors.NewNotFound(groupResourceForKind(kind), name)
-}
-
-// groupResourceForKind maps a workload kind to the GroupResource used in
-// NotFound errors.
-func groupResourceForKind(kind string) schema.GroupResource {
-	switch kind {
-	case "Deployment":
-		return schema.GroupResource{Group: "apps", Resource: "deployments"}
-	case "StatefulSet":
-		return schema.GroupResource{Group: "apps", Resource: "statefulsets"}
-	case "DaemonSet":
-		return schema.GroupResource{Group: "apps", Resource: "daemonsets"}
-	case "Rollout":
-		return schema.GroupResource{Group: "argoproj.io", Resource: "rollouts"}
-	case "CronJob":
-		return schema.GroupResource{Group: "batch", Resource: "cronjobs"}
-	case "Job":
-		return schema.GroupResource{Group: "batch", Resource: "jobs"}
-	default:
-		return corev1.Resource("pods")
-	}
+	return workloadEntry{}, apierrors.NewNotFound(workload.GroupResourceForKind(kind), name)
 }
 
 // inactiveWorkloadEntry reconstructs a workloadEntry from a retained
@@ -417,17 +295,7 @@ func (s *Server) inactiveWorkloadEntry(ctx context.Context, namespace, kind, nam
 		if ref.Kind != kind || ref.Name != name || wlr.Spec.Policy == "" {
 			continue
 		}
-		var containers, initContainers []corev1.Container
-		for cname, res := range wlr.Status.ObservedResources {
-			c := corev1.Container{Name: cname, Resources: requirementsFromObserved(res)}
-			if res.Init {
-				initContainers = append(initContainers, c)
-			} else {
-				containers = append(containers, c)
-			}
-		}
-		sort.Slice(containers, func(a, b int) bool { return containers[a].Name < containers[b].Name })
-		sort.Slice(initContainers, func(a, b int) bool { return initContainers[a].Name < initContainers[b].Name })
+		containers, initContainers := wlrcache.ContainersFromObserved(wlr.Status.ObservedResources)
 		return workloadEntry{
 			Namespace: namespace,
 			Name:      name,
@@ -441,24 +309,6 @@ func (s *Server) inactiveWorkloadEntry(ctx context.Context, namespace, kind, nam
 		}, true
 	}
 	return workloadEntry{}, false
-}
-
-func requirementsFromObserved(res sustainv1alpha1.ObservedContainerResources) corev1.ResourceRequirements {
-	out := corev1.ResourceRequirements{}
-	set := func(dst *corev1.ResourceList, name corev1.ResourceName, q *resource.Quantity) {
-		if q == nil {
-			return
-		}
-		if *dst == nil {
-			*dst = corev1.ResourceList{}
-		}
-		(*dst)[name] = *q
-	}
-	set(&out.Requests, corev1.ResourceCPU, res.CPURequest)
-	set(&out.Requests, corev1.ResourceMemory, res.MemoryRequest)
-	set(&out.Limits, corev1.ResourceCPU, res.CPULimit)
-	set(&out.Limits, corev1.ResourceMemory, res.MemoryLimit)
-	return out
 }
 
 // workloadKey builds the "namespace|kind|name" key used for Prometheus signal
@@ -614,10 +464,7 @@ func assembleCoordinationFactors(byLabels map[string]float64) *coordinationFacto
 // fetchCoordinationFactors queries the coordination factors for one workload;
 // nil when none exist.
 func (s *Server) fetchCoordinationFactors(ctx context.Context, namespace, kind, name string) *coordinationFactors {
-	expr := fmt.Sprintf(
-		`%s{namespace=%q,owner_kind=%q,owner_name=%q}`,
-		promclient.MetricCoordinationFactor, namespace, kind, name,
-	)
+	expr := promclient.MetricCoordinationFactor + promclient.WorkloadSelector(namespace, kind, name)
 	byLabels, err := s.PromClient.QueryByLabels(ctx, expr, "resource", "kind")
 	if err != nil || len(byLabels) == 0 {
 		return nil

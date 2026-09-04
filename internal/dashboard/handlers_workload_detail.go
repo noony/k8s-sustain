@@ -71,16 +71,14 @@ func (s *Server) lookupUpdateMode(ctx context.Context, namespace, kind, name str
 func (s *Server) fillDetailPrometheusSignals(ctx context.Context, resp *workloadDetailResponse, namespace, kind, name string) {
 	// The OOM rule is per-container; sum across containers for the
 	// workload-level 24h count shown on the detail page.
-	oomExpr := fmt.Sprintf(`sum(%s{namespace=%q,owner_kind=%q,owner_name=%q})`, promclient.MetricWorkloadOOM24h, namespace, kind, name)
-	if v, _ := s.PromClient.QueryInstant(ctx, oomExpr); v > 0 {
+	sel := promclient.WorkloadSelector(namespace, kind, name)
+	if v, _ := s.PromClient.QueryInstant(ctx, fmt.Sprintf("sum(%s%s)", promclient.MetricWorkloadOOM24h, sel)); v > 0 {
 		resp.OOM24h = int(v)
 	}
-	driftExpr := fmt.Sprintf(`max(abs(1 - %s{namespace=%q,owner_kind=%q,owner_name=%q}))`, promclient.MetricWorkloadDriftRatio, namespace, kind, name)
-	if v, _ := s.PromClient.QueryInstant(ctx, driftExpr); v > 0 {
+	if v, _ := s.PromClient.QueryInstant(ctx, fmt.Sprintf("max(abs(1 - %s%s))", promclient.MetricWorkloadDriftRatio, sel)); v > 0 {
 		resp.DriftPercent = v * 100
 	}
-	blockedExpr := fmt.Sprintf(`%s{namespace=%q,owner_kind=%q,owner_name=%q} == 1`, promclient.MetricWorkloadRetryState, namespace, kind, name)
-	blockedByReason, _ := s.PromClient.QueryByLabel(ctx, blockedExpr, "reason")
+	blockedByReason, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricWorkloadRetryState+sel+" == 1", "reason")
 	if len(blockedByReason) == 0 {
 		return
 	}
@@ -89,8 +87,7 @@ func (s *Server) fillDetailPrometheusSignals(ctx context.Context, resp *workload
 		reason = k
 		break
 	}
-	attemptsExpr := fmt.Sprintf(`%s{namespace=%q,owner_kind=%q,owner_name=%q}`, promclient.MetricWorkloadRetryAttempts, namespace, kind, name)
-	attempts, _ := s.PromClient.QueryInstant(ctx, attemptsExpr)
+	attempts, _ := s.PromClient.QueryInstant(ctx, promclient.MetricWorkloadRetryAttempts+sel)
 	resp.Blocked = &workloadDetailBlocked{Reason: reason, Attempts: int(attempts)}
 }
 
