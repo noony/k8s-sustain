@@ -1171,6 +1171,27 @@
   
   
     <li class="md-nav__item">
+      <a href="guides/authenticated-prometheus/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Authenticated Prometheus
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="guides/local-testing/" class="md-nav__link">
         
   
@@ -1600,6 +1621,7 @@ the pod. See <a href="concepts/update-modes/">Update modes</a>.</p>
 <li><strong>HPA-aware right-sizing</strong> — when a workload is scaled by an HPA or KEDA <code>ScaledObject</code>, requests are shaped so the autoscaler's utilization signal stays meaningful (see <a href="concepts/autoscaler-coordination/">Autoscaler Coordination</a>)</li>
 <li><strong>Limit strategies</strong> — keep existing ratio, set equal to request, remove limit, or use a custom multiplier</li>
 <li><strong>Prometheus-native</strong> — ships pre-computed recording rules; no external dependency beyond Prometheus</li>
+<li><strong>Works with authenticated Prometheus</strong> — bearer token, basic auth, custom headers and TLS (private CA, mTLS), including multi-tenant Thanos / Mimir / Cortex gateways (see <a href="guides/authenticated-prometheus/">Authenticated Prometheus</a>)</li>
 </ul>
 <hr />
 <h2 id="quick-navigation">Quick navigation<a class="headerlink" href="#quick-navigation" title="Permanent link">&para;</a></h2>

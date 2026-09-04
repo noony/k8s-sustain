@@ -1088,6 +1088,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/authenticated-prometheus/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Authenticated Prometheus
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/local-testing/" class="md-nav__link">
         
   
@@ -1300,6 +1321,15 @@
   <a href="#flags" class="md-nav__link">
     <span class="md-ellipsis">
       Flags
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prometheus-authentication-and-tls-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prometheus authentication and TLS flags
     </span>
   </a>
   
@@ -1584,6 +1614,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#prometheus-authentication-and-tls-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prometheus authentication and TLS flags
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       Environment variables
@@ -1846,6 +1885,90 @@
 </tr>
 </tbody>
 </table>
+<h3 id="prometheus-authentication-and-tls-flags">Prometheus authentication and TLS flags<a class="headerlink" href="#prometheus-authentication-and-tls-flags" title="Permanent link">&para;</a></h3>
+<p>These flags exist with <strong>identical names</strong> on both <code>start</code> and <code>dashboard</code>
+(the webhook has none — it never queries Prometheus). See the
+<a href="../../guides/authenticated-prometheus/">Authenticated Prometheus guide</a> for
+worked Helm examples.</p>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--prometheus-bearer-token</code></td>
+<td>—</td>
+<td>Static bearer token sent as <code>Authorization: Bearer &lt;token&gt;</code> on every request. Mutually exclusive with <code>--prometheus-bearer-token-file</code>. Read once at startup, so a rotating token must use the file form.</td>
+</tr>
+<tr>
+<td><code>--prometheus-bearer-token-file</code></td>
+<td>—</td>
+<td>Path to a file holding the bearer token. <strong>Re-read on every request</strong>, so projected service-account tokens keep working across rotation and a Secret update needs no restart.</td>
+</tr>
+<tr>
+<td><code>--prometheus-basic-auth-username</code></td>
+<td>—</td>
+<td>Username for HTTP basic auth. Required whenever a password or password file is set.</td>
+</tr>
+<tr>
+<td><code>--prometheus-basic-auth-password</code></td>
+<td>—</td>
+<td>Password for HTTP basic auth. Mutually exclusive with <code>--prometheus-basic-auth-password-file</code>.</td>
+</tr>
+<tr>
+<td><code>--prometheus-basic-auth-password-file</code></td>
+<td>—</td>
+<td>Path to a file holding the basic-auth password. Re-read on every request.</td>
+</tr>
+<tr>
+<td><code>--prometheus-headers</code></td>
+<td>—</td>
+<td>Extra HTTP header sent on every request, as <code>Key=Value</code> (e.g. <code>X-Scope-OrgID=tenant-a</code> for a multi-tenant Thanos/Mimir/Cortex gateway). <strong>Repeat the flag</strong> for several headers; each occurrence is taken verbatim, so a value may contain commas or quotes. Only the first <code>=</code> splits an entry, so values may contain <code>=</code>. The env-var form (<code>K8SSUSTAIN_PROMETHEUS_HEADERS</code>) is a single comma-separated string instead, so a value with a comma must use the flag. Header names must be valid HTTP tokens and values must not contain control characters — both are checked at startup.</td>
+</tr>
+<tr>
+<td><code>--prometheus-tls-ca-file</code></td>
+<td>—</td>
+<td>PEM CA bundle used to verify the Prometheus server certificate. <strong>Appended</strong> to a copy of the system trust store rather than replacing it.</td>
+</tr>
+<tr>
+<td><code>--prometheus-tls-cert-file</code></td>
+<td>—</td>
+<td>Client certificate for mutual TLS. Must be set together with <code>--prometheus-tls-key-file</code>. The pair is <strong>re-read on every TLS handshake</strong>, so a certificate rotated in place (cert-manager renewing the Secret, a mesh sidecar refreshing its pair) is used without a restart.</td>
+</tr>
+<tr>
+<td><code>--prometheus-tls-key-file</code></td>
+<td>—</td>
+<td>Client private key for mutual TLS. Must be set together with <code>--prometheus-tls-cert-file</code>. Re-read on every handshake, like the certificate.</td>
+</tr>
+<tr>
+<td><code>--prometheus-tls-server-name</code></td>
+<td>—</td>
+<td>Overrides the SNI / certificate hostname verified against the server certificate. Reach for this before <code>--prometheus-tls-insecure-skip-verify</code>.</td>
+</tr>
+<tr>
+<td><code>--prometheus-tls-insecure-skip-verify</code></td>
+<td><code>false</code></td>
+<td>Disable server-certificate verification. Insecure — the connection can be intercepted, and every credential above with it. Logs a loud warning at startup.</td>
+</tr>
+</tbody>
+</table>
+<p>Every file named above is also read <strong>once at construction</strong>, so a bad path, a
+malformed key pair, or a CA file with no valid PEM block fails the process at
+startup (<code>CrashLoopBackOff</code>) instead of degrading into per-query errors that
+look like a Prometheus outage. Credentials are never logged.</p>
+<p>Conflicting combinations are rejected at startup rather than silently resolved:
+bearer token + bearer token file, password + password file, bearer + basic
+auth, a password without a username, an <code>Authorization</code> entry in
+<code>--prometheus-headers</code> alongside bearer/basic auth, a header name or value
+that HTTP would reject, and a TLS cert without its key.</p>
+<p>If the system certificate store cannot be read, <code>--prometheus-tls-ca-file</code>
+becomes the <em>only</em> trusted root; the startup log says so with a <code>WARNING</code>
+line, since a public-CA ingress on the same address would then fail with
+"unknown authority".</p>
 <h3 id="environment-variables">Environment variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h3>
 <p>Every flag can be overridden with an environment variable prefixed by <code>K8SSUSTAIN_</code> (uppercase, hyphens and dots → underscores). The mapping is:</p>
 <ul>
@@ -1863,6 +1986,24 @@
 <a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># List-valued flag — comma-separated, same syntax as --excluded-namespaces=a,b</span>
 <a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="nv">K8SSUSTAIN_EXCLUDED_NAMESPACES</span><span class="o">=</span>kube-system,monitoring<span class="w"> </span>k8s-sustain<span class="w"> </span>start
 </code></pre></div>
+<div class="admonition danger">
+<p class="admonition-title">The same flag, two different environment variables</p>
+<p>Flags that exist on both <code>start</code> and <code>dashboard</code> — every
+<code>--prometheus-*</code> authentication flag, <code>--log-level</code>,
+<code>--excluded-namespaces</code> — share a <strong>flag name</strong> but not an environment
+variable. The controller reads <code>K8SSUSTAIN_&lt;FLAG&gt;</code>; the dashboard binds all
+of its flags under the <code>dashboard.</code> key prefix and reads
+<code>K8SSUSTAIN_DASHBOARD_&lt;FLAG&gt;</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE</span><span class="o">=</span>/etc/prom/token<span class="w"> </span>k8s-sustain<span class="w"> </span>start
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nv">K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE</span><span class="o">=</span>/etc/prom/token<span class="w"> </span>k8s-sustain<span class="w"> </span>dashboard
+</code></pre></div>
+<p>An unprefixed variable passed to <code>dashboard</code> is <strong>silently ignored</strong> — no
+warning, no error. The dashboard starts and queries Prometheus
+unauthenticated, which surfaces much later as "No metrics data available"
+while the controller works fine. The Helm chart renders the correct prefix
+for each component automatically; this only bites when you set environment
+variables yourself.</p>
+</div>
 <h3 id="log-verbosity">Log verbosity<a class="headerlink" href="#log-verbosity" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>info</code> (default) — high-signal events: reconcile cycle start/end with target counts, HPA detection, recommendations computed, in-place update applied, pod evictions, recommendation injection by the webhook.</li>
@@ -1899,7 +2040,7 @@
 <hr />
 <h2 id="k8s-sustain-webhook"><code>k8s-sustain webhook</code><a class="headerlink" href="#k8s-sustain-webhook" title="Permanent link">&para;</a></h2>
 <p>Starts the mutating admission webhook server. Listens for <code>Pod CREATE</code> admission requests and injects resources from <code>OnCreate</code>-mode policies.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>k8s-sustain webhook [flags]
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>k8s-sustain webhook [flags]
 </code></pre></div>
 <h3 id="flags_1">Flags<a class="headerlink" href="#flags_1" title="Permanent link">&para;</a></h3>
 <table>
@@ -1981,10 +2122,10 @@
 <h3 id="failure-policy">Failure policy<a class="headerlink" href="#failure-policy" title="Permanent link">&para;</a></h3>
 <p>The <code>MutatingWebhookConfiguration</code> is set to <code>failurePolicy: Ignore</code> by default. This means if the webhook is unreachable or returns an error, the pod is admitted unchanged. The controller will still apply <code>Ongoing</code> recommendations independently.</p>
 <p>To change the failure policy:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--set<span class="w"> </span>webhook.failurePolicy<span class="o">=</span>Fail
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--set<span class="w"> </span>webhook.failurePolicy<span class="o">=</span>Fail
 </code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Using <code>Fail</code> in production</p>
@@ -1993,7 +2134,7 @@
 <hr />
 <h2 id="k8s-sustain-dashboard"><code>k8s-sustain dashboard</code><a class="headerlink" href="#k8s-sustain-dashboard" title="Permanent link">&para;</a></h2>
 <p>Starts the web dashboard server. Provides a UI for policy exploration, workload metrics visualization, and policy simulation.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>k8s-sustain dashboard [flags]
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>k8s-sustain dashboard [flags]
 </code></pre></div>
 <h3 id="flags_2">Flags<a class="headerlink" href="#flags_2" title="Permanent link">&para;</a></h3>
 <table>
@@ -2032,6 +2173,18 @@
 </tr>
 </tbody>
 </table>
+<p>The dashboard also accepts the full set of
+<a href="#prometheus-authentication-and-tls-flags">Prometheus authentication and TLS flags</a>
+documented under <code>start</code>, with identical names and semantics — it queries
+Prometheus directly and needs the same credentials the controller does.</p>
+<div class="admonition danger">
+<p class="admonition-title">Dashboard environment variables carry the <code>DASHBOARD</code> prefix</p>
+<p><code>k8s-sustain dashboard</code> reads <strong><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code></strong>, not
+<code>K8SSUSTAIN_PROMETHEUS_*</code>, because every dashboard flag is bound under the
+<code>dashboard.</code> Viper key prefix. An unprefixed variable is silently ignored
+and the dashboard queries Prometheus unauthenticated. The flag names
+themselves are unprefixed and identical to the controller's.</p>
+</div>
 <h3 id="health-endpoints_2">Health endpoints<a class="headerlink" href="#health-endpoints_2" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -2053,10 +2206,10 @@
 <hr />
 <h2 id="k8s-sustain-version"><code>k8s-sustain version</code><a class="headerlink" href="#k8s-sustain-version" title="Permanent link">&para;</a></h2>
 <p>Prints the build-time version string and exits. Release builds embed the git tag via <code>-ldflags</code>; local and untagged builds report <code>dev</code>. The same value is logged at startup by every subcommand and is also available through the global <code>--version</code> flag.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>k8s-sustain version
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>k8s-sustain version
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># confirm which version is running in-cluster</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>deploy/k8s-sustain<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>--<span class="w"> </span>/k8s-sustain<span class="w"> </span>version
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># confirm which version is running in-cluster</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>deploy/k8s-sustain<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>--<span class="w"> </span>/k8s-sustain<span class="w"> </span>version
 </code></pre></div>
 
 

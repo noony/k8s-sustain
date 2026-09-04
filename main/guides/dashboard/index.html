@@ -16,7 +16,7 @@
         <link rel="prev" href="../cert-manager/">
       
       
-        <link rel="next" href="../local-testing/">
+        <link rel="next" href="../authenticated-prometheus/">
       
       
       <link rel="icon" href="../../assets/logo.svg">
@@ -1406,6 +1406,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../authenticated-prometheus/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Authenticated Prometheus
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../local-testing/" class="md-nav__link">
         
   
@@ -2025,6 +2046,26 @@
 </tr>
 </tbody>
 </table>
+<p>The dashboard also accepts the full set of Prometheus authentication and TLS
+flags (<code>--prometheus-bearer-token-file</code>, <code>--prometheus-basic-auth-*</code>,
+<code>--prometheus-headers</code>, <code>--prometheus-tls-*</code>), with the same names and
+semantics as on the controller — see the
+<a href="../../reference/cli/#prometheus-authentication-and-tls-flags">CLI reference</a>
+and the <a href="../authenticated-prometheus/">Authenticated Prometheus guide</a>.</p>
+<div class="admonition danger">
+<p class="admonition-title">Dashboard environment variables carry the <code>DASHBOARD</code> prefix</p>
+<p>Every dashboard flag is bound under the <code>dashboard.</code> Viper key prefix, so
+the dashboard reads <strong><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code></strong> where the
+controller reads <code>K8SSUSTAIN_PROMETHEUS_*</code>. The flag names are identical;
+only the environment variables differ.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE</span><span class="o">=</span>/etc/prom/token<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>k8s-sustain<span class="w"> </span>dashboard
+</code></pre></div>
+<p>An unprefixed variable is <strong>silently ignored</strong>: the dashboard starts,
+queries Prometheus unauthenticated, and every panel reports
+<a href="#no-metrics-data-available">"No metrics data available"</a> while the
+controller works fine.</p>
+</div>
 <p>When a request carries an <code>Origin</code> header and a CORS allowlist is configured,
 the dashboard appends <code>Vary: Origin</code> to the response. This prevents shared
 caches and CDNs from serving one origin's <code>Access-Control-Allow-Origin</code> header
@@ -2032,18 +2073,27 @@ back to a different origin (which would otherwise break the browser's
 same-origin policy when two trusted origins share the same upstream cache).</p>
 <h3 id="helm-chart">Helm Chart<a class="headerlink" href="#helm-chart" title="Permanent link">&para;</a></h3>
 <p>Enable the dashboard in your Helm values:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">prometheusAddress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://prometheus.monitoring.svc:9090</span><span class="w">  </span><span class="c1"># only if using an external Prometheus</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">dashboard</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">corsAllowedOrigins</span><span class="p">:</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"https://my-domain.example.com"</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">service</span><span class="p">:</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ClusterIP</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8090</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">prometheusAddress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://prometheus.monitoring.svc:9090</span><span class="w">  </span><span class="c1"># only if using an external Prometheus</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">dashboard</span><span class="p">:</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">corsAllowedOrigins</span><span class="p">:</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"https://my-domain.example.com"</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">service</span><span class="p">:</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ClusterIP</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8090</span>
+</code></pre></div>
+<p>If that Prometheus needs credentials, add the top-level <code>prometheusAuth</code> block —
+the chart applies it to the dashboard and the controller alike, with the correct
+environment-variable prefix for each:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-credentials</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">bearerTokenKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">token</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">headers</span><span class="p">:</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">X-Scope-OrgID</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tenant-a</span>
 </code></pre></div>
 <p>Then access it via port-forward:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>svc/&lt;release&gt;-k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>svc/&lt;release&gt;-k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
 </code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Authenticate before exposing it</p>
@@ -2147,14 +2197,14 @@ Past 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 
 <h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">&para;</a></h2>
 <p>The dashboard frontend is a Vue 3 + TypeScript SPA built with Vite, located in <code>internal/dashboard/ui/frontend/</code>. The compiled output goes to <code>internal/dashboard/ui/dist/</code> and is embedded into the Go binary via <code>go:embed</code>.</p>
 <h3 id="local-development">Local development<a class="headerlink" href="#local-development" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nb">cd</span><span class="w"> </span>internal/dashboard/ui/frontend
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>npm<span class="w"> </span>install
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>npm<span class="w"> </span>run<span class="w"> </span>dev<span class="w">    </span><span class="c1"># starts Vite dev server with API proxy to localhost:8090</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">cd</span><span class="w"> </span>internal/dashboard/ui/frontend
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>npm<span class="w"> </span>install
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>npm<span class="w"> </span>run<span class="w"> </span>dev<span class="w">    </span><span class="c1"># starts Vite dev server with API proxy to localhost:8090</span>
 </code></pre></div>
 <p>Run the Go dashboard backend separately (<code>k8s-sustain dashboard --bind-address=:8090</code>), and access the Vite dev server (default <code>http://localhost:5173</code>).</p>
 <h3 id="building">Building<a class="headerlink" href="#building" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>build-ui<span class="w">   </span><span class="c1"># builds the frontend (npm ci + npm run build)</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>make<span class="w"> </span>build<span class="w">      </span><span class="c1"># builds frontend then Go binary</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>make<span class="w"> </span>build-ui<span class="w">   </span><span class="c1"># builds the frontend (npm ci + npm run build)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>make<span class="w"> </span>build<span class="w">      </span><span class="c1"># builds frontend then Go binary</span>
 </code></pre></div>
 <p>The Docker build automatically handles the frontend build in a separate stage.</p>
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
@@ -2163,26 +2213,27 @@ Past 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 
 <ul>
 <li><strong>Recording rules not loaded</strong> — k8s-sustain requires recording rules (<code>k8s_sustain:pod_workload</code>, <code>k8s_sustain:container_cpu_usage_by_workload:rate1m</code>, etc.). Verify they exist by querying <code>k8s_sustain:pod_workload</code> in Prometheus. If using the bundled Prometheus subchart, they are embedded automatically. If using an external Prometheus with the Prometheus Operator, set <code>prometheusRule.enabled=true</code> to deploy the recording rules as a <code>PrometheusRule</code> resource.</li>
 <li><strong>Duplicate kube-state-metrics instances</strong> — If multiple kube-state-metrics are scraped, the workload mapping rules can fail with "many-to-many matching not allowed". Either remove the duplicate kube-state-metrics or upgrade the chart (the recording rules deduplicate series automatically since v0.3).</li>
+<li><strong>Dashboard querying Prometheus unauthenticated</strong> — if the controller produces recommendations but every dashboard panel is empty, the dashboard is probably missing its Prometheus credentials. The chart wires both components from the same <code>prometheusAuth</code> block, so this shows up when credentials were set by hand: the dashboard reads <code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code>, not <code>K8SSUSTAIN_PROMETHEUS_*</code>, and it never warns about an ignored variable. See <a href="../authenticated-prometheus/">Authenticated Prometheus</a>.</li>
 <li><strong>Missing upstream metrics</strong> — The recording rules depend on <code>kube_pod_owner</code>, <code>kube_replicaset_owner</code>, <code>container_cpu_usage_seconds_total</code>, <code>container_memory_working_set_bytes</code>, and <code>kube_pod_container_resource_requests</code> (for historical request lines). Ensure kube-state-metrics and cAdvisor metrics are scraped.</li>
 </ul>
 <h2 id="http-api">HTTP API<a class="headerlink" href="#http-api" title="Permanent link">&para;</a></h2>
 <p>The dashboard backs every UI page with a small JSON API under <code>/api/</code>. The same endpoints are useful for ad-hoc scripts and integrations.</p>
 <h3 id="response-envelope">Response envelope<a class="headerlink" href="#response-envelope" title="Permanent link">&para;</a></h3>
 <p>Every successful response is wrapped:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">"data"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"..."</span><span class="p">:</span><span class="w"> </span><span class="s2">"endpoint-specific payload"</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">"meta"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"requestId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a1b2c3d4e5f60718293a4b5c"</span><span class="w"> </span><span class="p">}</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">"data"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"..."</span><span class="p">:</span><span class="w"> </span><span class="s2">"endpoint-specific payload"</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">"meta"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"requestId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a1b2c3d4e5f60718293a4b5c"</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>Errors use a parallel shape:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">"code"</span><span class="p">:</span><span class="w"> </span><span class="s2">"BAD_REQUEST"</span><span class="p">,</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"invalid pageSize \"-1\": must be 1..200"</span><span class="p">,</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">"field"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pageSize"</span><span class="p">,</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nt">"requestId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a1b2c3d4e5f60718293a4b5c"</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nt">"code"</span><span class="p">:</span><span class="w"> </span><span class="s2">"BAD_REQUEST"</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"invalid pageSize \"-1\": must be 1..200"</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nt">"field"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pageSize"</span><span class="p">,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="nt">"requestId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a1b2c3d4e5f60718293a4b5c"</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="p">}</span>
 </code></pre></div>
 <p>Error <code>code</code> values are stable: <code>BAD_REQUEST</code>, <code>NOT_FOUND</code>, <code>METHOD_NOT_ALLOWED</code>, <code>SERVICE_UNAVAILABLE</code>, <code>INTERNAL</code>. The <code>field</code> key is only present on 400 responses that can be attributed to a single request input (page, pageSize, kind, risk, autoscaler, automated, window, step, limit, …).</p>
 <h3 id="request-correlation">Request correlation<a class="headerlink" href="#request-correlation" title="Permanent link">&para;</a></h3>
@@ -2325,13 +2376,13 @@ Past 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 
         
         
           
-          <a href="../local-testing/" class="md-footer__link md-footer__link--next" aria-label="Next: Local testing">
+          <a href="../authenticated-prometheus/" class="md-footer__link md-footer__link--next" aria-label="Next: Authenticated Prometheus">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Local testing
+                Authenticated Prometheus
               </div>
             </div>
             <div class="md-footer__button md-icon">

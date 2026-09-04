@@ -1088,6 +1088,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/authenticated-prometheus/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Authenticated Prometheus
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/local-testing/" class="md-nav__link">
         
   
@@ -1308,6 +1329,30 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#prometheus-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prometheus authentication
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prometheus authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-the-values-are-rendered" class="md-nav__link">
+    <span class="md-ellipsis">
+      How the values are rendered
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#controller" class="md-nav__link">
     <span class="md-ellipsis">
       Controller
@@ -1493,6 +1538,30 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#prometheus-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prometheus authentication
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prometheus authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-the-values-are-rendered" class="md-nav__link">
+    <span class="md-ellipsis">
+      How the values are rendered
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#controller" class="md-nav__link">
     <span class="md-ellipsis">
       Controller
@@ -1642,6 +1711,174 @@
 </tr>
 </tbody>
 </table>
+<hr />
+<h2 id="prometheus-authentication">Prometheus authentication<a class="headerlink" href="#prometheus-authentication" title="Permanent link">&para;</a></h2>
+<p>Authentication and TLS for the Prometheus connection. One top-level block wires
+the <strong>controller</strong> and the <strong>dashboard</strong> identically, so the two can never
+disagree about which Prometheus — or which tenant — a recommendation came from.
+The webhook is deliberately not wired: it never queries Prometheus, it only
+reads cached <code>WorkloadRecommendation</code> objects.</p>
+<p>See the <a href="../../guides/authenticated-prometheus/">Authenticated Prometheus guide</a>
+for worked examples (Thanos/Mimir tenant gateway, service-account token behind
+an auth proxy, basic auth with a private CA).</p>
+<div class="admonition note">
+<p class="admonition-title"><code>prometheusAuth</code> is not <code>prometheus</code></p>
+<p>This block configures k8s-sustain's <em>client</em>. The separate top-level
+<code>prometheus:</code> key configures the <a href="#prometheus-subchart">bundled Prometheus subchart</a>.</p>
+</div>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>prometheusAuth.existingSecret</code></td>
+<td><code>""</code></td>
+<td>Name of an existing Secret in the release namespace holding the bearer token and/or basic-auth credentials. Required for any of the <code>*Key</code> values below to take effect.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.bearerTokenKey</code></td>
+<td><code>""</code></td>
+<td>Key in <code>existingSecret</code> holding the bearer token. Mounted at <code>/etc/k8s-sustain/prometheus-auth/&lt;key&gt;</code> and passed as <code>--prometheus-bearer-token-file</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.bearerTokenFile</code></td>
+<td><code>""</code></td>
+<td>Absolute path to a bearer token file that <strong>already exists in the pod</strong>, passed verbatim as <code>--prometheus-bearer-token-file</code>. No volume or mount is rendered. Canonical value: <code>/var/run/secrets/kubernetes.io/serviceaccount/token</code>, the kubelet's rotating projected token. Mutually exclusive with <code>bearerTokenKey</code> and <code>bearerToken</code> — setting either alongside it fails the template.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.bearerToken</code></td>
+<td><code>""</code></td>
+<td>Inline bearer token. <strong>Discouraged</strong> — rendered verbatim into the pod spec. Ignored when <code>existingSecret</code> + <code>bearerTokenKey</code> are set.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.basicAuth.username</code></td>
+<td><code>""</code></td>
+<td>Basic-auth username, passed as <code>--prometheus-basic-auth-username</code>. Not secret material, so a plain value is fine.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.basicAuth.usernameKey</code></td>
+<td><code>""</code></td>
+<td>Key in <code>existingSecret</code> holding the username, injected with <code>valueFrom.secretKeyRef</code> (there is no <code>--prometheus-basic-auth-username-file</code> flag). Wins over <code>username</code> when both are set.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.basicAuth.passwordKey</code></td>
+<td><code>""</code></td>
+<td>Key in <code>existingSecret</code> holding the password. Mounted at <code>/etc/k8s-sustain/prometheus-auth/&lt;key&gt;</code> and passed as <code>--prometheus-basic-auth-password-file</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.basicAuth.passwordFile</code></td>
+<td><code>""</code></td>
+<td>Absolute path to a password file that <strong>already exists in the pod</strong> (a secret-store CSI mount, say), passed verbatim as <code>--prometheus-basic-auth-password-file</code>. No volume is rendered. Mutually exclusive with <code>passwordKey</code> and <code>password</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.basicAuth.password</code></td>
+<td><code>""</code></td>
+<td>Inline password. <strong>Discouraged</strong> — rendered verbatim into the pod spec. Ignored when <code>existingSecret</code> + <code>passwordKey</code> are set.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.headers</code></td>
+<td><code>{}</code></td>
+<td>Extra HTTP headers sent with every query, rendered as one <code>--prometheus-headers=Key=Value</code> flag per entry, so a value may contain commas or quotes. Header <strong>values land in the pod spec</strong> — use for tenant ids, not credentials. Values <strong>must be strings</strong>: an unquoted number such as <code>1234567</code> is parsed as a float and rejected by the values schema (write <code>"1234567"</code>). Example: <code>{X-Scope-OrgID: tenant-a}</code>. Keys are sorted so the rendered flags and the pod-template hash stay stable.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.existingSecret</code></td>
+<td><code>""</code></td>
+<td>Secret holding the CA bundle and/or client key pair. May be the same Secret as <code>prometheusAuth.existingSecret</code>; it is mounted separately, at <code>/etc/k8s-sustain/prometheus-tls</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.caKey</code></td>
+<td><code>""</code></td>
+<td>Key holding the CA bundle that signs the Prometheus server certificate (<code>--prometheus-tls-ca-file</code>). Appended to the system trust store, never substituted for it.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.caFile</code></td>
+<td><code>""</code></td>
+<td>Absolute path to a CA bundle that <strong>already exists in the pod</strong>, passed verbatim as <code>--prometheus-tls-ca-file</code>. No volume is rendered. On OpenShift, <code>/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt</code> is the service CA that signs the in-cluster monitoring endpoint. Mutually exclusive with <code>caKey</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.certKey</code></td>
+<td><code>""</code></td>
+<td>Key holding the client certificate for mTLS (<code>--prometheus-tls-cert-file</code>). Must be set with <code>keyKey</code>. The pair is re-read on every TLS handshake, so a renewed certificate in the Secret is used without a restart.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.certFile</code></td>
+<td><code>""</code></td>
+<td>Absolute path to a client certificate that <strong>already exists in the pod</strong> (a service-mesh sidecar's key pair, say), passed verbatim as <code>--prometheus-tls-cert-file</code>. No volume is rendered. Mutually exclusive with <code>certKey</code>; still needs a key half (<code>keyFile</code> or <code>keyKey</code>).</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.keyKey</code></td>
+<td><code>""</code></td>
+<td>Key holding the client private key for mTLS (<code>--prometheus-tls-key-file</code>). Must be set with <code>certKey</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.keyFile</code></td>
+<td><code>""</code></td>
+<td>Absolute path to a client private key that <strong>already exists in the pod</strong>, passed verbatim as <code>--prometheus-tls-key-file</code>. No volume is rendered. Mutually exclusive with <code>keyKey</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.serverName</code></td>
+<td><code>""</code></td>
+<td>Overrides the SNI / certificate name verified against the server certificate (<code>--prometheus-tls-server-name</code>).</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.insecureSkipVerify</code></td>
+<td><code>false</code></td>
+<td>Disable server-certificate verification (<code>--prometheus-tls-insecure-skip-verify</code>). Debug only — it makes every credential above interceptable. Logs a loud warning at startup.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="how-the-values-are-rendered">How the values are rendered<a class="headerlink" href="#how-the-values-are-rendered" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Secret-backed keys become read-only file mounts</strong>, projected with
+  <code>defaultMode: 288</code> (<code>0440</code>) and with an explicit <code>items:</code> list, so only the
+  keys you name are exposed — an unrelated key in the same Secret never reaches
+  the container. Credentials at <code>/etc/k8s-sustain/prometheus-auth/&lt;key&gt;</code>, TLS
+  material at <code>/etc/k8s-sustain/prometheus-tls/&lt;key&gt;</code>.</li>
+<li><strong>A secret-backed file always wins</strong> over its inline counterpart. Setting
+  both is not an error; the inline value simply is not rendered.</li>
+<li><strong>Inline values become environment variables</strong>, not arguments — so they stay
+  out of the container's <code>argv</code> — with the per-component prefix the binary
+  expects: <code>K8SSUSTAIN_PROMETHEUS_*</code> on the controller,
+  <code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code> on the dashboard.</li>
+<li>Naming a <code>*Key</code> without the matching <code>existingSecret</code> renders <strong>nothing</strong> —
+  no flag, no volume, no mount.</li>
+<li><strong>A <code>*File</code> value is a raw path, not a source the chart creates.</strong> It renders
+  the flag verbatim and adds <strong>no volume and no volumeMount</strong> — use it for a
+  file the pod already carries (the kubelet's projected service-account token,
+  a secret-store CSI mount, a mesh sidecar's key pair). The path must be
+  absolute, or the template fails.</li>
+<li><strong>A <code>*File</code> and its <code>*Key</code> are mutually exclusive and fail the template</strong>
+  when both are set, rather than being ranked by precedence: both drive the
+  <em>same</em> flag with different values, so the rendered Deployment would not show
+  which source was meant. <code>bearerTokenFile</code> / <code>basicAuth.passwordFile</code> conflict
+  with their inline counterparts too — the binary rejects an inline credential
+  together with its file at construction, so rendering both would only defer
+  the crash to startup. The error names both values.</li>
+<li><strong>The binary's own cross-credential rules are checked at template time too</strong>,
+  on the <em>effective</em> sources (a <code>*Key</code> only counts when its Secret is named):
+  a bearer token together with basic auth, a password without a username, and
+  a client certificate without its key (or vice versa) all fail the template
+  instead of surfacing as a <code>CrashLoopBackOff</code> after a green <code>helm upgrade</code>.</li>
+<li><strong>Every arg carrying a user value is quoted</strong>, so a header value or username
+  containing a colon followed by a space, a space followed by <code>#</code>, or a <code>"</code>
+  renders as the exact string, instead of turning the args entry into a YAML
+  mapping or being truncated at a comment marker.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Prefer <code>existingSecret</code> over inline values</p>
+<p>An inline <code>bearerToken</code> or <code>basicAuth.password</code> is readable through
+<code>kubectl get deploy -o yaml</code>, <code>helm get values</code>, and whatever git
+repository holds the values file. The file form additionally re-reads the
+credential on <strong>every request</strong>, so a rotated Secret — or a kubelet-rotated
+service-account token — is picked up with no pod restart. Create the Secret
+with external-secrets, sealed-secrets, a secret-store CSI driver, or this
+chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
+</div>
 <hr />
 <h2 id="controller">Controller<a class="headerlink" href="#controller" title="Permanent link">&para;</a></h2>
 <table>
