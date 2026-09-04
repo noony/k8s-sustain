@@ -68,6 +68,13 @@ spec:
             {{- if .Values.recommendOnly }}
             - --recommend-only=true
             {{- end }}
+            {{- with (include "k8s-sustain.prometheusAuthArgs" . | trim) }}
+            {{- . | nindent 12 }}
+            {{- end }}
+          {{- with (include "k8s-sustain.prometheusAuthEnv" (dict "ctx" . "envPrefix" "K8SSUSTAIN_") | trim) }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -93,6 +100,14 @@ spec:
             {{- toYaml .Values.controller.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.controller.resources | nindent 12 }}
+          {{- with (include "k8s-sustain.prometheusAuthVolumeMounts" . | trim) }}
+          volumeMounts:
+            {{- . | nindent 12 }}
+          {{- end }}
+      {{- with (include "k8s-sustain.prometheusAuthVolumes" . | trim) }}
+      volumes:
+        {{- . | nindent 8 }}
+      {{- end }}
       {{- with .Values.controller.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

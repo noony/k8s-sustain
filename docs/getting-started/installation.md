@@ -38,6 +38,14 @@ helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
   --set prometheusAddress=http://prometheus.monitoring.svc:80
 ```
 
+If that Prometheus requires authentication — a bearer token, basic auth, a
+private CA, or a Thanos/Mimir/Cortex tenant header — configure the top-level
+`prometheusAuth` block as well. See the
+[Authenticated Prometheus guide](../guides/authenticated-prometheus.md) for
+copy-pasteable values, and the
+[Helm values reference](../reference/helm-values.md#prometheus-authentication)
+for the full schema.
+
 !!! warning "Recording rules required"
     When `prometheus.enabled=false`, you must install the recording rules manually.
     Copy the rule groups from `prometheus.server.serverFiles` in `values.yaml` into your existing Prometheus configuration.

@@ -31,7 +31,10 @@ func TestSetupDefaultsAgreeWithConfigDefaults(t *testing.T) {
 	viper.Reset()
 	cmd := &cobra.Command{}
 	config.BindControllerFlags(cmd)
-	cfg := config.LoadControllerConfig()
+	cfg, err := config.LoadControllerConfig()
+	if err != nil {
+		t.Fatalf("LoadControllerConfig: %v", err)
+	}
 
 	// A reconciler with every knob left at its zero value: SetupWithManager's
 	// fallback branches are exactly what a zero value triggers.

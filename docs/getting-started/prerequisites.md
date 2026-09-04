@@ -50,6 +50,16 @@ relabel_configs:
 
 kube-prometheus-stack does this by default; the bundled Prometheus subchart is configured to do it as well.
 
+### Authenticated or multi-tenant Prometheus
+
+If the Prometheus you bring requires credentials, sits behind a private CA, or
+is a Thanos / Mimir / Cortex query gateway expecting a tenant header, set the
+top-level `prometheusAuth` values block — bearer token (inline or from a
+rotating file), basic auth, arbitrary headers, and TLS (custom CA, mTLS, SNI
+override) are all supported. The controller and the dashboard are wired
+identically; the webhook needs nothing, since it never queries Prometheus. See
+the [Authenticated Prometheus guide](../guides/authenticated-prometheus.md).
+
 ## TLS certificate (webhook only)
 
 The admission webhook requires a valid TLS certificate trusted by the Kubernetes API server. Two options are supported:

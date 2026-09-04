@@ -18,6 +18,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 // --- Flag registration helpers ---------------------------------------------
@@ -55,6 +56,16 @@ func bindDuration(flags *pflag.FlagSet, key, flagName string, def time.Duration,
 // needs a non-empty default.
 func bindStringSlice(flags *pflag.FlagSet, key, flagName, usage string) {
 	flags.StringSlice(flagName, nil, usage)
+	_ = viper.BindPFlag(key, flags.Lookup(flagName))
+}
+
+// bindStringArray is bindStringSlice without CSV splitting: each occurrence of
+// the flag contributes exactly one element, verbatim, so a value may contain a
+// comma or a double quote. Use it for values the caller does not control the
+// grammar of (HTTP header values); keep bindStringSlice for lists of simple
+// identifiers where --flag=a,b is the friendlier syntax.
+func bindStringArray(flags *pflag.FlagSet, key, flagName, usage string) {
+	flags.StringArray(flagName, nil, usage)
 	_ = viper.BindPFlag(key, flags.Lookup(flagName))
 }
 
@@ -130,6 +141,93 @@ func getStringSlice(key string) []string {
 	return out
 }
 
+// --- Prometheus transport (auth / TLS) flags -------------------------------
+
+// bindPrometheusTransportFlags registers the Prometheus authentication and TLS
+// flags on flags, binding them under keyPrefix ("" for the controller,
+// "dashboard." for the dashboard).
+//
+// Two subcommands need byte-identical flags under different Viper keys because
+// viper.BindPFlag maps one key to exactly one pflag: a shared flat key would
+// leave whichever subcommand registered last owning it, and the other would
+// read its value off an unset flagset (the same trap documented on
+// BindWebhookFlags). Registering them from one function is what keeps the two
+// flag sets from drifting.
+func bindPrometheusTransportFlags(flags *pflag.FlagSet, keyPrefix string) {
+	bindString(flags, keyPrefix+"prometheus-bearer-token", "prometheus-bearer-token", "",
+		"Static bearer token sent as `Authorization: Bearer <token>` on every Prometheus request. Mutually exclusive with --prometheus-bearer-token-file; prefer the file form for Kubernetes service-account tokens, which rotate.")
+	bindString(flags, keyPrefix+"prometheus-bearer-token-file", "prometheus-bearer-token-file", "",
+		"Path to a file holding the Prometheus bearer token. Re-read on every request, so projected service-account tokens keep working across rotation.")
+	bindString(flags, keyPrefix+"prometheus-basic-auth-username", "prometheus-basic-auth-username", "",
+		"Username for HTTP basic auth against Prometheus. Required whenever a password or password file is set.")
+	bindString(flags, keyPrefix+"prometheus-basic-auth-password", "prometheus-basic-auth-password", "",
+		"Password for HTTP basic auth against Prometheus. Mutually exclusive with --prometheus-basic-auth-password-file.")
+	bindString(flags, keyPrefix+"prometheus-basic-auth-password-file", "prometheus-basic-auth-password-file", "",
+		"Path to a file holding the Prometheus basic-auth password. Re-read on every request.")
+	bindStringArray(flags, keyPrefix+"prometheus-headers", "prometheus-headers",
+		"Extra HTTP header sent on every Prometheus request, as Key=Value (e.g. X-Scope-OrgID=tenant-a for a multi-tenant Thanos/Mimir/Cortex gateway). Repeat the flag for several headers; a value may contain commas. The K8SSUSTAIN_PROMETHEUS_HEADERS env var form is comma-separated instead, so values with commas must use the flag.")
+	bindString(flags, keyPrefix+"prometheus-tls-ca-file", "prometheus-tls-ca-file", "",
+		"PEM CA bundle used to verify the Prometheus server certificate. Appended to the system trust store rather than replacing it.")
+	bindString(flags, keyPrefix+"prometheus-tls-cert-file", "prometheus-tls-cert-file", "",
+		"Client certificate for mutual TLS to Prometheus. Must be set together with --prometheus-tls-key-file.")
+	bindString(flags, keyPrefix+"prometheus-tls-key-file", "prometheus-tls-key-file", "",
+		"Client private key for mutual TLS to Prometheus. Must be set together with --prometheus-tls-cert-file.")
+	bindString(flags, keyPrefix+"prometheus-tls-server-name", "prometheus-tls-server-name", "",
+		"Overrides the SNI / certificate hostname verified against the Prometheus server certificate.")
+	bindBool(flags, keyPrefix+"prometheus-tls-insecure-skip-verify", "prometheus-tls-insecure-skip-verify", false,
+		"Disable verification of the Prometheus server certificate. Insecure: the connection can be intercepted. Logs a warning at startup.")
+}
+
+// parseHeaders turns a `Key=Value` list into a header map. Only the FIRST `=`
+// splits, so header values may legitimately contain `=` (base64 tenant ids,
+// for instance).
+func parseHeaders(entries []string) (map[string]string, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		name, value, found := strings.Cut(entry, "=")
+		if !found {
+			return nil, fmt.Errorf("invalid prometheus header %q: expected Key=Value", entry)
+		}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, fmt.Errorf("invalid prometheus header %q: empty header name", entry)
+		}
+		out[name] = strings.TrimSpace(value)
+	}
+	return out, nil
+}
+
+// loadPrometheusTransport reads the Prometheus transport keys under keyPrefix
+// straight into the client's own config type. The only thing that can fail is
+// the --prometheus-headers grammar, and it is returned as an error rather than
+// stashed in a field precisely so no call site can forget to check it: a
+// forgotten check would start the process with NO headers, i.e. querying the
+// wrong tenant, instead of failing.
+func loadPrometheusTransport(keyPrefix string) (promclient.TransportConfig, error) {
+	headers, err := parseHeaders(getStringSlice(keyPrefix + "prometheus-headers"))
+	if err != nil {
+		return promclient.TransportConfig{}, err
+	}
+	return promclient.TransportConfig{
+		BearerToken:           viper.GetString(keyPrefix + "prometheus-bearer-token"),
+		BearerTokenFile:       viper.GetString(keyPrefix + "prometheus-bearer-token-file"),
+		BasicAuthUsername:     viper.GetString(keyPrefix + "prometheus-basic-auth-username"),
+		BasicAuthPassword:     viper.GetString(keyPrefix + "prometheus-basic-auth-password"),
+		BasicAuthPasswordFile: viper.GetString(keyPrefix + "prometheus-basic-auth-password-file"),
+		Headers:               headers,
+		TLS: promclient.TLSConfig{
+			CAFile:             viper.GetString(keyPrefix + "prometheus-tls-ca-file"),
+			CertFile:           viper.GetString(keyPrefix + "prometheus-tls-cert-file"),
+			KeyFile:            viper.GetString(keyPrefix + "prometheus-tls-key-file"),
+			ServerName:         viper.GetString(keyPrefix + "prometheus-tls-server-name"),
+			InsecureSkipVerify: viper.GetBool(keyPrefix + "prometheus-tls-insecure-skip-verify"),
+		},
+	}, nil
+}
+
 // --- Controller (start) flags ------------------------------------------------
 
 // DefaultQueryShardMaxSamples is the default --query-shard-max-samples value:
@@ -179,6 +277,7 @@ func BindControllerFlags(cmd *cobra.Command) {
 		"How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs). Also decides whether a RECURRING ephemeral identity is rightsized at admission on its next run: the webhook's only recommendation source is this object, so an identity whose gap between runs exceeds this window cold-starts every time. Set it above the longest expected inter-run gap (the 7d default covers weekly batch). The dashboard shows retained entries as inactive workloads. 0 sweeps them on the next reconcile.")
 	bindInt(flags, "query-shard-max-samples", "query-shard-max-samples", DefaultQueryShardMaxSamples,
 		"Projected Prometheus sample budget (containers x window-minutes, summed across a shard's workloads) a single batched CPU/memory/OOM shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own --query.max-samples (default 50,000,000): that server-side limit REJECTS an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default here leaves a 5x margin.")
+	bindPrometheusTransportFlags(flags, "")
 }
 
 // ControllerConfig holds resolved configuration for the controller.
@@ -198,10 +297,17 @@ type ControllerConfig struct {
 	RecycleReplacementTimeout time.Duration
 	RecommendationRetention   time.Duration
 	QueryShardMaxSamples      int
+	// PrometheusTransport is the auth/TLS config handed to promclient.New.
+	PrometheusTransport promclient.TransportConfig
 }
 
-// LoadControllerConfig reads the current Viper state and returns a ControllerConfig.
-func LoadControllerConfig() ControllerConfig {
+// LoadControllerConfig reads the current Viper state and returns a
+// ControllerConfig. It fails only on a malformed --prometheus-headers entry.
+func LoadControllerConfig() (ControllerConfig, error) {
+	transport, err := loadPrometheusTransport("")
+	if err != nil {
+		return ControllerConfig{}, fmt.Errorf("invalid --prometheus-headers: %w", err)
+	}
 	return ControllerConfig{
 		MetricsBindAddress:        viper.GetString("metrics-bind-address"),
 		HealthProbeBindAddress:    viper.GetString("health-probe-bind-address"),
@@ -218,7 +324,8 @@ func LoadControllerConfig() ControllerConfig {
 		RecycleReplacementTimeout: viper.GetDuration("recycle-replacement-timeout"),
 		RecommendationRetention:   viper.GetDuration("recommendation-retention"),
 		QueryShardMaxSamples:      viper.GetInt("query-shard-max-samples"),
-	}
+		PrometheusTransport:       transport,
+	}, nil
 }
 
 // --- Webhook flags ---------------------------------------------------------
@@ -281,6 +388,7 @@ func BindDashboardFlags(cmd *cobra.Command) {
 	bindString(flags, "dashboard.log-level", "log-level", "info", "Log level (debug, info, warn, error)")
 	bindStringSlice(flags, "dashboard.cors-allowed-origins", "cors-allowed-origins", "Allowed CORS origins (e.g. http://localhost:3000). Empty (default) means same-origin only. Use * to allow all.")
 	bindStringSlice(flags, "dashboard.excluded-namespaces", "excluded-namespaces", "Namespaces the controller/webhook never manage (mirrors their --excluded-namespaces flag). The dashboard uses this to keep its policy-scoped workload views consistent with what the controller and webhook actually manage.")
+	bindPrometheusTransportFlags(flags, "dashboard.")
 }
 
 // DashboardConfig holds resolved configuration for the dashboard server.
@@ -290,16 +398,24 @@ type DashboardConfig struct {
 	LogLevel           string
 	CORSAllowedOrigins []string
 	ExcludedNamespaces []string
+	// PrometheusTransport is the auth/TLS config handed to promclient.New.
+	PrometheusTransport promclient.TransportConfig
 }
 
-// LoadDashboardConfig reads the current Viper state and returns a DashboardConfig.
+// LoadDashboardConfig reads the current Viper state and returns a
+// DashboardConfig. It fails only on a malformed --prometheus-headers entry.
 // See LoadWebhookConfig for why we avoid viper.UnmarshalKey here.
-func LoadDashboardConfig() DashboardConfig {
-	return DashboardConfig{
-		BindAddress:        viper.GetString("dashboard.bind-address"),
-		PrometheusAddress:  viper.GetString("dashboard.prometheus-address"),
-		LogLevel:           viper.GetString("dashboard.log-level"),
-		CORSAllowedOrigins: getStringSlice("dashboard.cors-allowed-origins"),
-		ExcludedNamespaces: getStringSlice("dashboard.excluded-namespaces"),
+func LoadDashboardConfig() (DashboardConfig, error) {
+	transport, err := loadPrometheusTransport("dashboard.")
+	if err != nil {
+		return DashboardConfig{}, fmt.Errorf("invalid --prometheus-headers: %w", err)
 	}
+	return DashboardConfig{
+		BindAddress:         viper.GetString("dashboard.bind-address"),
+		PrometheusAddress:   viper.GetString("dashboard.prometheus-address"),
+		LogLevel:            viper.GetString("dashboard.log-level"),
+		CORSAllowedOrigins:  getStringSlice("dashboard.cors-allowed-origins"),
+		ExcludedNamespaces:  getStringSlice("dashboard.excluded-namespaces"),
+		PrometheusTransport: transport,
+	}, nil
 }

@@ -82,6 +82,7 @@ nav:
           - cert-manager (TLS): guides/cert-manager.md
       - Operations:
           - Dashboard: guides/dashboard.md
+          - Authenticated Prometheus: guides/authenticated-prometheus.md
           - Local testing: guides/local-testing.md
           - Managing policies with Helm: guides/managing-policies-with-helm.md
   - Reference:

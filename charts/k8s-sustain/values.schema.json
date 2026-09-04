@@ -35,6 +35,48 @@
         { "format": "uri", "pattern": "^https?://.+" }
       ]
     },
+    "prometheusAuth": {
+      "type": "object",
+      "description": "Authentication / TLS for the Prometheus connection, shared by the controller and the dashboard. Secret-backed file mounts are the recommended path; inline values land in the pod spec.",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": { "type": "string" },
+        "bearerTokenKey": { "type": "string" },
+        "bearerTokenFile": { "type": "string" },
+        "bearerToken": { "type": "string" },
+        "basicAuth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "username": { "type": "string" },
+            "usernameKey": { "type": "string" },
+            "passwordKey": { "type": "string" },
+            "passwordFile": { "type": "string" },
+            "password": { "type": "string" }
+          }
+        },
+        "headers": {
+          "type": "object",
+          "description": "Extra HTTP headers, one --prometheus-headers flag each. Values must be strings: an unquoted number is parsed as a float and would render in exponent notation.",
+          "additionalProperties": { "type": "string" }
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "caKey": { "type": "string" },
+            "caFile": { "type": "string" },
+            "certKey": { "type": "string" },
+            "certFile": { "type": "string" },
+            "keyKey": { "type": "string" },
+            "keyFile": { "type": "string" },
+            "serverName": { "type": "string" },
+            "insecureSkipVerify": { "type": "boolean" }
+          }
+        }
+      }
+    },
     "excludedNamespaces": { "type": "array", "items": { "type": "string" } },
     "controller": {
       "type": "object",
