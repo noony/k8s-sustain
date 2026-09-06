@@ -104,6 +104,14 @@ upsizes to ~`440m` once the high phase dominates the percentile window.
 The controller recycles the pod each time, exercising the second-recycle
 path that uniform-load scenarios cannot reach.
 
+Run this one with `WINDOW=2m`. The percentile window must be shorter than a
+5-minute phase, otherwise it always contains the whole high phase and the
+recommendation correctly stays pinned near `440m` for the entire run:
+
+```bash
+make test-scenario-stepped WINDOW=2m
+```
+
 ### `hpa`
 
 Single Deployment with `requests.cpu: 500m`, actual usage ~`150m`, plus
@@ -122,11 +130,14 @@ Single Deployment whose pod template includes:
 - a sidecar init container `log-shipper` (`restartPolicy: Always`,
   ~`50m` actual usage).
 
-**Expected:** All three containers receive recommendations
-(`kubectl get wlrec -n scenario-init-containers -o yaml`). Drift in `app` or
-`log-shipper` triggers a pod recycle (in-place on k8s ≥ 1.33, eviction
-otherwise). Drift in `migrate` does **not** trigger recycle — it has already
-exited; the new requests land via webhook injection on the next pod creation.
+**Expected:** `app` and `log-shipper` receive recommendations
+(`kubectl get wlrec -n scenario-init-containers -o yaml`). Drift in either
+triggers a pod recycle (in-place on k8s ≥ 1.33, eviction otherwise).
+
+`migrate` receives **no** recommendation: a ~5-second lifetime leaves no
+usage series in Prometheus for the recommender to read. Even if it had one,
+drift there could not trigger a recycle — the container has already exited
+while the pod is Running.
 
 Inspect the `container_kind` label on emitted gauges:
 

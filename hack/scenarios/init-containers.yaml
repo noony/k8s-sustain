@@ -5,12 +5,12 @@
 #   - sidecar init container `log-shipper` (restartPolicy: Always) gets
 #     CPU/memory recommendations from its own usage and is resized in-place on
 #     k8s >= 1.33 (or recycled along with the pod on older versions).
-#   - classic init container `migrate` is recommended too: the webhook injects
-#     resources for it on next pod creation. Drift in `migrate` does NOT
-#     trigger a pod recycle since it has already exited when the pod is
-#     Running.
+#   - classic init container `migrate` gets NO recommendation: it exits after
+#     ~5s, so Prometheus never scrapes a usage sample for it and the
+#     recommender has no series to work from. It could not drive a pod recycle
+#     anyway, having already exited while the pod is Running.
 #
-# Verify recommendations include all three containers:
+# Verify recommendations cover `app` and `log-shipper`:
 #   kubectl get wlrec -n scenario-init-containers -o yaml
 # Verify metrics carry container_kind:
 #   kubectl --raw /api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics \
