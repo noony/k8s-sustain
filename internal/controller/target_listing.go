@@ -3,11 +3,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
-	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -34,31 +35,27 @@ func (r *PolicyReconciler) collectTargets(ctx context.Context, policy *sustainv1
 		"pod", types.Pod)
 
 	nsAnn := newNSAnnotations(r.Client)
-	kinds := []struct {
-		mode *sustainv1alpha1.UpdateMode
-		name string
-		list func(context.Context, []string, *nsAnnotations) ([]workloadTarget, error)
-	}{
-		{types.Deployment, "deployments", r.listDeploymentTargets},
-		{types.StatefulSet, "statefulsets", r.listStatefulSetTargets},
-		{types.DaemonSet, "daemonsets", r.listDaemonSetTargets},
-		{types.ArgoRollout, "rollouts", r.listRolloutTargets},
-		{types.CronJob, "cronjobs", r.listCronJobTargets},
-		{types.Job, "jobs", r.listJobTargets},
-		{types.Pod, "pods", r.listBarePodTargets},
-	}
-	for _, k := range kinds {
-		if k.mode == nil {
+	for _, kind := range workload.SupportedKinds {
+		mode := types.ModeForKind(kind)
+		if mode == nil {
 			continue
 		}
-		t, err := k.list(ctx, namespaces, nsAnn)
+		var (
+			t   []workloadTarget
+			err error
+		)
+		if kind == "Pod" {
+			t, err = r.listBarePodTargets(ctx, namespaces, nsAnn)
+		} else {
+			t, err = r.listTargetsOfKind(ctx, kind, namespaces)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("listing %s: %w", k.name, err)
+			return nil, fmt.Errorf("listing %ss: %w", strings.ToLower(kind), err)
 		}
 		for i := range t {
-			t[i].UpdateMode = *k.mode
+			t[i].UpdateMode = *mode
 		}
-		logger.V(1).Info("listed workloads", "kind", k.name, "count", len(t))
+		logger.V(1).Info("listed workloads", "kind", kind, "count", len(t))
 		targets = append(targets, t...)
 	}
 
@@ -159,118 +156,54 @@ func dedupeNamespaces(namespaces []string) []string {
 	return out
 }
 
-// listKindTargets lists objects of kind L across the given namespaces (or
-// cluster-wide if namespaces is empty), converting items to workloadTargets via
-// appendItems. newList must return a fresh list per call — sharing one value
-// across calls would let the second List overwrite the first.
+// listInNamespaces runs list once per namespace (or once cluster-wide when
+// namespaces is empty) and concatenates the results.
 //
-// The namespace list is deduped here rather than at the call sites: this is the
-// single funnel every kind's listing goes through, so one workload can never be
-// emitted as two targets no matter which selector produced the list.
-func listKindTargets[L client.ObjectList](
-	ctx context.Context,
-	c client.Client,
-	namespaces []string,
-	newList func() L,
-	appendItems func(L, *[]workloadTarget),
-) ([]workloadTarget, error) {
-	fetch := func(opts ...client.ListOption) ([]workloadTarget, error) {
-		list := newList()
-		if err := c.List(ctx, list, opts...); err != nil {
+// The namespace list is deduped here rather than at the call sites: this is
+// the single funnel every kind's listing goes through, so one workload can
+// never be emitted as two targets no matter which selector produced the list.
+func listInNamespaces(namespaces []string, list func(opts ...client.ListOption) ([]workloadTarget, error)) ([]workloadTarget, error) {
+	if len(namespaces) == 0 {
+		return list()
+	}
+	var all []workloadTarget
+	for _, ns := range dedupeNamespaces(namespaces) {
+		t, err := list(client.InNamespace(ns))
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, t...)
+	}
+	return all, nil
+}
+
+// listTargetsOfKind lists every object of a template-bearing kind as targets.
+//
+// Jobs owned by a CronJob are skipped (the CronJob path resizes their pods,
+// so listing them here would double-process), as are terminal Jobs (Complete
+// or Failed — no running pods to resize). Neither the Job nor the CronJob spec
+// is ever mutated; reconcile resizes the running pods in place.
+func (r *PolicyReconciler) listTargetsOfKind(ctx context.Context, kind string, namespaces []string) ([]workloadTarget, error) {
+	return listInNamespaces(namespaces, func(opts ...client.ListOption) ([]workloadTarget, error) {
+		list := workload.ListForKind(kind)
+		if list == nil {
+			return nil, fmt.Errorf("unsupported kind %q", kind)
+		}
+		if err := r.List(ctx, list, opts...); err != nil {
 			return nil, err
 		}
 		var out []workloadTarget
-		appendItems(list, &out)
-		return out, nil
-	}
-	if len(namespaces) > 0 {
-		var all []workloadTarget
-		for _, ns := range dedupeNamespaces(namespaces) {
-			t, err := fetch(client.InNamespace(ns))
-			if err != nil {
-				return nil, err
+		err := meta.EachListItem(list, func(o runtime.Object) error {
+			obj := o.(client.Object)
+			if job, ok := obj.(*batchv1.Job); ok &&
+				(workload.IsOwnedByKind(job.OwnerReferences, "CronJob") || jobIsTerminal(job)) {
+				return nil
 			}
-			all = append(all, t...)
-		}
-		return all, nil
-	}
-	return fetch()
-}
-
-func (r *PolicyReconciler) listDeploymentTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
-	return listKindTargets(ctx, r.Client, namespaces,
-		func() *appsv1.DeploymentList { return &appsv1.DeploymentList{} },
-		func(l *appsv1.DeploymentList, out *[]workloadTarget) {
-			for i := range l.Items {
-				*out = append(*out, deploymentToTarget(&l.Items[i]))
-			}
+			out = append(out, targetFromObject(obj, kind))
+			return nil
 		})
-}
-
-func (r *PolicyReconciler) listStatefulSetTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
-	return listKindTargets(ctx, r.Client, namespaces,
-		func() *appsv1.StatefulSetList { return &appsv1.StatefulSetList{} },
-		func(l *appsv1.StatefulSetList, out *[]workloadTarget) {
-			for i := range l.Items {
-				*out = append(*out, statefulSetToTarget(&l.Items[i]))
-			}
-		})
-}
-
-func (r *PolicyReconciler) listDaemonSetTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
-	return listKindTargets(ctx, r.Client, namespaces,
-		func() *appsv1.DaemonSetList { return &appsv1.DaemonSetList{} },
-		func(l *appsv1.DaemonSetList, out *[]workloadTarget) {
-			for i := range l.Items {
-				*out = append(*out, daemonSetToTarget(&l.Items[i]))
-			}
-		})
-}
-
-func (r *PolicyReconciler) listRolloutTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
-	return listKindTargets(ctx, r.Client, namespaces,
-		func() *rolloutsv1alpha1.RolloutList { return &rolloutsv1alpha1.RolloutList{} },
-		func(l *rolloutsv1alpha1.RolloutList, out *[]workloadTarget) {
-			for i := range l.Items {
-				*out = append(*out, rolloutToTarget(&l.Items[i]))
-			}
-		})
-}
-
-// listCronJobTargets lists CronJobs, scoped to namespaces if provided.
-// CronJob targets carry the JobTemplate's pod spec; reconcile resizes the
-// currently-running job pods in place rather than recycling them or mutating
-// the CronJob spec (jobs run to completion).
-func (r *PolicyReconciler) listCronJobTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
-	return listKindTargets(ctx, r.Client, namespaces,
-		func() *batchv1.CronJobList { return &batchv1.CronJobList{} },
-		func(l *batchv1.CronJobList, out *[]workloadTarget) {
-			for i := range l.Items {
-				*out = append(*out, cronJobToTarget(&l.Items[i]))
-			}
-		})
-}
-
-// listJobTargets lists standalone Jobs, scoped to namespaces if provided.
-// Jobs owned by a CronJob are skipped (the CronJob path resizes their pods,
-// so listing them here would double-process), as are terminal Jobs (Complete
-// or Failed — no running pods to resize). Like CronJobs, the Job spec is never
-// mutated; reconcile resizes the running pods in place.
-func (r *PolicyReconciler) listJobTargets(ctx context.Context, namespaces []string, _ *nsAnnotations) ([]workloadTarget, error) {
-	return listKindTargets(ctx, r.Client, namespaces,
-		func() *batchv1.JobList { return &batchv1.JobList{} },
-		func(l *batchv1.JobList, out *[]workloadTarget) {
-			for i := range l.Items {
-				j := &l.Items[i]
-				if workload.IsOwnedByKind(j.OwnerReferences, "CronJob") {
-					continue
-				}
-				if jobIsTerminal(j) {
-					continue
-				}
-				*out = append(*out, jobToTarget(j))
-			}
-		})
+		return out, err
+	})
 }
 
 // listBarePodTargets discovers pods with no controller owner that opt into
@@ -294,46 +227,37 @@ func (r *PolicyReconciler) listJobTargets(ctx context.Context, namespaces []stri
 // policy, so logging here would fire for uninvolved policies too.
 func (r *PolicyReconciler) listBarePodTargets(ctx context.Context, namespaces []string, nsAnn *nsAnnotations) ([]workloadTarget, error) {
 	// GroupBarePods filters by resolved policy as it groups, so it needs the
-	// namespace level up front rather than after the fact. nsErr carries a
-	// namespace read failure out of the callback, which has no error return.
-	var nsErr error
-	targets, err := listKindTargets(ctx, r.Client, namespaces,
-		func() *corev1.PodList { return &corev1.PodList{} },
-		func(l *corev1.PodList, out *[]workloadTarget) {
-			if nsErr != nil {
-				return
-			}
-			nsMap, err := nsAnn.forPods(ctx, l.Items)
-			if err != nil {
-				nsErr = err
-				return
-			}
-			for _, g := range workload.GroupBarePods(l.Items, nsMap) {
-				*out = append(*out, workloadTarget{
-					Kind:           "Pod",
-					IdentityKind:   "Pod",
-					Name:           g.Name,
-					IdentityName:   g.Name,
-					Namespace:      g.Namespace,
-					PolicyName:     g.PolicyName,
-					Labels:         g.Labels,
-					Containers:     g.Containers,
-					InitContainers: g.InitContainers,
-					Object:         g.Representative,
-					// The apply phase needs every member, and this grouping is
-					// the only place it is computed — see BarePodMembers.
-					BarePodMembers: g.Members,
-					// See BarePodPolicyMismatched: logged by collectTargets,
-					// not here.
-					BarePodPolicyMismatched: g.PolicyMismatched,
-				})
-			}
-		})
-	if err != nil {
-		return nil, err
-	}
-	if nsErr != nil {
-		return nil, nsErr
-	}
-	return targets, nil
+	// namespace level up front rather than after the fact.
+	return listInNamespaces(namespaces, func(opts ...client.ListOption) ([]workloadTarget, error) {
+		var l corev1.PodList
+		if err := r.List(ctx, &l, opts...); err != nil {
+			return nil, err
+		}
+		nsMap, err := nsAnn.forPods(ctx, l.Items)
+		if err != nil {
+			return nil, err
+		}
+		var out []workloadTarget
+		for _, g := range workload.GroupBarePods(l.Items, nsMap) {
+			out = append(out, workloadTarget{
+				Kind:           "Pod",
+				IdentityKind:   "Pod",
+				Name:           g.Name,
+				IdentityName:   g.Name,
+				Namespace:      g.Namespace,
+				PolicyName:     g.PolicyName,
+				Labels:         g.Labels,
+				Containers:     g.Containers,
+				InitContainers: g.InitContainers,
+				Object:         g.Representative,
+				// The apply phase needs every member, and this grouping is
+				// the only place it is computed — see BarePodMembers.
+				BarePodMembers: g.Members,
+				// See BarePodPolicyMismatched: logged by collectTargets,
+				// not here.
+				BarePodPolicyMismatched: g.PolicyMismatched,
+			})
+		}
+		return out, nil
+	})
 }

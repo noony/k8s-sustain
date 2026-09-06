@@ -2,7 +2,8 @@ package controller
 
 import (
 	"context"
-	"sort"
+	"slices"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -91,15 +92,7 @@ func sortedIdentities(idx targetIndex) []promclient.WorkloadIdentity {
 	for id := range idx {
 		out = append(out, id)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Namespace != out[j].Namespace {
-			return out[i].Namespace < out[j].Namespace
-		}
-		if out[i].OwnerKind != out[j].OwnerKind {
-			return out[i].OwnerKind < out[j].OwnerKind
-		}
-		return out[i].OwnerName < out[j].OwnerName
-	})
+	slices.SortFunc(out, promclient.CompareIdentity)
 	return out
 }
 
@@ -108,10 +101,9 @@ func sortedIdentities(idx targetIndex) []promclient.WorkloadIdentity {
 // member's autoscaler shapes the recommendation — depends on the members' own
 // names rather than the listing or goroutine-completion order.
 func sortedTargets(targets []*workloadTarget) []*workloadTarget {
-	ordered := make([]*workloadTarget, len(targets))
-	copy(ordered, targets)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].key() < ordered[j].key() })
-	return ordered
+	return slices.SortedFunc(slices.Values(targets), func(a, b *workloadTarget) int {
+		return strings.Compare(a.key(), b.key())
+	})
 }
 
 // mergedObservedResources builds the ONE observed-resources snapshot an

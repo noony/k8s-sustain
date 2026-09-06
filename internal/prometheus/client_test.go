@@ -204,54 +204,6 @@ func TestQueryByLabels_JoinsMultipleLabelsWithPipe(t *testing.T) {
 	}
 }
 
-func TestQueryCPUByContainer_HappyPath(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		if !strings.Contains(q, "container_cpu_usage_by_workload") {
-			t.Errorf("expected per-pod CPU rule in query, got %q", q)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-			{"metric":{"container":"app"},"value":[0,"0.42"]}
-		]}}`))
-	}))
-	defer server.Close()
-
-	c, _ := New(server.URL)
-	got, err := c.QueryCPUByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h")
-	if err != nil {
-		t.Fatalf("QueryCPUByContainer: %v", err)
-	}
-	if got["app"] != 0.42 {
-		t.Errorf("got %v want 0.42", got["app"])
-	}
-}
-
-func TestQueryMemoryByContainer_HappyPath(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		if !strings.Contains(q, "container_memory_by_workload") {
-			t.Errorf("expected per-pod memory rule in query, got %q", q)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-			{"metric":{"container":"app"},"value":[0,"67108864"]}
-		]}}`))
-	}))
-	defer server.Close()
-
-	c, _ := New(server.URL)
-	got, err := c.QueryMemoryByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h")
-	if err != nil {
-		t.Fatalf("QueryMemoryByContainer: %v", err)
-	}
-	if got["app"] != 67108864 {
-		t.Errorf("got %v want 67108864", got["app"])
-	}
-}
-
 func TestQueryCPURangeByContainer_ReturnsTimeSeries(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -365,8 +317,8 @@ func TestQueryRecommendationRange_AppliesQuantileOverWindow(t *testing.T) {
 	now := time.Now()
 	tr := TimeRange{Start: now.Add(-24 * time.Hour), End: now}
 	c, _ := New(server.URL)
-	if _, err := c.QueryCPURecommendationRangeByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h", tr, "1h"); err != nil {
-		t.Fatalf("QueryCPURecommendationRangeByContainer: %v", err)
+	if _, err := c.QueryWorkloadCPURecommendationRangeByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h", tr, "1h"); err != nil {
+		t.Fatalf("QueryWorkloadCPURecommendationRangeByContainer: %v", err)
 	}
 	if !strings.Contains(query, "quantile_over_time(0.95") {
 		t.Errorf("expected quantile_over_time(0.95) in query, got %q", query)

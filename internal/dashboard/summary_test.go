@@ -78,11 +78,11 @@ func (f *fakePromClient) QueryRange(_ context.Context, _ string, tr promclient.T
 
 func (f *fakePromClient) Ping(_ context.Context) error { return nil }
 
-func (f *fakePromClient) QueryCPUByContainer(_ context.Context, _, _, _ string, _ float64, _ string) (promclient.ContainerValues, error) {
+func (f *fakePromClient) QueryWorkloadCPUByContainer(_ context.Context, _, _, _ string, _ float64, _ string) (promclient.ContainerValues, error) {
 	return promclient.ContainerValues{}, nil
 }
 
-func (f *fakePromClient) QueryMemoryByContainer(_ context.Context, _, _, _ string, _ float64, _ string) (promclient.ContainerValues, error) {
+func (f *fakePromClient) QueryWorkloadMemoryByContainer(_ context.Context, _, _, _ string, _ float64, _ string) (promclient.ContainerValues, error) {
 	if f.memByContainer != nil {
 		return f.memByContainer, nil
 	}
@@ -116,14 +116,14 @@ func (f *fakePromClient) QueryMemoryLimitRangeByContainer(_ context.Context, _, 
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *fakePromClient) QueryCPURecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, r promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *fakePromClient) QueryWorkloadCPURecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, r promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	f.mu.Lock()
 	f.capturedRecRange = r
 	f.mu.Unlock()
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *fakePromClient) QueryMemoryRecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *fakePromClient) QueryWorkloadMemoryRecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 

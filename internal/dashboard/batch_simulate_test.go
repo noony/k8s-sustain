@@ -20,7 +20,7 @@ import (
 )
 
 // blockingBatchPromClient is a PromQuerier stub for the batch-simulate handler.
-// QueryCPUByContainer signals its arrival (one signal per dispatched workload,
+// QueryWorkloadCPUByContainer signals its arrival (one signal per dispatched workload,
 // keyed by owner name) and then blocks until release is closed or the context
 // is cancelled, letting a test pin all bounded-spawn slots open while it cancels
 // the request. Every other method returns zero values.
@@ -29,7 +29,7 @@ type blockingBatchPromClient struct {
 	release chan struct{} // closed by the test to unblock in-flight queries
 
 	mu         sync.Mutex
-	dispatched map[string]struct{} // distinct owner names that reached QueryCPUByContainer
+	dispatched map[string]struct{} // distinct owner names that reached QueryWorkloadCPUByContainer
 }
 
 func newBlockingBatchPromClient() *blockingBatchPromClient {
@@ -40,7 +40,7 @@ func newBlockingBatchPromClient() *blockingBatchPromClient {
 	}
 }
 
-func (f *blockingBatchPromClient) QueryCPUByContainer(ctx context.Context, _, _, ownerName string, _ float64, _ string) (promclient.ContainerValues, error) {
+func (f *blockingBatchPromClient) QueryWorkloadCPUByContainer(ctx context.Context, _, _, ownerName string, _ float64, _ string) (promclient.ContainerValues, error) {
 	f.mu.Lock()
 	f.dispatched[ownerName] = struct{}{}
 	f.mu.Unlock()
@@ -83,7 +83,7 @@ func (f *blockingBatchPromClient) QueryByLabels(context.Context, string, ...stri
 	return map[string]float64{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryMemoryByContainer(context.Context, string, string, string, float64, string) (promclient.ContainerValues, error) {
+func (f *blockingBatchPromClient) QueryWorkloadMemoryByContainer(context.Context, string, string, string, float64, string) (promclient.ContainerValues, error) {
 	return promclient.ContainerValues{}, nil
 }
 
@@ -111,11 +111,11 @@ func (f *blockingBatchPromClient) QueryMemoryLimitRangeByContainer(_ context.Con
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryCPURecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *blockingBatchPromClient) QueryWorkloadCPURecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryMemoryRecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *blockingBatchPromClient) QueryWorkloadMemoryRecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	return promclient.ContainerTimeSeries{}, nil
 }
 
@@ -251,11 +251,11 @@ type usageBatchPromClient struct {
 	oomByOwner map[string]promclient.OOMSignal
 }
 
-func (f *usageBatchPromClient) QueryCPUByContainer(_ context.Context, _, _, ownerName string, _ float64, _ string) (promclient.ContainerValues, error) {
+func (f *usageBatchPromClient) QueryWorkloadCPUByContainer(_ context.Context, _, _, ownerName string, _ float64, _ string) (promclient.ContainerValues, error) {
 	return f.cpuByOwner[ownerName], nil
 }
 
-func (f *usageBatchPromClient) QueryMemoryByContainer(_ context.Context, _, _, ownerName string, _ float64, _ string) (promclient.ContainerValues, error) {
+func (f *usageBatchPromClient) QueryWorkloadMemoryByContainer(_ context.Context, _, _, ownerName string, _ float64, _ string) (promclient.ContainerValues, error) {
 	return f.memByOwner[ownerName], nil
 }
 

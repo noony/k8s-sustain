@@ -1,6 +1,11 @@
 package prometheus
 
-import "github.com/prometheus/common/model"
+import (
+	"cmp"
+	"strings"
+
+	"github.com/prometheus/common/model"
+)
 
 // WorkloadIdentity is the (namespace, owner_kind, owner_name) tuple that
 // identifies a workload in every k8s_sustain recording rule. It keys batched
@@ -10,6 +15,16 @@ type WorkloadIdentity struct {
 	Namespace string
 	OwnerKind string
 	OwnerName string
+}
+
+// CompareIdentity orders identities by namespace, kind, then name, for callers
+// that need a reproducible iteration order over a map keyed by identity.
+func CompareIdentity(a, b WorkloadIdentity) int {
+	return cmp.Or(
+		strings.Compare(a.Namespace, b.Namespace),
+		strings.Compare(a.OwnerKind, b.OwnerKind),
+		strings.Compare(a.OwnerName, b.OwnerName),
+	)
 }
 
 // IdentityValues maps a workload identity to its per-container values.

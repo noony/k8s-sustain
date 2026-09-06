@@ -40,3 +40,34 @@ func TestOwnerChainKinds_CoversEveryObjectForKind(t *testing.T) {
 		}
 	}
 }
+
+func TestListForKind(t *testing.T) {
+	if _, ok := ListForKind("Job").(*batchv1.JobList); !ok {
+		t.Errorf("ListForKind(Job) = %T, want *batchv1.JobList", ListForKind("Job"))
+	}
+	if got := ListForKind("Pod"); got != nil {
+		t.Errorf("ListForKind(Pod) = %T, want nil: bare pods have no owner object", got)
+	}
+}
+
+func TestGroupResourceForKind(t *testing.T) {
+	if got := GroupResourceForKind("Deployment"); got.Group != "apps" || got.Resource != "deployments" {
+		t.Errorf("GroupResourceForKind(Deployment) = %v", got)
+	}
+	if got := GroupResourceForKind("Pod"); got.Group != "" || got.Resource != "pods" {
+		t.Errorf("GroupResourceForKind(Pod) = %v, want core pods", got)
+	}
+}
+
+// Every listed kind except the bare-pod pseudo-kind must be Get-able and
+// List-able, or the controller and dashboard listings silently skip it.
+func TestSupportedKinds_CoveredByOwnerKinds(t *testing.T) {
+	for _, kind := range SupportedKinds {
+		if kind == "Pod" {
+			continue
+		}
+		if ObjectForKind(kind) == nil || ListForKind(kind) == nil {
+			t.Errorf("SupportedKinds lists %q but the ownerKinds table does not know it", kind)
+		}
+	}
+}

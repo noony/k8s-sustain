@@ -1,11 +1,16 @@
 # scenario: stepped
-# expected: CPU request first drops from 500m to ~110m (low phase), then grows
-# back toward ~440m once the load steps up to 40% (high phase). The
-# controller recycles the pod twice — once for each direction. Validates the
-# Ongoing recycle loop reacting to drift after pods were already resized.
+# expected: the CPU request follows the load — dropping to ~110m during the
+# low phase and growing back toward ~440m during the high phase — with the
+# controller recycling the pod once per direction. Validates the Ongoing
+# recycle loop reacting to drift after pods were already resized.
 #
-# Phase length is 5 min; expect at least two phases within the test window
-# so use WINDOW >= 10m for this scenario to make sense.
+# Phase length is 5 min, so the policy window must be SHORTER than one phase
+# for the oscillation to be observable: run this scenario with WINDOW <= 2m.
+# At the default WINDOW=10m the p95 window always spans the entire high
+# phase, so the recommendation correctly stays pinned near the high value and
+# never comes back down.
+#
+#   make test-scenario-stepped WINDOW=2m
 
 apiVersion: v1
 kind: Namespace

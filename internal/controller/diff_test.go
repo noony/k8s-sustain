@@ -9,28 +9,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-func TestQuantityEqual(t *testing.T) {
-	cases := []struct {
-		name string
-		a, b *resource.Quantity
-		want bool
-	}{
-		{"both nil", nil, nil, true},
-		{"both zero", qty("0"), qty("0"), true},
-		{"nil and zero", nil, qty("0"), true},
-		{"equal nonzero", qty("100m"), qty("100m"), true},
-		{"different", qty("100m"), qty("200m"), false},
-		{"nil vs nonzero", nil, qty("100m"), false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := quantityEqual(c.a, c.b); got != c.want {
-				t.Errorf("quantityEqual(%v, %v) = %v, want %v", c.a, c.b, got, c.want)
-			}
-		})
-	}
-}
-
 func TestChangedContainers_DetectsRequestAndLimitDrift(t *testing.T) {
 	containers := []corev1.Container{
 		{

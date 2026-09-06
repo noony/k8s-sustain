@@ -146,7 +146,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 
 	sel, err := metav1.LabelSelectorAsSelector(t.Selector)
 	if err != nil {
-		r.retries.remove(t.key())
+		r.retries.clear(t.key())
 		EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 		return err
 	}
@@ -215,7 +215,7 @@ func (r *PolicyReconciler) resizeInPlaceTarget(ctx context.Context, t *workloadT
 // the human-readable description used in the event and log line.
 func (r *PolicyReconciler) handleStepError(ctx context.Context, t *workloadTarget, phase, msg string, err error) error {
 	if !isTransientError(err) {
-		r.retries.remove(t.key())
+		r.retries.clear(t.key())
 		EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 		// Context cancellation is graceful shutdown, not a misconfiguration —
 		// don't spam events/logs on the way out.
@@ -244,6 +244,6 @@ func (r *PolicyReconciler) handleStepError(ctx context.Context, t *workloadTarge
 // recordStepSuccess clears retry state and emits the "no longer retrying"
 // metric for a workload target whose latest step succeeded.
 func (r *PolicyReconciler) recordStepSuccess(t *workloadTarget) {
-	r.retries.recordSuccess(t.key())
+	r.retries.clear(t.key())
 	EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 }

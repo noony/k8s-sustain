@@ -2,12 +2,11 @@ package controller
 
 import (
 	"context"
-	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // nsAnnotations memoises Namespace annotation lookups for the span of one
@@ -36,16 +35,12 @@ func (n *nsAnnotations) get(ctx context.Context, namespace string) (map[string]s
 	if a, ok := n.cache[namespace]; ok {
 		return a, nil
 	}
-	var ns corev1.Namespace
-	if err := n.client.Get(ctx, types.NamespacedName{Name: namespace}, &ns); err != nil {
-		if apierrors.IsNotFound(err) {
-			n.cache[namespace] = nil
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading namespace %s: %w", namespace, err)
+	a, err := workload.NamespaceAnnotations(ctx, n.client, namespace)
+	if err != nil {
+		return nil, err
 	}
-	n.cache[namespace] = ns.Annotations
-	return ns.Annotations, nil
+	n.cache[namespace] = a
+	return a, nil
 }
 
 // forPods returns the annotations of every distinct namespace the pods live

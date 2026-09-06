@@ -2,12 +2,12 @@ package dashboard
 
 import (
 	"context"
-	"sort"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
 // inactiveWorkload is a list row reconstructed from a WorkloadRecommendation
@@ -16,12 +16,8 @@ import (
 // ephemeral workloads visible on the dashboard until the retention window
 // lapses.
 type inactiveWorkload struct {
-	Namespace  string
-	Kind       string
-	Name       string
+	workloadRow
 	PolicyName string
-	LastSeenAt string
-	Containers []containerStatus
 }
 
 // collectInactiveWorkloads lists WorkloadRecommendations (narrowed by opts,
@@ -44,44 +40,17 @@ func (s *Server) collectInactiveWorkloads(ctx context.Context, live map[string]s
 		if _, ok := live[workloadKey(ref.Namespace, ref.Kind, ref.Name)]; ok {
 			continue
 		}
+		containers, initContainers := wlrcache.ContainersFromObserved(wlr.Status.ObservedResources)
 		out = append(out, inactiveWorkload{
-			Namespace:  ref.Namespace,
-			Kind:       ref.Kind,
-			Name:       ref.Name,
+			workloadRow: workloadRow{
+				Namespace:  ref.Namespace,
+				Kind:       ref.Kind,
+				Name:       ref.Name,
+				Containers: containerStatuses(containers, initContainers),
+				LastSeenAt: wlr.Status.ObservedAt.UTC().Format(time.RFC3339),
+			},
 			PolicyName: wlr.Spec.Policy,
-			LastSeenAt: wlr.Status.ObservedAt.UTC().Format(time.RFC3339),
-			Containers: observedContainerStatuses(wlr.Status.ObservedResources),
 		})
 	}
 	return out, nil
-}
-
-// observedContainerStatuses converts the WLR observed-resources snapshot into
-// the containerStatus rows list responses use: regular containers first, then
-// init containers, alphabetical within each group (map order is random).
-func observedContainerStatuses(obs map[string]sustainv1alpha1.ObservedContainerResources) []containerStatus {
-	out := make([]containerStatus, 0, len(obs))
-	for name, res := range obs {
-		cs := containerStatus{Name: name, Init: res.Init}
-		if res.CPURequest != nil {
-			cs.CPURequest = res.CPURequest.String()
-		}
-		if res.CPULimit != nil {
-			cs.CPULimit = res.CPULimit.String()
-		}
-		if res.MemoryRequest != nil {
-			cs.MemoryRequest = res.MemoryRequest.String()
-		}
-		if res.MemoryLimit != nil {
-			cs.MemoryLimit = res.MemoryLimit.String()
-		}
-		out = append(out, cs)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Init != out[j].Init {
-			return !out[i].Init
-		}
-		return out[i].Name < out[j].Name
-	})
-	return out
 }

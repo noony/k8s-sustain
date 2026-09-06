@@ -25,7 +25,9 @@ func logWarnings(ctx context.Context, expr string, warnings prometheusv1.Warning
 // ContainerValues maps container name to metric value (cores or bytes).
 type ContainerValues map[string]float64
 
-func workloadSelector(namespace, ownerKind, ownerName string) string {
+// WorkloadSelector renders the PromQL label matcher for one workload identity,
+// the selector every k8s_sustain recording rule is keyed by.
+func WorkloadSelector(namespace, ownerKind, ownerName string) string {
 	return fmt.Sprintf("{namespace=%q,owner_kind=%q,owner_name=%q}", namespace, ownerKind, ownerName)
 }
 
@@ -82,9 +84,35 @@ func (c *Client) execInstant(ctx context.Context, expr string, ts time.Time, tim
 	return v, nil
 }
 
-// runRange is execInstant's range-query counterpart, minus the breaker.allow()
-// gate, which callers run themselves. holdsProbe is allow()'s second return
-// value; acquire needs it so it does not reject the half-open probe holder.
+// execRange is execInstant's range-query counterpart: it runs the breaker
+// gate, parses step, and returns the result as a matrix.
+func (c *Client) execRange(ctx context.Context, expr string, r TimeRange, step string, timeout time.Duration) (model.Matrix, error) {
+	allowed, probe := c.breaker.allow()
+	if !allowed {
+		return nil, ErrCircuitOpen
+	}
+	stepDur, err := model.ParseDuration(step)
+	if err != nil {
+		return nil, fmt.Errorf("parsing step %q: %w", step, err)
+	}
+	result, err := c.runRange(ctx, expr, prometheusv1.Range{
+		Start: r.Start,
+		End:   r.End,
+		Step:  time.Duration(stepDur),
+	}, timeout, probe)
+	if err != nil {
+		return nil, err
+	}
+	matrix, ok := result.(model.Matrix)
+	if !ok {
+		return nil, fmt.Errorf("unexpected prometheus result type %T for range query", result)
+	}
+	return matrix, nil
+}
+
+// runRange issues the range query through the in-flight semaphore and per-call
+// timeout. holdsProbe is allow()'s second return value; acquire needs it so it
+// does not reject the half-open probe holder.
 func (c *Client) runRange(ctx context.Context, expr string, r prometheusv1.Range, timeout time.Duration, holdsProbe bool) (model.Value, error) {
 	release, err := c.acquire(ctx, holdsProbe)
 	if err != nil {
@@ -223,31 +251,17 @@ func New(addr string, opts ...Option) (*Client, error) {
 	return cli, nil
 }
 
-// QueryCPUByContainer returns per-container CPU (cores) at the given quantile
-// over window, averaged across the workload's pods.
-func (c *Client) QueryCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerCPUUsageByWorkloadRate1m, workloadSelector(namespace, ownerKind, ownerName), window))
-	return c.queryByContainer(ctx, expr)
-}
-
-// QueryMemoryByContainer returns per-container memory working set (bytes) at
-// the given quantile over window, averaged across the workload's pods.
-func (c *Client) QueryMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerMemoryByWorkloadBytes, workloadSelector(namespace, ownerKind, ownerName), window))
-	return c.queryByContainer(ctx, expr)
-}
-
 // QueryWorkloadCPUByContainer returns the per-container CPU quantile (cores)
 // of the busiest replica over window, from the workload_max_pod_cpu rule.
 func (c *Client) QueryWorkloadCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodCPUCores, workloadSelector(namespace, ownerKind, ownerName), window)
+	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodCPUCores, WorkloadSelector(namespace, ownerKind, ownerName), window)
 	return c.queryByContainer(ctx, expr)
 }
 
 // QueryWorkloadMemoryByContainer returns the per-container memory quantile
 // (bytes) of the busiest replica over window, from the workload_max_pod_memory rule.
 func (c *Client) QueryWorkloadMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodMemoryBytes, workloadSelector(namespace, ownerKind, ownerName), window)
+	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodMemoryBytes, WorkloadSelector(namespace, ownerKind, ownerName), window)
 	return c.queryByContainer(ctx, expr)
 }
 
@@ -269,14 +283,14 @@ type ContainerTimeSeries map[string][]TimeValue
 // QueryCPURangeByContainer returns per-container CPU usage time-series (cores)
 // over the specified range with the given step resolution.
 func (c *Client) QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := avgByContainer(MetricContainerCPUUsageByWorkloadRate1m + workloadSelector(namespace, ownerKind, ownerName))
+	expr := avgByContainer(MetricContainerCPUUsageByWorkloadRate1m + WorkloadSelector(namespace, ownerKind, ownerName))
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
 // QueryMemoryRangeByContainer returns per-container memory working set time-series (bytes)
 // over the specified range with the given step resolution.
 func (c *Client) QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := avgByContainer(MetricContainerMemoryByWorkloadBytes + workloadSelector(namespace, ownerKind, ownerName))
+	expr := avgByContainer(MetricContainerMemoryByWorkloadBytes + WorkloadSelector(namespace, ownerKind, ownerName))
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
@@ -302,23 +316,23 @@ func (c *Client) QueryMemoryLimitRangeByContainer(ctx context.Context, namespace
 }
 
 func (c *Client) queryMaxByContainerForWorkload(ctx context.Context, ruleName, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := maxByContainer(ruleName + workloadSelector(namespace, ownerKind, ownerName))
+	expr := maxByContainer(ruleName + WorkloadSelector(namespace, ownerKind, ownerName))
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
-// QueryCPURecommendationRangeByContainer returns the sliding-window CPU
-// recommendation (cores) per container: at each step, the quantile over the
-// trailing recWindow.
-func (c *Client) QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerCPUUsageByWorkloadRate1m, workloadSelector(namespace, ownerKind, ownerName), recWindow))
+// QueryWorkloadCPURecommendationRangeByContainer is the range counterpart of
+// QueryWorkloadCPUByContainer: at each step, the per-container CPU quantile
+// (cores) of the busiest replica over the trailing recWindow.
+func (c *Client) QueryWorkloadCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
+	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodCPUCores, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
-// QueryMemoryRecommendationRangeByContainer returns the sliding-window memory
-// recommendation (bytes) per container: at each step, the quantile over the
-// trailing recWindow.
-func (c *Client) QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := avgByContainer(quantileOverTimeExpr(quantile, MetricContainerMemoryByWorkloadBytes, workloadSelector(namespace, ownerKind, ownerName), recWindow))
+// QueryWorkloadMemoryRecommendationRangeByContainer is the range counterpart
+// of QueryWorkloadMemoryByContainer: at each step, the per-container memory
+// quantile (bytes) of the busiest replica over the trailing recWindow.
+func (c *Client) QueryWorkloadMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
+	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodMemoryBytes, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
@@ -445,26 +459,12 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		MetricPodWorkload, namespace, ownerKind, ownerName,
 	)
 
-	allowed, probe := c.breaker.allow()
-	if !allowed {
-		// Non-fatal: skip OOM lookup while breaker is open.
-		return nil, nil
-	}
-
-	result, err := c.runRange(ctx, expr, prometheusv1.Range{
-		Start: r.Start,
-		End:   r.End,
-		Step:  time.Duration(stepDur),
-	}, c.queryTimeout, probe)
+	matrix, err := c.execRange(ctx, expr, r, step, c.queryTimeout)
 	if err != nil {
-		// Non-fatal: OOM data may be missing (no kube-state-metrics); keep the
-		// dashboard rendering. runRange already recorded the breaker failure.
+		// Non-fatal: the breaker may be open or OOM data missing (no
+		// kube-state-metrics); keep the dashboard rendering. runRange already
+		// recorded any breaker failure.
 		return nil, nil //nolint:nilerr // intentional non-fatal swallow, see comment above
-	}
-
-	matrix, ok := result.(model.Matrix)
-	if !ok {
-		return nil, nil
 	}
 
 	// increase() smears each restart flat across the lookback; a second OOM
@@ -499,46 +499,25 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 }
 
 func (c *Client) queryRangeByContainer(ctx context.Context, expr string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	allowed, probe := c.breaker.allow()
-	if !allowed {
-		return nil, ErrCircuitOpen
-	}
-
-	stepDur, err := model.ParseDuration(step)
+	matrix, err := c.execRange(ctx, expr, r, step, c.queryTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("parsing step %q: %w", step, err)
+		return nil, wrapQueryErr("prometheus range query", expr, err)
 	}
-
-	result, err := c.runRange(ctx, expr, prometheusv1.Range{
-		Start: r.Start,
-		End:   r.End,
-		Step:  time.Duration(stepDur),
-	}, c.queryTimeout, probe)
-	if err != nil {
-		return nil, fmt.Errorf("prometheus range query %q: %w", expr, err)
-	}
-
-	matrix, ok := result.(model.Matrix)
-	if !ok {
-		return nil, fmt.Errorf("unexpected prometheus result type %T for range query", result)
-	}
-
 	series := make(ContainerTimeSeries, len(matrix))
 	for _, stream := range matrix {
-		name := string(stream.Metric["container"])
-		if name == "" {
-			continue
+		if name := string(stream.Metric["container"]); name != "" {
+			series[name] = timeValues(stream.Values)
 		}
-		values := make([]TimeValue, 0, len(stream.Values))
-		for _, v := range stream.Values {
-			values = append(values, TimeValue{
-				Timestamp: v.Timestamp.Time(),
-				Value:     float64(v.Value),
-			})
-		}
-		series[name] = values
 	}
 	return series, nil
+}
+
+func timeValues(pairs []model.SamplePair) []TimeValue {
+	out := make([]TimeValue, 0, len(pairs))
+	for _, p := range pairs {
+		out = append(out, TimeValue{Timestamp: p.Timestamp.Time(), Value: float64(p.Value)})
+	}
+	return out
 }
 
 // defaultQueryTimeout is sized for background reconciles; the webhook overrides it.
@@ -608,53 +587,24 @@ func (c *Client) QueryInstant(ctx context.Context, expr string) (float64, error)
 // QueryRange runs a range query for a single series and returns its time-stamped
 // values. If the query produces multiple series, only the first is returned.
 func (c *Client) QueryRange(ctx context.Context, expr string, r TimeRange, step string) ([]TimeValue, error) {
-	allowed, probe := c.breaker.allow()
-	if !allowed {
-		return nil, ErrCircuitOpen
-	}
-	stp, err := model.ParseDuration(step)
+	matrix, err := c.execRange(ctx, expr, r, step, dashboardQueryTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("parse step %q: %w", step, err)
+		return nil, wrapQueryErr("range query", expr, err)
 	}
-	pr := prometheusv1.Range{Start: r.Start, End: r.End, Step: time.Duration(stp)}
-	v, err := c.runRange(ctx, expr, pr, dashboardQueryTimeout, probe)
-	if err != nil {
-		return nil, fmt.Errorf("range query %q: %w", expr, err)
-	}
-	matrix, ok := v.(model.Matrix)
-	if !ok || len(matrix) == 0 {
+	if len(matrix) == 0 {
 		return nil, nil
 	}
-	out := make([]TimeValue, 0, len(matrix[0].Values))
-	for _, p := range matrix[0].Values {
-		out = append(out, TimeValue{Timestamp: p.Timestamp.Time(), Value: float64(p.Value)})
-	}
-	return out, nil
+	return timeValues(matrix[0].Values), nil
 }
 
 // QueryByLabel runs an instant query and returns a map of label value to sample value.
 func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error) {
-	v, err := c.execInstant(ctx, expr, time.Now(), dashboardQueryTimeout)
-	if err != nil {
-		return nil, wrapQueryErr("by-label query", expr, err)
-	}
-	vec, ok := v.(model.Vector)
-	if !ok {
-		return map[string]float64{}, nil
-	}
-	out := map[string]float64{}
-	for _, sample := range vec {
-		key := string(sample.Metric[model.LabelName(label)])
-		if key == "" {
-			continue
-		}
-		out[key] = float64(sample.Value)
-	}
-	return out, nil
+	return c.QueryByLabels(ctx, expr, label)
 }
 
 // QueryByLabels runs an instant query and returns a map keyed by the named
-// labels joined with '|'. Samples missing any requested label are skipped.
+// labels joined with '|'. Samples missing any requested label (or carrying it
+// empty, which Prometheus treats as absent) are skipped.
 func (c *Client) QueryByLabels(ctx context.Context, query string, labels ...string) (map[string]float64, error) {
 	v, err := c.execInstant(ctx, query, time.Now(), dashboardQueryTimeout)
 	if err != nil {
@@ -669,8 +619,8 @@ func (c *Client) QueryByLabels(ctx context.Context, query string, labels ...stri
 		parts := make([]string, 0, len(labels))
 		complete := true
 		for _, l := range labels {
-			lv, ok := s.Metric[model.LabelName(l)]
-			if !ok {
+			lv := s.Metric[model.LabelName(l)]
+			if lv == "" {
 				complete = false
 				break
 			}

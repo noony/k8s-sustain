@@ -74,135 +74,86 @@ func FetchWorkloadInputsBatch(
 			"namespace", d.Identity.Namespace, "ownerKind", d.Identity.OwnerKind, "ownerName", d.Identity.OwnerName)
 	}
 
-	// mu guards out, fallenBack and failures inside the per-shard goroutines.
-	var mu sync.Mutex
-	// fallenBack prevents a second fallback when both shards of an identity fail.
-	fallenBack := make(map[promclient.WorkloadIdentity]bool)
-	failures := make(map[promclient.WorkloadIdentity]error)
+	f := &batchFetcher{
+		pc: pc, rsCfg: rsCfg, out: out, logger: logger,
+		fallenBack: make(map[promclient.WorkloadIdentity]bool),
+		failures:   make(map[promclient.WorkloadIdentity]error),
+	}
 
 	// The three passes run sequentially, so fallenBack only sees concurrent
 	// access within one pass. OOM reuses the CPU partition: its recording
 	// rules are pre-aggregated, so shard size does not depend on the window.
-	fetchShardedCPU(ctx, pc, cpuShards, cpuQuantile, cpuWindow, rsCfg, out, &mu, logger, fallenBack, failures)
-	fetchShardedMemory(ctx, pc, memShards, memQuantile, memWindow, rsCfg, out, &mu, logger, fallenBack, failures)
-	fetchShardedOOM(ctx, pc, cpuShards, out, &mu, logger)
+	fetchSharded(ctx, f, cpuShards, "cpu",
+		func(ctx context.Context, shard promclient.Shard) (promclient.IdentityValues, error) {
+			return pc.QueryShardCPU(ctx, shard, cpuQuantile, cpuWindow)
+		},
+		func(wi *WorkloadInputs, cv promclient.ContainerValues) { wi.CPUPerPod = cv },
+		f.fallbackShardPerWorkload)
+	fetchSharded(ctx, f, memShards, "memory",
+		func(ctx context.Context, shard promclient.Shard) (promclient.IdentityValues, error) {
+			return pc.QueryShardMemory(ctx, shard, memQuantile, memWindow)
+		},
+		func(wi *WorkloadInputs, cv promclient.ContainerValues) { wi.MemPerPod = cv },
+		f.fallbackShardPerWorkload)
+	// OOM is best-effort: a shard that fails twice is logged and skipped.
+	fetchSharded(ctx, f, cpuShards, "oom", pc.QueryShardOOMSignal,
+		func(wi *WorkloadInputs, sig promclient.OOMSignal) { wi.OOM = sig },
+		nil)
 
-	return out, BatchStats{Failures: failures}
+	return out, BatchStats{Failures: f.failures}
 }
 
-// fetchShardedCPU queries each shard's CPU data concurrently. A shard that
-// fails twice falls back to per-workload queries.
-func fetchShardedCPU(
+// batchFetcher is the state shared by one FetchWorkloadInputsBatch pass. mu
+// guards out, fallenBack and failures inside the per-shard goroutines.
+type batchFetcher struct {
+	pc     *promclient.Client
+	rsCfg  sustainv1alpha1.ResourcesConfigs
+	out    BatchInputs
+	logger logr.Logger
+
+	mu sync.Mutex
+	// fallenBack prevents a second fallback when both shards of an identity fail.
+	fallenBack map[promclient.WorkloadIdentity]bool
+	failures   map[promclient.WorkloadIdentity]error
+}
+
+// fetchSharded queries every shard concurrently, retrying each once. A shard
+// that fails twice goes to onFailure when one is given, otherwise it is logged
+// and skipped. Results are stored under mu through store, only for identities
+// the batch requested.
+func fetchSharded[M ~map[promclient.WorkloadIdentity]V, V any](
 	ctx context.Context,
-	pc *promclient.Client,
+	f *batchFetcher,
 	shards []promclient.Shard,
-	quantile float64,
-	window string,
-	rsCfg sustainv1alpha1.ResourcesConfigs,
-	out BatchInputs,
-	mu *sync.Mutex,
-	logger logr.Logger,
-	fallenBack map[promclient.WorkloadIdentity]bool,
-	failures map[promclient.WorkloadIdentity]error,
+	what string,
+	query func(context.Context, promclient.Shard) (M, error),
+	store func(*WorkloadInputs, V),
+	onFailure func(context.Context, promclient.Shard),
 ) {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(shardFetchConcurrency)
 	for _, shard := range shards {
 		g.Go(func() error {
-			vals, err := pc.QueryShardCPU(gctx, shard, quantile, window)
+			vals, err := query(gctx, shard)
 			if err != nil {
-				vals, err = pc.QueryShardCPU(gctx, shard, quantile, window)
+				vals, err = query(gctx, shard)
 			}
 			if err != nil {
-				logger.V(1).Info("cpu shard query failed after retry; falling back to per-workload fetch",
-					"namespace", shard.Namespace, "ownerKind", shard.OwnerKind, "names", shard.Names, "err", err)
-				fallbackShardPerWorkload(gctx, pc, shard, rsCfg, out, mu, logger, fallenBack, failures)
+				f.logger.V(1).Info(what+" shard query failed after retry",
+					"namespace", shard.Namespace, "ownerKind", shard.OwnerKind, "names", shard.Names, "err", err,
+					"fallback", onFailure != nil)
+				if onFailure != nil {
+					onFailure(gctx, shard)
+				}
 				return nil // never cancel sibling shards
 			}
-			mu.Lock()
-			for id, cv := range vals {
-				if wi, ok := out[id]; ok {
-					wi.CPUPerPod = cv
+			f.mu.Lock()
+			for id, v := range vals {
+				if wi, ok := f.out[id]; ok {
+					store(wi, v)
 				}
 			}
-			mu.Unlock()
-			return nil
-		})
-	}
-	_ = g.Wait() // goroutines always return nil
-}
-
-// fetchShardedMemory is fetchShardedCPU's memory counterpart.
-func fetchShardedMemory(
-	ctx context.Context,
-	pc *promclient.Client,
-	shards []promclient.Shard,
-	quantile float64,
-	window string,
-	rsCfg sustainv1alpha1.ResourcesConfigs,
-	out BatchInputs,
-	mu *sync.Mutex,
-	logger logr.Logger,
-	fallenBack map[promclient.WorkloadIdentity]bool,
-	failures map[promclient.WorkloadIdentity]error,
-) {
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(shardFetchConcurrency)
-	for _, shard := range shards {
-		g.Go(func() error {
-			vals, err := pc.QueryShardMemory(gctx, shard, quantile, window)
-			if err != nil {
-				vals, err = pc.QueryShardMemory(gctx, shard, quantile, window)
-			}
-			if err != nil {
-				logger.V(1).Info("memory shard query failed after retry; falling back to per-workload fetch",
-					"namespace", shard.Namespace, "ownerKind", shard.OwnerKind, "names", shard.Names, "err", err)
-				fallbackShardPerWorkload(gctx, pc, shard, rsCfg, out, mu, logger, fallenBack, failures)
-				return nil // never cancel sibling shards
-			}
-			mu.Lock()
-			for id, cv := range vals {
-				if wi, ok := out[id]; ok {
-					wi.MemPerPod = cv
-				}
-			}
-			mu.Unlock()
-			return nil
-		})
-	}
-	_ = g.Wait() // goroutines always return nil
-}
-
-// fetchShardedOOM queries each shard's OOM signal concurrently. OOM is
-// best-effort: a shard that fails twice is logged and skipped, no fallback.
-func fetchShardedOOM(
-	ctx context.Context,
-	pc *promclient.Client,
-	shards []promclient.Shard,
-	out BatchInputs,
-	mu *sync.Mutex,
-	logger logr.Logger,
-) {
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(shardFetchConcurrency)
-	for _, shard := range shards {
-		g.Go(func() error {
-			sigs, err := pc.QueryShardOOMSignal(gctx, shard)
-			if err != nil {
-				sigs, err = pc.QueryShardOOMSignal(gctx, shard)
-			}
-			if err != nil {
-				logger.V(1).Info("oom shard query failed after retry; proceeding without oom floor for this shard",
-					"namespace", shard.Namespace, "ownerKind", shard.OwnerKind, "names", shard.Names, "err", err)
-				return nil // best-effort, no fallback
-			}
-			mu.Lock()
-			for id, sig := range sigs {
-				if wi, ok := out[id]; ok {
-					wi.OOM = sig
-				}
-			}
-			mu.Unlock()
+			f.mu.Unlock()
 			return nil
 		})
 	}
@@ -213,17 +164,7 @@ func fetchShardedOOM(
 // FetchWorkloadInputs and merges the result field by field, so no field's
 // value depends on pass ordering. Names are used raw: FetchWorkloadInputs
 // builds an exact-match selector, and an RE2-escaped name would not match.
-func fallbackShardPerWorkload(
-	ctx context.Context,
-	pc *promclient.Client,
-	shard promclient.Shard,
-	rsCfg sustainv1alpha1.ResourcesConfigs,
-	out BatchInputs,
-	mu *sync.Mutex,
-	logger logr.Logger,
-	fallenBack map[promclient.WorkloadIdentity]bool,
-	failures map[promclient.WorkloadIdentity]error,
-) {
+func (f *batchFetcher) fallbackShardPerWorkload(ctx context.Context, shard promclient.Shard) {
 	// Claims happen serially on this goroutine; only the network calls fan out.
 	g := new(errgroup.Group)
 	g.SetLimit(fallbackFetchConcurrency)
@@ -231,37 +172,35 @@ func fallbackShardPerWorkload(
 	for _, name := range shard.Names {
 		id := promclient.WorkloadIdentity{Namespace: shard.Namespace, OwnerKind: shard.OwnerKind, OwnerName: name}
 
-		mu.Lock()
-		if fallenBack[id] {
-			mu.Unlock()
+		f.mu.Lock()
+		if f.fallenBack[id] {
+			f.mu.Unlock()
 			continue
 		}
-		wi, ok := out[id]
+		wi, ok := f.out[id]
 		if !ok {
 			// shard.Names derives from cands, which seeded out; guard anyway.
-			mu.Unlock()
+			f.mu.Unlock()
 			continue
 		}
 		// Claim before querying: a failed fallback would fail identically if retried.
-		fallenBack[id] = true
-		mu.Unlock()
+		f.fallenBack[id] = true
+		f.mu.Unlock()
 
 		g.Go(func() error {
-			fetched, err := FetchWorkloadInputs(ctx, pc, shard.Namespace, shard.OwnerKind, name, rsCfg)
+			fetched, err := FetchWorkloadInputs(ctx, f.pc, shard.Namespace, shard.OwnerKind, name, f.rsCfg)
 			if err != nil {
-				logger.V(1).Info("per-workload fallback query failed; recording as a batch failure for this workload",
+				f.logger.V(1).Info("per-workload fallback query failed; recording as a batch failure for this workload",
 					"namespace", shard.Namespace, "ownerKind", shard.OwnerKind, "ownerName", name, "err", err)
-				mu.Lock()
-				failures[id] = err
-				mu.Unlock()
+				f.mu.Lock()
+				f.failures[id] = err
+				f.mu.Unlock()
 				return nil // never cancel sibling fetches
 			}
 
-			mu.Lock()
-			wi.CPUPerPod = fetched.CPUPerPod
-			wi.MemPerPod = fetched.MemPerPod
-			wi.OOM = fetched.OOM
-			mu.Unlock()
+			f.mu.Lock()
+			*wi = *fetched
+			f.mu.Unlock()
 			return nil
 		})
 	}

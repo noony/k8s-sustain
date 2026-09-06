@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
 // windowPattern mirrors the CRD validator on Policy.Spec.RightSizing.ResourcesConfigs.*.Window
@@ -38,6 +40,11 @@ type simulateRequest struct {
 
 	CPU    simulateResourceConfig `json:"cpu"`
 	Memory simulateResourceConfig `json:"memory"`
+
+	// AutoscalerCoordination overrides the managing Policy's setting; absent
+	// means "what the controller does today", so an untouched simulation
+	// matches the recommendations endpoint.
+	AutoscalerCoordination *sustainv1alpha1.AutoscalerCoordination `json:"autoscalerCoordination,omitempty"`
 }
 
 type simulateResourceConfig struct {
@@ -103,6 +110,12 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateSimulateResource(req.Memory, "memory"); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if c := req.AutoscalerCoordination; c != nil && c.ReplicaBudgetAnchor != nil &&
+		(*c.ReplicaBudgetAnchor < 0 || *c.ReplicaBudgetAnchor > 1) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid autoscalerCoordination.replicaBudgetAnchor %v: must be 0..1", *c.ReplicaBudgetAnchor))
 		return
 	}
 

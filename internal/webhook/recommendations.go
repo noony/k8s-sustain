@@ -53,7 +53,7 @@ func (h *Handler) fetchRecommendations(
 	now time.Time,
 	staleness time.Duration,
 ) (recs map[string]workload.ContainerRecommendation, departed bool, err error) {
-	objName := wlrName(kind, name)
+	objName := wlrcache.Name(kind, name)
 	var wlr sustainv1alpha1.WorkloadRecommendation
 	err = h.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: objName}, &wlr)
 	if apierrors.IsNotFound(err) {
@@ -90,22 +90,11 @@ func (h *Handler) fetchRecommendations(
 	} else if age > staleness {
 		return nil, false, ErrRecommendationStale
 	}
-	if len(wlr.Status.Containers) == 0 {
+	recs = wlrcache.RecsFromStatus(wlr.Status)
+	if recs == nil {
 		return nil, false, nil
 	}
-
-	out := make(map[string]workload.ContainerRecommendation, len(wlr.Status.Containers))
-	for cname, c := range wlr.Status.Containers {
-		out[cname] = workload.ContainerRecommendation{
-			CPURequest:        c.CPURequest,
-			MemoryRequest:     c.MemoryRequest,
-			CPULimit:          c.CPULimit,
-			MemoryLimit:       c.MemoryLimit,
-			RemoveCPULimit:    c.RemoveCPULimit,
-			RemoveMemoryLimit: c.RemoveMemoryLimit,
-		}
-	}
-	return out, wlr.Status.Departed, nil
+	return recs, wlr.Status.Departed, nil
 }
 
 // effectiveRetention is the bound applied to the departed path, falling back
@@ -116,7 +105,3 @@ func (h *Handler) effectiveRetention() time.Duration {
 	}
 	return h.RecommendationRetention
 }
-
-// wlrName delegates to the shared cache package — controller and webhook
-// must agree on WLR object names or the read contract breaks silently.
-func wlrName(kind, name string) string { return wlrcache.Name(kind, name) }

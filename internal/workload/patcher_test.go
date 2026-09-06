@@ -1528,7 +1528,7 @@ func statefulSetEvictionInterceptor(evictedNames *[]string, recs map[string]Cont
 			*uidCounter++
 			replacement.UID = types.UID("uid-recycled-" + obj.GetName() + "-" + string(rune('0'+*uidCounter)))
 			mu.Unlock()
-			ApplyRecommendationsToPodSpec(&replacement.Spec, recs)
+			applyRecsToPodSpec(&replacement.Spec, recs)
 			replacement.Status = corev1.PodStatus{
 				Phase: corev1.PodRunning,
 				Conditions: []corev1.PodCondition{{
@@ -2284,5 +2284,14 @@ func TestPatchPodInPlace_InfeasibleFallbackHonorsSafeToEvict(t *testing.T) {
 	}
 	if len(evicted) != 0 {
 		t.Errorf("expected no eviction for annotated pod, got %v", evicted)
+	}
+}
+
+func applyRecsToPodSpec(spec *corev1.PodSpec, recs map[string]ContainerRecommendation) {
+	for i := range spec.Containers {
+		applyRecToContainer(&spec.Containers[i], recs[spec.Containers[i].Name])
+	}
+	for i := range spec.InitContainers {
+		applyRecToContainer(&spec.InitContainers[i], recs[spec.InitContainers[i].Name])
 	}
 }

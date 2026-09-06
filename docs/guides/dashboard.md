@@ -217,6 +217,8 @@ The simulator lets you test "what-if" scenarios:
 
 The simulation runs automatically whenever any parameter changes (with a short debounce to avoid excessive queries). There is no manual "Run" button — results update live as you adjust sliders, change windows, or modify min/max values.
 
+The simulator, the workload recommendations endpoint and the controller all run the **same recommendation algorithm** (`internal/recommender`): the percentile is taken over the busiest replica, the OOM-aware memory floor applies, limits are derived from the workload's real containers, and **autoscaler coordination** is applied when an HPA or KEDA ScaledObject targets the workload. The simulator inherits the coordination setting of the workload's managing policy, so an untouched simulation shows exactly what the controller would apply; the `autoscalerCoordination` field of the `POST /api/simulate` body overrides it. The only controller behaviours the simulator skips are the workload-age gate (reported as `tooYoung` in the response instead of hiding the number) and the in-process live OOM watcher.
+
 The results show:
 
 - Computed recommendation per container (CPU/memory request, and CPU/memory limit when a limits strategy is selected; `— removed —` is rendered when `noLimit` is active)

@@ -154,7 +154,7 @@ The dashboard is an optional web UI that provides:
 
 - **Policy overview** — list all policies with status, namespaces, workload types
 - **Workload metrics** — interactive CPU and memory time-series charts
-- **Policy simulator** — test "what-if" scenarios with different percentiles, headroom, and min/max values
+- **Policy simulator** — test "what-if" scenarios with different percentiles, headroom, and min/max values, computed by the same `internal/recommender` pipeline the controller applies
 
 It is read-only: it queries the Kubernetes API and Prometheus but never modifies any resources. See the [Dashboard guide](../guides/dashboard.md) for details.
 

@@ -257,6 +257,8 @@ export interface RecommendationsData {
   policyName?: string
   containers?: Record<string, RecommendationContainer>
   initContainers?: string[]
+  /** The controller would still skip this workload as too young to have stable samples. */
+  tooYoung?: boolean
   cpuRecommendations?: Record<string, TimeValue[]>
   memoryRecommendations?: Record<string, TimeValue[]>
 }
@@ -271,6 +273,13 @@ export interface SimulateRequest {
   step: string
   cpu: SimulateResourceConfig
   memory: SimulateResourceConfig
+  /** Overrides the managing policy's autoscaler coordination; omit to inherit it. */
+  autoscalerCoordination?: SimulateAutoscalerCoordination
+}
+
+export interface SimulateAutoscalerCoordination {
+  enabled?: boolean
+  replicaBudgetAnchor?: number
 }
 
 export interface SimulateResourceConfig {
@@ -293,6 +302,7 @@ export interface SimulateLimitsConfig {
 export interface SimulationResult {
   containers: Record<string, RecommendationContainer>
   initContainers?: string[]
+  tooYoung?: boolean
   cpuSeries: Record<string, TimeValue[]>
   memorySeries: Record<string, TimeValue[]>
   resources?: Record<string, ContainerResources>

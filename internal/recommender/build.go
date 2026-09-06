@@ -3,6 +3,8 @@ package recommender
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -96,14 +98,22 @@ func AgeForLog(start time.Time) string {
 	return time.Since(start).String()
 }
 
+// WorkloadQuerier is the slice of the Prometheus client one workload's
+// recommendation needs. An interface so the dashboard can inject fakes.
+type WorkloadQuerier interface {
+	QueryWorkloadCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
+	QueryWorkloadMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
+	QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKind, ownerName string) (promclient.OOMSignal, error)
+}
+
 // FetchWorkloadInputs runs the Prometheus queries shared by the controller and
-// webhook paths, in parallel so wall time is bounded by the slowest query
-// rather than the sum — important on the webhook hot path. An OOM-signal
-// failure degrades to an empty value; the CPU and memory percentiles are fatal
-// because they are the recommendation's primary inputs.
+// dashboard paths, in parallel so wall time is bounded by the slowest query
+// rather than the sum. An OOM-signal failure degrades to an empty value; the
+// CPU and memory percentiles are fatal because they are the recommendation's
+// primary inputs.
 func FetchWorkloadInputs(
 	ctx context.Context,
-	pc *promclient.Client,
+	pc WorkloadQuerier,
 	ns, ownerKind, ownerName string,
 	rsCfg sustainv1alpha1.ResourcesConfigs,
 ) (*WorkloadInputs, error) {
@@ -315,4 +325,86 @@ func ComputeContainerRec(in ContainerInputs) ContainerRecResult {
 		HasData:         true,
 		MemFloorApplied: floorApplied,
 	}
+}
+
+// Request is one workload's recommendation computation, the unit the
+// controller, the dashboard's recommendation endpoint and its simulator all
+// share. Resources and Coordination usually come from a Policy; the simulator
+// substitutes the configuration under test.
+type Request struct {
+	Identity promclient.WorkloadIdentity
+	// Containers is the set to recommend for, carrying each container's current
+	// requests and limits (limit derivation reads them). Empty means "every
+	// container Prometheus reports", which is all a departed or unknown
+	// workload has left.
+	Containers   []corev1.Container
+	Resources    sustainv1alpha1.ResourcesConfigs
+	Coordination sustainv1alpha1.AutoscalerCoordination
+	AutoInfo     autoscaler.Info
+	// Inputs, when non-nil, are prefetched (the controller's sharded batch) and
+	// no Prometheus query is issued.
+	Inputs *WorkloadInputs
+	// WorkloadCreated and IdentityFirstSeen feed Result.TooYoung; see
+	// ShouldSkipYoungWorkload. Both zero disables the check.
+	WorkloadCreated   time.Time
+	IdentityFirstSeen time.Time
+	Hooks             BuildContainerRecsOptions
+}
+
+// Result is what Compute hands back. Inputs is always non-nil on success so
+// callers can show the raw usage next to the recommendation.
+type Result struct {
+	Recs   map[string]workload.ContainerRecommendation
+	Inputs *WorkloadInputs
+	// TooYoung reports that the controller would skip this workload for lack
+	// of stable samples. Compute still computes: a simulation wants the number
+	// regardless, and the controller applies its own gate before calling.
+	TooYoung bool
+}
+
+// Compute is the recommendation algorithm: fetch (unless prefetched), then
+// the per-container pipeline of BuildContainerRecs. Every reader of a
+// recommendation must go through here so the number the dashboard shows is
+// the number the controller applies.
+func Compute(ctx context.Context, q WorkloadQuerier, req Request) (Result, error) {
+	inputs := req.Inputs
+	if inputs == nil {
+		var err error
+		inputs, err = FetchWorkloadInputs(ctx, q, req.Identity.Namespace, req.Identity.OwnerKind, req.Identity.OwnerName, req.Resources)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	containers := req.Containers
+	if len(containers) == 0 {
+		containers = inputs.ObservedContainers()
+	}
+	return Result{
+		Recs:     BuildContainerRecs(containers, inputs, req.AutoInfo, req.Resources, req.Coordination, req.Hooks),
+		Inputs:   inputs,
+		TooYoung: ShouldSkipYoungWorkload(req.WorkloadCreated, req.IdentityFirstSeen, inputs.HasRecentOOM()),
+	}, nil
+}
+
+// ObservedContainers lists every container Prometheus reported on, sorted:
+// usage series plus the containers that OOMed, so a crash-looping container
+// with no usage samples still gets a memory recommendation.
+func (w *WorkloadInputs) ObservedContainers() []corev1.Container {
+	names := make(map[string]struct{}, len(w.CPUPerPod)+len(w.MemPerPod))
+	for n := range w.CPUPerPod {
+		names[n] = struct{}{}
+	}
+	for n := range w.MemPerPod {
+		names[n] = struct{}{}
+	}
+	for n, count := range w.OOM.OOMCounts {
+		if count > 0 {
+			names[n] = struct{}{}
+		}
+	}
+	out := make([]corev1.Container, 0, len(names))
+	for _, n := range slices.Sorted(maps.Keys(names)) {
+		out = append(out, corev1.Container{Name: n})
+	}
+	return out
 }

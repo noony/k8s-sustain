@@ -26,6 +26,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -400,7 +401,7 @@ func wlrRec(cpu, mem string) sustainv1alpha1.ContainerRecommendation {
 // ObservedAt, keyed exactly as the controller writes and the webhook reads it.
 func freshWLR(kind, ns, name string, containers map[string]sustainv1alpha1.ContainerRecommendation) *sustainv1alpha1.WorkloadRecommendation {
 	return &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: wlrName(kind, name)},
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: wlrcache.Name(kind, name)},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			ObservedAt: metav1.Now(),
 			Containers: containers,

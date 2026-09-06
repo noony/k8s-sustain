@@ -1,9 +1,6 @@
 package controller
 
 import (
-	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -83,66 +80,34 @@ func (w *workloadTarget) recommendableContainers(excludeInit bool) ([]corev1.Con
 	return workload.MergeContainersForRecommendation(w.Containers, w.InitContainers, excludeInit)
 }
 
-// newTargetFromTemplate assembles a workloadTarget from a typed workload
-// object and its pod template. Callers pass the template explicitly so this
-// helper can stay agnostic of the rollouts API (workload.PodTemplateOf does
-// not handle Argo Rollouts).
-func newTargetFromTemplate(obj client.Object, kind string, tmpl *corev1.PodTemplateSpec, selector *metav1.LabelSelector) workloadTarget {
+// targetFromObject assembles a workloadTarget from a typed workload object.
+// The pod template and selector come from workload.PodTemplateOf, so every
+// kind is converted by the same rule; an unsupported object yields a target
+// with no containers, which the recommendation pipeline treats as empty.
+func targetFromObject(obj client.Object, kind string) workloadTarget {
 	t := workloadTarget{
 		Kind:              kind,
 		Name:              obj.GetName(),
 		Namespace:         obj.GetNamespace(),
-		Selector:          selector,
 		Labels:            obj.GetLabels(),
 		ObjectAnnotations: obj.GetAnnotations(),
 		Object:            obj,
 		IdentityKind:      kind,
 		IdentityName:      obj.GetName(),
 	}
-	if tmpl != nil {
-		t.TemplateAnnotations = tmpl.Annotations
-		t.Containers = tmpl.Spec.Containers
-		t.InitContainers = tmpl.Spec.InitContainers
-		// The identity override stays pod-template-only: it is mirrored onto a
-		// pod LABEL by the webhook for kube-state-metrics, so it has to live
-		// where pods inherit it. Opt-in has no such constraint.
-		t.IdentityKind, t.IdentityName = workload.ApplyOwnerNameOverride(kind, obj.GetName(), tmpl.Annotations)
+	tmpl, selector, ok := workload.PodTemplateOf(obj)
+	if !ok {
+		return t
 	}
+	t.Selector = selector
+	t.TemplateAnnotations = tmpl.Annotations
+	t.Containers = tmpl.Spec.Containers
+	t.InitContainers = tmpl.Spec.InitContainers
+	// The identity override stays pod-template-only: it is mirrored onto a
+	// pod LABEL by the webhook for kube-state-metrics, so it has to live
+	// where pods inherit it. Opt-in has no such constraint.
+	t.IdentityKind, t.IdentityName = workload.ApplyOwnerNameOverride(kind, obj.GetName(), tmpl.Annotations)
 	return t
-}
-
-func deploymentToTarget(d *appsv1.Deployment) workloadTarget {
-	return newTargetFromTemplate(d, "Deployment", &d.Spec.Template, d.Spec.Selector)
-}
-
-func statefulSetToTarget(s *appsv1.StatefulSet) workloadTarget {
-	return newTargetFromTemplate(s, "StatefulSet", &s.Spec.Template, s.Spec.Selector)
-}
-
-func daemonSetToTarget(ds *appsv1.DaemonSet) workloadTarget {
-	return newTargetFromTemplate(ds, "DaemonSet", &ds.Spec.Template, ds.Spec.Selector)
-}
-
-func rolloutToTarget(r *rolloutsv1alpha1.Rollout) workloadTarget {
-	return newTargetFromTemplate(r, "Rollout", &r.Spec.Template, r.Spec.Selector)
-}
-
-// cronJobToTarget builds a workloadTarget from a CronJob. The opt-in policy
-// annotation lives on the JobTemplate's pod template, matching the convention
-// used for other kinds. Selector is left nil — CronJob reconciliation resizes
-// the running job pods in place (enumerated via the job-name label) and never
-// recycles/evicts them or mutates the CronJob spec.
-func cronJobToTarget(c *batchv1.CronJob) workloadTarget {
-	return newTargetFromTemplate(c, "CronJob", &c.Spec.JobTemplate.Spec.Template, nil)
-}
-
-// jobToTarget builds a workloadTarget from a standalone Job. The opt-in policy
-// annotation lives on the Job's pod template, matching every other kind.
-// Selector is left nil — the Job resize path enumerates pods via the
-// batch.kubernetes.io/job-name label, never the workload selector, and never
-// recycles/evicts (job runs finish on their own).
-func jobToTarget(j *batchv1.Job) workloadTarget {
-	return newTargetFromTemplate(j, "Job", &j.Spec.Template, nil)
 }
 
 // filterTargets returns targets that match the given policy: the workload's

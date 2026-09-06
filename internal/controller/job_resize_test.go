@@ -35,7 +35,7 @@ func TestListJobTargets_SkipsCronJobOwnedAndTerminal(t *testing.T) {
 	}
 	r := makeReconciler(t, standalone, cronOwned, terminal)
 
-	got, err := r.listJobTargets(context.Background(), nil, newNSAnnotations(r.Client))
+	got, err := r.listTargetsOfKind(context.Background(), "Job", nil)
 	if err != nil {
 		t.Fatalf("listJobTargets: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestJobToTarget_FromPodTemplate(t *testing.T) {
 			},
 		},
 	}
-	got := jobToTarget(job)
+	got := targetFromObject(job, "Job")
 	if got.Kind != "Job" {
 		t.Errorf("Kind = %q, want Job", got.Kind)
 	}
@@ -135,7 +135,7 @@ func TestResizeJobPods_ResizesInPlaceNeverEvicts(t *testing.T) {
 		Build()
 	r.patcher = workload.New(r.Client, true /* in-place */)
 
-	target := jobToTarget(job)
+	target := targetFromObject(job, "Job")
 	recs := map[string]workload.ContainerRecommendation{
 		"worker": {CPURequest: qty("250m")},
 	}
@@ -162,7 +162,7 @@ func TestResizeJobPods_ZeroWhenNoInPlaceSupport(t *testing.T) {
 	r := makeReconciler(t, job, pod)
 	r.patcher = workload.New(r.Client, false /* no in-place */)
 
-	target := jobToTarget(job)
+	target := targetFromObject(job, "Job")
 	recs := map[string]workload.ContainerRecommendation{"worker": {CPURequest: qty("250m")}}
 	resized, err := r.resizeJobPods(context.Background(), &target, recs, workload.Tolerance{}, nil)
 	if err != nil {
@@ -179,7 +179,7 @@ func TestResizeJobPods_TerminalJobResizesNothing(t *testing.T) {
 	r := makeReconciler(t, job, pod)
 	r.patcher = workload.New(r.Client, true /* in-place */)
 
-	target := jobToTarget(job)
+	target := targetFromObject(job, "Job")
 	recs := map[string]workload.ContainerRecommendation{"worker": {CPURequest: qty("250m")}}
 	resized, err := r.resizeJobPods(context.Background(), &target, recs, workload.Tolerance{}, nil)
 	if err != nil {
@@ -207,7 +207,7 @@ func TestResizeJobPods_PerPodInvalidNotCounted(t *testing.T) {
 		Build()
 	r.patcher = workload.New(r.Client, true /* in-place */)
 
-	target := jobToTarget(job)
+	target := targetFromObject(job, "Job")
 	recs := map[string]workload.ContainerRecommendation{"worker": {CPURequest: qty("250m")}}
 	resized, err := r.resizeJobPods(context.Background(), &target, recs, workload.Tolerance{}, nil)
 	if err != nil {
@@ -223,7 +223,7 @@ func TestResizeJobPods_NoRunningPodsResizesNothing(t *testing.T) {
 	r := makeReconciler(t, job) // job present, no pods
 	r.patcher = workload.New(r.Client, true /* in-place */)
 
-	target := jobToTarget(job)
+	target := targetFromObject(job, "Job")
 	recs := map[string]workload.ContainerRecommendation{"worker": {CPURequest: qty("250m")}}
 	resized, err := r.resizeJobPods(context.Background(), &target, recs, workload.Tolerance{}, nil)
 	if err != nil {
@@ -294,7 +294,7 @@ func TestReconcileWorkload_JobResizesRunningPod(t *testing.T) {
 		Build()
 	r.patcher = workload.New(r.Client, true /* in-place */)
 
-	target := jobToTarget(job)
+	target := targetFromObject(job, "Job")
 	policy := policyForReconcileWorkload(t, "p")
 
 	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(&target)); err != nil {

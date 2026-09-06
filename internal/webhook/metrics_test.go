@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
 // recSourceDelta returns how much the source counter moved across fn. The
@@ -57,7 +58,7 @@ func TestAdmit_RecommendationSourceMetric_Stale(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
 	staleWLR := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: wlrName("Deployment", "my-app")},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: wlrcache.Name("Deployment", "my-app")},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			ObservedAt: metav1.NewTime(time.Now().Add(-2 * time.Hour)), // > DefaultCacheStaleness (30m)
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{

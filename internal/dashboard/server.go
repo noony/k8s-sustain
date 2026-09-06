@@ -32,18 +32,21 @@ type PromQuerier interface {
 	QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error)
 	QueryByLabels(ctx context.Context, query string, labels ...string) (map[string]float64, error)
 
-	QueryCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
-	QueryMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
+	// recommender.WorkloadQuerier: the recommendation inputs, shared with the
+	// controller so the dashboard computes what the controller applies.
+	QueryWorkloadCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
+	QueryWorkloadMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
+	QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKind, ownerName string) (promclient.OOMSignal, error)
+
 	QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
 	QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
 	QueryCPURequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
 	QueryMemoryRequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
 	QueryCPULimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
 	QueryMemoryLimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryWorkloadCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
+	QueryWorkloadMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
 	QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) ([]promclient.OOMEvent, error)
-	QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKind, ownerName string) (promclient.OOMSignal, error)
 }
 
 var dashboardScheme = runtime.NewScheme()

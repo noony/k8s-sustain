@@ -2,7 +2,6 @@ package controller
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -29,17 +28,4 @@ func changedContainers(current []corev1.Container, recs map[string]workload.Cont
 		}
 	}
 	return changed
-}
-
-// quantityEqual reports whether two stored recommendation quantities are equal,
-// treating a nil pointer and an explicit zero as the same "unset" value. For
-// comparing a live container against a recommendation use
-// workload.ContainerMatches instead.
-func quantityEqual(a *resource.Quantity, b *resource.Quantity) bool {
-	aZero := a == nil || a.IsZero()
-	bZero := b == nil || b.IsZero()
-	if aZero || bZero {
-		return aZero == bZero
-	}
-	return a.Cmp(*b) == 0
 }

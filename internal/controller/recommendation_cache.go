@@ -7,8 +7,6 @@ import (
 
 	"github.com/go-logr/logr"
 
-	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
-	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,10 +25,6 @@ import (
 // CreationTimestamp, not ObservedAt, which the computation phase rewrites
 // every cycle and would make the guard self-satisfying.
 const sweepGracePeriod = 10 * time.Minute
-
-// wlrName delegates to the shared cache package so controller and webhook
-// agree on names.
-func wlrName(kind, name string) string { return wlrcache.Name(kind, name) }
 
 // wlrLastSeen returns the retention anchor: ObservedAt, or CreationTimestamp
 // when the status patch has not landed yet.
@@ -139,7 +133,7 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 	wanted := make(map[string]struct{}, len(targets))
 	for i := range targets {
 		t := &targets[i]
-		wanted[t.Namespace+"/"+wlrName(t.IdentityKind, t.IdentityName)] = struct{}{}
+		wanted[t.Namespace+"/"+wlrcache.Name(t.IdentityKind, t.IdentityName)] = struct{}{}
 	}
 
 	now := time.Now()
@@ -222,21 +216,9 @@ func (r *PolicyReconciler) workloadGone(
 	ctx context.Context,
 	ref sustainv1alpha1.WorkloadReference,
 ) (bool, time.Time, error) {
-	var obj client.Object
-	switch ref.Kind {
-	case "Deployment":
-		obj = &appsv1.Deployment{}
-	case "StatefulSet":
-		obj = &appsv1.StatefulSet{}
-	case "DaemonSet":
-		obj = &appsv1.DaemonSet{}
-	case "Rollout":
-		obj = &rolloutsv1alpha1.Rollout{}
-	case "CronJob":
-		obj = &batchv1.CronJob{}
-	case "Job":
-		obj = &batchv1.Job{}
-	default: // "Pod" (bare-pod identity) or unknown future kind
+	// "Pod" (a bare-pod identity) and unknown future kinds have no object.
+	obj := workload.ObjectForKind(ref.Kind)
+	if obj == nil {
 		return true, time.Time{}, nil
 	}
 	err := r.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, obj)

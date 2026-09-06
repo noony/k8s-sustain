@@ -2,12 +2,9 @@ package oomwatch
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -165,7 +162,7 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 		if policymatch.DecidesAt(ownerAnn) {
 			policyName, _ = policymatch.ResolvePolicy(podAnn, ownerAnn, nil)
 		} else {
-			nsAnn, err := w.namespaceAnnotations(ctx, pod.Namespace)
+			nsAnn, err := workload.NamespaceAnnotations(ctx, w.Client, pod.Namespace)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -251,11 +248,7 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 }
 
 // ownerAnnotations reads the owning workload's own metadata.annotations — the
-// level a pod does not inherit. An unknown kind, an empty kind, and a missing
-// object all resolve to nil rather than an error; none is a failure.
-//
-// It goes through the shared workload.ObjectForKind table so this and
-// internal/webhook's namesake cannot diverge on which kinds they can Get.
+// level a pod does not inherit.
 //
 // A Get here is only free when the manager already caches that kind, which it
 // does only for kinds some Policy enables (collectTargets skips the rest), and
@@ -263,32 +256,7 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 // cluster-wide informer for one object. Those kinds are few, so the cost is
 // small — but it is not the blanket "no new informer" guarantee it looks like.
 func (w *Watcher) ownerAnnotations(ctx context.Context, namespace, kind, name string) (map[string]string, error) {
-	obj := workload.ObjectForKind(kind)
-	if obj == nil {
-		return nil, nil
-	}
-	if err := w.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, obj); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading %s %s/%s: %w", kind, namespace, name, err)
-	}
-	return obj.GetAnnotations(), nil
-}
-
-// namespaceAnnotations reads the Namespace object's own metadata.annotations
-// — the least specific opt-in level. A missing Namespace resolves to nil
-// rather than an error: a pod being reconciled in a namespace the apiserver
-// no longer has is a deletion race, not a failure worth surfacing.
-func (w *Watcher) namespaceAnnotations(ctx context.Context, name string) (map[string]string, error) {
-	var ns corev1.Namespace
-	if err := w.Client.Get(ctx, types.NamespacedName{Name: name}, &ns); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading namespace %s: %w", name, err)
-	}
-	return ns.Annotations, nil
+	return workload.OwnerAnnotations(ctx, w.Client, namespace, kind, name)
 }
 
 func immediateController(pod *corev1.Pod) (kind, name string) {

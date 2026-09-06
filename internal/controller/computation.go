@@ -1,13 +1,14 @@
 package controller
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -81,11 +82,11 @@ func (r *PolicyReconciler) collectComputeItems(
 		items = append(items, synthesizeComputeItem(policy.Name, id, targets, metav1.Now()))
 	}
 
-	sort.Slice(items, func(a, b int) bool {
-		if items[a].WLR.Namespace != items[b].WLR.Namespace {
-			return items[a].WLR.Namespace < items[b].WLR.Namespace
-		}
-		return items[a].WLR.Name < items[b].WLR.Name
+	slices.SortFunc(items, func(a, b computeItem) int {
+		return cmp.Or(
+			strings.Compare(a.WLR.Namespace, b.WLR.Namespace),
+			strings.Compare(a.WLR.Name, b.WLR.Name),
+		)
 	})
 	return items, nil
 }
@@ -144,44 +145,11 @@ func containersFromObserved(
 	obs map[string]sustainv1alpha1.ObservedContainerResources,
 	excludeInit bool,
 ) []corev1.Container {
-	names := make([]string, 0, len(obs))
-	for name, o := range obs {
-		if excludeInit && o.Init {
-			continue
-		}
-		names = append(names, name)
+	containers, initContainers := wlrcache.ContainersFromObserved(obs)
+	if excludeInit {
+		return containers
 	}
-	sort.Strings(names)
-
-	out := make([]corev1.Container, 0, len(names))
-	for _, name := range names {
-		o := obs[name]
-		c := corev1.Container{Name: name}
-		if req := resourceList(o.CPURequest, o.MemoryRequest); req != nil {
-			c.Resources.Requests = req
-		}
-		if lim := resourceList(o.CPULimit, o.MemoryLimit); lim != nil {
-			c.Resources.Limits = lim
-		}
-		out = append(out, c)
-	}
-	return out
-}
-
-// resourceList builds a ResourceList from optional quantities, nil when both
-// are unset.
-func resourceList(cpu, mem *resource.Quantity) corev1.ResourceList {
-	if cpu == nil && mem == nil {
-		return nil
-	}
-	rl := corev1.ResourceList{}
-	if cpu != nil {
-		rl[corev1.ResourceCPU] = *cpu
-	}
-	if mem != nil {
-		rl[corev1.ResourceMemory] = *mem
-	}
-	return rl
+	return append(containers, initContainers...)
 }
 
 // computeIdentity produces the one recommendation an identity carries this
@@ -207,12 +175,17 @@ func (r *PolicyReconciler) computeIdentity(
 		return nil, r.refreshDepartedRecommendation(ctx, policy, it, inputs, fetchErr)
 	}
 
-	containers := containersFromObserved(it.Observed, policy.Spec.RightSizing.ExcludeInitContainers)
-	recs, err := r.buildRecommendations(ctx, policy,
-		it.Identity.Namespace, it.Identity.OwnerKind, it.Identity.OwnerName,
-		containers, r.groupAutoscalerInfo(ctx, it.Identity, it.Targets, autoSnap),
-		earliestTargetCreation(it.Targets), it.WLR.CreationTimestamp.Time,
-		inputs, fetchErr, snapshotPending)
+	recs, err := r.buildRecommendations(ctx, recRequest{
+		Policy:            policy,
+		Identity:          it.Identity,
+		Containers:        containersFromObserved(it.Observed, policy.Spec.RightSizing.ExcludeInitContainers),
+		AutoInfo:          r.groupAutoscalerInfo(ctx, it.Identity, it.Targets, autoSnap),
+		WorkloadCreated:   earliestTargetCreation(it.Targets),
+		IdentityFirstSeen: it.WLR.CreationTimestamp.Time,
+		Inputs:            inputs,
+		FetchErr:          fetchErr,
+		SnapshotPending:   snapshotPending,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -338,11 +311,15 @@ func (r *PolicyReconciler) refreshDepartedRecommendation(
 
 	// A departed identity has no workload object, so the age gate rests on the
 	// WLR's own CreationTimestamp, and there is nothing for an HPA to scale.
-	recs, err := buildRecommendations(ctx,
-		recDeps{Prom: r.PrometheusClient, LiveOOM: r.LiveOOM},
-		policy, it.Identity.Namespace, it.Identity.OwnerKind, it.Identity.OwnerName,
-		containers, autoscaler.Info{Kind: autoscaler.KindNone},
-		time.Time{}, it.WLR.CreationTimestamp.Time, inputs, fetchErr, false)
+	recs, err := r.buildRecommendations(ctx, recRequest{
+		Policy:            policy,
+		Identity:          it.Identity,
+		Containers:        containers,
+		AutoInfo:          autoscaler.Info{Kind: autoscaler.KindNone},
+		IdentityFirstSeen: it.WLR.CreationTimestamp.Time,
+		Inputs:            inputs,
+		FetchErr:          fetchErr,
+	})
 	if err != nil {
 		EmitWLRRefresh(it.Identity.Namespace, it.Identity.OwnerKind, WLRRefreshError)
 		return err

@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -82,43 +83,9 @@ func Upsert(
 		return nil
 	}
 
-	key := types.NamespacedName{Namespace: ref.Namespace, Name: Name(ref.Kind, ref.Name)}
-	var existing sustainv1alpha1.WorkloadRecommendation
-	err := c.Get(ctx, key, &existing)
-	if apierrors.IsNotFound(err) {
-		obj := &sustainv1alpha1.WorkloadRecommendation{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: key.Namespace,
-				Name:      key.Name,
-				Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: policyName},
-			},
-			Spec: sustainv1alpha1.WorkloadRecommendationSpec{WorkloadRef: ref, Policy: policyName},
-		}
-		if err := c.Create(ctx, obj); err != nil {
-			logger.V(1).Info("failed to create WorkloadRecommendation; skipping cache write", "err", err)
-			return fmt.Errorf("creating WorkloadRecommendation %s: %w", key, err)
-		}
-		// No re-read: see the read-after-write note on this package.
-		existing = *obj
-	} else if err != nil {
-		logger.V(1).Info("failed to read WorkloadRecommendation", "err", err)
-		return fmt.Errorf("reading WorkloadRecommendation %s: %w", key, err)
-	}
-
-	if existing.Spec.WorkloadRef != ref || existing.Spec.Policy != policyName ||
-		existing.Labels[sustainv1alpha1.WLRPolicyLabel] != policyName {
-		patched := existing.DeepCopy()
-		patched.Spec.WorkloadRef = ref
-		patched.Spec.Policy = policyName
-		if patched.Labels == nil {
-			patched.Labels = map[string]string{}
-		}
-		patched.Labels[sustainv1alpha1.WLRPolicyLabel] = policyName
-		if err := c.Patch(ctx, patched, client.MergeFrom(&existing)); err != nil {
-			logger.V(1).Info("failed to patch WorkloadRecommendation spec", "err", err)
-			return fmt.Errorf("patching WorkloadRecommendation %s spec: %w", key, err)
-		}
-		existing = *patched
+	key, existing, err := getOrCreate(ctx, c, ref, policyName)
+	if err != nil {
+		return err
 	}
 
 	if statusEquivalent(existing.Status, desired) &&
@@ -152,54 +119,9 @@ func EnsureExists(
 	observed map[string]sustainv1alpha1.ObservedContainerResources,
 ) error {
 	logger := log.FromContext(ctx).WithValues("kind", ref.Kind, "name", ref.Name, "namespace", ref.Namespace)
-	key := types.NamespacedName{Namespace: ref.Namespace, Name: Name(ref.Kind, ref.Name)}
-
-	var existing sustainv1alpha1.WorkloadRecommendation
-	err := c.Get(ctx, key, &existing)
-	if apierrors.IsNotFound(err) {
-		obj := &sustainv1alpha1.WorkloadRecommendation{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: key.Namespace,
-				Name:      key.Name,
-				Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: policyName},
-			},
-			Spec: sustainv1alpha1.WorkloadRecommendationSpec{WorkloadRef: ref, Policy: policyName},
-		}
-		if cErr := c.Create(ctx, obj); cErr != nil {
-			if !apierrors.IsAlreadyExists(cErr) {
-				logger.V(1).Info("failed to create WorkloadRecommendation", "err", cErr)
-				return fmt.Errorf("creating WorkloadRecommendation %s: %w", key, cErr)
-			}
-			// Raced another writer (the webhook's stub creation). Its object is
-			// equivalent, but only a read can say what status it already
-			// carries, so this is the one branch that re-reads.
-			if gErr := c.Get(ctx, key, &existing); gErr != nil {
-				logger.V(1).Info("failed to re-read WorkloadRecommendation after create race", "err", gErr)
-				return fmt.Errorf("re-reading WorkloadRecommendation %s after create race: %w", key, gErr)
-			}
-		} else {
-			// No re-read: see the read-after-write note on this package.
-			existing = *obj
-		}
-	} else if err != nil {
-		logger.V(1).Info("failed to read WorkloadRecommendation", "err", err)
-		return fmt.Errorf("reading WorkloadRecommendation %s: %w", key, err)
-	}
-
-	if existing.Spec.WorkloadRef != ref || existing.Spec.Policy != policyName ||
-		existing.Labels[sustainv1alpha1.WLRPolicyLabel] != policyName {
-		patched := existing.DeepCopy()
-		patched.Spec.WorkloadRef = ref
-		patched.Spec.Policy = policyName
-		if patched.Labels == nil {
-			patched.Labels = map[string]string{}
-		}
-		patched.Labels[sustainv1alpha1.WLRPolicyLabel] = policyName
-		if pErr := c.Patch(ctx, patched, client.MergeFrom(&existing)); pErr != nil {
-			logger.V(1).Info("failed to patch WorkloadRecommendation spec", "err", pErr)
-			return fmt.Errorf("patching WorkloadRecommendation %s spec: %w", key, pErr)
-		}
-		existing = *patched
+	key, existing, err := getOrCreate(ctx, c, ref, policyName)
+	if err != nil {
+		return err
 	}
 
 	if !existing.Status.Departed && observedEquivalent(existing.Status.ObservedResources, observed) {
@@ -215,6 +137,67 @@ func EnsureExists(
 		return fmt.Errorf("patching WorkloadRecommendation %s status: %w", key, pErr)
 	}
 	return nil
+}
+
+// getOrCreate reads the WorkloadRecommendation for ref, creating it when
+// missing, and brings its spec and policy label up to date. It never touches
+// status. A Create that loses the race to another writer (the webhook's stub
+// creation) re-reads: that object is equivalent, but only a read can say what
+// status it already carries, so this is the one branch that re-reads.
+func getOrCreate(
+	ctx context.Context,
+	c client.Client,
+	ref sustainv1alpha1.WorkloadReference,
+	policyName string,
+) (types.NamespacedName, sustainv1alpha1.WorkloadRecommendation, error) {
+	logger := log.FromContext(ctx).WithValues("kind", ref.Kind, "name", ref.Name, "namespace", ref.Namespace)
+	key := types.NamespacedName{Namespace: ref.Namespace, Name: Name(ref.Kind, ref.Name)}
+
+	var existing sustainv1alpha1.WorkloadRecommendation
+	err := c.Get(ctx, key, &existing)
+	if apierrors.IsNotFound(err) {
+		obj := &sustainv1alpha1.WorkloadRecommendation{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: key.Namespace,
+				Name:      key.Name,
+				Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: policyName},
+			},
+			Spec: sustainv1alpha1.WorkloadRecommendationSpec{WorkloadRef: ref, Policy: policyName},
+		}
+		switch cErr := c.Create(ctx, obj); {
+		case cErr == nil:
+			// No re-read: see the read-after-write note on this package.
+			existing = *obj
+		case apierrors.IsAlreadyExists(cErr):
+			if gErr := c.Get(ctx, key, &existing); gErr != nil {
+				logger.V(1).Info("failed to re-read WorkloadRecommendation after create race", "err", gErr)
+				return key, existing, fmt.Errorf("re-reading WorkloadRecommendation %s after create race: %w", key, gErr)
+			}
+		default:
+			logger.V(1).Info("failed to create WorkloadRecommendation", "err", cErr)
+			return key, existing, fmt.Errorf("creating WorkloadRecommendation %s: %w", key, cErr)
+		}
+	} else if err != nil {
+		logger.V(1).Info("failed to read WorkloadRecommendation", "err", err)
+		return key, existing, fmt.Errorf("reading WorkloadRecommendation %s: %w", key, err)
+	}
+
+	if existing.Spec.WorkloadRef != ref || existing.Spec.Policy != policyName ||
+		existing.Labels[sustainv1alpha1.WLRPolicyLabel] != policyName {
+		patched := existing.DeepCopy()
+		patched.Spec.WorkloadRef = ref
+		patched.Spec.Policy = policyName
+		if patched.Labels == nil {
+			patched.Labels = map[string]string{}
+		}
+		patched.Labels[sustainv1alpha1.WLRPolicyLabel] = policyName
+		if pErr := c.Patch(ctx, patched, client.MergeFrom(&existing)); pErr != nil {
+			logger.V(1).Info("failed to patch WorkloadRecommendation spec", "err", pErr)
+			return key, existing, fmt.Errorf("patching WorkloadRecommendation %s spec: %w", key, pErr)
+		}
+		existing = *patched
+	}
+	return key, existing, nil
 }
 
 // MarkNoData records that a computation produced nothing for an identity that
@@ -266,18 +249,19 @@ func observedEquivalent(a, b map[string]sustainv1alpha1.ObservedContainerResourc
 		return false
 	}
 	for name, av := range a {
-		bv, ok := b[name]
-		if !ok || av.Init != bv.Init {
-			return false
-		}
-		if !quantityEqual(av.CPURequest, bv.CPURequest) ||
-			!quantityEqual(av.MemoryRequest, bv.MemoryRequest) ||
-			!quantityEqual(av.CPULimit, bv.CPULimit) ||
-			!quantityEqual(av.MemoryLimit, bv.MemoryLimit) {
+		if bv, ok := b[name]; !ok || !observedContainerEqual(av, bv) {
 			return false
 		}
 	}
 	return true
+}
+
+func observedContainerEqual(a, b sustainv1alpha1.ObservedContainerResources) bool {
+	return a.Init == b.Init &&
+		quantityEqual(a.CPURequest, b.CPURequest) &&
+		quantityEqual(a.MemoryRequest, b.MemoryRequest) &&
+		quantityEqual(a.CPULimit, b.CPULimit) &&
+		quantityEqual(a.MemoryLimit, b.MemoryLimit)
 }
 
 // BuildObservedResources snapshots per-container requests/limits so the
@@ -321,16 +305,54 @@ func buildStatus(
 		ObservedResources: observed,
 	}
 	for name, rec := range recs {
-		out.Containers[name] = sustainv1alpha1.ContainerRecommendation{
-			CPURequest:        rec.CPURequest,
-			MemoryRequest:     rec.MemoryRequest,
-			CPULimit:          rec.CPULimit,
-			MemoryLimit:       rec.MemoryLimit,
-			RemoveCPULimit:    rec.RemoveCPULimit,
-			RemoveMemoryLimit: rec.RemoveMemoryLimit,
-		}
+		out.Containers[name] = sustainv1alpha1.ContainerRecommendation(rec)
 	}
 	return out
+}
+
+// RecsFromStatus converts the stored per-container recommendations back into
+// the form the injection paths apply. Returns nil when nothing is stored.
+func RecsFromStatus(status sustainv1alpha1.WorkloadRecommendationStatus) map[string]workload.ContainerRecommendation {
+	if len(status.Containers) == 0 {
+		return nil
+	}
+	out := make(map[string]workload.ContainerRecommendation, len(status.Containers))
+	for name, c := range status.Containers {
+		out[name] = workload.ContainerRecommendation(c)
+	}
+	return out
+}
+
+// ContainersFromObserved rebuilds the container lists from an observed-
+// resources snapshot, the only source left once the workload object is gone.
+// Both lists are sorted by name; map order is random.
+func ContainersFromObserved(obs map[string]sustainv1alpha1.ObservedContainerResources) (containers, initContainers []corev1.Container) {
+	for name, o := range obs {
+		c := corev1.Container{Name: name}
+		setQuantity(&c.Resources.Requests, corev1.ResourceCPU, o.CPURequest)
+		setQuantity(&c.Resources.Requests, corev1.ResourceMemory, o.MemoryRequest)
+		setQuantity(&c.Resources.Limits, corev1.ResourceCPU, o.CPULimit)
+		setQuantity(&c.Resources.Limits, corev1.ResourceMemory, o.MemoryLimit)
+		if o.Init {
+			initContainers = append(initContainers, c)
+		} else {
+			containers = append(containers, c)
+		}
+	}
+	byName := func(a, b corev1.Container) int { return strings.Compare(a.Name, b.Name) }
+	slices.SortFunc(containers, byName)
+	slices.SortFunc(initContainers, byName)
+	return containers, initContainers
+}
+
+func setQuantity(rl *corev1.ResourceList, name corev1.ResourceName, q *resource.Quantity) {
+	if q == nil {
+		return
+	}
+	if *rl == nil {
+		*rl = corev1.ResourceList{}
+	}
+	(*rl)[name] = *q
 }
 
 // statusEquivalent compares two statuses ignoring ObservedAt, so write
@@ -365,20 +387,8 @@ func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
 		}
 	}
 
-	if len(a.ObservedResources) != len(b.ObservedResources) {
-		return false
-	}
-	for name, av := range a.ObservedResources {
-		bv, ok := b.ObservedResources[name]
-		if !ok || av.Init != bv.Init ||
-			!quantityEqual(av.CPURequest, bv.CPURequest) ||
-			!quantityEqual(av.MemoryRequest, bv.MemoryRequest) ||
-			!quantityEqual(av.CPULimit, bv.CPULimit) ||
-			!quantityEqual(av.MemoryLimit, bv.MemoryLimit) {
-			return false
-		}
-	}
-	return true
+	return observedEquivalent(a.ObservedResources, b.ObservedResources) &&
+		len(a.ObservedResources) == len(b.ObservedResources)
 }
 
 // quantityEqual treats a nil pointer and an explicit zero as the same "unset"
