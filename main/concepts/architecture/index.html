@@ -1813,7 +1813,7 @@
 <ul>
 <li><strong>Policy overview</strong> — list all policies with status, namespaces, workload types</li>
 <li><strong>Workload metrics</strong> — interactive CPU and memory time-series charts</li>
-<li><strong>Policy simulator</strong> — test "what-if" scenarios with different percentiles, headroom, and min/max values</li>
+<li><strong>Policy simulator</strong> — test "what-if" scenarios with different percentiles, headroom, and min/max values, computed by the same <code>internal/recommender</code> pipeline the controller applies</li>
 </ul>
 <p>It is read-only: it queries the Kubernetes API and Prometheus but never modifies any resources. See the <a href="../../guides/dashboard/">Dashboard guide</a> for details.</p>
 <h2 id="recommend-only-mode">Recommend-only mode<a class="headerlink" href="#recommend-only-mode" title="Permanent link">&para;</a></h2>

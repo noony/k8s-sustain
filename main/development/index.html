@@ -2428,17 +2428,16 @@ input series and assert the recorded value — which <code>promtool check rules<
 cannot do. Add one whenever a rule's correctness depends on timing or on a
 join window, since that is exactly what a syntax check misses.</p>
 <h2 id="adding-a-new-workload-kind">Adding a new workload kind<a class="headerlink" href="#adding-a-new-workload-kind" title="Permanent link">&para;</a></h2>
-<p>To support a new workload kind (e.g. <code>Rollout</code> from Argo):</p>
+<p>Every reader of workload objects goes through one table, so supporting a new
+kind (say <code>Rollout</code> from Argo) is mostly a matter of registering it there:</p>
 <ol>
-<li>Add <code>ArgoRollout *UpdateMode</code> to <code>UpdateTypes</code> in <code>api/v1alpha1/policy_types.go</code> (already present as a placeholder)</li>
-<li>Add the deepcopy block to <code>zz_generated.deepcopy.go</code></li>
-<li>Add <code>RecycleRolloutPods</code> to <code>internal/workload/patcher.go</code></li>
-<li>Add <code>reconcileRollouts</code> to <code>internal/controller/policy_controller.go</code></li>
-<li>Add the case to <code>UpdateTypes.ModeForKind</code> in <code>api/v1alpha1/policy_types.go</code> and to <code>resolveOwner</code> in <code>internal/webhook/handler.go</code></li>
-<li>Add the kind to the <code>ownerKindObjects</code> table in <code>internal/webhook/optin.go</code>. This is what lets the webhook's multi-level opt-in resolution read the workload-level annotation for the new kind; a kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)</li>
-<li>Add the same kind to <code>k8s.OwnerChainDisableFor()</code> in <code>internal/k8s/client.go</code>. Every kind in <code>ownerKindObjects</code> must appear here too, or its first Get on the admission hot path stands up a cluster-wide informer over every object of that kind instead of costing one Get. <code>TestDisableForCoversOwnerAnnotationKinds</code> (<code>internal/webhook/optin_test.go</code>) cross-checks the two lists and fails if one is missing from the other</li>
-<li>Add RBAC markers (<code>+kubebuilder:rbac:...</code>) to the controller</li>
-<li>Add the Helm RBAC rule in <code>charts/k8s-sustain/templates/rbac.yaml</code></li>
+<li>Add <code>&lt;Kind&gt; *UpdateMode</code> to <code>UpdateTypes</code> in <code>api/v1alpha1/policy_types.go</code>, add the case to <code>UpdateTypes.ModeForKind</code>, then run <code>make generate</code> and <code>make manifests</code></li>
+<li>Add the kind to the <code>ownerKinds</code> table in <code>internal/workload/kindobjects.go</code> (object and list constructors plus its <code>GroupResource</code>) and, if the controller and dashboard should list it, to <code>workload.SupportedKinds</code>. This single table drives the controller's target listing, the dashboard's listing and NotFound errors, the workload-level annotation reads in the webhook and the OOM watcher, and the retention sweep's existence check. A kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)</li>
+<li>Add the kind's pod template and selector to <code>workload.PodTemplateOf</code> in <code>internal/workload/templates.go</code>. Return a nil selector for kinds whose pods must never be recycled (see Job and CronJob)</li>
+<li>Add the same kind to <code>k8s.OwnerChainDisableFor()</code> in <code>internal/k8s/client.go</code>. Every kind in <code>ownerKinds</code> must appear here too, or its first Get on the admission hot path stands up a cluster-wide informer over every object of that kind instead of costing one Get. <code>TestDisableForCoversOwnerAnnotationKinds</code> (<code>internal/webhook/optin_test.go</code>) cross-checks the two lists and fails if one is missing from the other</li>
+<li>If the kind is a CRD, register its scheme in <code>internal/config/config.go</code> and <code>internal/dashboard/server.go</code></li>
+<li>If the kind's pods cannot be evicted (job-like workloads), add an in-place-only branch in <code>reconcileWorkload</code> (<code>internal/controller/workload_reconcile.go</code>) alongside the Job, CronJob and bare-pod ones; selector-based kinds need nothing more</li>
+<li>Add RBAC markers (<code>+kubebuilder:rbac:...</code>) to the controller and the Helm RBAC rule in <code>charts/k8s-sustain/templates/rbac.yaml</code></li>
 </ol>
 <h2 id="documentation-site">Documentation site<a class="headerlink" href="#documentation-site" title="Permanent link">&para;</a></h2>
 <p>The docs site (this site) is built with mkdocs-material and versioned with

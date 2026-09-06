@@ -2225,6 +2225,7 @@ Past 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 
 </li>
 </ol>
 <p>The simulation runs automatically whenever any parameter changes (with a short debounce to avoid excessive queries). There is no manual "Run" button — results update live as you adjust sliders, change windows, or modify min/max values.</p>
+<p>The simulator, the workload recommendations endpoint and the controller all run the <strong>same recommendation algorithm</strong> (<code>internal/recommender</code>): the percentile is taken over the busiest replica, the OOM-aware memory floor applies, limits are derived from the workload's real containers, and <strong>autoscaler coordination</strong> is applied when an HPA or KEDA ScaledObject targets the workload. The simulator inherits the coordination setting of the workload's managing policy, so an untouched simulation shows exactly what the controller would apply; the <code>autoscalerCoordination</code> field of the <code>POST /api/simulate</code> body overrides it. The only controller behaviours the simulator skips are the workload-age gate (reported as <code>tooYoung</code> in the response instead of hiding the number) and the in-process live OOM watcher.</p>
 <p>The results show:</p>
 <ul>
 <li>Computed recommendation per container (CPU/memory request, and CPU/memory limit when a limits strategy is selected; <code>— removed —</code> is rendered when <code>noLimit</code> is active)</li>
