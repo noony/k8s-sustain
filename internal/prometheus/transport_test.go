@@ -504,12 +504,18 @@ func TestBaseRoundTripperDoesNotMutateDefault(t *testing.T) {
 	if !ok {
 		t.Skip("api.DefaultRoundTripper is not an *http.Transport")
 	}
-	before := def.TLSClientConfig
 
-	if _, err := baseRoundTripper(TransportConfig{TLS: TLSConfig{InsecureSkipVerify: true}}); err != nil {
+	rt, err := baseRoundTripper(TransportConfig{TLS: TLSConfig{InsecureSkipVerify: true}})
+	if err != nil {
 		t.Fatalf("baseRoundTripper: %v", err)
 	}
-	if def.TLSClientConfig != before {
+	if rt == api.DefaultRoundTripper {
+		t.Fatal("baseRoundTripper returned the shared api.DefaultRoundTripper instead of a clone")
+	}
+	// Transport.Clone() fires the one-time HTTP/2 setup, which lazily replaces
+	// a nil TLSClientConfig with an empty tls.Config on the default. That is
+	// Go's own initialization, not ours, so compare settings, not pointers.
+	if def.TLSClientConfig != nil && def.TLSClientConfig.InsecureSkipVerify {
 		t.Fatal("baseRoundTripper mutated the shared api.DefaultRoundTripper")
 	}
 }
