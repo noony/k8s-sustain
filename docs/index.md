@@ -1,30 +1,117 @@
-# k8s-sustain
-
-**k8s-sustain** is a Kubernetes operator that automatically right-sizes workload resource requests and limits using historical Prometheus metrics. It reduces cloud waste and carbon footprint without requiring manual tuning.
-
-## Why k8s-sustain?
-
-Most Kubernetes clusters run significantly over-provisioned. Engineers set resource requests based on worst-case estimates, and those numbers rarely get revisited. The result is idle CPU and memory that still costs money, consumes energy, and contributes to the environmental footprint of cloud infrastructure.
-
-**We believe resource optimization should be accessible to everyone** — from a solo developer running a side project to a platform team managing thousands of workloads. Every cluster that right-sizes its workloads wastes less energy and needs fewer resources to do the same job. By keeping this tool free and open source, we hope to make it easy for any organization to reduce waste and do its part to preserve the planet.
-
+---
+title: Home
+hide:
+  - navigation
+  - toc
 ---
 
-## How it works
+<div class="ks-hero" markdown>
 
-k8s-sustain continuously observes CPU and memory usage through Prometheus recording rules and produces per-container recommendations at a configurable percentile. It then applies those recommendations in one of two modes:
+<span class="ks-hero__eyebrow">Open source · Kubernetes operator</span>
 
-| Mode | Mechanism | When |
-|------|-----------|------|
-| **OnCreate** | Mutating admission webhook injects resources before the pod is scheduled | Each new pod creation |
-| **Ongoing** | Controller recycles stale pods (in-place on k8s ≥ 1.33, PDB-respecting eviction otherwise); webhook injects resources into new pods | On a configurable interval |
+<h1 class="ks-hero__title">Right-size Kubernetes workloads. <em>Automatically.</em></h1>
 
-CronJob, Job and bare-pod workloads are the exception to that second row: their
-running pods are only ever resized in place, never evicted — evicting them
-would discard in-flight work, and in the bare-pod case nothing would recreate
-the pod. See [Update modes](concepts/update-modes.md).
+<p class="ks-hero__lead">
+k8s-sustain reads the CPU and memory your containers actually use from Prometheus and turns that history into requests and limits — applied in place, with no rolling restarts on modern clusters and no manual tuning.
+</p>
 
-A workload opts in to a policy by setting a single annotation:
+<div class="ks-hero__actions" markdown>
+
+[Quick Start](getting-started/quick-start.md){ .md-button .md-button--primary }
+[Read the concepts](concepts/architecture.md){ .md-button }
+
+</div>
+
+<div class="ks-hero__install" markdown>
+
+```bash
+helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
+  --namespace k8s-sustain --create-namespace
+```
+
+</div>
+
+</div>
+
+## Why it matters { .ks-section-title }
+
+<p class="ks-section-lead">
+Over-provisioning is the quiet default in most clusters, and it has a cost beyond the cloud bill.
+</p>
+
+<div class="ks-why" markdown>
+
+<div class="ks-why__card ks-why__card--cost" markdown>
+
+:material-cash-multiple:{ .ks-why__icon }
+
+### Idle capacity is billed
+
+Requests are set from worst-case guesses and rarely revisited. Every unused core and gigabyte is still reserved, scheduled and paid for.
+
+</div>
+
+<div class="ks-why__card ks-why__card--energy" markdown>
+
+:material-lightning-bolt:{ .ks-why__icon }
+
+### Idle capacity burns energy
+
+Over-provisioned nodes draw power, generate heat and drive demand for more hardware, adding to the footprint of cloud infrastructure.
+
+</div>
+
+<div class="ks-why__card ks-why__card--open" markdown>
+
+:material-leaf:{ .ks-why__icon }
+
+### Right-sizing for everyone
+
+From a solo developer's side project to a platform team running thousands of workloads: free, open source and no manual tuning.
+
+</div>
+
+</div>
+
+<div class="ks-statement" markdown>
+
+We believe resource optimisation should be *accessible to everyone*. Every cluster that right-sizes its workloads wastes less energy and needs fewer machines to do the same job.
+
+</div>
+
+## How it works { .ks-section-title }
+
+<p class="ks-section-lead">
+One annotation opts a workload into a <code>Policy</code>. From there the pipeline runs on its own.
+</p>
+
+<div class="ks-steps" markdown>
+
+<div markdown>
+
+### Observe
+
+Prometheus recording rules aggregate per-container CPU and memory usage by workload. Nothing to instrument.
+
+</div>
+
+<div markdown>
+
+### Recommend
+
+The controller takes a configurable percentile over the lookback window, adds headroom, respects min/max clamps, OOM floors and autoscaler targets.
+
+</div>
+
+<div markdown>
+
+### Apply
+
+The admission webhook injects resources into new pods; the controller resizes running ones in place (k8s ≥ 1.33) or recycles them behind their PodDisruptionBudget.
+
+</div>
+
+</div>
 
 ```yaml
 metadata:
@@ -32,61 +119,156 @@ metadata:
     k8s.sustain.io/policy: my-policy
 ```
 
-It is honoured on the workload's pod template, on the workload object's own `metadata.annotations`, or on its Namespace — see the [Annotation reference](reference/annotation.md) for the full precedence and the opt-out escape hatch.
+The annotation is honoured on the pod template, on the workload's own `metadata.annotations`, or on its Namespace — most specific first. See the [Annotation reference](reference/annotation.md) for precedence and the opt-out escape hatch.
 
----
+## Two update modes { .ks-section-title }
 
-## Supported workloads
+<p class="ks-section-lead">
+Choose per workload kind how far k8s-sustain may go.
+</p>
 
-| Workload | OnCreate | Ongoing |
-|----------|----------|---------|
-| Deployment | ✅ | ✅ |
-| StatefulSet | ✅ | ✅ |
-| DaemonSet | ✅ | ✅ |
-| Argo Rollout | ✅ | ✅ |
-| Job | ✅ | ✅ |
-| CronJob | ✅ | ✅ |
+<div class="ks-modes" markdown>
 
----
+<div class="ks-mode" markdown>
 
-## Key features
+<p class="ks-mode__head" markdown="span">:material-shield-plus-outline:{ .ks-mode__icon } <span class="ks-mode__name">OnCreate</span> <span class="ks-mode__when">on every new pod</span></p>
 
-- **Percentile-based recommendations** — p50 through p99, configurable per policy
-- **Per-container granularity** — each container gets its own recommendation
-- **In-place pod updates** — no rolling restart when the cluster supports `InPlacePodVerticalScaling` (k8s ≥ 1.33)
-- **Recommend-only mode** — dry-run mode that logs recommendations without touching any workloads
-- **Web dashboard** — explore policies, view workload metrics, and simulate parameter changes
-- **Three independent components** — controller (Ongoing), admission webhook (OnCreate), and dashboard can run separately
-- **Headroom control** — add a safety buffer on top of the observed percentile
-- **HPA-aware right-sizing** — when a workload is scaled by an HPA or KEDA `ScaledObject`, requests are shaped so the autoscaler's utilization signal stays meaningful (see [Autoscaler Coordination](concepts/autoscaler-coordination.md))
-- **Limit strategies** — keep existing ratio, set equal to request, remove limit, or use a custom multiplier
-- **Prometheus-native** — ships pre-computed recording rules; no external dependency beyond Prometheus
-- **Works with authenticated Prometheus** — bearer token, basic auth, custom headers and TLS (private CA, mTLS), including multi-tenant Thanos / Mimir / Cortex gateways (see [Authenticated Prometheus](guides/authenticated-prometheus.md))
+The mutating admission webhook injects the cached recommendation before the pod is scheduled. Running pods are never touched.
 
----
+</div>
 
-## Quick navigation
+<div class="ks-mode ks-mode--ongoing" markdown>
+
+<p class="ks-mode__head" markdown="span">:material-autorenew:{ .ks-mode__icon } <span class="ks-mode__name">Ongoing</span> <span class="ks-mode__when">on a configurable interval</span></p>
+
+Everything OnCreate does, plus the controller brings running pods up to date: in place on k8s ≥ 1.33, PDB-respecting eviction otherwise.
+
+</div>
+
+</div>
+
+<div class="ks-kinds" markdown>
+
+<p class="ks-kinds__label">Supported in both modes</p>
+
+<p class="ks-kinds__list">
+<span>Deployment</span><span>StatefulSet</span><span>DaemonSet</span><span>Argo Rollout</span><span>Job</span><span>CronJob</span>
+</p>
+
+</div>
+
+<p class="ks-note" markdown="span">:material-information-outline: CronJob, Job and bare-pod workloads are never evicted: their running pods are only ever resized in place, since eviction would discard in-flight work and nothing would recreate a bare pod. See [Update modes](concepts/update-modes.md).</p>
+
+## Built for production clusters { .ks-section-title }
+
+<p class="ks-section-lead">
+Every safeguard a platform team expects, and nothing that touches your GitOps-managed specs.
+</p>
 
 <div class="grid cards" markdown>
 
-- :material-rocket-launch: **[Quick Start](getting-started/quick-start.md)**
+- :material-chart-bell-curve-cumulative:{ .lg .middle } **Percentile-based recommendations**
+
+    ---
+
+    p50 through p99, configurable per policy and per resource, with a headroom buffer on top of the observed value.
+
+- :material-arrow-expand-vertical:{ .lg .middle } **In-place pod updates**
+
+    ---
+
+    Zero-restart resizes through the `pods/resize` subresource when the cluster supports it, PDB-respecting eviction otherwise.
+
+- :material-source-branch-check:{ .lg .middle } **GitOps-safe by design**
+
+    ---
+
+    Workload specs are never patched. Resources reach pods only through admission and resize, so Argo CD and Flux never see drift.
+
+- :material-eye-outline:{ .lg .middle } **Recommend-only mode**
+
+    ---
+
+    Dry-run globally or per policy: recommendations are computed, cached and logged without touching any workload.
+
+- :material-fire-alert:{ .lg .middle } **OOM-aware memory floors**
+
+    ---
+
+    An `OOMKilled` container re-triggers reconciliation immediately and bumps the memory floor, VPA-style.
+
+- :material-scale-balance:{ .lg .middle } **Autoscaler coordination**
+
+    ---
+
+    Requests are shaped so HPA and KEDA utilisation targets stay meaningful instead of fighting the right-sizer.
+
+- :material-cube-outline:{ .lg .middle } **Per-container granularity**
+
+    ---
+
+    Sidecars and init containers get their own recommendation, clamped by the policy's min and max.
+
+- :material-monitor-dashboard:{ .lg .middle } **Web dashboard**
+
+    ---
+
+    Explore policies, chart real usage against requests, and simulate percentile or headroom changes before applying them.
+
+- :material-shield-lock-outline:{ .lg .middle } **Authenticated Prometheus**
+
+    ---
+
+    Bearer token, basic auth, custom headers and TLS, including multi-tenant Thanos, Mimir and Cortex gateways.
+
+</div>
+
+## See it in action { .ks-section-title }
+
+<p class="ks-section-lead">
+The dashboard shows current requests against observed usage and what each policy would change.
+</p>
+
+![Workload resizing dashboard](assets/dashboard-workload-resizing.png){ .ks-shot }
+
+## Explore the docs { .ks-section-title }
+
+<div class="grid cards" markdown>
+
+- :material-rocket-launch:{ .lg .middle } **[Quick Start](getting-started/quick-start.md)**
+
+    ---
 
     Install the chart and apply your first policy in five minutes.
 
-- :material-book-open: **[Policy CRD](reference/policy.md)**
+- :material-book-open-variant:{ .lg .middle } **[Policy CRD](reference/policy.md)**
+
+    ---
 
     Full API reference for the `Policy` resource.
 
-- :material-tag: **[Annotation](reference/annotation.md)**
+- :material-tag-outline:{ .lg .middle } **[Annotation](reference/annotation.md)**
 
-    How to opt a workload into a policy.
+    ---
 
-- :material-console: **[CLI](reference/cli.md)**
+    How to opt a workload into a policy, and how to opt one out.
 
-    `k8s-sustain start`, `webhook`, and `dashboard` flags.
+- :material-console:{ .lg .middle } **[CLI](reference/cli.md)**
 
-- :material-monitor-dashboard: **[Dashboard](guides/dashboard.md)**
+    ---
 
-    Explore policies, view metrics, and simulate changes.
+    `k8s-sustain start`, `webhook` and `dashboard` flags.
+
+- :material-sitemap-outline:{ .lg .middle } **[Architecture](concepts/architecture.md)**
+
+    ---
+
+    Controller, webhook and dashboard, and how they share one pipeline.
+
+- :material-shield-check-outline:{ .lg .middle } **[Security](security.md)**
+
+    ---
+
+    Signed images, SBOMs and SLSA provenance for every release.
 
 </div>

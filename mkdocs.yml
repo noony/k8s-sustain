@@ -4,44 +4,75 @@ site_url: https://noony.github.io/k8s-sustain
 repo_url: https://github.com/noony/k8s-sustain
 repo_name: noony/k8s-sustain
 edit_uri: edit/main/docs/
+copyright: Copyright &copy; k8s-sustain contributors &mdash; ISC License
 
 theme:
   name: material
   logo: assets/logo.svg
   favicon: assets/logo.svg
+  icon:
+    repo: fontawesome/brands/github
+  font: false
   palette:
-    - scheme: default
-      primary: teal
-      accent: teal
+    - media: "(prefers-color-scheme)"
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
-    - scheme: slate
-      primary: teal
-      accent: teal
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
-        name: Switch to light mode
+        name: Switch to system preference
   features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
     - navigation.tabs
     - navigation.tabs.sticky
     - navigation.sections
-    - navigation.expand
+    - navigation.path
     - navigation.top
     - navigation.footer
+    - toc.follow
     - search.highlight
     - search.suggest
+    - search.share
     - content.code.copy
     - content.code.annotate
     - content.tabs.link
+    - content.tooltips
+
+extra_css:
+  - stylesheets/extra.css
 
 plugins:
   - search
 
 markdown_extensions:
   - admonition
+  - abbr
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
@@ -50,10 +81,6 @@ markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
-  - attr_list
-  - tables
-  - toc:
-      permalink: true
 
 nav:
   - Home: index.md
@@ -98,3 +125,10 @@ nav:
 extra:
   version:
     provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/noony/k8s-sustain
+      name: k8s-sustain on GitHub
+    - icon: fontawesome/brands/docker
+      link: https://github.com/noony/k8s-sustain/pkgs/container/k8s-sustain
+      name: Container image on GHCR
