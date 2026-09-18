@@ -2079,6 +2079,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dashboard-styling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard styling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#documentation-site" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2477,6 +2488,17 @@
     <span class="md-ellipsis">
       
         Adding a new workload kind
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dashboard-styling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard styling
       
     </span>
   </a>
@@ -2928,6 +2950,25 @@ kind (say <code>Rollout</code> from Argo) is mostly a matter of registering it t
 <li>If the kind's pods cannot be evicted (job-like workloads), add an in-place-only branch in <code>reconcileWorkload</code> (<code>internal/controller/workload_reconcile.go</code>) alongside the Job, CronJob and bare-pod ones; selector-based kinds need nothing more</li>
 <li>Add RBAC markers (<code>+kubebuilder:rbac:...</code>) to the controller and the Helm RBAC rule in <code>charts/k8s-sustain/templates/rbac.yaml</code></li>
 </ol>
+<h2 id="dashboard-styling">Dashboard styling<a class="headerlink" href="#dashboard-styling" title="Permanent link">&para;</a></h2>
+<p>The dashboard's look lives in one stylesheet,
+<code>internal/dashboard/ui/frontend/src/style.css</code>, driven by CSS custom
+properties declared for <code>[data-theme='dark']</code> and <code>[data-theme='light']</code>.
+Restyle by changing tokens, not by adding per-view colours.</p>
+<ul>
+<li><strong>Fonts</strong> are self-hosted through the <code>@fontsource-variable/inter</code> and
+  <code>@fontsource-variable/jetbrains-mono</code> packages (imported in <code>src/main.ts</code>)
+  and end up embedded in the binary. Never load fonts from a CDN — the
+  dashboard has to work in clusters without internet egress.</li>
+<li><strong>Chart series colours</strong> are the <code>--series-*</code> tokens (<code>cpu</code>, <code>mem</code>, <code>config</code>,
+  <code>rec</code>, <code>baseline</code>). Views pass the key (<code>color: 'rec'</code>) and <code>lib/chart.ts</code>
+  resolves it per theme and recolours live charts on theme change. Colour
+  follows the entity: request and limit share <code>config</code> and differ by dash
+  pattern, which the legend keys reproduce. When changing a series colour,
+  re-check it against both card surfaces for colour-vision separation.</li>
+<li>To review a change visually, port-forward the dashboard Service to <code>:8090</code>
+  and run <code>npm run dev</code> in the frontend directory; Vite proxies <code>/api</code> to it.</li>
+</ul>
 <h2 id="documentation-site">Documentation site<a class="headerlink" href="#documentation-site" title="Permanent link">&para;</a></h2>
 <p>The docs site (this site) is built with mkdocs-material and versioned with
 <a href="https://github.com/jimporter/mike">mike</a>. Two things deploy it:</p>
