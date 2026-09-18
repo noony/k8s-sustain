@@ -26,6 +26,7 @@ Chart.register(
   Tooltip,
   zoomPlugin,
 )
+Chart.defaults.font.family = "'Inter Variable', Inter, system-ui, sans-serif"
 
 // Crosshair plugin (Grafana-style vertical line following mouse)
 const crosshairPlugin: Plugin = {
@@ -98,6 +99,28 @@ function softFill(color: string, alpha = 0.12): string {
   if (rgba) return `rgba(${rgba[1]}, ${rgba[2]}, ${rgba[3]}, ${alpha})`
   // Unknown format — return transparent so it doesn't render as black.
   return 'rgba(0, 0, 0, 0)'
+}
+
+const SERIES_TOKENS = {
+  cpu: ['--series-cpu', '#8b5cf6'],
+  mem: ['--series-mem', '#0ea5c4'],
+  config: ['--series-config', '#d97706'],
+  rec: ['--series-rec', '#1fae55'],
+  baseline: ['--series-baseline', '#8b93a1'],
+} as const
+
+export type SeriesKey = keyof typeof SERIES_TOKENS
+
+function isSeriesKey(c: string): c is SeriesKey {
+  return c in SERIES_TOKENS
+}
+
+// Accepts either a literal CSS color or a SeriesKey; keys resolve against the
+// active theme so the same series reads correctly on both surfaces.
+export function resolveSeriesColor(color: string): string {
+  if (!isSeriesKey(color)) return color
+  const [token, fallback] = SERIES_TOKENS[color]
+  return themeVar(token, fallback)
 }
 
 function themeColors() {
@@ -195,9 +218,35 @@ export interface ChartOpts {
   // avoid drawing a continuous line across periods where the workload had no
   // pods running (e.g. between CronJob runs).
   stepMs?: number
+  // Requested time window (epoch seconds). Pins the x-axis to it; otherwise
+  // Chart.js fits the axis to the data and a young workload viewed over "1d"
+  // renders as a few stretched minutes instead of a mostly-empty day.
+  window?: { fromTs: number; toTs: number }
 }
 
 type ChartPoint = { x: Date; y: number | null }
+type AxisBounds = { min?: number; max?: number }
+
+export function xAxisBounds(window?: { fromTs: number; toTs: number }): AxisBounds {
+  if (!window) return {}
+  const { fromTs, toTs } = window
+  if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || fromTs >= toTs) return {}
+  return { min: fromTs * 1000, max: toTs * 1000 }
+}
+
+export function annotationPoints(
+  value: number,
+  chartData: ChartPoint[],
+  bounds: AxisBounds,
+): ChartPoint[] {
+  if (bounds.min != null && bounds.max != null) {
+    return [
+      { x: new Date(bounds.min), y: value },
+      { x: new Date(bounds.max), y: value },
+    ]
+  }
+  return chartData.map((p) => ({ x: p.x, y: value }))
+}
 
 // withGaps converts a sparse time-series into chart data, inserting an
 // explicit null between consecutive points spaced farther apart than
@@ -253,27 +302,32 @@ export function createTimeSeriesChart(
 
   const transform = opts.transform || ((v: number) => v)
   const chartData = withGaps(points, transform, opts.stepMs)
+  const bounds = xAxisBounds(opts.window)
 
   const datasets: any[] = [
     {
       label: opts.label,
       data: chartData,
-      borderColor: opts.color,
+      seriesColor: opts.color,
+      borderColor: resolveSeriesColor(opts.color),
       backgroundColor: (ctx: any) => {
         const chart = ctx.chart
         const area = chart.chartArea
-        if (!area) return softFill(opts.color, 0.12)
+        const line = ctx.dataset.borderColor as string
+        if (!area) return softFill(line, 0.1)
         const grad = chart.ctx.createLinearGradient(0, area.top, 0, area.bottom)
-        grad.addColorStop(0, softFill(opts.color, 0.32))
-        grad.addColorStop(1, softFill(opts.color, 0))
+        grad.addColorStop(0, softFill(line, 0.22))
+        grad.addColorStop(1, softFill(line, 0))
         return grad
       },
       fill: opts.fill !== false,
-      borderWidth: 1.75,
+      borderWidth: 2,
+      borderJoinStyle: 'round',
+      borderCapStyle: 'round',
       pointRadius: 0,
       pointHoverRadius: 4,
       pointHoverBorderWidth: 2,
-      pointHoverBackgroundColor: opts.color,
+      pointHoverBackgroundColor: resolveSeriesColor(opts.color),
       pointHoverBorderColor: themeVar('--bg-card', '#0d1117'),
       tension: 0.3,
     },
@@ -285,8 +339,10 @@ export function createTimeSeriesChart(
     const ds: any = {
       label: s.label,
       data: seriesData,
-      borderColor: s.color || '#f59e0b',
-      borderWidth: 1.5,
+      seriesColor: s.color || 'config',
+      borderColor: resolveSeriesColor(s.color || 'config'),
+      borderWidth: 1.75,
+      borderCapStyle: 'round',
       borderDash: s.dash || [4, 4],
       pointRadius: 0,
       fill: false,
@@ -301,9 +357,11 @@ export function createTimeSeriesChart(
     const val = transform(anno.value)
     datasets.push({
       label: anno.label,
-      data: chartData.map((p) => ({ x: p.x, y: val })),
-      borderColor: anno.color || '#ef4444',
-      borderWidth: 1.5,
+      data: annotationPoints(val, chartData, bounds),
+      seriesColor: anno.color || 'rec',
+      borderColor: resolveSeriesColor(anno.color || 'rec'),
+      borderWidth: 1.75,
+      borderCapStyle: 'round',
       borderDash: anno.dash || [8, 4],
       pointRadius: 0,
       fill: false,
@@ -326,7 +384,31 @@ export function createTimeSeriesChart(
       plugins: {
         legend: {
           display: datasets.length > 1,
-          labels: { color: colors.tick, font: { size: 11 } },
+          align: 'end',
+          labels: {
+            color: colors.tick,
+            font: { size: 11 },
+            // Line keys carry each dataset's dash pattern, so request/limit
+            // stay distinguishable without relying on hue. With usePointStyle
+            // Chart.js derives items from the point element, which has no
+            // dash, so copy it over from the dataset.
+            generateLabels: (chart: Chart) =>
+              Chart.defaults.plugins.legend.labels.generateLabels(chart).map((item) => {
+                const ds: any = chart.data.datasets[item.datasetIndex ?? 0]
+                return {
+                  ...item,
+                  strokeStyle: ds.borderColor,
+                  lineWidth: 2,
+                  lineDash: ds.borderDash || [],
+                  lineCap: ds.borderCapStyle || 'butt',
+                }
+              }),
+            usePointStyle: true,
+            pointStyle: 'line',
+            pointStyleWidth: 26,
+            boxHeight: 6,
+            padding: 14,
+          },
         },
         tooltip: {
           backgroundColor: colors.tooltipBg,
@@ -334,9 +416,13 @@ export function createTimeSeriesChart(
           borderWidth: 1,
           titleColor: colors.text,
           bodyColor: colors.text,
-          padding: 10,
-          cornerRadius: 6,
+          padding: 12,
+          cornerRadius: 8,
           boxPadding: 6,
+          titleFont: { size: 11, weight: 500 },
+          bodyFont: { size: 12 },
+          titleMarginBottom: 8,
+          bodySpacing: 5,
           usePointStyle: true,
           callbacks: {
             // The main dataset's backgroundColor is a gradient function (the
@@ -371,14 +457,19 @@ export function createTimeSeriesChart(
       scales: {
         x: {
           type: 'time',
-          grid: { color: colors.grid },
-          ticks: { color: colors.tick, font: { size: 11 }, maxTicksLimit: 8 },
+          ...bounds,
+          grid: { display: false },
+          border: { display: false },
+          ticks: { color: colors.tick, font: { size: 11 }, maxTicksLimit: 8, maxRotation: 0 },
         },
         y: {
           grid: { color: colors.grid },
+          border: { display: false },
           ticks: {
             color: colors.tick,
             font: { size: 11 },
+            padding: 8,
+            maxTicksLimit: 6,
             callback: (v: any) => opts.yFormat(v),
           },
           beginAtZero: true,
@@ -427,6 +518,10 @@ export function applyThemeToAllCharts() {
     // recompute it via the scriptable function on next draw by forcing update.
     chart.data.datasets.forEach((ds: any) => {
       if (ds.pointHoverBorderColor) ds.pointHoverBorderColor = themeVar('--bg-card', '#0d1117')
+      if (ds.seriesColor) {
+        ds.borderColor = resolveSeriesColor(ds.seriesColor)
+        if (ds.pointHoverBackgroundColor) ds.pointHoverBackgroundColor = ds.borderColor
+      }
     })
     chart.update('none')
   })

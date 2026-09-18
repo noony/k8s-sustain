@@ -20,7 +20,7 @@ import {
 } from '../lib/chart'
 import TimeRangePicker from '../components/TimeRangePicker.vue'
 import { useTimeRange } from '../composables/useTimeRange'
-import { simulateRangeBody, DEFAULT_RANGE, type TimeRange } from '../lib/timerange'
+import { simulateRangeBody, resolveRange, DEFAULT_RANGE, type TimeRange } from '../lib/timerange'
 import DurationCombobox from '../components/DurationCombobox.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
 import KpiCard from '../components/KpiCard.vue'
@@ -354,6 +354,7 @@ function renderCharts(data: SimulationResult) {
   const simCpuRec = data.cpuRecommendations || {}
   const simMemRec = data.memoryRecommendations || {}
   const stepMs = parseStepToMs(simulateRangeBody(range.value, Date.now()).step)
+  const chartWindow = resolveRange(range.value, Date.now())
 
   containers.forEach((cname) => {
     const res = simResources[cname] || {}
@@ -362,12 +363,12 @@ function renderCharts(data: SimulationResult) {
       const cpuAnnotations: ChartAnnotation[] = []
       const cpuExtra: ExtraSeries[] = []
       if (simCpuReq[cname]?.length) {
-        cpuExtra.push({ data: simCpuReq[cname], label: 'Request', color: '#f59e0b', dash: [4, 4] })
+        cpuExtra.push({ data: simCpuReq[cname], label: 'Request', color: 'config', dash: [4, 4] })
       } else if (res.cpuRequest) {
         cpuAnnotations.push({
           value: parseCPUQuantity(res.cpuRequest),
           label: 'Request: ' + res.cpuRequest,
-          color: '#f59e0b',
+          color: 'config',
           dash: [4, 4],
         })
       }
@@ -375,27 +376,28 @@ function renderCharts(data: SimulationResult) {
         cpuAnnotations.push({
           value: parseCPUQuantity(res.cpuLimit),
           label: 'Limit: ' + res.cpuLimit,
-          color: '#f97316',
-          dash: [2, 2],
+          color: 'config',
+          dash: [1, 4],
         })
       if (simCpuRec[cname]?.length) {
         cpuExtra.push({
           data: simCpuRec[cname],
           label: 'Recommendation',
-          color: '#ef4444',
+          color: 'rec',
           dash: [8, 4],
           stepped: false,
         })
       }
       createTimeSeriesChart('simcpu-' + cname, data.cpuSeries[cname], {
         label: 'CPU Usage',
-        color: 'rgb(124, 58, 237)',
+        color: 'cpu',
         unit: 'cores',
         yFormat: (v) => v.toFixed(3),
         annotations: cpuAnnotations,
         extraSeries: cpuExtra,
         onZoomComplete: onChartZoom,
         stepMs,
+        window: chartWindow,
       })
     }
 
@@ -403,12 +405,12 @@ function renderCharts(data: SimulationResult) {
       const memAnnotations: ChartAnnotation[] = []
       const memExtra: ExtraSeries[] = []
       if (simMemReq[cname]?.length) {
-        memExtra.push({ data: simMemReq[cname], label: 'Request', color: '#f59e0b', dash: [4, 4] })
+        memExtra.push({ data: simMemReq[cname], label: 'Request', color: 'config', dash: [4, 4] })
       } else if (res.memoryRequest) {
         memAnnotations.push({
           value: parseMemoryQuantity(res.memoryRequest),
           label: 'Request: ' + res.memoryRequest,
-          color: '#f59e0b',
+          color: 'config',
           dash: [4, 4],
         })
       }
@@ -416,21 +418,21 @@ function renderCharts(data: SimulationResult) {
         memAnnotations.push({
           value: parseMemoryQuantity(res.memoryLimit),
           label: 'Limit: ' + res.memoryLimit,
-          color: '#f97316',
-          dash: [2, 2],
+          color: 'config',
+          dash: [1, 4],
         })
       if (simMemRec[cname]?.length) {
         memExtra.push({
           data: simMemRec[cname],
           label: 'Recommendation',
-          color: '#ef4444',
+          color: 'rec',
           dash: [8, 4],
           stepped: false,
         })
       }
       createTimeSeriesChart('simmem-' + cname, data.memorySeries[cname], {
         label: 'Memory Usage',
-        color: '#06b6d4',
+        color: 'mem',
         unit: 'MiB',
         transform: (v) => v / (1024 * 1024),
         yFormat: (v) => v.toFixed(0),
@@ -438,6 +440,7 @@ function renderCharts(data: SimulationResult) {
         extraSeries: memExtra,
         onZoomComplete: onChartZoom,
         stepMs,
+        window: chartWindow,
       })
     }
   })

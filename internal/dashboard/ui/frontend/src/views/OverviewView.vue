@@ -24,7 +24,7 @@ import LoadingState from '../components/LoadingState.vue'
 import ErrorState from '../components/ErrorState.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { formatBytes } from '../lib/format'
-import { rangeQueryParams } from '../lib/timerange'
+import { rangeQueryParams, resolveRange } from '../lib/timerange'
 
 const router = useRouter()
 const { range } = useTimeRange()
@@ -33,6 +33,12 @@ const summary = useApi<SummaryV2>(() => api<SummaryV2>('/api/summary'))
 const trend = useApi<TrendData>(() => {
   const p = new URLSearchParams(rangeQueryParams(range.value, Date.now()))
   return api<TrendData>(`/api/summary/trend?${p.toString()}`)
+})
+// Re-resolved whenever fresh trend data lands so a relative window's "now"
+// matches the fetch that produced the points.
+const trendWindow = computed(() => {
+  void trend.data.value
+  return resolveRange(range.value, Date.now())
 })
 const activity = useApi<{ items: ActivityItem[] }>(() =>
   api<{ items: ActivityItem[] }>('/api/summary/activity?limit=20'),
@@ -68,17 +74,13 @@ function selectAttention(row: AttentionRow) {
   router.push(`/workloads/${row.namespace}/${row.kind}/${row.name}`)
 }
 
-const accentColor = 'rgb(124, 58, 237)'
-const dimColor = 'rgb(156, 163, 175)'
-const successColor = 'rgb(63, 185, 80)'
-
 function cpuTrendSeries() {
   const t = trend.data.value
   if (!t) return []
   return [
-    { label: 'Original request', color: dimColor, points: t.cpu.originalRequest },
-    { label: 'Current request', color: accentColor, points: t.cpu.request },
-    { label: 'Usage', color: successColor, points: t.cpu.usage },
+    { label: 'Original request', color: 'baseline', points: t.cpu.originalRequest },
+    { label: 'Current request', color: 'config', points: t.cpu.request },
+    { label: 'Usage', color: 'cpu', points: t.cpu.usage },
   ]
 }
 
@@ -86,9 +88,9 @@ function memTrendSeries() {
   const t = trend.data.value
   if (!t) return []
   return [
-    { label: 'Original request', color: dimColor, points: t.memory.originalRequest },
-    { label: 'Current request', color: accentColor, points: t.memory.request },
-    { label: 'Usage', color: successColor, points: t.memory.usage },
+    { label: 'Original request', color: 'baseline', points: t.memory.originalRequest },
+    { label: 'Current request', color: 'config', points: t.memory.request },
+    { label: 'Usage', color: 'mem', points: t.memory.usage },
   ]
 }
 </script>
@@ -124,7 +126,7 @@ function memTrendSeries() {
       <KpiCard
         label="At risk"
         :value="String(summary.data.value.kpi.atRiskCount)"
-        tone="danger"
+        :tone="summary.data.value.kpi.atRiskCount > 0 ? 'danger' : 'neutral'"
         detail="OOM / blocked"
         clickable
         @click="gotoFiltered('at-risk')"
@@ -132,7 +134,7 @@ function memTrendSeries() {
       <KpiCard
         label="Drifted"
         :value="String(summary.data.value.kpi.driftedCount)"
-        tone="warn"
+        :tone="summary.data.value.kpi.driftedCount > 0 ? 'warn' : 'neutral'"
         detail=">10% from rec"
         clickable
         @click="gotoFiltered('drifted')"
@@ -154,11 +156,22 @@ function memTrendSeries() {
       <div class="chart-grid">
         <div>
           <div class="section-label">CPU</div>
-          <TrendChart :series="cpuTrendSeries()" unit=" cores" :height="240" />
+          <TrendChart
+            :series="cpuTrendSeries()"
+            unit=" cores"
+            :height="240"
+            :window="trendWindow"
+          />
         </div>
         <div>
           <div class="section-label">Memory</div>
-          <TrendChart :series="memTrendSeries()" unit="" :height="240" :y-format="formatBytes" />
+          <TrendChart
+            :series="memTrendSeries()"
+            unit=""
+            :height="240"
+            :y-format="formatBytes"
+            :window="trendWindow"
+          />
         </div>
       </div>
     </div>

@@ -407,6 +407,26 @@ kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 6. If the kind's pods cannot be evicted (job-like workloads), add an in-place-only branch in `reconcileWorkload` (`internal/controller/workload_reconcile.go`) alongside the Job, CronJob and bare-pod ones; selector-based kinds need nothing more
 7. Add RBAC markers (`+kubebuilder:rbac:...`) to the controller and the Helm RBAC rule in `charts/k8s-sustain/templates/rbac.yaml`
 
+## Dashboard styling
+
+The dashboard's look lives in one stylesheet,
+`internal/dashboard/ui/frontend/src/style.css`, driven by CSS custom
+properties declared for `[data-theme='dark']` and `[data-theme='light']`.
+Restyle by changing tokens, not by adding per-view colours.
+
+- **Fonts** are self-hosted through the `@fontsource-variable/inter` and
+  `@fontsource-variable/jetbrains-mono` packages (imported in `src/main.ts`)
+  and end up embedded in the binary. Never load fonts from a CDN — the
+  dashboard has to work in clusters without internet egress.
+- **Chart series colours** are the `--series-*` tokens (`cpu`, `mem`, `config`,
+  `rec`, `baseline`). Views pass the key (`color: 'rec'`) and `lib/chart.ts`
+  resolves it per theme and recolours live charts on theme change. Colour
+  follows the entity: request and limit share `config` and differ by dash
+  pattern, which the legend keys reproduce. When changing a series colour,
+  re-check it against both card surfaces for colour-vision separation.
+- To review a change visually, port-forward the dashboard Service to `:8090`
+  and run `npm run dev` in the frontend directory; Vite proxies `/api` to it.
+
 ## Documentation site
 
 The docs site (this site) is built with mkdocs-material and versioned with

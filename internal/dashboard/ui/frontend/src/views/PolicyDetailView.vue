@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, type PolicySpec, type PolicyWorkloadsData, type BatchSimulateData } from '../lib/api'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useTimeRange } from '../composables/useTimeRange'
 import { useSorting } from '../composables/useSorting'
 import { formatBytes, timeAgo } from '../lib/format'
-import { rangeQueryParams } from '../lib/timerange'
+import { rangeQueryParams, resolveRange } from '../lib/timerange'
 import StatusBadge from '../components/StatusBadge.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
 import RiskBadge from '../components/RiskBadge.vue'
@@ -32,6 +32,12 @@ const batchData = ref<BatchSimulateData | null>(null)
 const batchError = ref('')
 const { range } = useTimeRange()
 const yamlOpen = ref(false)
+// Re-resolved whenever the policy reloads so a relative window's "now" matches
+// the fetch that produced the points.
+const trendWindow = computed(() => {
+  void policy.value
+  return resolveRange(range.value, Date.now())
+})
 
 const { sort, sortArrow, applySorting } = useSorting('policyWorkloads')
 
@@ -132,13 +138,13 @@ function savingsClass(millis: number): string {
 function cpuEffectivenessSeries() {
   const cpu = policy.value?.effectivenessSeries?.cpu || []
   if (cpu.length === 0) return []
-  return [{ label: 'CPU saved', color: 'rgb(124, 58, 237)', points: cpu }]
+  return [{ label: 'CPU saved', color: 'cpu', points: cpu }]
 }
 
 function memEffectivenessSeries() {
   const mem = policy.value?.effectivenessSeries?.memory || []
   if (mem.length === 0) return []
-  return [{ label: 'Mem saved', color: 'rgb(6, 182, 212)', points: mem }]
+  return [{ label: 'Mem saved', color: 'mem', points: mem }]
 }
 
 function modeBadges(): string {
@@ -360,6 +366,7 @@ function renderYaml(p: typeof policy.value): string {
             :series="cpuEffectivenessSeries()"
             unit=" cores"
             :height="220"
+            :window="trendWindow"
           />
           <EmptyState
             v-else
@@ -375,6 +382,7 @@ function renderYaml(p: typeof policy.value): string {
             :series="memEffectivenessSeries()"
             unit=""
             :height="220"
+            :window="trendWindow"
             :y-format="formatBytes"
           />
           <EmptyState
