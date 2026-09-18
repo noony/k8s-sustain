@@ -432,6 +432,23 @@ pip install -r requirements-docs.txt
 mkdocs serve
 ```
 
+CI builds with `mkdocs build --strict` and lints with markdownlint, so a
+broken cross-reference or a lint violation fails the pull request.
+
+### Theme
+
+The site uses the stock Material theme with a single stylesheet,
+`docs/stylesheets/extra.css`. Its colour tokens mirror the dashboard's
+(`internal/dashboard/ui/frontend/src/style.css`) so the docs and the product
+share one palette; change them in both places or they drift. The palette
+follows the visitor's system preference by default, with a manual toggle.
+
+Diagrams are written as ` ```mermaid ` fences and rendered client-side by
+Material, so they pick up the active colour scheme. Prefer them over ASCII
+art, which cannot adapt to dark mode. The landing page (`docs/index.md`) uses
+a few `ks-*` classes defined in the same stylesheet; every other page is plain
+Markdown.
+
 The live site is published through GitHub's Actions-based Pages deployment
 (`actions/upload-pages-artifact` + `actions/deploy-pages` at the end of the
 `deploy`/`docs` jobs above), not the legacy "deploy from a branch" mechanism —

@@ -2,46 +2,30 @@
 
 k8s-sustain is split into three independent components that run as separate processes (different container args in the same image):
 
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                        Kubernetes Cluster                       │
-│                                                                 │
-│  ┌──────────────────┐        ┌──────────────────────────────┐   │
-│  │  k8s-sustain     │        │  k8s-sustain-webhook         │   │
-│  │  (controller)    │        │  (admission server)          │   │
-│  │                  │        │                              │   │
-│  │  Watches Policy  │        │  Intercepts Pod CREATE       │   │
-│  │  objects and     │        │  requests, injects           │   │
-│  │  reconciles      │        │  resources from OnCreate     │   │
-│  │  Ongoing-mode    │        │  policies                    │   │
-│  │  workloads       │        │                              │   │
-│  └────────┬─────────┘        └──────────────┬───────────────┘   │
-│           │                                 │                   │
-│           │ list / patch                    │ Get Policy        │
-│           │                                 │ Get Job/RS        │
-│           │                                 │ Watch WLR (cache) │
-│           │                                 │ Create stub WLR   │
-│           ▼                                 ▼                   │
-│  ┌────────────────────────────────────────────────────────┐     │
-│  │                   Kubernetes API Server                │     │
-│  └─────────────────────────┬──────────────────────────────┘     │
-│                            │                                    │
-│           ┌────────────────┼────────────────┐                   │
-│           ▼                ▼                ▼                   │
-│    Deployments      StatefulSets        CronJobs                │
-│    DaemonSets       Argo Rollouts                               │
-│                                                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                        Prometheus                        │   │
-│  │  k8s_sustain:container_cpu_usage_by_workload:rate1m      │   │
-│  │  k8s_sustain:container_memory_by_workload:bytes          │   │
-│  └────────────────────────────┬─────────────────────────────┘   │
-│                               │                                 │
-│  ┌────────────────────────────┴─────────────────────────────┐   │
-│  │  k8s-sustain-dashboard (optional)                        │   │
-│  │  Web UI: policy exploration, metrics, simulator          │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph ks["k8s-sustain (one image, three processes)"]
+        direction TB
+        C["<b>controller</b><br/>watches Policy objects,<br/>reconciles Ongoing workloads"]
+        W["<b>webhook</b><br/>intercepts Pod CREATE,<br/>injects OnCreate resources"]
+        D["<b>dashboard</b> (optional)<br/>policies, metrics, simulator"]
+    end
+    subgraph cluster["Cluster state"]
+        direction TB
+        API[("Kubernetes API server")]
+        WLR[("WorkloadRecommendation<br/>cache objects")]
+        PROM[("Prometheus<br/>k8s_sustain:* recording rules")]
+    end
+    WL["Deployments · StatefulSets · DaemonSets<br/>Argo Rollouts · CronJobs · Jobs · Pods"]
+
+    C -->|"list · resize · evict"| API
+    C -->|"write"| WLR
+    C -->|"percentile queries"| PROM
+    W -->|"get Policy · owner chain"| API
+    W -->|"read · create stub"| WLR
+    D -->|"read only"| API
+    D -->|"usage charts"| PROM
+    API --- WL
 ```
 
 ## Controller (`k8s-sustain start`)
