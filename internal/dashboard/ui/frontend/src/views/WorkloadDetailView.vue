@@ -22,7 +22,7 @@ import {
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useApi } from '../composables/useApi'
 import { useTimeRange } from '../composables/useTimeRange'
-import { rangeQueryParams, DEFAULT_RANGE, type TimeRange } from '../lib/timerange'
+import { rangeQueryParams, resolveRange, DEFAULT_RANGE, type TimeRange } from '../lib/timerange'
 import TimeRangePicker from '../components/TimeRangePicker.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
 import KpiCard from '../components/KpiCard.vue'
@@ -163,6 +163,7 @@ function renderCharts() {
   const memRecSeries = recs.value?.memoryRecommendations || {}
   const ooms = oomByContainer()
   const stepMs = parseStepToMs(rangeQueryParams(range.value, Date.now()).step)
+  const chartWindow = resolveRange(range.value, Date.now())
 
   containers().forEach((cname) => {
     const res = resources[cname] || {}
@@ -174,14 +175,14 @@ function renderCharts() {
         cpuExtra.push({
           data: cpuRequests[cname],
           label: 'Request',
-          color: '#f59e0b',
+          color: 'config',
           dash: [4, 4],
         })
       } else if (res.cpuRequest) {
         cpuAnnotations.push({
           value: parseCPUQuantity(res.cpuRequest),
           label: 'Request: ' + res.cpuRequest,
-          color: '#f59e0b',
+          color: 'config',
           dash: [4, 4],
         })
       }
@@ -189,35 +190,36 @@ function renderCharts() {
         cpuExtra.push({
           data: cpuLimits[cname],
           label: 'Limit',
-          color: '#f97316',
-          dash: [2, 2],
+          color: 'config',
+          dash: [1, 4],
         })
       } else if (res.cpuLimit) {
         cpuAnnotations.push({
           value: parseCPUQuantity(res.cpuLimit),
           label: 'Limit: ' + res.cpuLimit,
-          color: '#f97316',
-          dash: [2, 2],
+          color: 'config',
+          dash: [1, 4],
         })
       }
       if (recs.value?.automated && cpuRecSeries[cname]?.length) {
         cpuExtra.push({
           data: cpuRecSeries[cname],
           label: 'Recommendation',
-          color: '#ef4444',
+          color: 'rec',
           dash: [8, 4],
           stepped: false,
         })
       }
       createTimeSeriesChart('cpu-' + cname, metrics.value!.cpu[cname], {
         label: 'CPU Usage',
-        color: 'rgb(124, 58, 237)',
+        color: 'cpu',
         unit: 'cores',
         yFormat: (v) => v.toFixed(3),
         annotations: cpuAnnotations,
         extraSeries: cpuExtra,
         onZoomComplete: onChartZoom,
         stepMs,
+        window: chartWindow,
       })
     }
 
@@ -228,14 +230,14 @@ function renderCharts() {
         memExtra.push({
           data: memoryRequests[cname],
           label: 'Request',
-          color: '#f59e0b',
+          color: 'config',
           dash: [4, 4],
         })
       } else if (res.memoryRequest) {
         memAnnotations.push({
           value: parseMemoryQuantity(res.memoryRequest),
           label: 'Request: ' + res.memoryRequest,
-          color: '#f59e0b',
+          color: 'config',
           dash: [4, 4],
         })
       }
@@ -243,29 +245,29 @@ function renderCharts() {
         memExtra.push({
           data: memoryLimits[cname],
           label: 'Limit',
-          color: '#f97316',
-          dash: [2, 2],
+          color: 'config',
+          dash: [1, 4],
         })
       } else if (res.memoryLimit) {
         memAnnotations.push({
           value: parseMemoryQuantity(res.memoryLimit),
           label: 'Limit: ' + res.memoryLimit,
-          color: '#f97316',
-          dash: [2, 2],
+          color: 'config',
+          dash: [1, 4],
         })
       }
       if (recs.value?.automated && memRecSeries[cname]?.length) {
         memExtra.push({
           data: memRecSeries[cname],
           label: 'Recommendation',
-          color: '#ef4444',
+          color: 'rec',
           dash: [8, 4],
           stepped: false,
         })
       }
       createTimeSeriesChart('mem-' + cname, metrics.value!.memory[cname], {
         label: 'Memory Usage',
-        color: '#06b6d4',
+        color: 'mem',
         unit: 'MiB',
         transform: (v) => v / (1024 * 1024),
         yFormat: (v) => v.toFixed(0),
@@ -274,6 +276,7 @@ function renderCharts() {
         oomEvents: ooms[cname] || [],
         onZoomComplete: onChartZoom,
         stepMs,
+        window: chartWindow,
       })
     }
   })
@@ -311,23 +314,26 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
 
     <PageHeader :title="name">
       <template #title>
-        <span
-          class="kind-badge"
-          :class="'kind-' + kind"
-          style="font-size: 14px; margin-right: 4px"
-          >{{ kind }}</span
-        >
+        <span class="kind-badge" :class="'kind-' + kind">{{ kind }}</span>
         {{ name }}
       </template>
       <template #subtitle>
-        {{ namespace }} &mdash; {{ containers().length }} container(s) &mdash;
-        <template v-if="recs.automated">
-          <span class="badge badge-green">Automated</span>
-          <a href="#" @click.prevent="router.push(`/policies/${recs.policyName}`)">{{
-            recs.policyName
-          }}</a>
-        </template>
-        <span v-else class="badge badge-dim">Manual</span>
+        <span class="meta-chips">
+          <span class="meta-chip"><span class="meta-key">Namespace</span>{{ namespace }}</span>
+          <span class="meta-chip"
+            ><span class="meta-key">Containers</span>{{ containers().length }}</span
+          >
+          <template v-if="recs.automated">
+            <span class="badge badge-green">Automated</span>
+            <a
+              class="meta-chip"
+              href="#"
+              @click.prevent="router.push(`/policies/${recs.policyName}`)"
+              ><span class="meta-key">Policy</span>{{ recs.policyName }}</a
+            >
+          </template>
+          <span v-else class="badge badge-dim">Manual</span>
+        </span>
       </template>
       <template #meta>
         <RiskBadge v-if="snapshotRiskState()" :state="snapshotRiskState() as any" />

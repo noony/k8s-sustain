@@ -8,6 +8,7 @@ const props = defineProps<{
   unit: string
   height?: number
   yFormat?: (v: number) => string
+  window?: { fromTs: number; toTs: number }
 }>()
 
 const id = 'trend-' + Math.random().toString(36).slice(2)
@@ -33,6 +34,7 @@ function render() {
       // No shaded area under the baseline "Original request" series; the
       // overview trend compares lines, so a filled background just adds noise.
       fill: false,
+      window: props.window,
     })
   } catch {
     // jsdom lacks canvas getContext('2d'); swallow so component still mounts in tests
@@ -42,7 +44,7 @@ function render() {
 onMounted(render)
 onBeforeUnmount(() => destroyChart(id))
 watch(
-  () => props.series,
+  () => [props.series, props.window],
   () => {
     destroyChart(id)
     render()
