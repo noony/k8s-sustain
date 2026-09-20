@@ -60,7 +60,7 @@ func TestRecyclePods_ExposesPublicMethod(t *testing.T) {
 		}
 	}()
 
-	err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, nil)
+	_, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, nil)
 	if err == nil {
 		t.Error("expected error with nil client")
 	}
@@ -372,11 +372,51 @@ func TestRecyclePods_Eviction_HappyPath(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "stale" {
 		t.Errorf("expected only 'stale' evicted, got %v", evicted)
+	}
+}
+
+// The returned count drives the caller's ResourcesUpdated event: it must only
+// count pods actually resized or evicted, never pods already at target.
+func TestRecyclePods_ReturnsChangedCount(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		inPlace bool
+	}{
+		{"eviction", false},
+		{"inPlace", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+			fresh := runningPod("fresh", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")})
+
+			scheme := runtime.NewScheme()
+			_ = corev1.AddToScheme(scheme)
+			_ = policyv1.AddToScheme(scheme)
+
+			var evicted []string
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(stale, fresh).
+				WithInterceptorFuncs(evictionInterceptor(&evicted)).
+				Build()
+
+			p := New(c, tc.inPlace, testEvictionOpts()...)
+			sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+			recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+			changed, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs)
+			if err != nil {
+				t.Fatalf("RecyclePods: %v", err)
+			}
+			if changed != 1 {
+				t.Errorf("changed count = %d, want 1 (only the stale pod)", changed)
+			}
+		})
 	}
 }
 
@@ -414,7 +454,7 @@ func TestRecyclePods_SkipsTerminatingAndTerminal(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "pending" {
@@ -448,7 +488,7 @@ func TestEvictPod_PDBBlocked_ReturnsNil(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Errorf("expected nil on PDB block, got %v", err)
 	}
 }
@@ -477,7 +517,7 @@ func TestEvictPod_NotFound_ReturnsNil(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Errorf("expected nil on NotFound, got %v", err)
 	}
 }
@@ -514,7 +554,7 @@ func TestPatchPodInPlace_HappyPath(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if !resizeCalled {
@@ -588,7 +628,7 @@ func TestPatchPodInPlace_InfeasibleConditionFallsBackToEviction(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if resizeCalled {
@@ -637,7 +677,7 @@ func TestPatchPodInPlace_ErroredResizeFallsBackToEviction(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if resizeCalled {
@@ -686,7 +726,7 @@ func TestPatchPodInPlace_InfeasibleWithNewTargetRetriesResize(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if !resizeCalled {
@@ -735,7 +775,7 @@ func TestPatchPodInPlace_ResizeNotFoundSkips(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if !resizeCalled {
@@ -793,7 +833,7 @@ func TestPatchPodInPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if len(evicted) != 2 {
@@ -887,7 +927,7 @@ func TestPatchPodInPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
 		"sidecar": {CPURequest: qtyp("100m")},
 	}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("sidecar rejection should be best-effort, got: %v", err)
 	}
 	if !regularResizeOK {
@@ -942,7 +982,7 @@ func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if resizeCalled || evictionCalled {
@@ -986,7 +1026,7 @@ func TestPatchPodInPlace_DeferredWithNewTargetPatches(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if !resizeCalled {
@@ -1034,7 +1074,7 @@ func TestPatchPodInPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if resizeCalled || podPatchCalled || evictionCalled {
@@ -1079,7 +1119,7 @@ func TestPatchPodInPlace_PodGoneDuringResize_NoError(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("expected NotFound on a vanished pod to be a no-op, got: %v", err)
 	}
 	if evictionCalled {
@@ -1577,7 +1617,7 @@ func TestRecyclePods_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
 	// is already Ready at observation time. A regression would take
 	// readyTimeout * 3, which the deadline below catches early.
 	start := time.Now()
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
@@ -1675,7 +1715,7 @@ func TestRecyclePods_InPlaceInvalidFallback_WaitsForReplacement(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 
@@ -1726,7 +1766,7 @@ func TestRecyclePods_DefaultOrderIsAlphabetical(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	want := []string{"a", "b", "c"}
@@ -1776,7 +1816,7 @@ func TestRecyclePods_CrashLoopBackOffAbortsLoop(t *testing.T) {
 	// Expect a non-nil error (the abort) and exactly one eviction (the first
 	// pod) — the loop must NOT continue to evict pod "b" while a peer is
 	// crashlooping.
-	err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs)
+	_, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs)
 	if err == nil {
 		t.Fatal("expected error surfacing CrashLoopBackOff abort, got nil")
 	}
@@ -1817,7 +1857,7 @@ func TestRecyclePods_HPAScaleDownDoesNotStallEvictionLoop(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	// Both pods should be evicted in order — the wait between them must not
@@ -1859,7 +1899,7 @@ func TestRecyclePods_TimesOutWhenReplacementMissing(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs)
+	_, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs)
 	if err == nil {
 		t.Fatal("expected timeout error when replacement never appears, got nil")
 	}
@@ -1944,7 +1984,7 @@ func TestRecyclePods_Eviction_SkipsPodsNotOwnedByTarget(t *testing.T) {
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 	target := TargetWorkload{Kind: "Deployment", Name: "web", UID: "dep-uid"}
 
-	if err := p.RecyclePods(context.Background(), target, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), target, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	want := []string{"owned-1", "owned-2"}
@@ -2008,7 +2048,7 @@ func TestRecyclePods_InPlace_SkipsPodsNotOwnedByTarget(t *testing.T) {
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 	target := TargetWorkload{Kind: "StatefulSet", Name: "web", UID: "sts-uid"}
 
-	if err := p.RecyclePods(context.Background(), target, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), target, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if len(resized) != 1 || resized[0] != "web-0" {
@@ -2033,7 +2073,7 @@ func TestRecyclePods_SuppressesSmallDecrease(t *testing.T) {
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("995m")}}
 
 	var observed []string
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
 		WithTolerance(tol5),
 		WithSuppressionObserver(func(r string) { observed = append(observed, r) })); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
@@ -2060,7 +2100,7 @@ func TestRecyclePods_AppliesIncrease(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("1010m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
 		WithTolerance(tol5)); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
@@ -2190,7 +2230,7 @@ func TestRecyclePods_SafeToEvictFalseBlocksEviction(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "stale" {
@@ -2217,7 +2257,7 @@ func TestRecyclePods_SafeToEvictIgnoredWhenOptionSet(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
 		WithIgnoreSafeToEvictAnnotations(true)); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
@@ -2248,7 +2288,7 @@ func TestRecyclePods_SafeToEvictNonFalseValueDoesNotBlock(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if len(evicted) != 2 {
@@ -2279,7 +2319,7 @@ func TestPatchPodInPlace_InfeasibleFallbackHonorsSafeToEvict(t *testing.T) {
 	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
 		t.Fatalf("RecyclePods: %v", err)
 	}
 	if len(evicted) != 0 {

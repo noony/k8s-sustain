@@ -148,8 +148,9 @@ type TargetWorkload struct {
 }
 
 // RecyclePods drives pods matching the selector toward the recommended
-// resources, skipping pods not owned by the target workload.
-func (p *Patcher) RecyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation, opts ...RecycleOption) error {
+// resources, skipping pods not owned by the target workload. It returns the
+// number of pods resized in place or evicted.
+func (p *Patcher) RecyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation, opts ...RecycleOption) (int, error) {
 	return p.recyclePods(ctx, target, namespace, selector, recs, newRecycleOptions(opts))
 }
 
@@ -290,8 +291,9 @@ func (p *Patcher) resizePodInPlaceWith(ctx context.Context, pod *corev1.Pod, rec
 
 // recyclePods resizes or evicts stale pods one at a time, waiting for each
 // replacement and aborting on CrashLoopBackOff so a bad recommendation
-// cannot cascade through the workload.
-func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation, o recycleOptions) error {
+// cannot cascade through the workload. It returns the number of pods resized
+// or evicted.
+func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation, o recycleOptions) (int, error) {
 	logger := log.FromContext(ctx).WithValues("namespace", namespace, "selector", selector.String())
 
 	var podList corev1.PodList
@@ -299,7 +301,7 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 		client.InNamespace(namespace),
 		client.MatchingLabelsSelector{Selector: selector},
 	); err != nil {
-		return fmt.Errorf("listing pods: %w", err)
+		return 0, fmt.Errorf("listing pods: %w", err)
 	}
 	strategy := "eviction"
 	if p.inPlace {
@@ -316,7 +318,7 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 		if target.UID != "" {
 			owned, err := PodOwnedByWorkload(ctx, p.client, pod, target.UID, rsOwned)
 			if err != nil {
-				return fmt.Errorf("resolving owner of pod %s: %w", pod.Name, err)
+				return 0, fmt.Errorf("resolving owner of pod %s: %w", pod.Name, err)
 			}
 			if !owned {
 				logger.Info("skipping pod matching selector but not owned by target workload",
@@ -329,10 +331,10 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 	sortPodsForRecycle(pods)
 
 	var errs []error
-	processed, skipped := 0, 0
+	changed, processed, skipped := 0, 0, 0
 	for _, pod := range pods {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return changed, ctx.Err()
 		}
 		if pod.DeletionTimestamp != nil {
 			logger.V(1).Info("skipping terminating pod", "pod", pod.Name)
@@ -355,11 +357,11 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 		podRecs := ClampRecsToTolerance(podContainers(pod), recs, o.tol)
 		observeSuppressed(recs, podRecs, o.observe)
 		var (
-			evicted bool
-			err     error
+			applied, evicted bool
+			err              error
 		)
 		if p.inPlace {
-			evicted, err = p.patchPodInPlace(ctx, pod, podRecs, o.ignoreSafeToEvict)
+			applied, evicted, err = p.patchPodInPlace(ctx, pod, podRecs, o.ignoreSafeToEvict)
 		} else {
 			evicted, err = p.evictPod(ctx, pod, podRecs, o.ignoreSafeToEvict)
 		}
@@ -367,6 +369,9 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
 		}
 		processed++
+		if applied || evicted {
+			changed++
+		}
 		if !evicted {
 			continue
 		}
@@ -376,14 +381,15 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 			break
 		}
 	}
-	logger.Info("recycle pass complete", "processed", processed, "skipped", skipped, "errors", len(errs), "strategy", strategy)
-	return errors.Join(errs...)
+	logger.Info("recycle pass complete", "processed", processed, "skipped", skipped, "changed", changed, "errors", len(errs), "strategy", strategy)
+	return changed, errors.Join(errs...)
 }
 
 // patchPodInPlace resizes a pod in place, falling back to eviction when the
-// resize is Infeasible/Error or rejected as Invalid. Returns (evicted, err).
-func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, ignoreSafeToEvict bool) (bool, error) {
-	_, evicted, err := p.resizePodInPlaceWith(ctx, pod, recs, unapplyStrategy{
+// resize is Infeasible/Error or rejected as Invalid. Returns (applied,
+// evicted, err).
+func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, ignoreSafeToEvict bool) (bool, bool, error) {
+	return p.resizePodInPlaceWith(ctx, pod, recs, unapplyStrategy{
 		unsatisfiableLog: "staged in-place resize cannot complete, falling back to eviction",
 		unappliedLog:     "falling back to eviction",
 		// submitEviction, not evictPod: the spec already matches the
@@ -395,7 +401,6 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 			return p.evictPod(ctx, pod, recs, ignoreSafeToEvict)
 		},
 	})
-	return evicted, err
 }
 
 // submitInPlaceResize patches the /resize subresource with the diff from

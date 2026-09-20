@@ -62,6 +62,55 @@ func TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods(t *te
 	}
 }
 
+// The pod template is never patched, so it always differs from the
+// recommendation: the event must follow what happened to pods, or it fires on
+// every reconcile.
+func TestReconcileWorkload_ResourcesUpdatedEvent_OnlyWhenPodsChanged(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "web-pod",
+			Labels:    map[string]string{"app": "web"},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")},
+			},
+		}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	r := reconcilerWithProm(t, server, true, pod)
+	rec := r.recorder.(*events.FakeRecorder)
+
+	tgt := deploymentTarget("default", "web")
+	policy := policyForReconcileWorkload(t, "p")
+
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	select {
+	case e := <-rec.Events:
+		if !strings.Contains(e, "ResourcesUpdated") || !strings.Contains(e, "1 pod(s)") {
+			t.Fatalf("expected a ResourcesUpdated event naming the pod count, got %q", e)
+		}
+	default:
+		t.Fatal("expected a ResourcesUpdated event after the pod was resized")
+	}
+
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	select {
+	case e := <-rec.Events:
+		t.Fatalf("no pod changed on the second reconcile, got event %q", e)
+	default:
+	}
+}
+
 func TestReconcileWorkload_RecommendOnly_DoesNotRecyclePods(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
