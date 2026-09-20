@@ -159,29 +159,32 @@ func (r *PolicyReconciler) reconcileWorkload(
 		tw.UID = t.Object.GetUID()
 	}
 	logger.V(1).Info("recycling pods", "selector", sel.String())
-	if err := r.patcher.RecyclePods(ctx, tw, t.Namespace, sel, recs,
+	recycled, err := r.patcher.RecyclePods(ctx, tw, t.Namespace, sel, recs,
 		workload.WithTolerance(tol),
 		workload.WithSuppressionObserver(suppressionObserver),
 		workload.WithIgnoreSafeToEvictAnnotations(policy.Spec.RightSizing.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations),
-	); err != nil {
+	)
+	if err != nil {
 		return r.handleStepError(ctx, t, "patch", "Pod recycle failed", err)
 	}
 
 	r.recordStepSuccess(t)
 
-	// Only report containers whose resources changed vs. the pod-template spec,
-	// honouring the same downsize tolerance the patcher applies. This is a
-	// best-effort approximation for the event: the patcher decides per live pod
-	// (against each pod's actual resources), so in rollout edge cases the event
-	// list can differ slightly from what was recycled.
+	// The pod template is never patched, so it differs from the recommendation
+	// on every reconcile: only the patcher's count says whether anything
+	// happened. The container list stays a best-effort approximation — the
+	// patcher decides per live pod, the template is all we have here.
+	if recycled == 0 {
+		logger.V(1).Info("no pod resized or evicted, no event emitted")
+		return nil
+	}
 	changed := changedContainers(containers, recs, tol)
 	if len(changed) == 0 {
-		logger.V(1).Info("recommendations match current resources, no event emitted")
 		return nil
 	}
 	r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
-		"Updated resources for containers: %v", changed)
-	logger.Info("workload resources updated", "containers", changed)
+		"Updated resources on %d pod(s) for containers: %v", recycled, changed)
+	logger.Info("workload resources updated", "containers", changed, "pods", recycled)
 
 	return nil
 }
@@ -202,7 +205,7 @@ func (r *PolicyReconciler) resizeInPlaceTarget(ctx context.Context, t *workloadT
 	if resized > 0 {
 		if changed := changedContainers(containers, recs, tol); len(changed) > 0 {
 			r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
-				"in-place resized %s pods for containers: %v", strings.ToLower(t.Kind), changed)
+				"In-place resized %d %s pod(s) for containers: %v", resized, strings.ToLower(t.Kind), changed)
 		}
 	}
 	return nil
