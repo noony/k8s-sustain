@@ -187,7 +187,7 @@ jobs:
           args: "-no-fail -fmt sarif -out gosec.sarif ./..."
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         with:
           sarif_file: gosec.sarif
 
@@ -220,4 +220,4 @@ jobs:
         # rather than failing the job — deliberate, since its findings are
         # triaged there and a new heuristic should not block unrelated PRs.
         # Promote a finding to blocking with a code-scanning merge ruleset.
-        uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99 # v0.6.3
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
