@@ -1,0 +1,3020 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Kubernetes operator for workload right-sizing and sustainability">
+      
+      
+      
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/0.2.0/reference/helm-values/">
+      
+      
+        <link rel="prev" href="../cli/">
+      
+      
+        <link rel="next" href="../metrics/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Helm Values - k8s-sustain</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#helm-values-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="k8s-sustain" class="md-header__button md-logo" aria-label="k8s-sustain" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            k8s-sustain
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Helm Values
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/noony/k8s-sustain" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    noony/k8s-sustain
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/prerequisites/" class="md-tabs__link">
+          
+  
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../concepts/architecture/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guides/deployments/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../policy/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../security/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Security
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../development/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Development
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="k8s-sustain" class="md-nav__button md-logo" aria-label="k8s-sustain" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    k8s-sustain
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/noony/k8s-sustain" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    noony/k8s-sustain
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/prerequisites/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prerequisites
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/recommendation-pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recommendation Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/update-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Update Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/in-place-updates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    In-Place Updates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/autoscaler-coordination/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Autoscaler Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/node-optimization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node Optimization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/workload-recommendations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workload Recommendations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Workloads
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/deployments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployments & StatefulSets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/daemonsets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DaemonSets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/jobs-and-cronjobs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Jobs & CronJobs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/argo-rollouts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Argo Rollouts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/standalone-pods-and-grouping/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standalone Pods & Grouping
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/argocd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Argo CD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/keda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    KEDA
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/cert-manager/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    cert-manager (TLS)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/dashboard/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Dashboard
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/authenticated-prometheus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authenticated Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/local-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/managing-policies-with-helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Managing policies with Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy CRD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../annotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Annotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm Values
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm Values
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#global" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Global
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prometheus-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prometheus authentication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prometheus authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-the-values-are-rendered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the values are rendered
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#controller" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Controller
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#webhook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#serviceaccount" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ServiceAccount
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#servicemonitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ServiceMonitor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#crds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CRDs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extra-manifests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Extra manifests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prometheus-subchart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prometheus subchart
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../recording-rules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recording Rules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#global" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Global
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prometheus-authentication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prometheus authentication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prometheus authentication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-the-values-are-rendered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the values are rendered
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#controller" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Controller
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#webhook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#serviceaccount" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ServiceAccount
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#servicemonitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ServiceMonitor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#crds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CRDs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extra-manifests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Extra manifests
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prometheus-subchart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prometheus subchart
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../policy/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Reference
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<!-- Source of truth: charts/k8s-sustain/values.yaml -->
+
+<h1 id="helm-values-reference">Helm Values Reference<a class="headerlink" href="#helm-values-reference" title="Permanent link">&para;</a></h1>
+<h2 id="global">Global<a class="headerlink" href="#global" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>image.repository</code></td>
+<td><code>ghcr.io/noony/k8s-sustain</code></td>
+<td>Container image repository</td>
+</tr>
+<tr>
+<td><code>image.tag</code></td>
+<td><code>""</code></td>
+<td>Image tag; defaults to <code>Chart.appVersion</code></td>
+</tr>
+<tr>
+<td><code>image.pullPolicy</code></td>
+<td><code>IfNotPresent</code></td>
+<td>Image pull policy</td>
+</tr>
+<tr>
+<td><code>imagePullSecrets</code></td>
+<td><code>[]</code></td>
+<td>Image pull secrets</td>
+</tr>
+<tr>
+<td><code>nameOverride</code></td>
+<td><code>""</code></td>
+<td>Override the chart name</td>
+</tr>
+<tr>
+<td><code>fullnameOverride</code></td>
+<td><code>""</code></td>
+<td>Override the full release name</td>
+</tr>
+<tr>
+<td><code>recommendOnly</code></td>
+<td><code>false</code></td>
+<td>Compute recommendations without recycling or mutating pods (dry-run mode)</td>
+</tr>
+<tr>
+<td><code>prometheusAddress</code></td>
+<td><code>""</code></td>
+<td>Prometheus server URL, shared by all components. Leave empty to auto-detect the bundled subchart service.</td>
+</tr>
+<tr>
+<td><code>excludedNamespaces</code></td>
+<td><code>[]</code></td>
+<td>Extra namespaces to exclude from k8s-sustain entirely — the controller never recycles pods there and the webhook never mutates them (the release namespace, <code>kube-system</code>, and <code>kube-public</code> are always excluded)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="prometheus-authentication">Prometheus authentication<a class="headerlink" href="#prometheus-authentication" title="Permanent link">&para;</a></h2>
+<p>Authentication and TLS for the Prometheus connection. One top-level block wires
+the <strong>controller</strong> and the <strong>dashboard</strong> identically, so the two can never
+disagree about which Prometheus — or which tenant — a recommendation came from.
+The webhook is deliberately not wired: it never queries Prometheus, it only
+reads cached <code>WorkloadRecommendation</code> objects.</p>
+<p>See the <a href="../../guides/authenticated-prometheus/">Authenticated Prometheus guide</a>
+for worked examples (Thanos/Mimir tenant gateway, service-account token behind
+an auth proxy, basic auth with a private CA).</p>
+<div class="admonition note">
+<p class="admonition-title"><code>prometheusAuth</code> is not <code>prometheus</code></p>
+<p>This block configures k8s-sustain's <em>client</em>. The separate top-level
+<code>prometheus:</code> key configures the <a href="#prometheus-subchart">bundled Prometheus subchart</a>.</p>
+</div>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>prometheusAuth.existingSecret</code></td>
+<td><code>""</code></td>
+<td>Name of an existing Secret in the release namespace holding the bearer token and/or basic-auth credentials. Required for any of the <code>*Key</code> values below to take effect.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.bearerTokenKey</code></td>
+<td><code>""</code></td>
+<td>Key in <code>existingSecret</code> holding the bearer token. Mounted at <code>/etc/k8s-sustain/prometheus-auth/&lt;key&gt;</code> and passed as <code>--prometheus-bearer-token-file</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.bearerTokenFile</code></td>
+<td><code>""</code></td>
+<td>Absolute path to a bearer token file that <strong>already exists in the pod</strong>, passed verbatim as <code>--prometheus-bearer-token-file</code>. No volume or mount is rendered. Canonical value: <code>/var/run/secrets/kubernetes.io/serviceaccount/token</code>, the kubelet's rotating projected token. Mutually exclusive with <code>bearerTokenKey</code> and <code>bearerToken</code> — setting either alongside it fails the template.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.bearerToken</code></td>
+<td><code>""</code></td>
+<td>Inline bearer token. <strong>Discouraged</strong> — rendered verbatim into the pod spec. Ignored when <code>existingSecret</code> + <code>bearerTokenKey</code> are set.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.basicAuth.username</code></td>
+<td><code>""</code></td>
+<td>Basic-auth username, passed as <code>--prometheus-basic-auth-username</code>. Not secret material, so a plain value is fine.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.basicAuth.usernameKey</code></td>
+<td><code>""</code></td>
+<td>Key in <code>existingSecret</code> holding the username, injected with <code>valueFrom.secretKeyRef</code> (there is no <code>--prometheus-basic-auth-username-file</code> flag). Wins over <code>username</code> when both are set.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.basicAuth.passwordKey</code></td>
+<td><code>""</code></td>
+<td>Key in <code>existingSecret</code> holding the password. Mounted at <code>/etc/k8s-sustain/prometheus-auth/&lt;key&gt;</code> and passed as <code>--prometheus-basic-auth-password-file</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.basicAuth.passwordFile</code></td>
+<td><code>""</code></td>
+<td>Absolute path to a password file that <strong>already exists in the pod</strong> (a secret-store CSI mount, say), passed verbatim as <code>--prometheus-basic-auth-password-file</code>. No volume is rendered. Mutually exclusive with <code>passwordKey</code> and <code>password</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.basicAuth.password</code></td>
+<td><code>""</code></td>
+<td>Inline password. <strong>Discouraged</strong> — rendered verbatim into the pod spec. Ignored when <code>existingSecret</code> + <code>passwordKey</code> are set.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.headers</code></td>
+<td><code>{}</code></td>
+<td>Extra HTTP headers sent with every query, rendered as one <code>--prometheus-headers=Key=Value</code> flag per entry, so a value may contain commas or quotes. Header <strong>values land in the pod spec</strong> — use for tenant ids, not credentials. Values <strong>must be strings</strong>: an unquoted number such as <code>1234567</code> is parsed as a float and rejected by the values schema (write <code>"1234567"</code>). Example: <code>{X-Scope-OrgID: tenant-a}</code>. Keys are sorted so the rendered flags and the pod-template hash stay stable.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.existingSecret</code></td>
+<td><code>""</code></td>
+<td>Secret holding the CA bundle and/or client key pair. May be the same Secret as <code>prometheusAuth.existingSecret</code>; it is mounted separately, at <code>/etc/k8s-sustain/prometheus-tls</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.caKey</code></td>
+<td><code>""</code></td>
+<td>Key holding the CA bundle that signs the Prometheus server certificate (<code>--prometheus-tls-ca-file</code>). Appended to the system trust store, never substituted for it.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.caFile</code></td>
+<td><code>""</code></td>
+<td>Absolute path to a CA bundle that <strong>already exists in the pod</strong>, passed verbatim as <code>--prometheus-tls-ca-file</code>. No volume is rendered. On OpenShift, <code>/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt</code> is the service CA that signs the in-cluster monitoring endpoint. Mutually exclusive with <code>caKey</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.certKey</code></td>
+<td><code>""</code></td>
+<td>Key holding the client certificate for mTLS (<code>--prometheus-tls-cert-file</code>). Must be set with <code>keyKey</code>. The pair is re-read on every TLS handshake, so a renewed certificate in the Secret is used without a restart.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.certFile</code></td>
+<td><code>""</code></td>
+<td>Absolute path to a client certificate that <strong>already exists in the pod</strong> (a service-mesh sidecar's key pair, say), passed verbatim as <code>--prometheus-tls-cert-file</code>. No volume is rendered. Mutually exclusive with <code>certKey</code>; still needs a key half (<code>keyFile</code> or <code>keyKey</code>).</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.keyKey</code></td>
+<td><code>""</code></td>
+<td>Key holding the client private key for mTLS (<code>--prometheus-tls-key-file</code>). Must be set with <code>certKey</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.keyFile</code></td>
+<td><code>""</code></td>
+<td>Absolute path to a client private key that <strong>already exists in the pod</strong>, passed verbatim as <code>--prometheus-tls-key-file</code>. No volume is rendered. Mutually exclusive with <code>keyKey</code>.</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.serverName</code></td>
+<td><code>""</code></td>
+<td>Overrides the SNI / certificate name verified against the server certificate (<code>--prometheus-tls-server-name</code>).</td>
+</tr>
+<tr>
+<td><code>prometheusAuth.tls.insecureSkipVerify</code></td>
+<td><code>false</code></td>
+<td>Disable server-certificate verification (<code>--prometheus-tls-insecure-skip-verify</code>). Debug only — it makes every credential above interceptable. Logs a loud warning at startup.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="how-the-values-are-rendered">How the values are rendered<a class="headerlink" href="#how-the-values-are-rendered" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Secret-backed keys become read-only file mounts</strong>, projected with
+  <code>defaultMode: 288</code> (<code>0440</code>) and with an explicit <code>items:</code> list, so only the
+  keys you name are exposed — an unrelated key in the same Secret never reaches
+  the container. Credentials at <code>/etc/k8s-sustain/prometheus-auth/&lt;key&gt;</code>, TLS
+  material at <code>/etc/k8s-sustain/prometheus-tls/&lt;key&gt;</code>.</li>
+<li><strong>A secret-backed file always wins</strong> over its inline counterpart. Setting
+  both is not an error; the inline value simply is not rendered.</li>
+<li><strong>Inline values become environment variables</strong>, not arguments — so they stay
+  out of the container's <code>argv</code> — with the per-component prefix the binary
+  expects: <code>K8SSUSTAIN_PROMETHEUS_*</code> on the controller,
+  <code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code> on the dashboard.</li>
+<li>Naming a <code>*Key</code> without the matching <code>existingSecret</code> renders <strong>nothing</strong> —
+  no flag, no volume, no mount.</li>
+<li><strong>A <code>*File</code> value is a raw path, not a source the chart creates.</strong> It renders
+  the flag verbatim and adds <strong>no volume and no volumeMount</strong> — use it for a
+  file the pod already carries (the kubelet's projected service-account token,
+  a secret-store CSI mount, a mesh sidecar's key pair). The path must be
+  absolute, or the template fails.</li>
+<li><strong>A <code>*File</code> and its <code>*Key</code> are mutually exclusive and fail the template</strong>
+  when both are set, rather than being ranked by precedence: both drive the
+  <em>same</em> flag with different values, so the rendered Deployment would not show
+  which source was meant. <code>bearerTokenFile</code> / <code>basicAuth.passwordFile</code> conflict
+  with their inline counterparts too — the binary rejects an inline credential
+  together with its file at construction, so rendering both would only defer
+  the crash to startup. The error names both values.</li>
+<li><strong>The binary's own cross-credential rules are checked at template time too</strong>,
+  on the <em>effective</em> sources (a <code>*Key</code> only counts when its Secret is named):
+  a bearer token together with basic auth, a password without a username, and
+  a client certificate without its key (or vice versa) all fail the template
+  instead of surfacing as a <code>CrashLoopBackOff</code> after a green <code>helm upgrade</code>.</li>
+<li><strong>Every arg carrying a user value is quoted</strong>, so a header value or username
+  containing a colon followed by a space, a space followed by <code>#</code>, or a <code>"</code>
+  renders as the exact string, instead of turning the args entry into a YAML
+  mapping or being truncated at a comment marker.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Prefer <code>existingSecret</code> over inline values</p>
+<p>An inline <code>bearerToken</code> or <code>basicAuth.password</code> is readable through
+<code>kubectl get deploy -o yaml</code>, <code>helm get values</code>, and whatever git
+repository holds the values file. The file form additionally re-reads the
+credential on <strong>every request</strong>, so a rotated Secret — or a kubelet-rotated
+service-account token — is picked up with no pod restart. Create the Secret
+with external-secrets, sealed-secrets, a secret-store CSI driver, or this
+chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
+</div>
+<hr />
+<h2 id="controller">Controller<a class="headerlink" href="#controller" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>controller.replicaCount</code></td>
+<td><code>1</code></td>
+<td>Controller replicas</td>
+</tr>
+<tr>
+<td><code>controller.metricsBindAddress</code></td>
+<td><code>:8080</code></td>
+<td>Metrics endpoint address (<code>:port</code> or <code>host:port</code>); the metrics container port derives from its port part</td>
+</tr>
+<tr>
+<td><code>controller.healthProbeBindAddress</code></td>
+<td><code>:8081</code></td>
+<td>Health probe address (<code>:port</code> or <code>host:port</code>); the health container port derives from its port part</td>
+</tr>
+<tr>
+<td><code>controller.leaderElect</code></td>
+<td><code>true</code></td>
+<td>Enable leader election</td>
+</tr>
+<tr>
+<td><code>controller.reconcileInterval</code></td>
+<td><code>5m</code></td>
+<td>How often each matched Policy is re-evaluated (Prometheus re-queried, recommendations refreshed, stale pods recycled)</td>
+</tr>
+<tr>
+<td><code>controller.workloadConcurrencyLimit</code></td>
+<td><code>5</code></td>
+<td>Maximum number of workloads processed in parallel per reconcile cycle</td>
+</tr>
+<tr>
+<td><code>controller.policyConcurrencyLimit</code></td>
+<td><code>10</code></td>
+<td>Maximum number of Policy objects reconciled in parallel</td>
+</tr>
+<tr>
+<td><code>controller.recycleReplacementTimeout</code></td>
+<td><code>5m</code></td>
+<td>In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where Karpenter / cluster-autoscaler node provisioning regularly takes longer.</td>
+</tr>
+<tr>
+<td><code>controller.recommendationRetention</code></td>
+<td><code>168h</code></td>
+<td>How long a WorkloadRecommendation outlives a workload whose object has disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs). Not just a dashboard setting: it also decides whether a <em>recurring</em> ephemeral identity is rightsized at admission on its next run, so set it above the longest expected gap between runs (<code>168h</code> covers weekly batch). See <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>. The dashboard keeps showing retained entries as "inactive" rows until the window lapses. Set to <code>0s</code> to sweep them on the next reconcile instead.</td>
+</tr>
+<tr>
+<td><code>controller.prometheusMaxInflight</code></td>
+<td><code>8</code></td>
+<td>Maximum concurrent Prometheus queries across the whole controller. Kept below Prometheus's own <code>--query.max-concurrency</code> (default 20) so k8s-sustain cannot starve the dashboards and alerting sharing that server. Lower this first if the controller is the reason your Prometheus is struggling.</td>
+</tr>
+<tr>
+<td><code>controller.queryShardMaxSamples</code></td>
+<td><code>10000000</code></td>
+<td>Projected sample budget (containers × window-minutes, summed across a shard's workloads) one batched CPU/memory/OOM query may reach before a new shard is started. Must stay under Prometheus's <code>--query.max-samples</code> (default <code>50000000</code>): that limit <em>rejects</em> an over-budget query outright, failing every workload in the shard rather than just the excess. The default leaves a 5x margin.</td>
+</tr>
+<tr>
+<td><code>controller.logLevel</code></td>
+<td><code>error</code></td>
+<td>Log level</td>
+</tr>
+<tr>
+<td><code>controller.service.type</code></td>
+<td><code>ClusterIP</code></td>
+<td>Service type for the metrics endpoint</td>
+</tr>
+<tr>
+<td><code>controller.service.port</code></td>
+<td><code>8080</code></td>
+<td>Service port</td>
+</tr>
+<tr>
+<td><code>controller.service.annotations</code></td>
+<td><code>{}</code></td>
+<td>Extra annotations for the metrics Service (the chart already adds <code>prometheus.io/scrape</code>, <code>prometheus.io/port</code>, and <code>prometheus.io/path</code>)</td>
+</tr>
+<tr>
+<td><code>controller.resources</code></td>
+<td>see below</td>
+<td>Controller container resources</td>
+</tr>
+<tr>
+<td><code>controller.livenessProbe</code></td>
+<td>see below</td>
+<td>Liveness probe timings (<code>initialDelaySeconds</code>, <code>periodSeconds</code>, <code>timeoutSeconds</code>, <code>successThreshold</code>, <code>failureThreshold</code>). The probe endpoint (<code>/healthz</code> on the health port) is fixed by the chart.</td>
+</tr>
+<tr>
+<td><code>controller.readinessProbe</code></td>
+<td>see below</td>
+<td>Readiness probe timings, same fields. The probe endpoint (<code>/readyz</code> on the health port) is fixed by the chart.</td>
+</tr>
+<tr>
+<td><code>controller.nodeSelector</code></td>
+<td><code>{}</code></td>
+<td>Node selector</td>
+</tr>
+<tr>
+<td><code>controller.tolerations</code></td>
+<td><code>[]</code></td>
+<td>Tolerations</td>
+</tr>
+<tr>
+<td><code>controller.affinity</code></td>
+<td><code>{}</code></td>
+<td>Affinity rules</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Default resources:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">controller</span><span class="p">:</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
+</code></pre></div>
+<p><strong>Default probe timings</strong> (same for <code>livenessProbe</code> and <code>readinessProbe</code>, and for all components):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">controller</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">livenessProbe</span><span class="p">:</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">    </span><span class="nt">timeoutSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="nt">successThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">failureThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="nt">readinessProbe</span><span class="p">:</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">    </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nt">timeoutSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="nt">successThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="nt">failureThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+</code></pre></div>
+<hr />
+<h2 id="webhook">Webhook<a class="headerlink" href="#webhook" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>webhook.enabled</code></td>
+<td><code>true</code></td>
+<td>Deploy the admission webhook</td>
+</tr>
+<tr>
+<td><code>webhook.replicaCount</code></td>
+<td><code>1</code></td>
+<td>Webhook replicas (≥2 recommended for production)</td>
+</tr>
+<tr>
+<td><code>webhook.port</code></td>
+<td><code>9443</code></td>
+<td>HTTPS server port</td>
+</tr>
+<tr>
+<td><code>webhook.logLevel</code></td>
+<td><code>error</code></td>
+<td>Log level</td>
+</tr>
+<tr>
+<td><code>webhook.failurePolicy</code></td>
+<td><code>Ignore</code></td>
+<td><code>Ignore</code> or <code>Fail</code></td>
+</tr>
+<tr>
+<td><code>webhook.tlsSecretName</code></td>
+<td><code>k8s-sustain-webhook-tls</code></td>
+<td>TLS secret name</td>
+</tr>
+<tr>
+<td><code>webhook.caBundle</code></td>
+<td><code>""</code></td>
+<td>Base64-encoded CA cert (required when <code>certManager.enabled=false</code>)</td>
+</tr>
+<tr>
+<td><code>webhook.certManager.enabled</code></td>
+<td><code>false</code></td>
+<td>Create a cert-manager <code>Certificate</code> resource</td>
+</tr>
+<tr>
+<td><code>webhook.certManager.createIssuer</code></td>
+<td><code>true</code></td>
+<td>Create a self-signed <code>Issuer</code> in the release namespace. Set to <code>false</code> to use your own.</td>
+</tr>
+<tr>
+<td><code>webhook.certManager.issuerRef.name</code></td>
+<td><code>""</code></td>
+<td>Issuer name (only used when <code>createIssuer=false</code>)</td>
+</tr>
+<tr>
+<td><code>webhook.certManager.issuerRef.kind</code></td>
+<td><code>Issuer</code></td>
+<td>Issuer kind (only used when <code>createIssuer=false</code>)</td>
+</tr>
+<tr>
+<td><code>webhook.resources</code></td>
+<td>see below</td>
+<td>Webhook container resources</td>
+</tr>
+<tr>
+<td><code>webhook.startupProbe</code></td>
+<td>see below</td>
+<td>Startup probe timings. Suspends liveness and readiness until the webhook is actually listening. Same fixed endpoint.</td>
+</tr>
+<tr>
+<td><code>webhook.livenessProbe</code></td>
+<td>same as controller</td>
+<td>Liveness probe timings. The probe endpoint (HTTPS <code>/healthz</code> on the webhook port) is fixed by the chart.</td>
+</tr>
+<tr>
+<td><code>webhook.readinessProbe</code></td>
+<td>same as controller</td>
+<td>Readiness probe timings. Same fixed endpoint as the liveness probe.</td>
+</tr>
+<tr>
+<td><code>webhook.nodeSelector</code></td>
+<td><code>{}</code></td>
+<td>Node selector</td>
+</tr>
+<tr>
+<td><code>webhook.tolerations</code></td>
+<td><code>[]</code></td>
+<td>Tolerations</td>
+</tr>
+<tr>
+<td><code>webhook.affinity</code></td>
+<td><code>{}</code></td>
+<td>Affinity rules</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The webhook's startup probe is not optional.</strong> The webhook builds an informer
+cache before its HTTPS listener starts, and that build waits up to two minutes
+for the <code>Policy</code> and <code>WorkloadRecommendation</code> CRDs to become servable — the
+fresh-install race where Helm has created the CRDs but the API server is not
+serving them yet. Nothing answers <code>/healthz</code> for that whole period, so the
+liveness probe alone would kill the container after
+<code>initialDelaySeconds + periodSeconds × failureThreshold</code> = 40s and the pod would
+end in <code>CrashLoopBackOff</code> on exactly the install the wait exists to survive.</p>
+<p>The startup probe's budget must therefore stay <strong>larger than that two-minute
+wait</strong> (<code>crdWaitTimeout</code> in <code>internal/k8s/client.go</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">webhook</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">startupProbe</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">      </span><span class="c1"># 5 + 5 × 36 = 185s &gt; 120s</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">timeoutSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">successThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">failureThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">36</span>
+</code></pre></div>
+<p>If you shorten it, shorten it to something still comfortably above two minutes.
+A Go unit test reads this value out of <code>values.yaml</code> and fails if the two sides
+drift apart.</p>
+<p>The template carries the same numbers as its own defaults, so the probe is
+rendered even when the release's values do not contain <code>webhook.startupProbe</code>
+at all — which is what a <code>helm upgrade --reuse-values</code> from a release predating
+this key produces, since <code>--reuse-values</code> never picks up defaults newly added
+to <code>values.yaml</code>. Overriding one field keeps the template defaults for the
+others. A second Go unit test reads that template copy and checks it against
+<code>crdWaitTimeout</code> in its own right, and fails if the two copies disagree — so
+raising the wait cannot leave the <code>--reuse-values</code> path silently under budget
+while the <code>values.yaml</code> side still passes.</p>
+<p><strong>Default webhook resources:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">webhook</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512Mi</span>
+</code></pre></div>
+<p>The webhook's memory defaults are higher than the controller's on purpose. It serves admission reads from a <code>WorkloadRecommendation</code> informer cache rather than a per-pod apiserver <code>Get</code> — with Prometheus gone from the admission path, the apiserver is the only remaining source of latency there, and an uncached read per admission is a round trip a large cluster does not need. That cache is resident memory: budget roughly 20–50 MB at 10k workloads on top of the base footprint. Raise these if you run substantially more.</p>
+<hr />
+<h2 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dashboard.enabled</code></td>
+<td><code>true</code></td>
+<td>Deploy the dashboard</td>
+</tr>
+<tr>
+<td><code>dashboard.replicaCount</code></td>
+<td><code>1</code></td>
+<td>Dashboard replicas</td>
+</tr>
+<tr>
+<td><code>dashboard.bindAddress</code></td>
+<td><code>:8090</code></td>
+<td>Server bind address (<code>:port</code> or <code>host:port</code>); the container port derives from its port part</td>
+</tr>
+<tr>
+<td><code>dashboard.logLevel</code></td>
+<td><code>error</code></td>
+<td>Log level</td>
+</tr>
+<tr>
+<td><code>dashboard.corsAllowedOrigins</code></td>
+<td><code>[]</code></td>
+<td>Allowed CORS origins. Empty = same-origin only (the safe default). Set to <code>["https://your-grafana"]</code> to embed the dashboard cross-origin, or <code>["*"]</code> to allow all (not recommended).</td>
+</tr>
+<tr>
+<td><code>dashboard.service.type</code></td>
+<td><code>ClusterIP</code></td>
+<td>Service type</td>
+</tr>
+<tr>
+<td><code>dashboard.service.port</code></td>
+<td><code>8090</code></td>
+<td>Service port</td>
+</tr>
+<tr>
+<td><code>dashboard.resources</code></td>
+<td>see below</td>
+<td>Dashboard container resources</td>
+</tr>
+<tr>
+<td><code>dashboard.livenessProbe</code></td>
+<td>same as controller</td>
+<td>Liveness probe timings. The probe endpoint (<code>/healthz</code> on the http port) is fixed by the chart.</td>
+</tr>
+<tr>
+<td><code>dashboard.readinessProbe</code></td>
+<td>same as controller</td>
+<td>Readiness probe timings. The probe endpoint (<code>/readyz</code> on the http port) is fixed by the chart.</td>
+</tr>
+<tr>
+<td><code>dashboard.nodeSelector</code></td>
+<td><code>{}</code></td>
+<td>Node selector</td>
+</tr>
+<tr>
+<td><code>dashboard.tolerations</code></td>
+<td><code>[]</code></td>
+<td>Tolerations</td>
+</tr>
+<tr>
+<td><code>dashboard.affinity</code></td>
+<td><code>{}</code></td>
+<td>Affinity rules</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Default dashboard resources:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">dashboard</span><span class="p">:</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
+</code></pre></div>
+<hr />
+<h2 id="serviceaccount">ServiceAccount<a class="headerlink" href="#serviceaccount" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>serviceAccount.create</code></td>
+<td><code>true</code></td>
+<td>Create the controller/webhook ServiceAccount. The dashboard's dedicated ServiceAccount is always created alongside the dashboard (<code>dashboard.enabled</code>)</td>
+</tr>
+<tr>
+<td><code>serviceAccount.name</code></td>
+<td><code>""</code></td>
+<td>Override the ServiceAccount name</td>
+</tr>
+<tr>
+<td><code>serviceAccount.annotations</code></td>
+<td><code>{}</code></td>
+<td>Annotations on the ServiceAccount (e.g. for IRSA or Workload Identity)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="servicemonitor">ServiceMonitor<a class="headerlink" href="#servicemonitor" title="Permanent link">&para;</a></h2>
+<p>Only needed when running the Prometheus Operator externally (not the bundled subchart).</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>controller.serviceMonitor.enabled</code></td>
+<td><code>false</code></td>
+<td>Create a Prometheus Operator <code>ServiceMonitor</code> for the controller metrics endpoint</td>
+</tr>
+<tr>
+<td><code>controller.serviceMonitor.interval</code></td>
+<td><code>30s</code></td>
+<td>Scrape interval (controller)</td>
+</tr>
+<tr>
+<td><code>controller.serviceMonitor.scrapeTimeout</code></td>
+<td><code>10s</code></td>
+<td>Scrape timeout (controller)</td>
+</tr>
+<tr>
+<td><code>controller.serviceMonitor.additionalLabels</code></td>
+<td><code>{}</code></td>
+<td>Extra labels added to the controller <code>ServiceMonitor</code>. Use to match a specific Prometheus operator's <code>serviceMonitorSelector</code> (e.g. <code>{release: kube-prometheus-stack}</code>).</td>
+</tr>
+<tr>
+<td><code>webhook.serviceMonitor.enabled</code></td>
+<td><code>false</code></td>
+<td>Create a Prometheus Operator <code>ServiceMonitor</code> for the webhook (cert-expiry gauge etc.)</td>
+</tr>
+<tr>
+<td><code>webhook.serviceMonitor.interval</code></td>
+<td><code>30s</code></td>
+<td>Scrape interval (webhook)</td>
+</tr>
+<tr>
+<td><code>webhook.serviceMonitor.scrapeTimeout</code></td>
+<td><code>10s</code></td>
+<td>Scrape timeout (webhook)</td>
+</tr>
+<tr>
+<td><code>webhook.serviceMonitor.additionalLabels</code></td>
+<td><code>{}</code></td>
+<td>Extra labels added to the webhook <code>ServiceMonitor</code>. Same purpose as the controller variant.</td>
+</tr>
+<tr>
+<td><code>prometheusRule.enabled</code></td>
+<td><code>false</code></td>
+<td>Create a Prometheus Operator <code>PrometheusRule</code> holding the k8s-sustain recording rules. Leave disabled when using the bundled <code>prometheus</code> subchart — the same rules are already embedded in <code>prometheus.server.serverFiles</code>, and enabling both would duplicate the series.</td>
+</tr>
+<tr>
+<td><code>prometheusRule.additionalLabels</code></td>
+<td><code>{}</code></td>
+<td>Extra labels added to the <code>PrometheusRule</code>. Use to match a specific Prometheus operator's <code>ruleSelector</code> in clusters with multiple Prometheus instances.</td>
+</tr>
+<tr>
+<td><code>prometheusRule.groups</code></td>
+<td><em>(see values.yaml)</em></td>
+<td>The recording-rule groups themselves. Anchored as <code>&amp;recordingRulesGroups</code> so the bundled <code>prometheus</code> subchart's <code>serverFiles."recording_rules.yml".groups</code> aliases this exact list — edits flow to both consumers. The list is consumed regardless of <code>prometheusRule.enabled</code>; the toggle only gates the standalone <code>PrometheusRule</code> resource.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="crds">CRDs<a class="headerlink" href="#crds" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>installCRDs</code></td>
+<td><code>true</code></td>
+<td>Install the <code>Policy</code> CRD as part of the chart</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="extra-manifests">Extra manifests<a class="headerlink" href="#extra-manifests" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>extraManifests</code></td>
+<td><code>[]</code></td>
+<td>Arbitrary extra objects rendered with the release, for anything the chart does not template itself</td>
+</tr>
+</tbody>
+</table>
+<p>Use it for objects that belong to the release but have no dedicated chart value — a
+<code>Secret</code> holding Prometheus credentials, a <code>NetworkPolicy</code>, a Grafana dashboard
+<code>ConfigMap</code>, an <code>ExternalSecret</code>, an extra <code>RoleBinding</code>.</p>
+<p>Each entry is either a YAML map or a multi-line string, and both are passed through
+<code>tpl</code>, so entries may use template expressions (<code>.Release.Namespace</code>, <code>.Values.*</code>, the
+chart's <code>k8s-sustain.fullname</code> helper, ...):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">extraManifests</span><span class="p">:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="c1"># Map form — rendered verbatim; quote any value containing a template expression.</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ConfigMap</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">include</span><span class="nv"> </span><span class="s">"k8s-sustain.fullname"</span><span class="nv"> </span><span class="s">.</span><span class="nv"> </span><span class="s">}}-grafana-dashboard'</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">      </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">.Release.Namespace</span><span class="nv"> </span><span class="s">}}'</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">      </span><span class="nt">labels</span><span class="p">:</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">        </span><span class="nt">grafana_dashboard</span><span class="p">:</span><span class="w"> </span><span class="s">"1"</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span><span class="nt">data</span><span class="p">:</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">      </span><span class="nt">k8s-sustain.json</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">        </span><span class="no">{"title": "k8s-sustain"}</span>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">  </span><span class="c1"># String form — handy for manifests you paste in as-is.</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">    </span><span class="no">apiVersion: networking.k8s.io/v1</span>
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="w">    </span><span class="no">kind: NetworkPolicy</span>
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="w">    </span><span class="no">metadata:</span>
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="w">      </span><span class="no">name: {{ include "k8s-sustain.fullname" . }}-allow-webhook</span>
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="w">      </span><span class="no">namespace: {{ .Release.Namespace }}</span>
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="w">    </span><span class="no">spec:</span>
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="w">      </span><span class="no">podSelector:</span>
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="w">        </span><span class="no">matchLabels:</span>
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="w">          </span><span class="no">app.kubernetes.io/name: {{ include "k8s-sustain.name" . }}</span>
+<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="w">      </span><span class="no">ingress:</span>
+<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="w">        </span><span class="no">- {}</span>
+</code></pre></div>
+<hr />
+<h2 id="prometheus-subchart">Prometheus subchart<a class="headerlink" href="#prometheus-subchart" title="Permanent link">&para;</a></h2>
+<p>Pass any value supported by the <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">prometheus chart</a> under the <code>prometheus:</code> key. Recording rules for k8s-sustain are embedded in <code>prometheus.server.serverFiles</code> by default.</p>
+<p>Common overrides:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">prometheus</span><span class="p">:</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">server</span><span class="p">:</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nt">retention</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15d</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nt">persistentVolume</span><span class="p">:</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">      </span><span class="nt">size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20Gi</span>
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../cli/" class="md-footer__link md-footer__link--prev" aria-label="Previous: CLI">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                CLI
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../metrics/" class="md-footer__link md-footer__link--next" aria-label="Next: Metrics">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Metrics
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; k8s-sustain contributors &mdash; ISC License
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/noony/k8s-sustain" target="_blank" rel="noopener" title="k8s-sustain on GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+    <a href="https://github.com/noony/k8s-sustain/pkgs/container/k8s-sustain" target="_blank" rel="noopener" title="Container image on GHCR" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M349.9 236.3h-66.1v-59.4h66.1zm0-204.3h-66.1v60.7h66.1zm78.2 144.8H362v59.4h66.1zm-156.3-72.1h-66.1v60.1h66.1zm78.1 0h-66.1v60.1h66.1zm276.8 100c-14.4-9.7-47.6-13.2-73.1-8.4-3.3-24-16.7-44.9-41.1-63.7l-14-9.3-9.3 14c-18.4 27.8-23.4 73.6-3.7 103.8-8.7 4.7-25.8 11.1-48.4 10.7H2.4c-8.7 50.8 5.8 116.8 44 162.1 37.1 43.9 92.7 66.2 165.4 66.2 157.4 0 273.9-72.5 328.4-204.2 21.4.4 67.6.1 91.3-45.2 1.5-2.5 6.6-13.2 8.5-17.1zm-511.1-27.9h-66v59.4h66.1v-59.4zm78.1 0h-66.1v59.4h66.1zm78.1 0h-66.1v59.4h66.1zm-78.1-72.1h-66.1v60.1h66.1z"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.instant.progress", "navigation.tracking", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.top", "navigation.footer", "toc.follow", "search.highlight", "search.suggest", "search.share", "content.code.copy", "content.code.annotate", "content.tabs.link", "content.tooltips"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

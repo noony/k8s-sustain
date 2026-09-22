@@ -1,0 +1,3176 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Kubernetes operator for workload right-sizing and sustainability">
+      
+      
+      
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/0.2.0/guides/local-testing/">
+      
+      
+        <link rel="prev" href="../authenticated-prometheus/">
+      
+      
+        <link rel="next" href="../managing-policies-with-helm/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Local testing - k8s-sustain</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#local-end-to-end-testing" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="k8s-sustain" class="md-header__button md-logo" aria-label="k8s-sustain" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            k8s-sustain
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Local testing
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/noony/k8s-sustain" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    noony/k8s-sustain
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/prerequisites/" class="md-tabs__link">
+          
+  
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../concepts/architecture/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../deployments/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/policy/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../security/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Security
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../development/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Development
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="k8s-sustain" class="md-nav__button md-logo" aria-label="k8s-sustain" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="logo">
+
+    </a>
+    k8s-sustain
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/noony/k8s-sustain" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    noony/k8s-sustain
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/prerequisites/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prerequisites
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/recommendation-pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recommendation Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/update-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Update Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/in-place-updates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    In-Place Updates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/autoscaler-coordination/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Autoscaler Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/node-optimization/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node Optimization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/workload-recommendations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workload Recommendations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workloads
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Workloads
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deployments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployments & StatefulSets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../daemonsets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DaemonSets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../jobs-and-cronjobs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Jobs & CronJobs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../argo-rollouts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Argo Rollouts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standalone-pods-and-grouping/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standalone Pods & Grouping
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../argocd/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Argo CD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../keda/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    KEDA
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cert-manager/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    cert-manager (TLS)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dashboard/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Dashboard
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../authenticated-prometheus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authenticated Prometheus
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local testing
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#context-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context safety
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tunable-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tunable variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workload-generator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workload generator
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scenario-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scenario catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scenario catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#steady" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        steady
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        overprovisioned
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#underprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        underprovisioned
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stepped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        stepped
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hpa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        hpa
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#init-containers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        init-containers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cronjob" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cronjob
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cronjob-long-running" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cronjob-long-running
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cronjob-overprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cronjob-overprovisioned
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#job" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        job
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#statefulset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        statefulset
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        custom-name
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bare-pod" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bare-pod
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oom-kill" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        oom-kill
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#qos-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        qos-change
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommend-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        recommend-only
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recurring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        recurring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#namespace-optin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        namespace-optin
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adding-a-new-scenario" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a new scenario
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../managing-policies-with-helm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Managing policies with Helm
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Policy CRD
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/annotation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Annotation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/helm-values/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Helm Values
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/recording-rules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recording Rules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#context-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context safety
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tunable-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tunable variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workload-generator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workload generator
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scenario-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scenario catalog
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scenario catalog">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#steady" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        steady
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        overprovisioned
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#underprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        underprovisioned
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stepped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        stepped
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hpa" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        hpa
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#init-containers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        init-containers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cronjob" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cronjob
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cronjob-long-running" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cronjob-long-running
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cronjob-overprovisioned" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cronjob-overprovisioned
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#job" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        job
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#statefulset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        statefulset
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        custom-name
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bare-pod" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bare-pod
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oom-kill" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        oom-kill
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#qos-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        qos-change
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommend-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        recommend-only
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recurring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        recurring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#namespace-optin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        namespace-optin
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adding-a-new-scenario" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a new scenario
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../deployments/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Guides
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../dashboard/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Operations
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="local-end-to-end-testing">Local end-to-end testing<a class="headerlink" href="#local-end-to-end-testing" title="Permanent link">&para;</a></h1>
+<p>This guide walks through the <code>Makefile.scenarios</code> harness — a one-command
+way to bring up a kind cluster, install k8s-sustain, and run synthetic
+workload scenarios that exercise <code>Ongoing</code>-mode pod recycling end-to-end.</p>
+<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Docker</li>
+<li><a href="https://kind.sigs.k8s.io/"><code>kind</code></a></li>
+<li><code>kubectl</code></li>
+<li><code>helm</code> &gt;= 3.10</li>
+</ul>
+<p><code>make test-kind-up</code> installs the in-cluster dependencies for you:</p>
+<ul>
+<li><strong>cert-manager</strong> — required by the k8s-sustain admission webhook to issue
+  its serving cert.</li>
+<li><strong>metrics-server</strong> (patched with <code>--kubelet-insecure-tls</code> so it works
+  against kind's self-signed kubelet certs) — required by the <code>hpa</code>
+  scenario.</li>
+</ul>
+<h2 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>make<span class="w"> </span>test-kind-up<span class="w">                       </span><span class="c1"># ~3-5 min the first time</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>make<span class="w"> </span>test-scenario-steady<span class="w">               </span><span class="c1"># apply the scenario</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>sleep<span class="w"> </span>11m<span class="w">                               </span><span class="c1"># wait for WINDOW + reconcile slack</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>make<span class="w"> </span>test-scenario-status<span class="w">               </span><span class="c1"># see the table</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>make<span class="w"> </span>test-kind-down<span class="w">                     </span><span class="c1"># tear it all down</span>
+</code></pre></div>
+<h2 id="context-safety">Context safety<a class="headerlink" href="#context-safety" title="Permanent link">&para;</a></h2>
+<p>Every <code>test-scenario-*</code> target refuses to run unless the current kubectl
+context is <code>kind-k8s-sustain</code> (i.e. the cluster <code>make test-kind-up</code> just
+created). This is a guardrail against accidentally applying scenario
+manifests to a real cluster.</p>
+<p>To override (e.g. when you renamed the cluster, or you really know what
+you're doing):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">SKIP_CONTEXT_CHECK</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>test-scenario-steady
+</code></pre></div>
+<h2 id="tunable-variables">Tunable variables<a class="headerlink" href="#tunable-variables" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WINDOW</code></td>
+<td><code>10m</code></td>
+<td>Policy <code>window</code> value, templated into each scenario YAML.</td>
+</tr>
+<tr>
+<td><code>RECONCILE</code></td>
+<td><code>30s</code></td>
+<td>Controller <code>--reconcile-interval</code>, set via helm <code>--set</code>.</td>
+</tr>
+<tr>
+<td><code>TEST_IMG</code></td>
+<td><code>k8s-sustain:dev</code></td>
+<td>Image built and loaded into kind.</td>
+</tr>
+<tr>
+<td><code>WAIT</code></td>
+<td><code>0</code></td>
+<td>Optional pause between scenarios in <code>test-scenario-all</code>. Scenarios are isolated by namespace and don't interfere; only set this if you want staggered apply timing.</td>
+</tr>
+<tr>
+<td><code>CLUSTER_NAME</code></td>
+<td><code>k8s-sustain</code></td>
+<td>Kind cluster name (context becomes <code>kind-&lt;name&gt;</code>).</td>
+</tr>
+<tr>
+<td><code>CERT_MANAGER_VERSION</code></td>
+<td><code>v1.16.2</code></td>
+<td>cert-manager chart version installed by <code>test-kind-up</code>.</td>
+</tr>
+<tr>
+<td><code>SKIP_CONTEXT_CHECK</code></td>
+<td>unset</td>
+<td>Set to <code>1</code> to bypass the kubectl-context guard.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="workload-generator">Workload generator<a class="headerlink" href="#workload-generator" title="Permanent link">&para;</a></h2>
+<p>Each scenario runs a small Python load generator (<code>python:3.12-alpine</code>)
+shipped as a ConfigMap. The generator allocates a fixed amount of memory
+and busy-loops a tunable fraction of one core, controlled by env vars:</p>
+<ul>
+<li><code>LOAD_DUTY</code> — fraction of one core to consume (e.g. <code>0.20</code> ≈ 200 mCPU).</li>
+<li><code>LOAD_MEM_MB</code> — MiB to allocate and keep resident.</li>
+<li><code>LOAD_PHASES</code> — <code>"duty:secs,duty:secs,..."</code> schedule, used by <code>stepped</code>
+  to alternate between low and high load.</li>
+</ul>
+<p>This replaces <code>polinux/stress</code> because Kubernetes requires
+<code>requests.cpu &lt;= limits.cpu</code>, so we cannot cgroup-throttle <code>stress</code>'s
+full-core workers below the request — the partial-load Python loop lets
+us pick any fractional CPU usage we want without violating that.</p>
+<h2 id="scenario-catalog">Scenario catalog<a class="headerlink" href="#scenario-catalog" title="Permanent link">&para;</a></h2>
+<h3 id="steady"><code>steady</code><a class="headerlink" href="#steady" title="Permanent link">&para;</a></h3>
+<p>Single Deployment producing ~200m CPU and ~100MiB memory. Initial requests
+are deliberately oversized at <code>500m / 256Mi</code>.</p>
+<p><strong>Expected:</strong> CPU request drops to ~<code>220m</code>, memory request drops to
+~<code>110Mi</code>, within <code>WINDOW + reconcile_interval</code>.</p>
+<h3 id="overprovisioned"><code>overprovisioned</code><a class="headerlink" href="#overprovisioned" title="Permanent link">&para;</a></h3>
+<p>Same shape as <code>steady</code> but with extreme oversizing: <code>1000m / 512Mi</code>
+requests for ~<code>50m / 40Mi</code> of usage.</p>
+<p><strong>Expected:</strong> Aggressive downsizing — CPU to ~<code>60m</code>, memory to ~<code>50Mi</code>.</p>
+<h3 id="underprovisioned"><code>underprovisioned</code><a class="headerlink" href="#underprovisioned" title="Permanent link">&para;</a></h3>
+<p>Initial requests <code>50m / 32Mi</code>, <em>no limits</em>, actual usage ~<code>300m / 200Mi</code>.</p>
+<p><strong>Expected:</strong> CPU request grows to ~<code>330m</code>, memory to ~<code>230Mi</code>.</p>
+<h3 id="stepped"><code>stepped</code><a class="headerlink" href="#stepped" title="Permanent link">&para;</a></h3>
+<p>Single Deployment whose load alternates between ~<code>100m</code> (5 min) and
+~<code>400m</code> (5 min), driven by <code>LOAD_PHASES=0.10:300,0.40:300</code>.</p>
+<p><strong>Expected:</strong> The recommender lands at ~<code>110m</code> during the low phase, then
+upsizes to ~<code>440m</code> once the high phase dominates the percentile window.
+The controller recycles the pod each time, exercising the second-recycle
+path that uniform-load scenarios cannot reach.</p>
+<p>Run this one with <code>WINDOW=2m</code>. The percentile window must be shorter than a
+5-minute phase, otherwise it always contains the whole high phase and the
+recommendation correctly stays pinned near <code>440m</code> for the entire run:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>test-scenario-stepped<span class="w"> </span><span class="nv">WINDOW</span><span class="o">=</span>2m
+</code></pre></div>
+<h3 id="hpa"><code>hpa</code><a class="headerlink" href="#hpa" title="Permanent link">&para;</a></h3>
+<p>Single Deployment with <code>requests.cpu: 500m</code>, actual usage ~<code>150m</code>, plus
+an <code>autoscaling/v2</code> HPA targeting 60% CPU utilization (min 1 / max 5).</p>
+<p><strong>Expected:</strong> Recommender shrinks requests to ~<code>165m</code>. Once shrunk, HPA's
+effective utilization jumps above 60% and replicas scale up. Validates
+the interaction between right-sizing and the HPA.</p>
+<h3 id="init-containers"><code>init-containers</code><a class="headerlink" href="#init-containers" title="Permanent link">&para;</a></h3>
+<p>Single Deployment whose pod template includes:</p>
+<ul>
+<li>a regular container <code>app</code> (CPU <code>500m</code>, ~<code>200m</code> actual usage),</li>
+<li>a classic init container <code>migrate</code> that exits in ~5 seconds,</li>
+<li>a sidecar init container <code>log-shipper</code> (<code>restartPolicy: Always</code>,
+  ~<code>50m</code> actual usage).</li>
+</ul>
+<p><strong>Expected:</strong> <code>app</code> and <code>log-shipper</code> receive recommendations
+(<code>kubectl get wlrec -n scenario-init-containers -o yaml</code>). Drift in either
+triggers a pod recycle (in-place on k8s ≥ 1.33, eviction otherwise).</p>
+<p><code>migrate</code> receives <strong>no</strong> recommendation: a ~5-second lifetime leaves no
+usage series in Prometheus for the recommender to read. Even if it had one,
+drift there could not trigger a recycle — the container has already exited
+while the pod is Running.</p>
+<p>Inspect the <code>container_kind</code> label on emitted gauges:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>--raw<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>/api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">'k8s_sustain_recommended_cpu_cores{.*container_kind="init"'</span>
+</code></pre></div>
+<h3 id="cronjob"><code>cronjob</code><a class="headerlink" href="#cronjob" title="Permanent link">&para;</a></h3>
+<p>Single CronJob (<code>schedule: "* * * * *"</code>) running for ~30s per invocation
+with steady ~200m CPU / ~100MiB memory load. Initial requests are
+deliberately oversized at <code>500m / 256Mi</code>. <code>Ongoing</code> mode is enabled for
+CronJobs.</p>
+<p><strong>Expected:</strong> the CronJob spec is <strong>never modified</strong> (no GitOps drift).
+Currently-running job pods are resized in place via the <code>pods/resize</code>
+subresource when the cluster supports it; otherwise they finish on their
+existing resources. New runs (next minute boundary) spawn with updated
+requests injected by the webhook at admission. After
+<code>WINDOW + reconcile_interval</code> the CPU request drops to ~<code>220m</code> and
+memory to ~<code>110Mi</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># CronJob spec is unchanged across reconciles (no controller patches)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>cronjob<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob<span class="w"> </span>job<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.jobTemplate.spec.template.spec.containers[0].resources}'</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># The current recommendation is exposed via WorkloadRecommendation</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob<span class="w"> </span>cronjob-job<span class="w"> </span>-o<span class="w"> </span>yaml
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># Inspect a running job pod — its container resources reflect the latest reco</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob<span class="w"> </span>-l<span class="w"> </span>batch.kubernetes.io/job-name<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-A4<span class="w"> </span><span class="s1">'resources:'</span>
+</code></pre></div>
+<p>This scenario also exercises the Pod → Job → CronJob recording-rule
+chain — without it, <code>owner_kind="CronJob"</code> would have no metrics and the
+recommendation would never compute.</p>
+<h3 id="cronjob-long-running"><code>cronjob-long-running</code><a class="headerlink" href="#cronjob-long-running" title="Permanent link">&para;</a></h3>
+<p>CronJob with a 12-minute pod runtime (every 15 minutes,
+<code>concurrencyPolicy: Forbid</code>). Initial requests are oversized at
+<code>500m / 256Mi</code>. Run with <code>WINDOW=2m RECONCILE=30s</code> so the controller has
+time to land at least one recommendation while a single run is still
+alive.</p>
+<p><strong>Expected:</strong> the <strong>same pod</strong> is resized in place via the <code>pods/resize</code>
+subresource as the controller reconciles. The container's
+<code>spec.containers[0].resources</code> change without a restart — verify
+<code>status.containerStatuses[0].restartCount</code> stays at <code>0</code>. This is the
+scenario that exercises the new in-place resize path on a <code>restartPolicy:
+Never</code> Job pod (k8s ≥ 1.35).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">POD</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--field-selector<span class="w"> </span>status.phase<span class="o">=</span>Running<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.items[0].metadata.name}'</span><span class="k">)</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span><span class="nv">$POD</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.containers[0].resources}{"\n"}'</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>sleep<span class="w"> </span><span class="m">60</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span><span class="nv">$POD</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.containers[0].resources}{"\n"}'</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-cronjob-long-running<span class="w"> </span><span class="nv">$POD</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.containerStatuses[0].restartCount}{"\n"}'</span>
+</code></pre></div>
+<h3 id="cronjob-overprovisioned"><code>cronjob-overprovisioned</code><a class="headerlink" href="#cronjob-overprovisioned" title="Permanent link">&para;</a></h3>
+<p>CronJob analogue of the <code>overprovisioned</code> Deployment scenario. Initial
+requests <code>1000m / 512Mi</code>, actual per-run usage ~<code>50m / 40Mi</code> for ~90s.</p>
+<p><strong>Expected:</strong> Aggressive downsizing — CPU to ~<code>60m</code>, memory to ~<code>50Mi</code>,
+observed on each new run's pod (webhook-injected). The CronJob spec
+itself is intentionally unchanged. Confirms the new pod-level path
+handles large recommendation deltas just as well as the old spec-patching
+path did.</p>
+<h3 id="job"><code>job</code><a class="headerlink" href="#job" title="Permanent link">&para;</a></h3>
+<p>A standalone <code>batch/v1</code> Job (no CronJob owner) with one ~5-minute run.
+The controller does not reconcile standalone Jobs, so this scenario
+exercises only the webhook's <code>Pod → Job</code> resolution branch.</p>
+<p><strong>Expected:</strong> First run starts with the original <code>500m / 256Mi</code> requests
+(no history yet). Re-apply the Job after <code>WINDOW</code> elapses — the second
+run's pod is webhook-injected with the percentile-based recommendation
+(~<code>60m / 35Mi</code>), and the webhook upserts a <code>WorkloadRecommendation</code>
+(<code>job-oneshot</code>) for the identity.</p>
+<p>Note the re-applied Job object is only seconds old at admission — the
+10-minute workload-age gate passes because, for <code>Job</code>-kind workloads, it
+keys on the age of the identity's accumulated Prometheus history (from
+the first run) rather than the Job object's <code>CreationTimestamp</code>. The
+first run has no history, so it is skipped by the gate and leaves no
+<code>WorkloadRecommendation</code> behind.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>hack/scenarios/job.yaml
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>make<span class="w"> </span>test-scenario-job
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-job<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.items[0].spec.containers[0].resources}{"\n"}'</span>
+</code></pre></div>
+<h3 id="statefulset"><code>statefulset</code><a class="headerlink" href="#statefulset" title="Permanent link">&para;</a></h3>
+<p>Three-replica StatefulSet (<code>web-0</code>, <code>web-1</code>, <code>web-2</code>) with deliberately
+oversized requests (<code>500m / 256Mi</code>) and ~<code>200m / ~100Mi</code> of actual load.</p>
+<p><strong>Expected:</strong></p>
+<ul>
+<li>After <code>WINDOW + reconcile_interval</code> the controller recycles all three
+  pods. On Kubernetes ≥ 1.33 this is in-place via <code>/resize</code>; on older
+  versions it is eviction.</li>
+<li>In the eviction path, pods are evicted in <strong>descending ordinal order</strong>:
+  <code>web-2 → web-1 → web-0</code>, matching the StatefulSet controller's update
+  semantics. Inspect with:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>events<span class="w"> </span>-n<span class="w"> </span>scenario-statefulset<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>--sort-by<span class="o">=</span>.lastTimestamp<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">'Evicted|Killing|Recycled'</span>
+</code></pre></div>
+<ul>
+<li>The full 3-pod recycle finishes in roughly one reconcile cycle. If the
+  recycle wait ever regressed back to keying on pod name (which the
+  StatefulSet controller reuses across replacements), each pod would
+  block for the full <code>--replacement-timeout</code> (5 min default) and the run
+  would stretch to 15+ minutes before failing. Watch the controller log:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>-c<span class="w"> </span>controller<span class="w"> </span>--since<span class="o">=</span>5m<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">'evict|recycle|replacement'</span>
+</code></pre></div>
+<ul>
+<li>The CPU request drops to ~<code>220m</code> and memory to ~<code>110Mi</code> on every
+  replacement pod. Confirm uniformly across ordinals:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">for</span><span class="w"> </span>i<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">2</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-statefulset<span class="w"> </span>web-<span class="nv">$i</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.containers[0].resources}{"\n"}'</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="k">done</span>
+</code></pre></div>
+<h3 id="custom-name"><code>custom-name</code><a class="headerlink" href="#custom-name" title="Permanent link">&para;</a></h3>
+<p>Single Deployment named <code>stress</code>, same shape as <code>steady</code> (<code>500m / 256Mi</code>
+requests, ~<code>200m / ~100Mi</code> actual usage), but its pod template carries
+<code>k8s.sustain.io/owner-name: renamed-app</code> — overriding its
+Prometheus/recommendation identity to <code>Deployment/renamed-app</code>. Validates the
+identity-rename override (see
+<a href="../standalone-pods-and-grouping/">Standalone Pods &amp; Identity Grouping</a>): the
+Deployment's own name is never used for Prometheus queries or the
+<code>WorkloadRecommendation</code>.</p>
+<p><strong>Expected:</strong></p>
+<ul>
+<li>The pod is admitted with the webhook-mirrored label. Confirm:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>scenario-custom-name<span class="w"> </span>--show-labels<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>k8s.sustain.io/owner-name
+</code></pre></div>
+<ul>
+<li>The <code>WorkloadRecommendation</code> is named by the override identity
+  (<code>deployment-renamed-app</code>), not by the Deployment's own name
+  (<code>deployment-stress</code> never exists):</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>workloadrecommendation<span class="w"> </span>-n<span class="w"> </span>scenario-custom-name
+</code></pre></div>
+<ul>
+<li>After <code>WINDOW + reconcile_interval</code>, CPU request drops to ~<code>220m</code> and
+  memory to ~<code>110Mi</code> (identical target to <code>steady</code>, since the load profile
+  and <code>resourcesConfigs</code> match) — and the recommendation is only queryable
+  under the renamed identity:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090<span class="w"> </span><span class="p">&amp;</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>curl<span class="w"> </span>-s<span class="w"> </span>localhost:8090/api/workloads/scenario-custom-name/Deployment/renamed-app/recommendations
+</code></pre></div>
+<ul>
+<li><code>status.sh</code>'s generic table queries recommendations by the Deployment's own
+  name (<code>stress</code>), which the override deliberately bypasses, so <code>custom-name</code>
+  is not included in it; use the commands above instead.</li>
+</ul>
+<h3 id="bare-pod"><code>bare-pod</code><a class="headerlink" href="#bare-pod" title="Permanent link">&para;</a></h3>
+<p>A standalone <code>Pod</code> — no Deployment, no <code>ownerReferences</code> at all — simulating
+Airflow's <code>KubernetesPodOperator</code>, which by default launches a Pod directly
+with no parent Job. The policy and <code>k8s.sustain.io/owner-name: etl-daily</code>
+annotations live directly on the Pod (there's no pod template for a bare pod
+to carry them on). The Policy sets <code>rightSizing.update.types.pod: Ongoing</code>.
+Initial requests are deliberately oversized at <code>500m / 256Mi</code>; actual usage
+is the same ~<code>200m / ~100Mi</code> profile as <code>steady</code>.</p>
+<p><strong>Expected:</strong></p>
+<ul>
+<li>The pod is admitted with the webhook-mirrored label. Confirm:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-bare-pod<span class="w"> </span>etl-daily-run-1<span class="w"> </span>--show-labels<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>k8s.sustain.io/owner-name
+</code></pre></div>
+<ul>
+<li><strong>The pod is resized in place, never evicted.</strong> Eviction is permanently off
+  for <code>Pod</code>-kind targets — nothing would recreate the pod — but an in-place
+  resize needs no controller behind it, so under <code>Ongoing</code> the running pod is
+  corrected directly through the <code>pods/resize</code> subresource. The UID never
+  changes; only the requests do:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-bare-pod<span class="w"> </span>etl-daily-run-1<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.metadata.uid}{" "}{.spec.containers[0].resources.requests}{"\n"}'</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="c1"># same UID throughout; CPU comes down from 500m toward ~220m</span>
+</code></pre></div>
+<p>A memory decrease can be reported <code>Infeasible</code>/<code>Deferred</code> by the kubelet;
+  the patcher logs it and skips, and never falls back to eviction here. On a
+  cluster below k8s 1.33 there is no in-place support at all, so the pod
+  stays at <code>500m / 256Mi</code> and only the recommendation below appears.</p>
+<p>The scenario pod leaves <code>restartPolicy</code> unset, so it defaults to <code>Always</code>
+  and resizes on any k8s ≥ 1.33. Do not generalise that to real Airflow
+  pods: <code>KubernetesPodOperator</code> uses <code>restartPolicy: Never</code>, which is only
+  fully covered from k8s ≥ 1.35 — on 1.33/1.34 such a pod's resize is
+  rejected and it keeps its admitted resources.</p>
+<ul>
+<li>The controller computes and caches a <code>WorkloadRecommendation</code>
+  (<code>pod-etl-daily</code>) from the pod's actual usage — this is also the webhook's
+  <em>only</em> source of recommendations (it never queries Prometheus itself), so
+  a later pod sharing this <code>owner-name</code> (e.g. the next Airflow DAG run) gets
+  injected from it as long as the cache is still fresh when that pod is
+  admitted. Like every other kind, this waits out the 10-minute
+  <code>MinWorkloadAge</code> gate — bare pods are no longer exempt from it, since an
+  <code>Ongoing</code> bare pod can now be resized in place, so a near-zero percentile
+  from a too-young identity is no longer harmless. Expect the first cached
+  recommendation once the <code>etl-daily</code> identity has been known for 10+
+  minutes, not within the first couple of reconcile cycles:</li>
+</ul>
+<p>(The identity's history-age gate is applied by the controller when it
+  builds the recommendation to cache, not by the webhook at admission — the
+  webhook no longer computes anything of its own, so a pod re-created under
+  the same <code>owner-name</code> within ~10 minutes of the identity's first samples
+  simply has no cache entry yet to inject from and keeps its template
+  resources.)</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>workloadrecommendation<span class="w"> </span>-n<span class="w"> </span>scenario-bare-pod
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090<span class="w"> </span><span class="p">&amp;</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>curl<span class="w"> </span>-s<span class="w"> </span>localhost:8090/api/workloads/scenario-bare-pod/Pod/etl-daily/recommendations
+</code></pre></div>
+<ul>
+<li>Not in <code>status.sh</code>'s generic table (it assumes a Deployment per scenario);
+  use the commands above instead.</li>
+</ul>
+<h3 id="oom-kill"><code>oom-kill</code><a class="headerlink" href="#oom-kill" title="Permanent link">&para;</a></h3>
+<p>Single-container Deployment that quietly holds ~30Mi for 60 s, then attempts
+to allocate 120Mi against a 96Mi cgroup memory limit — the kernel kills the
+container, Kubernetes restarts it, and the cycle repeats.</p>
+<p><strong>Expected:</strong></p>
+<ul>
+<li><code>kubectl get pods -n scenario-oom-kill</code> shows <code>OOMKilled</code> in the last
+  termination reason and a growing restart count.</li>
+<li><code>k8s_sustain:workload_oom_24h{owner_name="stress"}</code> becomes positive.</li>
+<li>Memory recommendation <strong>does not shrink</strong> despite most samples being
+  quiet (~30Mi). The OOM-aware floor pulls the reco to
+  <code>max(peak_working_set_24h, current_request)</code> plus headroom — i.e. ≥ 96Mi.</li>
+<li><code>k8s_sustain_oom_floor_applied_total{owner_name="stress"}</code> increments on
+  each reconcile while the OOM is within the 24 h window.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-oom-kill<span class="w"> </span>stress<span class="w"> </span>-o<span class="w"> </span>yaml
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>kubectl<span class="w"> </span>--raw<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>/api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">'k8s_sustain_oom_floor_applied_total'</span>
+</code></pre></div>
+<h3 id="qos-change"><code>qos-change</code><a class="headerlink" href="#qos-change" title="Permanent link">&para;</a></h3>
+<p>3-replica Deployment whose containers start as <strong>Guaranteed QoS</strong> —
+<code>requests == limits</code> for both CPU (<code>500m</code>) and memory (<code>256Mi</code>) — with
+~<code>200m / 100Mi</code> of actual load per pod, protected by a PodDisruptionBudget
+with <code>minAvailable: 2</code>. The policy removes the CPU limit (<code>noLimit: true</code>)
+and sets a 1.5× memory limit ratio, so the recommendation breaks the
+<code>requests == limits</code> equality: applying it would flip the pods to
+Burstable, which Kubernetes forbids through the <code>/resize</code> subresource.</p>
+<p><strong>Expected (k8s ≥ 1.33):</strong></p>
+<ul>
+<li>Each in-place resize is rejected as <code>Invalid</code> by the API server (QoS
+  class change). This is a <em>per-pod</em> rejection — in-place mode stays
+  enabled for every other workload.</li>
+<li>The controller falls back to <strong>eviction</strong>: pods are replaced (new
+  name/UID) rather than resized, one at a time — after each eviction the
+  recycle loop waits for the replacement to become Ready before evicting
+  the next pod, so the PDB's <code>minAvailable: 2</code> holds throughout. An
+  eviction blocked by the PDB (429) is skipped and retried on the next
+  reconcile.</li>
+<li>The replacement pods run <code>Burstable</code> with CPU request ~<code>220m</code> (no limit)
+  and memory request ~<code>110Mi</code> (limit ~<code>165Mi</code>).</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># Guaranteed before the recycle, Burstable after</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-qos-change<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{range .items[*]}{.metadata.name}{": "}{.status.qosClass}{"\n"}{end}'</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># the per-pod Invalid rejection and the eviction fallback</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>deploy/k8s-sustain-controller<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">'rejected as invalid|falling back to eviction'</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="c1"># PDB status during the recycle: disruptionsAllowed flips between 1 and 0,</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="c1"># at least 2 pods stay Ready</span>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pdb<span class="w"> </span>-n<span class="w"> </span>scenario-qos-change<span class="w"> </span>stress<span class="w"> </span>-o<span class="w"> </span>wide
+</code></pre></div>
+<p>On clusters without in-place support (&lt; 1.33) the scenario still converges —
+stale pods are evicted directly — but the interesting branch (the <code>Invalid</code>
+rejection on <code>/resize</code>) is never exercised.</p>
+<h3 id="recommend-only"><code>recommend-only</code><a class="headerlink" href="#recommend-only" title="Permanent link">&para;</a></h3>
+<p>Clone of <code>steady</code> — same <code>500m / 256Mi</code> requests, same ~<code>200m / ~100Mi</code>
+load — but the Policy sets <code>spec.rightSizing.recommendOnly: true</code> (see the
+<a href="../../reference/policy/#specrightsizingrecommendonly">Policy reference</a>).
+The update mode stays <code>deployment: Ongoing</code> on purpose: it is the
+<code>recommendOnly</code> field, not the mode, that suppresses the apply. Run
+<code>scenario-steady</code> alongside to watch a dry-run policy and an active one
+coexist.</p>
+<p><strong>Expected:</strong></p>
+<ul>
+<li>A <code>WorkloadRecommendation</code> is computed and cached with the same
+  convergence target as <code>steady</code> (~<code>220m</code> / ~<code>110Mi</code>):</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-recommend-only<span class="w"> </span>deployment-stress<span class="w"> </span>-o<span class="w"> </span>yaml
+</code></pre></div>
+<ul>
+<li><strong>The pod is never recycled</strong>: same UID over time, requests stay
+  <code>500m/256Mi</code> indefinitely — in <code>make test-scenario-status</code> the
+  recommendation never converges with current and <code>RECYCLED</code> stays <code>no</code>:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-recommend-only<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.items[0].metadata.uid}{" "}{.items[0].spec.containers[0].resources.requests}{"\n"}'</span>
+</code></pre></div>
+<ul>
+<li><strong>The webhook does not inject either</strong>: delete the pod (only after the
+  <code>WorkloadRecommendation</code> above exists — before that, the young-workload
+  gate would also leave the replacement unmutated and the check proves
+  nothing) and the replacement comes back with the template's <code>500m/256Mi</code>:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-recommend-only<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>stress
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="c1"># wait for the replacement, then re-run the jsonpath above: still 500m/256Mi</span>
+</code></pre></div>
+<ul>
+<li>The operator says why nothing happens — the controller logs
+  <code>recommend-only: computed recommendations</code> with <code>source=policy</code>, and the
+  webhook logs <code>recommend-only: would inject resources</code> on pod creation:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>k8s-sustain<span class="w"> </span>--tail<span class="o">=</span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">'recommend-only'</span>
+</code></pre></div>
+<h3 id="recurring"><code>recurring</code><a class="headerlink" href="#recurring" title="Permanent link">&para;</a></h3>
+<p>A namespace-scoped <code>CronJob</code> ("launcher", every 2 minutes) plays the role of
+an external scheduler like Airflow. Its RBAC is <code>create</code>/<code>get</code>/<code>delete</code> on
+<code>pods</code> in this namespace only (<code>ServiceAccount</code>/<code>Role</code>/<code>RoleBinding</code>, no
+<code>ClusterRole</code>); each run computes a unique pod name
+(<code>etl-recurring-$(date +%s)</code>, so plain <code>create</code> never collides), creates a
+genuinely bare Pod — <strong>no <code>ownerReferences</code> at all</strong> — carrying a stable
+<code>k8s.sustain.io/owner-name: etl-recurring</code> annotation, waits for the ~30s
+load to finish, and then <strong>deletes the pod</strong>.</p>
+<p>The delete is what makes the scenario work. <code>workload.GroupBarePods</code> does
+not filter on pod phase, so a <code>Succeeded</code> pod left behind still reports the
+identity in every target listing — the identity would never depart and the
+departed-refresh path would never run. With the delete, each cycle leaves
+roughly 80s of every 120s in which <strong>no pod of the identity exists at all</strong>,
+comfortably longer than the harness's deployed <code>--reconcile-interval=30s</code>.</p>
+<p><strong>Expected — measured on a real kind cluster (k8s 1.35); see
+<code>recurring.yaml</code>'s header comment for the full chronologies and reasoning:</strong></p>
+<ul>
+<li>The <code>WorkloadRecommendation</code> (<code>pod-etl-recurring</code>) survives every gap, and
+  <code>status.observedAt</code> advances on reconciles taken while the pod list is
+  confirmed empty — this is the regression the branch fixes. The direct
+  counter is <code>k8s_sustain_wlr_refresh_total</code>, emitted only from
+  <code>refreshDepartedRecommendation</code>:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>scenario-recurring<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>etl-recurring<span class="w">   </span><span class="c1"># empty</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>scenario-recurring<span class="w"> </span>pod-etl-recurring<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.observedAt}{"\n"}'</span><span class="w">                    </span><span class="c1"># advances</span>
+</code></pre></div>
+<ul>
+<li>
+<p>The 10-minute <code>MinWorkloadAge</code> gate holds correctly for the first 6 runs
+  — all admitted at the template's <code>500m / 256Mi</code>,
+  <code>recommendation_skipped_total{reason="workload_too_young"}</code> climbing.</p>
+</li>
+<li>
+<p><strong>The moment the gate clears is not a clean convergence, and what happens
+  next depends on <code>WINDOW</code>.</strong> The gate is time-based, not data-volume-based:
+  a pod that runs ~30s per 120s has contributed only ~2.5 minutes of real
+  container runtime by the time the 10-minute gate opens, so the percentile
+  is computed over a mostly-empty series.</p>
+</li>
+<li>
+<p>At the harness default <strong><code>WINDOW=10m</code></strong> (plain
+    <code>make test-scenario-recurring</code>): CPU floors to <code>1m</code> and stays there;
+    memory stays realistic (<code>53–62Mi</code> request, <code>81–93Mi</code> limit); every pod
+    completes and <strong>nothing is killed</strong>. Undramatic and long-lived — it did
+    not self-heal within 14 minutes of observation.</p>
+</li>
+<li>At <strong><code>WINDOW=2m</code></strong>: the gate clears straight into <code>cpu=1m,
+    mem=4Mi/6Mi</code>, and every subsequent pod is OOM-killed the instant it
+    starts (<code>exitCode: 137</code>, <code>reason: OOMKilled</code>, <code>startedAt ==
+    finishedAt</code>). This is self-sustaining — a pod that dies at <code>t=0</code>
+    contributes no samples, so the floor re-derives itself. Observed
+    unbroken for 18 minutes with no recovery.</li>
+</ul>
+<p>Either way it is a real, currently-expected design gap — recorded, not
+  fixed by this scenario. It is <strong>not</strong> rescued by the OOM-aware memory
+  floor, which structurally cannot fire here: both detection paths key on
+  <code>LastTerminationState</code>, which Kubernetes only populates after a container
+  restart, and a <code>restartPolicy: Never</code> pod that dies once never gets one
+  (the captured kill showed <code>lastState: {}</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>scenario-recurring<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>etl-recurring<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="w">  </span>--sort-by<span class="o">=</span>.metadata.creationTimestamp<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.items[-1].spec.containers[0].resources}{"\n"}'</span>
+</code></pre></div>
+<ul>
+<li>
+<p><code>status.departed: true</code> is normally not visible while the launcher keeps
+  ticking at the default window, because the recommendation keeps changing and
+  each refresh therefore rewrites <code>observedAt</code>, so the sweep's 10-minute grace
+  period never lapses. A refresh does <em>not</em> rewrite <code>observedAt</code>
+  unconditionally: <code>wlrcache.Upsert</code> skips the write when the new status is
+  equivalent to the stored one and <code>observedAt</code> is younger than
+  <code>wlrcache.RefreshInterval</code> (10 minutes) — the same 10 minutes as the grace
+  period, by coincidence of two independently tuned constants rather than by
+  design. To see <code>departed</code> deliberately, suspend the launcher and budget
+  ~15 minutes; measured at 10m01s after the last <code>observedAt</code> write, with the
+  recommendation still retained. Exact commands are in <code>recurring.yaml</code>'s
+  header.</p>
+</li>
+<li>
+<p>Not in <code>status.sh</code>'s generic table (it assumes a Deployment per
+  scenario); use the commands above instead.</p>
+</li>
+</ul>
+<h3 id="namespace-optin"><code>namespace-optin</code><a class="headerlink" href="#namespace-optin" title="Permanent link">&para;</a></h3>
+<p>Two Deployments in one namespace, same shape as <code>steady</code>, but neither
+carries a <code>k8s.sustain.io/policy</code> annotation of its own anywhere: <code>web</code> opts
+in purely through the Namespace's <code>k8s.sustain.io/policy</code> annotation, and
+<code>opted-out</code> sets <code>k8s.sustain.io/opt-out: "true"</code> on its own
+<code>metadata.annotations</code> to override that inherited opt-in. Validates the
+delegated, most-specific-first annotation resolution (see the <a href="../../reference/annotation/">Annotation
+reference</a>).</p>
+<p><strong>Expected:</strong></p>
+<ul>
+<li><code>web</code>: CPU request drops from <code>500m</code> to ~<code>220m</code>, memory from <code>256Mi</code> to
+  ~<code>110Mi</code>, within <code>WINDOW + reconcile_interval</code> — exactly like <code>steady</code>,
+  despite carrying no annotation of its own anywhere.</li>
+<li><code>opted-out</code>: requests stay pinned at <code>500m / 256Mi</code> forever; it is never
+  reconciled.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>deploy<span class="w"> </span>-n<span class="w"> </span>scenario-namespace-optin<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].resources.requests}{"\n"}{end}'</span>
+</code></pre></div>
+<h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
+<p><code>make test-scenario-status</code> prints a table:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
+</code></pre></div>
+<p>The dashboard remains the richer source of truth — start a port-forward
+and open <code>http://localhost:8090</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
+</code></pre></div>
+<h2 id="adding-a-new-scenario">Adding a new scenario<a class="headerlink" href="#adding-a-new-scenario" title="Permanent link">&para;</a></h2>
+<p>See <code>hack/scenarios/README.md</code>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../authenticated-prometheus/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Authenticated Prometheus">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Authenticated Prometheus
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../managing-policies-with-helm/" class="md-footer__link md-footer__link--next" aria-label="Next: Managing policies with Helm">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Managing policies with Helm
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; k8s-sustain contributors &mdash; ISC License
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/noony/k8s-sustain" target="_blank" rel="noopener" title="k8s-sustain on GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+    <a href="https://github.com/noony/k8s-sustain/pkgs/container/k8s-sustain" target="_blank" rel="noopener" title="Container image on GHCR" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M349.9 236.3h-66.1v-59.4h66.1zm0-204.3h-66.1v60.7h66.1zm78.2 144.8H362v59.4h66.1zm-156.3-72.1h-66.1v60.1h66.1zm78.1 0h-66.1v60.1h66.1zm276.8 100c-14.4-9.7-47.6-13.2-73.1-8.4-3.3-24-16.7-44.9-41.1-63.7l-14-9.3-9.3 14c-18.4 27.8-23.4 73.6-3.7 103.8-8.7 4.7-25.8 11.1-48.4 10.7H2.4c-8.7 50.8 5.8 116.8 44 162.1 37.1 43.9 92.7 66.2 165.4 66.2 157.4 0 273.9-72.5 328.4-204.2 21.4.4 67.6.1 91.3-45.2 1.5-2.5 6.6-13.2 8.5-17.1zm-511.1-27.9h-66v59.4h66.1v-59.4zm78.1 0h-66.1v59.4h66.1zm78.1 0h-66.1v59.4h66.1zm-78.1-72.1h-66.1v60.1h66.1z"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.instant.progress", "navigation.tracking", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.path", "navigation.top", "navigation.footer", "toc.follow", "search.highlight", "search.suggest", "search.share", "content.code.copy", "content.code.annotate", "content.tabs.link", "content.tooltips"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
