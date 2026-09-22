@@ -1,0 +1,81 @@
+name: Deploy gh-pages to GitHub Pages
+description: >-
+  Publish the current gh-pages branch as a GitHub Pages deployment whose build
+  version is the gh-pages commit rather than the workflow's commit.
+
+# actions/deploy-pages hardcodes pages_build_version to GITHUB_SHA, and Pages
+# treats a build version it has already served as a no-op: the run reports
+# success but the site keeps serving the previous artifact. A release tag
+# usually lands on a commit whose docs the main-branch deploy already
+# published, so every tag-triggered docs deploy silently did nothing
+# (actions/deploy-pages#383). GITHUB_SHA cannot be overridden from a step's
+# env (the runner re-applies the github context after it), so the deployment
+# API is called directly with the gh-pages commit as the version: it changes
+# with every mike deploy and is a real commit, which is all the API accepts.
+
+inputs:
+  token:
+    description: GITHUB_TOKEN with pages:write; id-token:write must also be granted.
+    default: ${{ github.token }}
+
+outputs:
+  page_url:
+    description: URL of the deployed site.
+    value: ${{ steps.deploy.outputs.page_url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out published gh-pages content
+      id: site
+      shell: bash
+      run: |
+        set -euo pipefail
+        git fetch origin gh-pages
+        git worktree add "$RUNNER_TEMP/gh-pages-site" origin/gh-pages
+        echo "sha=$(git rev-parse origin/gh-pages)" >> "$GITHUB_OUTPUT"
+
+    - name: Upload Pages artifact
+      id: upload
+      uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+      with:
+        path: ${{ runner.temp }}/gh-pages-site
+
+    - name: Create Pages deployment
+      id: deploy
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+        BUILD_VERSION: ${{ steps.site.outputs.sha }}
+      run: |
+        set -euo pipefail
+        oidc_token="$(curl -sSf -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | jq -r .value)"
+        deployment="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/pages/deployments" \
+          -F artifact_id="${ARTIFACT_ID}" \
+          -f pages_build_version="${BUILD_VERSION}" \
+          -f oidc_token="${oidc_token}")"
+        id="$(jq -r '.id // empty' <<<"${deployment}")"
+        id="${id:-${BUILD_VERSION}}"
+        echo "page_url=$(jq -r .page_url <<<"${deployment}")" >> "$GITHUB_OUTPUT"
+        echo "created Pages deployment ${id} for gh-pages@${BUILD_VERSION}"
+
+        for _ in $(seq 1 120); do
+          # A transient 404 right after creation is normal; keep polling.
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/pages/deployments/${id}" --jq .status 2>/dev/null || echo unknown)"
+          case "${status}" in
+            succeed)
+              echo "deployed"
+              exit 0
+              ;;
+            deployment_failed|deployment_content_failed|deployment_cancelled|deployment_lost)
+              echo "Pages deployment ${id} failed: ${status}" >&2
+              exit 1
+              ;;
+          esac
+          echo "status: ${status}"
+          sleep 5
+        done
+        echo "timed out waiting for Pages deployment ${id}" >&2
+        gh api -X POST "repos/${GITHUB_REPOSITORY}/pages/deployments/${id}/cancel" >/dev/null 2>&1 || true
+        exit 1

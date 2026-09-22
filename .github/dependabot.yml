@@ -25,7 +25,11 @@ updates:
   # moves it — dependabot is that something. It rewrites both the SHA and the
   # trailing `# vX.Y.Z` comment, so pins stay both current and readable.
   - package-ecosystem: github-actions
-    directory: /
+    # `/` only covers .github/workflows; composite actions under
+    # .github/actions/ have their own action.yml and need listing explicitly.
+    directories:
+      - /
+      - /.github/actions/*
     cooldown:
       default-days: 7
     schedule:

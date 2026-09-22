@@ -108,14 +108,6 @@ jobs:
           # claimed it yet (i.e. before the first real release exists) — a
           # real release's "latest" must always win over "main".
           mike list | grep -q latest || mike set-default --push main
-      - name: Check out published gh-pages content
-        run: |
-          git fetch origin gh-pages
-          git worktree add "$RUNNER_TEMP/gh-pages-site" origin/gh-pages
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: ${{ runner.temp }}/gh-pages-site
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        uses: $/.github/actions/deploy-pages-site
