@@ -3002,11 +3002,18 @@ Material, so they pick up the active colour scheme. Prefer them over ASCII
 art, which cannot adapt to dark mode. The landing page (<code>docs/index.md</code>) uses
 a few <code>ks-*</code> classes defined in the same stylesheet; every other page is plain
 Markdown.</p>
-<p>The live site is published through GitHub's Actions-based Pages deployment
-(<code>actions/upload-pages-artifact</code> + <code>actions/deploy-pages</code> at the end of the
-<code>deploy</code>/<code>docs</code> jobs above), not the legacy "deploy from a branch" mechanism —
-<code>gh-pages</code> is still where mike stores version history, but pushing to it no
-longer auto-triggers a site rebuild by itself.</p>
+<p>The live site is published through GitHub's Actions-based Pages deployment,
+not the legacy "deploy from a branch" mechanism — <code>gh-pages</code> is still where
+mike stores version history, but pushing to it no longer auto-triggers a site
+rebuild by itself. The last step of the <code>deploy</code>/<code>docs</code> jobs above is the
+in-repo composite action <code>.github/actions/deploy-pages-site</code>, which uploads
+the <code>gh-pages</code> checkout as the Pages artifact and creates the deployment
+through the REST API with the <code>gh-pages</code> commit as <code>pages_build_version</code>.
+Stock <code>actions/deploy-pages</code> uses the workflow's own commit for that field,
+and Pages silently skips a version it has already served — a release tag sits
+on a commit the <code>main</code> deploy already published, so tag-triggered docs
+deploys used to report success while the site kept serving the previous
+version (<a href="https://github.com/actions/deploy-pages/issues/383">actions/deploy-pages#383</a>).</p>
 <h2 id="contributing">Contributing<a class="headerlink" href="#contributing" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Fork the repository</li>
