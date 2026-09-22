@@ -469,11 +469,18 @@ art, which cannot adapt to dark mode. The landing page (`docs/index.md`) uses
 a few `ks-*` classes defined in the same stylesheet; every other page is plain
 Markdown.
 
-The live site is published through GitHub's Actions-based Pages deployment
-(`actions/upload-pages-artifact` + `actions/deploy-pages` at the end of the
-`deploy`/`docs` jobs above), not the legacy "deploy from a branch" mechanism —
-`gh-pages` is still where mike stores version history, but pushing to it no
-longer auto-triggers a site rebuild by itself.
+The live site is published through GitHub's Actions-based Pages deployment,
+not the legacy "deploy from a branch" mechanism — `gh-pages` is still where
+mike stores version history, but pushing to it no longer auto-triggers a site
+rebuild by itself. The last step of the `deploy`/`docs` jobs above is the
+in-repo composite action `.github/actions/deploy-pages-site`, which uploads
+the `gh-pages` checkout as the Pages artifact and creates the deployment
+through the REST API with the `gh-pages` commit as `pages_build_version`.
+Stock `actions/deploy-pages` uses the workflow's own commit for that field,
+and Pages silently skips a version it has already served — a release tag sits
+on a commit the `main` deploy already published, so tag-triggered docs
+deploys used to report success while the site kept serving the previous
+version ([actions/deploy-pages#383](https://github.com/actions/deploy-pages/issues/383)).
 
 ## Contributing
 
