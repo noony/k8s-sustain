@@ -57,8 +57,9 @@ for file in "${files[@]}"; do
       continue
     fi
 
-    # Local composite actions and container refs carry no upstream tag to pin.
-    if [[ "$ref" == ./* || "$ref" == docker://* ]]; then
+    # In-repo actions (self-repository `$/` or workspace-relative `./`) and
+    # container refs carry no upstream tag to pin.
+    if [[ "$ref" == '$/'* || "$ref" == ./* || "$ref" == docker://* ]]; then
       pinned=$((pinned + 1))
       continue
     fi

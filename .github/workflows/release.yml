@@ -371,4 +371,4 @@ jobs:
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: ./.github/actions/deploy-pages-site
+        uses: $/.github/actions/deploy-pages-site
