@@ -21,7 +21,8 @@ describe('WorkloadsView', () => {
           containers: [],
           automated: true,
           riskState: 'at-risk',
-          driftPercent: 18.4,
+          stalePods: 2,
+          totalPods: 5,
           autoscalerPresent: true,
         },
       ],
@@ -36,7 +37,7 @@ describe('WorkloadsView', () => {
     expect(w.text()).toContain('Risk')
     expect(w.text()).toContain('Drift')
     expect(w.text()).toContain('At risk')
-    expect(w.text()).toContain('18.4')
+    expect(w.text()).toContain('2/5')
   })
 
   it('marks inactive rows with a badge and last-seen', async () => {
@@ -50,7 +51,8 @@ describe('WorkloadsView', () => {
           automated: true,
           policyName: 'p',
           riskState: 'safe',
-          driftPercent: 0,
+          stalePods: 0,
+          totalPods: 3,
           autoscalerPresent: false,
           active: false,
           lastSeenAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),

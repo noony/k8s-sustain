@@ -80,6 +80,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 	recs = recsForTarget(recs, containers)
 	if len(recs) == 0 {
 		logger.V(1).Info("no recommendations available yet (no Prometheus data)")
+		DeleteWorkloadPods(t.Namespace, t.Kind, t.Name)
 		r.recordStepSuccess(t)
 		return nil
 	}
@@ -95,16 +96,17 @@ func (r *PolicyReconciler) reconcileWorkload(
 			source = "flag"
 		}
 		logger.Info("recommend-only: computed recommendations", "source", source, "recommendations", recs)
+		DeleteWorkloadPods(t.Namespace, t.Kind, t.Name)
 		r.recordStepSuccess(t)
 		return nil
 	}
 
-	// OnCreate targets stop once the recommendation is computed and cached:
-	// the webhook injects resources at pod admission, and the controller
-	// must never recycle or resize running pods in this mode.
+	var counts workload.PodCounts
+	applyOpts := []workload.RecycleOption{workload.WithPodCounts(&counts)}
+	// OnCreate never touches running pods; the dry run only measures how many
+	// still wait for a rollout to pick up the recommendation.
 	if t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate {
-		r.recordStepSuccess(t)
-		return nil
+		applyOpts = append(applyOpts, workload.WithDryRun())
 	}
 
 	// Bare-pod identities (Kind == "Pod") are NEVER evicted: no controller
@@ -114,11 +116,11 @@ func (r *PolicyReconciler) reconcileWorkload(
 	// admitted with, forever. Below k8s 1.33 resizeInPlaceTarget is a no-op
 	// and bare pods stay untouched.
 	//
-	// OnCreate bare pods never reach here: that early return sits above this
-	// branch, so the mode distinction needs no new API surface.
+	// OnCreate bare pods reach this branch only as a dry run (WithDryRun in
+	// applyOpts): they are counted, never resized.
 	if t.Kind == "Pod" {
-		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, func() (int, error) {
-			return r.resizeBarePods(ctx, t, recs, tol, suppressionObserver)
+		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, &counts, func() (int, error) {
+			return r.resizeBarePods(ctx, t, recs, tol, suppressionObserver, applyOpts...)
 		})
 	}
 
@@ -128,8 +130,8 @@ func (r *PolicyReconciler) reconcileWorkload(
 	// pods directly; new scheduled runs always pick up the latest resources
 	// from the webhook at admission time.
 	if t.Kind == "CronJob" {
-		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, func() (int, error) {
-			return r.resizeCronJobPods(ctx, t, recs, tol, suppressionObserver)
+		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, &counts, func() (int, error) {
+			return r.resizeCronJobPods(ctx, t, recs, tol, suppressionObserver, applyOpts...)
 		})
 	}
 
@@ -139,8 +141,8 @@ func (r *PolicyReconciler) reconcileWorkload(
 	// after creation. CronJob-owned Jobs never reach here — the listing path
 	// excludes them and the CronJob branch above handles them.
 	if t.Kind == "Job" {
-		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, func() (int, error) {
-			return r.resizeJobPods(ctx, t, recs, tol, suppressionObserver)
+		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, &counts, func() (int, error) {
+			return r.resizeJobPods(ctx, t, recs, tol, suppressionObserver, applyOpts...)
 		})
 	}
 
@@ -160,14 +162,20 @@ func (r *PolicyReconciler) reconcileWorkload(
 	}
 	logger.V(1).Info("recycling pods", "selector", sel.String())
 	recycled, err := r.patcher.RecyclePods(ctx, tw, t.Namespace, sel, recs,
-		workload.WithTolerance(tol),
-		workload.WithSuppressionObserver(suppressionObserver),
-		workload.WithIgnoreSafeToEvictAnnotations(policy.Spec.RightSizing.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations),
+		append([]workload.RecycleOption{
+			workload.WithTolerance(tol),
+			workload.WithSuppressionObserver(suppressionObserver),
+			workload.WithIgnoreSafeToEvictAnnotations(policy.Spec.RightSizing.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations),
+		}, applyOpts...)...,
 	)
 	if err != nil {
+		if t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate {
+			return r.skipFailedDryRun(ctx, t, err)
+		}
 		return r.handleStepError(ctx, t, "patch", "Pod recycle failed", err)
 	}
 
+	EmitWorkloadPods(t.Namespace, t.Kind, t.Name, counts)
 	r.recordStepSuccess(t)
 
 	// The pod template is never patched, so it differs from the recommendation
@@ -196,18 +204,33 @@ func (r *PolicyReconciler) reconcileWorkload(
 // of pods the API server actually resized). The ResourcesUpdated event is only
 // emitted when at least one pod was resized — the workload spec is never
 // mutated, so changedContainers alone would fire on every reconcile.
-func (r *PolicyReconciler) resizeInPlaceTarget(ctx context.Context, t *workloadTarget, containers []corev1.Container, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance, resizeFn func() (int, error)) error {
+func (r *PolicyReconciler) resizeInPlaceTarget(ctx context.Context, t *workloadTarget, containers []corev1.Container, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance, counts *workload.PodCounts, resizeFn func() (int, error)) error {
 	resized, err := resizeFn()
 	if err != nil {
+		if t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate {
+			return r.skipFailedDryRun(ctx, t, err)
+		}
 		return r.handleStepError(ctx, t, "resize", t.Kind+" pod resize failed", err)
 	}
 	r.recordStepSuccess(t)
+	EmitWorkloadPods(t.Namespace, t.Kind, t.Name, *counts)
 	if resized > 0 {
 		if changed := changedContainers(containers, recs, tol); len(changed) > 0 {
 			r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
 				"In-place resized %d %s pod(s) for containers: %v", resized, strings.ToLower(t.Kind), changed)
 		}
 	}
+	return nil
+}
+
+// skipFailedDryRun treats a failed OnCreate count-only pass as success: the
+// pass never touches pods, and retry backoff would skip the compute phase and
+// freeze the WorkloadRecommendation the webhook relies on. The pod gauges keep
+// their previous values.
+func (r *PolicyReconciler) skipFailedDryRun(ctx context.Context, t *workloadTarget, err error) error {
+	log.FromContext(ctx).Info("OnCreate stale-pod count failed, pod gauges left unchanged",
+		"kind", t.Kind, "name", t.Name, "namespace", t.Namespace, "error", err.Error())
+	r.recordStepSuccess(t)
 	return nil
 }
 

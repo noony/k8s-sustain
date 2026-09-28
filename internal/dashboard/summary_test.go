@@ -188,9 +188,9 @@ func TestHandleSummaryHeadroomAttentionPolicies(t *testing.T) {
 			"k8s_sustain_policy_at_risk_count":              {"prod-policy": 2},
 		},
 		byLabels: map[string]map[string]float64{
-			"sum by (namespace, owner_kind, owner_name) (k8s_sustain:workload_oom_24h) > 0": {"shop|Deployment|checkout": 3, "prod|StatefulSet|api": 1},
-			"k8s_sustain:workload_drifted == 1":                                             {"prod|Deployment|web": 1},
-			"k8s_sustain_workload_retry_state == 1":                                         {"prod|Deployment|worker": 1},
+			"sum by (namespace, owner_kind, owner_name) (k8s_sustain:workload_oom_24h) > 0":    {"shop|Deployment|checkout": 3, "prod|StatefulSet|api": 1},
+			"max by (namespace, owner_kind, owner_name) (k8s_sustain_workload_stale_pods) > 0": {"prod|Deployment|web": 1},
+			"k8s_sustain_workload_retry_state == 1":                                            {"prod|Deployment|worker": 1},
 		},
 	}
 	srv := &Server{

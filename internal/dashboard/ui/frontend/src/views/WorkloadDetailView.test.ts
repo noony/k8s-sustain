@@ -21,7 +21,8 @@ describe('WorkloadDetailView', () => {
         return Promise.resolve({
           updateMode: 'Ongoing',
           oom24h: 2,
-          driftPercent: 18,
+          stalePods: 1,
+          totalPods: 4,
           recentEvents: [],
         })
       return Promise.resolve({})
@@ -36,5 +37,6 @@ describe('WorkloadDetailView', () => {
     await flushPromises()
     expect(w.text()).toContain('Ongoing')
     expect(w.text()).toContain('OOM')
+    expect(w.text()).toContain('1/4 pods')
   })
 })

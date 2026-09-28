@@ -25,7 +25,7 @@ const jobPodNameLabel = "batch.kubernetes.io/job-name"
 //
 // Returns the number of pods the API server actually resized, so the caller can
 // suppress the ResourcesUpdated event when nothing was touched.
-func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTarget, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance, observe func(resource string)) (int, error) {
+func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTarget, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance, observe func(resource string), opts ...workload.RecycleOption) (int, error) {
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 
 	cj, ok := t.Object.(*batchv1.CronJob)
@@ -39,6 +39,7 @@ func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTar
 	}
 	if len(jobs) == 0 {
 		logger.V(1).Info("no active jobs for cronjob; nothing to resize (next run will pick up new resources via webhook)")
+		workload.ApplyCounts(opts, workload.PodCounts{})
 		return 0, nil
 	}
 
@@ -55,7 +56,7 @@ func (r *PolicyReconciler) resizeCronJobPods(ctx context.Context, t *workloadTar
 
 	logger.V(1).Info("resizing cronjob pods", "jobs", len(jobs), "pods", len(pods))
 	resized, err := r.patcher.ResizePodsInPlace(ctx, pods, recs,
-		workload.WithTolerance(tol), workload.WithSuppressionObserver(observe))
+		append([]workload.RecycleOption{workload.WithTolerance(tol), workload.WithSuppressionObserver(observe)}, opts...)...)
 	if err != nil {
 		return 0, err
 	}

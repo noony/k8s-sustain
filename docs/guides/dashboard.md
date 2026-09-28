@@ -130,7 +130,7 @@ The picker displays dates in the browser's **local timezone** (for display only;
 
 The overview is organised as a vertical "Story Flow" with six bands, each answering a specific operator question — from "what am I saving?" down to "what just happened?".
 
-1. **KPI strip** — Headline savings cards for CPU (cores) and memory (bytes), each showing the absolute saving, the savings ratio versus current requests, and a sparkline of the last 24h. Two complementary cards count workloads currently **at risk** (drift exceeds the policy threshold) and **drifted** (request differs from the latest recommendation).
+1. **KPI strip** — Headline savings cards for CPU (cores) and memory (bytes), each showing the absolute saving, the savings ratio versus current requests, and a sparkline of the last 24h. Two complementary cards count workloads currently **at risk** (an OOM kill in the last 24h) and **drifted** (at least one pod not yet running the latest recommendation).
 2. **Savings** — A single card splits CPU and memory side-by-side, each plotting three lines over the selected time range so you can see the savings story directly:
     - **Usage** — actual measured working set (memory) or CPU rate, summed across containers in policy-managed workloads.
     - **Current request** — the request currently set on running pods, post-injection.
@@ -138,7 +138,7 @@ The overview is organised as a vertical "Story Flow" with six bands, each answer
 
     All three lines are scoped to managed workloads (those covered by a Policy) so they are directly comparable — usage and current-request queries are filtered with `and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*` so unmanaged pods don't inflate them. The gap between *original* and *current request* is the realised saving; the gap between *current request* and *usage* is the remaining headroom.
 3. **Headroom breakdown** — A stacked horizontal bar for CPU and memory split into `used`, `idle`, and `free` segments, sourced from the `k8s_sustain:cluster_cpu_headroom_breakdown` and `..._memory_headroom_breakdown` recording rules.
-4. **Attention queue** — Three grouped lists: **At risk** (workloads exceeding the drift threshold), **Drifted** (request out-of-date with respect to the recommendation), and **Blocked** (workloads where the controller is in an exponential-backoff retry state). Each row links to the workload detail page.
+4. **Attention queue** — Three grouped lists: **At risk** (workloads with an OOM kill in the last 24h), **Drifted** (at least one pod not yet running the recommendation, sorted by stale pod count), and **Blocked** (workloads where the controller is in an exponential-backoff retry state). Each row links to the workload detail page.
 5. **Policy effectiveness** — Per-policy rollup with the matched workload count, projected CPU/memory savings, and the count of at-risk workloads, so you can spot policies that need tuning.
 6. **Activity feed** — Most recent reconcile and pod-recycle events from the controller, with timestamps and outcomes.
 
@@ -147,7 +147,7 @@ The overview is organised as a vertical "Story Flow" with six bands, each answer
 Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, standalone Jobs) across the cluster, regardless of whether it is governed by a policy. Jobs spawned by a CronJob are folded under their owning CronJob row to avoid double-counting.
 
 - **Filters** — Filter by namespace, kind, **risk state** (healthy, drifted, at risk, blocked), **autoscaler presence** (with autoscaler / without autoscaler), and **lifecycle** (Active / Inactive). The lifecycle filter defaults to "Any lifecycle", so inactive workloads are visible by default. The free-text name search remains.
-- **Columns** — A **Risk** badge summarises the workload's state at a glance, a **Drift %** column shows the gap between current request and recommendation, and an **Autoscaler** column indicates whether the workload is paired with an HPA or KEDA ScaledObject. The previous CPU/Memory request columns have been removed because the workload detail view now displays them in context.
+- **Columns** — A **Risk** badge summarises the workload's state at a glance, a **Drift** column shows stale/total pods (for example `2/5`: pods not yet running the recommendation over live pods), and an **Autoscaler** column indicates whether the workload is paired with an HPA or KEDA ScaledObject. The previous CPU/Memory request columns have been removed because the workload detail view now displays them in context.
 - **Status column** — Still shows whether the workload is **Automated** (has a sustain policy) or **Manual**, with a link to the policy when applicable.
 - **Inactive badge** — A workload with no recently discovered pods (retained for historical reporting rather than deleted) shows an **Inactive** badge next to its name, styled as "Inactive · last seen X ago". The same badge appears in the Policy Detail matched-workloads table. Inactive rows come from a `WorkloadRecommendation` whose underlying object is gone (a completed bare pod, a TTL/hook-deleted or terminal Job) rather than a live workload — the controller keeps that recommendation around for the retention window (`--recommendation-retention` / `controller.recommendationRetention`, default `168h`) so you can still review what it used to run with. Once the window lapses, the row disappears from the list on the next refresh.
 
@@ -157,7 +157,7 @@ Click any workload to view its detail page.
 
 Shows a comprehensive view of a single workload:
 
-- **Status snapshot band** — A row of four KPI cards at the top of the page: **Update mode** (`OnCreate` / `Ongoing`), **Last recycled** (timestamp of the last controller-driven pod recycle), **Drift** (current request vs. recommendation as a percentage), and **OOM (24h)** (count of OOM kills observed in the last 24 hours).
+- **Status snapshot band** — A row of four KPI cards at the top of the page: **Update mode** (`OnCreate` / `Ongoing`), **Last recycled** (timestamp of the last controller-driven pod recycle), **Drift** (stale/total pods, for example `2/5 pods`), and **OOM (24h)** (count of OOM kills observed in the last 24 hours).
 - **Header badges** — A **Risk** badge mirrors the value shown in the Workloads list. When the workload has a paired autoscaler (HPA or KEDA ScaledObject), an **Autoscaler** badge is shown.
 - **Blocked card** — Visible only when the controller has a retry record for this workload; surfaces the failure **reason**, the number of **attempts**, the **next retry** time, and the **last error** message. Hidden once retries clear.
 - **Recommendations** — If automated, shows the computed CPU and memory recommendations per container.
@@ -196,7 +196,7 @@ Shows the full configuration for both CPU and memory, plus the matched workloads
 - **Effectiveness card** — A dedicated band with two time-series charts (CPU and memory) showing how this policy's savings have evolved over the selected time range.
 - **Time range picker** — The Datadog-style popover (relative presets: 5m to 1 Month; or an absolute From→To calendar range) drives the Effectiveness charts. The browser's local timezone is shown for display purposes. The selected range is encoded in the URL as `from_ts`/`to_ts` (epoch seconds); relative presets also carry a `window` hint so they re-anchor to "now" on reload. Copying the URL reproduces the same view — relative ranges show the latest window, absolute ranges show the exact frozen range.
 - **View as YAML modal** — Renders the entire `Policy` resource (sanitised of managed fields) inside a modal with a copy button — handy for sharing or storing in version control.
-- **Matched workloads table** — Each row now shows **Risk** and **Drift %** columns alongside the existing namespace/kind/name and current resource requests, so you can prioritise which workloads to investigate from inside the policy view.
+- **Matched workloads table** — Each row now shows **Risk** and **Drift** (stale/total pods) columns alongside the existing namespace/kind/name and current resource requests, so you can prioritise which workloads to investigate from inside the policy view.
 - **Namespace filter** and **pagination** (50 per page) remain unchanged.
 
 Click any workload to view its detail page.

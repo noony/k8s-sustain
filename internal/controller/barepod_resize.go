@@ -33,15 +33,17 @@ func (r *PolicyReconciler) resizeBarePods(
 	recs map[string]workload.ContainerRecommendation,
 	tol workload.Tolerance,
 	observe func(resource string),
+	opts ...workload.RecycleOption,
 ) (int, error) {
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.IdentityName, "namespace", t.Namespace)
 
 	if len(t.BarePodMembers) == 0 {
 		logger.V(1).Info("no live pods for bare-pod identity; nothing to resize")
+		workload.ApplyCounts(opts, workload.PodCounts{})
 		return 0, nil
 	}
 
 	logger.V(1).Info("resizing bare pods", "pods", len(t.BarePodMembers))
 	return r.patcher.ResizePodsInPlace(ctx, t.BarePodMembers, recs,
-		workload.WithTolerance(tol), workload.WithSuppressionObserver(observe))
+		append([]workload.RecycleOption{workload.WithTolerance(tol), workload.WithSuppressionObserver(observe)}, opts...)...)
 }

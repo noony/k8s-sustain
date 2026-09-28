@@ -386,7 +386,8 @@ func containerStatusFor(c corev1.Container, isInit bool) containerStatus {
 // list rows.
 type workloadSignals struct {
 	RiskState           string
-	DriftPercent        float64
+	StalePods           int
+	TotalPods           int
 	AutoscalerPresent   bool
 	CoordinationFactors *coordinationFactors
 }
@@ -400,23 +401,25 @@ func (s *Server) fetchWorkloadSignals(ctx context.Context, keys []string) map[st
 	// The OOM rule is per-container; re-aggregate so a 0-count sibling container
 	// cannot overwrite an OOMed one.
 	oom, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("sum by (namespace, owner_kind, owner_name) (%s)", promclient.MetricWorkloadOOM24h), "namespace", "owner_kind", "owner_name")
-	drift, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("max by (namespace, owner_kind, owner_name) (abs(1 - %s))", promclient.MetricWorkloadDriftRatio), "namespace", "owner_kind", "owner_name")
+	stale, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("max by (namespace, owner_kind, owner_name) (%s)", promclient.MetricWorkloadStalePods), "namespace", "owner_kind", "owner_name")
+	total, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("max by (namespace, owner_kind, owner_name) (%s)", promclient.MetricWorkloadPods), "namespace", "owner_kind", "owner_name")
 	blocked, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricWorkloadRetryState+" == 1", "namespace", "owner_kind", "owner_name")
 	autoscaler, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricAutoscalerPresent, "namespace", "owner_kind", "owner_name")
 	coord, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricCoordinationFactor, "namespace", "owner_kind", "owner_name", "resource", "kind")
 
 	out := make(map[string]workloadSignals, len(keys))
 	for _, key := range keys {
-		sig := workloadSignals{AutoscalerPresent: autoscaler[key] > 0}
-		if d, ok := drift[key]; ok {
-			sig.DriftPercent = d * 100
+		sig := workloadSignals{
+			AutoscalerPresent: autoscaler[key] > 0,
+			StalePods:         int(stale[key]),
+			TotalPods:         int(total[key]),
 		}
 		switch {
 		case oom[key] > 0:
 			sig.RiskState = "at-risk"
 		case blocked[key] > 0:
 			sig.RiskState = "blocked"
-		case sig.DriftPercent > 10:
+		case sig.StalePods > 0:
 			sig.RiskState = "drifted"
 		default:
 			sig.RiskState = "safe"

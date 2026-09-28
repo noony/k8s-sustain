@@ -42,10 +42,15 @@ var (
 		Help: "Memory request from the workload's pod-template spec (the 'original' value) in bytes.",
 	}, []string{"namespace", "owner_kind", "owner_name", "container", "container_kind", "policy"})
 
-	workloadDriftRatio = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "k8s_sustain_workload_drift_ratio",
-		Help: "Largest absolute drift ratio (recommended / current) across the workload's containers, per resource. 1.0 means no container has drifted. Aggregated at emit time so this metric stays O(workload), not O(workload × container).",
-	}, []string{"namespace", "owner_kind", "owner_name", "resource"})
+	workloadPods = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "k8s_sustain_workload_pods",
+		Help: "Live pods owned by the workload that the last reconcile evaluated.",
+	}, []string{"namespace", "owner_kind", "owner_name"})
+
+	workloadStalePods = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "k8s_sustain_workload_stale_pods",
+		Help: "Live pods whose resources the controller would still change (outside the downsize threshold) after the last reconcile.",
+	}, []string{"namespace", "owner_kind", "owner_name"})
 
 	workloadRetryState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_retry_state",
@@ -64,7 +69,7 @@ var (
 
 	policyAtRiskCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_policy_at_risk_count",
-		Help: "Number of policy-matched workloads in a risk state (OOM, drift, blocked).",
+		Help: "Number of policy-matched workloads in retry backoff.",
 	}, []string{"policy"})
 
 	autoscalerPresent = prometheus.NewGaugeVec(
@@ -175,7 +180,8 @@ func init() {
 		recommendedMemoryBytes,
 		templateCPUCores,
 		templateMemoryBytes,
-		workloadDriftRatio,
+		workloadPods,
+		workloadStalePods,
 		workloadRetryState,
 		workloadRetryAttempts,
 		policyWorkloadCount,

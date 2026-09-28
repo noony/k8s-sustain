@@ -221,8 +221,8 @@ const hasFilters = computed(
                   Name<span v-html="sortArrow('name')"></span>
                 </th>
                 <th>Risk</th>
-                <th class="sort-header" @click="sort('driftPercent')">
-                  Drift<span v-html="sortArrow('driftPercent')"></span>
+                <th class="sort-header" @click="sort('stalePods')">
+                  Drift<span v-html="sortArrow('stalePods')"></span>
                 </th>
                 <th class="sort-header" @click="sort('policyName')">
                   Policy<span v-html="sortArrow('policyName')"></span>
@@ -267,7 +267,9 @@ const hasFilters = computed(
                 </td>
                 <td data-label="Risk"><RiskBadge :state="w.riskState" /></td>
                 <td data-label="Drift">
-                  <code v-if="w.driftPercent">{{ w.driftPercent.toFixed(1) }}%</code>
+                  <code v-if="w.stalePods">{{
+                    w.totalPods ? `${w.stalePods}/${w.totalPods}` : w.stalePods
+                  }}</code>
                   <span v-else class="text-dim">-</span>
                 </td>
                 <td data-label="Policy">

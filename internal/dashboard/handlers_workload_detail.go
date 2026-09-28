@@ -16,7 +16,8 @@ import (
 
 type workloadDetailResponse struct {
 	UpdateMode          string                 `json:"updateMode,omitempty"`
-	DriftPercent        float64                `json:"driftPercent"`
+	StalePods           int                    `json:"stalePods"`
+	TotalPods           int                    `json:"totalPods"`
 	OOM24h              int                    `json:"oom24h"`
 	Blocked             *workloadDetailBlocked `json:"blocked,omitempty"`
 	RecentEvents        []activityItem         `json:"recentEvents"`
@@ -75,8 +76,11 @@ func (s *Server) fillDetailPrometheusSignals(ctx context.Context, resp *workload
 	if v, _ := s.PromClient.QueryInstant(ctx, fmt.Sprintf("sum(%s%s)", promclient.MetricWorkloadOOM24h, sel)); v > 0 {
 		resp.OOM24h = int(v)
 	}
-	if v, _ := s.PromClient.QueryInstant(ctx, fmt.Sprintf("max(abs(1 - %s%s))", promclient.MetricWorkloadDriftRatio, sel)); v > 0 {
-		resp.DriftPercent = v * 100
+	if v, _ := s.PromClient.QueryInstant(ctx, fmt.Sprintf("max(%s%s)", promclient.MetricWorkloadStalePods, sel)); v > 0 {
+		resp.StalePods = int(v)
+	}
+	if v, _ := s.PromClient.QueryInstant(ctx, fmt.Sprintf("max(%s%s)", promclient.MetricWorkloadPods, sel)); v > 0 {
+		resp.TotalPods = int(v)
 	}
 	blockedByReason, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricWorkloadRetryState+sel+" == 1", "reason")
 	if len(blockedByReason) == 0 {

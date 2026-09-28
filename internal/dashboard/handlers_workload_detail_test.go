@@ -10,7 +10,9 @@ func TestHandleWorkloadDetailReturnsSnapshot(t *testing.T) {
 	srv := newTestServerWithDeployment(t, "default", "web")
 	srv.PromClient = &fakePromClient{
 		instant: map[string]float64{
-			"sum(k8s_sustain:workload_oom_24h{namespace=\"default\",owner_kind=\"Deployment\",owner_name=\"web\"})": 1,
+			"sum(k8s_sustain:workload_oom_24h{namespace=\"default\",owner_kind=\"Deployment\",owner_name=\"web\"})":    1,
+			"max(k8s_sustain_workload_stale_pods{namespace=\"default\",owner_kind=\"Deployment\",owner_name=\"web\"})": 2,
+			"max(k8s_sustain_workload_pods{namespace=\"default\",owner_kind=\"Deployment\",owner_name=\"web\"})":       5,
 		},
 		byLabels: map[string]map[string]float64{
 			`k8s_sustain_coordination_factor{namespace="default",owner_kind="Deployment",owner_name="web"}`: {
@@ -27,9 +29,10 @@ func TestHandleWorkloadDetailReturnsSnapshot(t *testing.T) {
 		t.Fatalf("status %d", rec.Code)
 	}
 	var got struct {
-		UpdateMode          string  `json:"updateMode"`
-		OOM24h              int     `json:"oom24h"`
-		DriftPercent        float64 `json:"driftPercent"`
+		UpdateMode          string `json:"updateMode"`
+		OOM24h              int    `json:"oom24h"`
+		StalePods           int    `json:"stalePods"`
+		TotalPods           int    `json:"totalPods"`
 		CoordinationFactors *struct {
 			Enabled        bool    `json:"enabled"`
 			CPUOverhead    float64 `json:"cpuOverhead"`
@@ -40,6 +43,9 @@ func TestHandleWorkloadDetailReturnsSnapshot(t *testing.T) {
 	decodeEnvelopeData(t, rec.Body, &got)
 	if got.OOM24h != 1 {
 		t.Fatalf("oom24h: got %d want 1", got.OOM24h)
+	}
+	if got.StalePods != 2 || got.TotalPods != 5 {
+		t.Errorf("StalePods/TotalPods = %d/%d, want 2/5", got.StalePods, got.TotalPods)
 	}
 	if got.CoordinationFactors == nil {
 		t.Fatalf("expected CoordinationFactors to be populated")

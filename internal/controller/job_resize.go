@@ -19,7 +19,7 @@ import (
 //
 // Returns the number of pods the API server actually resized, so the caller can
 // suppress the ResourcesUpdated event when nothing was touched.
-func (r *PolicyReconciler) resizeJobPods(ctx context.Context, t *workloadTarget, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance, observe func(resource string)) (int, error) {
+func (r *PolicyReconciler) resizeJobPods(ctx context.Context, t *workloadTarget, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance, observe func(resource string), opts ...workload.RecycleOption) (int, error) {
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 
 	job, ok := t.Object.(*batchv1.Job)
@@ -28,6 +28,7 @@ func (r *PolicyReconciler) resizeJobPods(ctx context.Context, t *workloadTarget,
 	}
 	if jobIsTerminal(job) {
 		logger.V(1).Info("job is terminal; nothing to resize")
+		workload.ApplyCounts(opts, workload.PodCounts{})
 		return 0, nil
 	}
 
@@ -37,6 +38,7 @@ func (r *PolicyReconciler) resizeJobPods(ctx context.Context, t *workloadTarget,
 	}
 	if len(jobPods) == 0 {
 		logger.V(1).Info("no running pods for job; nothing to resize")
+		workload.ApplyCounts(opts, workload.PodCounts{})
 		return 0, nil
 	}
 
@@ -47,7 +49,7 @@ func (r *PolicyReconciler) resizeJobPods(ctx context.Context, t *workloadTarget,
 
 	logger.V(1).Info("resizing job pods", "pods", len(pods))
 	resized, err := r.patcher.ResizePodsInPlace(ctx, pods, recs,
-		workload.WithTolerance(tol), workload.WithSuppressionObserver(observe))
+		append([]workload.RecycleOption{workload.WithTolerance(tol), workload.WithSuppressionObserver(observe)}, opts...)...)
 	if err != nil {
 		return 0, err
 	}

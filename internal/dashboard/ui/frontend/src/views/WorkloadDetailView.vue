@@ -282,12 +282,19 @@ function renderCharts() {
   })
 }
 
+function driftLabel(): string {
+  const s = snapshot.data.value
+  if (!s) return '-'
+  if (s.totalPods) return `${s.stalePods}/${s.totalPods} pods`
+  return s.stalePods > 0 ? String(s.stalePods) : '-'
+}
+
 function snapshotRiskState(): 'safe' | 'drifted' | 'at-risk' | 'blocked' | '' {
   const s = snapshot.data.value
   if (!s) return ''
   if (s.blocked) return 'blocked'
   if (s.oom24h > 0) return 'at-risk'
-  if (s.driftPercent > 10) return 'drifted'
+  if (s.stalePods > 0) return 'drifted'
   return 'safe'
 }
 
@@ -368,8 +375,8 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         <KpiCard label="Mode" :value="snapshot.data.value?.updateMode || '-'" />
         <KpiCard
           label="Drift"
-          :value="(snapshot.data.value?.driftPercent || 0).toFixed(1) + '%'"
-          :tone="snapshot.data.value && snapshot.data.value.driftPercent > 10 ? 'warn' : 'neutral'"
+          :value="driftLabel()"
+          :tone="snapshot.data.value && snapshot.data.value.stalePods > 0 ? 'warn' : 'neutral'"
         />
         <KpiCard
           label="OOM 24h"

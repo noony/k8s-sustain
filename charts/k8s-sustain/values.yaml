@@ -1050,11 +1050,7 @@ prometheusRule:
 
         - record: k8s_sustain:workload_drifted
           expr: |
-            (
-              max by (namespace, owner_kind, owner_name) (
-                abs(1 - k8s_sustain_workload_drift_ratio)
-              ) > 0.10
-            ) * 1
+            max by (namespace, owner_kind, owner_name) (k8s_sustain_workload_stale_pods > bool 0)
 
     # NOTE: `interval` here is load-bearing, not a free tuning knob. The
     # recommender reads workload_max_pod_cpu/memory below as a plain RANGE

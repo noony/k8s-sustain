@@ -1,12 +1,9 @@
 package controller
 
 import (
-	"math"
-
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -21,16 +18,14 @@ type WorkloadMetrics struct {
 // Current values are configured resource requests, not live usage.
 // HasCPU/HasMemory mark whether a recommendation was actually computed —
 // when false (e.g. KeepRequest, no Prometheus data), we skip emitting so we
-// don't publish 0-valued recommendations or drift=100%.
+// don't publish 0-valued recommendations.
 type ContainerMetric struct {
 	Name                   string
 	Kind                   string // "regular" or "init"
 	HasCPU                 bool
-	CPUAtFloor             bool
 	RecommendedCPUCores    float64
 	CurrentCPUCores        float64
 	HasMemory              bool
-	MemoryAtFloor          bool
 	RecommendedMemoryBytes float64
 	CurrentMemoryBytes     float64
 }
@@ -41,47 +36,9 @@ const (
 	ContainerKindInit    = "init"
 )
 
-// EmitWorkloadMetrics writes recommendation gauges and drift ratios for one
+// EmitWorkloadMetrics writes recommendation and template gauges for one
 // reconciled workload. Idempotent: each call overwrites the previous values.
-//
-// Drift is emitted at workload granularity (not per-container) — its consumers
-// (the workload-drifted recording rule and the dashboard summaries) always
-// take max(abs(1 - ratio)) across containers anyway, so collapsing here
-// eliminates a 3–5× cardinality multiplier on this gauge.
 func EmitWorkloadMetrics(w WorkloadMetrics) {
-	// "Most drifted" = largest abs(1 - ratio); the ratio stays signed so
-	// consumers can still tell over- from under-provisioning.
-	var (
-		haveCPUDrift, haveMemDrift bool
-		cpuDrift, memDrift         float64
-	)
-	for _, c := range w.Containers {
-		if c.HasCPU && c.CurrentCPUCores > 0 && !c.CPUAtFloor {
-			r := c.RecommendedCPUCores / c.CurrentCPUCores
-			if !haveCPUDrift || math.Abs(1-r) > math.Abs(1-cpuDrift) {
-				cpuDrift = r
-				haveCPUDrift = true
-			}
-		}
-		if c.HasMemory && c.CurrentMemoryBytes > 0 && !c.MemoryAtFloor {
-			r := c.RecommendedMemoryBytes / c.CurrentMemoryBytes
-			if !haveMemDrift || math.Abs(1-r) > math.Abs(1-memDrift) {
-				memDrift = r
-				haveMemDrift = true
-			}
-		}
-	}
-	if haveCPUDrift {
-		workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, "cpu").Set(cpuDrift)
-	} else {
-		workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, "cpu")
-	}
-	if haveMemDrift {
-		workloadDriftRatio.WithLabelValues(w.Namespace, w.Kind, w.Name, "memory").Set(memDrift)
-	} else {
-		workloadDriftRatio.DeleteLabelValues(w.Namespace, w.Kind, w.Name, "memory")
-	}
-
 	// Per-container recommendation + template gauges still carry container
 	// labels: the savings recording rules join the two metrics on `container`,
 	// and operators rely on container_kind="init" to verify init-container
@@ -234,20 +191,13 @@ func emitWorkloadFromRecs(t *workloadTarget, policyName string, recs map[string]
 			kind = ContainerKindInit
 		}
 		cm := ContainerMetric{Name: c.Name, Kind: kind}
-		// When the recommendation lands at the floor (1m / 1Mi) it is the
-		// "no real usage data" sentinel — emit the value but skip drift so the
-		// dashboard doesn't surface a misleading "huge over-provisioning" signal.
-		floorCPU := recommender.MinCPURequest()
-		floorMem := recommender.MinMemoryRequest()
 		if rec.CPURequest != nil {
 			cm.HasCPU = true
 			cm.RecommendedCPUCores = float64(rec.CPURequest.MilliValue()) / 1000.0
-			cm.CPUAtFloor = rec.CPURequest.Cmp(*floorCPU) <= 0
 		}
 		if rec.MemoryRequest != nil {
 			cm.HasMemory = true
 			cm.RecommendedMemoryBytes = float64(rec.MemoryRequest.Value())
-			cm.MemoryAtFloor = rec.MemoryRequest.Cmp(*floorMem) <= 0
 		}
 		if cur := containerRequestCPUCores(c); cur > 0 {
 			cm.CurrentCPUCores = cur
@@ -308,4 +258,14 @@ func containerRequestMemoryBytes(c corev1.Container) float64 {
 		return 0
 	}
 	return float64(q.Value())
+}
+
+func EmitWorkloadPods(namespace, kind, name string, c workload.PodCounts) {
+	workloadPods.WithLabelValues(namespace, kind, name).Set(float64(c.Total))
+	workloadStalePods.WithLabelValues(namespace, kind, name).Set(float64(c.Stale))
+}
+
+func DeleteWorkloadPods(namespace, kind, name string) {
+	workloadPods.DeleteLabelValues(namespace, kind, name)
+	workloadStalePods.DeleteLabelValues(namespace, kind, name)
 }
