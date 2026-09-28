@@ -266,9 +266,10 @@ webhook:
   # verify the webhook TLS cert. Required when certManager.enabled=false.
   caBundle: ""
   certManager:
-    # Set to true to create a cert-manager Certificate and inject the CA bundle
-    # automatically via the cert-manager.io/inject-ca-from annotation.
-    enabled: false
+    # Create a cert-manager Certificate and inject the CA bundle via the
+    # cert-manager.io/inject-ca-from annotation. Requires cert-manager in the
+    # cluster; set to false and provide tlsSecretName + caBundle otherwise.
+    enabled: true
     # Create a self-signed Issuer in the release namespace.
     # Set to false if you want to use your own Issuer/ClusterIssuer (configure issuerRef below).
     createIssuer: true
@@ -396,6 +397,7 @@ dashboard:
   service:
     type: ClusterIP
     port: 8090
+    annotations: {}
   resources:
     requests:
       cpu: 100m
@@ -416,6 +418,13 @@ dashboard:
     timeoutSeconds: 1
     successThreshold: 1
     failureThreshold: 3
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    # Same as controller.serviceMonitor.additionalLabels — use to match a
+    # specific Prometheus operator's serviceMonitorSelector.
+    additionalLabels: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -447,7 +456,7 @@ extraManifests: []
 # PrometheusRule for the k8s-sustain recording rules, for users running the
 # Prometheus Operator externally (e.g. kube-prometheus-stack).
 # Leave disabled when using the bundled `prometheus` subchart — recording rules
-# are already embedded in prometheus.server.serverFiles in that case, and
+# are already embedded in prometheus.serverFiles in that case, and
 # enabling both would duplicate the series.
 prometheusRule:
   enabled: false
@@ -1059,7 +1068,7 @@ prometheusRule:
     # is no subquery step left to resample it. Raising it to cut Prometheus
     # memory would silently coarsen every recommendation percentile in the
     # product.
-    - name: k8s_sustain.workload_signal
+    - name: k8s_sustain.workload_max_pod
       interval: 1m
       rules:
         # Total CPU usage across all replicas, per container, per workload.

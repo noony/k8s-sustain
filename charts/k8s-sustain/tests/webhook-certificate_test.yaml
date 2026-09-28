@@ -5,7 +5,14 @@ release:
   name: k8s-sustain
   namespace: k8s-sustain
 tests:
-  - it: renders nothing by default
+  - it: renders an Issuer and Certificate by default
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: renders nothing when certManager is disabled
+    set:
+      webhook.certManager.enabled: false
     asserts:
       - hasDocuments:
           count: 0

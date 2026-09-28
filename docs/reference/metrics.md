@@ -1,9 +1,16 @@
-<!-- Source of truth: Prometheus metrics emitted in internal/ (grep for prometheus.New*) -->
+<!-- Source of truth: internal/controller/metrics.go, internal/webhook/metrics.go, internal/webhook/cert.go, internal/dashboard/metrics.go -->
 
-# Metrics & Recording Rules
+# Metrics
 
-This page lists every metric exposed by k8s-sustain plus the recording rules
-shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
+Every metric k8s-sustain exposes. Each component serves its own `/metrics`:
+
+| Component | Endpoint |
+|---|---|
+| Controller | `:8080/metrics` (`--metrics-bind-address`) |
+| Webhook | `/metrics` on the webhook port (HTTPS) |
+| Dashboard | `/metrics` on the dashboard HTTP port (`--bind-address`), same port as the UI |
+
+The chart can create a `ServiceMonitor` for each (see [Helm values](helm-values.md#servicemonitor)). The recording rules shipped with the chart are documented in [Recording Rules](recording-rules.md).
 
 ## Metrics emitted by the controller
 
@@ -13,7 +20,6 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 |------|------|--------|---------|
 | `k8s_sustain_reconcile_total` | counter | `policy`, `result` | Total reconciliations per policy and outcome. |
 | `k8s_sustain_reconcile_duration_seconds` | histogram | `policy` | Reconcile duration. |
-| `k8s_sustain_workload_patch_total` | counter | `kind`, `result` | Workload patches by kind and outcome. |
 
 ### Recommendations
 
@@ -36,11 +42,9 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 | `k8s_sustain_oom_reaction_latency_seconds`  | histogram | `namespace`, `owner_kind`, `owner_name` |
 | `k8s_sustain_oom_cache_entries`             | gauge   | — |
 
-`k8s_sustain_recommendation_skipped_total` increments when the recommender bypasses a workload without emitting a recommendation. `reason="workload_too_young"` means the identity has been known for less than 10 minutes — the [workload-age gate](../concepts/recommendation-pipeline.md#stages) — so percentile queries would otherwise floor to ~0 and trigger an immediate recycle. The gate is age-based, not sample-count based, and it reads the earlier of the workload object's `CreationTimestamp` and its `WorkloadRecommendation`'s.
-
-`k8s_sustain_oom_floor_applied_total` increments when the OOM-aware floor raises a memory recommendation above the percentile value. This means the workload OOM'd in the last 24h and the recommendation was floored at `max(peak_working_set_24h, oom_time_limit × 1.20)` plus headroom, instead of the (lower) percentile value. The peak anchor relies on cAdvisor observing the high-water mark; the OOM-time-limit anchor is the safety net for cgroup v2 / sub-scrape OOM kills where peak underreports.
-
-`k8s_sustain_oom_observed_total`, `k8s_sustain_oom_reaction_latency_seconds`, and `k8s_sustain_oom_cache_entries` are emitted by the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher). `observed_total` counts deduped OOM kills seen on annotated pods. `reaction_latency_seconds` measures the wall-clock delay from the container's `TerminatedAt` to the floor-driven memory recommendation that responds to it — the value the watcher is designed to compress. `cache_entries` reports the current size of the in-memory OOM cache.
+- `recommendation_skipped_total` — recommendations not emitted, by `reason`. `workload_too_young`: the identity is younger than the 10-minute [workload-age gate](../concepts/recommendation-pipeline.md#stages).
+- `oom_floor_applied_total` — memory recommendations raised above the percentile by the OOM floor (`max(peak_24h, oom_time_limit × 1.20)` plus headroom) after an OOM in the last 24h.
+- `oom_observed_total`, `oom_reaction_latency_seconds`, `oom_cache_entries` — from the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher): deduped OOM kills, delay from `TerminatedAt` to the responding recommendation, and current cache size.
 
 ### Drift, retry, autoscaler
 
@@ -62,69 +66,42 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 | `k8s_sustain_wlr_refresh_total`         | counter | `namespace`, `owner_kind`, `outcome` |
 | `k8s_sustain_group_autoscaler_mismatch_total` | counter | `namespace`, `owner_kind`, `owner_name` |
 
-`k8s_sustain_recycle_suppressed_total` counts resource decreases that the controller declined to apply because they fell below the policy's [`downsizeThreshold`](policy.md#cpudownsizethreshold-memorydownsizethreshold). It is incremented once per resource (`cpu`/`memory`) per pod processed in a reconcile, so a sustained non-zero rate means a workload keeps recommending small downsizes that are being held back to avoid churn. Increases are never suppressed and never counted here.
-
-`k8s_sustain_group_autoscaler_mismatch_total` increments once per reconcile for an [owner-name group](../guides/standalone-pods-and-grouping.md) whose members disagree on autoscaler presence or kind — one member HPA-governed, a sibling with none, or governed by a different autoscaler kind entirely. The group still gets exactly one shared recommendation, shaped by the first sorted member's autoscaler (`groupAutoscalerInfo`), so a mismatch is a misconfiguration signal: some member is inheriting a recommendation coordinated against an autoscaler that has no view of it. Any non-zero rate for an identity is worth investigating; it is not expected to fire in steady state.
+- `recycle_suppressed_total` — decreases held back by the policy's [`downsizeThreshold`](policy.md#cpudownsizethreshold-memorydownsizethreshold), once per resource per pod per reconcile. Increases are never counted.
+- `group_autoscaler_mismatch_total` — once per reconcile for an [owner-name group](../guides/standalone-pods-and-grouping.md) whose members disagree on autoscaler presence or kind. The group's single recommendation follows the first sorted member's autoscaler, so any non-zero rate is a misconfiguration.
 
 #### Batch prefetch coverage vs. failures
 
-Each reconcile, the controller fetches Prometheus data for every matched workload in one sharded batch call per policy (see [Architecture](../concepts/architecture.md)) instead of one query set per workload. Three metrics observe that call, and they answer two genuinely different questions on purpose:
+Each reconcile fetches Prometheus data for all of a policy's workloads in one sharded batch (see [Architecture](../concepts/architecture.md)):
 
-- `k8s_sustain_policy_batch_requested_count` — how many workload identities were included in this policy's batch prefetch this cycle.
-- `k8s_sustain_policy_batch_resolved_count` — how many of those identities came back with at least one CPU or memory sample.
-- `k8s_sustain_policy_batch_failures_total` — how many identities' fetch genuinely failed (the shard query *and* its per-workload fallback both errored, e.g. Prometheus is unreachable).
+- `policy_batch_requested_count` — identities in the batch this cycle.
+- `policy_batch_resolved_count` — identities that returned at least one CPU or memory sample.
+- `policy_batch_failures_total` — identities whose shard query and per-workload fallback both failed.
 
-`batch_resolved_count` can legitimately sit below `batch_requested_count` with `batch_failures_total` never moving at all: a workload younger than its configured window, or one whose containers haven't emitted samples yet, resolves to zero data on a perfectly healthy Prometheus. Only `batch_failures_total` means "something is actually wrong" — treat a sustained increase in it as a Prometheus-health alert, and treat a persistently low `batch_resolved_count`/`batch_requested_count` ratio (with `batch_failures_total` flat) as a data-maturity signal instead. Never derive one from the other.
+`resolved < requested` with flat `failures_total` is normal (young or quiet workloads). Alert on `failures_total`; treat a low resolved/requested ratio as a data-maturity signal.
 
 #### Series lifetime when a Policy is deleted
 
-Every series carrying a `policy` label is removed when that Policy is deleted, as part of the same finalizer that deletes the policy's `WorkloadRecommendation`s. That covers the per-policy metrics above (`policy_workload_count`, `policy_at_risk_count`, the three `policy_batch_*`, `reconcile_total`, `reconcile_duration_seconds`) and the per-workload gauges that carry the producing policy's name (`recommended_cpu_cores`, `workload_template_cpu_cores`, `recommended_memory_bytes`, `workload_template_memory_bytes`).
-
-This matters because a gauge keeps exporting its last value forever otherwise: a deleted policy would be indistinguishable from a live one that happens to match nothing, and cardinality would grow with every policy the controller had ever seen rather than with the number that exist. Deleting a Policy and recreating it under the same name therefore restarts its counters from zero — expected, and worth knowing before alerting on `increase(k8s_sustain_reconcile_total[...])` across a policy rename.
+Every series with a `policy` label is removed by the Policy's `k8s.sustain.io/cleanup` finalizer, together with its `WorkloadRecommendation`s. Recreating a Policy under the same name restarts its counters from zero.
 
 #### `k8s_sustain_wlr_refresh_total`
 
-`WorkloadRecommendation` (WLR) refresh outcomes by `namespace`, `owner_kind` and
-`outcome`, emitted once per reconcile cycle for each **departed** identity —
-one that still has a WLR but no live workload object in the current listing (a
-completed Job, an Airflow bare-pod group between runs). Cycles are driven by
-`--reconcile-interval`, but also by a change to the `Policy` and by an
-`OOMKilled` container, so the emission rate is at least one per interval.
+Refresh outcomes, once per reconcile, for **departed** identities only — a `WorkloadRecommendation` with no live workload object (a finished Job, a bare-pod group between runs). Live workloads are covered by the batch counters above.
 
-That population is exactly what this counter exists for: it is invisible to
-every other signal, because nothing lists it. Live workloads never increment
-this counter — they are observed by the batch-prefetch counters above and by
-`k8s_sustain_recommendation_skipped_total`.
-
-- `computed` — fresh values were written this cycle.
-- `nodata` — the identity has never produced a recommendation and still has no
-  usable samples. Not terminal; retried next cycle.
-- `retained-empty` — **the signal worth alerting on.** The identity *has* a
-  recommendation, but this cycle produced nothing, so the previous values were
-  deliberately left in place rather than overwritten. This is the moment a
-  served recommendation stops having live data behind it: the webhook keeps
-  injecting it, the WLR object still looks populated, and nothing else records
-  that its samples aged out of the query window. A one-off is expected for an
-  ephemeral identity between runs; a sustained `retained-empty` rate for the
-  same identity means its data source has gone away for good.
-- `no-snapshot` — the identity's WLR carries no `status.observedResources`, so
-  there is no container list to compute against and the refresh is skipped
-  before it starts. Distinct from `nodata`: that one is Prometheus having
-  nothing to say, this one is k8s-sustain not knowing what to ask about. A
-  transient blip is normal (a discovery or webhook snapshot write is one cycle
-  behind); a *sustained* count for the same identity means the snapshot write
-  is failing, and that identity is inert — neither computed nor injectable.
-- `error` — the computation itself failed (Prometheus unreachable, write
-  rejected). Distinct from `nodata`, which is a healthy Prometheus with
-  nothing to say for that identity.
+| `outcome` | Meaning |
+|---|---|
+| `computed` | Fresh values written. |
+| `nodata` | No recommendation yet and still no samples. Retried next cycle. |
+| `retained-empty` | Has a recommendation but this cycle produced nothing, so the previous values are kept and still served. Sustained for one identity means its data is gone for good — alert on this. |
+| `no-snapshot` | The object has no `status.observedResources`, so there is nothing to compute. Sustained means the snapshot write is failing. |
+| `error` | Computation or write failed. |
 
 #### `k8s_sustain_workload_pods`
 
-Number of live pods owned by the workload, evaluated on the last reconcile: not terminating and not in phase `Succeeded` or `Failed`. Emitted after each apply pass (in-place resize or eviction). CronJob and Job workloads report running job pods only; bare pods report their own live pods. For `OnCreate` workloads the count is measured with a dry run that touches no pod. The series is absent in recommend-only mode (flag or policy) and before the first recommendation, and is left unchanged when a pass errors. It is removed when the workload stops being a target of its policy: the workload (for bare pods, its last pod object) is deleted or opted out, a standalone Job completes or fails, or the Policy is deleted. Finished bare pods that still exist are no longer live, so they report `0`.
+Live pods (not terminating, not `Succeeded`/`Failed`) owned by the workload at the last apply pass. For `OnCreate` workloads it is measured with a dry run. Absent in recommend-only mode and before the first recommendation; removed when the workload stops being a target of its policy.
 
 #### `k8s_sustain_workload_stale_pods`
 
-Subset of `k8s_sustain_workload_pods` whose requests or limits still differ from the recommendation beyond the policy's `downsizeThreshold` after the apply pass, and that this pass neither resized nor evicted. `Pending` pods are counted and can be stale: the pass does not resize non-`Running` pods in place. Zero means the recommendation has reached every pod. For `OnCreate` workloads it shows pods awaiting a rollout. Same lifecycle as `k8s_sustain_workload_pods`. This is what the dashboard shows as **Drift** (`stale/total`).
+Subset of `workload_pods` whose resources still differ from the recommendation beyond `downsizeThreshold` after the apply pass. Zero means every pod runs the recommendation. Same lifecycle as `workload_pods`; the dashboard shows it as **Drift** (`stale/total`).
 
 #### `k8s_sustain_autoscaler_target_configured`
 
@@ -134,19 +111,16 @@ Configured autoscaler `averageUtilization` (%) for a workload's resource trigger
 #### `k8s_sustain_coordination_factor`
 
 Multiplier applied by autoscaler coordination to the per-pod request.
-`resource` is `cpu` or `memory`; `kind` is `overhead` (the always-on
-`(100 / hpa_target_pct) × 1.10` adjustment) or `replica` (the optional
-CPU-only replica-budget correction). The value is `1.0` when no effect
-was applied. See [Autoscaler Coordination](../concepts/autoscaler-coordination.md)
-for the formulas.
+`kind` is `overhead` (`(100 / hpa_target_pct) × 1.10`) or `replica` (CPU-only
+replica-budget correction); `1.0` when nothing applied. See
+[Autoscaler Coordination](../concepts/autoscaler-coordination.md).
 
 ### Dashboard server
 
 | Name | Type | Labels |
 |------|------|--------|
-| `k8s_sustain_dashboard_request_duration_seconds`         | histogram | `path`, `status` |
-| `k8s_sustain_dashboard_prometheus_query_duration_seconds`| histogram | `rule` |
-| `k8s_sustain_dashboard_panic_total`                      | counter   | `path` |
+| `k8s_sustain_dashboard_request_duration_seconds` | histogram | `path`, `status` |
+| `k8s_sustain_dashboard_panic_total`              | counter   | `path` |
 
 ### Webhook server
 
@@ -159,30 +133,20 @@ for the formulas.
 
 #### `k8s_sustain_webhook_panic_total`
 
-Every panic the webhook recovered. The `path` label is the route pattern (e.g. `POST /mutate`) for a panic caught by the shared `internal/httpx` recovery middleware on the request goroutine — a bounded pattern, never the raw request path.
-
-Two label values are not routes: `singleflight/ownerRef` and `singleflight/ownerAnnotations`. The owner-resolution Gets behind [the opt-in caches](annotation.md#the-webhooks-cost-control-does-not-fully-bound-itself) run on a `singleflight` goroutine rather than the request goroutine, so the middleware cannot see a panic there; the webhook recovers it itself, logs it with its stack, counts it here and fails that admission open. Any non-zero rate on this metric is a bug worth an issue, but a panic on one of these two paths is *contained* — it costs one admission its injection, not the process.
+Every panic the webhook recovered, by route pattern (e.g. `POST /mutate`), plus two non-route values, `singleflight/ownerRef` and `singleflight/ownerAnnotations`, for panics in the [owner-resolution caches](annotation.md#the-webhooks-cost-control-does-not-fully-bound-itself). Each is contained: that admission fails open. Any non-zero rate is a bug.
 
 #### `k8s_sustain_webhook_recommendation_source_total`
 
-The outcome of every admission's `WorkloadRecommendation` read, by `source`:
+The outcome of every admission's `WorkloadRecommendation` read, by `source`. A pod that misses its recommendation starts on its template resources with nothing in its spec to say so; this counter is the only place that is visible. Alert on a rising `stale` or `missing` rate relative to `hit`.
 
 | `source` | Meaning |
 |----------|---------|
-| `hit` | A fresh, usable recommendation was read — the healthy outcome. |
-| `retained` | A recommendation **was** injected, but from an object the controller is deliberately keeping for a workload identity that has *departed* — a completed Job, a bare-pod group between runs. Also a success; counted separately because the data is last-known-good rather than fresh, so its age is bounded by `--recommendation-retention` rather than by the staleness budget. The webhook enforces that bound itself (its own `--recommendation-retention`, rendered by the chart from the same value as the controller's) rather than trusting the sweep to have deleted the object — a controller wedged before its sweep would otherwise waive freshness for that identity forever. See [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). |
-| `stale` | The object exists but `observedAt` is older than the 30-minute staleness budget. The controller is falling behind, stuck, or the workload left its policy's scope. Not emitted for a departed identity *within* its retention window: such an identity is still recomputed every cycle, but once its samples age out of the query window the recompute deliberately writes nothing and leaves `observedAt` frozen, so it would report `stale` for the whole window and drown this signal — see `retained`. Past that window it does count as `stale`, and means the same thing it always does: the object should already have been swept, so the controller is stuck or behind. |
-| `missing` | No recommendation exists for this identity at all — no object, or one the controller has not yet evaluated even once. The webhook also creates a [stub](../concepts/workload-recommendations.md#cold-start-stub-recommendations) on this path, which is what puts the identity into the controller's work-list. A workload the controller *has* evaluated and found no samples for reports `nodata`, not `missing`: the controller records that outcome on the object, so this bucket stays what it claims to be — a genuinely unknown identity — rather than absorbing every quiet workload and firing a stub write for it on every admission. |
-| `nodata` | A recommendation object exists and was evaluated, but the identity produced nothing recommendable — the `nodata` state. Recorded for live and departed identities alike: a workload that is running but whose series never appear (a quiet container, an `owner_name` the recording rules do not match, or simply one younger than the 10-minute minimum age) lands here. **No stub is created**: the object already exists and is recomputed on every reconcile interval, so a create could only return `AlreadyExists` and then re-read an object that already has everything the webhook could add. Takes precedence over `stale`: the `nodata` mark stamps `observedAt` once and is deliberately never refreshed, so it is older than the staleness budget within minutes and would otherwise be reported as `stale` for as long as the identity has no history — swamping that alert with healthy traffic on any cluster running recurring short Jobs or bare-pod groups. |
-| `error` | The read itself failed (an apiserver error other than NotFound) — points at apiserver/RBAC/cache trouble rather than an unreconciled workload. |
-
-**Why this matters more than it looks.** Since Prometheus left the admission path, a `WorkloadRecommendation` read is the *only* way a pod can be rightsized at creation. When it fails, the pod starts on its template resources and **nothing in the pod's own spec records that fact** — there is no "I would have been rightsized but the pipeline was unhealthy" marker. This counter is the only place that is visible. Alert on a rising `stale`-or-`missing` rate relative to `hit`.
-
-A transient `missing` for a brand-new workload is normal — it lasts until the controller's next reconcile evaluates the identity for the first time, after which the identity reports `hit` or `nodata`. A *sustained* `missing` rate for the same identity is not normal: it means the controller is never computing it. Cross-check `k8s_sustain_wlr_refresh_total` for that namespace and owner kind — bearing in mind it only reports cycles in which the identity was **departed**, so a workload that is alive at every reconcile will be absent from it however badly it is failing.
-
-Steady `retained` traffic is the expected shape for recurring ephemeral workloads and needs no action. What *is* worth watching is `retained` counts turning into `missing` for the same identity: that means the gap between its runs has outgrown `--recommendation-retention`, so the object is being reaped in between and each run starts cold again.
-
-The webhook shares the same core HTTP middleware as the dashboard (request-ID correlation via `X-Request-Id`, panic recovery, duration telemetry, body-size limit), all living in `internal/httpx`. The dashboard additionally layers CORS and gzip for its SPA + API; the webhook deliberately omits both. Both servers are constructed through `httpx.NewServer`, which applies a single set of hardened timeout defaults (`ReadHeaderTimeout` 5s, `ReadTimeout`/`WriteTimeout` 15s, `IdleTimeout` 60s) so the two can no longer drift apart.
+| `hit` | A fresh recommendation was injected. |
+| `retained` | Injected from a kept recommendation of a departed identity (finished Job, bare-pod group between runs). Its age is bounded by `--recommendation-retention` instead of the staleness budget — see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). Steady `retained` is normal for recurring workloads; `retained` turning into `missing` means the gap between runs exceeds the retention window. |
+| `stale` | `observedAt` is older than the 30-minute staleness budget (or, for a departed identity, older than the retention window): the controller is behind, stuck, or the workload left its policy's scope. |
+| `missing` | No recommendation exists yet. The webhook creates a [stub](../concepts/workload-recommendations.md#cold-start-stub-recommendations) so the controller picks it up. Transient for new workloads; sustained for one identity means the controller never computes it. |
+| `nodata` | The recommendation exists and was evaluated but has no usable samples (too young, quiet, or unmatched by the recording rules). No stub is created. Takes precedence over `stale`. |
+| `error` | The read failed with an apiserver error other than NotFound. |
 
 #### About the `path` label
 
@@ -197,36 +161,4 @@ time series, not thousands.
 
 ## Recording rules
 
-All rules are evaluated every minute. They live in
-`charts/k8s-sustain/templates/prometheusrule.yaml`.
-
-### Workload mapping (existing)
-
-`k8s_sustain:pod_workload` resolves Pod → owner workload via kube-state-metrics.
-
-### Usage rates (existing)
-
-`k8s_sustain:container_cpu_usage:rate1m`, `k8s_sustain:container_cpu_usage_by_workload:rate1m`,
-`k8s_sustain:container_memory_working_set:bytes`, `k8s_sustain:container_memory_by_workload:bytes`,
-`k8s_sustain:workload_max_pod_cpu:cores`, `k8s_sustain:workload_max_pod_memory:bytes`.
-
-### Resource requests (existing)
-
-Per-workload (max across replicas — used for per-workload dashboard views):
-`k8s_sustain:container_cpu_requests_by_workload:cores`,
-`k8s_sustain:container_memory_requests_by_workload:bytes`.
-
-### Savings aggregates (new)
-
-`k8s_sustain:cluster_cpu_savings_cores`, `k8s_sustain:cluster_memory_savings_bytes`,
-`k8s_sustain:cluster_cpu_savings_ratio`, `k8s_sustain:cluster_memory_savings_ratio`,
-`k8s_sustain:policy_cpu_savings_cores`, `k8s_sustain:policy_memory_savings_bytes`.
-
-### Headroom (new)
-
-`k8s_sustain:cluster_cpu_headroom_breakdown` and
-`k8s_sustain:cluster_memory_headroom_breakdown` with label `segment={used,idle,free}`.
-
-### Workload signals (new)
-
-`k8s_sustain:workload_oom_24h` (per-container OOM count, labels include `container`), `k8s_sustain:workload_drifted` (boolean: 1 when at least one pod is stale).
+See [Recording Rules](recording-rules.md).

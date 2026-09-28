@@ -17,11 +17,6 @@ var (
 		Buckets: prometheus.DefBuckets,
 	}, []string{"policy"})
 
-	workloadPatchTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "k8s_sustain_workload_patch_total",
-		Help: "Total number of workload patches by kind and result.",
-	}, []string{"kind", "result"})
-
 	recommendedCPUCores = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_recommended_cpu_cores",
 		Help: "Current CPU recommendation in cores for a workload's container, by policy.",
@@ -175,7 +170,6 @@ func init() {
 	metrics.Registry.MustRegister(
 		reconcileTotal,
 		reconcileDuration,
-		workloadPatchTotal,
 		recommendedCPUCores,
 		recommendedMemoryBytes,
 		templateCPUCores,

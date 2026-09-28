@@ -8,12 +8,14 @@ on:
       - mkdocs.yml
       - .github/workflows/docs.yml
       - .markdownlint-cli2.jsonc
+      - requirements-docs.txt
   pull_request:
     paths:
       - docs/**
       - mkdocs.yml
       - .github/workflows/docs.yml
       - .markdownlint-cli2.jsonc
+      - requirements-docs.txt
   workflow_dispatch:
 
 # Read-only by default; only `deploy` re-grants the write it needs to push

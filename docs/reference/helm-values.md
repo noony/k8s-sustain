@@ -34,6 +34,8 @@ an auth proxy, basic auth with a private CA).
     This block configures k8s-sustain's *client*. The separate top-level
     `prometheus:` key configures the [bundled Prometheus subchart](#prometheus-subchart).
 
+Flag semantics (rotation, conflicts, startup validation) are in the [CLI reference](cli.md#prometheus-authentication-and-tls-flags); this section covers only how the chart renders them.
+
 | Value | Default | Description |
 |-------|---------|-------------|
 | `prometheusAuth.existingSecret` | `""` | Name of an existing Secret in the release namespace holding the bearer token and/or basic-auth credentials. Required for any of the `*Key` values below to take effect. |
@@ -47,14 +49,14 @@ an auth proxy, basic auth with a private CA).
 | `prometheusAuth.basicAuth.password` | `""` | Inline password. **Discouraged** — rendered verbatim into the pod spec. Ignored when `existingSecret` + `passwordKey` are set. |
 | `prometheusAuth.headers` | `{}` | Extra HTTP headers sent with every query, rendered as one `--prometheus-headers=Key=Value` flag per entry, so a value may contain commas or quotes. Header **values land in the pod spec** — use for tenant ids, not credentials. Values **must be strings**: an unquoted number such as `1234567` is parsed as a float and rejected by the values schema (write `"1234567"`). Example: `{X-Scope-OrgID: tenant-a}`. Keys are sorted so the rendered flags and the pod-template hash stay stable. |
 | `prometheusAuth.tls.existingSecret` | `""` | Secret holding the CA bundle and/or client key pair. May be the same Secret as `prometheusAuth.existingSecret`; it is mounted separately, at `/etc/k8s-sustain/prometheus-tls`. |
-| `prometheusAuth.tls.caKey` | `""` | Key holding the CA bundle that signs the Prometheus server certificate (`--prometheus-tls-ca-file`). Appended to the system trust store, never substituted for it. |
+| `prometheusAuth.tls.caKey` | `""` | Key holding the CA bundle that signs the Prometheus server certificate (`--prometheus-tls-ca-file`). |
 | `prometheusAuth.tls.caFile` | `""` | Absolute path to a CA bundle that **already exists in the pod**, passed verbatim as `--prometheus-tls-ca-file`. No volume is rendered. On OpenShift, `/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt` is the service CA that signs the in-cluster monitoring endpoint. Mutually exclusive with `caKey`. |
-| `prometheusAuth.tls.certKey` | `""` | Key holding the client certificate for mTLS (`--prometheus-tls-cert-file`). Must be set with `keyKey`. The pair is re-read on every TLS handshake, so a renewed certificate in the Secret is used without a restart. |
+| `prometheusAuth.tls.certKey` | `""` | Key holding the client certificate for mTLS (`--prometheus-tls-cert-file`). Must be set with `keyKey`. |
 | `prometheusAuth.tls.certFile` | `""` | Absolute path to a client certificate that **already exists in the pod** (a service-mesh sidecar's key pair, say), passed verbatim as `--prometheus-tls-cert-file`. No volume is rendered. Mutually exclusive with `certKey`; still needs a key half (`keyFile` or `keyKey`). |
 | `prometheusAuth.tls.keyKey` | `""` | Key holding the client private key for mTLS (`--prometheus-tls-key-file`). Must be set with `certKey`. |
 | `prometheusAuth.tls.keyFile` | `""` | Absolute path to a client private key that **already exists in the pod**, passed verbatim as `--prometheus-tls-key-file`. No volume is rendered. Mutually exclusive with `keyKey`. |
 | `prometheusAuth.tls.serverName` | `""` | Overrides the SNI / certificate name verified against the server certificate (`--prometheus-tls-server-name`). |
-| `prometheusAuth.tls.insecureSkipVerify` | `false` | Disable server-certificate verification (`--prometheus-tls-insecure-skip-verify`). Debug only — it makes every credential above interceptable. Logs a loud warning at startup. |
+| `prometheusAuth.tls.insecureSkipVerify` | `false` | Disable server-certificate verification (`--prometheus-tls-insecure-skip-verify`). Debug only. |
 
 ### How the values are rendered
 
@@ -112,14 +114,16 @@ an auth proxy, basic auth with a private CA).
 | `controller.metricsBindAddress` | `:8080` | Metrics endpoint address (`:port` or `host:port`); the metrics container port derives from its port part |
 | `controller.healthProbeBindAddress` | `:8081` | Health probe address (`:port` or `host:port`); the health container port derives from its port part |
 | `controller.leaderElect` | `true` | Enable leader election |
+| `controller.leaderElectionID` | `""` | Lease name for leader election (`--leader-election-id`); empty uses the binary default `k8s-sustain-leader-election`. Override when running several installs in one cluster. |
 | `controller.reconcileInterval` | `5m` | How often each matched Policy is re-evaluated (Prometheus re-queried, recommendations refreshed, stale pods recycled) |
 | `controller.workloadConcurrencyLimit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
 | `controller.policyConcurrencyLimit` | `10` | Maximum number of Policy objects reconciled in parallel |
 | `controller.recycleReplacementTimeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where Karpenter / cluster-autoscaler node provisioning regularly takes longer. |
-| `controller.recommendationRetention` | `168h` | How long a WorkloadRecommendation outlives a workload whose object has disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs). Not just a dashboard setting: it also decides whether a *recurring* ephemeral identity is rightsized at admission on its next run, so set it above the longest expected gap between runs (`168h` covers weekly batch). See [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). The dashboard keeps showing retained entries as "inactive" rows until the window lapses. Set to `0s` to sweep them on the next reconcile instead. |
+| `controller.recommendationRetention` | `168h` | How long a WorkloadRecommendation outlives its departed workload; rendered into both the controller and webhook `--recommendation-retention`. See [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). |
 | `controller.prometheusMaxInflight` | `8` | Maximum concurrent Prometheus queries across the whole controller. Kept below Prometheus's own `--query.max-concurrency` (default 20) so k8s-sustain cannot starve the dashboards and alerting sharing that server. Lower this first if the controller is the reason your Prometheus is struggling. |
 | `controller.queryShardMaxSamples` | `10000000` | Projected sample budget (containers × window-minutes, summed across a shard's workloads) one batched CPU/memory/OOM query may reach before a new shard is started. Must stay under Prometheus's `--query.max-samples` (default `50000000`): that limit *rejects* an over-budget query outright, failing every workload in the shard rather than just the excess. The default leaves a 5x margin. |
-| `controller.logLevel` | `error` | Log level |
+| `controller.logLevel` | `error` | Log level. At `error`, the `info`-level recommendation logs used in recommend-only mode are dropped; set `info` to see them. |
+| `controller.terminationGracePeriodSeconds` | `30` | Pod termination grace period (template default; not set in `values.yaml`) |
 | `controller.service.type` | `ClusterIP` | Service type for the metrics endpoint |
 | `controller.service.port` | `8080` | Service port |
 | `controller.service.annotations` | `{}` | Extra annotations for the metrics Service (the chart already adds `prometheus.io/scrape`, `prometheus.io/port`, and `prometheus.io/path`) |
@@ -136,7 +140,7 @@ an auth proxy, basic auth with a private CA).
 controller:
   resources:
     requests:
-      cpu: 10m
+      cpu: 100m
       memory: 128Mi
     limits:
       memory: 256Mi
@@ -170,56 +174,35 @@ controller:
 | `webhook.replicaCount` | `1` | Webhook replicas (≥2 recommended for production) |
 | `webhook.port` | `9443` | HTTPS server port |
 | `webhook.logLevel` | `error` | Log level |
+| `webhook.terminationGracePeriodSeconds` | `30` | Pod termination grace period (template default; not set in `values.yaml`) |
 | `webhook.failurePolicy` | `Ignore` | `Ignore` or `Fail` |
 | `webhook.tlsSecretName` | `k8s-sustain-webhook-tls` | TLS secret name |
 | `webhook.caBundle` | `""` | Base64-encoded CA cert (required when `certManager.enabled=false`) |
-| `webhook.certManager.enabled` | `false` | Create a cert-manager `Certificate` resource |
+| `webhook.certManager.enabled` | `true` | Create a cert-manager `Certificate` and inject the CA bundle. Requires cert-manager; set `false` and provide `tlsSecretName` + `caBundle` otherwise |
 | `webhook.certManager.createIssuer` | `true` | Create a self-signed `Issuer` in the release namespace. Set to `false` to use your own. |
 | `webhook.certManager.issuerRef.name` | `""` | Issuer name (only used when `createIssuer=false`) |
 | `webhook.certManager.issuerRef.kind` | `Issuer` | Issuer kind (only used when `createIssuer=false`) |
 | `webhook.resources` | see below | Webhook container resources |
-| `webhook.startupProbe` | see below | Startup probe timings. Suspends liveness and readiness until the webhook is actually listening. Same fixed endpoint. |
+| `webhook.startupProbe` | see below | Startup probe timings. Suspends liveness and readiness until the webhook is listening. Same fixed endpoint. |
 | `webhook.livenessProbe` | same as controller | Liveness probe timings. The probe endpoint (HTTPS `/healthz` on the webhook port) is fixed by the chart. |
 | `webhook.readinessProbe` | same as controller | Readiness probe timings. Same fixed endpoint as the liveness probe. |
 | `webhook.nodeSelector` | `{}` | Node selector |
 | `webhook.tolerations` | `[]` | Tolerations |
 | `webhook.affinity` | `{}` | Affinity rules |
 
-**The webhook's startup probe is not optional.** The webhook builds an informer
-cache before its HTTPS listener starts, and that build waits up to two minutes
-for the `Policy` and `WorkloadRecommendation` CRDs to become servable — the
-fresh-install race where Helm has created the CRDs but the API server is not
-serving them yet. Nothing answers `/healthz` for that whole period, so the
-liveness probe alone would kill the container after
-`initialDelaySeconds + periodSeconds × failureThreshold` = 40s and the pod would
-end in `CrashLoopBackOff` on exactly the install the wait exists to survive.
-
-The startup probe's budget must therefore stay **larger than that two-minute
-wait** (`crdWaitTimeout` in `internal/k8s/client.go`):
+**Default webhook startup probe:**
 
 ```yaml
 webhook:
   startupProbe:
     initialDelaySeconds: 5
-    periodSeconds: 5      # 5 + 5 × 36 = 185s > 120s
+    periodSeconds: 5      # 5 + 5 × 36 = 185s
     timeoutSeconds: 1
     successThreshold: 1
     failureThreshold: 36
 ```
 
-If you shorten it, shorten it to something still comfortably above two minutes.
-A Go unit test reads this value out of `values.yaml` and fails if the two sides
-drift apart.
-
-The template carries the same numbers as its own defaults, so the probe is
-rendered even when the release's values do not contain `webhook.startupProbe`
-at all — which is what a `helm upgrade --reuse-values` from a release predating
-this key produces, since `--reuse-values` never picks up defaults newly added
-to `values.yaml`. Overriding one field keeps the template defaults for the
-others. A second Go unit test reads that template copy and checks it against
-`crdWaitTimeout` in its own right, and fails if the two copies disagree — so
-raising the wait cannot leave the `--reuse-values` path silently under budget
-while the `values.yaml` side still passes.
+The webhook waits up to two minutes for its CRDs to become servable before it starts listening, so the startup probe budget must stay above 120s or a fresh install ends in `CrashLoopBackOff`. The template carries the same defaults, so the probe is rendered even under `helm upgrade --reuse-values`.
 
 **Default webhook resources:**
 
@@ -245,9 +228,11 @@ The webhook's memory defaults are higher than the controller's on purpose. It se
 | `dashboard.replicaCount` | `1` | Dashboard replicas |
 | `dashboard.bindAddress` | `:8090` | Server bind address (`:port` or `host:port`); the container port derives from its port part |
 | `dashboard.logLevel` | `error` | Log level |
+| `dashboard.terminationGracePeriodSeconds` | `30` | Pod termination grace period (template default; not set in `values.yaml`) |
 | `dashboard.corsAllowedOrigins` | `[]` | Allowed CORS origins. Empty = same-origin only (the safe default). Set to `["https://your-grafana"]` to embed the dashboard cross-origin, or `["*"]` to allow all (not recommended). |
 | `dashboard.service.type` | `ClusterIP` | Service type |
 | `dashboard.service.port` | `8090` | Service port |
+| `dashboard.service.annotations` | `{}` | Extra annotations for the dashboard Service |
 | `dashboard.resources` | see below | Dashboard container resources |
 | `dashboard.livenessProbe` | same as controller | Liveness probe timings. The probe endpoint (`/healthz` on the http port) is fixed by the chart. |
 | `dashboard.readinessProbe` | same as controller | Readiness probe timings. The probe endpoint (`/readyz` on the http port) is fixed by the chart. |
@@ -261,11 +246,30 @@ The webhook's memory defaults are higher than the controller's on purpose. It se
 dashboard:
   resources:
     requests:
-      cpu: 10m
+      cpu: 100m
       memory: 128Mi
     limits:
       memory: 256Mi
 ```
+
+---
+
+## Dashboard exposure
+
+The dashboard has no authentication; expose it only behind something that adds it.
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `ingress.enabled` | `false` | Create an `Ingress` for the dashboard Service |
+| `ingress.className` | `""` | `ingressClassName` |
+| `ingress.annotations` | `{}` | Ingress annotations |
+| `ingress.hosts` | `dashboard.local`, path `/` | Hosts and paths, each routed to the dashboard Service port |
+| `ingress.tls` | `[]` | Standard Ingress `tls` entries |
+| `httpRoute.enabled` | `false` | Create a Gateway API `HTTPRoute` for the dashboard Service |
+| `httpRoute.annotations` | `{}` | HTTPRoute annotations |
+| `httpRoute.parentRefs` | `gateway` / `http` | Gateways the route attaches to |
+| `httpRoute.hostnames` | `[dashboard.local]` | Hostnames matched |
+| `httpRoute.rules` | `PathPrefix /` | Match rules; each is routed to the dashboard Service port |
 
 ---
 
@@ -293,7 +297,11 @@ Only needed when running the Prometheus Operator externally (not the bundled sub
 | `webhook.serviceMonitor.interval` | `30s` | Scrape interval (webhook) |
 | `webhook.serviceMonitor.scrapeTimeout` | `10s` | Scrape timeout (webhook) |
 | `webhook.serviceMonitor.additionalLabels` | `{}` | Extra labels added to the webhook `ServiceMonitor`. Same purpose as the controller variant. |
-| `prometheusRule.enabled` | `false` | Create a Prometheus Operator `PrometheusRule` holding the k8s-sustain recording rules. Leave disabled when using the bundled `prometheus` subchart — the same rules are already embedded in `prometheus.server.serverFiles`, and enabling both would duplicate the series. |
+| `dashboard.serviceMonitor.enabled` | `false` | Create a Prometheus Operator `ServiceMonitor` for the dashboard's `/metrics` (served on its HTTP port) |
+| `dashboard.serviceMonitor.interval` | `30s` | Scrape interval (dashboard) |
+| `dashboard.serviceMonitor.scrapeTimeout` | `10s` | Scrape timeout (dashboard) |
+| `dashboard.serviceMonitor.additionalLabels` | `{}` | Extra labels added to the dashboard `ServiceMonitor`. Same purpose as the controller variant. |
+| `prometheusRule.enabled` | `false` | Create a Prometheus Operator `PrometheusRule` holding the k8s-sustain recording rules. Leave disabled when using the bundled `prometheus` subchart — the same rules are already embedded in `prometheus.serverFiles`, and enabling both would duplicate the series. |
 | `prometheusRule.additionalLabels` | `{}` | Extra labels added to the `PrometheusRule`. Use to match a specific Prometheus operator's `ruleSelector` in clusters with multiple Prometheus instances. |
 | `prometheusRule.groups` | *(see values.yaml)* | The recording-rule groups themselves. Anchored as `&recordingRulesGroups` so the bundled `prometheus` subchart's `serverFiles."recording_rules.yml".groups` aliases this exact list — edits flow to both consumers. The list is consumed regardless of `prometheusRule.enabled`; the toggle only gates the standalone `PrometheusRule` resource. |
 
@@ -303,7 +311,7 @@ Only needed when running the Prometheus Operator externally (not the bundled sub
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `installCRDs` | `true` | Install the `Policy` CRD as part of the chart |
+| `installCRDs` | `true` | Install the `Policy` and `WorkloadRecommendation` CRDs as part of the chart. See [Installation](../getting-started/installation.md) for uninstall behaviour. |
 
 ---
 
@@ -354,7 +362,11 @@ extraManifests:
 
 ## Prometheus subchart
 
-Pass any value supported by the [prometheus chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) under the `prometheus:` key. Recording rules for k8s-sustain are embedded in `prometheus.server.serverFiles` by default.
+| Value | Default | Description |
+|-------|---------|-------------|
+| `prometheus.enabled` | `true` | Deploy the bundled Prometheus (with kube-state-metrics). Disable to bring your own and set `prometheusAddress`. |
+
+Pass any value supported by the [prometheus chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) under the `prometheus:` key. Recording rules for k8s-sustain are embedded in `prometheus.serverFiles` by default.
 
 Common overrides:
 

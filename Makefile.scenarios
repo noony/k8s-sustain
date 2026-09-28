@@ -68,7 +68,6 @@ test-kind-up: ## Bring up kind cluster with cert-manager + metrics-server, build
 		--set image.repository=$(firstword $(subst :, ,$(TEST_IMG))) \
 		--set image.tag=$(lastword $(subst :, ,$(TEST_IMG))) \
 		--set image.pullPolicy=Never \
-		--set webhook.certManager.enabled=true \
 		--set controller.reconcileInterval=$(RECONCILE) \
 		--set controller.logLevel=debug \
 		--set webhook.logLevel=debug \

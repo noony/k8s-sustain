@@ -4,10 +4,9 @@ Cluster, tooling, and metrics requirements before installing k8s-sustain.
 
 ## Kubernetes
 
-| Requirement | Version |
-|-------------|---------|
-| Kubernetes | ≥ 1.24 |
-| Kubernetes (in-place updates) | ≥ 1.33 |
+Kubernetes **1.29 or later**. The CRDs' CEL validation rules use the Kubernetes `quantity()` library, which older API servers reject when the CRD is applied.
+
+Running pods are resized in place from 1.33; older clusters fall back to eviction. See the [version matrix](../concepts/in-place-updates.md#version-matrix).
 
 ## Helm
 
@@ -26,6 +25,7 @@ If you bring your own Prometheus, make sure **kube-state-metrics** and **cAdviso
 From **kube-state-metrics**:
 
 - `kube_pod_owner` — maps pods to their workload owner
+- `kube_pod_labels` — carries the `k8s.sustain.io/owner-name` label for [identity grouping](../guides/standalone-pods-and-grouping.md). kube-state-metrics only exports it when allowlisted: set `metricLabelsAllowlist: ["pods=[k8s.sustain.io/owner-name]"]` (the `--metric-labels-allowlist` flag)
 - `kube_job_owner` — resolves Job → CronJob
 - `kube_replicaset_owner` — resolves ReplicaSet → Deployment (or Rollout)
 - `kube_pod_container_resource_requests` / `kube_pod_container_resource_limits` — current CPU/memory requests and limits
@@ -60,11 +60,11 @@ override) are all supported. The controller and the dashboard are wired
 identically; the webhook needs nothing, since it never queries Prometheus. See
 the [Authenticated Prometheus guide](../guides/authenticated-prometheus.md).
 
-## TLS certificate (webhook only)
+## TLS certificate
 
-The admission webhook requires a valid TLS certificate trusted by the Kubernetes API server. Two options are supported:
+The admission webhook requires a TLS certificate trusted by the Kubernetes API server. Two options are supported:
 
-- **cert-manager** (recommended) — set `webhook.certManager.enabled=true`
-- **Manual secret** — create a `Secret` of type `kubernetes.io/tls` with `tls.crt` and `tls.key`, then set `webhook.tlsSecretName`
+- **cert-manager** (default) — install [cert-manager](https://cert-manager.io/) before the chart; with `webhook.certManager.enabled=true` (the default) the chart creates the Certificate and cert-manager injects the CA bundle.
+- **Manual** — set `webhook.certManager.enabled=false`, create a `Secret` of type `kubernetes.io/tls` with `tls.crt` and `tls.key` in the release namespace, set `webhook.tlsSecretName` to its name, and set `webhook.caBundle` to the base64-encoded CA certificate that signed it. The certificate must carry the webhook Service DNS names as SANs — see the [cert-manager guide](../guides/cert-manager.md).
 
-If you only use `Ongoing` mode (no `OnCreate`), the webhook is not needed and you can disable it with `webhook.enabled=false`.
+The webhook cannot be skipped: see [The admission webhook is required](installation.md#the-admission-webhook-is-required).

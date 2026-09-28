@@ -14,8 +14,9 @@ tests:
       - equal:
           path: metadata.name
           value: k8s-sustain
-      - notExists:
-          path: metadata.annotations
+      - equal:
+          path: metadata.annotations["cert-manager.io/inject-ca-from"]
+          value: k8s-sustain/k8s-sustain-webhook
       - equal:
           path: webhooks[0].name
           value: pods.k8s-sustain.io
@@ -102,6 +103,7 @@ tests:
 
   - it: uses an explicit caBundle when certManager is disabled
     set:
+      webhook.certManager.enabled: false
       webhook.caBundle: Zm9vYmFy
     asserts:
       - equal:

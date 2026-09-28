@@ -1,14 +1,11 @@
 # scenario: job
 # expected: A standalone batch/v1 Job (NOT created by a CronJob) whose pod
 # receives webhook-injected resources at admission. Validates the Pod -> Job
-# webhook resolution branch in isolation: the controller does not reconcile
-# standalone Jobs, so any resource adjustment observed on the pod is purely
-# the webhook's doing.
-#
-# Because there is only one run, mode `OnCreate` is the natural fit — the
-# pod is right-sized at admission with whatever recommendation Prometheus has
-# accumulated so far for owner_kind=Job (or for the workload family fallback
-# if no Job-specific history exists).
+# webhook resolution branch. The policy uses `job: OnCreate`, so the
+# controller only computes and caches the recommendation; any resource
+# adjustment observed on the pod is the webhook's doing. On a cache miss the
+# webhook writes a cold-start stub WorkloadRecommendation so the next
+# reconcile picks the Job up.
 #
 # Initial requests are deliberately oversized at 500m / 256Mi; per-run usage
 # is ~50m / ~30Mi for ~5 min. A second `Job` (re-applied after WINDOW) is

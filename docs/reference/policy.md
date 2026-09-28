@@ -19,8 +19,11 @@ kind: Policy
 metadata:
   name: production-rightsizing
 spec:
+  selector:
+    namespaces: [production]
   rightSizing:
     recommendOnly: false        # set true to dry-run just this policy
+    excludeInitContainers: false
     update:
       types:
         deployment: Ongoing
@@ -28,6 +31,8 @@ spec:
         daemonSet: Ongoing
         argoRollout: Ongoing
         cronJob: OnCreate
+        job: OnCreate
+        pod: Ongoing
       eviction:
         ignoreAutoscalerSafeToEvictAnnotations: false
     autoscalerCoordination:
@@ -64,9 +69,9 @@ spec:
 
 ## `spec.selector`
 
-Restricts which namespaces and workloads this policy applies to. Both the controller (when listing workloads to reconcile) and the admission webhook (when deciding whether to inject resources at pod creation) honour the same selector — so a workload outside the policy's scope is left alone by both components.
+Restricts which namespaces and workloads this policy applies to. The selector only **narrows**: a workload must also opt in with the `k8s.sustain.io/policy` annotation (see [Resolution order](annotation.md#resolution-order)). The controller, webhook and dashboard all honour the same selector.
 
-The webhook additionally honours the operator-level `--excluded-namespaces` flag (see [CLI reference](./cli.md)); a pod in an excluded namespace is admitted unchanged regardless of selector configuration. If `spec.selector.labelSelector` is malformed, the webhook fails open (admits the pod without mutation and logs a warning) rather than denying it.
+The controller and webhook also honour their operator-level `--excluded-namespaces` flag (see [CLI reference](./cli.md)); a workload in an excluded namespace is never managed regardless of selector configuration. If `spec.selector.labelSelector` is malformed, the webhook fails open (admits the pod without mutation and logs a warning) rather than denying it.
 
 ### `spec.selector.namespaces`
 
@@ -177,7 +182,7 @@ Configures recommendations for CPU and memory independently.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `percentile` | int32 | `95` | Percentile of usage to use as the recommendation. Range `1`–`100`. `100` resolves to the maximum sample over the window — useful for memory when you never want to undershoot the observed peak. |
-| `headroom` | int32 | `0` | Safety buffer added on top of the observed percentile value |
+| `headroom` | int32 | `0` | Safety buffer added on top of the observed percentile value, as a percentage. Range `0`–`100` (`20` = ×1.2). |
 | `keepRequest` | bool | `false` | When `true`, the request is not changed. Cannot be combined with `headroom`, `percentile`, `minAllowed`, or `maxAllowed` (those have no effect when the request is kept; rejected by CRD validation). |
 | `minAllowed` | Quantity | — | Floor value for the computed request. Must be `<= maxAllowed` if both are set. |
 | `maxAllowed` | Quantity | — | Cap value for the computed request. Must be `>= minAllowed` if both are set. |
@@ -207,7 +212,7 @@ exceeds `max(percent% × current, minDecrease)`.
 | `minDecrease` | Quantity | `10m` (CPU) / `15Mi` (memory) | Minimum decrease as an absolute quantity. Dominates the band at small workload sizes, so tiny pods are not recycled to reclaim a few millicores / MiB. |
 
 Set both `percent: 0` and `minDecrease: "0"` to disable suppression for that
-resource (every decrease is applied, as before this feature existed).
+resource (every decrease is applied).
 
 The threshold gates only the controller's recycling of **running** pods. The
 admission webhook always injects the exact recommendation at pod creation — a

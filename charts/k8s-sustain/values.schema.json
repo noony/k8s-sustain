@@ -88,7 +88,8 @@
         "leaderElect": { "type": "boolean" },
         "leaderElectionID": { "type": "string" },
         "reconcileInterval": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
-        "concurrencyLimit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "workloadConcurrencyLimit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "policyConcurrencyLimit": { "type": "integer", "minimum": 1, "maximum": 100 },
         "recycleReplacementTimeout": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
         "recommendationRetention": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
         "prometheusMaxInflight": { "type": "integer", "minimum": 1, "maximum": 100 },
@@ -161,6 +162,7 @@
           }
         },
         "resources": { "$ref": "#/definitions/resources" },
+        "startupProbe": { "$ref": "#/definitions/probe" },
         "livenessProbe": { "$ref": "#/definitions/probe" },
         "readinessProbe": { "$ref": "#/definitions/probe" },
         "serviceMonitor": {
@@ -261,6 +263,16 @@
         "resources": { "$ref": "#/definitions/resources" },
         "livenessProbe": { "$ref": "#/definitions/probe" },
         "readinessProbe": { "$ref": "#/definitions/probe" },
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "interval": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
+            "scrapeTimeout": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
+            "additionalLabels": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
         "nodeSelector": { "type": "object" },
         "tolerations": { "type": "array" },
         "affinity": { "type": "object" }

@@ -46,9 +46,7 @@ That 7-percentage-point cushion is what stops the feedback loop in the
 section above: real load growth — not request inflation — is what
 crosses the threshold.
 
-The 1.10 safety margin is hard-coded in v1. Knobs to expose it are not on
-the roadmap; the math gets fragile when users start tuning it for "less
-overhead" without modelling their actual traffic shape.
+The 1.10 safety margin is fixed.
 
 ### Caveats
 
@@ -101,25 +99,7 @@ anchor=0.10`:
 
 The clamp `[0.5, 2.0]` exists so a single reconcile can't catastrophically up- or down-size a pod. Steady-state convergence takes a few reconcile cycles, which is fine for a knob that's optimising for monthly cost rather than real-time response.
 
-**Computed by the controller; served as-is by the webhook.** The
-replica-budget factor is only ever computed by the controller, as part of
-the single recommendation pipeline it runs on its reconcile cadence — there
-is no second, webhook-side computation anymore. Earlier versions had the
-webhook independently build its own recommendation at admission time with
-the replica factor deliberately disabled there (`DisableReplicaCorrection`):
-a pod created *during* an HPA scale-out would otherwise see a transiently
-high `current_replicas` read live at admission and be injected with up to 2×
-the intended CPU request, potentially triggering node scale-up before the
-fleet settled. That admission-time computation — and the option to suppress
-part of it — no longer exists: the webhook now only injects whatever value
-the controller last computed and cached in the `WorkloadRecommendation` (see
-[Workload Recommendations](workload-recommendations.md)), replica-budget
-correction included. In practice this still lands close to steady state,
-because the cached factor reflects the replica count as of the controller's
-last reconcile (default every 5m) rather than the instant a scale-out's own
-new pods are created — but a reconcile that happens to land mid-scale-out
-can still cache a transient factor until the next cycle corrects it. The
-overhead formula above is unaffected either way.
+**Computed on the controller's reconcile.** The factor uses the replica count as of the controller's last reconcile, and the webhook injects that cached value. A reconcile that lands mid-scale-out can cache a transient factor until the next cycle corrects it.
 
 ## Detection rules
 

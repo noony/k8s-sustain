@@ -1,45 +1,10 @@
 # KEDA Integration
 
-k8s-sustain detects [KEDA](https://keda.sh) `ScaledObject`s automatically and shapes recommendations so the autoscaler's utilization signal stays meaningful — no configuration required.
-
-## Goal
-
-Run a workload scaled by a `ScaledObject` and confirm k8s-sustain's recommendation stays consistent across scaling events.
-
-## Prerequisites
-
-- KEDA installed in the cluster (the `ScaledObject` CRD is sufficient).
-- A workload with a `k8s.sustain.io/policy` annotation (pod template, its own `metadata.annotations`, or its Namespace — see the [Annotation reference](../reference/annotation.md)).
-- A k8s-sustain `Policy` matching the workload (see [Installation](../getting-started/installation.md)).
-- A Prometheus instance reachable from the controller.
+k8s-sustain detects [KEDA](https://keda.sh) `ScaledObject`s automatically. With [autoscaler coordination](../concepts/autoscaler-coordination.md) enabled on the Policy, it also shapes requests so the autoscaler's utilization signal stays meaningful.
 
 ## Walkthrough
 
-### 1. Annotate the Deployment
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: example-app
-  namespace: example
-spec:
-  replicas: 3
-  selector: { matchLabels: { app: example-app } }
-  template:
-    metadata:
-      labels: { app: example-app }
-      annotations:
-        k8s.sustain.io/policy: production-rightsizing
-    spec:
-      containers:
-        - name: app
-          image: nginx:1.27
-          resources:
-            requests: { cpu: 100m, memory: 256Mi }
-```
-
-### 2. Define a `ScaledObject`
+Opt in the workload as shown in the [Quick Start](../getting-started/quick-start.md#3-opt-in-a-deployment) (annotation `k8s.sustain.io/policy: production-rightsizing`), then define its `ScaledObject`:
 
 ```yaml
 apiVersion: keda.sh/v1alpha1
@@ -59,9 +24,7 @@ spec:
       metadata: { value: "70" }
 ```
 
-### 3. Enable autoscaler coordination
-
-To shape requests so KEDA's utilization signal stays meaningful, enable the overhead formula on the Policy:
+Enable the kind and coordination on the Policy:
 
 ```yaml
 apiVersion: k8s.sustain.io/v1alpha1
@@ -70,6 +33,9 @@ metadata:
   name: production-rightsizing
 spec:
   rightSizing:
+    update:
+      types:
+        deployment: Ongoing
     autoscalerCoordination:
       enabled: true
     resourcesConfigs:
@@ -81,19 +47,18 @@ See [Autoscaler Coordination](../concepts/autoscaler-coordination.md) for the fo
 
 ## Verification
 
-Confirm the controller observed the `ScaledObject`:
+Each reconcile that finds an autoscaler emits an `AutoscalerDetected` event on the workload:
 
 ```bash
-kubectl logs -n k8s-sustain deploy/k8s-sustain-controller \
-  | grep -E 'scaledObject|coordination'
+kubectl get events -n example --field-selector reason=AutoscalerDetected
 ```
 
-The metric `k8s_sustain_coordination_factor` should report the applied multiplier (`kind="overhead"`) for the workload.
+With coordination enabled, the `k8s_sustain_coordination_factor` metric reports the applied multiplier (`kind="overhead"`) for the workload.
 
 ## Notes
 
-- **Per-pod signal.** k8s-sustain sizes from the busiest replica's per-pod percentile (`max by` across pods), not a sum or per-pod average. Because `max` picks the hottest pod at each instant regardless of replica count, KEDA scaling 3 → 6 pods does not change the recommendation.
-- **HPA + ScaledObject co-existence.** KEDA itself manages an HPA on behalf of each `ScaledObject`. When k8s-sustain finds both targeting the same workload, the `ScaledObject` is canonical and the HPA is ignored for autoscaler-coordination purposes.
-- **Scale-to-zero.** When `minReplicaCount: 0` is configured and the workload scales to 0, the `max by` recording rule simply produces no samples for the idle window; `quantile_over_time` ignores the gap and sizes from the periods the workload was actually running — there is no replica division to guard against divide-by-zero.
-- **CRD-absent behavior.** If the KEDA CRD is not installed, the `ScaledObject` lookup returns no match silently and recommendations proceed using HPA-only detection.
-- **No HPA / ScaledObject patches.** k8s-sustain never modifies an HPA or a `ScaledObject`. Both are read-only inputs to the recommender.
+- **Per-pod signal.** k8s-sustain sizes from the busiest replica's per-pod percentile (`max by` across pods), not a sum or per-pod average, so KEDA scaling 3 → 6 pods does not change the recommendation.
+- **HPA + ScaledObject co-existence.** KEDA manages an HPA on behalf of each `ScaledObject`. When both target the same workload, the `ScaledObject` is canonical and the HPA is ignored.
+- **Scale-to-zero.** When the workload scales to 0, the recording rule produces no samples for the idle period and the percentile is computed from the periods the workload was running.
+- **CRD-absent behaviour.** If the KEDA CRD is not installed, the `ScaledObject` lookup is skipped silently and only HPAs are detected.
+- **Read-only.** k8s-sustain never modifies an HPA or a `ScaledObject`.

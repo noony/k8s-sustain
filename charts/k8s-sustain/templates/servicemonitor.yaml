@@ -48,3 +48,26 @@ spec:
       tlsConfig:
         insecureSkipVerify: true
 {{- end }}
+{{- if and .Values.dashboard.enabled .Values.dashboard.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "k8s-sustain.dashboardName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-sustain.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+    {{- with .Values.dashboard.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "k8s-sustain.dashboardSelectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.dashboard.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.dashboard.serviceMonitor.scrapeTimeout }}
+{{- end }}

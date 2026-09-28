@@ -62,15 +62,15 @@ func bindStringArray(flags *pflag.FlagSet, key, flagName, usage string) {
 
 // BindGlobalFlags registers global persistent flags on the root command.
 func BindGlobalFlags(root *cobra.Command) {
-	root.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: $HOME/.k8s-sustain.yaml)")
+	root.PersistentFlags().StringVar(&cfgFile, "config", "", "config file")
 	bindBool(root.PersistentFlags(), "recommend-only", "recommend-only", false,
 		"Compute recommendations but never patch workloads or mutate pods (dry-run mode)")
 }
 
 var cfgFile string
 
-// InitViper sets up Viper's config-file search paths, env prefix, and reads
-// the config file if present. Must be passed to cobra.OnInitialize().
+// InitViper sets up Viper's env prefix and reads the --config file when
+// given. Must be passed to cobra.OnInitialize().
 func InitViper() {
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
