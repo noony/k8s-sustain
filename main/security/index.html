@@ -971,35 +971,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -1722,6 +1694,95 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#runtime-security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime security
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Runtime security">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#identities-and-rbac" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Identities and RBAC
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Identities and RBAC">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-the-grant-is-cluster-wide" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why the grant is cluster-wide
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardening-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardening options
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admission-webhook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admission webhook
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pods
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-we-publish" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1933,6 +1994,95 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#runtime-security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime security
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Runtime security">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#identities-and-rbac" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Identities and RBAC
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Identities and RBAC">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-the-grant-is-cluster-wide" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why the grant is cluster-wide
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardening-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardening options
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#admission-webhook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admission webhook
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pods
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-we-publish" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2111,8 +2261,101 @@
 
 
 <h1 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h1>
-<p>Every <code>v*</code> tag publishes signed artifacts. This page tells you what is signed, how to verify it before you deploy it, and how the pipeline that produced it is hardened.</p>
-<p>The project is pre-1.0 and under active development. Signing, provenance and SBOMs start from the first release published after this pipeline landed — earlier tags have checksums only.</p>
+<p>This page covers what k8s-sustain can do inside your cluster (<a href="#runtime-security">Runtime security</a>), and the signed artifacts every <code>v*</code> tag publishes: what is signed, how to verify it before you deploy it, and how the pipeline that produced it is hardened.</p>
+<p>The project is pre-1.0 and under active development. The earliest tags predate signing and have checksums only.</p>
+<h2 id="runtime-security">Runtime security<a class="headerlink" href="#runtime-security" title="Permanent link">&para;</a></h2>
+<h3 id="identities-and-rbac">Identities and RBAC<a class="headerlink" href="#identities-and-rbac" title="Permanent link">&para;</a></h3>
+<p>The chart creates two ServiceAccounts, each bound to a ClusterRole (<code>charts/k8s-sustain/templates/rbac.yaml</code>):</p>
+<ul>
+<li><strong><code>&lt;fullname&gt;</code></strong>, shared by the controller and the webhook.</li>
+<li><strong><code>&lt;fullname&gt;-dashboard</code></strong>, for the dashboard (only when <code>dashboard.enabled</code>), with a strictly narrower role: <code>get</code>/<code>list</code>/<code>watch</code> only, no pod patch, resize or eviction, and no writes to any k8s-sustain resource.</li>
+</ul>
+<p>The controller/webhook ClusterRole grants:</p>
+<table>
+<thead>
+<tr>
+<th>Resources</th>
+<th>Verbs</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>policies</code></td>
+<td>get, list, watch, update, patch</td>
+<td>watching Policies, managing the <code>k8s.sustain.io/cleanup</code> finalizer</td>
+</tr>
+<tr>
+<td><code>policies/status</code></td>
+<td>get, update, patch</td>
+<td>status conditions</td>
+</tr>
+<tr>
+<td><code>policies/finalizers</code></td>
+<td>update</td>
+<td>finalizer</td>
+</tr>
+<tr>
+<td><code>workloadrecommendations</code>, <code>/status</code></td>
+<td>get, list, watch, create, update, patch, delete</td>
+<td>the recommendation cache; the webhook only reads it and creates stubs</td>
+</tr>
+<tr>
+<td><code>pods</code></td>
+<td>get, list, watch, patch</td>
+<td>listing and matching pods</td>
+</tr>
+<tr>
+<td><code>pods/resize</code></td>
+<td>patch</td>
+<td>in-place resize</td>
+</tr>
+<tr>
+<td><code>pods/eviction</code></td>
+<td>create</td>
+<td>PDB-respecting eviction</td>
+</tr>
+<tr>
+<td>Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, CronJobs, Argo Rollouts, Namespaces</td>
+<td>get, list, watch</td>
+<td>discovery and owner resolution — workload specs are never written</td>
+</tr>
+<tr>
+<td>HPAs, KEDA <code>ScaledObject</code>s</td>
+<td>get, list, watch</td>
+<td><a href="../concepts/autoscaler-coordination/">autoscaler coordination</a></td>
+</tr>
+<tr>
+<td><code>leases</code></td>
+<td>full</td>
+<td>leader election</td>
+</tr>
+<tr>
+<td><code>events</code> (core and <code>events.k8s.io</code>)</td>
+<td>create, patch</td>
+<td>reconcile and resize events</td>
+</tr>
+</tbody>
+</table>
+<h4 id="why-the-grant-is-cluster-wide">Why the grant is cluster-wide<a class="headerlink" href="#why-the-grant-is-cluster-wide" title="Permanent link">&para;</a></h4>
+<p>A Policy can target every namespace, and <code>WorkloadRecommendation</code> is namespaced, so the controller must write recommendations anywhere a matched workload lives and the webhook must read them for any pod it admits. RBAC cannot scope a grant by label, so the <code>k8s.sustain.io/policy</code> label on recommendations narrows the controller's list calls but not its permissions.</p>
+<h4 id="hardening-options">Hardening options<a class="headerlink" href="#hardening-options" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Treat Policy authorship as an admin operation.</strong> A Policy decides which namespaces can opt in; keep <code>create</code> on <code>policies</code> out of namespace owners' hands. <code>--excluded-namespaces</code> (Helm <code>excludedNamespaces</code>) is a hard deny no annotation can override.</li>
+<li><strong>NetworkPolicy on the webhook.</strong> Allow ingress to the webhook only from the API server.</li>
+<li><strong>Audit policy.</strong> Log API access from the k8s-sustain ServiceAccount to trace recommendation writes, resizes and evictions.</li>
+</ul>
+<h3 id="admission-webhook">Admission webhook<a class="headerlink" href="#admission-webhook" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Fails open.</strong> <code>failurePolicy: Ignore</code> by default (<code>webhook.failurePolicy</code>): if the webhook is unreachable, errors or times out, the pod is admitted unmodified. Setting <code>Fail</code> makes pod creation in every covered namespace depend on the webhook's availability.</li>
+<li><strong>Bounded latency.</strong> The apiserver timeout is 5s; the handler enforces its own 4s deadline and 2s per API call.</li>
+<li><strong>Narrow scope.</strong> It fires only on Pod <code>CREATE</code>, has <code>sideEffects: None</code>, and only ever patches container resources and the <code>k8s.sustain.io/owner-name</code> pod label. The release namespace, <code>kube-system</code>, <code>kube-public</code> and <code>excludedNamespaces</code> are excluded by the <code>namespaceSelector</code>.</li>
+<li><strong>TLS.</strong> The API server must trust the webhook's certificate: either cert-manager issues it and injects the CA bundle (<code>webhook.certManager.enabled=true</code>, the default), or you set it to <code>false</code> and supply a TLS Secret (<code>webhook.tlsSecretName</code>) and its CA (<code>webhook.caBundle</code>). Rotated certificates are reloaded without a restart. See the <a href="../guides/cert-manager/">cert-manager guide</a>.</li>
+</ul>
+<h3 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h3>
+<p>The dashboard (enabled by default) is read-only but has <strong>no built-in authentication</strong>: anyone who can reach it can read every Policy, recommendation and usage chart. It is exposed only through a <code>ClusterIP</code> Service. Before exposing it through an Ingress or Gateway, put an authenticating proxy in front of it — see the <a href="../guides/dashboard/">Dashboard guide</a> — or disable it with <code>dashboard.enabled=false</code>.</p>
+<h3 id="pods">Pods<a class="headerlink" href="#pods" title="Permanent link">&para;</a></h3>
+<p>All components run as non-root (UID 65532) with a read-only root filesystem, all capabilities dropped, no privilege escalation and the <code>RuntimeDefault</code> seccomp profile, from a distroless image.</p>
 <h2 id="what-we-publish">What we publish<a class="headerlink" href="#what-we-publish" title="Permanent link">&para;</a></h2>
 <table>
 <thead>

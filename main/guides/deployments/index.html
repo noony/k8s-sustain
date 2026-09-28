@@ -16,7 +16,7 @@
         <link rel="prev" href="../../concepts/workload-recommendations/">
       
       
-        <link rel="next" href="../daemonsets/">
+        <link rel="next" href="../jobs-and-cronjobs/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Deployments & StatefulSets - k8s-sustain</title>
+        <title>Deployments, StatefulSets & DaemonSets - k8s-sustain</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#deployments-statefulsets" class="md-skip">
+        <a href="#deployments-statefulsets-daemonsets" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Deployments & StatefulSets
+              Deployments, StatefulSets & DaemonSets
             
           </span>
         </div>
@@ -992,7 +992,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -1010,7 +1010,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -1036,10 +1036,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#goal" class="md-nav__link">
+  <a href="#opt-in" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Goal
+        Opt in
       
     </span>
   </a>
@@ -1047,60 +1047,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#what-happens-on-each-reconcile" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#walkthrough" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Walkthrough
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Walkthrough">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-annotate-the-workload" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. Annotate the workload
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-apply-the-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Apply the Policy
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#verification" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Verification
+        What happens on each reconcile
       
     </span>
   </a>
@@ -1122,34 +1072,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -1884,10 +1806,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#goal" class="md-nav__link">
+  <a href="#opt-in" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Goal
+        Opt in
       
     </span>
   </a>
@@ -1895,60 +1817,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
+  <a href="#what-happens-on-each-reconcile" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prerequisites
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#walkthrough" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Walkthrough
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Walkthrough">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-annotate-the-workload" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. Annotate the workload
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-apply-the-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Apply the Policy
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#verification" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Verification
+        What happens on each reconcile
       
     </span>
   </a>
@@ -2060,76 +1932,46 @@
   
 
 
-<h1 id="deployments-statefulsets">Deployments &amp; StatefulSets<a class="headerlink" href="#deployments-statefulsets" title="Permanent link">&para;</a></h1>
-<p>k8s-sustain right-sizes Deployments and StatefulSets uniformly: the controller recycles stale pods (in-place on Kubernetes 1.33+, eviction on older versions) and the webhook injects fresh recommendations into replacement pods.</p>
-<h2 id="goal">Goal<a class="headerlink" href="#goal" title="Permanent link">&para;</a></h2>
-<p>Right-size a Deployment (or StatefulSet) in <code>Ongoing</code> mode without disrupting running traffic.</p>
-<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
-<ul>
-<li>A Deployment or StatefulSet with a <code>k8s.sustain.io/policy</code> annotation (pod template, the workload's own <code>metadata.annotations</code>, or its Namespace — see the <a href="../../reference/annotation/">Annotation reference</a>).</li>
-<li>A k8s-sustain <code>Policy</code> matching the workload (see <a href="../../getting-started/installation/">Installation</a>).</li>
-<li>A Prometheus instance reachable from the controller.</li>
-</ul>
-<h2 id="walkthrough">Walkthrough<a class="headerlink" href="#walkthrough" title="Permanent link">&para;</a></h2>
-<h3 id="1-annotate-the-workload">1. Annotate the workload<a class="headerlink" href="#1-annotate-the-workload" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Deployment</span>
+<h1 id="deployments-statefulsets-daemonsets">Deployments, StatefulSets &amp; DaemonSets<a class="headerlink" href="#deployments-statefulsets-daemonsets" title="Permanent link">&para;</a></h1>
+<p>k8s-sustain right-sizes Deployments, StatefulSets and DaemonSets through the same code path: the webhook injects the recommendation into every new pod, and in <code>Ongoing</code> mode the controller also brings running pods up to date. The workload spec is never patched.</p>
+<h2 id="opt-in">Opt in<a class="headerlink" href="#opt-in" title="Permanent link">&para;</a></h2>
+<p>Annotate the workload as shown in the <a href="../../getting-started/quick-start/#3-opt-in-a-deployment">Quick Start</a>, then enable the kinds on a Policy:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example-app</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nt">selector</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> matchLabels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> app</span><span class="p">:</span><span class="w"> </span><span class="nv">example-app</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="nt">template</span><span class="p">:</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">      </span><span class="nt">labels</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> app</span><span class="p">:</span><span class="w"> </span><span class="nv">example-app</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">      </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">        </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web-rightsizing</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">app</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">          </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nginx:1.27</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">          </span><span class="nt">resources</span><span class="p">:</span>
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">            </span><span class="nt">requests</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> cpu</span><span class="p">:</span><span class="w"> </span><span class="nv">100m</span><span class="p p-Indicator">,</span><span class="nt"> memory</span><span class="p">:</span><span class="w"> </span><span class="nv">256Mi</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">            </span><span class="nt">limits</span><span class="p">:</span><span class="w">   </span><span class="p p-Indicator">{</span><span class="nt"> cpu</span><span class="p">:</span><span class="w"> </span><span class="nv">200m</span><span class="p p-Indicator">,</span><span class="nt"> memory</span><span class="p">:</span><span class="w"> </span><span class="nv">512Mi</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web-rightsizing</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">        </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">        </span><span class="nt">statefulSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">        </span><span class="nt">daemonSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nt">resourcesConfigs</span><span class="p">:</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">168h</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> percentile</span><span class="p">:</span><span class="w"> </span><span class="nv">95</span><span class="p p-Indicator">,</span><span class="nt"> headroom</span><span class="p">:</span><span class="w"> </span><span class="nv">10</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span><span class="w">   </span><span class="p p-Indicator">{</span><span class="nt"> keepLimitRequestRatio</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">168h</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> percentile</span><span class="p">:</span><span class="w"> </span><span class="nv">95</span><span class="p p-Indicator">,</span><span class="nt"> headroom</span><span class="p">:</span><span class="w"> </span><span class="nv">20</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span><span class="w">   </span><span class="p p-Indicator">{</span><span class="nt"> keepLimitRequestRatio</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="w"> </span><span class="p p-Indicator">}</span>
 </code></pre></div>
-<h3 id="2-apply-the-policy">2. Apply the Policy<a class="headerlink" href="#2-apply-the-policy" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web-rightsizing</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">        </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="nt">statefulSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nt">resourcesConfigs</span><span class="p">:</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">168h</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> percentile</span><span class="p">:</span><span class="w"> </span><span class="nv">95</span><span class="p p-Indicator">,</span><span class="nt"> headroom</span><span class="p">:</span><span class="w"> </span><span class="nv">10</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span><span class="w">   </span><span class="p p-Indicator">{</span><span class="nt"> keepLimitRequestRatio</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span>
-<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">168h</span>
-<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> percentile</span><span class="p">:</span><span class="w"> </span><span class="nv">95</span><span class="p p-Indicator">,</span><span class="nt"> headroom</span><span class="p">:</span><span class="w"> </span><span class="nv">20</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span><span class="w">   </span><span class="p p-Indicator">{</span><span class="nt"> keepLimitRequestRatio</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="w"> </span><span class="p p-Indicator">}</span>
-</code></pre></div>
-<h2 id="verification">Verification<a class="headerlink" href="#verification" title="Permanent link">&para;</a></h2>
-<p>After a reconcile cycle, inspect a running pod:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>example<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>example-app<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>yq<span class="w"> </span><span class="s1">'.items[0].spec.containers[].resources'</span>
-</code></pre></div>
-<p>The Deployment's pod template stays unchanged:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>deploy<span class="w"> </span>example-app<span class="w"> </span>-n<span class="w"> </span>example<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>yq<span class="w"> </span><span class="s1">'.spec.template.spec.containers[].resources'</span>
-</code></pre></div>
-<p>These differ — the webhook mutates pods at admission, not the workload spec.</p>
+<p>Both the annotation and the Policy's selector must match the workload — see <a href="../../reference/annotation/#resolution-order">Resolution order</a>.</p>
+<h2 id="what-happens-on-each-reconcile">What happens on each reconcile<a class="headerlink" href="#what-happens-on-each-reconcile" title="Permanent link">&para;</a></h2>
+<p>Every <code>--reconcile-interval</code> (default <code>5m</code>) the controller recomputes the recommendation and, in <code>Ongoing</code> mode, updates the pods that are not yet running it:</p>
+<ul>
+<li>Running pods are resized in place where the cluster supports it, otherwise evicted so the webhook sizes the replacement — see <a href="../../concepts/in-place-updates/#version-matrix">Version matrix</a> and <a href="../../concepts/in-place-updates/#eviction-fallback">Eviction fallback</a>.</li>
+<li>Evictions go one pod at a time and respect PDBs and the other <a href="../../concepts/update-modes/#eviction-safeguards">eviction safeguards</a>.</li>
+<li>Small request decreases are suppressed by the <a href="../../concepts/update-modes/#downsize-threshold">downsize threshold</a>; increases always apply.</li>
+</ul>
+<p><code>OnCreate</code> skips the recycling step: running pods keep their resources until the next rollout. To check the result, see <a href="../../concepts/update-modes/#verifying-applied-resources">Verifying applied resources</a>.</p>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong><code>Ongoing</code> vs <code>OnCreate</code>.</strong> <code>Ongoing</code> keeps running pods aligned with the latest recommendation by recycling them on drift. <code>OnCreate</code> only injects at admission and lets the controller leave running pods alone; the dashboard reports pods still waiting for a rollout as drift (stale pods). See <a href="../../concepts/update-modes/">Update Modes</a>.</li>
-<li><strong>In-place vs eviction.</strong> On Kubernetes 1.33+ the controller patches running pods in place; on older versions it falls back to PDB-respecting eviction. See <a href="../../concepts/in-place-updates/">In-Place Updates</a>.</li>
-<li><strong>Pinned containers.</strong> If a container already has a non-zero CPU request when the webhook intercepts the pod, k8s-sustain leaves it unchanged. Use this to pin specific sidecars while letting the main container be managed.</li>
+<li><strong>Keeping existing requests.</strong> There is no per-container pinning. <code>requests.keepRequest: true</code> on <code>cpu</code> or <code>memory</code> leaves that request untouched on every container the Policy manages; use a separate Policy for workloads that need it. See the <a href="../../reference/policy/">Policy reference</a>.</li>
 <li><strong>Combining with HPA.</strong> Recommendations are computed from the busiest replica's per-pod percentile (<code>max by</code> across pods), which is invariant to replica count, so HPA scale-out does not perturb the recommendation. To shape requests so the HPA's utilization target stays meaningful, enable <a href="../../concepts/autoscaler-coordination/">Autoscaler Coordination</a>. See also the <a href="../keda/">KEDA guide</a>.</li>
+<li><strong>DaemonSets and <code>updateStrategy: OnDelete</code>.</strong> Evicting a pod deletes it, so the DaemonSet controller recreates it with the webhook-injected resources, whichever update strategy is set.</li>
+<li><strong>Node agents.</strong> Log shippers, CNI plugins and node exporters run on every node and are disruptive to OOM-kill; use a higher percentile (p99) and generous memory headroom for them.</li>
 <li><strong>Headroom suggestions.</strong></li>
 </ul>
 <table>
@@ -2160,6 +2002,11 @@
 <td>CPU-burst workloads</td>
 <td>20–30%</td>
 <td>10%</td>
+</tr>
+<tr>
+<td>Node agents (DaemonSets)</td>
+<td>15%</td>
+<td>25%+</td>
 </tr>
 </tbody>
 </table>
@@ -2217,13 +2064,13 @@
         
         
           
-          <a href="../daemonsets/" class="md-footer__link md-footer__link--next" aria-label="Next: DaemonSets">
+          <a href="../jobs-and-cronjobs/" class="md-footer__link md-footer__link--next" aria-label="Next: Jobs &amp; CronJobs">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                DaemonSets
+                Jobs & CronJobs
               </div>
             </div>
             <div class="md-footer__button md-icon">

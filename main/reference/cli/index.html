@@ -971,35 +971,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guides/daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -1653,17 +1625,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#environment-variables" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Environment variables
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#log-verbosity" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1787,6 +1748,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment variables
+      
+    </span>
+  </a>
   
 </li>
       
@@ -2027,17 +1999,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#environment-variables" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Environment variables
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#log-verbosity" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2165,6 +2126,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#k8s-sustain-version" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2266,7 +2238,7 @@
 <tr>
 <td><code>--config</code></td>
 <td>—</td>
-<td>Path to a config file (YAML); all flags can be set there</td>
+<td>Path to a YAML config file. Keys are the flag names (<code>webhook.</code>/<code>dashboard.</code>-prefixed for those subcommands). No file is read unless this flag is set, and it has no environment-variable form.</td>
 </tr>
 </tbody>
 </table>
@@ -2278,7 +2250,7 @@
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># via environment variable</span>
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nv">K8SSUSTAIN_RECOMMEND_ONLY</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>k8s-sustain<span class="w"> </span>start
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># via config file (.k8s-sustain.yaml)</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># via config file (k8s-sustain start --config /etc/k8s-sustain/config.yaml)</span>
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>recommend-only:<span class="w"> </span><span class="nb">true</span>
 </code></pre></div>
 <hr />
@@ -2310,6 +2282,11 @@
 <td><code>--leader-elect</code></td>
 <td><code>false</code></td>
 <td>Enable leader election for high-availability deployments</td>
+</tr>
+<tr>
+<td><code>--leader-election-id</code></td>
+<td><code>k8s-sustain-leader-election</code></td>
+<td>Lease name used for leader election. Override when running several installs in the same cluster.</td>
 </tr>
 <tr>
 <td><code>--log-level</code></td>
@@ -2354,7 +2331,7 @@
 <tr>
 <td><code>--recommendation-retention</code></td>
 <td><code>168h</code></td>
-<td>How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs) — that is, how long a departed identity's last-known-good keeps being served. It does <strong>not</strong> affect how often anything is recomputed: a retained identity is recomputed on <code>--reconcile-interval</code> like every other cache object. Because the webhook's only source is this object, the window decides whether a <em>recurring</em> ephemeral identity is rightsized at admission on its next run, so set it above the longest expected gap between runs — see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>. The dashboard shows retained entries as inactive workloads. <code>0</code> sweeps them on the next reconcile. The window is measured from <code>status.observedAt</code>, which keeps being refreshed while the identity's samples remain inside the query window, so the clock only starts once that history ages out — budget object count against roughly <code>window + retention</code>.</td>
+<td>How long a WorkloadRecommendation is kept after its workload object disappears (bare pods, deleted or finished Jobs). Set it above the longest gap between runs of a recurring workload; <code>0</code> sweeps on the next reconcile. See <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</td>
 </tr>
 <tr>
 <td><code>--query-shard-max-samples</code></td>
@@ -2365,9 +2342,11 @@
 </table>
 <h3 id="prometheus-authentication-and-tls-flags">Prometheus authentication and TLS flags<a class="headerlink" href="#prometheus-authentication-and-tls-flags" title="Permanent link">&para;</a></h3>
 <p>These flags exist with <strong>identical names</strong> on both <code>start</code> and <code>dashboard</code>
-(the webhook has none — it never queries Prometheus). See the
-<a href="../../guides/authenticated-prometheus/">Authenticated Prometheus guide</a> for
-worked Helm examples.</p>
+(the webhook has none — it never queries Prometheus). The Helm chart renders
+them from the <code>prometheusAuth</code> block — see
+<a href="../helm-values/#prometheus-authentication">Helm values: Prometheus authentication</a>.
+Worked examples live in the
+<a href="../../guides/authenticated-prometheus/">Authenticated Prometheus guide</a>.</p>
 <table>
 <thead>
 <tr>
@@ -2447,41 +2426,6 @@ that HTTP would reject, and a TLS cert without its key.</p>
 becomes the <em>only</em> trusted root; the startup log says so with a <code>WARNING</code>
 line, since a public-CA ingress on the same address would then fail with
 "unknown authority".</p>
-<h3 id="environment-variables">Environment variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h3>
-<p>Every flag can be overridden with an environment variable prefixed by <code>K8SSUSTAIN_</code> (uppercase, hyphens and dots → underscores). The mapping is:</p>
-<ul>
-<li><code>K8SSUSTAIN_</code> + flag name with <code>-</code> and <code>.</code> replaced by <code>_</code>, upper-cased.</li>
-</ul>
-<p>Examples:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Top-level flag (controller)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nv">K8SSUSTAIN_RECONCILE_INTERVAL</span><span class="o">=</span>30m<span class="w"> </span>k8s-sustain<span class="w"> </span>start
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nv">K8SSUSTAIN_LOG_LEVEL</span><span class="o">=</span>debug<span class="w"> </span>k8s-sustain<span class="w"> </span>start
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Subcommand-scoped flag (dashboard.bind-address, webhook.excluded-namespaces)</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nv">K8SSUSTAIN_DASHBOARD_BIND_ADDRESS</span><span class="o">=</span>:9999<span class="w"> </span>k8s-sustain<span class="w"> </span>dashboard
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nv">K8SSUSTAIN_WEBHOOK_EXCLUDED_NAMESPACES</span><span class="o">=</span>kube-system,monitoring<span class="w"> </span>k8s-sustain<span class="w"> </span>webhook
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># List-valued flag — comma-separated, same syntax as --excluded-namespaces=a,b</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="nv">K8SSUSTAIN_EXCLUDED_NAMESPACES</span><span class="o">=</span>kube-system,monitoring<span class="w"> </span>k8s-sustain<span class="w"> </span>start
-</code></pre></div>
-<div class="admonition danger">
-<p class="admonition-title">The same flag, two different environment variables</p>
-<p>Flags that exist on both <code>start</code> and <code>dashboard</code> — every
-<code>--prometheus-*</code> authentication flag, <code>--log-level</code>,
-<code>--excluded-namespaces</code> — share a <strong>flag name</strong> but not an environment
-variable. The controller reads <code>K8SSUSTAIN_&lt;FLAG&gt;</code>; the dashboard binds all
-of its flags under the <code>dashboard.</code> key prefix and reads
-<code>K8SSUSTAIN_DASHBOARD_&lt;FLAG&gt;</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE</span><span class="o">=</span>/etc/prom/token<span class="w"> </span>k8s-sustain<span class="w"> </span>start
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nv">K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE</span><span class="o">=</span>/etc/prom/token<span class="w"> </span>k8s-sustain<span class="w"> </span>dashboard
-</code></pre></div>
-<p>An unprefixed variable passed to <code>dashboard</code> is <strong>silently ignored</strong> — no
-warning, no error. The dashboard starts and queries Prometheus
-unauthenticated, which surfaces much later as "No metrics data available"
-while the controller works fine. The Helm chart renders the correct prefix
-for each component automatically; this only bites when you set environment
-variables yourself.</p>
-</div>
 <h3 id="log-verbosity">Log verbosity<a class="headerlink" href="#log-verbosity" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>info</code> (default) — high-signal events: reconcile cycle start/end with target counts, HPA detection, recommendations computed, in-place update applied, pod evictions, recommendation injection by the webhook.</li>
@@ -2506,7 +2450,7 @@ variables yourself.</p>
 <tr>
 <td><code>/readyz</code></td>
 <td><code>:8081</code></td>
-<td>Readiness — returns <code>200 OK</code> when the controller cache is synced</td>
+<td>Readiness — returns <code>200 OK</code> when the process is alive (a ping; it does not wait for cache sync)</td>
 </tr>
 <tr>
 <td><code>/metrics</code></td>
@@ -2517,8 +2461,8 @@ variables yourself.</p>
 </table>
 <hr />
 <h2 id="k8s-sustain-webhook"><code>k8s-sustain webhook</code><a class="headerlink" href="#k8s-sustain-webhook" title="Permanent link">&para;</a></h2>
-<p>Starts the mutating admission webhook server. Listens for <code>Pod CREATE</code> admission requests and injects resources from <code>OnCreate</code>-mode policies.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>k8s-sustain webhook [flags]
+<p>Starts the mutating admission webhook server. Listens for <code>Pod CREATE</code> admission requests and injects the cached recommendation for any workload kind the Policy configures, whether <code>OnCreate</code> or <code>Ongoing</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>k8s-sustain webhook [flags]
 </code></pre></div>
 <h3 id="flags_1">Flags<a class="headerlink" href="#flags_1" title="Permanent link">&para;</a></h3>
 <table>
@@ -2558,7 +2502,7 @@ variables yourself.</p>
 <tr>
 <td><code>--recommendation-retention</code></td>
 <td><code>168h</code></td>
-<td>Must match the controller flag of the same name. It bounds the one case where the webhook injects from a recommendation older than the 30 min staleness budget: an identity the controller marked <em>departed</em>, whose <code>status.observedAt</code> is frozen by design. Past this window the object is one the controller's sweep should already have deleted, so the webhook treats it as stale rather than injecting last-known-good forever — which is what a controller wedged before its sweep would otherwise cause. The chart renders both flags from the single <code>controller.recommendationRetention</code> value, so they cannot drift.</td>
+<td>Must match the controller flag. A departed identity's recommendation older than this is treated as stale instead of injected. The chart renders both from <code>controller.recommendationRetention</code>.</td>
 </tr>
 </tbody>
 </table>
@@ -2577,6 +2521,11 @@ variables yourself.</p>
 <td><code>/healthz</code></td>
 <td>webhook port</td>
 <td>Returns <code>200 OK</code> — used as liveness probe (HTTPS)</td>
+</tr>
+<tr>
+<td><code>/metrics</code></td>
+<td>webhook port</td>
+<td>Prometheus metrics for the webhook (HTTPS)</td>
 </tr>
 </tbody>
 </table>
@@ -2600,19 +2549,19 @@ variables yourself.</p>
 <h3 id="failure-policy">Failure policy<a class="headerlink" href="#failure-policy" title="Permanent link">&para;</a></h3>
 <p>The <code>MutatingWebhookConfiguration</code> is set to <code>failurePolicy: Ignore</code> by default. This means if the webhook is unreachable or returns an error, the pod is admitted unchanged. The controller will still apply <code>Ongoing</code> recommendations independently.</p>
 <p>To change the failure policy:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--set<span class="w"> </span>webhook.failurePolicy<span class="o">=</span>Fail
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--set<span class="w"> </span>webhook.failurePolicy<span class="o">=</span>Fail
 </code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Using <code>Fail</code> in production</p>
-<p>Setting <code>failurePolicy: Fail</code> means <strong>pod creation is blocked</strong> if the webhook is unavailable. Only use this if you have ≥2 webhook replicas. The webhook no longer depends on Prometheus at admission time — it only needs the apiserver to read the cached <code>WorkloadRecommendation</code> — but it still needs the controller's cache to stay fresh (within <code>DefaultCacheStaleness</code>, 30 min) for injections to happen at all, and a webhook outage under <code>Fail</code> still blocks pod creation regardless.</p>
+<p>Setting <code>failurePolicy: Fail</code> means <strong>pod creation is blocked</strong> if the webhook is unavailable. Only use this if you have ≥2 webhook replicas. The webhook does not depend on Prometheus at admission time — it only needs the apiserver to read the cached <code>WorkloadRecommendation</code> — but it still needs the controller's cache to stay fresh (within <code>DefaultCacheStaleness</code>, 30 min) for injections to happen at all, and a webhook outage under <code>Fail</code> still blocks pod creation regardless.</p>
 </div>
 <hr />
 <h2 id="k8s-sustain-dashboard"><code>k8s-sustain dashboard</code><a class="headerlink" href="#k8s-sustain-dashboard" title="Permanent link">&para;</a></h2>
 <p>Starts the web dashboard server. Provides a UI for policy exploration, workload metrics visualization, and policy simulation.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>k8s-sustain dashboard [flags]
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>k8s-sustain dashboard [flags]
 </code></pre></div>
 <h3 id="flags_2">Flags<a class="headerlink" href="#flags_2" title="Permanent link">&para;</a></h3>
 <table>
@@ -2653,16 +2602,8 @@ variables yourself.</p>
 </table>
 <p>The dashboard also accepts the full set of
 <a href="#prometheus-authentication-and-tls-flags">Prometheus authentication and TLS flags</a>
-documented under <code>start</code>, with identical names and semantics — it queries
-Prometheus directly and needs the same credentials the controller does.</p>
-<div class="admonition danger">
-<p class="admonition-title">Dashboard environment variables carry the <code>DASHBOARD</code> prefix</p>
-<p><code>k8s-sustain dashboard</code> reads <strong><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code></strong>, not
-<code>K8SSUSTAIN_PROMETHEUS_*</code>, because every dashboard flag is bound under the
-<code>dashboard.</code> Viper key prefix. An unprefixed variable is silently ignored
-and the dashboard queries Prometheus unauthenticated. The flag names
-themselves are unprefixed and identical to the controller's.</p>
-</div>
+documented under <code>start</code>, with identical names and semantics. Their environment
+variables carry the <code>DASHBOARD</code> prefix — see <a href="#environment-variables">Environment variables</a>.</p>
 <h3 id="health-endpoints_2">Health endpoints<a class="headerlink" href="#health-endpoints_2" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -2676,18 +2617,71 @@ themselves are unprefixed and identical to the controller's.</p>
 <tr>
 <td><code>/healthz</code></td>
 <td><code>:8090</code></td>
-<td>Returns <code>200 OK</code> — used as liveness/readiness probe</td>
+<td>Liveness — returns <code>200 OK</code> when the process is alive</td>
+</tr>
+<tr>
+<td><code>/readyz</code></td>
+<td><code>:8090</code></td>
+<td>Readiness — <code>200</code> when Prometheus answers a ping, <code>503</code> otherwise</td>
+</tr>
+<tr>
+<td><code>/metrics</code></td>
+<td><code>:8090</code></td>
+<td>Prometheus metrics for the dashboard, on the same port as the UI</td>
 </tr>
 </tbody>
 </table>
 <p>See the <a href="../../guides/dashboard/">Dashboard guide</a> for full usage instructions.</p>
 <hr />
+<h2 id="environment-variables">Environment variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h2>
+<p>Every flag except <code>--config</code> can be set with an environment variable: <code>K8SSUSTAIN_</code> + the flag's key, upper-cased, with <code>-</code> and <code>.</code> replaced by <code>_</code>. List-valued flags take a comma-separated string.</p>
+<div class="admonition danger">
+<p class="admonition-title">The prefix depends on the subcommand</p>
+<table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Key</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>global (<code>--recommend-only</code>)</td>
+<td>flag name</td>
+<td><code>K8SSUSTAIN_RECOMMEND_ONLY</code></td>
+</tr>
+<tr>
+<td><code>start</code></td>
+<td>flag name</td>
+<td><code>K8SSUSTAIN_LOG_LEVEL</code></td>
+</tr>
+<tr>
+<td><code>webhook</code></td>
+<td><code>webhook.</code> + flag name</td>
+<td><code>K8SSUSTAIN_WEBHOOK_LOG_LEVEL</code></td>
+</tr>
+<tr>
+<td><code>dashboard</code></td>
+<td><code>dashboard.</code> + flag name</td>
+<td><code>K8SSUSTAIN_DASHBOARD_LOG_LEVEL</code></td>
+</tr>
+</tbody>
+</table>
+<p>Flags shared across subcommands (<code>--log-level</code>, <code>--excluded-namespaces</code>, <code>--recommendation-retention</code>, every <code>--prometheus-*</code> flag) have the same flag name but a different variable per subcommand. A variable with the wrong prefix is <strong>silently ignored</strong>. The Helm chart renders the right prefix for each component. See <a href="../../guides/authenticated-prometheus/#environment-variables-the-prefixes-differ-per-subcommand">Authenticated Prometheus: environment variables</a> for the full Prometheus auth table.</p>
+</div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">K8SSUSTAIN_RECONCILE_INTERVAL</span><span class="o">=</span>30m<span class="w"> </span>k8s-sustain<span class="w"> </span>start
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nv">K8SSUSTAIN_EXCLUDED_NAMESPACES</span><span class="o">=</span>kube-system,monitoring<span class="w"> </span>k8s-sustain<span class="w"> </span>start
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nv">K8SSUSTAIN_WEBHOOK_EXCLUDED_NAMESPACES</span><span class="o">=</span>kube-system,monitoring<span class="w"> </span>k8s-sustain<span class="w"> </span>webhook
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="nv">K8SSUSTAIN_DASHBOARD_BIND_ADDRESS</span><span class="o">=</span>:9999<span class="w"> </span>k8s-sustain<span class="w"> </span>dashboard
+</code></pre></div>
+<hr />
 <h2 id="k8s-sustain-version"><code>k8s-sustain version</code><a class="headerlink" href="#k8s-sustain-version" title="Permanent link">&para;</a></h2>
 <p>Prints the build-time version string and exits. Release builds embed the git tag via <code>-ldflags</code>; local and untagged builds report <code>dev</code>. The same value is logged at startup by every subcommand and is also available through the global <code>--version</code> flag.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>k8s-sustain version
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>k8s-sustain version
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># confirm which version is running in-cluster</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>deploy/k8s-sustain<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>--<span class="w"> </span>/k8s-sustain<span class="w"> </span>version
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># confirm which version is running in-cluster</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>deploy/k8s-sustain<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>--<span class="w"> </span>/k8s-sustain<span class="w"> </span>version
 </code></pre></div>
 
 

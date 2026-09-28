@@ -1162,35 +1162,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="guides/daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -2116,7 +2088,7 @@ k8s-sustain reads the CPU and memory your containers actually use from Prometheu
 </div>
 <div class="ks-hero__install">
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span>--create-namespace
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span>--create-namespace
 </code></pre></div>
 </div>
 </div>
@@ -2168,7 +2140,7 @@ One annotation opts a workload into a <code>Policy</code>. From there the pipeli
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-policy</span>
 </code></pre></div>
-<p>The annotation is honoured on the pod template, on the workload's own <code>metadata.annotations</code>, or on its Namespace — most specific first. See the <a href="reference/annotation/">Annotation reference</a> for precedence and the opt-out escape hatch.</p>
+<p>The annotation is honoured on the pod template, on the workload's own <code>metadata.annotations</code>, or on its Namespace — most specific first. See <a href="reference/annotation/#resolution-order">resolution order</a> for precedence and the opt-out escape hatch.</p>
 <h2 class="ks-section-title" id="two-update-modes">Two update modes<a class="headerlink" href="#two-update-modes" title="Permanent link">&para;</a></h2>
 <p class="ks-section-lead">
 Choose per workload kind how far k8s-sustain may go.
@@ -2187,10 +2159,10 @@ Choose per workload kind how far k8s-sustain may go.
 <div class="ks-kinds">
 <p class="ks-kinds__label">Supported in both modes</p>
 <p class="ks-kinds__list">
-<span>Deployment</span><span>StatefulSet</span><span>DaemonSet</span><span>Argo Rollout</span><span>Job</span><span>CronJob</span>
+<span>Deployment</span><span>StatefulSet</span><span>DaemonSet</span><span>Argo Rollout</span><span>Job</span><span>CronJob</span><span>Pod</span>
 </p>
 </div>
-<p class="ks-note"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11 9h2V7h-2m1 13c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8m0-18A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2m-1 15h2v-6h-2z"/></svg></span> CronJob, Job and bare-pod workloads are never evicted: their running pods are only ever resized in place, since eviction would discard in-flight work and nothing would recreate a bare pod. See <a href="concepts/update-modes/">Update modes</a>.</p>
+<p class="ks-note"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M11 9h2V7h-2m1 13c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8m0-18A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2m-1 15h2v-6h-2z"/></svg></span> CronJob, Job and bare-pod workloads are never evicted: their running pods are only ever resized in place, since eviction would discard in-flight work and nothing would recreate a bare pod. See <a href="concepts/in-place-updates/#kinds-that-are-never-evicted">Kinds that are never evicted</a>.</p>
 <h2 class="ks-section-title" id="built-for-production-clusters">Built for production clusters<a class="headerlink" href="#built-for-production-clusters" title="Permanent link">&para;</a></h2>
 <p class="ks-section-lead">
 Every safeguard a platform team expects, and nothing that touches your GitOps-managed specs.
@@ -2201,7 +2173,7 @@ Every safeguard a platform team expects, and nothing that touches your GitOps-ma
 <li>
 <p><span class="twemoji lg middle"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 19v1h18v2H2V2h2v15c3 0 6-2 8.1-5.6 3-5 6.3-7.4 9.9-7.4v2c-2.8 0-5.5 2.1-8.1 6.5C11.3 16.6 7.7 19 4 19"/></svg></span> <strong>Percentile-based recommendations</strong></p>
 <hr />
-<p>p50 through p99, configurable per policy and per resource, with a headroom buffer on top of the observed value.</p>
+<p>Any percentile from 1 to 100, configurable per policy and per resource, with a headroom buffer on top of the observed value.</p>
 </li>
 <li>
 <p><span class="twemoji lg middle"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 9v6h3l-4 4-4-4h3V9H8l4-4 4 4zM4 2h16v2H4zm0 18h16v2H4z"/></svg></span> <strong>In-place pod updates</strong></p>
@@ -2282,7 +2254,7 @@ The dashboard shows current requests against observed usage and what each policy
 <li>
 <p><span class="twemoji lg middle"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 11c0 5.55-3.84 10.74-9 12-5.16-1.26-9-6.45-9-12V5l9-4 9 4zm-9 10c3.75-1 7-5.46 7-9.78V6.3l-7-3.12L5 6.3v4.92C5 15.54 8.25 20 12 21m-2-4-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9"/></svg></span> <strong><a href="security/">Security</a></strong></p>
 <hr />
-<p>Signed images, SBOMs and SLSA provenance for every release.</p>
+<p>Runtime permissions and trust boundaries, plus signed images, SBOMs and SLSA provenance for every release.</p>
 </li>
 </ul>
 </div>

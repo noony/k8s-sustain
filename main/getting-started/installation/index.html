@@ -629,17 +629,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#install-without-the-admission-webhook" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Install without the admission webhook
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#install-in-recommend-only-mode-dry-run" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -651,10 +640,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#install-with-cert-manager-recommended-for-production" class="md-nav__link">
+  <a href="#the-admission-webhook-is-required" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Install with cert-manager (recommended for production)
+        The admission webhook is required
       
     </span>
   </a>
@@ -1111,35 +1100,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guides/daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -1898,17 +1859,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#install-without-the-admission-webhook" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Install without the admission webhook
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#install-in-recommend-only-mode-dry-run" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1920,10 +1870,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#install-with-cert-manager-recommended-for-production" class="md-nav__link">
+  <a href="#the-admission-webhook-is-required" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Install with cert-manager (recommended for production)
+        The admission webhook is required
       
     </span>
   </a>
@@ -2032,13 +1982,8 @@
 
 
 <h1 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h1>
-<p>Install k8s-sustain into a cluster with Helm, optionally using a bundled Prometheus or pointing at an existing one.</p>
-<p>Charts are published as OCI artifacts to GitHub Container Registry — no <code>helm repo add</code> needed. Pick a version from the <a href="https://github.com/noony/k8s-sustain/releases">releases page</a> and pin it with <code>--version</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--create-namespace
-</code></pre></div>
+<p>Install k8s-sustain into a cluster with Helm, optionally using a bundled Prometheus or pointing at an existing one. Check the <a href="../prerequisites/">prerequisites</a> first.</p>
+<p>Charts are published as OCI artifacts to GitHub Container Registry — no <code>helm repo add</code> needed. Pick a version from the <a href="https://github.com/noony/k8s-sustain/releases">releases page</a> and pin it with <code>--version</code>.</p>
 <div class="admonition note">
 <p class="admonition-title">No version ranges</p>
 <p>OCI registries don't support the caret/tilde ranges a classic Helm repo does — <code>--version</code> must be an exact chart version (e.g. <code>0.4.0</code>).</p>
@@ -2048,20 +1993,22 @@
 <p>Images, charts and release binaries are signed with cosign in keyless mode, and images carry an SPDX SBOM and SLSA build provenance. See <a href="../../security/">Security</a> for copy-pasteable <code>cosign verify</code> and <code>gh attestation verify</code> commands, and for pinning the image by digest.</p>
 </div>
 <h2 id="install-with-bundled-prometheus">Install with bundled Prometheus<a class="headerlink" href="#install-with-bundled-prometheus" title="Permanent link">&para;</a></h2>
-<p>The default installation deploys the controller, the admission webhook, and a <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">Prometheus</a> instance with the required recording rules pre-configured.</p>
+<p>The default installation deploys the controller, the admission webhook, the dashboard, and a <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">Prometheus</a> instance (with kube-state-metrics) with the required recording rules pre-configured.</p>
+<p>The webhook needs a TLS certificate. By default the chart has <a href="https://cert-manager.io/">cert-manager</a> issue it from a self-signed Issuer, so cert-manager must be installed in the cluster first:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--create-namespace
+</code></pre></div>
+<p>Without cert-manager, set <code>webhook.certManager.enabled=false</code>, create the TLS Secret yourself and pass <code>webhook.tlsSecretName</code> and <code>webhook.caBundle</code> instead — see <a href="../prerequisites/#tls-certificate">TLS certificate</a> and the <a href="../../guides/cert-manager/">cert-manager guide</a> (which also covers using your own Issuer).</p>
+<h2 id="install-with-an-existing-prometheus">Install with an existing Prometheus<a class="headerlink" href="#install-with-an-existing-prometheus" title="Permanent link">&para;</a></h2>
+<p>If you already have Prometheus running, disable the bundled instance and point k8s-sustain at yours:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--create-namespace
-</code></pre></div>
-<h2 id="install-with-an-existing-prometheus">Install with an existing Prometheus<a class="headerlink" href="#install-with-an-existing-prometheus" title="Permanent link">&para;</a></h2>
-<p>If you already have Prometheus running, disable the bundled instance and point k8s-sustain at yours:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--set<span class="w"> </span>prometheus.enabled<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--set<span class="w"> </span><span class="nv">prometheusAddress</span><span class="o">=</span>http://prometheus.monitoring.svc:80
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--set<span class="w"> </span>prometheus.enabled<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--set<span class="w"> </span><span class="nv">prometheusAddress</span><span class="o">=</span>http://prometheus.monitoring.svc:80
 </code></pre></div>
 <p>If that Prometheus requires authentication — a bearer token, basic auth, a
 private CA, or a Thanos/Mimir/Cortex tenant header — configure the top-level
@@ -2072,72 +2019,62 @@ copy-pasteable values, and the
 for the full schema.</p>
 <div class="admonition warning">
 <p class="admonition-title">Recording rules required</p>
-<p>When <code>prometheus.enabled=false</code>, you must install the recording rules manually.
-Copy the rule groups from <code>prometheus.server.serverFiles</code> in <code>values.yaml</code> into your existing Prometheus configuration.
-If you use the Prometheus Operator, enable <code>prometheusRule.enabled=true</code> to deploy the recording rules as a <code>PrometheusRule</code> resource, and <code>controller.serviceMonitor.enabled=true</code> for the controller metrics <code>ServiceMonitor</code>.</p>
+<p>When <code>prometheus.enabled=false</code>, you must install the recording rules yourself. They are defined once, under <code>prometheusRule.groups</code> in the chart's <code>values.yaml</code>.
+If you use the Prometheus Operator, set <code>prometheusRule.enabled=true</code> to deploy them as a <code>PrometheusRule</code> resource, and <code>controller.serviceMonitor.enabled=true</code> for the controller metrics <code>ServiceMonitor</code>. Otherwise copy the groups into your Prometheus rule files. Your Prometheus must also scrape the metrics listed in <a href="../prerequisites/#prometheus">Prerequisites</a>.</p>
 </div>
-<h2 id="install-without-the-admission-webhook">Install without the admission webhook<a class="headerlink" href="#install-without-the-admission-webhook" title="Permanent link">&para;</a></h2>
-<p>If you only need <code>Ongoing</code> mode (no <code>OnCreate</code>), you can disable the webhook entirely. This removes the TLS certificate requirement.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<h2 id="install-in-recommend-only-mode-dry-run">Install in recommend-only mode (dry-run)<a class="headerlink" href="#install-in-recommend-only-mode-dry-run" title="Permanent link">&para;</a></h2>
+<p>Run k8s-sustain without applying any changes: recommendations are computed and cached in <code>WorkloadRecommendation</code> objects, but pods are never resized, evicted or injected.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--set<span class="w"> </span><span class="nv">recommendOnly</span><span class="o">=</span><span class="nb">true</span>
+</code></pre></div>
+<p>Review the results with <code>kubectl get wlrec -A</code> or the dashboard. The controller also logs each recommendation at <code>info</code> level, which the chart's default <code>controller.logLevel: error</code> suppresses — add <code>--set controller.logLevel=info</code> to see them.</p>
+<p>Once you are satisfied, disable recommend-only mode:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--set<span class="w"> </span>webhook.enabled<span class="o">=</span><span class="nb">false</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--set<span class="w"> </span><span class="nv">recommendOnly</span><span class="o">=</span><span class="nb">false</span>
 </code></pre></div>
-<h2 id="install-in-recommend-only-mode-dry-run">Install in recommend-only mode (dry-run)<a class="headerlink" href="#install-in-recommend-only-mode-dry-run" title="Permanent link">&para;</a></h2>
-<p>Run k8s-sustain without applying any changes. Recommendations are logged as structured JSON but workloads and pods are never modified.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>--set<span class="w"> </span><span class="nv">recommendOnly</span><span class="o">=</span><span class="nb">true</span>
-</code></pre></div>
-<p>Once you are satisfied with the logged recommendations, disable recommend-only mode:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--reuse-values<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--set<span class="w"> </span><span class="nv">recommendOnly</span><span class="o">=</span><span class="nb">false</span>
-</code></pre></div>
-<p>For a gradual rollout, you can also dry-run a single policy instead of the whole installation by setting <code>spec.rightSizing.recommendOnly: true</code> on that <code>Policy</code> — see the <a href="../../reference/policy/#specrightsizingrecommendonly">Policy reference</a>.</p>
-<h2 id="install-with-cert-manager-recommended-for-production">Install with cert-manager (recommended for production)<a class="headerlink" href="#install-with-cert-manager-recommended-for-production" title="Permanent link">&para;</a></h2>
-<p>The chart creates a self-signed Issuer and Certificate automatically — just enable cert-manager:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.enabled<span class="o">=</span><span class="nb">true</span>
-</code></pre></div>
-<p>See the <a href="../../guides/cert-manager/">cert-manager guide</a> for using your own Issuer.</p>
+<p>To dry-run a single policy instead of the whole installation, see <a href="../../concepts/update-modes/#recommend-only-mode">Recommend-only mode</a>.</p>
+<h2 id="the-admission-webhook-is-required">The admission webhook is required<a class="headerlink" href="#the-admission-webhook-is-required" title="Permanent link">&para;</a></h2>
+<p><code>webhook.enabled=false</code> exists, but k8s-sustain does not work correctly without the webhook, in either mode:</p>
+<ul>
+<li><code>OnCreate</code> does nothing at all.</li>
+<li><code>Ongoing</code> still needs it: pods the controller evicts (always on k8s &lt; 1.33, and as a fallback on newer clusters) are recreated from the unchanged template, so the replacement starts on the old resources and is evicted again on the next reconcile.</li>
+<li>Jobs, CronJob runs and bare pods only get the recommendation at creation, so they are never sized.</li>
+</ul>
 <h2 id="verify-the-installation">Verify the installation<a class="headerlink" href="#verify-the-installation" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>k8s-sustain
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>k8s-sustain
 </code></pre></div>
-<p>Expected output:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>NAME                                        READY   STATUS    RESTARTS   AGE
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>k8s-sustain-&lt;hash&gt;                          1/1     Running   0          1m
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>k8s-sustain-webhook-&lt;hash&gt;                  1/1     Running   0          1m
+<p>With the default values you should see:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>NAME                                             READY   STATUS    RESTARTS   AGE
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>k8s-sustain-&lt;hash&gt;                               1/1     Running   0          1m
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>k8s-sustain-webhook-&lt;hash&gt;                       1/1     Running   0          1m
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>k8s-sustain-dashboard-&lt;hash&gt;                     1/1     Running   0          1m
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>k8s-sustain-prometheus-server-&lt;hash&gt;             2/2     Running   0          1m
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>k8s-sustain-kube-state-metrics-&lt;hash&gt;            1/1     Running   0          1m
 </code></pre></div>
-<p>Check the controller logs:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>k8s-sustain<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/component!<span class="o">=</span>webhook
-</code></pre></div>
-<p>Check the webhook logs:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/component<span class="o">=</span>webhook
+<p>The last two are absent with <code>prometheus.enabled=false</code>, and the dashboard with <code>dashboard.enabled=false</code>.</p>
+<p>Check the controller and webhook logs:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>deploy/k8s-sustain
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>deploy/k8s-sustain-webhook
 </code></pre></div>
 <h2 id="upgrading">Upgrading<a class="headerlink" href="#upgrading" title="Permanent link">&para;</a></h2>
 <p>Bump <code>--version</code> to the new release and re-run <code>helm upgrade</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span>--reuse-values
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span>--reuse-values
 </code></pre></div>
 <h2 id="uninstalling">Uninstalling<a class="headerlink" href="#uninstalling" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>helm<span class="w"> </span>uninstall<span class="w"> </span>k8s-sustain<span class="w"> </span>-n<span class="w"> </span>k8s-sustain
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>helm<span class="w"> </span>uninstall<span class="w"> </span>k8s-sustain<span class="w"> </span>-n<span class="w"> </span>k8s-sustain
 </code></pre></div>
-<div class="admonition note">
-<p class="admonition-title">CRD retention</p>
-<p>The <code>Policy</code> CRD is annotated with <code>helm.sh/resource-policy: keep</code> and will <strong>not</strong> be deleted on uninstall to protect existing Policy objects. Delete it manually if needed:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>crd<span class="w"> </span>policies.k8s.sustain.io
-</code></pre></div></p>
+<div class="admonition warning">
+<p class="admonition-title">Uninstall deletes the CRDs and every Policy</p>
+<p>The chart installs the <code>Policy</code> and <code>WorkloadRecommendation</code> CRDs as regular templates (<code>installCRDs: true</code>), so <code>helm uninstall</code> deletes both CRDs — and with them every <code>Policy</code> and <code>WorkloadRecommendation</code> in the cluster. Back up your Policies first (<code>kubectl get policies -o yaml &gt; policies.yaml</code>), or manage them with the <a href="../../guides/managing-policies-with-helm/">policies chart</a> or GitOps.</p>
 </div>
 
 

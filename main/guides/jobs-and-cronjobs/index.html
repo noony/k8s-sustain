@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://noony.github.io/k8s-sustain/main/guides/jobs-and-cronjobs/">
       
       
-        <link rel="prev" href="../daemonsets/">
+        <link rel="prev" href="../deployments/">
       
       
         <link rel="next" href="../argo-rollouts/">
@@ -983,35 +983,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -1092,10 +1064,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#standalone-jobs" class="md-nav__link">
+  <a href="#policy" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Standalone Jobs
+        Policy
       
     </span>
   </a>
@@ -1103,62 +1075,39 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cronjobs" class="md-nav__link">
+  <a href="#opting-in" class="md-nav__link">
     <span class="md-ellipsis">
       
-        CronJobs
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="CronJobs">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#owner-chain" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Owner chain
+        Opting in
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#oncreate-mode-recommended-for-cronjobs" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#ongoing-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        OnCreate mode (recommended for CronJobs)
+        Ongoing mode
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#ongoing-mode-for-cronjobs" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#cold-start" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Ongoing mode for CronJobs
+        Cold start
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#cold-start-the-first-run-is-never-injected" class="md-nav__link">
-    <span class="md-ellipsis">
       
-        Cold start: the first run is never injected
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
+        <li class="md-nav__item">
   <a href="#collecting-enough-history" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1168,8 +1117,8 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#guaranteed-qos-for-batch-jobs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1179,8 +1128,8 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#oom-detection-for-one-shot-pods" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1188,11 +1137,6 @@
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1906,10 +1850,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#standalone-jobs" class="md-nav__link">
+  <a href="#policy" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Standalone Jobs
+        Policy
       
     </span>
   </a>
@@ -1917,62 +1861,39 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cronjobs" class="md-nav__link">
+  <a href="#opting-in" class="md-nav__link">
     <span class="md-ellipsis">
       
-        CronJobs
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="CronJobs">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#owner-chain" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Owner chain
+        Opting in
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#oncreate-mode-recommended-for-cronjobs" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#ongoing-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        OnCreate mode (recommended for CronJobs)
+        Ongoing mode
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#ongoing-mode-for-cronjobs" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#cold-start" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Ongoing mode for CronJobs
+        Cold start
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#cold-start-the-first-run-is-never-injected" class="md-nav__link">
-    <span class="md-ellipsis">
       
-        Cold start: the first run is never injected
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
+        <li class="md-nav__item">
   <a href="#collecting-enough-history" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1982,8 +1903,8 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#guaranteed-qos-for-batch-jobs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1993,8 +1914,8 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#oom-detection-for-one-shot-pods" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2002,11 +1923,6 @@
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -2105,137 +2021,86 @@
 
 
 <h1 id="jobs-and-cronjobs">Jobs and CronJobs<a class="headerlink" href="#jobs-and-cronjobs" title="Permanent link">&para;</a></h1>
-<p>k8s-sustain right-sizes both standalone <code>Job</code>s and scheduled <code>CronJob</code>s. Because each run creates a fresh pod, <code>OnCreate</code> mode is the natural fit for both kinds.</p>
-<h2 id="standalone-jobs">Standalone Jobs<a class="headerlink" href="#standalone-jobs" title="Permanent link">&para;</a></h2>
-<p>A standalone <code>Job</code> (not created by a CronJob) runs once. The webhook resolves <code>Pod → Job</code> directly and injects resources at admission. <code>OnCreate</code> is the typical mode and the natural fit for short-lived jobs.</p>
-<p><code>Ongoing</code> additionally lets the <strong>controller</strong> resize a Job's <strong>currently running</strong> pods in place via the <code>pods/resize</code> subresource (requires k8s ≥ 1.35, since standalone Jobs always run with <code>restartPolicy: Never</code>/<code>OnFailure</code>, whose in-place resize landed in 1.35), without evicting them or mutating the Job spec. Because a standalone Job has no "next run", in-place resize is the only way to correct an already-running pod — so <code>Ongoing</code> is worthwhile for <strong>long-running</strong> Jobs (batch processing, ML training, migrations) and a no-op for jobs that finish within seconds. On clusters without in-place support the running pod is left untouched. Jobs owned by a CronJob are never picked up by this path; they are resized through their owning CronJob instead.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch/v1</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Job</span>
+<p>k8s-sustain right-sizes both standalone <code>Job</code>s and scheduled <code>CronJob</code>s. Every run creates a fresh pod, so the webhook injects the current recommendation at the start of each run.</p>
+<h2 id="policy">Policy<a class="headerlink" href="#policy" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example-batch</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">template</span><span class="p">:</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">      </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">        </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch-rightsizing</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">      </span><span class="nt">restartPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Never</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">worker</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">          </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">busybox:1.36</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">          </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"sh"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"-c"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"sleep</span><span class="nv"> </span><span class="s">30"</span><span class="p p-Indicator">]</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">          </span><span class="nt">resources</span><span class="p">:</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">            </span><span class="nt">requests</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> cpu</span><span class="p">:</span><span class="w"> </span><span class="nv">100m</span><span class="p p-Indicator">,</span><span class="nt"> memory</span><span class="p">:</span><span class="w"> </span><span class="nv">64Mi</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch-rightsizing</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">        </span><span class="nt">job</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">        </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">resourcesConfigs</span><span class="p">:</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">336h</span><span class="w">          </span><span class="c1"># 14 days — more history for irregular jobs</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">          </span><span class="nt">percentile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">90</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">          </span><span class="nt">headroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">          </span><span class="nt">equalsToRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">   </span><span class="c1"># Guaranteed QoS for batch jobs</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">336h</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">          </span><span class="nt">percentile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">95</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">          </span><span class="nt">headroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">          </span><span class="nt">equalsToRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 </code></pre></div>
-<p>The matching policy snippet:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
+<p><code>job</code> applies to standalone Jobs; Jobs created by a CronJob are handled through their CronJob under <code>cronJob</code>.</p>
+<h2 id="opting-in">Opting in<a class="headerlink" href="#opting-in" title="Permanent link">&para;</a></h2>
+<p>For a CronJob, the pod-template annotation is two levels deep:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch/v1</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CronJob</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch-rightsizing</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">        </span><span class="nt">job</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span>
-</code></pre></div>
-<p>Right-sizing a standalone Job is only meaningful when the same job type runs repeatedly enough to build a percentile history.</p>
-<p>Standalone Jobs appear on the dashboard's Workloads page as kind <code>Job</code>. Jobs owned by a CronJob are intentionally excluded — they appear under their owning CronJob row.</p>
-<h2 id="cronjobs">CronJobs<a class="headerlink" href="#cronjobs" title="Permanent link">&para;</a></h2>
-<p>CronJobs spawn ephemeral pods on a schedule. Because each run creates a fresh pod, <code>OnCreate</code> mode is a natural fit — the webhook injects recommendations at the start of every run.</p>
-<h3 id="owner-chain">Owner chain<a class="headerlink" href="#owner-chain" title="Permanent link">&para;</a></h3>
-<p>The webhook resolves the full owner chain:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Pod → Job → CronJob
-</code></pre></div>
-<p>When a pod annotated with <code>k8s.sustain.io/policy</code> is created by a Job owned by a CronJob, the webhook looks up the CronJob and checks its mode.</p>
-<h3 id="oncreate-mode-recommended-for-cronjobs">OnCreate mode (recommended for CronJobs)<a class="headerlink" href="#oncreate-mode-recommended-for-cronjobs" title="Permanent link">&para;</a></h3>
-<p>Each job pod receives the current recommendation at creation time. No restarts, no rollouts — just fresh pods with accurate resources on every schedule tick.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch-rightsizing</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">        </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="nt">resourcesConfigs</span><span class="p">:</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">336h</span><span class="w">          </span><span class="c1"># 14 days — more history for irregular jobs</span>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">          </span><span class="nt">percentile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">90</span>
-<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">          </span><span class="nt">headroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
-<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span>
-<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="w">          </span><span class="nt">equalsToRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">   </span><span class="c1"># Guaranteed QoS for batch jobs</span>
-<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span>
-<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">336h</span>
-<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a><span class="w">          </span><span class="nt">percentile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">95</span>
-<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="w">          </span><span class="nt">headroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15</span>
-<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span>
-<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a><span class="w">          </span><span class="nt">equalsToRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-</code></pre></div>
-<p>Opt in your CronJob:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch/v1</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CronJob</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nightly-report</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">schedule</span><span class="p">:</span><span class="w"> </span><span class="s">"0</span><span class="nv"> </span><span class="s">2</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">*"</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="nt">jobTemplate</span><span class="p">:</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">      </span><span class="nt">template</span><span class="p">:</span>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">        </span><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">          </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">            </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch-rightsizing</span><span class="w">  </span><span class="c1"># (1)!</span>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">        </span><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">          </span><span class="nt">restartPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnFailure</span>
-<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">          </span><span class="nt">containers</span><span class="p">:</span>
-<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">report</span>
-<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="w">              </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">busybox:1.36</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nightly-report</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">schedule</span><span class="p">:</span><span class="w"> </span><span class="s">"0</span><span class="nv"> </span><span class="s">2</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">*"</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="nt">jobTemplate</span><span class="p">:</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">      </span><span class="nt">template</span><span class="p">:</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">        </span><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">          </span><span class="nt">annotations</span><span class="p">:</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">            </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch-rightsizing</span><span class="w">  </span><span class="c1"># (1)!</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">        </span><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">          </span><span class="nt">restartPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnFailure</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">          </span><span class="nt">containers</span><span class="p">:</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">report</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">              </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">busybox:1.36</span>
 </code></pre></div>
 <ol>
-<li>For a CronJob the pod-template level is two levels deep — <code>spec.jobTemplate.spec.template.metadata.annotations</code> — but it is also honoured on the CronJob's own <code>metadata.annotations</code> or its Namespace; see the <a href="../../reference/annotation/">Annotation reference</a>.</li>
+<li><code>spec.jobTemplate.spec.template.metadata.annotations</code>. The CronJob's own <code>metadata.annotations</code> and its Namespace also work — see <a href="../../reference/annotation/#resolution-order">Resolution order</a>.</li>
 </ol>
-<h3 id="ongoing-mode-for-cronjobs">Ongoing mode for CronJobs<a class="headerlink" href="#ongoing-mode-for-cronjobs" title="Permanent link">&para;</a></h3>
-<p><code>Ongoing</code> mode resizes <strong>currently running</strong> job pods in place using the Kubernetes <code>pods/resize</code> subresource (requires k8s ≥ 1.33, where <code>InPlacePodVerticalScaling</code> is on by default; works for <code>restartPolicy: Never</code>/<code>OnFailure</code> on k8s ≥ 1.35). The CronJob spec itself is <strong>never modified</strong>, so GitOps tools (Argo CD, Flux) see no drift. Future runs continue to pick up the latest resources from the webhook at admission.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">        </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
+<p>A standalone Job is annotated on <code>spec.template.metadata.annotations</code>. The webhook resolves <code>Pod → Job</code> for a standalone Job and <code>Pod → Job → CronJob</code> for a scheduled one.</p>
+<p>On the dashboard, standalone Jobs appear as kind <code>Job</code>; Jobs owned by a CronJob appear under their CronJob row.</p>
+<h2 id="ongoing-mode">Ongoing mode<a class="headerlink" href="#ongoing-mode" title="Permanent link">&para;</a></h2>
+<p><code>Ongoing</code> additionally resizes <strong>running</strong> job pods in place through the <code>pods/resize</code> subresource. Job and CronJob pods are never evicted, and the Job/CronJob spec is never modified. In-place resize of <code>restartPolicy: Never</code>/<code>OnFailure</code> pods has its own Kubernetes version requirement — see <a href="../../concepts/in-place-updates/#version-matrix">Version matrix</a> and <a href="../../concepts/in-place-updates/#kinds-that-are-never-evicted">Kinds that are never evicted</a>. When a resize is not possible, the running pod keeps its resources and the next run gets the recommendation from the webhook.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="nt">job</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
 </code></pre></div>
-<p>Practical implications:</p>
-<ul>
-<li>For CronJobs whose pods finish within seconds (e.g. <code>* * * * *</code> health pings), <code>Ongoing</code> is essentially equivalent to <code>OnCreate</code> — pods complete before any reconcile pass would touch them. The cost of running <code>Ongoing</code> is one extra Job/Pod list per reconcile.</li>
-<li>For long-running runs (daily ETL, batch training, hour-long backfills), <code>Ongoing</code> can correct an under- or over-provisioned pod mid-run without restarting the container.</li>
-<li>On clusters below k8s 1.33, or when the kubelet reports the resize as <code>Infeasible</code> or <code>Error</code>, or the API server rejects the resize for that pod (e.g. it would change the QoS class), the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook. The <code>ResourcesUpdated</code> event only counts pods whose resize the API server actually accepted.</li>
-<li>The controller never patches the <code>CronJob</code> or <code>Job</code> object, so RBAC for <code>batch/cronjobs</code> and <code>batch/jobs</code> is read-only.</li>
-</ul>
-<h3 id="cold-start-the-first-run-is-never-injected">Cold start: the first run is never injected<a class="headerlink" href="#cold-start-the-first-run-is-never-injected" title="Permanent link">&para;</a></h3>
-<p>A standalone Job is re-created on every run, so its object is always seconds old at admission, and a Job that runs briefly and is TTL-cleaned may never be alive when a reconcile fires. Its identity enters the cache through a <strong>cold-start stub</strong>:</p>
-<ol>
-<li><strong>First run.</strong> No <code>WorkloadRecommendation</code> exists, so the pod is admitted with its template resources and the webhook creates an empty stub, recording the admitted pod's container set on it. Admission cannot wait for a Prometheus query it no longer makes — the stub is for the <em>next</em> run.</li>
-<li><strong>Next reconcile.</strong> The object is now in the controller's work-list, so the identity is recomputed on every reconcile interval whether or not a Job happens to be running at the time. On that first pass the identity is still seconds old, so the workload-age gate holds it back and nothing is written. Once the run finishes — a Complete or Failed Job leaves the target listing, as does a TTL-cleaned one — the identity is <em>departed</em>, and a cycle that finds nothing for it records <code>status.source: nodata</code>. That is <strong>not</strong> terminal: it means only that nothing has been computed yet, and the identity is recomputed on the next cycle regardless.</li>
-<li><strong>Convergence.</strong> Once the identity has cleared the 10-minute age gate and Prometheus has usable samples for it, the next reconcile writes a real recommendation — so convergence takes <strong>one reconcile interval</strong> from that point, not a longer retry cycle. Every run after that is injected at admission.</li>
-</ol>
-<p>A short Job that always finishes between two reconciles converges too. The controller no longer has to catch a run alive: the cache object outlives the runs, so it keeps ageing past the gate and Prometheus history keeps accumulating against the one identity. Keep <code>--recommendation-retention</code> above the gap between runs so the object is not swept in between (see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>).</p>
-<p>The <a href="../../concepts/recommendation-pipeline/#stages">workload-age gate</a> is what makes this work across runs: it keys on the earliest of the object's <code>CreationTimestamp</code> and the identity's <code>WorkloadRecommendation</code> <code>CreationTimestamp</code>, so an identity k8s-sustain has known since an earlier run counts as old even though each run's object is brand new.</p>
-<p>A Job whose <strong>name changes every run</strong> (a timestamp or hash suffix) is a different identity each time and will never converge — it is a new cold start on every run. Use a stable Job name, or run it under a CronJob, so history accumulates against one identity. Watch <code>k8s_sustain_wlr_refresh_total{outcome="nodata"}</code> to spot this: a rate that never converts to <code>computed</code> is the signature, alongside a <code>WorkloadRecommendation</code> count that grows with every run.</p>
-<h3 id="collecting-enough-history">Collecting enough history<a class="headerlink" href="#collecting-enough-history" title="Permanent link">&para;</a></h3>
+<p><code>Ongoing</code> is worthwhile for <strong>long-running</strong> runs (daily ETL, ML training, backfills, migrations), where it can correct a pod mid-run. For runs that finish within seconds it behaves like <code>OnCreate</code>, at the cost of one extra Job/Pod list per reconcile.</p>
+<h2 id="cold-start">Cold start<a class="headerlink" href="#cold-start" title="Permanent link">&para;</a></h2>
+<p>The first run of a new Job or CronJob is admitted with its template resources; the webhook records a stub <code>WorkloadRecommendation</code> so the controller starts computing the identity, and later runs are injected once a recommendation exists. See <a href="../../concepts/workload-recommendations/#cold-start-stub-recommendations">Cold start</a> and keep <code>--recommendation-retention</code> above the gap between runs (<a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>).</p>
+<p>A Job whose <strong>name changes every run</strong> (a timestamp or hash suffix) is a new identity each time and never converges. Use a stable Job name, or run it under a CronJob. The signature is a <code>k8s_sustain_wlr_refresh_total{outcome="nodata"}</code> rate that never turns into <code>computed</code>, alongside a <code>WorkloadRecommendation</code> count that grows with every run.</p>
+<h2 id="collecting-enough-history">Collecting enough history<a class="headerlink" href="#collecting-enough-history" title="Permanent link">&para;</a></h2>
 <p>CronJobs that run infrequently (e.g. weekly) may not have enough data for a meaningful percentile. Use a longer window:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">resourcesConfigs</span><span class="p">:</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">cpu</span><span class="p">:</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">720h</span><span class="w">   </span><span class="c1"># 30 days</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">resourcesConfigs</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">cpu</span><span class="p">:</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">720h</span><span class="w">   </span><span class="c1"># 30 days</span>
 </code></pre></div>
-<p>When the window holds no usable samples, the controller writes no recommendation and leaves resources unchanged, retrying on the next reconcile. A live Job or CronJob simply keeps an empty <code>status</code> on its <code>WorkloadRecommendation</code>; only once the identity is departed does a fruitless cycle record <code>status.source: nodata</code>. Separately, an identity known for less than 10 minutes is held back by the <a href="../../concepts/recommendation-pipeline/#stages">workload-age gate</a>, which logs <code>skipping recommendation: workload too young</code> and increments <code>k8s_sustain_recommendation_skipped_total{reason="workload_too_young"}</code>.</p>
-<h3 id="guaranteed-qos-for-batch-jobs">Guaranteed QoS for batch jobs<a class="headerlink" href="#guaranteed-qos-for-batch-jobs" title="Permanent link">&para;</a></h3>
-<p>Setting <code>equalsToRequest: true</code> for both CPU and memory limits makes the pod a <a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/#guaranteed">Guaranteed QoS class</a>, which prevents throttling and OOM eviction under memory pressure. This is often desirable for batch workloads.</p>
-<h3 id="oom-detection-for-one-shot-pods">OOM detection for one-shot pods<a class="headerlink" href="#oom-detection-for-one-shot-pods" title="Permanent link">&para;</a></h3>
-<p>CronJob/Job pods typically run with <code>restartPolicy: Never</code> (or <code>backoffLimit: 0</code>), so the kubelet does not restart them after an OOM kill — <code>kube_pod_container_status_restarts_total</code> stays at 0. The <code>k8s_sustain:workload_oom_24h</code> rule combines two paths so OOMs are still detected: a "kill" path uses <code>max_over_time(kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[24h])</code> to flag any (pod, container) that OOMed, regardless of whether it was restarted.</p>
-<p>This means the OOM-driven memory floor (in <code>policy_controller.go</code>) and dashboard "OOM 24h" badge work for CronJobs too — provided the failed pod survives long enough for kube-state-metrics to scrape it. Pods garbage-collected by <code>failedJobsHistoryLimit</code> within ~30s of failing can still slip through; raising <code>failedJobsHistoryLimit</code> above 0 helps.</p>
+<p>When the window holds no usable samples, no recommendation is written and resources stay unchanged until a later reconcile finds data.</p>
+<h2 id="guaranteed-qos-for-batch-jobs">Guaranteed QoS for batch jobs<a class="headerlink" href="#guaranteed-qos-for-batch-jobs" title="Permanent link">&para;</a></h2>
+<p>Setting <code>equalsToRequest: true</code> for both CPU and memory limits makes the pod <a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/#guaranteed">Guaranteed QoS</a>, which makes the pod the last candidate for node-pressure eviction.</p>
+<h2 id="oom-detection-for-one-shot-pods">OOM detection for one-shot pods<a class="headerlink" href="#oom-detection-for-one-shot-pods" title="Permanent link">&para;</a></h2>
+<p>Job pods typically run with <code>restartPolicy: Never</code> (or <code>backoffLimit: 0</code>), so an OOM kill does not increment <code>kube_pod_container_status_restarts_total</code>. The <code>k8s_sustain:workload_oom_24h</code> rule therefore also flags any container whose <code>kube_pod_container_status_last_terminated_reason</code> was <code>OOMKilled</code> in the last 24h, so the OOM-driven memory floor and the dashboard's "OOM 24h" badge work for Jobs and CronJobs too.</p>
+<p>This requires the failed pod to survive long enough for kube-state-metrics to scrape it. Pods removed by <code>failedJobsHistoryLimit</code> within ~30s of failing can slip through; keep <code>failedJobsHistoryLimit</code> above 0.</p>
 
 
 
@@ -2273,7 +2138,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../daemonsets/" class="md-footer__link md-footer__link--prev" aria-label="Previous: DaemonSets">
+          <a href="../deployments/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Deployments, StatefulSets &amp; DaemonSets">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -2283,7 +2148,7 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                DaemonSets
+                Deployments, StatefulSets & DaemonSets
               </div>
             </div>
           </a>

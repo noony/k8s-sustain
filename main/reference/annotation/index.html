@@ -971,35 +971,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guides/daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -1588,7 +1560,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="k8s.sustain.io/policy">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resolution-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolution order
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Resolution order">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1602,19 +1585,19 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#namespace-opt-in-is-delegated-not-sovereign" class="md-nav__link">
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#annotations-and-labels" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Namespace opt-in is delegated, not sovereign
+        Annotations and labels
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1896,7 +1879,18 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="k8s.sustain.io/policy">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resolution-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resolution order
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Resolution order">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1910,19 +1904,19 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#namespace-opt-in-is-delegated-not-sovereign" class="md-nav__link">
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#annotations-and-labels" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Namespace opt-in is delegated, not sovereign
+        Annotations and labels
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -2055,11 +2049,17 @@
   
 
 
-<!-- Source of truth: api/v1alpha1/policy_types.go (PolicyAnnotation, OptOutAnnotation) and internal/policymatch/resolve.go (ResolvePolicy) -->
+<!-- Source of truth: api/v1alpha1/policy_types.go (annotation and label constants) and internal/policymatch/resolve.go (ResolvePolicy) -->
 
 <h1 id="annotation-reference">Annotation Reference<a class="headerlink" href="#annotation-reference" title="Permanent link">&para;</a></h1>
 <h2 id="k8ssustainiopolicy"><code>k8s.sustain.io/policy</code><a class="headerlink" href="#k8ssustainiopolicy" title="Permanent link">&para;</a></h2>
-<p>This annotation is the <strong>only</strong> way to opt a workload into a policy. It is honoured at three levels, most specific first:</p>
+<p>This annotation is the <strong>only</strong> way to opt a workload into a policy. The value is the name of a cluster-scoped <code>Policy</code> object.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;policy-name&gt;</span>
+</code></pre></div>
+<h2 id="resolution-order">Resolution order<a class="headerlink" href="#resolution-order" title="Permanent link">&para;</a></h2>
+<p>The controller, webhook, dashboard and OOM watcher all resolve the policy through <code>internal/policymatch.ResolvePolicy</code>, which reads three levels, most specific first:</p>
 <table>
 <thead>
 <tr>
@@ -2071,13 +2071,13 @@
 <tbody>
 <tr>
 <td>Pod template</td>
-<td><code>spec.template.metadata.annotations</code></td>
-<td>Pods inherit it, so the admission webhook reads it with no extra lookups. Cheapest and most explicit.</td>
+<td><code>spec.template.metadata.annotations</code> (CronJob: <code>spec.jobTemplate.spec.template.metadata.annotations</code>; bare Pod: the Pod's own <code>metadata.annotations</code>)</td>
+<td>Pods inherit it, so the webhook reads it with no extra lookups. Cheapest and most explicit.</td>
 </tr>
 <tr>
 <td>Workload metadata</td>
 <td><code>metadata.annotations</code> on the Deployment/StatefulSet/DaemonSet/CronJob/Job/Rollout</td>
-<td>For charts that expose <code>metadata.annotations</code> but no pod-template annotation knob.</td>
+<td>For charts that expose <code>metadata.annotations</code> but no pod-template annotation knob. Not consulted for bare Pods.</td>
 </tr>
 <tr>
 <td>Namespace</td>
@@ -2086,24 +2086,83 @@
 </tr>
 </tbody>
 </table>
-<p>The first level that says anything wins. A less specific level is consulted only when every more specific one is silent.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;policy-name&gt;</span>
-</code></pre></div>
-<p>The value is the name of a cluster-scoped <code>Policy</code> object.</p>
+<p>The first level that carries either a non-empty <code>k8s.sustain.io/policy</code> or <code>k8s.sustain.io/opt-out: "true"</code> decides; less specific levels are not read. An <strong>empty</strong> <code>k8s.sustain.io/policy</code> value falls through to the next level, so a Helm value that renders empty is not an opt-out.</p>
+<p>The annotation opts the workload in; the Policy must <strong>also</strong> accept it. A resolved policy applies only when its <code>spec.selector</code> (<code>namespaces</code> and <code>labelSelector</code>) matches the workload and the namespace is not in the operator's <code>--excluded-namespaces</code>. The annotation names the policy, the selector narrows it. This also makes Namespace opt-in delegated rather than sovereign: namespace owners choose among the policies whose selector already reaches them; they cannot grant themselves one.</p>
 <h3 id="opting-out">Opting out<a class="headerlink" href="#opting-out" title="Permanent link">&para;</a></h3>
-<p><code>k8s.sustain.io/opt-out: "true"</code> at any level excludes the workload from a policy it would otherwise inherit from a less specific level:</p>
+<p><code>k8s.sustain.io/opt-out: "true"</code> at a level ends resolution with no policy, so a more specific opt-out beats a less specific opt-in:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">metadata</span><span class="p">:</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">k8s.sustain.io/opt-out</span><span class="p">:</span><span class="w"> </span><span class="s">"true"</span>
 </code></pre></div>
-<p>Only the literal string <code>"true"</code> opts out. An <strong>empty</strong> <code>k8s.sustain.io/policy</code> value is not an opt-out — it falls through to the next level, so a Helm value that renders empty behaves as it always has.</p>
-<h3 id="namespace-opt-in-is-delegated-not-sovereign">Namespace opt-in is delegated, not sovereign<a class="headerlink" href="#namespace-opt-in-is-delegated-not-sovereign" title="Permanent link">&para;</a></h3>
-<p>A Namespace annotation only takes effect for a <code>Policy</code> whose own <code>spec.selector</code> (<code>namespaces</code> and <code>labelSelector</code>) already reaches that namespace, and the operator's <code>--excluded-namespaces</code> remains a hard deny. Namespace owners choose among the policies offered to them; they cannot grant themselves one.</p>
+<p>Only the literal string <code>"true"</code> opts out.</p>
+<hr />
+<h2 id="annotations-and-labels">Annotations and labels<a class="headerlink" href="#annotations-and-labels" title="Permanent link">&para;</a></h2>
+<p>Every <code>k8s.sustain.io/</code> key the operator reads or writes:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Kind</th>
+<th>On</th>
+<th>Written by</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>k8s.sustain.io/policy</code></td>
+<td>annotation</td>
+<td>pod template, workload, Namespace, bare Pod</td>
+<td>you</td>
+<td>Opts into the named Policy. See <a href="#resolution-order">Resolution order</a>.</td>
+</tr>
+<tr>
+<td><code>k8s.sustain.io/opt-out</code></td>
+<td>annotation</td>
+<td>pod template, workload, Namespace, bare Pod</td>
+<td>you</td>
+<td><code>"true"</code> stops resolution with no policy.</td>
+</tr>
+<tr>
+<td><code>k8s.sustain.io/owner-name</code></td>
+<td>annotation</td>
+<td>pod template, bare Pod</td>
+<td>you</td>
+<td>Overrides the workload identity: a bare Pod becomes kind <code>Pod</code> with this name; pods with a real owner are grouped under this name. Must be a valid label value (RFC 1123, ≤ 63 chars); invalid or empty values are ignored. Read from the pod template only, never from workload metadata. See <a href="../../guides/standalone-pods-and-grouping/">Standalone Pods &amp; Identity Grouping</a>.</td>
+</tr>
+<tr>
+<td><code>k8s.sustain.io/owner-name</code></td>
+<td>label</td>
+<td>Pod</td>
+<td>webhook</td>
+<td>Mirror of the annotation, added at admission so kube-state-metrics (<code>kube_pod_labels</code>) exposes it to the recording rules.</td>
+</tr>
+<tr>
+<td><code>k8s.sustain.io/policy</code></td>
+<td>label</td>
+<td><code>WorkloadRecommendation</code></td>
+<td>controller, webhook</td>
+<td>Policy that produced the recommendation; used to scope list calls.</td>
+</tr>
+<tr>
+<td><code>k8s.sustain.io/stub</code></td>
+<td>label</td>
+<td><code>WorkloadRecommendation</code></td>
+<td>webhook</td>
+<td><code>"true"</code> on a <a href="../../concepts/workload-recommendations/#cold-start-stub-recommendations">cold-start stub</a> created at admission. Provenance only.</td>
+</tr>
+<tr>
+<td><code>k8s.sustain.io/cleanup</code></td>
+<td>finalizer</td>
+<td><code>Policy</code></td>
+<td>controller</td>
+<td>Deletes the policy's <code>WorkloadRecommendation</code>s and metric series before the Policy is removed.</td>
+</tr>
+</tbody>
+</table>
 <hr />
 <h2 id="placement-by-workload-kind">Placement by workload kind<a class="headerlink" href="#placement-by-workload-kind" title="Permanent link">&para;</a></h2>
-<div class="tabbed-set tabbed-alternate" data-tabs="1:5"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><input id="__tabbed_1_4" name="__tabbed_1" type="radio" /><input id="__tabbed_1_5" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Deployment</label><label for="__tabbed_1_2">StatefulSet</label><label for="__tabbed_1_3">DaemonSet</label><label for="__tabbed_1_4">CronJob</label><label for="__tabbed_1_5">Namespace</label></div>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:7"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><input id="__tabbed_1_4" name="__tabbed_1" type="radio" /><input id="__tabbed_1_5" name="__tabbed_1" type="radio" /><input id="__tabbed_1_6" name="__tabbed_1" type="radio" /><input id="__tabbed_1_7" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Deployment</label><label for="__tabbed_1_2">StatefulSet</label><label for="__tabbed_1_3">DaemonSet</label><label for="__tabbed_1_4">Rollout / Job</label><label for="__tabbed_1_5">CronJob</label><label for="__tabbed_1_6">Bare Pod</label><label for="__tabbed_1_7">Namespace</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">apps/v1</span>
@@ -2157,6 +2216,9 @@
 </code></pre></div>
 </div>
 <div class="tabbed-block">
+<p>Same as Deployment: the annotation goes in <code>spec.template.metadata.annotations</code>.</p>
+</div>
+<div class="tabbed-block">
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch/v1</span>
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CronJob</span>
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nt">metadata</span><span class="p">:</span>
@@ -2181,33 +2243,51 @@
 </div>
 <div class="tabbed-block">
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Namespace</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Pod</span>
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production-rightsizing</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">etl-run-42</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production-rightsizing</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="nt">k8s.sustain.io/owner-name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">etl-daily</span><span class="w">  </span><span class="c1"># (1)!</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">worker</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">      </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">busybox:1.36</span>
+</code></pre></div>
+<ol>
+<li>Required: a pod with no controller owner is only managed under an owner-name identity.</li>
+</ol>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Namespace</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production-rightsizing</span>
 </code></pre></div>
 </div>
 </div>
 </div>
 <hr />
 <h2 id="adding-the-annotation-imperatively">Adding the annotation imperatively<a class="headerlink" href="#adding-the-annotation-imperatively" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Deployment</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>deployment<span class="w"> </span>my-app<span class="w"> </span>-n<span class="w"> </span>production<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span>-p<span class="o">=</span><span class="s1">'{"spec":{"template":{"metadata":{"annotations":{"k8s.sustain.io/policy":"production-rightsizing"}}}}}'</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="c1"># CronJob</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>cronjob<span class="w"> </span>my-job<span class="w"> </span>-n<span class="w"> </span>production<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span>-p<span class="o">=</span><span class="s1">'{"spec":{"jobTemplate":{"spec":{"template":{"metadata":{"annotations":{"k8s.sustain.io/policy":"production-rightsizing"}}}}}}}'</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Deployment</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>deployment<span class="w"> </span>my-app<span class="w"> </span>-n<span class="w"> </span>production<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span>-p<span class="o">=</span><span class="s1">'{"spec":{"template":{"metadata":{"annotations":{"k8s.sustain.io/policy":"production-rightsizing"}}}}}'</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="c1"># CronJob</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>cronjob<span class="w"> </span>my-job<span class="w"> </span>-n<span class="w"> </span>production<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span>-p<span class="o">=</span><span class="s1">'{"spec":{"jobTemplate":{"spec":{"template":{"metadata":{"annotations":{"k8s.sustain.io/policy":"production-rightsizing"}}}}}}}'</span>
 </code></pre></div>
 <hr />
 <h2 id="removing-a-workload-from-a-policy">Removing a workload from a policy<a class="headerlink" href="#removing-a-workload-from-a-policy" title="Permanent link">&para;</a></h2>
 <p>Delete the annotation from whichever level set it (pod template, workload metadata, or Namespace) — or, if a more specific level should stop inheriting a less specific one's opt-in, set <code>k8s.sustain.io/opt-out: "true"</code> on that more specific level instead. The controller will stop reconciling the workload on the next interval; existing resources are not reverted.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>kubectl<span class="w"> </span>annotate<span class="w"> </span>deployment<span class="w"> </span>my-app<span class="w"> </span>-n<span class="w"> </span>production<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>k8s.sustain.io/policy-<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>--overwrite
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>kubectl<span class="w"> </span>annotate<span class="w"> </span>deployment<span class="w"> </span>my-app<span class="w"> </span>-n<span class="w"> </span>production<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>k8s.sustain.io/policy-<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>--overwrite
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
@@ -2215,7 +2295,7 @@
 </div>
 <hr />
 <h2 id="how-the-annotation-is-consumed">How the annotation is consumed<a class="headerlink" href="#how-the-annotation-is-consumed" title="Permanent link">&para;</a></h2>
-<p>All four components resolve the annotation through the same function, <code>internal/policymatch.ResolvePolicy(template, workloadMeta, namespace)</code>, so they can never drift on which policy a workload is opted into:</p>
+<p>Each component passes these levels to <code>ResolvePolicy</code>:</p>
 <table>
 <thead>
 <tr>
@@ -2243,12 +2323,7 @@
 </tbody>
 </table>
 <h3 id="the-webhooks-cost-control-does-not-fully-bound-itself">The webhook's cost control does not fully bound itself<a class="headerlink" href="#the-webhooks-cost-control-does-not-fully-bound-itself" title="Permanent link">&para;</a></h3>
-<p>The webhook pre-gates the owner/Namespace reads above behind <code>anyPolicyCovers</code>: if no Policy's <code>selector</code> could claim a pod at all, it skips them entirely. This <em>is</em> the cost control for a cluster with at least one selector-scoped Policy — most pod creates in most namespaces are skipped before any extra read.</p>
-<p>It does <strong>not</strong> bound cost on a cluster where a Policy has an empty <code>selector</code> (no <code>namespaces</code>, no <code>labelSelector</code>) — the default, and what <a href="../../getting-started/quick-start/">Quick Start</a> produces. Such a Policy covers every pod in the cluster, so the pre-gate always passes and every pod CREATE it admits pays for owner resolution: <code>resolveCachedPodOwner</code> (via a Deployment/Rollout pod's ReplicaSet, or a CronJob pod's Job) does one Get to find the top-level owner. This Get is not scoped to the multi-level opt-in chain — <code>admit()</code> needs the same top-level owner to look up the <code>WorkloadRecommendation</code> for <strong>every</strong> pod it injects into, pod-template-annotated (the common case, since every existing user annotates the pod template) or not. A pod with no annotation of its own additionally goes through the opt-in chain (<code>resolveOptIn</code>), which needs a second Get — <code>ownerAnnotations</code>, of the resolved top-level object's own <code>metadata.annotations</code> — to evaluate the workload level; that second Get <em>is</em> scoped to unannotated pods, since an annotated pod's own annotation already decides the policy without ever reading its owner's. A rolling restart of a large Deployment therefore issues up to two owner Gets per replica in the worst case — not one.</p>
-<p>The webhook absorbs this with two small in-memory caches (<code>internal/webhook/ownercache.go</code>), both TTL ~30s and both consulted before their respective Get: <code>Handler.ownerRefCache</code>, keyed by the pod's own immediate controller ownerRef (<code>namespace/kind/name/UID</code> of its ReplicaSet or Job), bounds the first Get — shared by <strong>every</strong> pod CREATE that reaches owner resolution at all, whether it took the pod-template-annotated path or the multi-level opt-in chain; <code>Handler.ownerAnnCache</code>, keyed by <code>(namespace, kind, name)</code> of the resolved top-level object, bounds the second Get and is reached only via the multi-level opt-in chain. N pods created behind the same owner in a burst — exactly what a rolling restart produces — share both cache keys, so the pair collapses from up to 2N Gets to at most 2.</p>
-<p>Both caches also collapse a <em>concurrent</em> cold-start burst, not just the steady-state (already-warm) case: N pods admitted at the same instant behind one owner — the exact shape of a rolling restart — issue one in-flight Get via <a href="https://pkg.go.dev/golang.org/x/sync/singleflight"><code>golang.org/x/sync/singleflight</code></a>, with every other admission waiting on that Get's result instead of each starting its own. A waiter still respects its own admission deadline: if it times out before the in-flight Get returns, only that one admission gives up and fails open (with the pod resolved on template resources); the Get itself keeps running regardless, to completion or its own 2s <code>apiCallTimeout</code> budget (whichever comes first) — not just for as long as some other admission is still waiting on it, but also to populate the cache for the next burst even if every waiter has already given up.</p>
-<p>A panic inside that shared Get is contained rather than fatal. Running it on a <code>singleflight</code> goroutine puts it outside the HTTP handler's panic-recovery middleware, and <code>singleflight</code> deliberately re-raises a leader panic on a bare goroutine that nothing can recover — so, unguarded, one nil deref under an owner Get would abort the whole webhook process and (under <code>failurePolicy: Fail</code>) block every Pod CREATE in the cluster until it restarted. The webhook therefore recovers such a panic itself, logs it with its stack, counts it on <a href="../metrics/#k8s_sustain_webhook_panic_total"><code>k8s_sustain_webhook_panic_total</code></a> under <code>singleflight/ownerRef</code> or <code>singleflight/ownerAnnotations</code>, and hands it to the leader and every waiter as an ordinary error — which they fail open on like any other failed Get. Nothing is cached, and the next admission retries.</p>
-<p>The trade-off: a workload that gains its opt-in annotation at the workload level may take up to the cache's TTL to be picked up by admission. This is acceptable because the controller reconciles independently of admission on its own interval regardless of what the webhook does.</p>
+<p>When a Policy has an empty <code>selector</code>, every pod CREATE pays for up to two owner Gets (top-level owner, then its annotations for unannotated pods). Two ~30s TTL caches with <code>singleflight</code> collapse a rolling restart's burst to at most two Gets per owner, so a workload-level annotation change can take up to 30s to reach admission.</p>
 
 
 

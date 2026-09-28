@@ -981,35 +981,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -1425,17 +1397,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#files-vs-inline-values" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Files vs inline values
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#recipe-1-thanos-mimir-cortex-multi-tenant-gateway" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1454,23 +1415,6 @@
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Recipe 2 — In-cluster Prometheus behind an auth proxy (projected token)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#legacy-variant-a-kubernetesioservice-account-token-secret" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Legacy variant — a kubernetes.io/service-account-token Secret
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1525,10 +1469,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#security-guidance" class="md-nav__link">
+  <a href="#credential-sources-and-security" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Security guidance
+        Credential sources and security
       
     </span>
   </a>
@@ -1956,17 +1900,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#files-vs-inline-values" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Files vs inline values
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#recipe-1-thanos-mimir-cortex-multi-tenant-gateway" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1985,23 +1918,6 @@
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Recipe 2 — In-cluster Prometheus behind an auth proxy (projected token)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#legacy-variant-a-kubernetesioservice-account-token-secret" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Legacy variant — a kubernetes.io/service-account-token Secret
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -2056,10 +1972,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#security-guidance" class="md-nav__link">
+  <a href="#credential-sources-and-security" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Security guidance
+        Credential sources and security
       
     </span>
   </a>
@@ -2202,7 +2118,7 @@ the CLI, through environment variables, and through the chart's
 <tbody>
 <tr>
 <td>Controller (<code>start</code>)</td>
-<td>Yes — three queries per reconcile shard</td>
+<td>Yes — batched queries every reconcile</td>
 <td>Yes</td>
 </tr>
 <tr>
@@ -2219,8 +2135,7 @@ the CLI, through environment variables, and through the chart's
 </table>
 <p>The chart wires the controller and the dashboard <strong>identically</strong> from one
 top-level <code>prometheusAuth</code> block, so the two can never disagree about which
-Prometheus — or which tenant — a recommendation came from. The webhook is
-deliberately not wired: it has no Prometheus client at all.</p>
+Prometheus — or which tenant — a recommendation came from.</p>
 <div class="admonition note">
 <p class="admonition-title"><code>prometheusAuth</code>, not <code>prometheus</code></p>
 <p>The values block is top-level <code>prometheusAuth</code>. The <code>prometheus:</code> key
@@ -2228,63 +2143,14 @@ belongs to the bundled <a href="../../reference/helm-values/#prometheus-subchart
 and configures that server, not k8s-sustain's client.</p>
 </div>
 <hr />
-<h2 id="files-vs-inline-values">Files vs inline values<a class="headerlink" href="#files-vs-inline-values" title="Permanent link">&para;</a></h2>
-<p>Every credential can be supplied two ways, and the difference matters
-operationally:</p>
-<table>
-<thead>
-<tr>
-<th></th>
-<th>Inline (<code>--prometheus-bearer-token</code>, <code>--prometheus-basic-auth-password</code>)</th>
-<th>File (<code>--prometheus-bearer-token-file</code>, <code>--prometheus-basic-auth-password-file</code>)</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Read</td>
-<td>Once, at startup</td>
-<td><strong>On every request</strong></td>
-</tr>
-<tr>
-<td>Credential rotation</td>
-<td>Requires a pod restart</td>
-<td>Picked up automatically, no restart</td>
-</tr>
-<tr>
-<td>Where the secret lives</td>
-<td>In the pod spec and in <code>helm get values</code></td>
-<td>Only in the Secret</td>
-</tr>
-</tbody>
-</table>
-<p>The mTLS key pair (<code>tls.certFile</code>/<code>keyFile</code>, or <code>certKey</code>/<code>keyKey</code>) behaves
-like the file column: it is re-read on every TLS handshake, so a certificate
-renewed in place by cert-manager or a mesh sidecar is used without a restart.</p>
-<p><strong>Prefer the file form.</strong> Two consequences follow from the per-request re-read:</p>
-<ul>
-<li>A Kubernetes projected service-account token is rotated in place by the
-  kubelet roughly hourly. A token read once at startup starts returning <code>401</code>
-  after the first rotation; a token file keeps working indefinitely.</li>
-<li>Updating the backing Secret (external-secrets rotation, a manual
-  <code>kubectl create secret ... --dry-run | kubectl apply</code>) takes effect on the
-  next query, with no rollout.</li>
-</ul>
-<p>Files are <em>also</em> read once at construction time, purely as a validation step:
-a missing or unreadable path, a malformed key pair, or a CA file with no valid
-PEM block <strong>fails the process at startup</strong> (visible as <code>CrashLoopBackOff</code>)
-rather than degrading into per-query errors that look like a Prometheus outage.</p>
-<hr />
 <h2 id="recipe-1-thanos-mimir-cortex-multi-tenant-gateway">Recipe 1 — Thanos / Mimir / Cortex multi-tenant gateway<a class="headerlink" href="#recipe-1-thanos-mimir-cortex-multi-tenant-gateway" title="Permanent link">&para;</a></h2>
-<p>A tenant-aware query gateway needs two things: a bearer token, and a tenant
-header (<code>X-Scope-OrgID</code> for Mimir and Cortex; the header name varies across
-gateways, which is why it is a generic <code>headers</code> map rather than a fixed
-field).</p>
-<p>Create the Secret holding the token:</p>
+<p>A tenant-aware query gateway needs a bearer token and a tenant header
+(<code>X-Scope-OrgID</code> for Mimir and Cortex; the header name varies across gateways,
+which is why <code>headers</code> is a generic map).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>kubectl<span class="w"> </span>create<span class="w"> </span>secret<span class="w"> </span>generic<span class="w"> </span>prometheus-credentials<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--from-literal<span class="o">=</span><span class="nv">token</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>cat<span class="w"> </span>./mimir-token<span class="k">)</span><span class="s2">"</span>
 </code></pre></div>
-<p>Then:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># values.yaml</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">prometheus</span><span class="p">:</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">                                            </span><span class="c1"># no bundled Prometheus</span>
@@ -2318,211 +2184,198 @@ field).</p>
 <a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">token</span>
 <a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a><span class="w">          </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">token</span>
 </code></pre></div>
-<p>Only the keys you actually name are projected into the pod, so unrelated keys
-living in the same Secret are never exposed to the container.</p>
+<p>Only the keys you name are projected into the pod, so unrelated keys in the
+same Secret are never exposed.</p>
 <div class="admonition tip">
 <p class="admonition-title">Header values are not secrets</p>
 <p><code>prometheusAuth.headers</code> values are rendered into the pod spec verbatim.
 Use them for tenant ids and routing hints — never for credentials. Keys are
-sorted before rendering, so the flag and the pod-template hash stay stable
-across <code>helm upgrade</code> runs instead of flapping with map iteration order.</p>
+sorted before rendering, so the pod-template hash stays stable across
+<code>helm upgrade</code> runs.</p>
 </div>
 <hr />
 <h2 id="recipe-2-in-cluster-prometheus-behind-an-auth-proxy-projected-token">Recipe 2 — In-cluster Prometheus behind an auth proxy (projected token)<a class="headerlink" href="#recipe-2-in-cluster-prometheus-behind-an-auth-proxy-projected-token" title="Permanent link">&para;</a></h2>
 <p>When Prometheus sits behind <code>kube-rbac-proxy</code>, <code>oauth2-proxy</code>, or an
 authenticating Ingress that validates a Kubernetes service-account token with a
-<code>TokenReview</code>, point k8s-sustain at the token the kubelet <strong>already projects
-into every pod</strong>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>/var/run/secrets/kubernetes.io/serviceaccount/token
-</code></pre></div>
-<p>The chart never sets <code>automountServiceAccountToken: false</code>, so the controller
-and the dashboard both carry that file. It is a <em>projected</em> token: the kubelet
-rewrites it in place roughly hourly, and <code>--prometheus-bearer-token-file</code> is
-re-read on every query — so rotation needs no restart, no <code>helm upgrade</code>, and
-no Secret to manage.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># values.yaml</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nt">prometheus</span><span class="p">:</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="nt">prometheusAddress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://prometheus-proxy.monitoring.svc:8443</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="c1"># A path, not a Secret key: the file is already in the pod, so the chart</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="c1"># renders the flag and nothing else — no volume, no volumeMount.</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">bearerTokenFile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/run/secrets/kubernetes.io/serviceaccount/token</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
-<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-proxy-ca</span><span class="w">   </span><span class="c1"># whatever signs the proxy's cert</span>
-<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">    </span><span class="nt">caKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ca.crt</span>
-<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>
-<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="nt">extraManifests</span><span class="p">:</span>
-<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">  </span><span class="c1"># What kube-rbac-proxy typically authorizes against.</span>
-<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rbac.authorization.k8s.io/v1</span>
-<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ClusterRoleBinding</span>
-<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">include</span><span class="nv"> </span><span class="s">"k8s-sustain.fullname"</span><span class="nv"> </span><span class="s">.</span><span class="nv"> </span><span class="s">}}-prometheus-reader'</span>
-<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="w">    </span><span class="nt">roleRef</span><span class="p">:</span>
-<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="w">      </span><span class="nt">apiGroup</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rbac.authorization.k8s.io</span>
-<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ClusterRole</span>
-<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-reader</span><span class="w">          </span><span class="c1"># your proxy's ClusterRole</span>
-<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="w">    </span><span class="nt">subjects</span><span class="p">:</span>
-<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="w">      </span><span class="c1"># BOTH identities: the controller and the dashboard run under separate</span>
-<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="w">      </span><span class="c1"># ServiceAccounts, so each pod projects a token for a different subject.</span>
-<a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ServiceAccount</span>
-<a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a><span class="w">        </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">include</span><span class="nv"> </span><span class="s">"k8s-sustain.serviceAccountName"</span><span class="nv"> </span><span class="s">.</span><span class="nv"> </span><span class="s">}}'</span>
-<a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a><span class="w">        </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">.Release.Namespace</span><span class="nv"> </span><span class="s">}}'</span>
-<a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ServiceAccount</span>
-<a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a><span class="w">        </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">include</span><span class="nv"> </span><span class="s">"k8s-sustain.dashboardName"</span><span class="nv"> </span><span class="s">.</span><span class="nv"> </span><span class="s">}}'</span>
-<a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a><span class="w">        </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">.Release.Namespace</span><span class="nv"> </span><span class="s">}}'</span>
+<code>TokenReview</code>, point k8s-sustain at the token the kubelet already projects into
+every pod (<code>/var/run/secrets/kubernetes.io/serviceaccount/token</code>). The kubelet
+rotates it in place roughly hourly and <code>--prometheus-bearer-token-file</code> is
+re-read on every query, so rotation needs no restart and no Secret.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># values.yaml</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nt">prometheus</span><span class="p">:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="nt">prometheusAddress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://prometheus-proxy.monitoring.svc:8443</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="c1"># A path, not a Secret key: the chart renders the flag and mounts nothing.</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="nt">bearerTokenFile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/run/secrets/kubernetes.io/serviceaccount/token</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">    </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-proxy-ca</span><span class="w">   </span><span class="c1"># whatever signs the proxy's cert</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">    </span><span class="nt">caKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ca.crt</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="nt">extraManifests</span><span class="p">:</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rbac.authorization.k8s.io/v1</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ClusterRoleBinding</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">include</span><span class="nv"> </span><span class="s">"k8s-sustain.fullname"</span><span class="nv"> </span><span class="s">.</span><span class="nv"> </span><span class="s">}}-prometheus-reader'</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="w">    </span><span class="nt">roleRef</span><span class="p">:</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="w">      </span><span class="nt">apiGroup</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rbac.authorization.k8s.io</span>
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="w">      </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ClusterRole</span>
+<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-reader</span><span class="w">          </span><span class="c1"># your proxy's ClusterRole</span>
+<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="w">    </span><span class="nt">subjects</span><span class="p">:</span>
+<a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ServiceAccount</span>
+<a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="w">        </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">include</span><span class="nv"> </span><span class="s">"k8s-sustain.serviceAccountName"</span><span class="nv"> </span><span class="s">.</span><span class="nv"> </span><span class="s">}}'</span>
+<a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a><span class="w">        </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">.Release.Namespace</span><span class="nv"> </span><span class="s">}}'</span>
+<a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ServiceAccount</span>
+<a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a><span class="w">        </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">include</span><span class="nv"> </span><span class="s">"k8s-sustain.dashboardName"</span><span class="nv"> </span><span class="s">.</span><span class="nv"> </span><span class="s">}}'</span>
+<a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a><span class="w">        </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">.Release.Namespace</span><span class="nv"> </span><span class="s">}}'</span>
 </code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Two ServiceAccounts, two identities</p>
-<p>The dashboard has its own ServiceAccount (<code>&lt;release&gt;-dashboard</code>), so its
-projected token authenticates as a <em>different</em> subject than the
+<p>The dashboard runs under its own ServiceAccount (<code>&lt;fullname&gt;-dashboard</code>),
+so its projected token authenticates as a <em>different</em> subject than the
 controller's. Authorize both, or the dashboard gets a <code>403</code> from the proxy
 while the controller works — which surfaces as "No metrics data available"
 with no error anywhere else.</p>
 </div>
-<p>This renders, on <strong>both</strong> Deployments:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">args</span><span class="p">:</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--prometheus-bearer-token-file=/var/run/secrets/kubernetes.io/serviceaccount/token</span>
-</code></pre></div>
-<p>and adds no volume for it — the kubelet owns that file.</p>
+<p><code>bearerTokenFile</code> is a <strong>raw path</strong>, as are <code>basicAuth.passwordFile</code>,
+<code>tls.caFile</code>, <code>tls.certFile</code> and <code>tls.keyFile</code>. They render their flag
+verbatim, create nothing, and are for files something <em>else</em> put in the pod —
+the kubelet, a secret-store CSI driver, a service-mesh sidecar. See
+<a href="#rejected-configurations">Rejected configurations</a> for how they combine with
+<code>*Key</code> values.</p>
 <div class="admonition tip">
 <p class="admonition-title">OpenShift in-cluster monitoring</p>
 <p>OpenShift projects its service CA into the same directory, so the Thanos
-querier in front of the cluster's Prometheus needs no Secret at all:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">prometheusAddress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://thanos-querier.openshift-monitoring.svc:9091</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">bearerTokenFile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/run/secrets/kubernetes.io/serviceaccount/token</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">caFile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt</span>
+querier needs no Secret at all:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">prometheusAddress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://thanos-querier.openshift-monitoring.svc:9091</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">bearerTokenFile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/run/secrets/kubernetes.io/serviceaccount/token</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span><span class="nt">caFile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt</span>
 </code></pre></div>
-<p>Bind the release's ServiceAccount to <code>cluster-monitoring-view</code> with
+<p>Bind both ServiceAccounts to <code>cluster-monitoring-view</code> with
 <code>extraManifests</code> as above.</p>
 </div>
-<p><code>bearerTokenFile</code> is a <strong>raw path</strong>, and every credential and TLS setting has
-one: <code>basicAuth.passwordFile</code>, <code>tls.caFile</code>, <code>tls.certFile</code>, <code>tls.keyFile</code>.
-They render their flag verbatim, create nothing, and are for files something
-<em>else</em> put in the pod — the kubelet, a secret-store CSI driver, a service-mesh
-sidecar. Each is mutually exclusive with its <code>*Key</code> counterpart (and, for the
-token and the password, with the inline value): setting both <strong>fails the
-template</strong> naming the two values, because both would drive the same flag and
-the rendered Deployment could no longer say which source was meant.</p>
 <div class="admonition note">
-<p class="admonition-title">A custom token <code>audience</code> still needs a patch</p>
-<p>The projected token in the default location carries the API server's own
-audience. A proxy that demands a <em>specific</em> audience needs a
-<code>serviceAccountToken</code> projected volume with an <code>audience:</code> field, which
-this chart cannot express (it has no <code>extraVolumes</code>) — that case still
-needs a kustomize / Argo CD patch on both Deployments, adding the volume
-and pointing <code>bearerTokenFile</code> at its mount path.</p>
+<p class="admonition-title">A custom token <code>audience</code> needs a patch</p>
+<p>The default projected token carries the API server's audience. A proxy
+that demands a specific audience needs a <code>serviceAccountToken</code> projected
+volume with <code>audience:</code>, which the chart cannot express (no
+<code>extraVolumes</code>) — add it with a kustomize / Argo CD patch on both
+Deployments and point <code>bearerTokenFile</code> at its mount path.</p>
 </div>
-<h3 id="legacy-variant-a-kubernetesioservice-account-token-secret">Legacy variant — a <code>kubernetes.io/service-account-token</code> Secret<a class="headerlink" href="#legacy-variant-a-kubernetesioservice-account-token-secret" title="Permanent link">&para;</a></h3>
-<p>Before projected tokens, the way to get a token file was to have the token
-controller populate a Secret and mount it. The chart still supports it through
-<code>existingSecret</code> + <code>bearerTokenKey</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s-sustain-prometheus-token</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">bearerTokenKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">token</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s-sustain-prometheus-token</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="nt">caKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ca.crt</span><span class="w">                     </span><span class="c1"># the Secret also carries the cluster CA</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="nt">extraManifests</span><span class="p">:</span>
-<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
-<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Secret</span>
-<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kubernetes.io/service-account-token</span>
-<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">    </span><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s-sustain-prometheus-token</span>
-<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">      </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">.Release.Namespace</span><span class="nv"> </span><span class="s">}}'</span>
-<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="w">      </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="w">        </span><span class="nt">kubernetes.io/service-account.name</span><span class="p">:</span><span class="w"> </span><span class="s">'{{</span><span class="nv"> </span><span class="s">include</span><span class="nv"> </span><span class="s">"k8s-sustain.serviceAccountName"</span><span class="nv"> </span><span class="s">.</span><span class="nv"> </span><span class="s">}}'</span>
-</code></pre></div>
-<p>A Secret-backed token is mounted into both pods, so both authenticate as the
-<strong>controller's</strong> ServiceAccount — one identity to authorize instead of two.
-That is the only way in which this form is simpler.</p>
-<div class="admonition warning">
-<p class="admonition-title">Long-lived and non-rotating</p>
-<p>This token never expires and never rotates; it is a standing credential
-sitting in etcd, and revoking it means deleting the Secret. Reach for it
-only when something <strong>outside</strong> the pod must read the same token — an
-external system or a proxy configuration you have to paste it into.
-Otherwise use the projected token above.</p>
+<div class="admonition note">
+<p class="admonition-title">Legacy <code>kubernetes.io/service-account-token</code> Secret</p>
+<p>A token Secret populated by the token controller also works through
+<code>existingSecret</code> + <code>bearerTokenKey</code> (create it with <code>extraManifests</code>, the
+<code>kubernetes.io/service-account.name</code> annotation naming
+<code>{{ include "k8s-sustain.serviceAccountName" . }}</code>; the Secret's <code>ca.crt</code>
+can serve as <code>tls.caKey</code>). Both pods then authenticate as the
+controller's ServiceAccount. The token never expires or rotates — use it
+only when something outside the pod must read the same token.</p>
 </div>
 <hr />
 <h2 id="recipe-3-basic-auth-behind-a-private-ca">Recipe 3 — Basic auth behind a private CA<a class="headerlink" href="#recipe-3-basic-auth-behind-a-private-ca" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>kubectl<span class="w"> </span>create<span class="w"> </span>secret<span class="w"> </span>generic<span class="w"> </span>prometheus-credentials<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>--from-literal<span class="o">=</span><span class="nv">username</span><span class="o">=</span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span>--from-file<span class="o">=</span><span class="nv">password</span><span class="o">=</span>./password.txt
-<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>
-<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>kubectl<span class="w"> </span>create<span class="w"> </span>secret<span class="w"> </span>generic<span class="w"> </span>prometheus-ca<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">  </span>--from-file<span class="o">=</span>ca.crt<span class="o">=</span>./corp-root-ca.pem
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>kubectl<span class="w"> </span>create<span class="w"> </span>secret<span class="w"> </span>generic<span class="w"> </span>prometheus-credentials<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--from-literal<span class="o">=</span><span class="nv">username</span><span class="o">=</span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--from-file<span class="o">=</span><span class="nv">password</span><span class="o">=</span>./password.txt
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>kubectl<span class="w"> </span>create<span class="w"> </span>secret<span class="w"> </span>generic<span class="w"> </span>prometheus-ca<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span>--from-file<span class="o">=</span>ca.crt<span class="o">=</span>./corp-root-ca.pem
 </code></pre></div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># values.yaml</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nt">prometheus</span><span class="p">:</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="nt">prometheusAddress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://prometheus.corp.internal:9090</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
-<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">  </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-credentials</span>
-<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span><span class="nt">basicAuth</span><span class="p">:</span>
-<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">    </span><span class="nt">usernameKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">username</span><span class="w">             </span><span class="c1"># injected via secretKeyRef (env var)</span>
-<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">    </span><span class="nt">passwordKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">password</span><span class="w">             </span><span class="c1"># mounted as a file, re-read per request</span>
-<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
-<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">    </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-ca</span>
-<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">    </span><span class="nt">caKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ca.crt</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># values.yaml</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nt">prometheus</span><span class="p">:</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="nt">prometheusAddress</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://prometheus.corp.internal:9090</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-credentials</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="nt">basicAuth</span><span class="p">:</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="nt">usernameKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">username</span><span class="w">             </span><span class="c1"># injected via secretKeyRef (env var)</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="nt">passwordKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">password</span><span class="w">             </span><span class="c1"># mounted as a file, re-read per request</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">    </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-ca</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">    </span><span class="nt">caKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ca.crt</span>
 </code></pre></div>
-<p>The username is not secret material, so <code>basicAuth.username: k8s-sustain</code> in
-plain values is fine too — <code>usernameKey</code> wins when both are set. There is no
-<code>--prometheus-basic-auth-username-file</code>; the username is passed as a flag (or,
-with <code>usernameKey</code>, as a <code>valueFrom.secretKeyRef</code> env var), never mounted.</p>
+<p>The username is not secret, so <code>basicAuth.username: k8s-sustain</code> in plain
+values is fine too — <code>usernameKey</code> wins when both are set. There is no
+username file; it is passed as a flag or, with <code>usernameKey</code>, a
+<code>secretKeyRef</code> env var.</p>
 <div class="admonition info">
 <p class="admonition-title">The CA is appended, not substituted</p>
-<p><code>prometheusAuth.tls.caKey</code> renders <code>--prometheus-tls-ca-file</code>, whose PEM
-bundle is <strong>appended to a copy of the system trust pool</strong>. A publicly
-signed ingress on the same address keeps validating; adding a private CA
-never revokes trust in a certificate the host already accepts.</p>
+<p><code>--prometheus-tls-ca-file</code> is <strong>appended to a copy of the system trust
+pool</strong>, so a publicly signed ingress on the same address keeps validating.</p>
 </div>
 <h3 id="mutual-tls">Mutual TLS<a class="headerlink" href="#mutual-tls" title="Permanent link">&para;</a></h3>
-<p>Set the client key pair alongside (or instead of) the CA. Both must be set
-together — a cert without a key is rejected at startup:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">    </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-client-tls</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">    </span><span class="nt">caKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ca.crt</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">    </span><span class="nt">certKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tls.crt</span>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">    </span><span class="nt">keyKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tls.key</span>
+<p>Set the client key pair alongside (or instead of) the CA; cert and key must be
+set together:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-client-tls</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">caKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ca.crt</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nt">certKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tls.crt</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="nt">keyKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">tls.key</span>
 </code></pre></div>
-<p>These are mounted at <code>/etc/k8s-sustain/prometheus-tls/&lt;key&gt;</code> — a separate mount
-from the credentials, though it may point at the same Secret.</p>
+<p>These are mounted at <code>/etc/k8s-sustain/prometheus-tls/&lt;key&gt;</code>, a separate mount
+from the credentials (it may point at the same Secret).</p>
 <h3 id="when-the-certificate-name-does-not-match-the-address">When the certificate name does not match the address<a class="headerlink" href="#when-the-certificate-name-does-not-match-the-address" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-ca</span>
-<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="nt">caKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ca.crt</span>
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span><span class="nt">serverName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus.corp.internal</span><span class="w">   </span><span class="c1"># SNI / verified hostname override</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">prometheusAuth</span><span class="p">:</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">tls</span><span class="p">:</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="nt">existingSecret</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus-ca</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="nt">caKey</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ca.crt</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="nt">serverName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus.corp.internal</span><span class="w">   </span><span class="c1"># SNI / verified hostname override</span>
 </code></pre></div>
 <p>Reach for <code>serverName</code> before <code>insecureSkipVerify</code>.</p>
 <hr />
 <h2 id="environment-variables-the-prefixes-differ-per-subcommand">Environment variables — the prefixes differ per subcommand<a class="headerlink" href="#environment-variables-the-prefixes-differ-per-subcommand" title="Permanent link">&para;</a></h2>
+<p>Each subcommand binds its flags under its own Viper key prefix, so the same
+flag name maps to a <strong>different environment variable</strong> per subcommand:</p>
+<table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Prefix</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Controller (<code>start</code>)</td>
+<td><code>K8SSUSTAIN_</code></td>
+<td><code>K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE</code></td>
+</tr>
+<tr>
+<td>Webhook (<code>webhook</code>)</td>
+<td><code>K8SSUSTAIN_WEBHOOK_</code></td>
+<td><code>K8SSUSTAIN_WEBHOOK_LOG_LEVEL</code></td>
+</tr>
+<tr>
+<td>Dashboard (<code>dashboard</code>)</td>
+<td><code>K8SSUSTAIN_DASHBOARD_</code></td>
+<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE</code></td>
+</tr>
+</tbody>
+</table>
+<p>The global <code>--recommend-only</code> flag is unprefixed (<code>K8SSUSTAIN_RECOMMEND_ONLY</code>)
+on every subcommand; <code>--config</code> has no environment variable.</p>
 <div class="admonition danger">
-<p class="admonition-title">The controller and the dashboard read <em>different</em> environment variables</p>
-<p>The controller binds these flags at the top level and reads
-<strong><code>K8SSUSTAIN_PROMETHEUS_*</code></strong>. The dashboard binds every one of its flags
-under the <code>dashboard.</code> Viper key prefix — like <code>--bind-address</code> and
-<code>--log-level</code> — so it reads <strong><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code></strong>.</p>
-<p>An unprefixed variable on the dashboard is <strong>silently ignored</strong>: the
-dashboard starts, queries Prometheus unauthenticated, and reports "no
-metrics data available" while the controller works fine. There is no error
-message for this.</p>
+<p class="admonition-title">A wrong prefix is silently ignored</p>
+<p><code>K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE</code> set on the dashboard does
+nothing: the dashboard starts, queries Prometheus unauthenticated, and
+reports "No metrics data available" while the controller works fine.
+There is no error message. The same applies to shared flags such as
+<code>--log-level</code> and <code>--excluded-namespaces</code> on the webhook.</p>
 </div>
+<p>The Prometheus settings (the webhook has none):</p>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
-<th>Controller (<code>start</code>)</th>
-<th>Dashboard (<code>dashboard</code>)</th>
+<th>Controller</th>
+<th>Dashboard</th>
 </tr>
 </thead>
 <tbody>
@@ -2583,45 +2436,64 @@ message for this.</p>
 </tr>
 </tbody>
 </table>
-<p>The <strong>command-line flag names are identical</strong> on both subcommands — only the
-environment variables differ. The chart handles the prefix for you; this table
-matters when you set environment variables yourself (raw manifests, a kustomize
-patch, <code>docker run</code>, local development).</p>
+<p>The chart renders the right prefix for each component; this table matters when
+you set environment variables yourself (raw manifests, a kustomize patch,
+<code>docker run</code>, local development).</p>
 <hr />
-<h2 id="security-guidance">Security guidance<a class="headerlink" href="#security-guidance" title="Permanent link">&para;</a></h2>
+<h2 id="credential-sources-and-security">Credential sources and security<a class="headerlink" href="#credential-sources-and-security" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Inline (<code>--prometheus-bearer-token</code>, <code>--prometheus-basic-auth-password</code>)</th>
+<th>File (<code>--prometheus-bearer-token-file</code>, <code>--prometheus-basic-auth-password-file</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Read</td>
+<td>Once, at startup</td>
+<td><strong>On every request</strong></td>
+</tr>
+<tr>
+<td>Credential rotation</td>
+<td>Requires a pod restart</td>
+<td>Picked up automatically</td>
+</tr>
+<tr>
+<td>Where the secret lives</td>
+<td>In the pod spec, <code>kubectl get deploy -o yaml</code>, <code>helm get values</code>, your values repo</td>
+<td>Only in the Secret</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Prefer the file form</strong> (<code>existingSecret</code> + <code>*Key</code>, or a raw <code>*File</code> path):</p>
 <ul>
-<li><strong>Prefer <code>existingSecret</code> file mounts over inline values.</strong> An inline
-  <code>prometheusAuth.bearerToken</code> or <code>prometheusAuth.basicAuth.password</code> is
-  rendered verbatim into the Deployment and is therefore readable through
-  <code>kubectl get deploy -o yaml</code>, <code>helm get values</code>, and whatever git repository
-  holds your values file. The inline values exist as an escape hatch for quick
-  tests; treat them as such.</li>
-<li>Inline values are passed as <strong>environment variables, not arguments</strong>, so at
-  least they stay out of the container's <code>argv</code> (and out of <code>ps</code> output and
-  crash dumps that capture it). That is a mitigation, not a fix.</li>
-<li>A secret-backed file <strong>always wins</strong> over its inline counterpart. Setting
-  both does not conflict — the file is used and the inline value is not
-  rendered at all.</li>
-<li>A <strong>raw <code>*File</code> path is not ranked, it is exclusive</strong>: setting it together
-  with the matching <code>*Key</code> (or, for the token and the password, with the inline
-  value) fails <code>helm template</code> / <code>helm upgrade</code> with both value names in the
-  message. The two would drive one flag from two sources, and nothing in the
-  rendered Deployment would say which one was meant.</li>
-<li>Mounted credential files are projected with mode <code>0440</code> (<code>defaultMode: 288</code>)
-  and mounted read-only; the pod's <code>fsGroup</code> (65532) is the only identity that
-  can read them.</li>
+<li>A projected service-account token rotates roughly hourly; read once at
+  startup it starts returning <code>401</code> after the first rotation.</li>
+<li>Updating the backing Secret (external-secrets rotation, a manual
+  <code>kubectl apply</code>) takes effect on the next query, with no rollout.</li>
+<li>The mTLS key pair is re-read on every TLS handshake, so a certificate renewed
+  in place by cert-manager or a mesh sidecar is used without a restart.</li>
+<li>Inline values exist as an escape hatch for quick tests. The chart passes them
+  as environment variables, not arguments, which keeps them out of <code>argv</code> —
+  a mitigation, not a fix.</li>
+<li>Mounted credential files use mode <code>0440</code>, read-only; the pod's <code>fsGroup</code>
+  (65532) is the only identity that can read them.</li>
 <li><strong>Credentials are never logged</strong>, at any log level. Startup errors name the
   <em>path</em> that failed, never the contents.</li>
-<li>Create the Secret out of band — external-secrets, sealed-secrets, a cloud
-  secret store CSI driver — or through
-  <a href="../../reference/helm-values/#extra-manifests"><code>extraManifests</code></a> as shown
-  above.</li>
+<li>Create the Secret out of band — external-secrets, sealed-secrets, a secret
+  store CSI driver — or through
+  <a href="../../reference/helm-values/#extra-manifests"><code>extraManifests</code></a>.</li>
 </ul>
+<p>Files are also read once at startup as a validation step: a missing path, a
+malformed key pair, or a CA file with no valid PEM block <strong>fails the process
+at startup</strong> (<code>CrashLoopBackOff</code>) rather than degrading into per-query errors
+that look like a Prometheus outage.</p>
 <hr />
 <h2 id="rejected-configurations">Rejected configurations<a class="headerlink" href="#rejected-configurations" title="Permanent link">&para;</a></h2>
-<p>These are rejected at construction time, so the process fails fast at startup
-rather than resolving a conflict silently and querying with the wrong (or no)
-credential:</p>
+<p>The binary rejects these at construction time, so it fails fast rather than
+querying with the wrong (or no) credential:</p>
 <table>
 <thead>
 <tr>
@@ -2654,34 +2526,32 @@ credential:</p>
 <td>TLS cert file without key file (or vice versa)</td>
 <td>A key pair needs both halves</td>
 </tr>
-<tr>
-<td><code>WithTransportConfig</code> <strong>and</strong> <code>WithRoundTripper</code> (Go API only)</td>
-<td>The latter replaces the whole transport</td>
-</tr>
 </tbody>
 </table>
-<p>The chart checks the same rules <em>before</em> the binary ever starts, on the
-effective sources (a <code>*Key</code> only counts when its Secret is named): a bearer
-token together with basic auth, a password without a username, and a client
-certificate without its key all fail <code>helm template</code> / <code>helm upgrade</code>. It also
-rejects a raw <code>*File</code> path set alongside its <code>*Key</code> or its inline counterpart,
-naming both values (see
-<a href="#recipe-2--in-cluster-prometheus-behind-an-auth-proxy-projected-token">Recipe 2</a>).</p>
-<p>A malformed <code>--prometheus-headers</code> entry (anything without an <code>=</code>, an empty
-key, a name that is not a valid HTTP token, or a value with control
-characters) is reported with the offending entry before the client is built.
-Only the <strong>first</strong> <code>=</code> splits an entry, so header values may contain <code>=</code>
-themselves — a base64 tenant id, for instance. The flag is <strong>repeatable</strong>, one
+<p>The chart checks the same rules in <code>helm template</code> / <code>helm upgrade</code>, on the
+effective sources (a <code>*Key</code> only counts when its Secret is named). Between chart
+values:</p>
+<ul>
+<li>A Secret-backed <code>*Key</code> <strong>wins</strong> over the inline value for the same credential;
+  only the file is rendered.</li>
+<li>A raw <code>*File</code> path is <strong>exclusive</strong> with its <code>*Key</code> and, for the token and the
+  password, with the inline value. Both would drive the same flag, so the
+  render fails with "<code>… are mutually exclusive</code>", naming both values. A raw path
+  must also be absolute.</li>
+</ul>
+<p>A malformed <code>--prometheus-headers</code> entry (no <code>=</code>, an empty key, a name that is
+not a valid HTTP token, or a value with control characters) is reported with
+the offending entry at startup. Only the <strong>first</strong> <code>=</code> splits an entry, so
+values may contain <code>=</code> (a base64 tenant id). The flag is <strong>repeatable</strong>, one
 header per occurrence, so a value may also contain a comma; the chart renders
-one flag per entry of <code>prometheusAuth.headers</code>. The environment-variable form
-is a single comma-separated string and cannot express such a value.</p>
+one flag per <code>prometheusAuth.headers</code> entry. The environment-variable form is a
+single comma-separated string and cannot express such a value.</p>
 <div class="admonition warning">
 <p class="admonition-title"><code>insecureSkipVerify</code></p>
 <p><code>prometheusAuth.tls.insecureSkipVerify</code> / <code>--prometheus-tls-insecure-skip-verify</code>
 disables server-certificate verification entirely, which makes every
 credential above interceptable. It is honoured, but logs a loud warning at
-startup. Use <code>serverName</code> or a <code>caKey</code> instead for anything that outlives a
-debugging session.</p>
+startup. Use <code>serverName</code> or a <code>caKey</code> instead.</p>
 </div>
 <hr />
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
@@ -2694,8 +2564,8 @@ debugging session.</p>
 </thead>
 <tbody>
 <tr>
-<td>Pod is in <code>CrashLoopBackOff</code> with <code>reading prometheus bearer token file …: no such file or directory</code></td>
-<td>The key named in <code>bearerTokenKey</code> does not exist in <code>existingSecret</code>, or the Secret is in another namespace</td>
+<td><code>CrashLoopBackOff</code> with <code>reading prometheus bearer token file …: no such file or directory</code></td>
+<td>With <code>bearerTokenKey</code>: the key does not exist in <code>existingSecret</code>, or the Secret is in another namespace. With <code>bearerTokenFile</code>: the path does not exist in the pod — it mounts nothing</td>
 </tr>
 <tr>
 <td><code>contains no valid PEM certificate</code> at startup</td>
@@ -2703,35 +2573,27 @@ debugging session.</p>
 </tr>
 <tr>
 <td>Controller works, dashboard shows "No metrics data available"</td>
-<td>The dashboard is missing its credentials — check for a <code>K8SSUSTAIN_PROMETHEUS_*</code> variable that should be <code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code>, or a patch applied to only one Deployment</td>
+<td>Dashboard credentials missing: a <code>K8SSUSTAIN_PROMETHEUS_*</code> variable that should be <code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code>, a patch applied to only one Deployment, or (projected token) the dashboard ServiceAccount not authorized</td>
 </tr>
 <tr>
 <td>Queries return <code>401</code> about an hour after startup</td>
-<td>A rotating token was supplied inline instead of as a file — switch to <code>bearerTokenFile</code> (or <code>bearerTokenKey</code>)</td>
+<td>A rotating token was supplied inline — switch to <code>bearerTokenFile</code> or <code>bearerTokenKey</code></td>
 </tr>
 <tr>
 <td><code>helm upgrade</code> fails with "<code>… are mutually exclusive</code>"</td>
-<td>A <code>*File</code> raw path is set alongside its <code>*Key</code> or its inline value, or a bearer token is combined with basic auth. Keep exactly one; the message names both</td>
+<td>A <code>*File</code> path set alongside its <code>*Key</code> or inline value, or a bearer token combined with basic auth. Keep exactly one</td>
 </tr>
 <tr>
 <td><code>helm upgrade</code> fails with "<code>must be a string</code>" or "<code>Invalid type. Expected: string</code>" on a header</td>
-<td>The header value is an unquoted number in the values file; write it as <code>"1234567"</code></td>
+<td>The header value is an unquoted number; write it as <code>"1234567"</code></td>
 </tr>
 <tr>
 <td>Startup log shows <code>system certificate pool unavailable</code></td>
-<td>The container image's trust store could not be read, so <code>tls.caKey</code>/<code>caFile</code> is the only root. A public-CA ingress in front of the same address will fail verification until the image's CA bundle is fixed</td>
-</tr>
-<tr>
-<td>Pod is in <code>CrashLoopBackOff</code> with <code>reading prometheus bearer token file …: no such file or directory</code> and <code>bearerTokenFile</code> is set</td>
-<td>The path does not exist in the pod. <code>bearerTokenFile</code> mounts nothing — only a file something else already projects (the kubelet's token, a CSI mount) is readable</td>
+<td>The image's trust store could not be read, so the configured CA is the only root; a public-CA ingress on the same address fails verification</td>
 </tr>
 <tr>
 <td>Multi-tenant gateway returns <code>no org id</code> / empty results</td>
-<td><code>prometheusAuth.headers</code> missing, or the gateway expects a different header name than <code>X-Scope-OrgID</code></td>
-</tr>
-<tr>
-<td><code>helm upgrade</code> restarts the pods with no value change</td>
-<td>Should not happen — header keys are sorted before rendering. If it does, something else changed the pod template</td>
+<td><code>prometheusAuth.headers</code> missing, or the gateway expects a header other than <code>X-Scope-OrgID</code></td>
 </tr>
 </tbody>
 </table>

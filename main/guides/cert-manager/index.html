@@ -981,35 +981,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -2016,12 +1988,11 @@
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>--set<span class="w"> </span>crds.enabled<span class="o">=</span><span class="nb">true</span>
 </code></pre></div>
 <h2 id="default-setup-self-signed">Default setup (self-signed)<a class="headerlink" href="#default-setup-self-signed" title="Permanent link">&para;</a></h2>
-<p>The chart creates a self-signed <code>Issuer</code> and <code>Certificate</code> automatically. No external Issuer is required:</p>
+<p><code>webhook.certManager.enabled</code> defaults to <code>true</code>: the chart creates a self-signed <code>Issuer</code> and <code>Certificate</code>. No external Issuer is required:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.enabled<span class="o">=</span><span class="nb">true</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--create-namespace
 </code></pre></div>
 <p>This is the simplest approach and works for both development and production. The webhook only needs to be trusted by the Kubernetes API server, and cert-manager handles CA bundle injection automatically.</p>
 <h2 id="using-your-own-issuer">Using your own Issuer<a class="headerlink" href="#using-your-own-issuer" title="Permanent link">&para;</a></h2>
@@ -2030,10 +2001,9 @@
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.enabled<span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.createIssuer<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.issuerRef.name<span class="o">=</span>my-ca-issuer<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.issuerRef.kind<span class="o">=</span>ClusterIssuer
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.createIssuer<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.issuerRef.name<span class="o">=</span>my-ca-issuer<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.issuerRef.kind<span class="o">=</span>ClusterIssuer
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">ACME / Let's Encrypt issuers</p>
@@ -2043,35 +2013,39 @@
 <p>When <code>webhook.certManager.enabled=true</code>, the chart creates:</p>
 <ol>
 <li>A self-signed <code>Issuer</code> (unless <code>createIssuer=false</code>)</li>
-<li>A <code>Certificate</code> resource targeting the webhook service DNS names:</li>
+<li>A <code>Certificate</code> for the webhook Service, where <code>&lt;fullname&gt;</code> is the chart's fullname (the release name if it contains <code>k8s-sustain</code>, otherwise <code>&lt;release&gt;-k8s-sustain</code>; <code>k8s-sustain</code> for the commands on this page):</li>
 </ol>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>k8s-sustain-webhook.&lt;namespace&gt;.svc
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>k8s-sustain-webhook.&lt;namespace&gt;.svc.cluster.local
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>&lt;fullname&gt;-webhook
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>&lt;fullname&gt;-webhook.&lt;namespace&gt;
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>&lt;fullname&gt;-webhook.&lt;namespace&gt;.svc
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>&lt;fullname&gt;-webhook.&lt;namespace&gt;.svc.cluster.local
 </code></pre></div>
 <ol>
 <li>cert-manager issues the certificate and stores it in <code>webhook.tlsSecretName</code> (default: <code>k8s-sustain-webhook-tls</code>)</li>
 <li>The <code>MutatingWebhookConfiguration</code> is annotated with <code>cert-manager.io/inject-ca-from</code>, so cert-manager automatically updates the <code>caBundle</code> when the certificate is renewed</li>
 </ol>
 <h2 id="manual-certificate-without-cert-manager">Manual certificate (without cert-manager)<a class="headerlink" href="#manual-certificate-without-cert-manager" title="Permanent link">&para;</a></h2>
-<p>Create a TLS secret manually and provide the base64-encoded CA certificate:</p>
+<p>Create a TLS secret manually and provide the base64-encoded CA certificate. The API server only checks the Subject Alternative Name, so the certificate must carry the Service DNS name as a SAN (the example assumes release <code>k8s-sustain</code> in namespace <code>k8s-sustain</code>):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Generate a self-signed cert (example only)</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>openssl<span class="w"> </span>req<span class="w"> </span>-x509<span class="w"> </span>-newkey<span class="w"> </span>rsa:4096<span class="w"> </span>-keyout<span class="w"> </span>tls.key<span class="w"> </span>-out<span class="w"> </span>tls.crt<span class="w"> </span>-days<span class="w"> </span><span class="m">365</span><span class="w"> </span>-nodes<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-subj<span class="w"> </span><span class="s2">"/CN=k8s-sustain-webhook.k8s-sustain.svc"</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># Create the secret</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>kubectl<span class="w"> </span>create<span class="w"> </span>secret<span class="w"> </span>tls<span class="w"> </span>k8s-sustain-webhook-tls<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>--cert<span class="o">=</span>tls.crt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>--key<span class="o">=</span>tls.key<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span>-n<span class="w"> </span>k8s-sustain
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="c1"># Base64-encode the CA cert (use -b 0 on macOS instead of -w0)</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="nv">CA_BUNDLE</span><span class="o">=</span><span class="k">$(</span>base64<span class="w"> </span>-w0<span class="w"> </span>tls.crt<span class="k">)</span>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="w">  </span>--set<span class="w"> </span>webhook.caBundle<span class="o">=</span><span class="s2">"</span><span class="si">${</span><span class="nv">CA_BUNDLE</span><span class="si">}</span><span class="s2">"</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>-subj<span class="w"> </span><span class="s2">"/CN=k8s-sustain-webhook.k8s-sustain.svc"</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>-addext<span class="w"> </span><span class="s2">"subjectAltName=DNS:k8s-sustain-webhook.k8s-sustain.svc,DNS:k8s-sustain-webhook.k8s-sustain.svc.cluster.local"</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># Create the secret</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>kubectl<span class="w"> </span>create<span class="w"> </span>secret<span class="w"> </span>tls<span class="w"> </span>k8s-sustain-webhook-tls<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>--cert<span class="o">=</span>tls.crt<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">  </span>--key<span class="o">=</span>tls.key<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">  </span>-n<span class="w"> </span>k8s-sustain
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1"># Base64-encode the CA cert (use -b 0 on macOS instead of -w0)</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="nv">CA_BUNDLE</span><span class="o">=</span><span class="k">$(</span>base64<span class="w"> </span>-w0<span class="w"> </span>tls.crt<span class="k">)</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>oci://ghcr.io/noony/helm-charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">  </span>--version<span class="w"> </span>&lt;VERSION&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="w">  </span>--create-namespace<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="w">  </span>--set<span class="w"> </span>webhook.certManager.enabled<span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="w">  </span>--set<span class="w"> </span>webhook.caBundle<span class="o">=</span><span class="s2">"</span><span class="si">${</span><span class="nv">CA_BUNDLE</span><span class="si">}</span><span class="s2">"</span>
 </code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Certificate rotation</p>
@@ -2079,7 +2053,7 @@
 </div>
 <div class="admonition note">
 <p class="admonition-title">Hot reload</p>
-<p>The webhook reloads its TLS keypair on a 1h tick via <code>tls.Config.GetCertificate</code>, so cert-manager rotations take effect on the next handshake — no pod restart required. The <code>k8s_sustain_webhook_cert_expiry_seconds</code> gauge tracks the active leaf's expiry; alert when <code>(gauge - time())</code> drops below your renewal SLA.</p>
+<p>The webhook re-reads its TLS keypair from the mounted Secret every hour, so a rotated certificate is served within an hour, with no pod restart. cert-manager renews well before expiry, so this delay is harmless. The <code>k8s_sustain_webhook_cert_expiry_seconds</code> gauge tracks the active leaf's expiry; alert when <code>(gauge - time())</code> drops below your renewal SLA.</p>
 </div>
 
 

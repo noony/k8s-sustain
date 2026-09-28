@@ -969,35 +969,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -1853,21 +1825,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#prometheus-client-options" class="md-nav__link">
+  <a href="#start-the-webhook" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prometheus client options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#start-the-webhook-requires-tls" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Start the webhook (requires TLS)
+        Start the webhook
       
     </span>
   </a>
@@ -1891,107 +1852,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#deploying-on-kind" class="md-nav__link">
+  <a href="#deploying-on-kind-manually" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deploying on kind
+        Deploying on kind manually
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Deploying on kind">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-create-a-kind-cluster" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. Create a kind cluster
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-build-and-load-the-image" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Build and load the image
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-install-with-helm" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. Install with Helm
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#4-verify-pods-are-running" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4. Verify pods are running
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#5-access-the-dashboard" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5. Access the dashboard
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#6-create-a-test-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        6. Create a test policy
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#rebuilding-after-changes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Rebuilding after changes
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#cleanup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cleanup
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -2079,13 +1946,30 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#dashboard-styling" class="md-nav__link">
+  <a href="#dashboard-frontend" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Dashboard styling
+        Dashboard frontend
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Dashboard frontend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#styling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Styling
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2125,6 +2009,256 @@
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#internals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Internals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Internals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prometheus-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prometheus transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#controller" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Controller
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Controller">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#work-list-union-and-informer-lag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Work-list union and informer lag
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-identity-computation-under-owner-name-grouping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-identity computation under owner-name grouping
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#owner-name-group-merge-order-and-write-cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Owner-name group: merge order and write cost
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bare-pod-grouping-implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bare-pod grouping implementation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oom-watcher" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OOM watcher
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="OOM watcher">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cache-per-field-merge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache: per-field merge
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#predicate-and-dedup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Predicate and dedup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#webhook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Webhook">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#informer-cache-and-shutdown-ordering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Informer cache and shutdown ordering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#owner-resolution-cost-and-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Owner-resolution cost and caching
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stub-writes-dedup-bounds-and-shutdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stub writes: dedup, bounds and shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-staleness-constant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache staleness constant
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#startup-probe-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Startup probe budget
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workloadrecommendation-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkloadRecommendation lifecycle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="WorkloadRecommendation lifecycle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gc-preconditions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GC preconditions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#freshness-grace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Freshness grace
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#departed-waiver-bound" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Departed waiver bound
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2269,21 +2403,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#prometheus-client-options" class="md-nav__link">
+  <a href="#start-the-webhook" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Prometheus client options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#start-the-webhook-requires-tls" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Start the webhook (requires TLS)
+        Start the webhook
       
     </span>
   </a>
@@ -2307,107 +2430,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#deploying-on-kind" class="md-nav__link">
+  <a href="#deploying-on-kind-manually" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deploying on kind
+        Deploying on kind manually
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Deploying on kind">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-create-a-kind-cluster" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. Create a kind cluster
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-build-and-load-the-image" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Build and load the image
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-install-with-helm" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. Install with Helm
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#4-verify-pods-are-running" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        4. Verify pods are running
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#5-access-the-dashboard" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5. Access the dashboard
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#6-create-a-test-policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        6. Create a test policy
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#rebuilding-after-changes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Rebuilding after changes
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#cleanup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cleanup
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -2495,13 +2524,30 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#dashboard-styling" class="md-nav__link">
+  <a href="#dashboard-frontend" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Dashboard styling
+        Dashboard frontend
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Dashboard frontend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#styling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Styling
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2541,6 +2587,256 @@
       
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#internals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Internals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Internals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prometheus-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prometheus transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#controller" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Controller
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Controller">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#work-list-union-and-informer-lag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Work-list union and informer lag
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-identity-computation-under-owner-name-grouping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-identity computation under owner-name grouping
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#owner-name-group-merge-order-and-write-cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Owner-name group: merge order and write cost
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bare-pod-grouping-implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bare-pod grouping implementation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#oom-watcher" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OOM watcher
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="OOM watcher">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cache-per-field-merge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache: per-field merge
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#predicate-and-dedup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Predicate and dedup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#webhook" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Webhook">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#informer-cache-and-shutdown-ordering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Informer cache and shutdown ordering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#owner-resolution-cost-and-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Owner-resolution cost and caching
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stub-writes-dedup-bounds-and-shutdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stub writes: dedup, bounds and shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-staleness-constant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache staleness constant
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#startup-probe-budget" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Startup probe budget
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workloadrecommendation-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WorkloadRecommendation lifecycle
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="WorkloadRecommendation lifecycle">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gc-preconditions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GC preconditions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#freshness-grace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Freshness grace
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#departed-waiver-bound" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Departed waiver bound
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2586,8 +2882,13 @@
 <tbody>
 <tr>
 <td>Go</td>
-<td>≥ 1.26</td>
+<td>≥ 1.26 (see <code>go.mod</code>)</td>
 <td>Build and test</td>
+</tr>
+<tr>
+<td>Node.js</td>
+<td>26</td>
+<td>Build and test the dashboard frontend</td>
 </tr>
 <tr>
 <td>Docker</td>
@@ -2605,16 +2906,17 @@
 <td>Chart development</td>
 </tr>
 <tr>
-<td>minikube / kind / k3d</td>
+<td>kind</td>
 <td>any</td>
-<td>Local cluster</td>
+<td>Local cluster and <a href="../guides/local-testing/">end-to-end harness</a></td>
 </tr>
 </tbody>
 </table>
 <h2 id="clone-and-build">Clone and build<a class="headerlink" href="#clone-and-build" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/noony/k8s-sustain.git
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>k8s-sustain
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>go<span class="w"> </span>build<span class="w"> </span>./...
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>go<span class="w"> </span>build<span class="w"> </span>./...<span class="w">   </span><span class="c1"># Go only</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>make<span class="w"> </span>build<span class="w">       </span><span class="c1"># dashboard UI (npm ci + build), then bin/k8s-sustain</span>
 </code></pre></div>
 <h2 id="run-tests">Run tests<a class="headerlink" href="#run-tests" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span><span class="nb">test</span><span class="w">         </span><span class="c1"># go test -shuffle=on ./...</span>
@@ -2622,8 +2924,8 @@
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>make<span class="w"> </span>coverage<span class="w">     </span><span class="c1"># go test -race -shuffle=on -coverprofile=coverage.out ./...</span>
 </code></pre></div>
 <p>CI runs the race detector and goroutine-leak detection (via <code>go.uber.org/goleak</code>
-on the <code>oomwatch</code>, <code>prometheus</code>, <code>dashboard</code>, and <code>webhook</code> packages), so flakes
-or leaks introduced by new tests will surface in the test job.</p>
+on the <code>dashboard</code>, <code>k8s</code>, <code>oomwatch</code>, <code>prometheus</code>, and <code>webhook</code> packages), so
+flakes or leaks introduced by new tests surface in the test job.</p>
 <h2 id="lint">Lint<a class="headerlink" href="#lint" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>lint<span class="w">   </span><span class="c1"># golangci-lint run</span>
 </code></pre></div>
@@ -2656,30 +2958,38 @@ runs. The full posture and the verification commands are documented in
 <a href="../security/">Security</a>.</p>
 <h2 id="project-structure">Project structure<a class="headerlink" href="#project-structure" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>k8s-sustain/
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>├── api/v1alpha1/          # CRD Go types and deepcopy
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>│   ├── policy_types.go
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>│   └── zz_generated.deepcopy.go
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>├── cmd/
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>│   ├── controller/        # Root cobra command + start subcommand
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>│   ├── webhook/           # webhook subcommand
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>│   └── dashboard/         # dashboard subcommand
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>├── internal/
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>│   ├── autoscaler/        # HPA / KEDA detection used by recommender + webhook
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>│   ├── config/            # Centralized Viper config (flags, env, file)
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>│   ├── controller/        # Policy reconciler
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>│   ├── dashboard/         # Dashboard HTTP server
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>│   ├── httpx/             # Shared HTTP stack: envelope, middleware, hardened NewServer, shutdown
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>│   ├── k8s/               # client.New helper used by webhook + dashboard
-<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>│   ├── logging/           # Shared zap logger setup
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>├── api/v1alpha1/          # CRD Go types (Policy, WorkloadRecommendation) and deepcopy
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>├── cmd/
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>│   ├── controller/        # Root cobra command + start subcommand
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>│   ├── webhook/           # webhook subcommand
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>│   └── dashboard/         # dashboard subcommand
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>├── internal/
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>│   ├── autoscaler/        # HPA / KEDA detection used by recommender + webhook
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>│   ├── config/            # Centralized Viper config (flags, env, file)
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>│   ├── controller/        # Policy reconciler
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>│   ├── dashboard/         # Dashboard HTTP server + embedded Vue SPA (ui/)
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>│   ├── httpx/             # Shared HTTP stack: envelope, middleware, hardened NewServer, shutdown
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>│   ├── k8s/               # client.New helper used by webhook + dashboard
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>│   ├── logging/           # Shared zap logger setup
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>│   ├── oomwatch/          # Live OOMKilled detection, re-triggers reconciles
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>│   ├── policymatch/       # Policy resolution (ResolvePolicy) and selector matching
 <a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>│   ├── prometheus/        # Prometheus HTTP API client + metric name constants
 <a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>│   ├── recommender/       # Resource recommendation logic (pure functions)
-<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>│   ├── webhook/           # Admission webhook HTTP handler
-<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>│   └── workload/          # Pod recycler, template/owner-ref helpers
-<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>├── charts/k8s-sustain/    # Helm chart
-<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>├── docs/                  # This documentation
-<a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>├── Dockerfile
-<a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>├── Makefile
-<a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a>└── main.go
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>│   ├── version/           # Build version
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>│   ├── webhook/           # Admission webhook HTTP handler
+<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>│   ├── wlrcache/          # WorkloadRecommendation naming and upsert
+<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>│   └── workload/          # Pod recycler, template/owner-ref helpers
+<a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>├── charts/
+<a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>│   ├── k8s-sustain/          # Operator chart
+<a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a>│   └── k8s-sustain-policies/ # Policy objects chart
+<a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a>├── hack/
+<a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a>│   ├── docscheck/         # Docs drift guards (run by go test)
+<a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a>│   └── scenarios/         # kind end-to-end scenarios
+<a id="__codelineno-4-29" name="__codelineno-4-29" href="#__codelineno-4-29"></a>├── docs/                  # This documentation
+<a id="__codelineno-4-30" name="__codelineno-4-30" href="#__codelineno-4-30"></a>├── Dockerfile
+<a id="__codelineno-4-31" name="__codelineno-4-31" href="#__codelineno-4-31"></a>├── Makefile
+<a id="__codelineno-4-32" name="__codelineno-4-32" href="#__codelineno-4-32"></a>├── Makefile.scenarios     # kind end-to-end harness
+<a id="__codelineno-4-33" name="__codelineno-4-33" href="#__codelineno-4-33"></a>└── main.go
 </code></pre></div>
 <h2 id="running-locally-against-a-cluster">Running locally against a cluster<a class="headerlink" href="#running-locally-against-a-cluster" title="Permanent link">&para;</a></h2>
 <h3 id="start-the-controller">Start the controller<a class="headerlink" href="#start-the-controller" title="Permanent link">&para;</a></h3>
@@ -2690,7 +3000,7 @@ runs. The full posture and the verification commands are documented in
 <a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-prometheus-server<span class="w"> </span><span class="m">9090</span>:80<span class="w"> </span><span class="p">&amp;</span>
 <a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
 <a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>--prometheus-address<span class="o">=</span>http://localhost:9090<span class="w"> </span><span class="se">\ </span><span class="w"> </span><span class="c1"># port-forwarded from the cluster</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>--prometheus-address<span class="o">=</span>http://localhost:9090<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>--reconcile-interval<span class="o">=</span>1m<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span>--log-level<span class="o">=</span>debug
 </code></pre></div>
@@ -2703,178 +3013,75 @@ deployment uses:</p>
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--prometheus-headers<span class="o">=</span>X-Scope-OrgID<span class="o">=</span>tenant-a<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--log-level<span class="o">=</span>debug
 </code></pre></div>
-<p>The flag names are identical on <code>go run main.go dashboard</code>. The <strong>environment
-variables are not</strong>: the dashboard binds its flags under the <code>dashboard.</code> Viper
-key prefix, so it reads <code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code> while the
-controller reads <code>K8SSUSTAIN_PROMETHEUS_*</code>. See the
-<a href="../reference/cli/#prometheus-authentication-and-tls-flags">CLI reference</a>.</p>
-<h3 id="prometheus-client-options">Prometheus client options<a class="headerlink" href="#prometheus-client-options" title="Permanent link">&para;</a></h3>
-<p><code>internal/prometheus.New(addr, opts...)</code> takes functional options. The
-transport-related ones:</p>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Purpose</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithTransportConfig(TransportConfig)</code></td>
-<td>Bearer token (inline or file), basic auth (inline or password file), arbitrary headers, and TLS (<code>CAFile</code>, <code>CertFile</code>/<code>KeyFile</code>, <code>ServerName</code>, <code>InsecureSkipVerify</code>). This is what the <code>start</code> and <code>dashboard</code> call sites use: <code>config.LoadControllerConfig</code> / <code>LoadDashboardConfig</code> fill a <code>PrometheusTransport</code> field of this type directly, and return an error on a malformed <code>--prometheus-headers</code> entry so no call site can start with the headers silently dropped.</td>
-</tr>
-<tr>
-<td><code>WithRoundTripper(http.RoundTripper)</code></td>
-<td>Escape hatch installing a transport this package does not model (SigV4, an in-memory key pair, a recording transport in tests). <strong>Mutually exclusive</strong> with <code>WithTransportConfig</code> — passing both is an error from <code>New</code>, not a silent precedence rule.</td>
-</tr>
-</tbody>
-</table>
-<p>Implementation notes worth knowing before touching <code>internal/prometheus/transport.go</code>:</p>
-<ul>
-<li>The zero <code>TransportConfig</code> is a no-op: <code>New(addr)</code> with no options builds the
-  client with no <code>RoundTripper</code> at all, byte-identical to the pre-auth
-  behaviour.</li>
-<li><code>RoundTrip</code> operates on a <strong>clone</strong> of the request. That is required by the
-  <code>http.RoundTripper</code> contract and avoids a data race on the shared header map
-  under <code>-race</code>.</li>
-<li>Credential <strong>files are re-read on every request</strong> so a kubelet-rotated
-  projected service-account token keeps working. Do not add a cache here — the
-  client issues a handful of queries per reconcile, bounded by
-  <code>--prometheus-max-inflight</code>. The mTLS key pair gets the same property
-  through <code>tls.Config.GetClientCertificate</code>, which reloads <code>CertFile</code>/<code>KeyFile</code>
-  on every handshake; do not put a static entry in <code>tls.Config.Certificates</code>,
-  it would shadow the callback.</li>
-<li><code>TransportConfig.validate</code> checks header names and values with
-  <code>httpguts</code> at construction. <code>http.Transport</code> would otherwise reject them on
-  every request, tripping the circuit breaker and reading as an outage.</li>
-<li>This is a deliberate hand-rolled subset of
-  <code>github.com/prometheus/common/config.HTTPClientConfig</code>, kept because that
-  package <em>replaces</em> the root pool with <code>CAFile</code> where this one appends to the
-  system pool, and because it would compile in JWT/OAuth2 and conntrack
-  dependencies the binary does not otherwise use. Revisit if a proxy, OAuth2
-  or SigV4 transport becomes a requirement.</li>
-<li>Every configured file is <em>also</em> read once inside <code>newTransportRoundTripper</code>,
-  so a bad path fails <code>New</code> and therefore the process, rather than surfacing as
-  a per-query error indistinguishable from a Prometheus outage.</li>
-<li><code>CAFile</code> is appended to a <strong>copy</strong> of the system pool, and the base transport
-  is a <code>Clone()</code> of <code>api.DefaultRoundTripper</code> — the package-level default is
-  shared with every other <code>client_golang</code> consumer in the process and must
-  never be mutated.</li>
-<li>Adding a new flag means editing, in <code>internal/config/config.go</code>,
-  <code>bindPrometheusTransportFlags</code> (called with <code>""</code> for the controller and
-  <code>"dashboard."</code> for the dashboard, which is what keeps the two flag sets from
-  drifting) and <code>loadPrometheusTransport</code>, plus the field on
-  <code>promclient.TransportConfig</code>. Mirror it in
-  <code>charts/k8s-sustain/templates/_helpers.tpl</code> (<code>k8s-sustain.prometheusAuthArgs</code>
-  / <code>…Env</code> / <code>…AuthSecretVolumes</code>), <code>values.yaml</code>, <code>values.schema.json</code>, and
-  <code>charts/k8s-sustain/tests/prometheus-auth_test.yaml</code>. Any future component
-  that queries Prometheus adds those four includes rather than re-deriving the
-  flags.</li>
-<li><code>--prometheus-headers</code> is a pflag <strong>StringArray</strong>, not a StringSlice: one
-  element per flag occurrence, no CSV splitting, so a header value may contain
-  a comma. The chart renders one flag per header for that reason. The env-var
-  path (<code>getStringSlice</code>) still splits on commas and cannot express such a
-  value.</li>
-</ul>
-<h3 id="start-the-webhook-requires-tls">Start the webhook (requires TLS)<a class="headerlink" href="#start-the-webhook-requires-tls" title="Permanent link">&para;</a></h3>
-<p>The webhook must be reachable from the API server, which makes local development more involved. Use local kind cluster with a self-signed cert.</p>
+<p>The flag names are identical on <code>go run main.go dashboard</code>; the environment
+variables are not — see
+<a href="../guides/authenticated-prometheus/#environment-variables-the-prefixes-differ-per-subcommand">Environment variables — the prefixes differ per subcommand</a>.</p>
+<h3 id="start-the-webhook">Start the webhook<a class="headerlink" href="#start-the-webhook" title="Permanent link">&para;</a></h3>
+<p>The webhook must be reachable from the API server over TLS, so develop it
+in-cluster: use the <a href="../guides/local-testing/">kind harness</a> or the manual kind
+deployment below and rebuild the image.</p>
 <h2 id="local-end-to-end-testing">Local end-to-end testing<a class="headerlink" href="#local-end-to-end-testing" title="Permanent link">&para;</a></h2>
-<p>The repository ships a <code>Makefile.scenarios</code> harness that brings up a kind
-cluster, installs cert-manager and metrics-server, builds &amp; loads the
-image, helm-installs k8s-sustain, and runs a small library of synthetic
-workload scenarios designed to exercise <code>Ongoing</code>-mode recycling
-end-to-end. The scenario targets refuse to run unless the current kubectl
-context is <code>kind-k8s-sustain</code>; bypass with <code>SKIP_CONTEXT_CHECK=1</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>make<span class="w"> </span>test-kind-up<span class="w">                       </span><span class="c1"># one-shot cluster + helm install</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>make<span class="w"> </span>test-scenario-steady<span class="w">               </span><span class="c1"># apply a scenario</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>make<span class="w"> </span>test-scenario-status<span class="w">               </span><span class="c1"># current vs. recommended table</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>make<span class="w"> </span>test-scenario-clean<span class="w">                </span><span class="c1"># delete every scenario namespace</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>make<span class="w"> </span>test-kind-down<span class="w">                     </span><span class="c1"># delete the kind cluster</span>
+<p><code>Makefile.scenarios</code> brings up a kind cluster with cert-manager and
+metrics-server, installs k8s-sustain from the local image, and applies
+synthetic workload scenarios. See <a href="../guides/local-testing/">Local end-to-end testing</a>
+for the targets, variables and the scenario catalog.</p>
+<h2 id="deploying-on-kind-manually">Deploying on kind manually<a class="headerlink" href="#deploying-on-kind-manually" title="Permanent link">&para;</a></h2>
+<p>The manual equivalent of <code>make test-kind-up</code>, useful to understand or deviate
+from what the harness does.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kind<span class="w"> </span>create<span class="w"> </span>cluster<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># The webhook needs a serving certificate; cert-manager issues it.</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>helm<span class="w"> </span>repo<span class="w"> </span>add<span class="w"> </span>jetstack<span class="w"> </span>https://charts.jetstack.io<span class="w"> </span>--force-update
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>cert-manager<span class="w"> </span>jetstack/cert-manager<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span>--namespace<span class="w"> </span>cert-manager<span class="w"> </span>--create-namespace<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span>--set<span class="w"> </span>crds.enabled<span class="o">=</span><span class="nb">true</span><span class="w"> </span>--wait
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>k8s-sustain:dev
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>k8s-sustain:dev<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>helm<span class="w"> </span>dependency<span class="w"> </span>build<span class="w"> </span>charts/k8s-sustain
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>k8s-sustain<span class="w"> </span>./charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span>--create-namespace<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="w">  </span>--set<span class="w"> </span>image.repository<span class="o">=</span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="w">  </span>--set<span class="w"> </span>image.tag<span class="o">=</span>dev<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">  </span>--set<span class="w"> </span>image.pullPolicy<span class="o">=</span>Never<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="w">  </span>--wait
 </code></pre></div>
-<p>See <a href="../guides/local-testing/"><code>docs/guides/local-testing.md</code></a> for the
-scenario catalog and the expected outcomes.</p>
-<p>The remainder of this section ("Deploying on kind") describes the
-manual equivalent, which is useful when you want to understand exactly
-what the harness does or deviate from it.</p>
-<h2 id="deploying-on-kind">Deploying on kind<a class="headerlink" href="#deploying-on-kind" title="Permanent link">&para;</a></h2>
-<p>A full local deployment with Prometheus, the controller, webhook, and dashboard:</p>
-<h3 id="1-create-a-kind-cluster">1. Create a kind cluster<a class="headerlink" href="#1-create-a-kind-cluster" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>kind<span class="w"> </span>create<span class="w"> </span>cluster<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
+<p><code>image.pullPolicy=Never</code> makes Kubernetes use the locally loaded image. The
+dashboard is enabled by default and <code>prometheusAddress</code> resolves to the bundled
+Prometheus subchart. Open the dashboard with
+<code>kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090</code>, then
+create a Policy (see <a href="../getting-started/quick-start/">Quick start</a>).</p>
+<p>After changing code, rebuild, reload and restart:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>k8s-sustain:dev
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>k8s-sustain:dev<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>kubectl<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deploy/k8s-sustain<span class="w"> </span>deploy/k8s-sustain-webhook<span class="w"> </span>deploy/k8s-sustain-dashboard
 </code></pre></div>
-<h3 id="2-build-and-load-the-image">2. Build and load the image<a class="headerlink" href="#2-build-and-load-the-image" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>k8s-sustain:dev
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>k8s-sustain:dev<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
-</code></pre></div>
-<h3 id="3-install-with-helm">3. Install with Helm<a class="headerlink" href="#3-install-with-helm" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>helm<span class="w"> </span>install<span class="w"> </span>k8s-sustain<span class="w"> </span>./charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span>--set<span class="w"> </span>image.repository<span class="o">=</span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>--set<span class="w"> </span>image.tag<span class="o">=</span>dev<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>--set<span class="w"> </span>image.pullPolicy<span class="o">=</span>Never<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span>--set<span class="w"> </span>dashboard.enabled<span class="o">=</span><span class="nb">true</span>
-</code></pre></div>
-<p><code>image.pullPolicy=Never</code> ensures Kubernetes uses the locally loaded image. The <code>prometheusAddress</code> is auto-resolved to the bundled prometheus subchart service.</p>
-<h3 id="4-verify-pods-are-running">4. Verify pods are running<a class="headerlink" href="#4-verify-pods-are-running" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-w
-</code></pre></div>
-<h3 id="5-access-the-dashboard">5. Access the dashboard<a class="headerlink" href="#5-access-the-dashboard" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
-</code></pre></div>
-<p>Open <code>http://localhost:8090</code>.</p>
-<h3 id="6-create-a-test-policy">6. Create a test policy<a class="headerlink" href="#6-create-a-test-policy" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt;'EOF'</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="s">apiVersion: k8s.sustain.io/v1alpha1</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="s">kind: Policy</span>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="s">metadata:</span>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="s">  name: test-policy</span>
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="s">spec:</span>
-<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="s">  selector:</span>
-<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="s">    namespaces: [default]</span>
-<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="s">  rightSizing:</span>
-<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="s">    update:</span>
-<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="s">      types:</span>
-<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="s">        deployment: Ongoing</span>
-<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="s">    resourcesConfigs:</span>
-<a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a><span class="s">      cpu:</span>
-<a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a><span class="s">        window: 168h</span>
-<a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a><span class="s">        requests:</span>
-<a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a><span class="s">          percentile: 95</span>
-<a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a><span class="s">      memory:</span>
-<a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a><span class="s">        window: 168h</span>
-<a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a><span class="s">        requests:</span>
-<a id="__codelineno-13-21" name="__codelineno-13-21" href="#__codelineno-13-21"></a><span class="s">          percentile: 95</span>
-<a id="__codelineno-13-22" name="__codelineno-13-22" href="#__codelineno-13-22"></a><span class="s">EOF</span>
-</code></pre></div>
-<h3 id="rebuilding-after-changes">Rebuilding after changes<a class="headerlink" href="#rebuilding-after-changes" title="Permanent link">&para;</a></h3>
-<p>After modifying code, rebuild and reload:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>k8s-sustain:dev
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>k8s-sustain:dev<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>kubectl<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deployment<span class="w"> </span>k8s-sustain
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>kubectl<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deployment<span class="w"> </span>k8s-sustain-dashboard
-</code></pre></div>
-<h3 id="cleanup">Cleanup<a class="headerlink" href="#cleanup" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>kind<span class="w"> </span>delete<span class="w"> </span>cluster<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
-</code></pre></div>
+<p>Tear down with <code>kind delete cluster --name k8s-sustain</code>.</p>
 <h2 id="regenerating-code">Regenerating code<a class="headerlink" href="#regenerating-code" title="Permanent link">&para;</a></h2>
-<p>If you modify types in <code>api/v1alpha1/</code>, regenerate the deepcopy methods:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>make<span class="w"> </span>generate
+<p>After modifying types in <code>api/v1alpha1/</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>make<span class="w"> </span>generate<span class="w">      </span><span class="c1"># deepcopy methods</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>make<span class="w"> </span>manifests<span class="w">     </span><span class="c1"># CRD YAML into charts/k8s-sustain/files/crds/</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>make<span class="w"> </span>verify-crds<span class="w">   </span><span class="c1"># what CI checks</span>
 </code></pre></div>
-<p>This requires <code>controller-gen</code> to be installed:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>go<span class="w"> </span>install<span class="w"> </span>sigs.k8s.io/controller-tools/cmd/controller-gen@latest
-</code></pre></div>
+<p><code>controller-gen</code> is a Go tool dependency pinned in <code>go.mod</code> and run with
+<code>go tool controller-gen</code>; there is nothing to install.</p>
 <h2 id="building-the-container-image">Building the container image<a class="headerlink" href="#building-the-container-image" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>ghcr.io/noony/k8s-sustain:dev
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>ghcr.io/noony/k8s-sustain:dev
 </code></pre></div>
 <p>This builds a single-arch image for the host's native platform (e.g. <code>linux/arm64</code> on Apple Silicon, <code>linux/amd64</code> on Intel) using <code>docker buildx --load</code>. The Dockerfile is multi-arch aware: it honors <code>TARGETOS</code>/<code>TARGETARCH</code> and runs the Go and Node build stages on <code>$BUILDPLATFORM</code> so cross-compilation is native, not emulated.</p>
 <p><strong>Note for Apple Silicon + colima users:</strong> running an emulated <code>linux/amd64</code> binary inside colima has produced random stdlib panics (memory-model mismatches under x86-on-ARM translation). Always build natively — the default <code>make docker-build</code> does this.</p>
 <h3 id="multi-arch-publish">Multi-arch publish<a class="headerlink" href="#multi-arch-publish" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>docker<span class="w"> </span>buildx<span class="w"> </span>create<span class="w"> </span>--use<span class="w"> </span>--name<span class="w"> </span>k8s-sustain-builder<span class="w">   </span><span class="c1"># one-time</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>make<span class="w"> </span>docker-buildx<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>ghcr.io/noony/k8s-sustain:dev<span class="w">    </span><span class="c1"># builds + pushes linux/amd64 + linux/arm64</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>docker<span class="w"> </span>buildx<span class="w"> </span>create<span class="w"> </span>--use<span class="w"> </span>--name<span class="w"> </span>k8s-sustain-builder<span class="w">   </span><span class="c1"># one-time</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>make<span class="w"> </span>docker-buildx<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>ghcr.io/noony/k8s-sustain:dev<span class="w">    </span><span class="c1"># builds + pushes linux/amd64 + linux/arm64</span>
 </code></pre></div>
 <p>Override <code>PLATFORMS</code> to change the matrix, e.g. <code>PLATFORMS=linux/arm64 make docker-buildx</code>. CI (<code>.github/workflows/release.yml</code>) publishes both <code>linux/amd64</code> and <code>linux/arm64</code> automatically on tag pushes.</p>
 <p>The <code>helm</code> job in that same workflow also pushes both charts as OCI artifacts to <code>oci://ghcr.io/noony/helm-charts/&lt;chart&gt;</code>, in addition to attaching the packaged <code>.tgz</code> files to the GitHub release.</p>
 <h3 id="release-notes">Release notes<a class="headerlink" href="#release-notes" title="Permanent link">&para;</a></h3>
 <p>The <code>gh-release</code> job uses GitHub's automatic release notes (<code>generate_release_notes: true</code>), which are shaped by <code>.github/release.yml</code>. That file groups merged PRs into a "General" section and a "Dependencies" section (anything carrying the <code>dependencies</code> label, applied automatically by Dependabot), so a release isn't dominated by a long tail of dependency bumps. The <code>dependencies</code> exclusion on "General" makes the split independent of category order. PRs labeled <code>skip-changelog</code> are omitted from release notes entirely — apply that label manually (it isn't created by default: <code>gh label create skip-changelog --description "Exclude this PR from release notes" --color ededed</code>).</p>
 <h2 id="makefile-targets">Makefile targets<a class="headerlink" href="#makefile-targets" title="Permanent link">&para;</a></h2>
+<p><code>make help</code> lists every target with its description (<code>make test-help</code> for the
+kind harness). The ones used most:</p>
 <table>
 <thead>
 <tr>
@@ -2885,35 +3092,19 @@ what the harness does or deviate from it.</p>
 <tbody>
 <tr>
 <td><code>make build</code></td>
-<td>Build the binary</td>
+<td>Build the dashboard UI and the binary</td>
 </tr>
 <tr>
-<td><code>make test</code></td>
-<td>Run unit tests</td>
+<td><code>make test-race</code></td>
+<td>Run all tests with the race detector, as CI does</td>
 </tr>
 <tr>
-<td><code>make generate</code></td>
-<td>Regenerate deepcopy code</td>
-</tr>
-<tr>
-<td><code>make docker-build</code></td>
-<td>Build a native-arch container image and load it into the local daemon</td>
-</tr>
-<tr>
-<td><code>make docker-buildx</code></td>
-<td>Build and push a multi-arch image (<code>PLATFORMS</code> env, default <code>linux/amd64,linux/arm64</code>)</td>
-</tr>
-<tr>
-<td><code>make helm-lint</code></td>
-<td>Lint the Helm chart</td>
-</tr>
-<tr>
-<td><code>make helm-template</code></td>
-<td>Render templates to stdout</td>
+<td><code>make lint</code></td>
+<td>Run golangci-lint</td>
 </tr>
 <tr>
 <td><code>make helm-unittest</code></td>
-<td>Run Helm chart unit tests (requires the helm-unittest plugin)</td>
+<td>Run Helm chart unit tests</td>
 </tr>
 </tbody>
 </table>
@@ -2922,12 +3113,12 @@ what the harness does or deviate from it.</p>
 under <code>charts/k8s-sustain/tests/</code> — one <code>*_test.yaml</code> file per template, asserting on
 default rendering, every enable/disable conditional, and value wiring. Install the plugin
 once, then run the suite:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1"># --verify=false: helm v4 verifies plugin provenance by default, which git-source installs don't support</span>
-<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>helm<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>https://github.com/helm-unittest/helm-unittest.git<span class="w"> </span>--version<span class="w"> </span><span class="m">1</span>.0.0<span class="w"> </span>--verify<span class="o">=</span><span class="nb">false</span>
-<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>make<span class="w"> </span>helm-unittest
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># --verify=false: helm v4 verifies plugin provenance by default, which git-source installs don't support</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>helm<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>https://github.com/helm-unittest/helm-unittest.git<span class="w"> </span>--version<span class="w"> </span><span class="m">1</span>.0.0<span class="w"> </span>--verify<span class="o">=</span><span class="nb">false</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>make<span class="w"> </span>helm-unittest
 </code></pre></div>
 <p>Run a single suite with the plugin's <code>-f</code> flag (paths are relative to the chart root):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>helm<span class="w"> </span>unittest<span class="w"> </span>charts/k8s-sustain<span class="w"> </span>-f<span class="w"> </span><span class="s1">'tests/deployment_test.yaml'</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>helm<span class="w"> </span>unittest<span class="w"> </span>charts/k8s-sustain<span class="w"> </span>-f<span class="w"> </span><span class="s1">'tests/deployment_test.yaml'</span>
 </code></pre></div>
 <p>CI runs the full suite in the <code>helm</code> job alongside <code>helm lint</code> and <code>helm template</code>.
 <code>make helm-promtool</code> additionally validates the rendered PrometheusRule
@@ -2950,7 +3141,23 @@ kind (say <code>Rollout</code> from Argo) is mostly a matter of registering it t
 <li>If the kind's pods cannot be evicted (job-like workloads), add an in-place-only branch in <code>reconcileWorkload</code> (<code>internal/controller/workload_reconcile.go</code>) alongside the Job, CronJob and bare-pod ones; selector-based kinds need nothing more</li>
 <li>Add RBAC markers (<code>+kubebuilder:rbac:...</code>) to the controller and the Helm RBAC rule in <code>charts/k8s-sustain/templates/rbac.yaml</code></li>
 </ol>
-<h2 id="dashboard-styling">Dashboard styling<a class="headerlink" href="#dashboard-styling" title="Permanent link">&para;</a></h2>
+<h2 id="dashboard-frontend">Dashboard frontend<a class="headerlink" href="#dashboard-frontend" title="Permanent link">&para;</a></h2>
+<p>The dashboard frontend is a Vue 3 + TypeScript SPA built with Vite in
+<code>internal/dashboard/ui/frontend/</code>. <code>make build-ui</code> (part of <code>make build</code>) runs
+<code>npm ci &amp;&amp; npm run build</code> into <code>internal/dashboard/ui/dist/</code>, which is
+embedded into the Go binary via <code>go:embed</code>. The Docker build runs the frontend
+build in its own stage.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nb">cd</span><span class="w"> </span>internal/dashboard/ui/frontend
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>npm<span class="w"> </span>install
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>npm<span class="w"> </span>run<span class="w"> </span>dev<span class="w">        </span><span class="c1"># Vite dev server on http://localhost:5173</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>npm<span class="w"> </span>run<span class="w"> </span><span class="nb">test</span><span class="w">       </span><span class="c1"># vitest</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>npm<span class="w"> </span>run<span class="w"> </span>typecheck<span class="w">  </span><span class="c1"># vue-tsc --noEmit</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>npm<span class="w"> </span>run<span class="w"> </span>lint<span class="w">       </span><span class="c1"># eslint src/</span>
+</code></pre></div>
+<p>The dev server proxies <code>/api</code> and <code>/healthz</code> to <code>localhost:8090</code>: run the
+backend with <code>go run main.go dashboard --bind-address=:8090</code>, or port-forward
+the in-cluster dashboard Service to <code>:8090</code>.</p>
+<h3 id="styling">Styling<a class="headerlink" href="#styling" title="Permanent link">&para;</a></h3>
 <p>The dashboard's look lives in one stylesheet,
 <code>internal/dashboard/ui/frontend/src/style.css</code>, driven by CSS custom
 properties declared for <code>[data-theme='dark']</code> and <code>[data-theme='light']</code>.
@@ -2966,16 +3173,13 @@ Restyle by changing tokens, not by adding per-view colours.</p>
   follows the entity: request and limit share <code>config</code> and differ by dash
   pattern, which the legend keys reproduce. When changing a series colour,
   re-check it against both card surfaces for colour-vision separation.</li>
-<li>To review a change visually, port-forward the dashboard Service to <code>:8090</code>
-  and run <code>npm run dev</code> in the frontend directory; Vite proxies <code>/api</code> to it.</li>
 </ul>
 <h2 id="documentation-site">Documentation site<a class="headerlink" href="#documentation-site" title="Permanent link">&para;</a></h2>
 <p>The docs site (this site) is built with mkdocs-material and versioned with
 <a href="https://github.com/jimporter/mike">mike</a>. Two things deploy it:</p>
 <ul>
 <li>Every push to <code>main</code> (that touches <code>docs/**</code> or <code>mkdocs.yml</code>) updates the
-  <code>main</code> version — a rolling snapshot of in-progress docs, same as the old
-  always-live behavior.</li>
+  <code>main</code> version — a rolling snapshot of in-progress docs.</li>
 <li>Every pushed tag <code>vX.Y.Z</code> that is <strong>not</strong> a prerelease (no <code>-</code> in the tag,
   so <code>v0.1.0-rc.1</code> is excluded) publishes a permanent, immutable version
   <code>X.Y.Z</code> and re-points the <code>latest</code> alias at it. This runs as the <code>docs</code> job
@@ -2985,12 +3189,15 @@ Restyle by changing tokens, not by adding per-view colours.</p>
 <p>The version dropdown in the site header is generated by mike from
 <code>versions.json</code> on the <code>gh-pages</code> branch — it only appears on the deployed
 site, not in a local <code>mkdocs serve</code>/<code>mkdocs build</code> preview.</p>
-<p>To preview docs locally, nothing changes:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements-docs.txt
-<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>mkdocs<span class="w"> </span>serve
+<p>To preview docs locally:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements-docs.txt
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>mkdocs<span class="w"> </span>serve
 </code></pre></div>
-<p>CI builds with <code>mkdocs build --strict</code> and lints with markdownlint, so a
-broken cross-reference or a lint violation fails the pull request.</p>
+<p>CI builds with <code>mkdocs build --strict</code> and lints with markdownlint. The
+<code>validation</code> block in <code>mkdocs.yml</code> turns broken links and anchors into
+warnings, which <code>--strict</code> fails on. <code>hack/docscheck</code> (run by <code>make test</code>)
+fails when <code>docs/reference</code> drifts from the flags, metrics, recording rules
+and Helm values it documents.</p>
 <h3 id="theme">Theme<a class="headerlink" href="#theme" title="Permanent link">&para;</a></h3>
 <p>The site uses the stock Material theme with a single stylesheet,
 <code>docs/stylesheets/extra.css</code>. Its colour tokens mirror the dashboard's
@@ -3003,17 +3210,17 @@ art, which cannot adapt to dark mode. The landing page (<code>docs/index.md</cod
 a few <code>ks-*</code> classes defined in the same stylesheet; every other page is plain
 Markdown.</p>
 <p>The live site is published through GitHub's Actions-based Pages deployment,
-not the legacy "deploy from a branch" mechanism — <code>gh-pages</code> is still where
-mike stores version history, but pushing to it no longer auto-triggers a site
-rebuild by itself. The last step of the <code>deploy</code>/<code>docs</code> jobs above is the
+not the legacy "deploy from a branch" mechanism — <code>gh-pages</code> is where mike
+stores version history, but pushing to it does not trigger a site rebuild by
+itself. The last step of the <code>deploy</code>/<code>docs</code> jobs above is the
 in-repo composite action <code>.github/actions/deploy-pages-site</code>, which uploads
 the <code>gh-pages</code> checkout as the Pages artifact and creates the deployment
 through the REST API with the <code>gh-pages</code> commit as <code>pages_build_version</code>.
 Stock <code>actions/deploy-pages</code> uses the workflow's own commit for that field,
 and Pages silently skips a version it has already served — a release tag sits
-on a commit the <code>main</code> deploy already published, so tag-triggered docs
-deploys used to report success while the site kept serving the previous
-version (<a href="https://github.com/actions/deploy-pages/issues/383">actions/deploy-pages#383</a>).</p>
+on a commit the <code>main</code> deploy already published, so a tag-triggered deploy
+would report success without updating the site
+(<a href="https://github.com/actions/deploy-pages/issues/383">actions/deploy-pages#383</a>).</p>
 <h2 id="contributing">Contributing<a class="headerlink" href="#contributing" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Fork the repository</li>
@@ -3022,6 +3229,147 @@ version (<a href="https://github.com/actions/deploy-pages/issues/383">actions/de
 <li>Open a pull request against <code>main</code></li>
 </ol>
 <p>Please ensure <code>go build ./...</code> and <code>go test ./...</code> pass before opening a PR.</p>
+<h2 id="internals">Internals<a class="headerlink" href="#internals" title="Permanent link">&para;</a></h2>
+<p>Implementation notes for maintainers. Behaviour users can observe is
+documented in the guides and references; this section explains why the code
+is shaped the way it is.</p>
+<h3 id="prometheus-transport">Prometheus transport<a class="headerlink" href="#prometheus-transport" title="Permanent link">&para;</a></h3>
+<p><code>internal/prometheus.New(addr, opts...)</code> takes functional options. The
+transport-related ones:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithTransportConfig(TransportConfig)</code></td>
+<td>Bearer token (inline or file), basic auth (inline or password file), arbitrary headers, and TLS (<code>CAFile</code>, <code>CertFile</code>/<code>KeyFile</code>, <code>ServerName</code>, <code>InsecureSkipVerify</code>). The <code>start</code> and <code>dashboard</code> call sites use it: <code>config.LoadControllerConfig</code> / <code>LoadDashboardConfig</code> fill a <code>PrometheusTransport</code> field of this type and return an error on a malformed <code>--prometheus-headers</code> entry.</td>
+</tr>
+<tr>
+<td><code>WithRoundTripper(http.RoundTripper)</code></td>
+<td>Escape hatch for a transport this package does not model (SigV4, an in-memory key pair, a recording transport in tests). <strong>Mutually exclusive</strong> with <code>WithTransportConfig</code> — passing both is an error from <code>New</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Before touching <code>internal/prometheus/transport.go</code>:</p>
+<ul>
+<li>The zero <code>TransportConfig</code> is a no-op: <code>New(addr)</code> builds the client with no
+  <code>RoundTripper</code> at all.</li>
+<li><code>RoundTrip</code> operates on a <strong>clone</strong> of the request, as the
+  <code>http.RoundTripper</code> contract requires; mutating the shared header map races
+  under <code>-race</code>.</li>
+<li>Credential <strong>files are re-read on every request</strong> so a kubelet-rotated
+  projected token keeps working. Do not cache: query volume is bounded by
+  <code>--prometheus-max-inflight</code>. The mTLS key pair reloads through
+  <code>tls.Config.GetClientCertificate</code> on every handshake; a static entry in
+  <code>tls.Config.Certificates</code> would shadow the callback.</li>
+<li>Every configured file is also read once in <code>newTransportRoundTripper</code>, so a
+  bad path fails <code>New</code> and the process instead of looking like a Prometheus
+  outage per query. <code>TransportConfig.validate</code> checks header names and values
+  with <code>httpguts</code> for the same reason: <code>http.Transport</code> would reject them on
+  every request and trip the circuit breaker.</li>
+<li><code>CAFile</code> is appended to a <strong>copy</strong> of the system pool, and the base transport
+  is a <code>Clone()</code> of <code>api.DefaultRoundTripper</code>, which is shared process-wide and
+  must never be mutated.</li>
+<li>This is a deliberate subset of <code>prometheus/common/config.HTTPClientConfig</code>:
+  that package <em>replaces</em> the root pool with <code>CAFile</code>, and pulls in JWT/OAuth2
+  and conntrack dependencies. Revisit if OAuth2 or SigV4 becomes a requirement.</li>
+<li><code>--prometheus-headers</code> is a pflag <strong>StringArray</strong> (one element per flag
+  occurrence, no CSV splitting); the env-var path (<code>getStringSlice</code>) still
+  splits on commas.</li>
+<li>A new transport flag goes in <code>bindPrometheusTransportFlags</code> (called with <code>""</code>
+  for the controller and <code>"dashboard."</code> for the dashboard, which keeps the two
+  flag sets from drifting) and <code>loadPrometheusTransport</code> in
+  <code>internal/config/config.go</code>, plus the field on <code>promclient.TransportConfig</code>.
+  Mirror it in <code>charts/k8s-sustain/templates/_helpers.tpl</code>
+  (<code>k8s-sustain.prometheusAuthArgs</code> / <code>…Env</code> / <code>…AuthSecretVolumes</code>),
+  <code>values.yaml</code>, <code>values.schema.json</code>, and
+  <code>charts/k8s-sustain/tests/prometheus-auth_test.yaml</code>.</li>
+</ul>
+<h3 id="controller">Controller<a class="headerlink" href="#controller" title="Permanent link">&para;</a></h3>
+<h4 id="work-list-union-and-informer-lag">Work-list union and informer lag<a class="headerlink" href="#work-list-union-and-informer-lag" title="Permanent link">&para;</a></h4>
+<p>The controller's reads go through a watch-populated informer cache, so a <code>WorkloadRecommendation</code> that discovery created moments earlier in the same reconcile is often not yet visible to a list, and nothing watches <code>WorkloadRecommendation</code> to re-trigger a reconcile when it becomes visible. The computation work-list is therefore the union of the listed cache objects and the identities discovery just ensured. Without the union a freshly matched workload would wait a full <code>--reconcile-interval</code> before being computed. Discovery already holds the container set for those identities, so the union costs no extra API calls.</p>
+<h4 id="per-identity-computation-under-owner-name-grouping">Per-identity computation under owner-name grouping<a class="headerlink" href="#per-identity-computation-under-owner-name-grouping" title="Permanent link">&para;</a></h4>
+<p>The computation unit is the identity, not the workload object: a group of workloads sharing an owner-name produces exactly one computation and one write, against the union of the members' containers. Computing per member would give the single shared <code>WorkloadRecommendation</code> several competing answers, with the survivor decided by whichever member's goroutine finished last. Retry backoff is also per member: an identity is withheld from the batch prefetch only when every member is backed off, so one failing member cannot deny its healthy siblings their inputs.</p>
+<h4 id="owner-name-group-merge-order-and-write-cost">Owner-name group: merge order and write cost<a class="headerlink" href="#owner-name-group-merge-order-and-write-cost" title="Permanent link">&para;</a></h4>
+<p>For an owner-name group, the union snapshot in <code>status.observedResources</code> is built from the members' containers. Where two members declare the same container name with different requests/limits, the entry from the member whose <code>kind/namespace/name</code> sorts first is kept whole, rather than mixing one member's request with another's limit. The recommendation is computed against that union, using the autoscaler of the first member (same sort order) that has one, and treating the identity as being as old as its oldest member.</p>
+<p>Every choice is decided by the members' names or by an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. Discovery (<code>EnsureExists</code>) and the computation phase (<code>wlrcache.Upsert</code>) both write <code>status.observedResources</code>, but always the same merged value computed once per identity, so the two writers never disagree, and a group whose members and metrics are unchanged costs no status write on subsequent reconciles rather than one write per member per cycle.</p>
+<h4 id="bare-pod-grouping-implementation">Bare-pod grouping implementation<a class="headerlink" href="#bare-pod-grouping-implementation" title="Permanent link">&para;</a></h4>
+<p>Bare-pod groups are built by <code>workload.GroupBarePods</code>, used by both the controller and the dashboard. It resolves each pod's policy across the pod's own annotations and the namespace annotation map it is passed, so Namespace-level opt-in works for bare pods. The dashboard displays the containers and annotations of the most recently created pod in the group.</p>
+<h3 id="oom-watcher">OOM watcher<a class="headerlink" href="#oom-watcher" title="Permanent link">&para;</a></h3>
+<h4 id="cache-per-field-merge">Cache: per-field merge<a class="headerlink" href="#cache-per-field-merge" title="Permanent link">&para;</a></h4>
+<p>The OOM cache is keyed by <code>(namespace, ownerKind, ownerName, container)</code>, so every pod of a workload writes to the same slot, and pods are reconciled in parallel. The slot is a per-field merge rather than last-write-wins:</p>
+<ul>
+<li><strong>Identity and timestamps</strong> (pod name/UID, terminated-at, observed-at, restart count) come from the newest observation, ordered by <code>(terminated-at, restart-count)</code>. Restart count only breaks ties on an equal timestamp, which <code>metav1.Time</code>'s one-second resolution makes common; across two pods the counters are unrelated, so a cross-pod tie picks arbitrarily between two equally recent stamps.</li>
+<li><strong>The OOM-time memory limit</strong> (the bump anchor for the memory floor) is the largest limit seen across those pods, not the most recent. A Deployment bumped 128Mi → 256Mi can have an old un-resized pod (128Mi) OOM after an already-resized one (256Mi); anchoring on the newer 128Mi would bump the floor to a value 256Mi already proved insufficient. The recommender <code>max()</code>es this record against the Prometheus anchor for the same reason.</li>
+</ul>
+<p>An out-of-order observation still counts as a new kill for triggering an immediate reconcile; it contributes its limit, not its identity. The accepted cost is on a deliberate downsize: an older, larger limit keeps anchoring the floor high until it ages out of the cache (bounded by the TTL and the recommender's freshness window). That errs toward brief over-provisioning rather than an under-bump into another OOM, and it cannot compound, because every merged value is a limit the kernel actually applied.</p>
+<p>The watcher captures the limit from <code>ContainerStatus.Resources</code> (falling back to the pod spec when the status carries none). The spec holds the desired limit, which the recommender itself rewrites on every in-place resize, so anchoring on the spec would feed the OOM floor its own previous output and compound on each kill.</p>
+<h4 id="predicate-and-dedup">Predicate and dedup<a class="headerlink" href="#predicate-and-dedup" title="Permanent link">&para;</a></h4>
+<p>The watcher's event predicate is local (no apiserver calls): a pod is queued when it carries the <code>k8s.sustain.io/policy</code> annotation itself or has ever had an <code>OOMKilled</code> container status. The OOM arm is sticky — <code>LastTerminationState.Terminated</code> persists for the container's lifetime — so every later event for such a pod re-queues a reconcile. Before resolving the owner or Namespace, the watcher checks whether this exact termination (pod UID + container + restart count + terminated-at) was already resolved, so a chronically restarting pod's owner resolution runs once per distinct kill, not once per status write, including for pods managed by no Policy.</p>
+<h3 id="webhook">Webhook<a class="headerlink" href="#webhook" title="Permanent link">&para;</a></h3>
+<h4 id="informer-cache-and-shutdown-ordering">Informer cache and shutdown ordering<a class="headerlink" href="#informer-cache-and-shutdown-ordering" title="Permanent link">&para;</a></h4>
+<p>The webhook serves <code>Policy</code>, <code>WorkloadRecommendation</code> and <code>Namespace</code> reads from an informer cache (<code>k8s.NewCached</code>); budget roughly 20–50 MB resident at 10k workloads. Owner-chain kinds (<code>ReplicaSet</code>, <code>Job</code>, and the workload kinds read for workload-level opt-in) stay uncached: they are read at most once per pod CREATE, and a cluster-wide informer per kind would cost more memory than the Gets it saves.</p>
+<p>The three informers are registered and synced during startup, before the webhook receives traffic. Registering them lazily would push a blocking cluster-wide LIST into the first admission's 2s per-call timeout, so on large clusters the first pods after every restart would fail open. Startup is all-or-nothing: if it fails (most often because the CRDs are not yet established on a fresh install, which <code>k8s.NewCached</code> waits up to two minutes for), the informers already started are stopped before the error is returned, so a crash-looping webhook does not leak a cache per attempt. The cache lives on a run context kept alive past SIGTERM so draining admissions still read fresh data.</p>
+<h4 id="owner-resolution-cost-and-caching">Owner-resolution cost and caching<a class="headerlink" href="#owner-resolution-cost-and-caching" title="Permanent link">&para;</a></h4>
+<p>The webhook pre-gates the owner and Namespace reads of <a href="../reference/annotation/#resolution-order">policy resolution</a> behind <code>anyPolicyCovers</code>: if no Policy's <code>selector</code> could claim a pod at all, it skips them entirely. This <em>is</em> the cost control for a cluster with at least one selector-scoped Policy — most pod creates in most namespaces are skipped before any extra read.</p>
+<p>It does <strong>not</strong> bound cost on a cluster where a Policy has an empty <code>selector</code> (no <code>namespaces</code>, no <code>labelSelector</code>) — the default, and what <a href="../getting-started/quick-start/">Quick Start</a> produces. Such a Policy covers every pod in the cluster, so the pre-gate always passes and every pod CREATE it admits pays for owner resolution: <code>resolveCachedPodOwner</code> (via a Deployment/Rollout pod's ReplicaSet, or a CronJob pod's Job) does one Get to find the top-level owner. This Get is not scoped to the multi-level opt-in chain — <code>admit()</code> needs the same top-level owner to look up the <code>WorkloadRecommendation</code> for <strong>every</strong> pod it injects into, pod-template-annotated (the common case, since every existing user annotates the pod template) or not. A pod with no annotation of its own additionally goes through the opt-in chain (<code>resolveOptIn</code>), which needs a second Get — <code>ownerAnnotations</code>, of the resolved top-level object's own <code>metadata.annotations</code> — to evaluate the workload level; that second Get <em>is</em> scoped to unannotated pods, since an annotated pod's own annotation already decides the policy without ever reading its owner's. A rolling restart of a large Deployment therefore issues up to two owner Gets per replica in the worst case — not one.</p>
+<p>The webhook absorbs this with two small in-memory caches (<code>internal/webhook/ownercache.go</code>), both TTL ~30s and both consulted before their respective Get: <code>Handler.ownerRefCache</code>, keyed by the pod's own immediate controller ownerRef (<code>namespace/kind/name/UID</code> of its ReplicaSet or Job), bounds the first Get — shared by <strong>every</strong> pod CREATE that reaches owner resolution at all, whether it took the pod-template-annotated path or the multi-level opt-in chain; <code>Handler.ownerAnnCache</code>, keyed by <code>(namespace, kind, name)</code> of the resolved top-level object, bounds the second Get and is reached only via the multi-level opt-in chain. N pods created behind the same owner in a burst — exactly what a rolling restart produces — share both cache keys, so the pair collapses from up to 2N Gets to at most 2.</p>
+<p>Both caches also collapse a <em>concurrent</em> cold-start burst, not just the steady-state (already-warm) case: N pods admitted at the same instant behind one owner — the exact shape of a rolling restart — issue one in-flight Get via <a href="https://pkg.go.dev/golang.org/x/sync/singleflight"><code>golang.org/x/sync/singleflight</code></a>, with every other admission waiting on that Get's result instead of each starting its own. A waiter still respects its own admission deadline: if it times out before the in-flight Get returns, only that one admission gives up and fails open (with the pod resolved on template resources); the Get itself keeps running regardless, to completion or its own 2s <code>apiCallTimeout</code> budget (whichever comes first) — not just for as long as some other admission is still waiting on it, but also to populate the cache for the next burst even if every waiter has already given up.</p>
+<p>A panic inside that shared Get is contained rather than fatal. Running it on a <code>singleflight</code> goroutine puts it outside the HTTP handler's panic-recovery middleware, and <code>singleflight</code> deliberately re-raises a leader panic on a bare goroutine that nothing can recover — so, unguarded, one nil deref under an owner Get would abort the whole webhook process and (under <code>failurePolicy: Fail</code>) block every Pod CREATE in the cluster until it restarted. The webhook therefore recovers such a panic itself, logs it with its stack, counts it on <a href="../reference/metrics/#k8s_sustain_webhook_panic_total"><code>k8s_sustain_webhook_panic_total</code></a> under <code>singleflight/ownerRef</code> or <code>singleflight/ownerAnnotations</code>, and hands it to the leader and every waiter as an ordinary error — which they fail open on like any other failed Get. Nothing is cached, and the next admission retries.</p>
+<p>The trade-off: a workload that gains its opt-in annotation at the workload level may take up to the cache's TTL to be picked up by admission. This is acceptable because the controller reconciles independently of admission on its own interval regardless of what the webhook does.</p>
+<h4 id="stub-writes-dedup-bounds-and-shutdown">Stub writes: dedup, bounds and shutdown<a class="headerlink" href="#stub-writes-dedup-bounds-and-shutdown" title="Permanent link">&para;</a></h4>
+<p>A stub becomes visible to the webhook's informer only after the create and watch propagation, so inside that window every pod of a scaling workload reads <code>missing</code> and would fire its own create (a 500-replica scale-out means 500 creates of one name, 499 rejected). Stub requests are therefore deduplicated per identity for 30s and bounded to 16 concurrent writes. Over-capacity requests queue rather than drop: a run-once Job has no later admission to retry on.</p>
+<p>Stub goroutines outlive the admission that started them (up to 30s queued plus 5s for the write), so on shutdown SIGTERM cancels in-flight stub writes and the process waits, bounded, for them to unwind before stopping the informer cache they read through. An abandoned request is re-issued by the next admission for the same identity.</p>
+<p>The status snapshot (<code>status.observedResources</code>) is also written on the <code>AlreadyExists</code> path, so an object lacking one can be filled in by a later admission; a snapshot discovery already wrote from the pod template wins. Only the missing case creates a stub: on a stale object a create is a guaranteed no-op.</p>
+<p>The <code>k8s.sustain.io/stub</code> label is provenance, not control flow. The controller's own write path must <code>Create</code> before it can patch status (the status subresource discards status supplied at create), so every controller-written recommendation is transiently empty-status too.</p>
+<h4 id="cache-staleness-constant">Cache staleness constant<a class="headerlink" href="#cache-staleness-constant" title="Permanent link">&para;</a></h4>
+<p>The staleness window is <code>webhook.Handler.CacheStaleness</code> (default <code>DefaultCacheStaleness = 30m</code>, <code>internal/webhook/recommendations.go</code>). It is not exposed as a flag or Helm value.</p>
+<h4 id="startup-probe-budget">Startup probe budget<a class="headerlink" href="#startup-probe-budget" title="Permanent link">&para;</a></h4>
+<p>The webhook builds an informer
+cache before its HTTPS listener starts, and that build waits up to two minutes
+for the <code>Policy</code> and <code>WorkloadRecommendation</code> CRDs to become servable — the
+fresh-install race where Helm has created the CRDs but the API server is not
+serving them yet. Nothing answers <code>/healthz</code> for that whole period, so the
+liveness probe alone would kill the container after
+<code>initialDelaySeconds + periodSeconds × failureThreshold</code> = 40s and the pod would
+end in <code>CrashLoopBackOff</code> on exactly the install the wait exists to survive.</p>
+<p>The startup probe's budget must therefore stay <strong>larger than that two-minute
+wait</strong> (<code>crdWaitTimeout</code> in <code>internal/k8s/client.go</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nt">webhook</span><span class="p">:</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span><span class="nt">startupProbe</span><span class="p">:</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">    </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">    </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">      </span><span class="c1"># 5 + 5 × 36 = 185s &gt; 120s</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">    </span><span class="nt">timeoutSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">    </span><span class="nt">successThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">    </span><span class="nt">failureThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">36</span>
+</code></pre></div>
+<p>If you shorten it, shorten it to something still comfortably above two minutes.
+A Go unit test reads this value out of <code>values.yaml</code> and fails if the two sides
+drift apart.</p>
+<p>The template carries the same numbers as its own defaults, so the probe is
+rendered even when the release's values do not contain <code>webhook.startupProbe</code>
+at all — which is what a <code>helm upgrade --reuse-values</code> from a release predating
+this key produces, since <code>--reuse-values</code> never picks up defaults newly added
+to <code>values.yaml</code>. Overriding one field keeps the template defaults for the
+others. A second Go unit test reads that template copy and checks it against
+<code>crdWaitTimeout</code> in its own right, and fails if the two copies disagree — so
+raising the wait cannot leave the <code>--reuse-values</code> path silently under budget
+while the <code>values.yaml</code> side still passes.</p>
+<h3 id="workloadrecommendation-lifecycle">WorkloadRecommendation lifecycle<a class="headerlink" href="#workloadrecommendation-lifecycle" title="Permanent link">&para;</a></h3>
+<h4 id="gc-preconditions">GC preconditions<a class="headerlink" href="#gc-preconditions" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>Per-cycle sweep</strong> deletes with <code>uid</code> + <code>resourceVersion</code> preconditions, because it decides on a copy read from the informer cache. With several reconciles running at once, a workload re-annotated from one policy to another is re-labelled and rewritten by the new policy while the old policy's sweep still holds the pre-rewrite copy; the precondition turns that delete into a conflict (left alone, re-judged next cycle) instead of destroying a fresh recommendation. A conflict is an expected outcome, not an error.</li>
+<li><strong>Policy-deletion finalizer</strong> deletes on <code>uid</code> alone. Its rule ("this object belongs to the policy being deleted") cannot be invalidated by a rewrite, so a <code>resourceVersion</code> precondition would only let a WLR rewritten inside the informer propagation window survive. The <code>uid</code> still refuses a name reused by a delete-and-recreate. Any failure, conflicts included, is returned so the finalizer stays on and the deletion is retried.</li>
+<li><strong>Orphan reaper</strong> keeps the strict <code>uid</code> + <code>resourceVersion</code> preconditions: its rule reads <code>spec.policy</code>, which is rewritten in place when a re-annotated workload's WLR is re-pointed at its new policy, so a stale copy can call a just-adopted object an orphan. It guarantees nothing, so it can afford the conflict.</li>
+</ul>
+<h4 id="freshness-grace">Freshness grace<a class="headerlink" href="#freshness-grace" title="Permanent link">&para;</a></h4>
+<p>Independently of retention, a <code>WorkloadRecommendation</code> created within the last 10 minutes is never swept, nor is one whose workload object was created in that window; it protects an identity first written just after a reconcile built its target list. The grace keys off creation timestamps, not <code>status.observedAt</code>: the computation phase refreshes <code>observedAt</code> for every object in its list each cycle, departed identities included, so an <code>observedAt</code>-based guard would be self-satisfying and an opted-out workload would keep its recommendation (and its share of Prometheus load) indefinitely.</p>
+<h4 id="departed-waiver-bound">Departed waiver bound<a class="headerlink" href="#departed-waiver-bound" title="Permanent link">&para;</a></h4>
+<p>The webhook bounds the <code>departed</code> staleness waiver with its own <code>--recommendation-retention</code> (rendered from the same <code>controller.recommendationRetention</code> Helm value as the controller's). Relying on the sweep to delete a lapsed object would leave the waiver unbounded whenever the controller stops sweeping: both the sweep and the clearing of <code>departed</code> live inside the reconcile, which returns early when a workload listing fails (RBAC revoked on one kind, an unreachable API group, a removed CRD). <code>departed</code> is only set on a positively confirmed absence, never when the existence check errors.</p>
 
 
 

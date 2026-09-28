@@ -629,10 +629,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#tls-certificate-webhook-only" class="md-nav__link">
+  <a href="#tls-certificate" class="md-nav__link">
     <span class="md-ellipsis">
       
-        TLS certificate (webhook only)
+        TLS certificate
       
     </span>
   </a>
@@ -1084,35 +1084,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guides/daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -1899,10 +1871,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#tls-certificate-webhook-only" class="md-nav__link">
+  <a href="#tls-certificate" class="md-nav__link">
     <span class="md-ellipsis">
       
-        TLS certificate (webhook only)
+        TLS certificate
       
     </span>
   </a>
@@ -1980,24 +1952,8 @@
 <h1 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h1>
 <p>Cluster, tooling, and metrics requirements before installing k8s-sustain.</p>
 <h2 id="kubernetes">Kubernetes<a class="headerlink" href="#kubernetes" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Requirement</th>
-<th>Version</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Kubernetes</td>
-<td>≥ 1.24</td>
-</tr>
-<tr>
-<td>Kubernetes (in-place updates)</td>
-<td>≥ 1.33</td>
-</tr>
-</tbody>
-</table>
+<p>Kubernetes <strong>1.29 or later</strong>. The CRDs' CEL validation rules use the Kubernetes <code>quantity()</code> library, which older API servers reject when the CRD is applied.</p>
+<p>Running pods are resized in place from 1.33; older clusters fall back to eviction. See the <a href="../../concepts/in-place-updates/#version-matrix">version matrix</a>.</p>
 <h2 id="helm">Helm<a class="headerlink" href="#helm" title="Permanent link">&para;</a></h2>
 <p>Helm 3.10+ is required to deploy the chart.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>helm<span class="w"> </span>version
@@ -2008,6 +1964,7 @@
 <p>From <strong>kube-state-metrics</strong>:</p>
 <ul>
 <li><code>kube_pod_owner</code> — maps pods to their workload owner</li>
+<li><code>kube_pod_labels</code> — carries the <code>k8s.sustain.io/owner-name</code> label for <a href="../../guides/standalone-pods-and-grouping/">identity grouping</a>. kube-state-metrics only exports it when allowlisted: set <code>metricLabelsAllowlist: ["pods=[k8s.sustain.io/owner-name]"]</code> (the <code>--metric-labels-allowlist</code> flag)</li>
 <li><code>kube_job_owner</code> — resolves Job → CronJob</li>
 <li><code>kube_replicaset_owner</code> — resolves ReplicaSet → Deployment (or Rollout)</li>
 <li><code>kube_pod_container_resource_requests</code> / <code>kube_pod_container_resource_limits</code> — current CPU/memory requests and limits</li>
@@ -2036,13 +1993,13 @@ rotating file), basic auth, arbitrary headers, and TLS (custom CA, mTLS, SNI
 override) are all supported. The controller and the dashboard are wired
 identically; the webhook needs nothing, since it never queries Prometheus. See
 the <a href="../../guides/authenticated-prometheus/">Authenticated Prometheus guide</a>.</p>
-<h2 id="tls-certificate-webhook-only">TLS certificate (webhook only)<a class="headerlink" href="#tls-certificate-webhook-only" title="Permanent link">&para;</a></h2>
-<p>The admission webhook requires a valid TLS certificate trusted by the Kubernetes API server. Two options are supported:</p>
+<h2 id="tls-certificate">TLS certificate<a class="headerlink" href="#tls-certificate" title="Permanent link">&para;</a></h2>
+<p>The admission webhook requires a TLS certificate trusted by the Kubernetes API server. Two options are supported:</p>
 <ul>
-<li><strong>cert-manager</strong> (recommended) — set <code>webhook.certManager.enabled=true</code></li>
-<li><strong>Manual secret</strong> — create a <code>Secret</code> of type <code>kubernetes.io/tls</code> with <code>tls.crt</code> and <code>tls.key</code>, then set <code>webhook.tlsSecretName</code></li>
+<li><strong>cert-manager</strong> (default) — install <a href="https://cert-manager.io/">cert-manager</a> before the chart; with <code>webhook.certManager.enabled=true</code> (the default) the chart creates the Certificate and cert-manager injects the CA bundle.</li>
+<li><strong>Manual</strong> — set <code>webhook.certManager.enabled=false</code>, create a <code>Secret</code> of type <code>kubernetes.io/tls</code> with <code>tls.crt</code> and <code>tls.key</code> in the release namespace, set <code>webhook.tlsSecretName</code> to its name, and set <code>webhook.caBundle</code> to the base64-encoded CA certificate that signed it. The certificate must carry the webhook Service DNS names as SANs — see the <a href="../../guides/cert-manager/">cert-manager guide</a>.</li>
 </ul>
-<p>If you only use <code>Ongoing</code> mode (no <code>OnCreate</code>), the webhook is not needed and you can disable it with <code>webhook.enabled=false</code>.</p>
+<p>The webhook cannot be skipped: see <a href="../installation/#the-admission-webhook-is-required">The admission webhook is required</a>.</p>
 
 
 

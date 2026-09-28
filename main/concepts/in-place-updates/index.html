@@ -1117,35 +1117,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guides/daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -2044,37 +2016,39 @@
 
 
 <h1 id="in-place-updates">In-Place Updates<a class="headerlink" href="#in-place-updates" title="Permanent link">&para;</a></h1>
-<p>Kubernetes 1.27 introduced the <code>InPlacePodVerticalScaling</code> feature gate (alpha), which became beta (on by default) in Kubernetes 1.33 together with the <code>pods/resize</code> subresource as the only supported way to mutate pod resources. It allows changing a pod's resource requests and limits <strong>without restarting the container</strong>.</p>
-<p>k8s-sustain auto-detects whether the cluster supports the feature and chooses the appropriate code path. There is <strong>no minimum k8s version for k8s-sustain itself</strong> — clusters below 1.33 fall back transparently to PDB-respecting eviction.</p>
+<p>Kubernetes 1.33 enables in-place pod resize (<code>InPlacePodVerticalScaling</code>, beta and on by default) with the <code>pods/resize</code> subresource. It changes a pod's requests and limits <strong>without recreating the pod</strong>.</p>
+<p>k8s-sustain detects support at startup and picks the code path. Clusters below 1.33 (k8s-sustain itself needs <a href="../../getting-started/prerequisites/#kubernetes">1.29 or later</a>) fall back to PDB-respecting eviction.</p>
 <h2 id="version-matrix">Version matrix<a class="headerlink" href="#version-matrix" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
 <th>k8s version</th>
-<th>Feature state</th>
 <th>k8s-sustain behaviour</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>≤ 1.32</strong></td>
-<td>Feature absent, or alpha gate off by default; no stable <code>/resize</code> subresource</td>
-<td>Detected at startup as <code>inPlace=false</code> → eviction path. Stale pods evicted via the Eviction API; webhook re-injects on replacement.</td>
+<td><strong>1.29 – 1.32</strong></td>
+<td><code>inPlace=false</code> → eviction path. Stale pods are evicted via the Eviction API; the webhook injects the recommendation into the replacement. CronJob, Job and bare-pod pods are not touched.</td>
 </tr>
 <tr>
 <td><strong>1.33+</strong></td>
-<td>On by default; <code>/resize</code> subresource (<code>PATCH /api/v1/.../pods/&lt;name&gt;/resize</code>)</td>
-<td><code>inPlace=true</code>. All resizes go through <code>/resize</code>; sidecar (restartable init) resize attempted as a separate <code>/resize</code> call.</td>
+<td><code>inPlace=true</code>. All resizes go through <code>pods/resize</code>; sidecar (restartable init) containers are resized in a separate call.</td>
 </tr>
 </tbody>
 </table>
+<p>The gate is the server version alone: the controller compares <code>major.minor</code> against 1.33 and does not probe feature gates.</p>
+<div class="admonition warning">
+<p class="admonition-title"><code>restartPolicy: Never</code> / <code>OnFailure</code> pods need 1.35</p>
+<p>Job pods, CronJob runs and most bare pods (Airflow's <code>KubernetesPodOperator</code> uses <code>Never</code>) run with <code>restartPolicy: Never</code> or <code>OnFailure</code>. On 1.33 and 1.34 the API server rejects resizing those pods; the rejection is logged per pod and, for these kinds, never escalated to eviction. Full coverage starts at <strong>1.35</strong>.</p>
+</div>
 <h2 id="how-the-runtime-path-is-chosen">How the runtime path is chosen<a class="headerlink" href="#how-the-runtime-path-is-chosen" title="Permanent link">&para;</a></h2>
-<p>At controller startup the discovery API is queried and <code>major.minor</code> is compared against <code>1.33</code>. The result lives on <code>Patcher.inPlace</code>:</p>
+<p>At controller startup the discovery API is queried for the server version. The result is logged:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>INFO  InPlacePodVerticalScaling support  enabled=true   server=v1.33.2
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>INFO  InPlacePodVerticalScaling support  enabled=false  server=v1.30.5
 </code></pre></div>
-<p>In both modes the patcher lists pods by the workload's label selector and then drops any pod whose controller ownerRef chain does not resolve to the target workload (directly for StatefulSet/DaemonSet pods, via the owning ReplicaSet for Deployment/Argo Rollout pods). A debug pod carrying the same labels, or a pod belonging to another workload with an overlapping selector, is never resized or evicted — the skip is logged so overlapping selectors are easy to diagnose.</p>
-<p><code>Pod</code>-kind targets are the one exception to that lookup, because a bare pod has no ownerRef to resolve and no workload object to take a selector from. Their membership comes from the grouping rule instead — no controller <code>ownerReference</code>, a valid <code>k8s.sustain.io/owner-name</code>, and a <code>k8s.sustain.io/policy</code> annotation matching the one that claimed the group. The first is what makes a ReplicaSet-owned pod that merely carries the mirrored <code>owner-name</code> label a non-member; the second is what stops a pod opted into a <em>different</em> policy from being resized under this group's recommendation, and it is logged rather than silently dropped. See the <a href="#bare-pods">bare-pod paragraph</a> below.</p>
+<p>In both modes only pods owned by the target workload are touched — see <a href="../update-modes/#eviction-safeguards">Eviction safeguards</a>.</p>
+<p><code>Pod</code>-kind targets have no ownerRef or selector; their membership comes from the grouping rule instead — see <a href="#bare-pods">Bare pods</a>.</p>
 <p>When <code>Ongoing</code> mode is active and <code>inPlace=true</code>, the patcher walks each running pod and:</p>
 <ol>
 <li>Compares the pod spec against the current recommendation.</li>
@@ -2092,31 +2066,25 @@
 </ol>
 <p>Sidecar (restartable init) containers are resized in a <strong>separate</strong> <code>/resize</code> call so a sidecar rejection (their resize needs feature gates beyond <code>InPlacePodVerticalScaling</code>) cannot block the regular-container resize. Failures on the sidecar call are logged and ignored — new requests will land at next pod creation via webhook injection.</p>
 <h2 id="eviction-fallback">Eviction fallback<a class="headerlink" href="#eviction-fallback" title="Permanent link">&para;</a></h2>
-<p>On any cluster where <code>inPlace=false</code> (auto-detected as &lt; 1.33):</p>
+<p>On clusters below 1.33, and for pods whose in-place resize fails on newer clusters, stale pods are evicted. The guards (ownership check, PDBs, <code>safe-to-evict</code>, one pod at a time, crash-loop halt, StatefulSet ordering) are listed in <a href="../update-modes/#eviction-safeguards">Eviction safeguards</a>. Details of the wait between evictions:</p>
 <ul>
-<li>Stale pods are evicted <strong>one at a time</strong> via the Eviction API. After each eviction the patcher waits for the workload's selector to become <strong>quiescent</strong> — the evicted pod is gone and no peer is <code>Pending</code> or <code>Running</code>-but-<code>NotReady</code> — before evicting the next pod. This caps the disruption to (at most) one pod per workload at a time and avoids stampeding a workload with many stale pods.</li>
-<li>The quiescence check uses pod state, not a frozen Ready-count baseline, so it handles HPA scale-down naturally: if the autoscaler decides not to provision a replacement for an evicted pod, the remaining peers stay Ready and the wait returns immediately.</li>
-<li>The wait has a fixed timeout (default 5 minutes, tunable via <code>controller.recycleReplacementTimeout</code> / <code>--recycle-replacement-timeout</code>). The default is sized to cover node-autoscaling latency: when Karpenter or cluster-autoscaler has to provision a fresh node for the replacement pod, the cold start (node boot + image pull + init containers) regularly takes 2–3 minutes and can hit 5+ on slow registries. Setting the timeout too low produces false-positive aborts during normal scale-up; raise it on clusters with slow provisioning, lower it on tight clusters where you want faster surfacing of stuck rollouts. When the budget elapses the loop aborts for this reconcile so a genuinely stuck workload does not get more pods taken down before the next reconcile can re-evaluate.</li>
-<li><strong>Crash-loop circuit breaker.</strong> During the post-eviction wait, if any pod in the workload's selector enters <code>CrashLoopBackOff</code>, the loop aborts immediately. This guards against a bad recommendation cascading through every pod in the workload — the next reconcile picks up the recommendation drift and re-computes.</li>
-<li><strong>StatefulSet ordering.</strong> Pods owned by a StatefulSet are evicted in descending ordinal order (e.g. <code>web-2 → web-1 → web-0</code>), matching the StatefulSet controller's update semantics. Pods owned by other workload kinds (Deployment, DaemonSet, …) are evicted in alphabetical name order so reconciles stay deterministic.</li>
-<li>429 responses (PodDisruptionBudget blocking eviction) are logged and skipped — the next reconcile cycle will retry.</li>
-<li>Pods annotated <code>cluster-autoscaler.kubernetes.io/safe-to-evict: "false"</code> are never evicted (only the literal <code>"false"</code> blocks, matching cluster-autoscaler's convention). The skip is logged and the loop moves to the next pod. Set <code>spec.rightSizing.update.eviction.ignoreAutoscalerSafeToEvictAnnotations: true</code> to evict them anyway. In-place resizes are not gated by the annotation — a resize does not disrupt the pod. This gate also covers the eviction fallback for <code>Infeasible</code>/<code>Error</code> in-place resizes described above.</li>
-<li>The workload controller (Deployment / StatefulSet / etc.) replaces the evicted pod from the updated template; the webhook injects the latest recommendation into the replacement at admission time.</li>
+<li>Quiescence is judged from pod state (evicted pod gone, no peer <code>Pending</code> or <code>Running</code>-but-not-Ready), not a Ready-count baseline, so HPA scale-down is handled: if no replacement is provisioned, the remaining peers stay Ready and the wait returns immediately.</li>
+<li>The wait times out after <code>--recycle-replacement-timeout</code> (Helm <code>controller.recycleReplacementTimeout</code>, default 5m), sized to cover a node-autoscaler provisioning a fresh node for the replacement. When it elapses, the loop stops for this reconcile so a stuck workload loses no more pods.</li>
+<li>The workload controller replaces the evicted pod from its unchanged template; the webhook injects the latest recommendation at admission.</li>
 </ul>
 <h2 id="kinds-that-are-never-evicted">Kinds that are never evicted<a class="headerlink" href="#kinds-that-are-never-evicted" title="Permanent link">&para;</a></h2>
 <p>Three kinds opt out of the eviction path entirely, on the same reasoning: evicting the pod would destroy work that nothing will redo. For all three, in-place resize is the <em>only</em> post-creation correction, so on a cluster without in-place support the running pod simply keeps its original resources.</p>
 <h3 id="cronjobs-and-jobs">CronJobs and Jobs<a class="headerlink" href="#cronjobs-and-jobs" title="Permanent link">&para;</a></h3>
-<p>CronJobs are special-cased: the controller never mutates the CronJob spec (which would cause GitOps drift) and never evicts a job pod (which would kill the run). Job pods are enumerated via the <code>batch.kubernetes.io/job-name</code> label and confirmed by controller ownerRef back to the Job (which is itself ownerRef-checked against the CronJob), so a bystander pod carrying the label is never touched. On clusters that support in-place resize, currently-running job pods are resized via the <code>pods/resize</code> subresource using the same machinery as Deployments — including for <code>restartPolicy: Never</code>/<code>OnFailure</code> pods on k8s ≥ 1.35. If the cluster does not support in-place resize, the running pod is left untouched and the next scheduled run picks up the new resources from the webhook. Standalone Jobs (not owned by a CronJob) get the same treatment when <code>job: Ongoing</code> is set: their running pods are resized in place and never evicted. Unlike a CronJob there is no next run, so on clusters without in-place support the pod simply keeps its original resources for the rest of its lifetime.</p>
+<p>The controller never mutates the CronJob or Job spec and never evicts a job pod (which would kill the run). Job pods are found via the <code>batch.kubernetes.io/job-name</code> label and confirmed by controller ownerRef back to the Job (itself ownerRef-checked against the CronJob). Running job pods are resized in place when the cluster supports it (see the <a href="#version-matrix">version matrix</a>); otherwise they finish on their original resources and, for a CronJob, the next run gets the new values from the webhook. A standalone Job (<code>job: Ongoing</code>) has no next run, so in-place resize is its only correction.</p>
 <h3 id="bare-pods">Bare pods<a class="headerlink" href="#bare-pods" title="Permanent link">&para;</a></h3>
 <p>Bare pods opted in via <code>k8s.sustain.io/owner-name</code> (kind <code>Pod</code>) are the third member of that family, and the strongest case of it: no controller exists that could recreate an evicted bare pod, so eviction would not disrupt the workload — it would delete it. Under <code>pod: Ongoing</code> their running pods <strong>are</strong> resized in place, through the same <code>pods/resize</code> machinery; an in-place resize needs no controller behind it, and without it a long-running Airflow task would keep whatever it was admitted with for its entire life. Under <code>pod: OnCreate</code>, nothing is applied to a running pod at all and the recommendation reaches the identity's next pod through the webhook.</p>
-<p>Membership is decided by the grouping rule rather than a label selector, so a ReplicaSet-owned pod that happens to carry the mirrored <code>owner-name</code> label is never a member — the bare-pod counterpart of the ownerRef check protecting every other kind.</p>
-<p>The <code>restartPolicy</code> caveat bites hardest here. Airflow's <code>KubernetesPodOperator</code> creates <code>restartPolicy: Never</code> pods by default, and those are only fully covered from <strong>k8s ≥ 1.35</strong>; on 1.33/1.34 the resize is rejected per pod, logged, and skipped — never escalated to eviction.</p>
-<p>An in-place <strong>memory</strong> resize can restart the container, which for an Airflow task means losing in-flight work. Bare pods inherit that tradeoff from Job and CronJob rather than getting an exception from it: resizing the running pod is the only way to correct it after creation. Downsize suppression (<code>downsizeThreshold</code>) bounds how often it can fire, and <code>pod: OnCreate</code> opts out of it entirely. See <a href="../../guides/standalone-pods-and-grouping/">Standalone Pods &amp; Identity Grouping</a>.</p>
+<p>Membership is decided by the grouping rule rather than a label selector: a pod with no controller <code>ownerReference</code>, a valid <code>k8s.sustain.io/owner-name</code>, and a <code>k8s.sustain.io/policy</code> annotation matching the policy that claimed the group. A ReplicaSet-owned pod that carries the mirrored <code>owner-name</code> label is therefore never a member, and a pod opted into a different policy is logged and skipped.</p>
+<p>A container with <code>resizePolicy: RestartContainer</code> for memory restarts on a memory resize, which for a task means losing in-flight work (see <a href="#caveats">Caveats</a>). Use <code>pod: OnCreate</code> if that is not acceptable. See <a href="../../guides/standalone-pods-and-grouping/">Standalone Pods &amp; Identity Grouping</a>.</p>
 <h2 id="caveats">Caveats<a class="headerlink" href="#caveats" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Memory shrink may force restart.</strong> When a memory request is <strong>lowered</strong>, some kubelet versions return <code>Deferred</code> until the next container start because the cgroup cannot shrink while the workload is using more than the new limit. k8s-sustain accepts this — the new value lands on the next pod restart, no recycling needed.</li>
-<li><strong>Memory grow is always live.</strong> Increasing memory requests/limits is applied without restart on supported kernels.</li>
-<li><strong>CPU is always resizable in-place.</strong> No restart, no kubelet deferral.</li>
+<li><strong>Any resize can be deferred or infeasible.</strong> CPU and memory, up or down: the kubelet reports <code>Deferred</code> while the node lacks free capacity and <code>Infeasible</code> when the request exceeds what the node can ever offer. <code>Deferred</code> resizes are left to the kubelet; <code>Infeasible</code> ones fall back to eviction (except for the never-evicted kinds).</li>
+<li><strong>Memory limit decreases</strong> only complete once the container's usage is below the new limit; until then the resize stays in progress.</li>
+<li><strong><code>resizePolicy: RestartContainer</code></strong> on a container restarts it for that resource's resize. For Job, CronJob and bare pods that can discard in-flight work.</li>
 <li><strong>VPA conflicts.</strong> Running Vertical Pod Autoscaler alongside k8s-sustain on the same pods produces conflicting patches. Use the <code>k8s.sustain.io/policy</code> annotation to opt workloads in selectively, and exclude those workloads from VPA targets.</li>
 <li><strong>Resize status inspection:</strong></li>
 </ul>

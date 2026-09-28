@@ -971,35 +971,7 @@
   <span class="md-ellipsis">
     
   
-    Deployments & StatefulSets
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guides/daemonsets/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DaemonSets
+    Deployments, StatefulSets & DaemonSets
   
 
     
@@ -1708,6 +1680,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dashboard-exposure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard exposure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#serviceaccount" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1987,6 +1970,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dashboard-exposure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard exposure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#serviceaccount" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2184,6 +2178,7 @@ an auth proxy, basic auth with a private CA).</p>
 <p>This block configures k8s-sustain's <em>client</em>. The separate top-level
 <code>prometheus:</code> key configures the <a href="#prometheus-subchart">bundled Prometheus subchart</a>.</p>
 </div>
+<p>Flag semantics (rotation, conflicts, startup validation) are in the <a href="../cli/#prometheus-authentication-and-tls-flags">CLI reference</a>; this section covers only how the chart renders them.</p>
 <table>
 <thead>
 <tr>
@@ -2251,7 +2246,7 @@ an auth proxy, basic auth with a private CA).</p>
 <tr>
 <td><code>prometheusAuth.tls.caKey</code></td>
 <td><code>""</code></td>
-<td>Key holding the CA bundle that signs the Prometheus server certificate (<code>--prometheus-tls-ca-file</code>). Appended to the system trust store, never substituted for it.</td>
+<td>Key holding the CA bundle that signs the Prometheus server certificate (<code>--prometheus-tls-ca-file</code>).</td>
 </tr>
 <tr>
 <td><code>prometheusAuth.tls.caFile</code></td>
@@ -2261,7 +2256,7 @@ an auth proxy, basic auth with a private CA).</p>
 <tr>
 <td><code>prometheusAuth.tls.certKey</code></td>
 <td><code>""</code></td>
-<td>Key holding the client certificate for mTLS (<code>--prometheus-tls-cert-file</code>). Must be set with <code>keyKey</code>. The pair is re-read on every TLS handshake, so a renewed certificate in the Secret is used without a restart.</td>
+<td>Key holding the client certificate for mTLS (<code>--prometheus-tls-cert-file</code>). Must be set with <code>keyKey</code>.</td>
 </tr>
 <tr>
 <td><code>prometheusAuth.tls.certFile</code></td>
@@ -2286,7 +2281,7 @@ an auth proxy, basic auth with a private CA).</p>
 <tr>
 <td><code>prometheusAuth.tls.insecureSkipVerify</code></td>
 <td><code>false</code></td>
-<td>Disable server-certificate verification (<code>--prometheus-tls-insecure-skip-verify</code>). Debug only — it makes every credential above interceptable. Logs a loud warning at startup.</td>
+<td>Disable server-certificate verification (<code>--prometheus-tls-insecure-skip-verify</code>). Debug only.</td>
 </tr>
 </tbody>
 </table>
@@ -2369,6 +2364,11 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 <td>Enable leader election</td>
 </tr>
 <tr>
+<td><code>controller.leaderElectionID</code></td>
+<td><code>""</code></td>
+<td>Lease name for leader election (<code>--leader-election-id</code>); empty uses the binary default <code>k8s-sustain-leader-election</code>. Override when running several installs in one cluster.</td>
+</tr>
+<tr>
 <td><code>controller.reconcileInterval</code></td>
 <td><code>5m</code></td>
 <td>How often each matched Policy is re-evaluated (Prometheus re-queried, recommendations refreshed, stale pods recycled)</td>
@@ -2391,7 +2391,7 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 <tr>
 <td><code>controller.recommendationRetention</code></td>
 <td><code>168h</code></td>
-<td>How long a WorkloadRecommendation outlives a workload whose object has disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs). Not just a dashboard setting: it also decides whether a <em>recurring</em> ephemeral identity is rightsized at admission on its next run, so set it above the longest expected gap between runs (<code>168h</code> covers weekly batch). See <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>. The dashboard keeps showing retained entries as "inactive" rows until the window lapses. Set to <code>0s</code> to sweep them on the next reconcile instead.</td>
+<td>How long a WorkloadRecommendation outlives its departed workload; rendered into both the controller and webhook <code>--recommendation-retention</code>. See <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</td>
 </tr>
 <tr>
 <td><code>controller.prometheusMaxInflight</code></td>
@@ -2406,7 +2406,12 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 <tr>
 <td><code>controller.logLevel</code></td>
 <td><code>error</code></td>
-<td>Log level</td>
+<td>Log level. At <code>error</code>, the <code>info</code>-level recommendation logs used in recommend-only mode are dropped; set <code>info</code> to see them.</td>
+</tr>
+<tr>
+<td><code>controller.terminationGracePeriodSeconds</code></td>
+<td><code>30</code></td>
+<td>Pod termination grace period (template default; not set in <code>values.yaml</code>)</td>
 </tr>
 <tr>
 <td><code>controller.service.type</code></td>
@@ -2459,7 +2464,7 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">controller</span><span class="p">:</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
 <a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
@@ -2511,6 +2516,11 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 <td>Log level</td>
 </tr>
 <tr>
+<td><code>webhook.terminationGracePeriodSeconds</code></td>
+<td><code>30</code></td>
+<td>Pod termination grace period (template default; not set in <code>values.yaml</code>)</td>
+</tr>
+<tr>
 <td><code>webhook.failurePolicy</code></td>
 <td><code>Ignore</code></td>
 <td><code>Ignore</code> or <code>Fail</code></td>
@@ -2527,8 +2537,8 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 </tr>
 <tr>
 <td><code>webhook.certManager.enabled</code></td>
-<td><code>false</code></td>
-<td>Create a cert-manager <code>Certificate</code> resource</td>
+<td><code>true</code></td>
+<td>Create a cert-manager <code>Certificate</code> and inject the CA bundle. Requires cert-manager; set <code>false</code> and provide <code>tlsSecretName</code> + <code>caBundle</code> otherwise</td>
 </tr>
 <tr>
 <td><code>webhook.certManager.createIssuer</code></td>
@@ -2553,7 +2563,7 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 <tr>
 <td><code>webhook.startupProbe</code></td>
 <td>see below</td>
-<td>Startup probe timings. Suspends liveness and readiness until the webhook is actually listening. Same fixed endpoint.</td>
+<td>Startup probe timings. Suspends liveness and readiness until the webhook is listening. Same fixed endpoint.</td>
 </tr>
 <tr>
 <td><code>webhook.livenessProbe</code></td>
@@ -2582,36 +2592,16 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 </tr>
 </tbody>
 </table>
-<p><strong>The webhook's startup probe is not optional.</strong> The webhook builds an informer
-cache before its HTTPS listener starts, and that build waits up to two minutes
-for the <code>Policy</code> and <code>WorkloadRecommendation</code> CRDs to become servable — the
-fresh-install race where Helm has created the CRDs but the API server is not
-serving them yet. Nothing answers <code>/healthz</code> for that whole period, so the
-liveness probe alone would kill the container after
-<code>initialDelaySeconds + periodSeconds × failureThreshold</code> = 40s and the pod would
-end in <code>CrashLoopBackOff</code> on exactly the install the wait exists to survive.</p>
-<p>The startup probe's budget must therefore stay <strong>larger than that two-minute
-wait</strong> (<code>crdWaitTimeout</code> in <code>internal/k8s/client.go</code>):</p>
+<p><strong>Default webhook startup probe:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">webhook</span><span class="p">:</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">startupProbe</span><span class="p">:</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">      </span><span class="c1"># 5 + 5 × 36 = 185s &gt; 120s</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">      </span><span class="c1"># 5 + 5 × 36 = 185s</span>
 <a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="nt">timeoutSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">successThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
 <a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="nt">failureThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">36</span>
 </code></pre></div>
-<p>If you shorten it, shorten it to something still comfortably above two minutes.
-A Go unit test reads this value out of <code>values.yaml</code> and fails if the two sides
-drift apart.</p>
-<p>The template carries the same numbers as its own defaults, so the probe is
-rendered even when the release's values do not contain <code>webhook.startupProbe</code>
-at all — which is what a <code>helm upgrade --reuse-values</code> from a release predating
-this key produces, since <code>--reuse-values</code> never picks up defaults newly added
-to <code>values.yaml</code>. Overriding one field keeps the template defaults for the
-others. A second Go unit test reads that template copy and checks it against
-<code>crdWaitTimeout</code> in its own right, and fails if the two copies disagree — so
-raising the wait cannot leave the <code>--reuse-values</code> path silently under budget
-while the <code>values.yaml</code> side still passes.</p>
+<p>The webhook waits up to two minutes for its CRDs to become servable before it starts listening, so the startup probe budget must stay above 120s or a fresh install ends in <code>CrashLoopBackOff</code>. The template carries the same defaults, so the probe is rendered even under <code>helm upgrade --reuse-values</code>.</p>
 <p><strong>Default webhook resources:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">webhook</span><span class="p">:</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
@@ -2654,6 +2644,11 @@ while the <code>values.yaml</code> side still passes.</p>
 <td>Log level</td>
 </tr>
 <tr>
+<td><code>dashboard.terminationGracePeriodSeconds</code></td>
+<td><code>30</code></td>
+<td>Pod termination grace period (template default; not set in <code>values.yaml</code>)</td>
+</tr>
+<tr>
 <td><code>dashboard.corsAllowedOrigins</code></td>
 <td><code>[]</code></td>
 <td>Allowed CORS origins. Empty = same-origin only (the safe default). Set to <code>["https://your-grafana"]</code> to embed the dashboard cross-origin, or <code>["*"]</code> to allow all (not recommended).</td>
@@ -2667,6 +2662,11 @@ while the <code>values.yaml</code> side still passes.</p>
 <td><code>dashboard.service.port</code></td>
 <td><code>8090</code></td>
 <td>Service port</td>
+</tr>
+<tr>
+<td><code>dashboard.service.annotations</code></td>
+<td><code>{}</code></td>
+<td>Extra annotations for the dashboard Service</td>
 </tr>
 <tr>
 <td><code>dashboard.resources</code></td>
@@ -2704,11 +2704,75 @@ while the <code>values.yaml</code> side still passes.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">dashboard</span><span class="p">:</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10m</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
 <a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
 <a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span>
 <a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
 </code></pre></div>
+<hr />
+<h2 id="dashboard-exposure">Dashboard exposure<a class="headerlink" href="#dashboard-exposure" title="Permanent link">&para;</a></h2>
+<p>The dashboard has no authentication; expose it only behind something that adds it.</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ingress.enabled</code></td>
+<td><code>false</code></td>
+<td>Create an <code>Ingress</code> for the dashboard Service</td>
+</tr>
+<tr>
+<td><code>ingress.className</code></td>
+<td><code>""</code></td>
+<td><code>ingressClassName</code></td>
+</tr>
+<tr>
+<td><code>ingress.annotations</code></td>
+<td><code>{}</code></td>
+<td>Ingress annotations</td>
+</tr>
+<tr>
+<td><code>ingress.hosts</code></td>
+<td><code>dashboard.local</code>, path <code>/</code></td>
+<td>Hosts and paths, each routed to the dashboard Service port</td>
+</tr>
+<tr>
+<td><code>ingress.tls</code></td>
+<td><code>[]</code></td>
+<td>Standard Ingress <code>tls</code> entries</td>
+</tr>
+<tr>
+<td><code>httpRoute.enabled</code></td>
+<td><code>false</code></td>
+<td>Create a Gateway API <code>HTTPRoute</code> for the dashboard Service</td>
+</tr>
+<tr>
+<td><code>httpRoute.annotations</code></td>
+<td><code>{}</code></td>
+<td>HTTPRoute annotations</td>
+</tr>
+<tr>
+<td><code>httpRoute.parentRefs</code></td>
+<td><code>gateway</code> / <code>http</code></td>
+<td>Gateways the route attaches to</td>
+</tr>
+<tr>
+<td><code>httpRoute.hostnames</code></td>
+<td><code>[dashboard.local]</code></td>
+<td>Hostnames matched</td>
+</tr>
+<tr>
+<td><code>httpRoute.rules</code></td>
+<td><code>PathPrefix /</code></td>
+<td>Match rules; each is routed to the dashboard Service port</td>
+</tr>
+</tbody>
+</table>
 <hr />
 <h2 id="serviceaccount">ServiceAccount<a class="headerlink" href="#serviceaccount" title="Permanent link">&para;</a></h2>
 <table>
@@ -2790,9 +2854,29 @@ while the <code>values.yaml</code> side still passes.</p>
 <td>Extra labels added to the webhook <code>ServiceMonitor</code>. Same purpose as the controller variant.</td>
 </tr>
 <tr>
+<td><code>dashboard.serviceMonitor.enabled</code></td>
+<td><code>false</code></td>
+<td>Create a Prometheus Operator <code>ServiceMonitor</code> for the dashboard's <code>/metrics</code> (served on its HTTP port)</td>
+</tr>
+<tr>
+<td><code>dashboard.serviceMonitor.interval</code></td>
+<td><code>30s</code></td>
+<td>Scrape interval (dashboard)</td>
+</tr>
+<tr>
+<td><code>dashboard.serviceMonitor.scrapeTimeout</code></td>
+<td><code>10s</code></td>
+<td>Scrape timeout (dashboard)</td>
+</tr>
+<tr>
+<td><code>dashboard.serviceMonitor.additionalLabels</code></td>
+<td><code>{}</code></td>
+<td>Extra labels added to the dashboard <code>ServiceMonitor</code>. Same purpose as the controller variant.</td>
+</tr>
+<tr>
 <td><code>prometheusRule.enabled</code></td>
 <td><code>false</code></td>
-<td>Create a Prometheus Operator <code>PrometheusRule</code> holding the k8s-sustain recording rules. Leave disabled when using the bundled <code>prometheus</code> subchart — the same rules are already embedded in <code>prometheus.server.serverFiles</code>, and enabling both would duplicate the series.</td>
+<td>Create a Prometheus Operator <code>PrometheusRule</code> holding the k8s-sustain recording rules. Leave disabled when using the bundled <code>prometheus</code> subchart — the same rules are already embedded in <code>prometheus.serverFiles</code>, and enabling both would duplicate the series.</td>
 </tr>
 <tr>
 <td><code>prometheusRule.additionalLabels</code></td>
@@ -2820,7 +2904,7 @@ while the <code>values.yaml</code> side still passes.</p>
 <tr>
 <td><code>installCRDs</code></td>
 <td><code>true</code></td>
-<td>Install the <code>Policy</code> CRD as part of the chart</td>
+<td>Install the <code>Policy</code> and <code>WorkloadRecommendation</code> CRDs as part of the chart. See <a href="../../getting-started/installation/">Installation</a> for uninstall behaviour.</td>
 </tr>
 </tbody>
 </table>
@@ -2877,7 +2961,23 @@ chart's <code>k8s-sustain.fullname</code> helper, ...):</p>
 </code></pre></div>
 <hr />
 <h2 id="prometheus-subchart">Prometheus subchart<a class="headerlink" href="#prometheus-subchart" title="Permanent link">&para;</a></h2>
-<p>Pass any value supported by the <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">prometheus chart</a> under the <code>prometheus:</code> key. Recording rules for k8s-sustain are embedded in <code>prometheus.server.serverFiles</code> by default.</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>prometheus.enabled</code></td>
+<td><code>true</code></td>
+<td>Deploy the bundled Prometheus (with kube-state-metrics). Disable to bring your own and set <code>prometheusAddress</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Pass any value supported by the <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">prometheus chart</a> under the <code>prometheus:</code> key. Recording rules for k8s-sustain are embedded in <code>prometheus.serverFiles</code> by default.</p>
 <p>Common overrides:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">prometheus</span><span class="p">:</span>
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
