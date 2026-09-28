@@ -1982,6 +1982,7 @@
 <li>Existing running pods are <strong>not</strong> affected — only newly created pods receive the recommendation</li>
 <li>If the webhook is unavailable, the pod is admitted without resource injection (<code>failurePolicy: Ignore</code>)</li>
 <li>The controller still computes a recommendation for <code>OnCreate</code> workloads on its regular reconcile cycle and caches it in a <code>WorkloadRecommendation</code> object — this keeps the workload visible on the dashboard and is what the webhook injects at admission (the webhook has no other source of recommendations), but the controller <strong>never</strong> recycles, resizes, or otherwise mutates the workload in this mode</li>
+<li>The dashboard reports pods still waiting for a rollout to pick up the recommendation as drift (stale pods)</li>
 </ul>
 <p><strong>Best for:</strong></p>
 <ul>

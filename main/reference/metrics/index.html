@@ -1743,10 +1743,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#k8s_sustain_workload_drift_ratio" class="md-nav__link">
+  <a href="#k8s_sustain_workload_pods" class="md-nav__link">
     <span class="md-ellipsis">
       
-        k8s_sustain_workload_drift_ratio
+        k8s_sustain_workload_pods
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#k8s_sustain_workload_stale_pods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        k8s_sustain_workload_stale_pods
       
     </span>
   </a>
@@ -2133,10 +2144,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#k8s_sustain_workload_drift_ratio" class="md-nav__link">
+  <a href="#k8s_sustain_workload_pods" class="md-nav__link">
     <span class="md-ellipsis">
       
-        k8s_sustain_workload_drift_ratio
+        k8s_sustain_workload_pods
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#k8s_sustain_workload_stale_pods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        k8s_sustain_workload_stale_pods
       
     </span>
   </a>
@@ -2508,9 +2530,14 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.</
 </thead>
 <tbody>
 <tr>
-<td><code>k8s_sustain_workload_drift_ratio</code></td>
+<td><code>k8s_sustain_workload_pods</code></td>
 <td>gauge</td>
-<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>resource</code></td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code></td>
+</tr>
+<tr>
+<td><code>k8s_sustain_workload_stale_pods</code></td>
+<td>gauge</td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code></td>
 </tr>
 <tr>
 <td><code>k8s_sustain_workload_retry_state</code></td>
@@ -2626,8 +2653,10 @@ this counter — they are observed by the batch-prefetch counters above and by
   rejected). Distinct from <code>nodata</code>, which is a healthy Prometheus with
   nothing to say for that identity.</li>
 </ul>
-<h4 id="k8s_sustain_workload_drift_ratio"><code>k8s_sustain_workload_drift_ratio</code><a class="headerlink" href="#k8s_sustain_workload_drift_ratio" title="Permanent link">&para;</a></h4>
-<p>Largest drift ratio (recommended / current) across the workload's containers, per resource. <code>1.0</code> means no drift; <code>&gt; 1.0</code> means under-provisioned (recommendation higher than current); <code>&lt; 1.0</code> means over-provisioned. The controller pre-aggregates with <code>max(abs(1 - ratio))</code> across containers at emit time so this gauge stays one series per (workload, resource) — i.e. constant cardinality regardless of how many containers a pod has. The signed ratio is preserved (not the absolute value) so consumers can still distinguish over- from under-provisioning.</p>
+<h4 id="k8s_sustain_workload_pods"><code>k8s_sustain_workload_pods</code><a class="headerlink" href="#k8s_sustain_workload_pods" title="Permanent link">&para;</a></h4>
+<p>Number of live pods owned by the workload, evaluated on the last reconcile: not terminating and not in phase <code>Succeeded</code> or <code>Failed</code>. Emitted after each apply pass (in-place resize or eviction). CronJob and Job workloads report running job pods only; bare pods report their own live pods. For <code>OnCreate</code> workloads the count is measured with a dry run that touches no pod. The series is absent in recommend-only mode (flag or policy) and before the first recommendation, and is left unchanged when a pass errors. It is removed when the workload stops being a target of its policy: the workload (for bare pods, its last pod object) is deleted or opted out, a standalone Job completes or fails, or the Policy is deleted. Finished bare pods that still exist are no longer live, so they report <code>0</code>.</p>
+<h4 id="k8s_sustain_workload_stale_pods"><code>k8s_sustain_workload_stale_pods</code><a class="headerlink" href="#k8s_sustain_workload_stale_pods" title="Permanent link">&para;</a></h4>
+<p>Subset of <code>k8s_sustain_workload_pods</code> whose requests or limits still differ from the recommendation beyond the policy's <code>downsizeThreshold</code> after the apply pass, and that this pass neither resized nor evicted. <code>Pending</code> pods are counted and can be stale: the pass does not resize non-<code>Running</code> pods in place. Zero means the recommendation has reached every pod. For <code>OnCreate</code> workloads it shows pods awaiting a rollout. Same lifecycle as <code>k8s_sustain_workload_pods</code>. This is what the dashboard shows as <strong>Drift</strong> (<code>stale/total</code>).</p>
 <h4 id="k8s_sustain_autoscaler_target_configured"><code>k8s_sustain_autoscaler_target_configured</code><a class="headerlink" href="#k8s_sustain_autoscaler_target_configured" title="Permanent link">&para;</a></h4>
 <p>Configured autoscaler <code>averageUtilization</code> (%) for a workload's resource trigger.
 <code>kind</code> is <code>HPA</code> or <code>KEDA</code>; <code>resource</code> is <code>cpu</code> or <code>memory</code>.</p>
@@ -2770,7 +2799,7 @@ time series, not thousands.</p>
 <p><code>k8s_sustain:cluster_cpu_headroom_breakdown</code> and
 <code>k8s_sustain:cluster_memory_headroom_breakdown</code> with label <code>segment={used,idle,free}</code>.</p>
 <h3 id="workload-signals-new">Workload signals (new)<a class="headerlink" href="#workload-signals-new" title="Permanent link">&para;</a></h3>
-<p><code>k8s_sustain:workload_oom_24h</code> (per-container OOM count, labels include <code>container</code>), <code>k8s_sustain:workload_drifted</code> (boolean: drift &gt; 10%).</p>
+<p><code>k8s_sustain:workload_oom_24h</code> (per-container OOM count, labels include <code>container</code>), <code>k8s_sustain:workload_drifted</code> (boolean: 1 when at least one pod is stale).</p>
 
 
 
