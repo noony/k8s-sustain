@@ -46,7 +46,8 @@ shipped in the Helm chart. Use these to build alerts or custom Grafana boards.
 
 | Name | Type | Labels |
 |------|------|--------|
-| `k8s_sustain_workload_drift_ratio`      | gauge   | `namespace`, `owner_kind`, `owner_name`, `resource` |
+| `k8s_sustain_workload_pods`             | gauge   | `namespace`, `owner_kind`, `owner_name` |
+| `k8s_sustain_workload_stale_pods`       | gauge   | `namespace`, `owner_kind`, `owner_name` |
 | `k8s_sustain_workload_retry_state`      | gauge   | `namespace`, `owner_kind`, `owner_name`, `reason` |
 | `k8s_sustain_workload_retry_attempts`   | counter | `namespace`, `owner_kind`, `owner_name` |
 | `k8s_sustain_policy_workload_count`     | gauge   | `policy` |
@@ -117,9 +118,13 @@ this counter — they are observed by the batch-prefetch counters above and by
   rejected). Distinct from `nodata`, which is a healthy Prometheus with
   nothing to say for that identity.
 
-#### `k8s_sustain_workload_drift_ratio`
+#### `k8s_sustain_workload_pods`
 
-Largest drift ratio (recommended / current) across the workload's containers, per resource. `1.0` means no drift; `> 1.0` means under-provisioned (recommendation higher than current); `< 1.0` means over-provisioned. The controller pre-aggregates with `max(abs(1 - ratio))` across containers at emit time so this gauge stays one series per (workload, resource) — i.e. constant cardinality regardless of how many containers a pod has. The signed ratio is preserved (not the absolute value) so consumers can still distinguish over- from under-provisioning.
+Number of live pods owned by the workload, evaluated on the last reconcile: not terminating and not in phase `Succeeded` or `Failed`. Emitted after each apply pass (in-place resize or eviction). CronJob and Job workloads report running job pods only; bare pods report their own live pods. For `OnCreate` workloads the count is measured with a dry run that touches no pod. The series is absent in recommend-only mode (flag or policy) and before the first recommendation, and is left unchanged when a pass errors. It is removed when the workload stops being a target of its policy: the workload (for bare pods, its last pod object) is deleted or opted out, a standalone Job completes or fails, or the Policy is deleted. Finished bare pods that still exist are no longer live, so they report `0`.
+
+#### `k8s_sustain_workload_stale_pods`
+
+Subset of `k8s_sustain_workload_pods` whose requests or limits still differ from the recommendation beyond the policy's `downsizeThreshold` after the apply pass, and that this pass neither resized nor evicted. `Pending` pods are counted and can be stale: the pass does not resize non-`Running` pods in place. Zero means the recommendation has reached every pod. For `OnCreate` workloads it shows pods awaiting a rollout. Same lifecycle as `k8s_sustain_workload_pods`. This is what the dashboard shows as **Drift** (`stale/total`).
 
 #### `k8s_sustain_autoscaler_target_configured`
 
@@ -224,4 +229,4 @@ Per-workload (max across replicas — used for per-workload dashboard views):
 
 ### Workload signals (new)
 
-`k8s_sustain:workload_oom_24h` (per-container OOM count, labels include `container`), `k8s_sustain:workload_drifted` (boolean: drift > 10%).
+`k8s_sustain:workload_oom_24h` (per-container OOM count, labels include `container`), `k8s_sustain:workload_drifted` (boolean: 1 when at least one pod is stale).

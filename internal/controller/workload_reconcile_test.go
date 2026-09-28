@@ -566,3 +566,113 @@ func TestHandleStepError_ConcurrentSuccess_NoPanic(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func stalePodsLabels(ns, name string) map[string]string {
+	return map[string]string{"namespace": ns, "owner_kind": "Deployment", "owner_name": name}
+}
+
+func webPod(cpu string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web-pod", Labels: map[string]string{"app": "web"}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name:      "app",
+			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)}},
+		}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+func TestReconcileWorkload_EmitsPodCountsAfterApply(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+	r := reconcilerWithProm(t, server, true, webPod("50m"))
+	tgt := deploymentTarget("default", "web")
+	policy := policyForReconcileWorkload(t, "p")
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
+		t.Fatal(err)
+	}
+	if got := gaugeValue(t, "k8s_sustain_workload_pods", stalePodsLabels("default", "web")); got != 1 {
+		t.Errorf("pods = %v, want 1", got)
+	}
+	if got := gaugeValue(t, "k8s_sustain_workload_stale_pods", stalePodsLabels("default", "web")); got != 0 {
+		t.Errorf("stale = %v, want 0 after in-place resize", got)
+	}
+}
+
+func TestReconcileWorkload_OnCreate_CountsStaleWithoutTouchingPods(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+	r := reconcilerWithProm(t, server, true, webPod("999m"))
+	tgt := deploymentTarget("default", "web")
+	tgt.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
+	policy := policyForReconcileWorkload(t, "p")
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
+		t.Fatal(err)
+	}
+	if got := gaugeValue(t, "k8s_sustain_workload_stale_pods", stalePodsLabels("default", "web")); got != 1 {
+		t.Errorf("stale = %v, want 1", got)
+	}
+	var got corev1.Pod
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "web-pod"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if q := got.Spec.Containers[0].Resources.Requests[corev1.ResourceCPU]; q.String() != "999m" {
+		t.Errorf("OnCreate must not resize, cpu = %s", q.String())
+	}
+}
+
+func TestReconcileWorkload_RecommendOnly_DeletesPodCounts(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+	EmitWorkloadPods("default", "Deployment", "web", workload.PodCounts{Total: 3, Stale: 3})
+	r := reconcilerWithProm(t, server, false, webPod("999m"))
+	r.RecommendOnly = true
+	tgt := deploymentTarget("default", "web")
+	policy := policyForReconcileWorkload(t, "p")
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
+		t.Fatal(err)
+	}
+	if workloadStalePods.DeleteLabelValues("default", "Deployment", "web") {
+		t.Error("recommend-only must delete the stale-pods series")
+	}
+}
+
+// A failed OnCreate dry run must not enter retry backoff: backoff skips the
+// compute phase and would freeze the WorkloadRecommendation the webhook reads.
+func TestReconcileWorkload_OnCreate_DryRunErrorIsNotAStepFailure(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+	r := reconcilerWithProm(t, server, true, webPod("999m"))
+	wrapped := interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*corev1.PodList); ok {
+				return apierrors.NewServiceUnavailable("apiserver unavailable")
+			}
+			return c.List(ctx, list, opts...)
+		},
+	})
+	r.Client = wrapped
+	r.patcher = workload.New(wrapped, true)
+	tgt := deploymentTarget("default", "web")
+	tgt.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
+	policy := policyForReconcileWorkload(t, "p")
+
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
+		t.Fatalf("OnCreate dry-run failure must not fail the step, got %v", err)
+	}
+	if state := r.retries.getState(tgt.key()); state != nil && state.attempts != 0 {
+		t.Errorf("OnCreate dry-run failure must not enter retry backoff, attempts = %d", state.attempts)
+	}
+	rec := r.recorder.(*events.FakeRecorder)
+	for {
+		select {
+		case e := <-rec.Events:
+			if strings.Contains(e, "Warning") {
+				t.Errorf("unexpected Warning event: %q", e)
+			}
+			continue
+		default:
+		}
+		break
+	}
+}

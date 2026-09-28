@@ -307,3 +307,79 @@ func TestReconcileWorkload_JobResizesRunningPod(t *testing.T) {
 		t.Error("controller must never evict a standalone job pod")
 	}
 }
+
+func TestReconcileWorkload_OnCreateJobCountsWithoutResizing(t *testing.T) {
+	server := promServerForReconcile(t)
+	defer server.Close()
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "oncreate-batch", UID: "oncreate-job-uid"},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name: "app",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
+					},
+				}}},
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:       "default",
+			Name:            "oncreate-batch-abc",
+			Labels:          map[string]string{jobPodNameLabel: "oncreate-batch"},
+			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), UID: "oncreate-job-uid", Kind: "Job", Name: "oncreate-batch"}},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
+			},
+		}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+
+	r := reconcilerWithProm(t, server, true, pod)
+	var podResized, evicted bool
+	r.Client = fake.NewClientBuilder().
+		WithScheme(r.Scheme).
+		WithStatusSubresource(&sustainv1alpha1.Policy{}).
+		WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					podResized = true
+				}
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					evicted = true
+				}
+				return nil
+			},
+		}).
+		Build()
+	r.patcher = workload.New(r.Client, true)
+
+	target := targetFromObject(job, "Job")
+	target.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
+	policy := policyForReconcileWorkload(t, "p")
+
+	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(&target)); err != nil {
+		t.Fatalf("reconcileWorkload: %v", err)
+	}
+	if podResized || evicted {
+		t.Fatalf("OnCreate must not touch running job pods: resized=%v evicted=%v", podResized, evicted)
+	}
+	labels := map[string]string{"namespace": "default", "owner_kind": "Job", "owner_name": "oncreate-batch"}
+	if got := gaugeValue(t, "k8s_sustain_workload_pods", labels); got != 1 {
+		t.Errorf("pods = %v, want 1", got)
+	}
+	if got := gaugeValue(t, "k8s_sustain_workload_stale_pods", labels); got != 1 {
+		t.Errorf("stale = %v, want 1", got)
+	}
+}

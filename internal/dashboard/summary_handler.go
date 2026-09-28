@@ -242,7 +242,7 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 		recordErr(err)
 	})
 	wg.Go(func() {
-		v, err := collectAttention(ctx, s.PromClient, promclient.MetricWorkloadDrifted+" == 1", "drift")
+		v, err := collectAttention(ctx, s.PromClient, fmt.Sprintf("max by (namespace, owner_kind, owner_name) (%s) > 0", promclient.MetricWorkloadStalePods), "drift")
 		driftRows = v
 		recordErr(err)
 	})

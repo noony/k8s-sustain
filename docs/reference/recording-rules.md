@@ -358,14 +358,10 @@ Both paths are tagged with a distinct `_src` label so they survive the `or` unio
 ### `k8s_sustain:workload_drifted`
 
 ```promql
-(
-  max by (namespace, owner_kind, owner_name) (
-    abs(1 - k8s_sustain_workload_drift_ratio)
-  ) > 0.10
-) * 1
+max by (namespace, owner_kind, owner_name) (k8s_sustain_workload_stale_pods > bool 0)
 ```
 
-Boolean (0/1) per workload indicating drift > 10% between current spec and recommendation.
+Boolean (0/1) per workload: 1 when at least one live pod is not yet running the recommendation (`k8s_sustain_workload_stale_pods > 0`).
 
 ### `k8s_sustain:workload_cpu_usage:cores`
 

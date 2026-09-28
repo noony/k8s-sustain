@@ -408,7 +408,8 @@ export interface CoordinationFactors {
 
 export interface WorkloadDetailSnapshot {
   updateMode?: string
-  driftPercent: number
+  stalePods: number
+  totalPods: number
   oom24h: number
   blocked?: { reason: string; attempts: number; nextRetryAt?: string; lastError?: string }
   recentEvents: ActivityItem[]
@@ -417,7 +418,8 @@ export interface WorkloadDetailSnapshot {
 
 export interface WorkloadItemV2 extends WorkloadItem {
   riskState: 'safe' | 'drifted' | 'at-risk' | 'blocked'
-  driftPercent: number
+  stalePods: number
+  totalPods: number
   autoscalerPresent: boolean
   coordinationFactors?: CoordinationFactors
   active: boolean

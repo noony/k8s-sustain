@@ -21,7 +21,8 @@ type workloadRow struct {
 	Name                string               `json:"name"`
 	Containers          []containerStatus    `json:"containers"`
 	RiskState           string               `json:"riskState"` // safe | drifted | at-risk | blocked
-	DriftPercent        float64              `json:"driftPercent"`
+	StalePods           int                  `json:"stalePods"`
+	TotalPods           int                  `json:"totalPods"`
 	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
 	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
 	Active              bool                 `json:"active"`
@@ -32,7 +33,8 @@ func (r *workloadRow) key() string { return workloadKey(r.Namespace, r.Kind, r.N
 
 func (r *workloadRow) setSignals(sig workloadSignals) {
 	r.RiskState = sig.RiskState
-	r.DriftPercent = sig.DriftPercent
+	r.StalePods = sig.StalePods
+	r.TotalPods = sig.TotalPods
 	r.AutoscalerPresent = sig.AutoscalerPresent
 	r.CoordinationFactors = sig.CoordinationFactors
 }

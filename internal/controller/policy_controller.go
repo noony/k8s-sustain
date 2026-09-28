@@ -89,6 +89,8 @@ type PolicyReconciler struct {
 	recorder events.EventRecorder
 	patcher  *workload.Patcher
 	retries  *retryTracker
+
+	podGauges podGaugeTracker
 }
 
 // LiveOOMConfig groups the inputs from the OOM Pod watcher. MaxAge zero means
@@ -185,6 +187,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 			// Ordered after cleanup so a retried deletion re-emits nothing.
 			DeletePolicyMetrics(policy.Name)
+			r.podGauges.forget(policy.Name)
 			r.recorder.Eventf(policy, nil, corev1.EventTypeNormal, "Cleanup", "Cleanup", "Policy deleted, removing finalizer.")
 			controllerutil.RemoveFinalizer(policy, finalizerName)
 			if err := r.Update(ctx, policy); err != nil {
@@ -215,6 +218,12 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
 	}
 	logger.Info("collected workload targets", "count", len(targets))
+
+	gaugeKeys := make([]podGaugeKey, 0, len(targets))
+	for i := range targets {
+		gaugeKeys = append(gaugeKeys, podGaugeKey{Namespace: targets[i].Namespace, Kind: targets[i].Kind, Name: targets[i].Name})
+	}
+	r.podGauges.observe(policy.Name, gaugeKeys)
 
 	targetsByIdentity, discoveryFailures := r.discover(ctx, policy, targets)
 

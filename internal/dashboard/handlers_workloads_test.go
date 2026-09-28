@@ -38,10 +38,11 @@ func TestAllWorkloadsIncludesRiskDriftHPA(t *testing.T) {
 	srv := newTestServerWithDeployment(t, "default", "web")
 	srv.PromClient = &fakePromClient{
 		byLabels: map[string]map[string]float64{
-			"sum by (namespace, owner_kind, owner_name) (k8s_sustain:workload_oom_24h)":              {"default|Deployment|web": 2},
-			"max by (namespace, owner_kind, owner_name) (abs(1 - k8s_sustain_workload_drift_ratio))": {"default|Deployment|web": 0.6},
-			"k8s_sustain_workload_retry_state == 1":                                                  {},
-			"k8s_sustain_autoscaler_present":                                                         {"default|Deployment|web": 1},
+			"sum by (namespace, owner_kind, owner_name) (k8s_sustain:workload_oom_24h)":    {"default|Deployment|web": 2},
+			"max by (namespace, owner_kind, owner_name) (k8s_sustain_workload_stale_pods)": {"default|Deployment|web": 2},
+			"max by (namespace, owner_kind, owner_name) (k8s_sustain_workload_pods)":       {"default|Deployment|web": 5},
+			"k8s_sustain_workload_retry_state == 1":                                        {},
+			"k8s_sustain_autoscaler_present":                                               {"default|Deployment|web": 1},
 			"k8s_sustain_coordination_factor": {
 				"default|Deployment|web|cpu|overhead":    1.2,
 				"default|Deployment|web|memory|overhead": 1.1,
@@ -53,10 +54,11 @@ func TestAllWorkloadsIncludesRiskDriftHPA(t *testing.T) {
 	srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads", nil))
 	var resp struct {
 		Items []struct {
-			Name                string  `json:"name"`
-			RiskState           string  `json:"riskState"`
-			DriftPercent        float64 `json:"driftPercent"`
-			AutoscalerPresent   bool    `json:"autoscalerPresent"`
+			Name                string `json:"name"`
+			RiskState           string `json:"riskState"`
+			StalePods           int    `json:"stalePods"`
+			TotalPods           int    `json:"totalPods"`
+			AutoscalerPresent   bool   `json:"autoscalerPresent"`
 			CoordinationFactors *struct {
 				Enabled        bool    `json:"enabled"`
 				CPUOverhead    float64 `json:"cpuOverhead"`
@@ -73,6 +75,9 @@ func TestAllWorkloadsIncludesRiskDriftHPA(t *testing.T) {
 	if item.RiskState != "at-risk" || item.AutoscalerPresent != true {
 		t.Fatalf("unexpected row: %+v", item)
 	}
+	if item.StalePods != 2 || item.TotalPods != 5 {
+		t.Errorf("StalePods/TotalPods = %d/%d, want 2/5", item.StalePods, item.TotalPods)
+	}
 	if item.CoordinationFactors == nil {
 		t.Fatalf("expected CoordinationFactors to be populated")
 	}
@@ -87,6 +92,40 @@ func TestAllWorkloadsIncludesRiskDriftHPA(t *testing.T) {
 	}
 	if item.CoordinationFactors.CPUReplica != 0.9 {
 		t.Errorf("CoordinationFactors.CPUReplica = %v, want 0.9", item.CoordinationFactors.CPUReplica)
+	}
+}
+
+func TestAllWorkloadsRiskStateFromStalePods(t *testing.T) {
+	cases := []struct {
+		name  string
+		stale float64
+		want  string
+	}{
+		{"stale pods drift", 2, "drifted"},
+		{"no stale pods safe", 0, "safe"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestServerWithDeployment(t, "default", "web")
+			srv.PromClient = &fakePromClient{
+				byLabels: map[string]map[string]float64{
+					"max by (namespace, owner_kind, owner_name) (k8s_sustain_workload_stale_pods)": {"default|Deployment|web": tc.stale},
+					"max by (namespace, owner_kind, owner_name) (k8s_sustain_workload_pods)":       {"default|Deployment|web": 5},
+				},
+			}
+			rec := httptest.NewRecorder()
+			srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads", nil))
+			var resp struct {
+				Items []struct {
+					RiskState string `json:"riskState"`
+					StalePods int    `json:"stalePods"`
+				} `json:"items"`
+			}
+			decodeEnvelopeData(t, rec.Body, &resp)
+			if len(resp.Items) != 1 || resp.Items[0].RiskState != tc.want || resp.Items[0].StalePods != int(tc.stale) {
+				t.Fatalf("got %+v, want risk %s stale %v", resp.Items, tc.want, tc.stale)
+			}
+		})
 	}
 }
 

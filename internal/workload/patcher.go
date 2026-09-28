@@ -45,6 +45,52 @@ type recycleOptions struct {
 	tol               Tolerance
 	observe           func(resource string)
 	ignoreSafeToEvict bool
+	counts            *PodCounts
+	dryRun            bool
+}
+
+// PodCounts reports live pods still differing from the recommendation after a
+// pass (Stale) out of all live pods owned by the workload (Total).
+type PodCounts struct {
+	Total int
+	Stale int
+}
+
+// WithPodCounts writes pod counts to c when the call returns a nil error.
+func WithPodCounts(c *PodCounts) RecycleOption {
+	return func(o *recycleOptions) { o.counts = c }
+}
+
+// WithDryRun lists and evaluates pods exactly like a real pass but never
+// mutates them; only meaningful combined with WithPodCounts.
+func WithDryRun() RecycleOption {
+	return func(o *recycleOptions) { o.dryRun = true }
+}
+
+// ApplyCounts writes c through any WithPodCounts option in opts, for callers
+// that short-circuit before reaching the patcher.
+func ApplyCounts(opts []RecycleOption, c PodCounts) {
+	if o := newRecycleOptions(opts); o.counts != nil {
+		*o.counts = c
+	}
+}
+
+func countable(pod *corev1.Pod) bool {
+	return pod.DeletionTimestamp == nil && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed
+}
+
+func countPods(pods []*corev1.Pod, recs map[string]ContainerRecommendation, tol Tolerance, fixed map[types.UID]bool) PodCounts {
+	var pc PodCounts
+	for _, pod := range pods {
+		if !countable(pod) {
+			continue
+		}
+		pc.Total++
+		if !fixed[pod.UID] && podIsStale(pod, ClampRecsToTolerance(podContainers(pod), recs, tol)) {
+			pc.Stale++
+		}
+	}
+	return pc
 }
 
 func newRecycleOptions(opts []RecycleOption) recycleOptions {
@@ -160,10 +206,16 @@ func (p *Patcher) RecyclePods(ctx context.Context, target TargetWorkload, namesp
 func (p *Patcher) ResizePodsInPlace(ctx context.Context, pods []*corev1.Pod, recs map[string]ContainerRecommendation, opts ...RecycleOption) (int, error) {
 	o := newRecycleOptions(opts)
 	logger := log.FromContext(ctx)
-	if !p.inPlace {
-		logger.V(1).Info("in-place resize disabled on this cluster; deferring to next pod creation via webhook")
+	if !p.inPlace || o.dryRun {
+		if !p.inPlace {
+			logger.V(1).Info("in-place resize disabled on this cluster; deferring to next pod creation via webhook")
+		}
+		if o.counts != nil {
+			*o.counts = countPods(pods, recs, o.tol, nil)
+		}
 		return 0, nil
 	}
+	fixed := map[types.UID]bool{}
 
 	var errs []error
 	resized, processed, skipped := 0, 0, 0
@@ -184,11 +236,16 @@ func (p *Patcher) ResizePodsInPlace(ctx context.Context, pods []*corev1.Pod, rec
 		}
 		if applied {
 			resized++
+			fixed[pod.UID] = true
 		}
 		processed++
 	}
 	logger.Info("in-place resize pass complete", "processed", processed, "skipped", skipped, "resized", resized, "errors", len(errs))
-	return resized, errors.Join(errs...)
+	err := errors.Join(errs...)
+	if err == nil && o.counts != nil {
+		*o.counts = countPods(pods, recs, o.tol, fixed)
+	}
+	return resized, err
 }
 
 // unapplyStrategy decides what happens when an in-place resize cannot be
@@ -321,7 +378,7 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 				return 0, fmt.Errorf("resolving owner of pod %s: %w", pod.Name, err)
 			}
 			if !owned {
-				logger.Info("skipping pod matching selector but not owned by target workload",
+				logger.V(1).Info("skipping pod matching selector but not owned by target workload",
 					"pod", pod.Name, "targetKind", target.Kind, "targetName", target.Name)
 				continue
 			}
@@ -329,6 +386,13 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 		pods = append(pods, pod)
 	}
 	sortPodsForRecycle(pods)
+	if o.dryRun {
+		if o.counts != nil {
+			*o.counts = countPods(pods, recs, o.tol, nil)
+		}
+		return 0, nil
+	}
+	fixed := map[types.UID]bool{}
 
 	var errs []error
 	changed, processed, skipped := 0, 0, 0
@@ -371,6 +435,7 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 		processed++
 		if applied || evicted {
 			changed++
+			fixed[pod.UID] = true
 		}
 		if !evicted {
 			continue
@@ -382,7 +447,11 @@ func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namesp
 		}
 	}
 	logger.Info("recycle pass complete", "processed", processed, "skipped", skipped, "changed", changed, "errors", len(errs), "strategy", strategy)
-	return changed, errors.Join(errs...)
+	err := errors.Join(errs...)
+	if err == nil && o.counts != nil {
+		*o.counts = countPods(pods, recs, o.tol, fixed)
+	}
+	return changed, err
 }
 
 // patchPodInPlace resizes a pod in place, falling back to eviction when the

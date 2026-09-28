@@ -433,8 +433,8 @@ function renderYaml(p: typeof policy.value): string {
                   Name<span v-html="sortArrow('name')"></span>
                 </th>
                 <th>Risk</th>
-                <th class="sort-header" @click="sort('driftPercent')">
-                  Drift<span v-html="sortArrow('driftPercent')"></span>
+                <th class="sort-header" @click="sort('stalePods')">
+                  Drift<span v-html="sortArrow('stalePods')"></span>
                 </th>
                 <th>Containers</th>
                 <th>CPU Req</th>
@@ -464,7 +464,9 @@ function renderYaml(p: typeof policy.value): string {
                 </td>
                 <td><RiskBadge :state="w.riskState" /></td>
                 <td>
-                  <code v-if="w.driftPercent">{{ w.driftPercent.toFixed(1) }}%</code
+                  <code v-if="w.stalePods">{{
+                    w.totalPods ? `${w.stalePods}/${w.totalPods}` : w.stalePods
+                  }}</code
                   ><span v-else style="color: var(--text-dim)">-</span>
                 </td>
                 <td style="color: var(--text-dim)">

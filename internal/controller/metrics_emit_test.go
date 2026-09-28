@@ -57,12 +57,6 @@ func TestEmitWorkloadMetricsSetsExpectedValues(t *testing.T) {
 	if cpu != 0.25 {
 		t.Errorf("cpu rec: got %v want 0.25", cpu)
 	}
-	driftCPU := gaugeValue(t, "k8s_sustain_workload_drift_ratio", map[string]string{
-		"namespace": "default", "owner_kind": "Deployment", "owner_name": "web", "resource": "cpu",
-	})
-	if driftCPU != 0.5 {
-		t.Errorf("cpu drift: got %v want 0.5 (rec/current)", driftCPU)
-	}
 }
 
 func gaugeValue(t *testing.T, name string, labels map[string]string) float64 {
@@ -338,12 +332,6 @@ func TestEmitWorkloadFromRecs_HappyPath(t *testing.T) {
 	}); got != 0.25 {
 		t.Errorf("recommended cpu = %v, want 0.25", got)
 	}
-	// drift ratio cpu = 0.25 / 0.5 = 0.5 (workload-level, max across containers)
-	if got := gaugeValue(t, "k8s_sustain_workload_drift_ratio", map[string]string{
-		"namespace": ns, "owner_kind": kind, "owner_name": name, "resource": "cpu",
-	}); got != 0.5 {
-		t.Errorf("cpu drift = %v, want 0.5", got)
-	}
 }
 
 // With no recommendation on any container the emitter must do nothing, or
@@ -470,5 +458,21 @@ func TestDeletePolicyMetricsLeavesOtherPoliciesAlone(t *testing.T) {
 	if got := gaugeValue(t, "k8s_sustain_policy_batch_requested_count",
 		map[string]string{"policy": survivor}); got != 11 {
 		t.Errorf("survivor batch_requested = %v, want 11", got)
+	}
+}
+
+func TestEmitWorkloadPods_SetAndDelete(t *testing.T) {
+	const ns, name = "emit-pods-ns", "emit-pods-wl"
+	EmitWorkloadPods(ns, "Deployment", name, workload.PodCounts{Total: 5, Stale: 2})
+	labels := map[string]string{"namespace": ns, "owner_kind": "Deployment", "owner_name": name}
+	if got := gaugeValue(t, "k8s_sustain_workload_pods", labels); got != 5 {
+		t.Errorf("pods = %v, want 5", got)
+	}
+	if got := gaugeValue(t, "k8s_sustain_workload_stale_pods", labels); got != 2 {
+		t.Errorf("stale = %v, want 2", got)
+	}
+	DeleteWorkloadPods(ns, "Deployment", name)
+	if workloadStalePods.DeleteLabelValues(ns, "Deployment", name) {
+		t.Error("stale series still present after DeleteWorkloadPods")
 	}
 }

@@ -1,0 +1,25 @@
+# k8s_sustain:workload_drifted must be a 0/1 boolean per workload: dashboard
+# queries match `== 1`, so a workload with several stale pods must still record
+# 1, and the controller's scrape labels must not split one workload in two.
+rule_files:
+  - rules-only.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'k8s_sustain_workload_stale_pods{namespace="a",owner_kind="Deployment",owner_name="many",instance="10.0.0.1:8080",pod="ctrl-1"}'
+        values: '3x5'
+      - series: 'k8s_sustain_workload_stale_pods{namespace="a",owner_kind="Deployment",owner_name="many",instance="10.0.0.2:8080",pod="ctrl-2"}'
+        values: '3x5'
+      - series: 'k8s_sustain_workload_stale_pods{namespace="a",owner_kind="Deployment",owner_name="clean",instance="10.0.0.1:8080",pod="ctrl-1"}'
+        values: '0x5'
+    promql_expr_test:
+      - expr: k8s_sustain:workload_drifted
+        eval_time: 2m
+        exp_samples:
+          - labels: 'k8s_sustain:workload_drifted{namespace="a",owner_kind="Deployment",owner_name="many"}'
+            value: 1
+          - labels: 'k8s_sustain:workload_drifted{namespace="a",owner_kind="Deployment",owner_name="clean"}'
+            value: 0

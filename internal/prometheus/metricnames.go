@@ -18,7 +18,8 @@ const (
 
 	MetricWorkloadOOM24h              = "k8s_sustain:workload_oom_24h"
 	MetricWorkloadDrifted             = "k8s_sustain:workload_drifted"
-	MetricWorkloadDriftRatio          = "k8s_sustain_workload_drift_ratio"
+	MetricWorkloadPods                = "k8s_sustain_workload_pods"
+	MetricWorkloadStalePods           = "k8s_sustain_workload_stale_pods"
 	MetricWorkloadRetryState          = "k8s_sustain_workload_retry_state"
 	MetricWorkloadRetryAttempts       = "k8s_sustain_workload_retry_attempts"
 	MetricWorkloadTemplateCPUCores    = "k8s_sustain_workload_template_cpu_cores"
