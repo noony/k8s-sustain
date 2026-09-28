@@ -91,6 +91,7 @@
 #   kubectl port-forward -n k8s-sustain svc/k8s-sustain-metrics 8080:8080
 #   curl -s localhost:8080/metrics | grep k8s_sustain_wlr_refresh_total
 #   # webhook side (its own metrics endpoint):
+#   kubectl port-forward -n k8s-sustain deploy/k8s-sustain-webhook 9443:9443
 #   curl -sk https://localhost:9443/metrics | grep recommendation_source_total
 
 apiVersion: v1

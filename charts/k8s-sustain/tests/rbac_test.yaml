@@ -34,7 +34,7 @@ tests:
           content:
             apiGroups: [k8s.sustain.io]
             resources: [policies]
-            verbs: [get, list, watch, create, update, patch, delete]
+            verbs: [get, list, watch, update, patch]
       - contains:
           path: rules
           content:

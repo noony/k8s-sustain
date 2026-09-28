@@ -34,7 +34,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// +kubebuilder:rbac:groups=k8s.sustain.io,resources=policies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=k8s.sustain.io,resources=policies,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=policies/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=policies/finalizers,verbs=update
 // +kubebuilder:rbac:groups=k8s.sustain.io,resources=workloadrecommendations,verbs=get;list;watch;create;update;patch;delete

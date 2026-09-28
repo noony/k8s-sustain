@@ -17,14 +17,13 @@ helm install cert-manager jetstack/cert-manager \
 
 ## Default setup (self-signed)
 
-The chart creates a self-signed `Issuer` and `Certificate` automatically. No external Issuer is required:
+`webhook.certManager.enabled` defaults to `true`: the chart creates a self-signed `Issuer` and `Certificate`. No external Issuer is required:
 
 ```bash
 helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
   --version <VERSION> \
   --namespace k8s-sustain \
-  --create-namespace \
-  --set webhook.certManager.enabled=true
+  --create-namespace
 ```
 
 This is the simplest approach and works for both development and production. The webhook only needs to be trusted by the Kubernetes API server, and cert-manager handles CA bundle injection automatically.
@@ -38,7 +37,6 @@ helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
   --version <VERSION> \
   --namespace k8s-sustain \
   --create-namespace \
-  --set webhook.certManager.enabled=true \
   --set webhook.certManager.createIssuer=false \
   --set webhook.certManager.issuerRef.name=my-ca-issuer \
   --set webhook.certManager.issuerRef.kind=ClusterIssuer
@@ -52,11 +50,13 @@ helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
 When `webhook.certManager.enabled=true`, the chart creates:
 
 1. A self-signed `Issuer` (unless `createIssuer=false`)
-2. A `Certificate` resource targeting the webhook service DNS names:
+2. A `Certificate` for the webhook Service, where `<fullname>` is the chart's fullname (the release name if it contains `k8s-sustain`, otherwise `<release>-k8s-sustain`; `k8s-sustain` for the commands on this page):
 
    ```text
-   k8s-sustain-webhook.<namespace>.svc
-   k8s-sustain-webhook.<namespace>.svc.cluster.local
+   <fullname>-webhook
+   <fullname>-webhook.<namespace>
+   <fullname>-webhook.<namespace>.svc
+   <fullname>-webhook.<namespace>.svc.cluster.local
    ```
 
 3. cert-manager issues the certificate and stores it in `webhook.tlsSecretName` (default: `k8s-sustain-webhook-tls`)
@@ -64,12 +64,13 @@ When `webhook.certManager.enabled=true`, the chart creates:
 
 ## Manual certificate (without cert-manager)
 
-Create a TLS secret manually and provide the base64-encoded CA certificate:
+Create a TLS secret manually and provide the base64-encoded CA certificate. The API server only checks the Subject Alternative Name, so the certificate must carry the Service DNS name as a SAN (the example assumes release `k8s-sustain` in namespace `k8s-sustain`):
 
 ```bash
 # Generate a self-signed cert (example only)
 openssl req -x509 -newkey rsa:4096 -keyout tls.key -out tls.crt -days 365 -nodes \
-  -subj "/CN=k8s-sustain-webhook.k8s-sustain.svc"
+  -subj "/CN=k8s-sustain-webhook.k8s-sustain.svc" \
+  -addext "subjectAltName=DNS:k8s-sustain-webhook.k8s-sustain.svc,DNS:k8s-sustain-webhook.k8s-sustain.svc.cluster.local"
 
 # Create the secret
 kubectl create secret tls k8s-sustain-webhook-tls \
@@ -84,6 +85,7 @@ helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
   --version <VERSION> \
   --namespace k8s-sustain \
   --create-namespace \
+  --set webhook.certManager.enabled=false \
   --set webhook.caBundle="${CA_BUNDLE}"
 ```
 
@@ -91,4 +93,4 @@ helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
     Without cert-manager, you are responsible for rotating the certificate before it expires and updating `webhook.caBundle` via `helm upgrade`.
 
 !!! note "Hot reload"
-    The webhook reloads its TLS keypair on a 1h tick via `tls.Config.GetCertificate`, so cert-manager rotations take effect on the next handshake — no pod restart required. The `k8s_sustain_webhook_cert_expiry_seconds` gauge tracks the active leaf's expiry; alert when `(gauge - time())` drops below your renewal SLA.
+    The webhook re-reads its TLS keypair from the mounted Secret every hour, so a rotated certificate is served within an hour, with no pod restart. cert-manager renews well before expiry, so this delay is harmless. The `k8s_sustain_webhook_cert_expiry_seconds` gauge tracks the active leaf's expiry; alert when `(gauge - time())` drops below your renewal SLA.

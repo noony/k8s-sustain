@@ -5,7 +5,7 @@ PLATFORMS ?= linux/amd64,linux/arm64
 
 include Makefile.scenarios
 
-.PHONY: help build test test-race lint generate manifests generate-crds verify-crds tidy fmt vet coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template helm-unittest port-forward port-forward-stop
+.PHONY: help build-ui build test test-race lint generate manifests generate-crds verify-crds tidy coverage docker-build docker-buildx docker-push helm-deps helm-lint helm-template helm-promtool helm-unittest port-forward port-forward-stop
 
 NAMESPACE ?= k8s-sustain
 DASHBOARD_PORT ?= 8090
@@ -14,7 +14,7 @@ PROMETHEUS_PORT ?= 9090
 .DEFAULT_GOAL := help
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
 build-ui: ## Build dashboard frontend
 	cd internal/dashboard/ui/frontend && npm ci && npm run build

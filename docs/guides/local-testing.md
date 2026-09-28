@@ -29,6 +29,22 @@ make test-scenario-status               # see the table
 make test-kind-down                     # tear it all down
 ```
 
+## Make targets
+
+`make test-help` lists every harness target.
+
+| Target | What it does |
+|---|---|
+| `test-kind-up` | Create (or reuse) the kind cluster, install cert-manager and metrics-server, build and load the image, `helm upgrade --install` k8s-sustain with debug logging |
+| `test-kind-down` | Delete the kind cluster |
+| `test-reboot` | Clean every scenario and Policy, uninstall the release, then run `test-kind-up` again |
+| `test-scenario-<name>` | Apply one scenario from the [catalog](#scenario-catalog) |
+| `test-scenario-all` | Apply every scenario back-to-back (`WAIT` pauses between them) |
+| `test-scenario-status` | Current vs. recommended table (`hack/scenarios/status.sh`) |
+| `test-scenario-watch` | List pods in every scenario namespace |
+| `test-scenario-logs` | Tail controller, webhook and dashboard logs |
+| `test-scenario-clean` | Delete every `scenario-*` namespace and its Policy |
+
 ## Context safety
 
 Every `test-scenario-*` target refuses to run unless the current kubectl
@@ -53,6 +69,7 @@ SKIP_CONTEXT_CHECK=1 make test-scenario-steady
 | `WAIT`                 | `0`                      | Optional pause between scenarios in `test-scenario-all`. Scenarios are isolated by namespace and don't interfere; only set this if you want staggered apply timing. |
 | `CLUSTER_NAME`         | `k8s-sustain`            | Kind cluster name (context becomes `kind-<name>`).         |
 | `CERT_MANAGER_VERSION` | `v1.16.2`                | cert-manager chart version installed by `test-kind-up`.    |
+| `METRICS_SERVER_URL`   | upstream `latest` `components.yaml` | metrics-server manifest applied by `test-kind-up`.  |
 | `SKIP_CONTEXT_CHECK`   | unset                    | Set to `1` to bypass the kubectl-context guard.             |
 
 ## Workload generator
@@ -121,6 +138,30 @@ an `autoscaling/v2` HPA targeting 60% CPU utilization (min 1 / max 5).
 effective utilization jumps above 60% and replicas scale up. Validates
 the interaction between right-sizing and the HPA.
 
+### `hpa-coordinated`
+
+Same Deployment and HPA as `hpa` (`500m` request, ~`150m` usage, 60% target)
+with `autoscalerCoordination.enabled: true`.
+
+**Expected:** the CPU request is sized with the overhead formula,
+`base × (110 / 60)` ≈ 1.83× — ~`300–350m` instead of ~`165m`. Utilization stays
+near 50%, below the HPA target, so replicas stay at 1. The Workloads page shows
+the **Coordinated** badge. See
+[Autoscaler coordination](../concepts/autoscaler-coordination.md).
+
+### `hpa-replica-anchor`
+
+`hpa-coordinated` plus `replicaBudgetAnchor: 0.10`, pre-scaled to 6 replicas
+(HPA min 1 / max 5). The anchor's target is `round(1 + 0.1 × 4) = 1` replica,
+so while the Deployment runs more replicas the CPU request gets up to a 2×
+bump on top of the overhead formula.
+
+**Expected:** usually indistinguishable from `hpa-coordinated`. The HPA
+scales 6 → 1 within ~9 minutes, before the 10-minute workload-age gate lets
+the first recommendation compute, so the replica factor is `1.0` by then. To
+observe the bump, keep the HPA scaled out past the gate (more load, or
+`behavior.scaleDown.stabilizationWindowSeconds` above 600).
+
 ### `init-containers`
 
 Single Deployment whose pod template includes:
@@ -143,13 +184,13 @@ Inspect the `container_kind` label on emitted gauges:
 
 ```bash
 kubectl --raw \
-  /api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics \
+  /api/v1/namespaces/k8s-sustain/services/k8s-sustain-metrics:8080/proxy/metrics \
   | grep 'k8s_sustain_recommended_cpu_cores{.*container_kind="init"'
 ```
 
 ### `cronjob`
 
-Single CronJob (`schedule: "* * * * *"`) running for ~30s per invocation
+Single CronJob (`schedule: "*/2 * * * *"`) running for ~90s per invocation
 with steady ~200m CPU / ~100MiB memory load. Initial requests are
 deliberately oversized at `500m / 256Mi`. `Ongoing` mode is enabled for
 CronJobs.
@@ -157,7 +198,7 @@ CronJobs.
 **Expected:** the CronJob spec is **never modified** (no GitOps drift).
 Currently-running job pods are resized in place via the `pods/resize`
 subresource when the cluster supports it; otherwise they finish on their
-existing resources. New runs (next minute boundary) spawn with updated
+existing resources. New runs (every two minutes) spawn with updated
 requests injected by the webhook at admission. After
 `WINDOW + reconcile_interval` the CPU request drops to ~`220m` and
 memory to ~`110Mi`.
@@ -189,7 +230,7 @@ alive.
 subresource as the controller reconciles. The container's
 `spec.containers[0].resources` change without a restart — verify
 `status.containerStatuses[0].restartCount` stays at `0`. This is the
-scenario that exercises the new in-place resize path on a `restartPolicy:
+scenario that exercises the in-place resize path on a `restartPolicy:
 Never` Job pod (k8s ≥ 1.35).
 
 ```bash
@@ -212,33 +253,66 @@ requests `1000m / 512Mi`, actual per-run usage ~`50m / 40Mi` for ~90s.
 
 **Expected:** Aggressive downsizing — CPU to ~`60m`, memory to ~`50Mi`,
 observed on each new run's pod (webhook-injected). The CronJob spec
-itself is intentionally unchanged. Confirms the new pod-level path
-handles large recommendation deltas just as well as the old spec-patching
-path did.
+itself is unchanged.
 
 ### `job`
 
-A standalone `batch/v1` Job (no CronJob owner) with one ~5-minute run.
-The controller does not reconcile standalone Jobs, so this scenario
-exercises only the webhook's `Pod → Job` resolution branch.
+A standalone `batch/v1` Job (no CronJob owner) with one ~5-minute run,
+under `job: OnCreate`. Exercises the webhook's `Pod → Job` resolution: the
+controller computes and caches the recommendation, and the webhook injects
+it into the next run's pod. Under `OnCreate` the running pod is never touched
+(`job: Ongoing` would resize it in place, never evict it).
 
 **Expected:** First run starts with the original `500m / 256Mi` requests
-(no history yet). Re-apply the Job after `WINDOW` elapses — the second
-run's pod is webhook-injected with the percentile-based recommendation
-(~`60m / 35Mi`), and the webhook upserts a `WorkloadRecommendation`
-(`job-oneshot`) for the identity.
+(no history yet); the webhook creates a cold-start stub
+`WorkloadRecommendation` (`job-oneshot`). Re-apply the Job after `WINDOW`
+elapses — once the controller has filled the stub, the new run's pod is
+injected with the percentile-based recommendation (~`60m / 35Mi`).
 
-Note the re-applied Job object is only seconds old at admission — the
-10-minute workload-age gate passes because, for `Job`-kind workloads, it
-keys on the age of the identity's accumulated Prometheus history (from
-the first run) rather than the Job object's `CreationTimestamp`. The
-first run has no history, so it is skipped by the gate and leaves no
-`WorkloadRecommendation` behind.
+The re-applied Job object is only seconds old, but the 10-minute
+workload-age gate keys on the earlier of the Job's creation time and its
+`WorkloadRecommendation`'s, so the cached object carries the identity's age
+across runs.
 
 ```bash
 kubectl delete -f hack/scenarios/job.yaml
 make test-scenario-job
 kubectl get pod -n scenario-job -l app=stress \
+  -o jsonpath='{.items[0].spec.containers[0].resources}{"\n"}'
+```
+
+### `coldstart`
+
+A standalone Job with a fixed name (`etl`, `job: OnCreate`) that runs ~90s
+and is TTL-deleted 30s later, so its whole lifetime fits between two
+reconciles at the default 5m interval. Exercises
+[cold-start stub recommendations](../concepts/workload-recommendations.md#cold-start-stub-recommendations):
+the webhook creates the `WorkloadRecommendation` at the first admission, and
+the controller keeps recomputing it from its work-list even though it never
+sees the Job alive.
+
+The harness installs with `RECONCILE=30s`, which does catch the Job alive.
+To see the stub as the only writer, reinstall with
+`make test-kind-up RECONCILE=5m`.
+
+**Expected:**
+
+1. First run: admitted at `500m / 256Mi`; `job-etl` appears with no
+   `status.containers` (no history yet).
+2. Re-run the Job a few times, spaced out, until the identity has history:
+
+    ```bash
+    kubectl delete job etl -n scenario-coldstart --ignore-not-found
+    make test-scenario-coldstart
+    ```
+
+3. `status.containers` fills with a real recommendation, and the next run's pod
+   is admitted with it (~`55m / ~35Mi`).
+
+```bash
+kubectl get wlrec -n scenario-coldstart job-etl \
+  -o jsonpath='{.status.containers}{"\n"}'
+kubectl get pod -n scenario-coldstart -l app=etl \
   -o jsonpath='{.items[0].spec.containers[0].resources}{"\n"}'
 ```
 
@@ -261,15 +335,15 @@ oversized requests (`500m / 256Mi`) and ~`200m / ~100Mi` of actual load.
     --sort-by=.lastTimestamp | grep -E 'Evicted|Killing|Recycled'
   ```
 
-- The full 3-pod recycle finishes in roughly one reconcile cycle. If the
-  recycle wait ever regressed back to keying on pod name (which the
-  StatefulSet controller reuses across replacements), each pod would
-  block for the full `--replacement-timeout` (5 min default) and the run
-  would stretch to 15+ minutes before failing. Watch the controller log:
+- The full 3-pod recycle finishes in roughly one reconcile cycle. The
+  recycle wait keys on pod UID, not name (the StatefulSet controller reuses
+  names across replacements); if each pod instead blocks for the full
+  `--recycle-replacement-timeout` (5 min default), that wait is broken.
+  Watch the controller log:
 
   ```bash
-  kubectl logs -n k8s-sustain -l app.kubernetes.io/name=k8s-sustain \
-    -c controller --since=5m | grep -E 'evict|recycle|replacement'
+  kubectl logs -n k8s-sustain deploy/k8s-sustain --since=5m \
+    | grep -E 'evict|recycle|replacement'
   ```
 
 - The CPU request drops to ~`220m` and memory to ~`110Mi` on every
@@ -319,78 +393,32 @@ Deployment's own name is never used for Prometheus queries or the
   curl -s localhost:8090/api/workloads/scenario-custom-name/Deployment/renamed-app/recommendations
   ```
 
-- `status.sh`'s generic table queries recommendations by the Deployment's own
-  name (`stress`), which the override deliberately bypasses, so `custom-name`
-  is not included in it; use the commands above instead.
-
 ### `bare-pod`
 
-A standalone `Pod` — no Deployment, no `ownerReferences` at all — simulating
-Airflow's `KubernetesPodOperator`, which by default launches a Pod directly
-with no parent Job. The policy and `k8s.sustain.io/owner-name: etl-daily`
-annotations live directly on the Pod (there's no pod template for a bare pod
-to carry them on). The Policy sets `rightSizing.update.types.pod: Ongoing`.
-Initial requests are deliberately oversized at `500m / 256Mi`; actual usage
-is the same ~`200m / ~100Mi` profile as `steady`.
+A standalone `Pod` with no `ownerReferences`, simulating Airflow's
+`KubernetesPodOperator`. The policy and `k8s.sustain.io/owner-name: etl-daily`
+annotations sit on the Pod itself, and the Policy sets
+`update.types.pod: Ongoing`. Requests `500m / 256Mi`, usage ~`200m / ~100Mi`.
 
 **Expected:**
 
-- The pod is admitted with the webhook-mirrored label. Confirm:
+- The pod carries the webhook-mirrored `k8s.sustain.io/owner-name` label.
+- After the 10-minute workload-age gate, the controller caches a
+  `WorkloadRecommendation` (`pod-etl-daily`); a later pod with the same
+  `owner-name` is injected from it at admission.
+- On k8s ≥ 1.33 the running pod is **resized in place, never evicted**: same
+  UID, CPU request comes down toward ~`220m`. A memory decrease the kubelet
+  reports `Infeasible`/`Deferred` is skipped, never turned into an eviction.
+  Below 1.33 the pod keeps `500m / 256Mi`. (The scenario pod defaults to
+  `restartPolicy: Always`; real `KubernetesPodOperator` pods use `Never`,
+  which resizes only from k8s 1.35.)
 
-  ```bash
-  kubectl get pod -n scenario-bare-pod etl-daily-run-1 --show-labels | grep k8s.sustain.io/owner-name
-  ```
-
-- **The pod is resized in place, never evicted.** Eviction is permanently off
-  for `Pod`-kind targets — nothing would recreate the pod — but an in-place
-  resize needs no controller behind it, so under `Ongoing` the running pod is
-  corrected directly through the `pods/resize` subresource. The UID never
-  changes; only the requests do:
-
-  ```bash
-  kubectl get pod -n scenario-bare-pod etl-daily-run-1 \
-    -o jsonpath='{.metadata.uid}{" "}{.spec.containers[0].resources.requests}{"\n"}'
-  # same UID throughout; CPU comes down from 500m toward ~220m
-  ```
-
-  A memory decrease can be reported `Infeasible`/`Deferred` by the kubelet;
-  the patcher logs it and skips, and never falls back to eviction here. On a
-  cluster below k8s 1.33 there is no in-place support at all, so the pod
-  stays at `500m / 256Mi` and only the recommendation below appears.
-
-  The scenario pod leaves `restartPolicy` unset, so it defaults to `Always`
-  and resizes on any k8s ≥ 1.33. Do not generalise that to real Airflow
-  pods: `KubernetesPodOperator` uses `restartPolicy: Never`, which is only
-  fully covered from k8s ≥ 1.35 — on 1.33/1.34 such a pod's resize is
-  rejected and it keeps its admitted resources.
-
-- The controller computes and caches a `WorkloadRecommendation`
-  (`pod-etl-daily`) from the pod's actual usage — this is also the webhook's
-  *only* source of recommendations (it never queries Prometheus itself), so
-  a later pod sharing this `owner-name` (e.g. the next Airflow DAG run) gets
-  injected from it as long as the cache is still fresh when that pod is
-  admitted. Like every other kind, this waits out the 10-minute
-  `MinWorkloadAge` gate — bare pods are no longer exempt from it, since an
-  `Ongoing` bare pod can now be resized in place, so a near-zero percentile
-  from a too-young identity is no longer harmless. Expect the first cached
-  recommendation once the `etl-daily` identity has been known for 10+
-  minutes, not within the first couple of reconcile cycles:
-
-  (The identity's history-age gate is applied by the controller when it
-  builds the recommendation to cache, not by the webhook at admission — the
-  webhook no longer computes anything of its own, so a pod re-created under
-  the same `owner-name` within ~10 minutes of the identity's first samples
-  simply has no cache entry yet to inject from and keeps its template
-  resources.)
-
-  ```bash
-  kubectl get workloadrecommendation -n scenario-bare-pod
-  kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090 &
-  curl -s localhost:8090/api/workloads/scenario-bare-pod/Pod/etl-daily/recommendations
-  ```
-
-- Not in `status.sh`'s generic table (it assumes a Deployment per scenario);
-  use the commands above instead.
+```bash
+kubectl get pod -n scenario-bare-pod etl-daily-run-1 --show-labels
+kubectl get pod -n scenario-bare-pod etl-daily-run-1 \
+  -o jsonpath='{.metadata.uid}{" "}{.spec.containers[0].resources.requests}{"\n"}'
+kubectl get wlrec -n scenario-bare-pod pod-etl-daily -o yaml
+```
 
 ### `oom-kill`
 
@@ -404,15 +432,16 @@ container, Kubernetes restarts it, and the cycle repeats.
   termination reason and a growing restart count.
 - `k8s_sustain:workload_oom_24h{owner_name="stress"}` becomes positive.
 - Memory recommendation **does not shrink** despite most samples being
-  quiet (~30Mi). The OOM-aware floor pulls the reco to
-  `max(peak_working_set_24h, current_request)` plus headroom — i.e. ≥ 96Mi.
+  quiet (~30Mi). The OOM-aware floor pulls it to
+  `max(kernel high-water peak, OOM-time cgroup limit × 1.20)` plus headroom —
+  i.e. ≥ ~115Mi before headroom.
 - `k8s_sustain_oom_floor_applied_total{owner_name="stress"}` increments on
   each reconcile while the OOM is within the 24 h window.
 
 ```bash
-kubectl get wlrec -n scenario-oom-kill stress -o yaml
+kubectl get wlrec -n scenario-oom-kill deployment-stress -o yaml
 kubectl --raw \
-  /api/v1/namespaces/k8s-sustain/services/k8s-sustain-controller:8080/proxy/metrics \
+  /api/v1/namespaces/k8s-sustain/services/k8s-sustain-metrics:8080/proxy/metrics \
   | grep 'k8s_sustain_oom_floor_applied_total'
 ```
 
@@ -445,7 +474,7 @@ Burstable, which Kubernetes forbids through the `/resize` subresource.
 kubectl get pod -n scenario-qos-change -l app=stress \
   -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.qosClass}{"\n"}{end}'
 # the per-pod Invalid rejection and the eviction fallback
-kubectl logs -n k8s-sustain deploy/k8s-sustain-controller \
+kubectl logs -n k8s-sustain deploy/k8s-sustain \
   | grep -E 'rejected as invalid|falling back to eviction'
 # PDB status during the recycle: disruptionsAllowed flips between 1 and 0,
 # at least 2 pods stay Ready
@@ -505,87 +534,38 @@ coexist.
 
 ### `recurring`
 
-A namespace-scoped `CronJob` ("launcher", every 2 minutes) plays the role of
-an external scheduler like Airflow. Its RBAC is `create`/`get`/`delete` on
-`pods` in this namespace only (`ServiceAccount`/`Role`/`RoleBinding`, no
-`ClusterRole`); each run computes a unique pod name
-(`etl-recurring-$(date +%s)`, so plain `create` never collides), creates a
-genuinely bare Pod — **no `ownerReferences` at all** — carrying a stable
-`k8s.sustain.io/owner-name: etl-recurring` annotation, waits for the ~30s
-load to finish, and then **deletes the pod**.
+A namespace-scoped CronJob (`launcher`, every 2 minutes) plays an external
+scheduler like Airflow: each run creates a bare Pod
+`etl-recurring-<timestamp>` (no `ownerReferences`) with the stable
+`k8s.sustain.io/owner-name: etl-recurring` annotation, waits ~30s for it to
+finish, then **deletes it**. That leaves ~80s of every 120s with no pod of the
+identity at all — longer than the harness's 30s reconcile interval — so the
+controller must keep the identity alive from its `WorkloadRecommendation`
+alone. `recurring.yaml`'s header holds the measured chronologies.
 
-The delete is what makes the scenario work. `workload.GroupBarePods` does
-not filter on pod phase, so a `Succeeded` pod left behind still reports the
-identity in every target listing — the identity would never depart and the
-departed-refresh path would never run. With the delete, each cycle leaves
-roughly 80s of every 120s in which **no pod of the identity exists at all**,
-comfortably longer than the harness's deployed `--reconcile-interval=30s`.
+**Expected:**
 
-**Expected — measured on a real kind cluster (k8s 1.35); see
-`recurring.yaml`'s header comment for the full chronologies and reasoning:**
+- `pod-etl-recurring` survives every gap and `status.observedAt` advances
+  while no pod exists; `k8s_sustain_wlr_refresh_total` counts those refreshes.
+- The first ~6 runs are admitted at the template's `500m / 256Mi` while the
+  10-minute workload-age gate holds
+  (`recommendation_skipped_total{reason="workload_too_young"}` climbs).
+- After the gate the percentile is computed over a mostly-empty series (a
+  ~30s pod every 120s): at `WINDOW=10m` CPU floors to `1m` with realistic
+  memory; at `WINDOW=2m` memory also collapses and every run is OOM-killed at
+  start. This is a known limitation of duty-cycled identities, not rescued by
+  the OOM floor (a `restartPolicy: Never` pod never gets a
+  `LastTerminationState`); use a window that spans several runs. See
+  [Standalone Pods & Identity Grouping](standalone-pods-and-grouping.md).
 
-- The `WorkloadRecommendation` (`pod-etl-recurring`) survives every gap, and
-  `status.observedAt` advances on reconciles taken while the pod list is
-  confirmed empty — this is the regression the branch fixes. The direct
-  counter is `k8s_sustain_wlr_refresh_total`, emitted only from
-  `refreshDepartedRecommendation`:
-
-  ```bash
-  kubectl get pods -n scenario-recurring -l app=etl-recurring   # empty
-  kubectl get wlrec -n scenario-recurring pod-etl-recurring \
-    -o jsonpath='{.status.observedAt}{"\n"}'                    # advances
-  ```
-
-- The 10-minute `MinWorkloadAge` gate holds correctly for the first 6 runs
-  — all admitted at the template's `500m / 256Mi`,
-  `recommendation_skipped_total{reason="workload_too_young"}` climbing.
-
-- **The moment the gate clears is not a clean convergence, and what happens
-  next depends on `WINDOW`.** The gate is time-based, not data-volume-based:
-  a pod that runs ~30s per 120s has contributed only ~2.5 minutes of real
-  container runtime by the time the 10-minute gate opens, so the percentile
-  is computed over a mostly-empty series.
-
-  - At the harness default **`WINDOW=10m`** (plain
-    `make test-scenario-recurring`): CPU floors to `1m` and stays there;
-    memory stays realistic (`53–62Mi` request, `81–93Mi` limit); every pod
-    completes and **nothing is killed**. Undramatic and long-lived — it did
-    not self-heal within 14 minutes of observation.
-  - At **`WINDOW=2m`**: the gate clears straight into `cpu=1m,
-    mem=4Mi/6Mi`, and every subsequent pod is OOM-killed the instant it
-    starts (`exitCode: 137`, `reason: OOMKilled`, `startedAt ==
-    finishedAt`). This is self-sustaining — a pod that dies at `t=0`
-    contributes no samples, so the floor re-derives itself. Observed
-    unbroken for 18 minutes with no recovery.
-
-  Either way it is a real, currently-expected design gap — recorded, not
-  fixed by this scenario. It is **not** rescued by the OOM-aware memory
-  floor, which structurally cannot fire here: both detection paths key on
-  `LastTerminationState`, which Kubernetes only populates after a container
-  restart, and a `restartPolicy: Never` pod that dies once never gets one
-  (the captured kill showed `lastState: {}`):
-
-  ```bash
-  kubectl get pod -n scenario-recurring -l app=etl-recurring \
-    --sort-by=.metadata.creationTimestamp \
-    -o jsonpath='{.items[-1].spec.containers[0].resources}{"\n"}'
-  ```
-
-- `status.departed: true` is normally not visible while the launcher keeps
-  ticking at the default window, because the recommendation keeps changing and
-  each refresh therefore rewrites `observedAt`, so the sweep's 10-minute grace
-  period never lapses. A refresh does *not* rewrite `observedAt`
-  unconditionally: `wlrcache.Upsert` skips the write when the new status is
-  equivalent to the stored one and `observedAt` is younger than
-  `wlrcache.RefreshInterval` (10 minutes) — the same 10 minutes as the grace
-  period, by coincidence of two independently tuned constants rather than by
-  design. To see `departed` deliberately, suspend the launcher and budget
-  ~15 minutes; measured at 10m01s after the last `observedAt` write, with the
-  recommendation still retained. Exact commands are in `recurring.yaml`'s
-  header.
-
-- Not in `status.sh`'s generic table (it assumes a Deployment per
-  scenario); use the commands above instead.
+```bash
+kubectl get pods -n scenario-recurring -l app=etl-recurring
+kubectl get wlrec -n scenario-recurring pod-etl-recurring \
+  -o jsonpath='{.status.observedAt}{"\n"}'
+kubectl get pod -n scenario-recurring -l app=etl-recurring \
+  --sort-by=.metadata.creationTimestamp \
+  -o jsonpath='{.items[-1].spec.containers[0].resources}{"\n"}'
+```
 
 ### `namespace-optin`
 
@@ -615,9 +595,9 @@ reference](../reference/annotation.md)).
 `make test-scenario-status` prints a table:
 
 ```text
-NAMESPACE                  POD             CPU req  CPU rec  MEM req  MEM rec  RECYCLED
-scenario-overprovisioned   stress-xxxxx    1000m    62m      512Mi    48Mi     yes
-scenario-steady            stress-yyyyy    500m     230m     256Mi    115Mi    yes
+NAMESPACE                    POD                    CPUreq    CPUrec    MEMreq    MEMrec    RECYCLED
+scenario-overprovisioned     stress-xxxxx           1000m     62m       512Mi     48Mi      yes
+scenario-steady              stress-yyyyy           500m      230m      256Mi     115Mi     yes
 ```
 
 The dashboard remains the richer source of truth — start a port-forward
@@ -627,6 +607,9 @@ and open `http://localhost:8090`:
 kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090
 ```
 
+Every scenario appears in the table, including CronJob/Job runs (newest pod),
+bare pods, and the `custom-name` override identity.
+
 ## Adding a new scenario
 
-See `hack/scenarios/README.md`.
+See [`hack/scenarios/README.md`](https://github.com/noony/k8s-sustain/blob/main/hack/scenarios/README.md).

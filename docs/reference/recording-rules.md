@@ -12,14 +12,15 @@ Computing percentiles over multi-day windows from raw `container_cpu_usage_secon
 
 | Rule | Purpose |
 |---|---|
-| `pod_workload` | Pod → workload mapping (foundational) |
+| `pod_workload`, `pod_owner_kind_internal` | Pod → workload mapping (foundational); the second is a helper for the owner-name override |
 | `container_cpu_usage:rate1m`, `container_memory_working_set:bytes` | Per-container usage (foundational) |
 | `container_cpu_usage_by_workload:rate1m`, `container_memory_by_workload:bytes` | Per-container usage with workload labels (feeds the max-pod rules) |
 | `workload_max_pod_cpu:cores`, `workload_max_pod_memory:bytes` | Busiest-replica per-pod usage — the recommender's percentile input |
-| `container_*_requests_by_workload:*` | Configured requests (dashboard) |
+| `container_*_requests_by_workload:*`, `container_*_limits_by_workload:*` | Configured requests and limits (dashboard) |
 | `cluster_*_savings_*`, `policy_*_savings_*` | Savings aggregates (dashboard) |
 | `cluster_*_headroom_breakdown` | Used/idle/free split (dashboard) |
-| `workload_oom_24h`, `workload_drifted` | Risk signals (dashboard) |
+| `container_peak_memory_24h:bytes`, `container_oom_limit_24h:bytes` | OOM floor anchors (recommender) |
+| `workload_oom_24h`, `workload_drifted` | Risk signals (recommender OOM floor, dashboard) |
 | `workload_*_usage:*` | Per-workload usage totals (dashboard trend) |
 
 ## Rules
@@ -27,23 +28,40 @@ Computing percentiles over multi-day windows from raw `container_cpu_usage_secon
 ### `k8s_sustain:pod_workload`
 
 ```promql
-max by (namespace, pod, owner_kind, owner_name) (
-  kube_pod_owner{
-    owner_kind=~"StatefulSet|DaemonSet|Job",
-    owner_is_controller="true"
-  }
-  unless on(namespace, pod) (
-    label_replace(kube_pod_owner{owner_kind="Job", owner_is_controller="true"},
-                  "job_name", "$1", "owner_name", "(.*)")
-    * on(namespace, job_name) group_left
-    max by (namespace, job_name) (
-      kube_job_owner{owner_kind="CronJob", owner_is_controller="true"}
+(
+  max by (namespace, pod, owner_kind, owner_name) (
+    kube_pod_owner{
+      owner_kind=~"StatefulSet|DaemonSet|Job",
+      owner_is_controller="true"
+    }
+    unless on(namespace, pod) (
+      label_replace(kube_pod_owner{owner_kind="Job", owner_is_controller="true"},
+                    "job_name", "$1", "owner_name", "(.*)")
+      * on(namespace, job_name) group_left
+      max by (namespace, job_name) (
+        kube_job_owner{owner_kind="CronJob", owner_is_controller="true"}
+      )
     )
   )
 )
+unless on(namespace, pod) kube_pod_labels{label_k8s_sustain_io_owner_name!=""}
 ```
 
-Four rules share this name (direct owners excluding CronJob-owned Jobs; Pod → Job → CronJob via `kube_job_owner`; Deployment via ReplicaSet; Argo Rollouts via ReplicaSet). Maps every pod to its top-level workload. The `unless` clause on the direct-owner rule prevents pods from carrying both `owner_kind=Job` and `owner_kind=CronJob`, which would break downstream `group_left` joins.
+Five rules share this name and map every pod to its top-level workload:
+
+1. Direct owners (StatefulSet, DaemonSet, Job), excluding CronJob-owned Jobs — shown above.
+2. Pod → Job → CronJob via `kube_job_owner`.
+3. Pod → ReplicaSet → Deployment.
+4. Pod → ReplicaSet → Argo Rollout.
+5. Owner-name override: pods whose `kube_pod_labels` carry a non-empty `label_k8s_sustain_io_owner_name` (the label the webhook mirrors from the [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation). `owner_name` becomes the label value; `owner_kind` is the pod's real owner kind, or `Pod` when it has none.
+
+Rules 1–4 end with `unless on(namespace, pod) kube_pod_labels{label_k8s_sustain_io_owner_name!=""}`, so a pod with an override is mapped only by rule 5 and every pod has exactly one row. The CronJob exclusion in rule 1 likewise stops a pod carrying both `owner_kind=Job` and `owner_kind=CronJob`.
+
+Rule 5 needs the kube-state-metrics `metricLabelsAllowlist: pods=[k8s.sustain.io/owner-name]` setting (on by default in the bundled subchart); without it, override pods are not mapped at all.
+
+### `k8s_sustain:pod_owner_kind_internal`
+
+Helper for rule 5: the pod's real `owner_kind` via the same four resolution paths as rules 1–4, but without their owner-name exclusion. Not meant to be queried directly.
 
 ### `k8s_sustain:container_cpu_usage:rate1m`
 
@@ -54,7 +72,7 @@ max by (namespace, pod, container) (
     container!="POD",
     image!="",
     node!=""
-  }[1m])
+  }[1m:10s])
 )
 or
 max by (namespace, pod, container) (
@@ -68,7 +86,7 @@ max by (namespace, pod, container) (
 ```
 
 Per-container CPU usage rate, no workload labels. Primary 1m window
-preserves sub-5m bursts that a longer window would smooth away (matters
+(a `[1m:10s]` subquery) preserves sub-5m bursts that a longer window would smooth away (matters
 for percentile-based rightsizing). Falls back to a 5m window for
 short-running pods (CronJobs, Jobs) whose lifetime is too brief to
 accumulate ≥2 samples in 1m. `max by (namespace, pod, container)`
@@ -235,7 +253,7 @@ sum by (policy) (
 )
 ```
 
-Per-policy CPU savings.
+Per-policy CPU savings. Carries a static `resource="cpu"` label.
 
 ### `k8s_sustain:policy_memory_savings_bytes`
 
@@ -247,7 +265,7 @@ sum by (policy) (
 )
 ```
 
-Per-policy memory savings.
+Per-policy memory savings. Carries a static `resource="memory"` label.
 
 ### `k8s_sustain:cluster_cpu_headroom_breakdown`
 
@@ -284,6 +302,33 @@ label_replace(
 ```
 
 Same `used`/`idle`/`free` split, for memory. Same rationale as CPU: raw inputs so unmapped pods are counted.
+
+### `k8s_sustain:container_peak_memory_24h:bytes`
+
+```promql
+max by (namespace, owner_kind, owner_name, container) (
+  (
+    label_replace(
+      max by (namespace, pod, container) (max_over_time(container_memory_max_usage_bytes{container!="", container!="POD", image!="", node!=""}[24h])),
+      "_src", "max_usage", "", ""
+    )
+    or
+    label_replace(
+      max by (namespace, pod, container) (max_over_time(container_memory_peak_working_set_bytes{container!="", container!="POD", image!="", node!=""}[24h])),
+      "_src", "peak_ws", "", ""
+    )
+    or
+    label_replace(
+      max by (namespace, pod, container) (max_over_time(container_memory_working_set_bytes{container!="", container!="POD", image!="", node!=""}[24h:1m])),
+      "_src", "working_set", "", ""
+    )
+  )
+  * on(namespace, pod) group_left(owner_kind, owner_name)
+  k8s_sustain:pod_workload
+)
+```
+
+True 24h memory peak per (workload, container): the kernel high-water mark (cgroup v1 `max_usage_bytes`, cgroup v2 `peak_working_set_bytes`) or the working-set max, whichever is higher. It catches sub-scrape spikes that working set alone misses. The recommender uses it as the peak anchor of the OOM floor. The cgroup limit is deliberately excluded — see the next rule.
 
 ### `k8s_sustain:container_oom_limit_24h:bytes`
 
@@ -395,7 +440,7 @@ Busiest-replica CPU rate, per container, per workload: at each instant this is t
 
 Collapsing across pods **here** (in the recording rule) rather than at query time is deliberate: it keeps the recommender's `quantile_over_time(p, …[window])` range-vector scan cheap (one series per workload×container instead of one per historical pod) and immune to pod-name churn — a pod that briefly ran hot then died is the `max` for only those instants and drops out afterward, so its partial-lifetime samples can't distort the percentile.
 
-This rule (and `workload_max_pod_memory:bytes` below) lives in the `k8s_sustain.workload_signal` group, which evaluates at `interval: 1m`. The recommender reads it as a plain range vector rather than a `[window:1m]` subquery, so that `interval` **is** the percentile's effective sample resolution — there is no subquery step left to resample it. Raising the group's interval to cut Prometheus load would silently coarsen every recommendation percentile in the product; it is not a free knob.
+This rule (and `workload_max_pod_memory:bytes` below) lives in the `k8s_sustain.workload_max_pod` group, which evaluates at `interval: 1m`. The recommender reads it as a plain range vector rather than a `[window:1m]` subquery, so that `interval` **is** the percentile's effective sample resolution — there is no subquery step left to resample it. Raising the group's interval to cut Prometheus load would silently coarsen every recommendation percentile in the product; it is not a free knob.
 
 ### `k8s_sustain:workload_max_pod_memory:bytes`
 

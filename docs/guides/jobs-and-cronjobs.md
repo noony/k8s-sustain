@@ -1,35 +1,8 @@
 # Jobs and CronJobs
 
-k8s-sustain right-sizes both standalone `Job`s and scheduled `CronJob`s. Because each run creates a fresh pod, `OnCreate` mode is the natural fit for both kinds.
+k8s-sustain right-sizes both standalone `Job`s and scheduled `CronJob`s. Every run creates a fresh pod, so the webhook injects the current recommendation at the start of each run.
 
-## Standalone Jobs
-
-A standalone `Job` (not created by a CronJob) runs once. The webhook resolves `Pod → Job` directly and injects resources at admission. `OnCreate` is the typical mode and the natural fit for short-lived jobs.
-
-`Ongoing` additionally lets the **controller** resize a Job's **currently running** pods in place via the `pods/resize` subresource (requires k8s ≥ 1.35, since standalone Jobs always run with `restartPolicy: Never`/`OnFailure`, whose in-place resize landed in 1.35), without evicting them or mutating the Job spec. Because a standalone Job has no "next run", in-place resize is the only way to correct an already-running pod — so `Ongoing` is worthwhile for **long-running** Jobs (batch processing, ML training, migrations) and a no-op for jobs that finish within seconds. On clusters without in-place support the running pod is left untouched. Jobs owned by a CronJob are never picked up by this path; they are resized through their owning CronJob instead.
-
-```yaml
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: example-batch
-  namespace: example
-spec:
-  template:
-    metadata:
-      annotations:
-        k8s.sustain.io/policy: batch-rightsizing
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: worker
-          image: busybox:1.36
-          command: ["sh", "-c", "sleep 30"]
-          resources:
-            requests: { cpu: 100m, memory: 64Mi }
-```
-
-The matching policy snippet:
+## Policy
 
 ```yaml
 apiVersion: k8s.sustain.io/v1alpha1
@@ -41,40 +14,6 @@ spec:
     update:
       types:
         job: OnCreate
-        cronJob: OnCreate
-```
-
-Right-sizing a standalone Job is only meaningful when the same job type runs repeatedly enough to build a percentile history.
-
-Standalone Jobs appear on the dashboard's Workloads page as kind `Job`. Jobs owned by a CronJob are intentionally excluded — they appear under their owning CronJob row.
-
-## CronJobs
-
-CronJobs spawn ephemeral pods on a schedule. Because each run creates a fresh pod, `OnCreate` mode is a natural fit — the webhook injects recommendations at the start of every run.
-
-### Owner chain
-
-The webhook resolves the full owner chain:
-
-```text
-Pod → Job → CronJob
-```
-
-When a pod annotated with `k8s.sustain.io/policy` is created by a Job owned by a CronJob, the webhook looks up the CronJob and checks its mode.
-
-### OnCreate mode (recommended for CronJobs)
-
-Each job pod receives the current recommendation at creation time. No restarts, no rollouts — just fresh pods with accurate resources on every schedule tick.
-
-```yaml
-apiVersion: k8s.sustain.io/v1alpha1
-kind: Policy
-metadata:
-  name: batch-rightsizing
-spec:
-  rightSizing:
-    update:
-      types:
         cronJob: OnCreate
     resourcesConfigs:
       cpu:
@@ -93,7 +32,11 @@ spec:
           equalsToRequest: true
 ```
 
-Opt in your CronJob:
+`job` applies to standalone Jobs; Jobs created by a CronJob are handled through their CronJob under `cronJob`.
+
+## Opting in
+
+For a CronJob, the pod-template annotation is two levels deep:
 
 ```yaml
 apiVersion: batch/v1
@@ -116,42 +59,34 @@ spec:
               image: busybox:1.36
 ```
 
-1. For a CronJob the pod-template level is two levels deep — `spec.jobTemplate.spec.template.metadata.annotations` — but it is also honoured on the CronJob's own `metadata.annotations` or its Namespace; see the [Annotation reference](../reference/annotation.md).
+1. `spec.jobTemplate.spec.template.metadata.annotations`. The CronJob's own `metadata.annotations` and its Namespace also work — see [Resolution order](../reference/annotation.md#resolution-order).
 
-### Ongoing mode for CronJobs
+A standalone Job is annotated on `spec.template.metadata.annotations`. The webhook resolves `Pod → Job` for a standalone Job and `Pod → Job → CronJob` for a scheduled one.
 
-`Ongoing` mode resizes **currently running** job pods in place using the Kubernetes `pods/resize` subresource (requires k8s ≥ 1.33, where `InPlacePodVerticalScaling` is on by default; works for `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35). The CronJob spec itself is **never modified**, so GitOps tools (Argo CD, Flux) see no drift. Future runs continue to pick up the latest resources from the webhook at admission.
+On the dashboard, standalone Jobs appear as kind `Job`; Jobs owned by a CronJob appear under their CronJob row.
+
+## Ongoing mode
+
+`Ongoing` additionally resizes **running** job pods in place through the `pods/resize` subresource. Job and CronJob pods are never evicted, and the Job/CronJob spec is never modified. In-place resize of `restartPolicy: Never`/`OnFailure` pods has its own Kubernetes version requirement — see [Version matrix](../concepts/in-place-updates.md#version-matrix) and [Kinds that are never evicted](../concepts/in-place-updates.md#kinds-that-are-never-evicted). When a resize is not possible, the running pod keeps its resources and the next run gets the recommendation from the webhook.
 
 ```yaml
 spec:
   rightSizing:
     update:
       types:
+        job: Ongoing
         cronJob: Ongoing
 ```
 
-Practical implications:
+`Ongoing` is worthwhile for **long-running** runs (daily ETL, ML training, backfills, migrations), where it can correct a pod mid-run. For runs that finish within seconds it behaves like `OnCreate`, at the cost of one extra Job/Pod list per reconcile.
 
-- For CronJobs whose pods finish within seconds (e.g. `* * * * *` health pings), `Ongoing` is essentially equivalent to `OnCreate` — pods complete before any reconcile pass would touch them. The cost of running `Ongoing` is one extra Job/Pod list per reconcile.
-- For long-running runs (daily ETL, batch training, hour-long backfills), `Ongoing` can correct an under- or over-provisioned pod mid-run without restarting the container.
-- On clusters below k8s 1.33, or when the kubelet reports the resize as `Infeasible` or `Error`, or the API server rejects the resize for that pod (e.g. it would change the QoS class), the running pod is left alone (it would be destructive to evict a Job pod). The new resources still land on the next scheduled run via the webhook. The `ResourcesUpdated` event only counts pods whose resize the API server actually accepted.
-- The controller never patches the `CronJob` or `Job` object, so RBAC for `batch/cronjobs` and `batch/jobs` is read-only.
+## Cold start
 
-### Cold start: the first run is never injected
+The first run of a new Job or CronJob is admitted with its template resources; the webhook records a stub `WorkloadRecommendation` so the controller starts computing the identity, and later runs are injected once a recommendation exists. See [Cold start](../concepts/workload-recommendations.md#cold-start-stub-recommendations) and keep `--recommendation-retention` above the gap between runs ([Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads)).
 
-A standalone Job is re-created on every run, so its object is always seconds old at admission, and a Job that runs briefly and is TTL-cleaned may never be alive when a reconcile fires. Its identity enters the cache through a **cold-start stub**:
+A Job whose **name changes every run** (a timestamp or hash suffix) is a new identity each time and never converges. Use a stable Job name, or run it under a CronJob. The signature is a `k8s_sustain_wlr_refresh_total{outcome="nodata"}` rate that never turns into `computed`, alongside a `WorkloadRecommendation` count that grows with every run.
 
-1. **First run.** No `WorkloadRecommendation` exists, so the pod is admitted with its template resources and the webhook creates an empty stub, recording the admitted pod's container set on it. Admission cannot wait for a Prometheus query it no longer makes — the stub is for the *next* run.
-2. **Next reconcile.** The object is now in the controller's work-list, so the identity is recomputed on every reconcile interval whether or not a Job happens to be running at the time. On that first pass the identity is still seconds old, so the workload-age gate holds it back and nothing is written. Once the run finishes — a Complete or Failed Job leaves the target listing, as does a TTL-cleaned one — the identity is *departed*, and a cycle that finds nothing for it records `status.source: nodata`. That is **not** terminal: it means only that nothing has been computed yet, and the identity is recomputed on the next cycle regardless.
-3. **Convergence.** Once the identity has cleared the 10-minute age gate and Prometheus has usable samples for it, the next reconcile writes a real recommendation — so convergence takes **one reconcile interval** from that point, not a longer retry cycle. Every run after that is injected at admission.
-
-   A short Job that always finishes between two reconciles converges too. The controller no longer has to catch a run alive: the cache object outlives the runs, so it keeps ageing past the gate and Prometheus history keeps accumulating against the one identity. Keep `--recommendation-retention` above the gap between runs so the object is not swept in between (see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads)).
-
-The [workload-age gate](../concepts/recommendation-pipeline.md#stages) is what makes this work across runs: it keys on the earliest of the object's `CreationTimestamp` and the identity's `WorkloadRecommendation` `CreationTimestamp`, so an identity k8s-sustain has known since an earlier run counts as old even though each run's object is brand new.
-
-A Job whose **name changes every run** (a timestamp or hash suffix) is a different identity each time and will never converge — it is a new cold start on every run. Use a stable Job name, or run it under a CronJob, so history accumulates against one identity. Watch `k8s_sustain_wlr_refresh_total{outcome="nodata"}` to spot this: a rate that never converts to `computed` is the signature, alongside a `WorkloadRecommendation` count that grows with every run.
-
-### Collecting enough history
+## Collecting enough history
 
 CronJobs that run infrequently (e.g. weekly) may not have enough data for a meaningful percentile. Use a longer window:
 
@@ -161,14 +96,14 @@ resourcesConfigs:
     window: 720h   # 30 days
 ```
 
-When the window holds no usable samples, the controller writes no recommendation and leaves resources unchanged, retrying on the next reconcile. A live Job or CronJob simply keeps an empty `status` on its `WorkloadRecommendation`; only once the identity is departed does a fruitless cycle record `status.source: nodata`. Separately, an identity known for less than 10 minutes is held back by the [workload-age gate](../concepts/recommendation-pipeline.md#stages), which logs `skipping recommendation: workload too young` and increments `k8s_sustain_recommendation_skipped_total{reason="workload_too_young"}`.
+When the window holds no usable samples, no recommendation is written and resources stay unchanged until a later reconcile finds data.
 
-### Guaranteed QoS for batch jobs
+## Guaranteed QoS for batch jobs
 
-Setting `equalsToRequest: true` for both CPU and memory limits makes the pod a [Guaranteed QoS class](https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/#guaranteed), which prevents throttling and OOM eviction under memory pressure. This is often desirable for batch workloads.
+Setting `equalsToRequest: true` for both CPU and memory limits makes the pod [Guaranteed QoS](https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/#guaranteed), which makes the pod the last candidate for node-pressure eviction.
 
-### OOM detection for one-shot pods
+## OOM detection for one-shot pods
 
-CronJob/Job pods typically run with `restartPolicy: Never` (or `backoffLimit: 0`), so the kubelet does not restart them after an OOM kill — `kube_pod_container_status_restarts_total` stays at 0. The `k8s_sustain:workload_oom_24h` rule combines two paths so OOMs are still detected: a "kill" path uses `max_over_time(kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}[24h])` to flag any (pod, container) that OOMed, regardless of whether it was restarted.
+Job pods typically run with `restartPolicy: Never` (or `backoffLimit: 0`), so an OOM kill does not increment `kube_pod_container_status_restarts_total`. The `k8s_sustain:workload_oom_24h` rule therefore also flags any container whose `kube_pod_container_status_last_terminated_reason` was `OOMKilled` in the last 24h, so the OOM-driven memory floor and the dashboard's "OOM 24h" badge work for Jobs and CronJobs too.
 
-This means the OOM-driven memory floor (in `policy_controller.go`) and dashboard "OOM 24h" badge work for CronJobs too — provided the failed pod survives long enough for kube-state-metrics to scrape it. Pods garbage-collected by `failedJobsHistoryLimit` within ~30s of failing can still slip through; raising `failedJobsHistoryLimit` above 0 helps.
+This requires the failed pod to survive long enough for kube-state-metrics to scrape it. Pods removed by `failedJobsHistoryLimit` within ~30s of failing can slip through; keep `failedJobsHistoryLimit` above 0.

@@ -1,8 +1,58 @@
 # Security
 
-Every `v*` tag publishes signed artifacts. This page tells you what is signed, how to verify it before you deploy it, and how the pipeline that produced it is hardened.
+This page covers what k8s-sustain can do inside your cluster ([Runtime security](#runtime-security)), and the signed artifacts every `v*` tag publishes: what is signed, how to verify it before you deploy it, and how the pipeline that produced it is hardened.
 
-The project is pre-1.0 and under active development. Signing, provenance and SBOMs start from the first release published after this pipeline landed — earlier tags have checksums only.
+The project is pre-1.0 and under active development. The earliest tags predate signing and have checksums only.
+
+## Runtime security
+
+### Identities and RBAC
+
+The chart creates two ServiceAccounts, each bound to a ClusterRole (`charts/k8s-sustain/templates/rbac.yaml`):
+
+- **`<fullname>`**, shared by the controller and the webhook.
+- **`<fullname>-dashboard`**, for the dashboard (only when `dashboard.enabled`), with a strictly narrower role: `get`/`list`/`watch` only, no pod patch, resize or eviction, and no writes to any k8s-sustain resource.
+
+The controller/webhook ClusterRole grants:
+
+| Resources | Verbs | Used for |
+|---|---|---|
+| `policies` | get, list, watch, update, patch | watching Policies, managing the `k8s.sustain.io/cleanup` finalizer |
+| `policies/status` | get, update, patch | status conditions |
+| `policies/finalizers` | update | finalizer |
+| `workloadrecommendations`, `/status` | get, list, watch, create, update, patch, delete | the recommendation cache; the webhook only reads it and creates stubs |
+| `pods` | get, list, watch, patch | listing and matching pods |
+| `pods/resize` | patch | in-place resize |
+| `pods/eviction` | create | PDB-respecting eviction |
+| Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, CronJobs, Argo Rollouts, Namespaces | get, list, watch | discovery and owner resolution — workload specs are never written |
+| HPAs, KEDA `ScaledObject`s | get, list, watch | [autoscaler coordination](concepts/autoscaler-coordination.md) |
+| `leases` | full | leader election |
+| `events` (core and `events.k8s.io`) | create, patch | reconcile and resize events |
+
+#### Why the grant is cluster-wide
+
+A Policy can target every namespace, and `WorkloadRecommendation` is namespaced, so the controller must write recommendations anywhere a matched workload lives and the webhook must read them for any pod it admits. RBAC cannot scope a grant by label, so the `k8s.sustain.io/policy` label on recommendations narrows the controller's list calls but not its permissions.
+
+#### Hardening options
+
+- **Treat Policy authorship as an admin operation.** A Policy decides which namespaces can opt in; keep `create` on `policies` out of namespace owners' hands. `--excluded-namespaces` (Helm `excludedNamespaces`) is a hard deny no annotation can override.
+- **NetworkPolicy on the webhook.** Allow ingress to the webhook only from the API server.
+- **Audit policy.** Log API access from the k8s-sustain ServiceAccount to trace recommendation writes, resizes and evictions.
+
+### Admission webhook
+
+- **Fails open.** `failurePolicy: Ignore` by default (`webhook.failurePolicy`): if the webhook is unreachable, errors or times out, the pod is admitted unmodified. Setting `Fail` makes pod creation in every covered namespace depend on the webhook's availability.
+- **Bounded latency.** The apiserver timeout is 5s; the handler enforces its own 4s deadline and 2s per API call.
+- **Narrow scope.** It fires only on Pod `CREATE`, has `sideEffects: None`, and only ever patches container resources and the `k8s.sustain.io/owner-name` pod label. The release namespace, `kube-system`, `kube-public` and `excludedNamespaces` are excluded by the `namespaceSelector`.
+- **TLS.** The API server must trust the webhook's certificate: either cert-manager issues it and injects the CA bundle (`webhook.certManager.enabled=true`, the default), or you set it to `false` and supply a TLS Secret (`webhook.tlsSecretName`) and its CA (`webhook.caBundle`). Rotated certificates are reloaded without a restart. See the [cert-manager guide](guides/cert-manager.md).
+
+### Dashboard
+
+The dashboard (enabled by default) is read-only but has **no built-in authentication**: anyone who can reach it can read every Policy, recommendation and usage chart. It is exposed only through a `ClusterIP` Service. Before exposing it through an Ingress or Gateway, put an authenticating proxy in front of it — see the [Dashboard guide](guides/dashboard.md) — or disable it with `dashboard.enabled=false`.
+
+### Pods
+
+All components run as non-root (UID 65532) with a read-only root filesystem, all capabilities dropped, no privilege escalation and the `RuntimeDefault` seccomp profile, from a distroless image.
 
 ## What we publish
 

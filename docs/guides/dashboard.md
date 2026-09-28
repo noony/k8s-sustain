@@ -1,17 +1,6 @@
 # Dashboard
 
-k8s-sustain includes a built-in web dashboard for exploring policies, viewing workload resource usage, and simulating policy changes before applying them.
-
-## Features
-
-- **Overview Story Flow** — Cluster summary covering savings KPIs, CPU and memory usage-vs-request trends, headroom breakdown, attention queue (at risk / drifted / blocked), policy effectiveness, and recent activity.
-- **Workloads** — Cluster-wide list with risk/drift/autoscaler columns, plus filters for namespace, kind, risk state, autoscaler presence, and lifecycle (active/inactive).
-- **Workload Detail** — Status snapshot (mode, last recycle, drift, OOM 24h), risk and HPA badges, blocked-state diagnostics, copy-as-YAML, and interactive CPU/memory charts with sliding-window recommendation, historical requests/limits, and OOM markers.
-- **Policies** — 4-card stat strip (total policies, active workloads, CPU & memory savings) plus per-policy effectiveness columns.
-- **Policy Detail** — Effectiveness time-series, view-as-YAML modal, Datadog-style time range picker, and matched workloads with risk/drift columns.
-- **Policy Simulator** — Tweak percentile, headroom, min/max, and limits strategy; supports Argo Rollouts; shows projected savings impact.
-- **Health Checks** — The `/healthz` endpoint verifies Prometheus connectivity for reliable readiness probes.
-- **Request Logging** — Structured HTTP access logs for debugging and observability.
+k8s-sustain includes a built-in, read-only web dashboard for exploring policies, viewing workload resource usage, and simulating policy changes before applying them.
 
 ## Running the Dashboard
 
@@ -25,7 +14,7 @@ k8s-sustain dashboard \
 
 The dashboard is then available at `http://localhost:8090`.
 
-At startup, the dashboard validates Prometheus connectivity and logs a warning if it is unreachable.
+At startup, the dashboard pings Prometheus and logs an error if it is unreachable; it still starts, and `/readyz` reports not-ready until Prometheus answers.
 
 !!! note
     The dashboard requires access to:
@@ -39,7 +28,7 @@ At startup, the dashboard validates Prometheus connectivity and logs a warning i
 |---------------------------|------------------------------|------------------------------------------|
 | `--bind-address`          | `:8090`                      | Address the dashboard server listens on  |
 | `--prometheus-address`    | `http://localhost:9090`      | Prometheus server URL                    |
-| `--log-level`             | `info`                       | Log level (debug, info, warn, error)     |
+| `--log-level`             | `info`                       | Log level (debug, info, warn, error). The Helm chart sets `error`, which drops the startup and access logs. |
 | `--cors-allowed-origins`  | `(empty — same-origin only)` | Allowed CORS origins (comma-separated). Use `*` to allow all (not recommended). |
 | `--excluded-namespaces`   | `(empty)`                    | Namespaces the controller/webhook never manage (comma-separated). Mirrors their `--excluded-namespaces` flag so the dashboard's policy-scoped workload views stay consistent with what is actually managed. |
 
@@ -51,202 +40,118 @@ semantics as on the controller — see the
 and the [Authenticated Prometheus guide](authenticated-prometheus.md).
 
 !!! danger "Dashboard environment variables carry the `DASHBOARD` prefix"
-    Every dashboard flag is bound under the `dashboard.` Viper key prefix, so
-    the dashboard reads **`K8SSUSTAIN_DASHBOARD_PROMETHEUS_*`** where the
-    controller reads `K8SSUSTAIN_PROMETHEUS_*`. The flag names are identical;
-    only the environment variables differ.
-
-    ```bash
-    K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE=/etc/prom/token \
-      k8s-sustain dashboard
-    ```
-
-    An unprefixed variable is **silently ignored**: the dashboard starts,
-    queries Prometheus unauthenticated, and every panel reports
-    ["No metrics data available"](#no-metrics-data-available) while the
-    controller works fine.
+    The dashboard reads `K8SSUSTAIN_DASHBOARD_*`, not `K8SSUSTAIN_*`; an
+    unprefixed variable is silently ignored and every panel reports
+    ["No metrics data available"](#no-metrics-data-available). See
+    [Environment variables — the prefixes differ per subcommand](authenticated-prometheus.md#environment-variables-the-prefixes-differ-per-subcommand).
 
 When a request carries an `Origin` header and a CORS allowlist is configured,
-the dashboard appends `Vary: Origin` to the response. This prevents shared
-caches and CDNs from serving one origin's `Access-Control-Allow-Origin` header
-back to a different origin (which would otherwise break the browser's
-same-origin policy when two trusted origins share the same upstream cache).
+the dashboard appends `Vary: Origin` to the response so shared caches never
+serve one origin's `Access-Control-Allow-Origin` header to another.
 
 ### Helm Chart
 
-Enable the dashboard in your Helm values:
+The dashboard is enabled by default (`dashboard.enabled: true`). All `dashboard.*` values, including `corsAllowedOrigins`, `ingress.*` and `httpRoute.*`, are listed in the [Helm values reference](../reference/helm-values.md#dashboard). If Prometheus needs credentials, the top-level `prometheusAuth` block configures the dashboard and the controller alike, with the correct environment-variable prefix for each.
 
-```yaml
-prometheusAddress: http://prometheus.monitoring.svc:9090  # only if using an external Prometheus
-
-dashboard:
-  enabled: true
-  corsAllowedOrigins:
-    - "https://my-domain.example.com"
-  service:
-    type: ClusterIP
-    port: 8090
-```
-
-If that Prometheus needs credentials, add the top-level `prometheusAuth` block —
-the chart applies it to the dashboard and the controller alike, with the correct
-environment-variable prefix for each:
-
-```yaml
-prometheusAuth:
-  existingSecret: prometheus-credentials
-  bearerTokenKey: token
-  headers:
-    X-Scope-OrgID: tenant-a
-```
-
-Then access it via port-forward:
+Access it via port-forward (the Service is named `<fullname>-dashboard`, e.g. `k8s-sustain-dashboard` for a release called `k8s-sustain`):
 
 ```bash
-kubectl port-forward svc/<release>-k8s-sustain-dashboard 8090:8090
+kubectl port-forward svc/k8s-sustain-dashboard 8090:8090
 ```
 
 !!! warning "Authenticate before exposing it"
-    The dashboard has **no built-in authentication**. It listens on a `ClusterIP` Service, so it stays cluster-internal until you add an Ingress/Gateway. When you expose it beyond `kubectl port-forward`, never expose it directly — front it with an identity-aware proxy such as **Cloudflare Access**, `oauth2-proxy`, or an authenticating Ingress (OIDC/SSO, mTLS). See [Hardening options](../concepts/workload-recommendations.md#hardening-options).
+    The dashboard has **no built-in authentication**. It listens on a `ClusterIP` Service, so it stays cluster-internal until you add an Ingress/Gateway. When you expose it beyond `kubectl port-forward`, never expose it directly — front it with an identity-aware proxy such as **Cloudflare Access**, `oauth2-proxy`, or an authenticating Ingress (OIDC/SSO, mTLS). See [Hardening options](../security.md#hardening-options).
 
 ## Using the Dashboard
 
-### Time Range and Auto-refresh
+### Time range and auto-refresh
 
-Every view in the dashboard — Overview, Workload Detail, Policy Detail, and Simulator — shares the same **time range picker** in the top-right corner.
+Overview, Workload Detail, Policy Detail and Simulator share one **time range picker**.
 
-**Relative presets** re-anchor to "now" on every load and refresh:
-Past 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 1 Month.
+- **Relative presets** — Past 5 Minutes, 15 Minutes, 30 Minutes, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 1 Month. They re-anchor to "now" on every load and refresh.
+- **Absolute range** — "Select from calendar…" opens a month calendar. Click a start and an end day (in either order; a single day selects that whole day), set the **From**/**To** times, and click **Apply**. Future days are disabled and an end in the future is clamped to now.
+- **Timezone** — dates display in the browser's local timezone; API calls use UTC epoch seconds.
+- **Shareable URLs** — the range is encoded as `from_ts`/`to_ts` (epoch seconds); relative presets also carry a `window` hint so the URL re-anchors to "now" on reload.
+- **Auto-refresh** — every 60 seconds while the tab is visible, paused while it is hidden. Absolute ranges stay fixed.
 
-**Absolute range** — click "Select from calendar…" to open a month calendar. Click a start day then an end day to select the span (click days in any order — they sort automatically; a single day selects that whole day), navigate months with the ‹ › arrows, and set the **From** and **To** times of day with the time fields below the grid. The current day is highlighted, and future days are disabled (there is no data ahead of now); an end that lands in the future is clamped back to the present. Click **Apply** to commit. Absolute ranges stay fixed regardless of when you load the page.
-
-The picker displays dates in the browser's **local timezone** (for display only; all API calls use UTC epoch seconds).
-
-**Shareable URLs** — the selected range is encoded in the URL as `from_ts`/`to_ts` (epoch seconds). Relative presets also carry a `window` hint so the URL re-anchors to "now" on reload. Copying and sharing a URL reproduces the same view: relative = latest window; absolute = exact frozen range.
-
-**Auto-refresh** — the dashboard refreshes automatically every 60 seconds while the browser tab is visible. It pauses when the tab is backgrounded or hidden, and resumes when you return. There is no manual toggle. Relative ranges re-anchor to "now" on each refresh; absolute ranges stay fixed.
+Charts always span the full selected window: a workload with less history than the range shows its data at the right edge. **Drag horizontally** on a Workload Detail or Simulator chart to zoom; the zoom becomes the active absolute range (URL, picker and every chart update together) and a **Reset zoom** button returns to the previous range.
 
 ### Overview Page
 
-The overview is organised as a vertical "Story Flow" with six bands, each answering a specific operator question — from "what am I saving?" down to "what just happened?".
+The overview is a vertical flow of six bands:
 
-1. **KPI strip** — Headline savings cards for CPU (cores) and memory (bytes), each showing the absolute saving, the savings ratio versus current requests, and a sparkline of the last 24h. Two complementary cards count workloads currently **at risk** (an OOM kill in the last 24h) and **drifted** (at least one pod not yet running the latest recommendation).
-2. **Savings** — A single card splits CPU and memory side-by-side, each plotting three lines over the selected time range so you can see the savings story directly:
-    - **Usage** — actual measured working set (memory) or CPU rate, summed across containers in policy-managed workloads.
-    - **Current request** — the request currently set on running pods, post-injection.
-    - **Original request** — the user's pod-template request before k8s-sustain rewrote it (`k8s_sustain_workload_template_*`).
+1. **KPI strip** — five cards:
+    - **CPU saved** and **Memory saved** — absolute saving, share of cluster requests, and a 7-day sparkline.
+    - **At risk** — workloads the controller holds in retry backoff, summed across policies. Click to open the filtered Workloads list.
+    - **Drifted** — workloads with at least one pod not yet running the recommendation. Click to open the filtered Workloads list.
+    - **Coordinated** — workloads whose recommendation is adjusted for an HPA or KEDA ScaledObject (see [Autoscaler coordination](../concepts/autoscaler-coordination.md)).
+2. **Savings** — CPU and memory side by side, each plotting three lines over the selected range:
+    - **Usage** — measured CPU rate or memory working set, summed across containers in policy-managed workloads.
+    - **Current request** — the request on running pods, post-injection.
+    - **Original request** — the pod-template request before k8s-sustain rewrote it (`k8s_sustain_workload_template_*`).
 
-    All three lines are scoped to managed workloads (those covered by a Policy) so they are directly comparable — usage and current-request queries are filtered with `and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*` so unmanaged pods don't inflate them. The gap between *original* and *current request* is the realised saving; the gap between *current request* and *usage* is the remaining headroom.
-3. **Headroom breakdown** — A stacked horizontal bar for CPU and memory split into `used`, `idle`, and `free` segments, sourced from the `k8s_sustain:cluster_cpu_headroom_breakdown` and `..._memory_headroom_breakdown` recording rules.
-4. **Attention queue** — Three grouped lists: **At risk** (workloads with an OOM kill in the last 24h), **Drifted** (at least one pod not yet running the recommendation, sorted by stale pod count), and **Blocked** (workloads where the controller is in an exponential-backoff retry state). Each row links to the workload detail page.
-5. **Policy effectiveness** — Per-policy rollup with the matched workload count, projected CPU/memory savings, and the count of at-risk workloads, so you can spot policies that need tuning.
-6. **Activity feed** — Most recent reconcile and pod-recycle events from the controller, with timestamps and outcomes.
+    All three are scoped to managed workloads (usage and current-request queries are joined `and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*`). The gap between *original* and *current request* is the realised saving; the gap between *current request* and *usage* is the remaining headroom.
+3. **Cluster headroom** — a stacked bar for CPU and memory split into `used`, `idle` and `free`, from the `k8s_sustain:cluster_cpu_headroom_breakdown` and `..._memory_headroom_breakdown` recording rules.
+4. **Needs attention** — three lists: **At risk** (an OOM kill in the last 24h), **Drifted** (sorted by stale pod count), and **Blocked** (in retry backoff). Each row links to the workload detail page.
+5. **Policy effectiveness** — per-policy workload count, CPU/memory saved, and the number of blocked workloads.
+6. **Recent activity** — the latest reconcile and pod-recycle events from the controller.
 
 ### Workloads Page
 
-Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, standalone Jobs) across the cluster, regardless of whether it is governed by a policy. Jobs spawned by a CronJob are folded under their owning CronJob row to avoid double-counting.
+Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, standalone Jobs, and bare Pods grouped by `k8s.sustain.io/owner-name`) across the cluster, whether or not a policy governs it. Jobs spawned by a CronJob are folded under their CronJob row.
 
-- **Filters** — Filter by namespace, kind, **risk state** (healthy, drifted, at risk, blocked), **autoscaler presence** (with autoscaler / without autoscaler), and **lifecycle** (Active / Inactive). The lifecycle filter defaults to "Any lifecycle", so inactive workloads are visible by default. The free-text name search remains.
-- **Columns** — A **Risk** badge summarises the workload's state at a glance, a **Drift** column shows stale/total pods (for example `2/5`: pods not yet running the recommendation over live pods), and an **Autoscaler** column indicates whether the workload is paired with an HPA or KEDA ScaledObject. The previous CPU/Memory request columns have been removed because the workload detail view now displays them in context.
-- **Status column** — Still shows whether the workload is **Automated** (has a sustain policy) or **Manual**, with a link to the policy when applicable.
-- **Inactive badge** — A workload with no recently discovered pods (retained for historical reporting rather than deleted) shows an **Inactive** badge next to its name, styled as "Inactive · last seen X ago". The same badge appears in the Policy Detail matched-workloads table. Inactive rows come from a `WorkloadRecommendation` whose underlying object is gone (a completed bare pod, a TTL/hook-deleted or terminal Job) rather than a live workload — the controller keeps that recommendation around for the retention window (`--recommendation-retention` / `controller.recommendationRetention`, default `168h`) so you can still review what it used to run with. Once the window lapses, the row disappears from the list on the next refresh.
+- **Stat strip** — Total, Automated (managed by a policy) and Manual counts.
+- **Filters** — namespace, kind, status (Automated / Manual), lifecycle (Active / Inactive, default any), risk (Safe / Drifted / At risk / Blocked), autoscaler (Has / No autoscaler), and a name search.
+- **Columns** — Namespace, Kind, Name, **Risk**, **Drift** (stale/total pods, e.g. `2/5`), **Policy** (links to the policy) and container count.
+- **Risk** — `At risk` (OOM kill in the last 24h) takes precedence over `Blocked` (retry backoff), then `Drift` (stale pods), otherwise `Safe`.
+- **Name badges** — **Autoscaler** when an HPA or KEDA ScaledObject targets the workload; **Coordinated** when autoscaler coordination adjusts its recommendation, followed by the non-trivial factors (`×1.15 CPU`, `×1.10 mem` overhead, `· replica ×0.80`); **Inactive · last seen X ago** for a workload with no live object.
 
-Click any workload to view its detail page.
+Inactive rows come from a retained `WorkloadRecommendation` whose object is gone (a completed bare pod, a deleted or terminal Job). They stay listed for the retention window (`--recommendation-retention`, default `168h`); see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads).
 
 ### Workload Detail
 
-Shows a comprehensive view of a single workload:
+- **Header** — kind, namespace, container count, **Automated** + policy link or **Manual**, the **Risk** badge, and the **Coordinated** badge with its factors when autoscaler coordination applies.
+- **Status** — three cards: **Mode** (`OnCreate` / `Ongoing`), **Drift** (stale/total pods), **OOM 24h**.
+- **Currently blocked** — shown only while the controller holds a retry record: reason, attempt count and last error.
+- **Recommendations** — for automated workloads, current vs. recommended CPU and memory request per container (init containers flagged).
+- **Charts** — per container, CPU and memory usage with the workload's **historical request** (amber dashed, stepped) and **limit** (amber dotted), plus the **sliding-window recommendation** (green long-dashed) for automated workloads, computed at each point with the policy's window and parameters. Without historical request data in Prometheus, the request line falls back to the current spec. Lines break across gaps longer than ~1.5× the query step (between CronJob runs, scaled to zero). Memory charts show **OOM kills** as red markers with a count, from kube-state-metrics; without kube-state-metrics the markers are omitted.
+- **Open in Simulator** — jumps to the simulator with the workload pre-filled.
 
-- **Status snapshot band** — A row of four KPI cards at the top of the page: **Update mode** (`OnCreate` / `Ongoing`), **Last recycled** (timestamp of the last controller-driven pod recycle), **Drift** (stale/total pods, for example `2/5 pods`), and **OOM (24h)** (count of OOM kills observed in the last 24 hours).
-- **Header badges** — A **Risk** badge mirrors the value shown in the Workloads list. When the workload has a paired autoscaler (HPA or KEDA ScaledObject), an **Autoscaler** badge is shown.
-- **Blocked card** — Visible only when the controller has a retry record for this workload; surfaces the failure **reason**, the number of **attempts**, the **next retry** time, and the **last error** message. Hidden once retries clear.
-- **Recommendations** — If automated, shows the computed CPU and memory recommendations per container.
-- **CPU and Memory charts** — Interactive time-series with a sliding-window recommendation line overlaid (for automated workloads). The recommendation evolves over time, showing how it would have been computed at each point using the policy's configured window and parameters, rather than a flat line.
-- **Open in Simulator** — Jump to the simulator with the workload pre-filled.
+When a container OOM'd in the last 24h, its displayed memory recommendation is floored at `max(kernel high-water peak, OOM-time cgroup limit × 1.20)`, exactly as the controller applies it (see [Recommendation pipeline](../concepts/recommendation-pipeline.md)). Sibling containers that did not OOM keep their plain percentile.
 
-Clicking through to an **inactive** workload's detail page still works: it resolves from the retained `WorkloadRecommendation` rather than a live workload object, so the recommendation and any Prometheus-backed usage history for the time range it was running remain visible even though the workload object itself is gone.
-
-A **time range picker** in the top-right controls how much history to display. It offers relative presets — Past 5 Minutes, 15m, 30m, 1 Hour, 4 Hours, 1 Day, 2 Days, 1 Week, 1 Month — and a "Select from calendar…" option for an absolute From→To range. The picker shows the browser's local timezone (display only). The step resolution adjusts automatically for each range. Charts always span the full selected window: a workload with less history than the range (a fresh deployment viewed over Past 1 Day) shows its data at the right edge with empty space before it, rather than stretching a few minutes across the whole axis. You can also **drag to zoom** on any chart to focus on a specific time window — click and drag horizontally to select the region of interest. Zooming sets the shared time range to the selected window: the URL, the time range picker, and every chart on the page all update together, and the data is re-fetched at a finer step resolution for the zoomed span. Because the zoom becomes the active (absolute) range, a **Reset zoom** button appears next to each chart's title while zoomed — click it to return to the previous range. Each chart overlays the workload's **historical resource request** (amber dashed stepped line) and **limit** (amber dotted line — same hue, since both are configured values) so you can see how actual usage compares to configured resources over time. The request line reflects real changes (e.g. from k8s-sustain patching or manual edits) rather than a flat snapshot. If historical request data is not available in Prometheus, the dashboard falls back to a static line from the current workload spec. If the workload is automated, the **recommendation** line (green long-dashed) is also shown. The legend keys reproduce each line's dash pattern, so series stay distinguishable without relying on colour alone.
-
-Usage, request, limit, and recommendation lines all **break across gaps** where no metric samples were emitted (e.g. between CronJob runs, while a workload is scaled to zero, or after pod deletion). The chart inserts an explicit gap whenever the spacing between consecutive samples exceeds ~1.5× the query step, so a continuous line never implies activity that wasn't there.
-
-Memory charts also display **OOM kill events** as red vertical markers with a count badge in the chart header. These are detected via `kube_pod_container_status_restarts_total` correlated with `kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}`. If no kube-state-metrics is available, OOM markers are silently omitted.
-
-When a container has OOM'd in the last 24h, that container's displayed **memory recommendation** is floored at `max(kernel high-water peak, OOM-time cgroup limit × 1.20)` (containers that did not OOM keep their pure percentile line, even when a sibling in the same pod OOMed) (same `OOM floor` step described in [Recommendation pipeline](../concepts/recommendation-pipeline.md)), so what the dashboard's recommendation card and chart line show matches what the controller would actually apply — including the bump anchor that takes over when the kernel peak underreports on cgroup v2.
-
-The dashboard **auto-refreshes every 60 seconds** while the browser tab is visible; it pauses automatically when the tab is backgrounded or hidden. Relative presets re-anchor to "now" on each refresh so they always show the latest window; absolute ranges stay fixed.
+An **inactive** workload's detail page resolves from the retained `WorkloadRecommendation`, so the recommendation and the usage history for the time it ran remain visible.
 
 ### Policies Page
 
-The Policies page leads with a **4-card stat strip** summarising the cluster-wide picture:
-
-- **Total policies** — number of `Policy` resources in the cluster
-- **Active workloads** — total workloads currently matched by any policy
-- **CPU savings** — aggregated cluster-wide CPU saved (cores)
-- **Memory savings** — aggregated cluster-wide memory saved (bytes)
-
-Below the strip, the policy table replaces the previous Ready/Namespace columns with **effectiveness columns**: matched **workload count**, **CPU savings** and **memory savings** per policy, **at-risk** workload count, and **last applied** timestamp. The Ready status indicator is still shown alongside the policy name. Click any row to view the policy detail page.
+A stat strip shows **Total policies**, **Workloads covered**, **Cluster CPU saved** and **Cluster Mem saved**. The table lists each policy's Name, **Status** (Ready condition), **Mode** (per-kind update modes), **Workloads**, **CPU saved**, **Mem saved**, **At risk** (blocked workloads) and **Last applied**. Click a row for the policy detail page.
 
 ### Policy Detail
 
-Shows the full configuration for both CPU and memory, plus the matched workloads table.
-
-- **Configuration card** — Per-resource (CPU and memory) cards display **window**, **percentile**, **headroom**, **min**/**max allowed**, **keepRequest** flag, and the active **limits** strategy (`equalsToRequest`, `keepLimit`, `keepLimitRequestRatio`, `noLimit`, or `requestsLimitsRatio`). Underneath, a meta row shows the **update mode** badges for all supported workload kinds (Deploy, STS, DS, CJ, Job, Argo Rollout), the **eviction** policy (`ignoreAutoscalerSafeToEvictAnnotations`), the **excludeInitContainers** flag, and the **autoscaler coordination** state (enabled / `replicaBudgetAnchor`).
-- **Selector card** — Lists the policy's `spec.selector` (target namespaces and any `matchLabels` / `matchExpressions`) so you can immediately see which workloads it scopes to.
-- **Effectiveness card** — A dedicated band with two time-series charts (CPU and memory) showing how this policy's savings have evolved over the selected time range.
-- **Time range picker** — The Datadog-style popover (relative presets: 5m to 1 Month; or an absolute From→To calendar range) drives the Effectiveness charts. The browser's local timezone is shown for display purposes. The selected range is encoded in the URL as `from_ts`/`to_ts` (epoch seconds); relative presets also carry a `window` hint so they re-anchor to "now" on reload. Copying the URL reproduces the same view — relative ranges show the latest window, absolute ranges show the exact frozen range.
-- **View as YAML modal** — Renders the entire `Policy` resource (sanitised of managed fields) inside a modal with a copy button — handy for sharing or storing in version control.
-- **Matched workloads table** — Each row now shows **Risk** and **Drift** (stale/total pods) columns alongside the existing namespace/kind/name and current resource requests, so you can prioritise which workloads to investigate from inside the policy view.
-- **Namespace filter** and **pagination** (50 per page) remain unchanged.
-
-Click any workload to view its detail page.
+- **Stat strip** — Status, Matched Workloads, CPU saved, Memory saved.
+- **Configuration** — per resource: window, percentile, headroom, min, max, keep request, and limits strategy. Below: update mode per kind (Deploy, STS, DS, CJ, Job, Rollout), ignore safe-to-evict annotations, exclude init containers, and autoscaler coordination (with `replicaBudgetAnchor` when set). **View as YAML** opens the Policy spec in a modal.
+- **Selector** — target namespaces (or "all namespaces"), `matchLabels` and `matchExpressions`.
+- **Effectiveness over time** — CPU and memory savings for this policy over the selected range.
+- **Matched Workloads** — Namespace, Kind, Name (with Inactive badge), Risk, Drift, containers and their current CPU/memory requests; namespace filter and pagination (50 per page).
+- **Simulate All** — runs the recommender with this policy's configuration over every matched workload (`GET /api/policies/{name}/batch-simulate`) and shows a **Batch Simulation Results** card: aggregate CPU and memory savings (current → recommended) and a per-container table. "Current" is the container's measured usage from Prometheus, not its configured request. A workload that fails to compute shows its error on its own row.
 
 ### Policy Simulator
 
-The simulator lets you test "what-if" scenarios:
+1. Select a **workload** (namespace, kind, name). Kinds: Deployment, StatefulSet, DaemonSet, CronJob, Job, Rollout, Pod.
+2. Optionally **Load from policy** to pre-fill every field from an existing policy.
+3. Adjust **CPU and memory** independently:
+    - Window — the recommendation lookback (e.g. `168h`), independent of the chart time range
+    - Percentile (50–100)
+    - Headroom (0–100%)
+    - Min/Max allowed
+    - **Limits strategy** — `keepLimit` (default), `noLimit`, `equalsToRequest`, `requestsLimitsRatio` (with a multiplier), or `keepLimitRequestRatio`. Mirrors `spec.rightSizing.resourcesConfigs.<resource>.limits`.
 
-1. Select a **workload target** (namespace, kind, name). The kind picker covers Deployment, StatefulSet, DaemonSet, CronJob, and standalone Job, plus **Argo Rollout**.
-2. Choose a **time range** via the time range picker — relative presets or an absolute From→To calendar range — controls how much history is displayed on the charts.
-3. Optionally, use the **Load from policy** dropdown to pre-fill all configuration fields (percentile, headroom, min/max, window, and limits strategy) from an existing policy — useful as a starting point before tweaking values.
-4. Adjust **CPU and Memory parameters** independently:
-    - Window (1h to 30 days) — the lookback period used to compute the recommendation, matching the Policy CRD structure. This is independent of the chart time range.
-    - Percentile (50th to 99th)
-    - Headroom percentage (0-100%)
-    - Min/Max allowed values
-    - **Limits strategy** — pick one of `keepLimit` (default; existing pod limits stay unchanged), `noLimit`, `equalsToRequest`, `requestsLimitsRatio` (with a numeric multiplier), or `keepLimitRequestRatio`. Mirrors `spec.rightSizing.resourcesConfigs.<resource>.limits` on the Policy CRD.
+The simulation re-runs automatically (debounced) whenever a parameter changes. Results show:
 
-The simulation runs automatically whenever any parameter changes (with a short debounce to avoid excessive queries). There is no manual "Run" button — results update live as you adjust sliders, change windows, or modify min/max values.
+- A **Savings impact** band — projected CPU and memory change.
+- Per container: CPU/memory request and limit, current vs. recommended (`— removed —` under `noLimit`).
+- Charts with the sliding-window recommendation, historical request and current limit over usage.
 
-The simulator, the workload recommendations endpoint and the controller all run the **same recommendation algorithm** (`internal/recommender`): the percentile is taken over the busiest replica, the OOM-aware memory floor applies, limits are derived from the workload's real containers, and **autoscaler coordination** is applied when an HPA or KEDA ScaledObject targets the workload. The simulator inherits the coordination setting of the workload's managing policy, so an untouched simulation shows exactly what the controller would apply; the `autoscalerCoordination` field of the `POST /api/simulate` body overrides it. The only controller behaviours the simulator skips are the workload-age gate (reported as `tooYoung` in the response instead of hiding the number) and the in-process live OOM watcher.
-
-The results show:
-
-- Computed recommendation per container (CPU/memory request, and CPU/memory limit when a limits strategy is selected; `— removed —` is rendered when `noLimit` is active)
-- A **savings impact band** that summarises the projected CPU and memory delta as both a percentage change and an absolute saving (cores / bytes), so you can immediately see whether the candidate parameters reduce or increase footprint
-- Time-series charts with a **sliding-window recommendation line** (green) that shows how the recommendation would have evolved at each point in time, **historical request** (amber dashed, stepped), and **current limit** (amber dotted) overlaid on historical usage
-
-## Development
-
-The dashboard frontend is a Vue 3 + TypeScript SPA built with Vite, located in `internal/dashboard/ui/frontend/`. The compiled output goes to `internal/dashboard/ui/dist/` and is embedded into the Go binary via `go:embed`.
-
-### Local development
-
-```bash
-cd internal/dashboard/ui/frontend
-npm install
-npm run dev    # starts Vite dev server with API proxy to localhost:8090
-```
-
-Run the Go dashboard backend separately (`k8s-sustain dashboard --bind-address=:8090`), and access the Vite dev server (default `http://localhost:5173`).
-
-### Building
-
-```bash
-make build-ui   # builds the frontend (npm ci + npm run build)
-make build      # builds frontend then Go binary
-```
-
-The Docker build automatically handles the frontend build in a separate stage.
+The simulator, the workload recommendations endpoint and the controller share one algorithm (`internal/recommender`): percentile over the busiest replica, OOM-aware memory floor, limits derived from the real containers, and **autoscaler coordination** when an HPA or KEDA ScaledObject targets the workload. The simulator inherits the coordination setting of the workload's managing policy; the `autoscalerCoordination` field of the `POST /api/simulate` body overrides it. It skips only the workload-age gate (reported as `tooYoung` instead of hiding the number) and the live OOM watcher.
 
 ## Troubleshooting
 
@@ -254,14 +159,36 @@ The Docker build automatically handles the frontend build in a separate stage.
 
 This message appears when Prometheus returns no time-series data for the workload. Common causes:
 
-- **Recording rules not loaded** — k8s-sustain requires recording rules (`k8s_sustain:pod_workload`, `k8s_sustain:container_cpu_usage_by_workload:rate1m`, etc.). Verify they exist by querying `k8s_sustain:pod_workload` in Prometheus. If using the bundled Prometheus subchart, they are embedded automatically. If using an external Prometheus with the Prometheus Operator, set `prometheusRule.enabled=true` to deploy the recording rules as a `PrometheusRule` resource.
-- **Duplicate kube-state-metrics instances** — If multiple kube-state-metrics are scraped, the workload mapping rules can fail with "many-to-many matching not allowed". Either remove the duplicate kube-state-metrics or upgrade the chart (the recording rules deduplicate series automatically since v0.3).
-- **Dashboard querying Prometheus unauthenticated** — if the controller produces recommendations but every dashboard panel is empty, the dashboard is probably missing its Prometheus credentials. The chart wires both components from the same `prometheusAuth` block, so this shows up when credentials were set by hand: the dashboard reads `K8SSUSTAIN_DASHBOARD_PROMETHEUS_*`, not `K8SSUSTAIN_PROMETHEUS_*`, and it never warns about an ignored variable. See [Authenticated Prometheus](authenticated-prometheus.md).
-- **Missing upstream metrics** — The recording rules depend on `kube_pod_owner`, `kube_replicaset_owner`, `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`, and `kube_pod_container_resource_requests` (for historical request lines). Ensure kube-state-metrics and cAdvisor metrics are scraped.
+- **Recording rules not loaded** — k8s-sustain requires recording rules (`k8s_sustain:pod_workload`, `k8s_sustain:container_cpu_usage_by_workload:rate1m`, etc.). Verify they exist by querying `k8s_sustain:pod_workload` in Prometheus. The bundled Prometheus subchart embeds them. With an external Prometheus Operator, set `prometheusRule.enabled=true` to deploy them as a `PrometheusRule`. See [Recording rules](../reference/recording-rules.md).
+- **Duplicate kube-state-metrics instances** — the recording rules deduplicate with `max by()`, but a hand-written query joining raw kube-state-metrics series can still fail with "many-to-many matching not allowed". Remove the duplicate kube-state-metrics or deduplicate the same way.
+- **Dashboard querying Prometheus unauthenticated** — if the controller produces recommendations but every dashboard panel is empty, the dashboard is probably missing its Prometheus credentials. The chart wires both from the same `prometheusAuth` block, so this shows up when credentials were set by hand with the wrong [environment-variable prefix](authenticated-prometheus.md#environment-variables-the-prefixes-differ-per-subcommand).
+- **Missing upstream metrics** — the recording rules depend on `kube_pod_owner`, `kube_replicaset_owner`, `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`, and `kube_pod_container_resource_requests` (for historical request lines). Ensure kube-state-metrics and cAdvisor metrics are scraped.
 
 ## HTTP API
 
 The dashboard backs every UI page with a small JSON API under `/api/`. The same endpoints are useful for ad-hoc scripts and integrations.
+
+### Routes
+
+| Method | Path | Returns |
+|---|---|---|
+| `GET` | `/api/policies` | Policies with per-policy rollups (workloads, savings, at-risk) |
+| `GET` | `/api/policies/{name}` | One Policy |
+| `GET` | `/api/policies/{name}/workloads` | Workloads matched by the policy (`page`, `pageSize`, `namespace`) |
+| `GET` | `/api/policies/{name}/batch-simulate` | Recommendations for every matched workload with aggregate savings |
+| `GET` | `/api/workloads` | Every workload in the cluster (filters: `namespace`, `kind`, `automated`, `active`, `risk`, `autoscaler`, `search`, `page`, `pageSize`) |
+| `GET` | `/api/workloads/{namespace}/{kind}/{name}` | Status snapshot (mode, drift, OOM 24h, blocked, coordination) |
+| `GET` | `/api/workloads/{namespace}/{kind}/{name}/metrics` | Usage, request, limit and OOM time-series |
+| `GET` | `/api/workloads/{namespace}/{kind}/{name}/recommendations` | Current recommendation per container |
+| `POST` | `/api/simulate` | What-if recommendation for one workload |
+| `GET` | `/api/summary` | Overview snapshot (KPIs, headroom, attention, policy rollups) |
+| `GET` | `/api/summary/trend` | Overview savings time-series |
+| `GET` | `/api/summary/activity` | Recent controller events |
+| `GET` | `/healthz` | Liveness: always `200` |
+| `GET` | `/readyz` | Readiness: pings Prometheus; `503` with the error when unreachable |
+| `GET` | `/metrics` | Prometheus metrics: `k8s_sustain_dashboard_request_duration_seconds`, `k8s_sustain_dashboard_panic_total` |
+
+Any other path serves the SPA.
 
 ### Response envelope
 
@@ -319,20 +246,4 @@ An `/api/*` path that matches no registered route returns the JSON 404 error env
 
 ### Validation
 
-Query parameters are validated strictly. Unknown enum values (`?risk=foo`, `?autoscaler=maybe`, `?kind=Pod`) return 400 with the `field` set, instead of silently filtering out every workload. Likewise out-of-range integers (`?page=-1`, `?limit=10000`) and malformed durations (`?window=junk`) get a 400 pointing at the offending input.
-
-## Helm Values Reference
-
-| Key                              | Default                    | Description                              |
-|----------------------------------|----------------------------|------------------------------------------|
-| `dashboard.enabled`              | `true`                     | Enable the dashboard deployment          |
-| `dashboard.replicaCount`         | `1`                        | Number of dashboard replicas             |
-| `dashboard.bindAddress`          | `:8090`                    | Server bind address (`:port` or `host:port`); the container port derives from its port part |
-| `dashboard.logLevel`             | `info`                     | Log level                                |
-| `dashboard.corsAllowedOrigins`   | `[]`                       | Allowed CORS origins. Empty = same-origin only. |
-| `dashboard.service.type`         | `ClusterIP`                | Service type                             |
-| `dashboard.service.port`         | `8090`                     | Service port                             |
-| `dashboard.resources`            | 10m CPU / 32-64Mi memory   | Pod resource requests/limits             |
-| `dashboard.nodeSelector`         | `{}`                       | Node selector                            |
-| `dashboard.tolerations`          | `[]`                       | Tolerations                              |
-| `dashboard.affinity`             | `{}`                       | Affinity rules                           |
+Query parameters are validated strictly. Unknown enum values (`?risk=foo`, `?autoscaler=maybe`, `?kind=ReplicaSet`) return 400 with the `field` set, instead of silently filtering out every workload. Likewise out-of-range integers (`?page=-1`, `?limit=10000`) and malformed durations (`?window=junk`) get a 400 pointing at the offending input.

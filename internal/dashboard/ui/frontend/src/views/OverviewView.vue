@@ -135,7 +135,7 @@ function memTrendSeries() {
         label="Drifted"
         :value="String(summary.data.value.kpi.driftedCount)"
         :tone="summary.data.value.kpi.driftedCount > 0 ? 'warn' : 'neutral'"
-        detail=">10% from rec"
+        detail="pods not on rec"
         clickable
         @click="gotoFiltered('drifted')"
       />

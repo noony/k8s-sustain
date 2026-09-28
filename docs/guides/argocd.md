@@ -1,47 +1,10 @@
 # Argo CD Integration
 
-k8s-sustain coexists with Argo CD GitOps without any `ignoreDifferences` configuration: k8s-sustain only mutates Pods (via the webhook) and recycles them (via the controller), and never touches the workload spec that Argo CD tracks.
-
-## Goal
-
-Run a workload under Argo CD GitOps with k8s-sustain right-sizing it, and confirm Argo CD remains in `Synced` state across reconcile cycles.
-
-## Prerequisites
-
-- An Argo CD installation managing the target namespace.
-- A Git repository containing the workload manifest with a `k8s.sustain.io/policy` annotation (pod template, the workload's own `metadata.annotations`, or its Namespace — see the [Annotation reference](../reference/annotation.md)).
-- A k8s-sustain `Policy` matching the workload (see [Installation](../getting-started/installation.md)).
-- Read access to a Prometheus instance from the controller.
+k8s-sustain coexists with Argo CD without any `ignoreDifferences` configuration: it sizes pods at admission and resizes or evicts running pods, but never touches the workload spec that Argo CD tracks.
 
 ## Walkthrough
 
-### 1. Annotate the workload's pod template in Git
-
-```yaml
-# apps/example-app/deployment.yaml in your gitops repo
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: example-app
-  namespace: example
-spec:
-  replicas: 3
-  selector: { matchLabels: { app: example-app } }
-  template:
-    metadata:
-      labels: { app: example-app }
-      annotations:
-        k8s.sustain.io/policy: production-rightsizing
-    spec:
-      containers:
-        - name: app
-          image: nginx:1.27
-          resources:
-            requests: { cpu: 100m, memory: 256Mi }
-            limits:   { cpu: 200m, memory: 512Mi }
-```
-
-### 2. Define the Argo CD `Application`
+Commit the workload to Git with the `k8s.sustain.io/policy` annotation (see the [Quick Start](../getting-started/quick-start.md#3-opt-in-a-deployment) for an example Deployment), and point an `Application` at it:
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -61,41 +24,20 @@ spec:
     automated: { selfHeal: true, prune: true }
 ```
 
-Apply the `Application`. Argo CD syncs the Deployment.
-
-### 3. Wait for a k8s-sustain reconcile cycle
-
-Reconciles run on the `--reconcile-interval` (default `5m`). To accelerate a first observation, restart the controller pod or trigger a Policy update.
+Policies themselves can be managed from Git too — see [Managing policies with Helm](managing-policies-with-helm.md#gitops-with-argo-cd).
 
 ## Verification
 
-After a reconcile cycle that recycles a pod, Argo CD must remain `Synced`:
+After a reconcile cycle that updates pods (default interval `5m`), the Application stays `Synced`:
 
 ```bash
 argocd app get example-app -o json | jq '.status.sync.status'
 ```
 
-Expected output: `"Synced"`.
-
-The pod's resources reflect the recommendation:
-
-```bash
-kubectl get pods -n example -l app=example-app \
-  -o yaml | yq '.items[].spec.containers[].resources'
-```
-
-The Deployment's pod template is **unchanged** from what is in Git:
-
-```bash
-kubectl get deploy example-app -n example \
-  -o yaml | yq '.spec.template.spec.containers[].resources'
-```
-
-These two outputs differ — that is expected, since the webhook mutates pods but never the workload spec.
+The pods carry the recommendation while the Deployment in Git is unchanged — see [Verifying applied resources](../concepts/update-modes.md#verifying-applied-resources).
 
 ## Notes
 
-- **No `ignoreDifferences` needed.** k8s-sustain never patches workload specs. The webhook intercepts `Pod CREATE` admission and injects resources into the resulting pod manifest; the controller recycles stale pods (in-place on Kubernetes 1.33+, eviction on older versions). Argo CD tracks workload specs, so there is no diff to ignore.
-- **`selfHeal: true` is safe.** Since Argo CD never sees a diff caused by k8s-sustain, it has nothing to revert.
-- **Argo Rollouts.** If you use Argo Rollouts (`Rollout` objects) instead of native Deployments, see the [Argo Rollouts guide](argo-rollouts.md).
-- **Sync-wave hook Jobs.** A `PreSync`/`PostSync` hook Job annotated with `k8s.sustain.io/policy` is a standalone Job as far as k8s-sustain is concerned. Only the controller writes `WorkloadRecommendation`s, on its reconcile cadence — the webhook only reads them — so a hook Job that Argo CD's deletion policy (`argocd.argoproj.io/hook-delete-policy`) removes before the controller's next reconcile ever sees it produces no recommendation at all, and its pods are admitted with their template resources. A hook Job that *is* observed by a reconcile (long-running, or left in place by its deletion policy) gets a cached recommendation like any other workload; once its object is gone, that entry stays visible on the dashboard as an **inactive** row for the retention window (`--recommendation-retention`, default `168h`) — see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads).
+- **`selfHeal: true` is safe.** Argo CD never sees a diff caused by k8s-sustain, so it has nothing to revert.
+- **Argo Rollouts.** For `Rollout` objects, see the [Argo Rollouts guide](argo-rollouts.md).
+- **Sync-wave hook Jobs.** A `PreSync`/`PostSync` hook Job annotated with `k8s.sustain.io/policy` is a standalone Job to k8s-sustain. Its first run is admitted with template resources and leaves a cold-start stub; later runs of the same Job name get the recommendation once it is computed — see [Cold start](../concepts/workload-recommendations.md#cold-start-stub-recommendations). Once the Job is deleted, its entry stays as an inactive row for the retention window — see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads).

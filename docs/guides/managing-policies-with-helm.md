@@ -14,6 +14,10 @@ manages only `Policy` custom resources.
 
 - The `k8s-sustain` operator chart is installed (it provides the `Policy` CRD).
 
+A Policy's `selector` only narrows which workloads it can match. Workloads must
+still opt in with the `k8s.sustain.io/policy` annotation — see
+[Resolution order](../reference/annotation.md#resolution-order).
+
 ## Defining policies
 
 Each entry in `policies` becomes one `Policy`. The `spec` maps 1:1 to the
@@ -23,8 +27,9 @@ Each entry in `policies` becomes one `Policy`. The `spec` maps 1:1 to the
 # policies-values.yaml
 policies:
   - name: staging-rightsizing
-    labels:
+    labels:              # optional, merged into metadata.labels
       team: platform
+    annotations: {}      # optional, rendered as metadata.annotations
     spec:
       selector:
         namespaces: [staging]
@@ -43,7 +48,8 @@ Install or upgrade:
 
 ```bash
 helm upgrade --install k8s-sustain-policies \
-  charts/k8s-sustain-policies \
+  oci://ghcr.io/noony/helm-charts/k8s-sustain-policies \
+  --version <VERSION> \
   -f policies-values.yaml
 ```
 
@@ -56,7 +62,10 @@ kubectl get policies.k8s.sustain.io
 ## GitOps with Argo CD
 
 Run one Argo CD `Application` for the operator and another for the policies, so
-app teams can change policies without redeploying the operator:
+app teams can change policies without redeploying the operator. The chart comes
+from the OCI registry and the values file from your config repository (the
+OCI registry must be registered in Argo CD as a Helm repository with OCI
+enabled):
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -66,13 +75,16 @@ metadata:
   namespace: argocd
 spec:
   project: default
-  source:
-    repoURL: https://github.com/your-org/your-config.git
-    path: charts/k8s-sustain-policies
-    targetRevision: main
-    helm:
-      valueFiles:
-        - ../../envs/staging/policies-values.yaml
+  sources:
+    - repoURL: ghcr.io/noony/helm-charts
+      chart: k8s-sustain-policies
+      targetRevision: <VERSION>
+      helm:
+        valueFiles:
+          - $values/envs/staging/policies-values.yaml
+    - repoURL: https://github.com/your-org/your-config.git
+      targetRevision: main
+      ref: values
   destination:
     server: https://kubernetes.default.svc
     namespace: k8s-sustain

@@ -10,10 +10,10 @@ Over-provisioned clusters are one of the largest hidden sources of cloud waste: 
 
 k8s-sustain watches `Policy` objects and applies percentile-based resource recommendations to opted-in workloads. Two independent components handle updates:
 
-- **Controller** — periodically reconciles Policy objects and recycles stale pods; uses in-place pod updates on k8s ≥ 1.33, PDB-respecting eviction otherwise. CronJob, Job and bare-pod workloads are never evicted — their running pods are only resized in place, because eviction would discard in-flight work and nothing would recreate a bare pod
+- **Controller** — periodically reconciles Policy objects and brings running pods up to date: in place on k8s ≥ 1.33, PDB-respecting eviction otherwise. CronJob, Job and bare-pod workloads are never evicted ([details](https://noony.github.io/k8s-sustain/latest/concepts/in-place-updates/#kinds-that-are-never-evicted))
 - **Admission webhook** — injects resources at pod creation time, before scheduling
 
-Workloads opt in with a single annotation:
+Workloads opt in with a single annotation, on the pod template, the workload's own metadata, or its Namespace (most specific wins; `k8s.sustain.io/opt-out: "true"` excludes a workload — see [resolution order](https://noony.github.io/k8s-sustain/latest/reference/annotation/#resolution-order)):
 
 ```yaml
 metadata:
@@ -27,11 +27,11 @@ metadata:
 
 ## Documentation
 
-- [Getting Started](https://noony.github.io/k8s-sustain/getting-started/installation/)
-- [Architecture](https://noony.github.io/k8s-sustain/concepts/architecture/)
-- [Update Modes](https://noony.github.io/k8s-sustain/concepts/update-modes/)
-- [Policy CRD Reference](https://noony.github.io/k8s-sustain/reference/policy/)
-- [Helm Values](https://noony.github.io/k8s-sustain/reference/helm-values/)
+- [Getting Started](https://noony.github.io/k8s-sustain/latest/getting-started/installation/)
+- [Architecture](https://noony.github.io/k8s-sustain/latest/concepts/architecture/)
+- [Update Modes](https://noony.github.io/k8s-sustain/latest/concepts/update-modes/)
+- [Policy CRD Reference](https://noony.github.io/k8s-sustain/latest/reference/policy/)
+- [Helm Values](https://noony.github.io/k8s-sustain/latest/reference/helm-values/)
 
 ## Security & supply chain
 
@@ -50,7 +50,7 @@ cosign verify \
   ghcr.io/noony/k8s-sustain:<version>
 ```
 
-Full verification instructions — provenance, SBOM, binaries, charts, and enforcing signatures at admission — are in the [Security documentation](https://noony.github.io/k8s-sustain/security/).
+Full verification instructions — provenance, SBOM, binaries, charts, and enforcing signatures at admission — are in the [Security documentation](https://noony.github.io/k8s-sustain/latest/security/).
 
 To report a vulnerability, open a [private security advisory](https://github.com/noony/k8s-sustain/security/advisories/new) rather than a public issue.
 

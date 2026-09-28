@@ -16,7 +16,7 @@ spec:
 
 **Behaviour:**
 
-- The webhook intercepts every `Pod CREATE` request for pods that carry the policy annotation
+- The webhook intercepts every `Pod CREATE` request for pods opted into the policy — through the pod template, the workload or its Namespace (see [resolution order](../reference/annotation.md#resolution-order))
 - The latest recommendation is always injected — the webhook overrides whatever the pod template currently specifies
 - Existing running pods are **not** affected — only newly created pods receive the recommendation
 - If the webhook is unavailable, the pod is admitted without resource injection (`failurePolicy: Ignore`)
@@ -47,24 +47,22 @@ spec:
 
 **At pod creation (webhook):**
 
-- The webhook intercepts `Pod CREATE` requests for pods that carry the policy annotation
 - As in OnCreate mode, the webhook injects the latest recommendation over whatever the template specifies, so new pods never start with stale resources and never wait for the controller's first resize
 
-**Three kinds never take the eviction path**, on any cluster version: `cronJob`, `job` and `pod`. Evicting those pods would destroy in-flight work that nothing will redo — and for a bare pod, nothing would recreate it at all. For them `Ongoing` means in-place resize or nothing: the k8s < 1.33 path immediately below does not apply to them at all, and neither does the eviction fallback in the k8s ≥ 1.33 path. Each kind's exception is spelled out at the end of this section.
+`cronJob`, `job` and `pod` never take the eviction path: their running pods are resized in place or not at all — see [Kinds that are never evicted](in-place-updates.md#kinds-that-are-never-evicted).
 
 **Ongoing reconciliation (controller) on clusters without in-place update support (k8s < 1.33):**
 
-1. Each non-terminal pod (Running or Pending) with stale resources is evicted via the Eviction API. Staleness is detected on both requests and limits — a recommendation that only changes a limit still triggers a recycle. Evicting Pending pods unblocks workloads stuck unschedulable because their original request was too large; the webhook re-injects the smaller recommendation on the replacement.
+1. Each non-terminal pod (Running or Pending) with stale resources is evicted via the Eviction API, one at a time (see [Eviction safeguards](#eviction-safeguards)). Staleness is detected on both requests and limits. Evicting Pending pods unblocks workloads stuck unschedulable because their original request was too large.
 2. The workload controller (Deployment/StatefulSet/DaemonSet) creates replacement pods
 3. The webhook injects the latest recommendations into the new pods at creation time
 4. PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle
 
 **Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.33):**
 
-1. Controller patches each running, non-terminating pod's `spec.containers[*].resources` directly
-2. The kubelet applies the new resources without restarting the container
-3. If the kubelet reports `Infeasible` (node cannot satisfy the request) or `Error` (actuating the accepted resize failed), the pod is evicted as a fallback
-4. If the kubelet reports `Deferred`, the resize is pending kubelet-side conditions and no action is taken
+1. Controller resizes each running, non-terminating pod through the `pods/resize` subresource
+2. The kubelet applies the new resources, without restarting the container unless its `resizePolicy` requires it
+3. If the kubelet reports `Infeasible` or `Error`, or the API server rejects the resize as invalid, the pod is evicted as a fallback; `Deferred` resizes are left to the kubelet
 
 See [In-Place Updates](in-place-updates.md) for details.
 
@@ -74,13 +72,7 @@ See [In-Place Updates](in-place-updates.md) for details.
 - Situations where you want resources to track actual usage over time
 - Clusters with in-place update support (zero-disruption updates, k8s ≥ 1.33)
 
-**Note:** The controller never patches workload templates (Deployment, StatefulSet, CronJob, etc.) — the webhook handles resource injection at pod creation. On clusters without in-place update support (k8s < 1.33), pods are replaced via PDB-respecting eviction, which causes pod restarts — except for the three never-evicted kinds below.
-
-**CronJob exception:** for `cronJob: Ongoing`, eviction is *never* used — evicting a Job pod would kill the run. Currently-running job pods are resized in place when the cluster supports it (k8s ≥ 1.33, with full coverage of `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35); otherwise they are left to finish on their original resources and the next scheduled run picks up the new values from the webhook. The CronJob spec itself is never modified, so GitOps tools see no drift.
-
-**Standalone Job exception:** `job: Ongoing` behaves the same way — the controller resizes a standalone Job's currently-running pods in place and never evicts them (which would discard in-flight work) or mutates the Job spec. Because a standalone Job has no next run, in-place resize is the only post-creation correction, so `Ongoing` is worthwhile only for **long-running** Jobs and requires k8s ≥ 1.35 (standalone Jobs always run with `restartPolicy: Never`/`OnFailure`). On clusters without in-place support the running pod is left untouched. Jobs owned by a CronJob are handled by the CronJob path above, not this one.
-
-**Bare-pod exception:** `pod: Ongoing` is the third member of the same family, and the reason for it is the strongest of the three — no controller exists that could recreate an evicted bare pod, so eviction would not disrupt the workload, it would delete it. A bare pod (opted in via [`k8s.sustain.io/owner-name`](../guides/standalone-pods-and-grouping.md)) is therefore **never evicted in either mode**, while `Ongoing` resizes its running pods in place through `pods/resize` (k8s ≥ 1.33, with full coverage of `restartPolicy: Never`/`OnFailure` on k8s ≥ 1.35 — Airflow's `KubernetesPodOperator` uses `Never` by default). On clusters without in-place support nothing is applied to a running bare pod and the recommendation only reaches the identity's next pod through the webhook. As with Job and CronJob, an in-place **memory** resize can restart the container and so discard an in-flight task; bare pods inherit that tradeoff rather than getting an exception from it. Use `pod: OnCreate` if your tasks cannot tolerate a restart — the recommendation is still computed, cached and injected into the next pod.
+The controller never patches workload templates (Deployment, StatefulSet, CronJob, …), so GitOps tools see no drift — see [Verifying applied resources](#verifying-applied-resources).
 
 ---
 
@@ -94,7 +86,7 @@ See [In-Place Updates](in-place-updates.md) for details.
 | CronJob pods (ephemeral per-run) | `OnCreate` — each run gets fresh recommendations |
 | Long-running standalone Jobs (k8s ≥ 1.35) | `Ongoing` — resizes the running pod in place mid-run |
 | Short-lived standalone Jobs | `OnCreate` — pods finish before a reconcile would touch them |
-| Long-running bare pods (k8s ≥ 1.33; ≥ 1.35 for `restartPolicy: Never`/`OnFailure`, which Airflow's `KubernetesPodOperator` uses) | `Ongoing` — resizes the running pod in place; never evicted |
+| Long-running bare pods (k8s ≥ 1.35, see [Version matrix](in-place-updates.md#version-matrix)) | `Ongoing` — resizes the running pod in place; never evicted |
 | Short-lived bare pods, or tasks that cannot tolerate a container restart | `OnCreate` — inject at admission only |
 | StatefulSets with persistent state | `Ongoing` + k8s ≥ 1.33, or `OnCreate` |
 | DaemonSets | `Ongoing` (rolling update is DaemonSet's normal behaviour) |
@@ -102,15 +94,63 @@ See [In-Place Updates](in-place-updates.md) for details.
 
 ---
 
+## Downsize threshold
+
+To avoid churning pods over noise, the controller ignores small **decreases**. A decrease is acted on only when it is at least `max(percent% of the current value, minDecrease)`, set per resource with `resourcesConfigs.<cpu|memory>.downsizeThreshold` (defaults: 5%, with `minDecrease` 10m for CPU and 15Mi for memory). The check is per container and per value (request and limit).
+
+- **Increases always apply**, however small.
+- Setting both `percent` and `minDecrease` to `0` acts on every decrease.
+- The threshold only gates resizing and eviction of running pods; new pods still receive the exact recommendation from the webhook.
+
+See the [Policy reference](../reference/policy.md#cpudownsizethreshold-memorydownsizethreshold).
+
+---
+
+## Eviction safeguards
+
+Whenever the controller evicts a pod — on k8s < 1.33, or as the fallback for a failed in-place resize — it applies these guards:
+
+- **Ownership check.** Pods are listed by the workload's selector and then kept only when their controller ownerRef chain resolves to the target workload's UID (directly for StatefulSet/DaemonSet/Job, via the ReplicaSet for Deployment/Argo Rollout). A bystander pod that merely shares the labels is never touched. The same check gates in-place resizes.
+- **PodDisruptionBudgets.** Evictions go through the Eviction API; a PDB-blocked pod is skipped and retried next reconcile.
+- **`safe-to-evict` annotation.** Pods annotated `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` are never evicted. Set `spec.rightSizing.update.eviction.ignoreAutoscalerSafeToEvictAnnotations: true` to evict them anyway. In-place resizes are not gated by it.
+- **One pod at a time.** After each eviction the controller waits for the workload to become quiescent (evicted pod gone, no peer Pending or not Ready) before evicting the next, up to `--recycle-replacement-timeout` (default 5m). On timeout it stops for this reconcile.
+- **Crash-loop halt.** If any pod of the workload enters `CrashLoopBackOff` during that wait, the loop stops so a bad recommendation cannot cascade.
+- **StatefulSet ordering.** StatefulSet pods are evicted in descending ordinal order (`web-2 → web-1 → web-0`); other kinds in name order.
+
+CronJob, Job and bare-pod pods are never evicted — see [Kinds that are never evicted](in-place-updates.md#kinds-that-are-never-evicted). More detail on the wait is in [Eviction fallback](in-place-updates.md#eviction-fallback).
+
+---
+
+## Verifying applied resources
+
+The workload's pod template never changes, so `kubectl get deployment -o yaml` keeps showing the original resources. Check the recommendation and the pods instead:
+
+```bash
+# cached recommendation (what the webhook injects and the controller applies)
+kubectl get wlrec -n <namespace>
+kubectl get wlrec <kind>-<name> -n <namespace> -o yaml
+
+# resources on the running pods
+kubectl get pods -n <namespace> -l <workload-selector> \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[*].resources}{"\n"}{end}'
+```
+
+The workload also gets a `ResourcesUpdated` event whenever the controller resizes or evicts at least one of its pods (`kubectl describe`).
+
+---
+
 ## Recommend-only mode
 
-Independently of `OnCreate` or `Ongoing`, you can run in **recommend-only** mode at two scopes: globally, by passing `--recommend-only` (or `recommendOnly: true` in the Helm values), or per policy, by setting `spec.rightSizing.recommendOnly: true` on an individual `Policy`. The global flag is a master switch — when set, every policy is dry-run regardless of its own field. In this mode:
+Recommend-only is a dry-run that works independently of `OnCreate` or `Ongoing`, at two scopes:
 
-- The controller still reconciles and computes recommendations, but **never recycles pods**
-- The webhook still intercepts pod creation and reads the cached recommendation, but **never injects resources** (only the owner-name metadata label mirror is still applied)
-- Computed recommendations are logged as structured JSON at `info` level
+- **Globally**, with `--recommend-only` (Helm `recommendOnly: true`, which sets it on the controller and the webhook). This is a master switch: every policy is dry-run regardless of its own field.
+- **Per policy**, with `spec.rightSizing.recommendOnly: true` — useful to onboard one policy while others actively apply.
 
-This is useful for validating recommendations before switching to active mode. See the [CLI reference](../reference/cli.md) for details.
+In this mode:
+
+- The controller still reconciles, computes and caches recommendations in `WorkloadRecommendation` objects, but **never resizes or evicts pods**
+- The webhook still resolves pods and reads the cache, but **never injects resources** (only the owner-name label mirror is still applied)
+- The controller logs each recommendation at `info` level — the chart's default `controller.logLevel: error` hides these, so read `kubectl get wlrec` or the dashboard instead, or raise the log level
 
 ---
 

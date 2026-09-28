@@ -1,9 +1,12 @@
 package dashboard
 
 import (
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	dto "github.com/prometheus/client_model/go"
@@ -30,6 +33,49 @@ func TestHandlerRecordsRequestDuration(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("dashboard duration histogram not registered")
+	}
+}
+
+func TestMetricsEndpointServesRegistry(t *testing.T) {
+	srv := &Server{Logger: testLogger(t)}
+	h := srv.Handler()
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("Content-Type = %q, want text/plain exposition", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "k8s_sustain_dashboard_request_duration_seconds") {
+		t.Error("/metrics body missing dashboard request duration histogram")
+	}
+}
+
+func TestMetricsEndpointGzipIsSingleEncoded(t *testing.T) {
+	srv := &Server{Logger: testLogger(t)}
+	h := srv.Handler()
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	h.ServeHTTP(rec, req)
+	if got := rec.Header().Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", got)
+	}
+	zr, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	body, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("read gzip body: %v", err)
+	}
+	if !strings.Contains(string(body), "k8s_sustain_dashboard_request_duration_seconds") {
+		t.Error("decoded /metrics body missing dashboard request duration histogram (double-compressed?)")
 	}
 }
 

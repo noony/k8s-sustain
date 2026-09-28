@@ -53,6 +53,11 @@ theme:
     - content.tabs.link
     - content.tooltips
 
+validation:
+  anchors: warn
+  unrecognized_links: warn
+  omitted_files: warn
+
 extra_css:
   - stylesheets/extra.css
 
@@ -98,8 +103,7 @@ nav:
       - Workload Recommendations: concepts/workload-recommendations.md
   - Guides:
       - Workloads:
-          - Deployments & StatefulSets: guides/deployments.md
-          - DaemonSets: guides/daemonsets.md
+          - Deployments, StatefulSets & DaemonSets: guides/deployments.md
           - Jobs & CronJobs: guides/jobs-and-cronjobs.md
           - Argo Rollouts: guides/argo-rollouts.md
           - Standalone Pods & Grouping: guides/standalone-pods-and-grouping.md

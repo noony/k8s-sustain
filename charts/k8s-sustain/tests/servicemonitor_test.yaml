@@ -97,3 +97,62 @@ tests:
           path: metadata.name
           value: k8s-sustain-webhook
         documentIndex: 1
+
+  - it: renders the dashboard monitor on the http port when enabled
+    set:
+      dashboard.serviceMonitor.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-dashboard
+      - isSubset:
+          path: metadata.labels
+          content:
+            app.kubernetes.io/component: dashboard
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: k8s-sustain
+            app.kubernetes.io/instance: k8s-sustain
+            app.kubernetes.io/component: dashboard
+      - equal:
+          path: spec.endpoints
+          value:
+            - port: http
+              path: /metrics
+              interval: 30s
+              scrapeTimeout: 10s
+
+  - it: adds dashboard additionalLabels
+    set:
+      dashboard.serviceMonitor.enabled: true
+      dashboard.serviceMonitor.additionalLabels:
+        release: kube-prometheus-stack
+    asserts:
+      - isSubset:
+          path: metadata.labels
+          content:
+            release: kube-prometheus-stack
+
+  - it: suppresses the dashboard monitor when the dashboard itself is disabled
+    set:
+      dashboard.enabled: false
+      dashboard.serviceMonitor.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders all three monitors when all are enabled
+    set:
+      controller.serviceMonitor.enabled: true
+      webhook.serviceMonitor.enabled: true
+      dashboard.serviceMonitor.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 3
+      - equal:
+          path: metadata.name
+          value: k8s-sustain-dashboard
+        documentIndex: 2

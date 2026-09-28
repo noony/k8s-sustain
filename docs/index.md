@@ -26,7 +26,7 @@ k8s-sustain reads the CPU and memory your containers actually use from Prometheu
 
 ```bash
 helm install k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
-  --namespace k8s-sustain --create-namespace
+  --version <VERSION> --namespace k8s-sustain --create-namespace
 ```
 
 </div>
@@ -119,7 +119,7 @@ metadata:
     k8s.sustain.io/policy: my-policy
 ```
 
-The annotation is honoured on the pod template, on the workload's own `metadata.annotations`, or on its Namespace — most specific first. See the [Annotation reference](reference/annotation.md) for precedence and the opt-out escape hatch.
+The annotation is honoured on the pod template, on the workload's own `metadata.annotations`, or on its Namespace — most specific first. See [resolution order](reference/annotation.md#resolution-order) for precedence and the opt-out escape hatch.
 
 ## Two update modes { .ks-section-title }
 
@@ -152,12 +152,12 @@ Everything OnCreate does, plus the controller brings running pods up to date: in
 <p class="ks-kinds__label">Supported in both modes</p>
 
 <p class="ks-kinds__list">
-<span>Deployment</span><span>StatefulSet</span><span>DaemonSet</span><span>Argo Rollout</span><span>Job</span><span>CronJob</span>
+<span>Deployment</span><span>StatefulSet</span><span>DaemonSet</span><span>Argo Rollout</span><span>Job</span><span>CronJob</span><span>Pod</span>
 </p>
 
 </div>
 
-<p class="ks-note" markdown="span">:material-information-outline: CronJob, Job and bare-pod workloads are never evicted: their running pods are only ever resized in place, since eviction would discard in-flight work and nothing would recreate a bare pod. See [Update modes](concepts/update-modes.md).</p>
+<p class="ks-note" markdown="span">:material-information-outline: CronJob, Job and bare-pod workloads are never evicted: their running pods are only ever resized in place, since eviction would discard in-flight work and nothing would recreate a bare pod. See [Kinds that are never evicted](concepts/in-place-updates.md#kinds-that-are-never-evicted).</p>
 
 ## Built for production clusters { .ks-section-title }
 
@@ -171,7 +171,7 @@ Every safeguard a platform team expects, and nothing that touches your GitOps-ma
 
     ---
 
-    p50 through p99, configurable per policy and per resource, with a headroom buffer on top of the observed value.
+    Any percentile from 1 to 100, configurable per policy and per resource, with a headroom buffer on top of the observed value.
 
 - :material-arrow-expand-vertical:{ .lg .middle } **In-place pod updates**
 
@@ -269,6 +269,6 @@ The dashboard shows current requests against observed usage and what each policy
 
     ---
 
-    Signed images, SBOMs and SLSA provenance for every release.
+    Runtime permissions and trust boundaries, plus signed images, SBOMs and SLSA provenance for every release.
 
 </div>
