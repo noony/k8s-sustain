@@ -212,20 +212,20 @@ const hasFilters = computed(
             <thead>
               <tr>
                 <th class="sort-header" @click="sort('namespace')">
-                  Namespace<span v-html="sortArrow('namespace')"></span>
+                  Namespace<span>{{ sortArrow('namespace') }}</span>
                 </th>
                 <th class="sort-header" @click="sort('kind')">
-                  Kind<span v-html="sortArrow('kind')"></span>
+                  Kind<span>{{ sortArrow('kind') }}</span>
                 </th>
                 <th class="sort-header" @click="sort('name')">
-                  Name<span v-html="sortArrow('name')"></span>
+                  Name<span>{{ sortArrow('name') }}</span>
                 </th>
                 <th>Risk</th>
                 <th class="sort-header" @click="sort('stalePods')">
-                  Drift<span v-html="sortArrow('stalePods')"></span>
+                  Drift<span>{{ sortArrow('stalePods') }}</span>
                 </th>
                 <th class="sort-header" @click="sort('policyName')">
-                  Policy<span v-html="sortArrow('policyName')"></span>
+                  Policy<span>{{ sortArrow('policyName') }}</span>
                 </th>
                 <th>Containers</th>
               </tr>

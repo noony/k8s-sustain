@@ -92,21 +92,21 @@ function updateTypeBadges(update?: Record<string, string>): string {
             <thead>
               <tr>
                 <th class="sort-header" @click="sort('name')">
-                  Name<span v-html="sortArrow('name')"></span>
+                  Name<span>{{ sortArrow('name') }}</span>
                 </th>
                 <th>Status</th>
                 <th>Mode</th>
                 <th class="sort-header" @click="sort('workloadCount')">
-                  Workloads<span v-html="sortArrow('workloadCount')"></span>
+                  Workloads<span>{{ sortArrow('workloadCount') }}</span>
                 </th>
                 <th class="sort-header" @click="sort('cpuSavingsCores')">
-                  CPU saved<span v-html="sortArrow('cpuSavingsCores')"></span>
+                  CPU saved<span>{{ sortArrow('cpuSavingsCores') }}</span>
                 </th>
                 <th class="sort-header" @click="sort('memSavingsBytes')">
-                  Mem saved<span v-html="sortArrow('memSavingsBytes')"></span>
+                  Mem saved<span>{{ sortArrow('memSavingsBytes') }}</span>
                 </th>
                 <th class="sort-header" @click="sort('atRiskCount')">
-                  At risk<span v-html="sortArrow('atRiskCount')"></span>
+                  At risk<span>{{ sortArrow('atRiskCount') }}</span>
                 </th>
                 <th>Last applied</th>
               </tr>
