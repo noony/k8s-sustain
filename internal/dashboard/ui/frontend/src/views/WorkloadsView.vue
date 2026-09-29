@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, watch, computed, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { watch, computed, onMounted } from 'vue'
 import { api, type WorkloadListData, type CoordinationFactors } from '../lib/api'
 import { useApi } from '../composables/useApi'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
-import { useSorting } from '../composables/useSorting'
+import { useRowLink } from '../composables/useRowLink'
+import { useListQuery } from '../composables/useListQuery'
+import { workloadPath } from '../lib/routes'
 import RiskBadge from '../components/RiskBadge.vue'
 import PageHeader from '../components/PageHeader.vue'
 import LoadingState from '../components/LoadingState.vue'
@@ -13,35 +14,34 @@ import EmptyState from '../components/EmptyState.vue'
 import Combobox from '../components/Combobox.vue'
 import { timeAgo } from '../lib/format'
 
-const route = useRoute()
-const router = useRouter()
+const { openRow } = useRowLink()
+const {
+  filterRef,
+  page,
+  sort,
+  sortArrow,
+  searchInput,
+  onSearch,
+  hasFilters,
+  clearFilters,
+  apiQuery,
+  onQueryChange,
+  totalPagesOf,
+  clampPage,
+} = useListQuery({
+  filterKeys: ['namespace', 'kind', 'automated', 'active', 'risk', 'autoscaler', 'search'],
+  defaultSort: 'name',
+})
 
-const nsFilter = ref('')
-const kindFilter = ref('')
-const automatedFilter = ref('')
-const activeFilter = ref('')
-const riskFilter = ref(String(route.query.risk || ''))
-const autoscalerFilter = ref(String(route.query.autoscaler || ''))
-const search = ref('')
-const page = ref(1)
-let searchTimer: ReturnType<typeof setTimeout> | null = null
-
-const { sort, sortArrow, applySorting } = useSorting('allWorkloads')
-
-function buildQs() {
-  const qs = new URLSearchParams({ page: String(page.value), pageSize: '50' })
-  if (nsFilter.value) qs.set('namespace', nsFilter.value)
-  if (kindFilter.value) qs.set('kind', kindFilter.value)
-  if (automatedFilter.value) qs.set('automated', automatedFilter.value)
-  if (activeFilter.value) qs.set('active', activeFilter.value)
-  if (riskFilter.value) qs.set('risk', riskFilter.value)
-  if (autoscalerFilter.value) qs.set('autoscaler', autoscalerFilter.value)
-  if (search.value) qs.set('search', search.value)
-  return qs
-}
+const nsFilter = filterRef('namespace')
+const kindFilter = filterRef('kind')
+const automatedFilter = filterRef('automated')
+const activeFilter = filterRef('active')
+const riskFilter = filterRef('risk')
+const autoscalerFilter = filterRef('autoscaler')
 
 const list = useApi<WorkloadListData>(() =>
-  api<WorkloadListData>('/api/workloads?' + buildQs().toString()),
+  api<WorkloadListData>('/api/workloads?' + apiQuery.value),
 )
 
 function load() {
@@ -49,36 +49,12 @@ function load() {
 }
 
 useAutoRefresh(load)
-
 onMounted(load)
-watch([nsFilter, kindFilter, automatedFilter, activeFilter, page], load)
+onQueryChange(load)
 
-watch([riskFilter, autoscalerFilter], () => {
-  router.replace({
-    query: {
-      ...route.query,
-      risk: riskFilter.value || undefined,
-      autoscaler: autoscalerFilter.value || undefined,
-    },
-  })
-  page.value = 1
-  load()
-})
-
-function onSearch(val: string) {
-  if (searchTimer) clearTimeout(searchTimer)
-  searchTimer = setTimeout(() => {
-    search.value = val
-    page.value = 1
-    load()
-  }, 300)
-}
-
-const sorted = computed(() => applySorting(list.data.value?.items || []))
-const totalPages = computed(() => {
-  if (!list.data.value) return 1
-  return Math.ceil(list.data.value.total / (list.data.value.pageSize || 50))
-})
+const sorted = computed(() => list.data.value?.items || [])
+const totalPages = computed(() => totalPagesOf(list.data.value))
+watch(() => list.data.value, clampPage)
 
 function isMeaningful(v: number | undefined): v is number {
   return typeof v === 'number' && Math.abs(v - 1) > 1e-6
@@ -90,29 +66,6 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
     isMeaningful(cf.cpuOverhead) || isMeaningful(cf.memoryOverhead) || isMeaningful(cf.cpuReplica)
   )
 }
-
-function clearFilters() {
-  nsFilter.value = ''
-  kindFilter.value = ''
-  automatedFilter.value = ''
-  activeFilter.value = ''
-  riskFilter.value = ''
-  autoscalerFilter.value = ''
-  search.value = ''
-  page.value = 1
-  load()
-}
-
-const hasFilters = computed(
-  () =>
-    nsFilter.value ||
-    kindFilter.value ||
-    automatedFilter.value ||
-    activeFilter.value ||
-    riskFilter.value ||
-    autoscalerFilter.value ||
-    search.value,
-)
 </script>
 
 <template>
@@ -149,7 +102,6 @@ const hasFilters = computed(
             :options="list.data.value.namespaces || []"
             placeholder="Namespace…"
             all-label="All namespaces"
-            @update:model-value="page = 1"
           />
           <Combobox
             v-model="kindFilter"
@@ -157,14 +109,13 @@ const hasFilters = computed(
             placeholder="Kind…"
             all-label="All kinds"
             min-width="140px"
-            @update:model-value="page = 1"
           />
-          <select v-model="automatedFilter" @change="page = 1">
+          <select v-model="automatedFilter">
             <option value="">All status</option>
             <option value="true">Automated</option>
             <option value="false">Manual</option>
           </select>
-          <select v-model="activeFilter" @change="page = 1">
+          <select v-model="activeFilter">
             <option value="">Any lifecycle</option>
             <option value="true">Active</option>
             <option value="false">Inactive</option>
@@ -184,9 +135,18 @@ const hasFilters = computed(
           <input
             type="text"
             placeholder="Search by name..."
-            :value="search"
+            :value="searchInput"
             @input="onSearch(($event.target as HTMLInputElement).value)"
           />
+          <button
+            class="btn btn-secondary btn-sm"
+            type="button"
+            data-test="reset-filters"
+            :disabled="!hasFilters"
+            @click="clearFilters"
+          >
+            Reset filters
+          </button>
         </div>
       </div>
 
@@ -234,14 +194,17 @@ const hasFilters = computed(
               <tr
                 v-for="w in sorted"
                 :key="w.namespace + '/' + w.kind + '/' + w.name"
-                @click="router.push(`/workloads/${w.namespace}/${w.kind}/${w.name}`)"
+                @click="openRow(workloadPath(w), $event)"
+                @auxclick="openRow(workloadPath(w), $event)"
               >
                 <td data-label="Namespace" class="text-dim">{{ w.namespace }}</td>
                 <td data-label="Kind">
                   <span class="kind-badge" :class="'kind-' + w.kind">{{ w.kind }}</span>
                 </td>
                 <td data-label="Name" class="font-semibold">
-                  {{ w.name }}
+                  <RouterLink :to="workloadPath(w)" class="row-link" @click.stop @auxclick.stop>{{
+                    w.name
+                  }}</RouterLink>
                   <span
                     v-if="w.active === false"
                     class="badge badge-dim gap-2"
@@ -273,11 +236,12 @@ const hasFilters = computed(
                   <span v-else class="text-dim">-</span>
                 </td>
                 <td data-label="Policy">
-                  <a
+                  <RouterLink
                     v-if="w.policyName"
-                    href="#"
-                    @click.stop.prevent="router.push(`/policies/${w.policyName}`)"
-                    >{{ w.policyName }}</a
+                    :to="`/policies/${w.policyName}`"
+                    @click.stop
+                    @auxclick.stop
+                    >{{ w.policyName }}</RouterLink
                   ><span v-else>-</span>
                 </td>
                 <td data-label="Containers" class="text-dim">{{ w.containers.length }}</td>

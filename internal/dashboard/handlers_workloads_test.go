@@ -711,3 +711,160 @@ func TestNamespaceAnnotations_FetchedOnceAcrossMultiKindRequest(t *testing.T) {
 		t.Errorf("Namespace List calls = %d, want exactly 1 for a request spanning %d kinds", namespaceListCalls, len(supportedWorkloadKinds))
 	}
 }
+
+func TestAllWorkloadsSort(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-b", Name: "web"}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-a", Name: "web"}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-c", Name: "api"}},
+		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-a", Name: "zeta"}},
+	).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		{"", []string{"ns-c/api", "ns-a/web", "ns-b/web", "ns-a/zeta"}},
+		{"?sort=name", []string{"ns-c/api", "ns-a/web", "ns-b/web", "ns-a/zeta"}},
+		{"?sort=-name", []string{"ns-a/zeta", "ns-b/web", "ns-a/web", "ns-c/api"}},
+		{"?sort=namespace", []string{"ns-a/web", "ns-a/zeta", "ns-b/web", "ns-c/api"}},
+		{"?sort=kind", []string{"ns-a/web", "ns-b/web", "ns-a/zeta", "ns-c/api"}},
+		{"?sort=name&pageSize=2&page=2", []string{"ns-b/web", "ns-a/zeta"}},
+	} {
+		rec := httptest.NewRecorder()
+		srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads"+tc.query, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d", tc.query, rec.Code)
+		}
+		var resp struct {
+			Items []struct {
+				Namespace string `json:"namespace"`
+				Name      string `json:"name"`
+			} `json:"items"`
+		}
+		decodeEnvelopeData(t, rec.Body, &resp)
+		got := make([]string, 0, len(resp.Items))
+		for _, it := range resp.Items {
+			got = append(got, it.Namespace+"/"+it.Name)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.query, got, tc.want)
+		}
+	}
+}
+
+func TestAllWorkloadsSortRejectsUnknownKey(t *testing.T) {
+	srv := newTestServerWithDeployment(t, "ns", "web")
+	rec := httptest.NewRecorder()
+	srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads?sort=containers", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"sort"`) {
+		t.Errorf("body %s should name the sort field", rec.Body.String())
+	}
+}
+
+func TestAllWorkloadsSearchAcrossPages(t *testing.T) {
+	var objs []client.Object
+	for _, n := range []string{"web-1", "api", "web-2", "db", "WEB-3", "web-4", "cache"} {
+		objs = append(objs, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: strings.ToLower(n)}})
+	}
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	for _, tc := range []struct {
+		page string
+		want []string
+	}{
+		{"1", []string{"web-1", "web-2"}},
+		{"2", []string{"web-3", "web-4"}},
+		{"3", []string{}},
+	} {
+		rec := httptest.NewRecorder()
+		srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads?search=WeB&pageSize=2&page="+tc.page, nil))
+		var resp struct {
+			Items []struct {
+				Name string `json:"name"`
+			} `json:"items"`
+			Total int `json:"total"`
+		}
+		decodeEnvelopeData(t, rec.Body, &resp)
+		got := []string{}
+		for _, it := range resp.Items {
+			got = append(got, it.Name)
+		}
+		if resp.Total != 4 || !slices.Equal(got, tc.want) {
+			t.Errorf("page %s: total=%d items=%v, want total=4 items=%v", tc.page, resp.Total, got, tc.want)
+		}
+	}
+}
+
+func TestPolicyWorkloadsSortAndSearch(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	mode := sustainv1alpha1.UpdateModeOnCreate
+	policy.Spec.RightSizing.Update.Types.Deployment = &mode
+	objs := []client.Object{policy}
+	for _, ref := range []struct{ ns, name string }{
+		{"ns-b", "web-1"}, {"ns-a", "api"}, {"ns-c", "web-2"}, {"ns-a", "web-3"}, {"ns-b", "db"},
+	} {
+		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: ref.ns, Name: ref.name}}
+		d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
+		objs = append(objs, d)
+	}
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+
+	for _, tc := range []struct {
+		query     string
+		wantTotal int
+		want      []string
+	}{
+		{"", 5, []string{"ns-a/api", "ns-b/db", "ns-b/web-1", "ns-c/web-2", "ns-a/web-3"}},
+		{"?sort=-name", 5, []string{"ns-a/web-3", "ns-c/web-2", "ns-b/web-1", "ns-b/db", "ns-a/api"}},
+		{"?sort=namespace", 5, []string{"ns-a/api", "ns-a/web-3", "ns-b/db", "ns-b/web-1", "ns-c/web-2"}},
+		{"?search=WEB&pageSize=2&page=2", 3, []string{"ns-a/web-3"}},
+		{"?search=web&namespace=ns-b", 1, []string{"ns-b/web-1"}},
+	} {
+		rec := httptest.NewRecorder()
+		srv.handlePolicyWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/policies/p/workloads"+tc.query, nil), "p")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d", tc.query, rec.Code)
+		}
+		var resp struct {
+			Items []struct {
+				Namespace string `json:"namespace"`
+				Name      string `json:"name"`
+			} `json:"items"`
+			Total      int      `json:"total"`
+			Matched    int      `json:"matched"`
+			Namespaces []string `json:"namespaces"`
+		}
+		decodeEnvelopeData(t, rec.Body, &resp)
+		if resp.Matched != 5 {
+			t.Errorf("%s: matched = %d, want 5 regardless of filters", tc.query, resp.Matched)
+		}
+		got := []string{}
+		for _, it := range resp.Items {
+			got = append(got, it.Namespace+"/"+it.Name)
+		}
+		if resp.Total != tc.wantTotal || !slices.Equal(got, tc.want) {
+			t.Errorf("%s: total=%d items=%v, want total=%d items=%v", tc.query, resp.Total, got, tc.wantTotal, tc.want)
+		}
+		if len(resp.Namespaces) != 3 {
+			t.Errorf("%s: namespaces facet = %v, want all 3 regardless of filters", tc.query, resp.Namespaces)
+		}
+	}
+}
+
+func TestPolicyWorkloadsRejectsUnknownSort(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy).Build()
+	srv := &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}}
+	rec := httptest.NewRecorder()
+	srv.handlePolicyWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/policies/p/workloads?sort=policyName", nil), "p")
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"sort"`) {
+		t.Fatalf("status %d body %s, want 400 naming sort", rec.Code, rec.Body.String())
+	}
+}

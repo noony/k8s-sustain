@@ -209,6 +209,7 @@ export interface WorkloadListData {
 export interface PolicyWorkloadsData {
   items: WorkloadItemV2[]
   total: number
+  matched?: number
   pageSize: number
   namespaces?: string[]
 }

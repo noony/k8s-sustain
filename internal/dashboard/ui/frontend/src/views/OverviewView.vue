@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { onMounted, computed, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRowLink } from '../composables/useRowLink'
 import {
   api,
   type SummaryV2,
   type TrendData,
-  type AttentionRow,
   type ActivityItem,
   type WorkloadListData,
   type WorkloadItemV2,
@@ -26,7 +25,7 @@ import EmptyState from '../components/EmptyState.vue'
 import { formatBytes } from '../lib/format'
 import { rangeQueryParams, resolveRange } from '../lib/timerange'
 
-const router = useRouter()
+const { openRow } = useRowLink()
 const { range } = useTimeRange()
 
 const summary = useApi<SummaryV2>(() => api<SummaryV2>('/api/summary'))
@@ -66,13 +65,6 @@ onMounted(loadAll)
 watch(range, () => {
   loadAll()
 })
-
-function gotoFiltered(state: string) {
-  router.push(`/workloads?risk=${state}`)
-}
-function selectAttention(row: AttentionRow) {
-  router.push(`/workloads/${row.namespace}/${row.kind}/${row.name}`)
-}
 
 function cpuTrendSeries() {
   const t = trend.data.value
@@ -128,16 +120,14 @@ function memTrendSeries() {
         :value="String(summary.data.value.kpi.atRiskCount)"
         :tone="summary.data.value.kpi.atRiskCount > 0 ? 'danger' : 'neutral'"
         detail="OOM / blocked"
-        clickable
-        @click="gotoFiltered('at-risk')"
+        to="/workloads?risk=at-risk"
       />
       <KpiCard
         label="Drifted"
         :value="String(summary.data.value.kpi.driftedCount)"
         :tone="summary.data.value.kpi.driftedCount > 0 ? 'warn' : 'neutral'"
         detail="pods not on rec"
-        clickable
-        @click="gotoFiltered('drifted')"
+        to="/workloads?risk=drifted"
       />
       <KpiCard
         label="Coordinated"
@@ -198,7 +188,7 @@ function memTrendSeries() {
     <!-- Band 4: Attention -->
     <div class="card">
       <div class="card-header"><h2>Needs attention</h2></div>
-      <AttentionQueue :groups="summary.data.value.attention" @select="selectAttention" />
+      <AttentionQueue :groups="summary.data.value.attention" />
     </div>
 
     <!-- Band 5: Policy effectiveness -->
@@ -224,9 +214,18 @@ function memTrendSeries() {
             <tr
               v-for="p in summary.data.value.policies"
               :key="p.name"
-              @click="router.push(`/policies/${p.name}`)"
+              @click="openRow(`/policies/${p.name}`, $event)"
+              @auxclick="openRow(`/policies/${p.name}`, $event)"
             >
-              <td data-label="Policy" class="font-semibold">{{ p.name }}</td>
+              <td data-label="Policy" class="font-semibold">
+                <RouterLink
+                  :to="`/policies/${p.name}`"
+                  class="row-link"
+                  @click.stop
+                  @auxclick.stop
+                  >{{ p.name }}</RouterLink
+                >
+              </td>
               <td data-label="Workloads">{{ p.workloadCount }}</td>
               <td data-label="CPU saved">
                 <code>{{ p.cpuSavingsCores.toFixed(2) }}c</code>

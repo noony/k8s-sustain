@@ -150,6 +150,16 @@ a {
 a:hover {
   text-decoration: underline;
 }
+/* Anchors styled as rows, cards or buttons: real links for Cmd/middle-click,
+   but they keep the look of what they replaced. */
+a.btn:hover,
+a.kpi-card:hover,
+a.aq-row:hover {
+  text-decoration: none;
+}
+.row-link {
+  color: inherit;
+}
 code {
   font-family: var(--font-mono);
 }
@@ -841,6 +851,11 @@ tbody tr:last-child td {
   padding: 6px 14px;
   font-size: 13px;
 }
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
 
 /* Recommendation result cards */
 .rec-grid {
@@ -952,7 +967,8 @@ tbody tr:last-child td {
 .kpi-card:hover {
   border-color: var(--border-strong);
 }
-button.kpi-card {
+button.kpi-card,
+a.kpi-card {
   display: block;
   background: var(--bg-card);
   color: var(--text);

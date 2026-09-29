@@ -1,10 +1,12 @@
 package dashboard
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -50,11 +52,14 @@ func liveRow(kind string, e workloadEntry) workloadRow {
 }
 
 type paginatedWorkloads struct {
-	Items      []workloadRow `json:"items"`
-	Total      int           `json:"total"`
-	Page       int           `json:"page"`
-	PageSize   int           `json:"pageSize"`
-	Namespaces []string      `json:"namespaces"`
+	Items []workloadRow `json:"items"`
+	Total int           `json:"total"`
+	// Matched counts every workload the policy manages, before namespace and
+	// search filters; Total is after them.
+	Matched    int      `json:"matched"`
+	Page       int      `json:"page"`
+	PageSize   int      `json:"pageSize"`
+	Namespaces []string `json:"namespaces"`
 }
 
 func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, policyName string) {
@@ -68,6 +73,12 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 
 	q := r.URL.Query()
 	nsFilter := q.Get("namespace")
+	search := strings.ToLower(q.Get("search"))
+	sortKey, sortDesc, perr := parseSortParam(q, policyWorkloadSortKeys, "name")
+	if perr != nil {
+		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
+		return
+	}
 	page, pageSize, perr := parsePageParams(q, 50, 200)
 	if perr != nil {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
@@ -76,13 +87,18 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 
 	workloads := s.listPolicyWorkloadRows(ctx, policy, policyName)
 
+	matched := len(workloads)
 	namespaces := uniqueValues(workloads, func(w workloadRow) string { return w.Namespace })
 
 	// Narrow before the signal decoration so it only covers returned rows.
 	if nsFilter != "" {
 		workloads = filterInPlace(workloads, func(w workloadRow) bool { return w.Namespace == nsFilter })
 	}
-	applySignals(ctx, s, workloads, func(w *workloadRow) *workloadRow { return w })
+	if search != "" {
+		workloads = filterInPlace(workloads, func(w workloadRow) bool { return nameMatches(&w, search) })
+	}
+	applySignals(ctx, s, workloads, identityRow)
+	sortWorkloads(workloads, identityRow, rowOrder(sortKey), sortDesc)
 
 	total := len(workloads)
 	start, end := paginateRange(total, page, pageSize)
@@ -91,6 +107,7 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 	writeJSON(w, http.StatusOK, paginatedWorkloads{
 		Items:      workloads[start:end],
 		Total:      total,
+		Matched:    matched,
 		Page:       page,
 		PageSize:   pageSize,
 		Namespaces: namespaces,
@@ -105,7 +122,7 @@ func (s *Server) listPolicyWorkloadRows(ctx context.Context, policy *sustainv1al
 		out = append(out, liveRow(kind, e))
 	})
 
-	inactive, err := s.collectInactiveWorkloads(ctx, liveKeys(out, func(w *workloadRow) *workloadRow { return w }),
+	inactive, err := s.collectInactiveWorkloads(ctx, liveKeys(out, identityRow),
 		client.MatchingLabels{sustainv1alpha1.WLRPolicyLabel: policyName})
 	if err != nil {
 		s.Logger.Error(err, "failed to list retained WorkloadRecommendations", "policy", policyName)
@@ -226,9 +243,16 @@ type allWorkloadFilters struct {
 	active     *bool
 	risk       string
 	autoscaler string
+	sortKey    string
+	sortDesc   bool
 	page       int
 	pageSize   int
 }
+
+var (
+	policyWorkloadSortKeys = []string{"name", "namespace", "kind", "stalePods"}
+	allWorkloadSortKeys    = append(slices.Clone(policyWorkloadSortKeys), "policyName")
+)
 
 func parseAllWorkloadFilters(q url.Values) (allWorkloadFilters, *paramError) {
 	f := allWorkloadFilters{
@@ -249,6 +273,9 @@ func parseAllWorkloadFilters(q url.Values) (allWorkloadFilters, *paramError) {
 		return f, perr
 	}
 	if f.autoscaler, perr = parseEnumParam(q, "autoscaler", []string{"has-autoscaler", "no-autoscaler"}); perr != nil {
+		return f, perr
+	}
+	if f.sortKey, f.sortDesc, perr = parseSortParam(q, allWorkloadSortKeys, "name"); perr != nil {
 		return f, perr
 	}
 	if f.page, f.pageSize, perr = parsePageParams(q, 50, 200); perr != nil {
@@ -281,6 +308,7 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	applySignals(ctx, s, workloads, allRowOf)
 
 	workloads = applyAllWorkloadFilters(workloads, filters)
+	sortWorkloads(workloads, allRowOf, allWorkloadOrder(filters.sortKey), filters.sortDesc)
 
 	counts := countAllWorkloads(workloads)
 	total := len(workloads)
@@ -408,7 +436,7 @@ func applyAllWorkloadFilters(workloads []allWorkloadSummary, f allWorkloadFilter
 	}
 	if f.search != "" {
 		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool {
-			return strings.Contains(strings.ToLower(w.Name), f.search)
+			return nameMatches(&w.workloadRow, f.search)
 		})
 	}
 	if f.risk != "" {
@@ -419,6 +447,54 @@ func applyAllWorkloadFilters(workloads []allWorkloadSummary, f allWorkloadFilter
 		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.AutoscalerPresent == want })
 	}
 	return workloads
+}
+
+func identityRow(w *workloadRow) *workloadRow { return w }
+
+// nameMatches expects needle already lower-cased.
+func nameMatches(w *workloadRow, needle string) bool {
+	return strings.Contains(strings.ToLower(w.Name), needle)
+}
+
+func rowOrder(key string) func(a, b *workloadRow) int {
+	return func(a, b *workloadRow) int {
+		switch key {
+		case "namespace":
+			return cmp.Compare(a.Namespace, b.Namespace)
+		case "kind":
+			return cmp.Compare(a.Kind, b.Kind)
+		case "stalePods":
+			return cmp.Compare(a.StalePods, b.StalePods)
+		default:
+			return cmp.Compare(a.Name, b.Name)
+		}
+	}
+}
+
+func allWorkloadOrder(key string) func(a, b *allWorkloadSummary) int {
+	if key == "policyName" {
+		return func(a, b *allWorkloadSummary) int { return cmp.Compare(a.PolicyName, b.PolicyName) }
+	}
+	byRow := rowOrder(key)
+	return func(a, b *allWorkloadSummary) int { return byRow(&a.workloadRow, &b.workloadRow) }
+}
+
+// sortWorkloads runs before pagination so a sort spans every page. Ties fall
+// back to name/namespace/kind so page boundaries stay stable across requests.
+func sortWorkloads[T any](items []T, rowOf func(*T) *workloadRow, primary func(a, b *T) int, desc bool) {
+	slices.SortFunc(items, func(a, b T) int {
+		ra, rb := rowOf(&a), rowOf(&b)
+		c := cmp.Or(
+			primary(&a, &b),
+			cmp.Compare(ra.Name, rb.Name),
+			cmp.Compare(ra.Namespace, rb.Namespace),
+			cmp.Compare(ra.Kind, rb.Kind),
+		)
+		if desc {
+			return -c
+		}
+		return c
+	})
 }
 
 func countAllWorkloads(workloads []allWorkloadSummary) workloadCounts {

@@ -4,7 +4,6 @@ import type { AttentionRow } from '../lib/api'
 
 defineProps<{ groups: { risk: AttentionRow[]; drift: AttentionRow[]; blocked: AttentionRow[] } }>()
 const open = ref({ risk: true, drift: true, blocked: true })
-const emit = defineEmits<{ select: [row: AttentionRow] }>()
 
 const groupMeta: Record<string, { label: string; cls: string }> = {
   risk: { label: 'Risk', cls: 'risk-risk' },
@@ -22,11 +21,11 @@ const groupMeta: Record<string, { label: string; cls: string }> = {
         <span class="aq-count">{{ rows.length }}</span>
       </button>
       <div v-if="open[key] && rows.length" class="aq-body">
-        <button
+        <RouterLink
           v-for="r in rows"
           :key="r.namespace + '/' + r.kind + '/' + r.name"
           class="aq-row"
-          @click="emit('select', r)"
+          :to="`/workloads/${r.namespace}/${r.kind}/${r.name}`"
         >
           <span class="aq-ns">{{ r.namespace }}</span>
           <span class="aq-kind">{{ r.kind }}</span>
@@ -34,7 +33,7 @@ const groupMeta: Record<string, { label: string; cls: string }> = {
           <span class="aq-signal"
             >{{ r.signal }}<span v-if="r.detail"> · {{ r.detail }}</span></span
           >
-        </button>
+        </RouterLink>
       </div>
       <div v-else-if="open[key]" class="aq-empty">No items.</div>
     </div>

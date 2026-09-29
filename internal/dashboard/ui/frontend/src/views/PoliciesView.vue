@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRowLink } from '../composables/useRowLink'
 import { api, type PolicySummary } from '../lib/api'
 import { timeAgo, formatBytes } from '../lib/format'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
@@ -11,7 +11,7 @@ import LoadingState from '../components/LoadingState.vue'
 import ErrorState from '../components/ErrorState.vue'
 import EmptyState from '../components/EmptyState.vue'
 
-const router = useRouter()
+const { openRow } = useRowLink()
 const loading = ref(true)
 const error = ref('')
 const policies = ref<PolicySummary[]>([])
@@ -112,8 +112,21 @@ function updateTypeBadges(update?: Record<string, string>): string {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="p in sorted" :key="p.name" @click="router.push(`/policies/${p.name}`)">
-                <td data-label="Name" class="font-semibold">{{ p.name }}</td>
+              <tr
+                v-for="p in sorted"
+                :key="p.name"
+                @click="openRow(`/policies/${p.name}`, $event)"
+                @auxclick="openRow(`/policies/${p.name}`, $event)"
+              >
+                <td data-label="Name" class="font-semibold">
+                  <RouterLink
+                    :to="`/policies/${p.name}`"
+                    class="row-link"
+                    @click.stop
+                    @auxclick.stop
+                    >{{ p.name }}</RouterLink
+                  >
+                </td>
                 <td data-label="Status"><StatusBadge :conditions="p.conditions" /></td>
                 <td data-label="Mode">{{ updateTypeBadges(p.update) }}</td>
                 <td data-label="Workloads">{{ p.workloadCount || 0 }}</td>

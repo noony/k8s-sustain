@@ -64,6 +64,8 @@ kubectl port-forward svc/k8s-sustain-dashboard 8090:8090
 
 ## Using the Dashboard
 
+Every navigation target — table rows, names, policy links, breadcrumbs, the Overview KPI cards and attention queue, **Open in Simulator** — behaves like a regular link: **Cmd/Ctrl-click** or **middle-click** opens it in a new tab, and right-clicking a name offers "Open in new tab".
+
 ### Time range and auto-refresh
 
 Overview, Workload Detail, Policy Detail and Simulator share one **time range picker**.
@@ -101,8 +103,8 @@ The overview is a vertical flow of six bands:
 Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, standalone Jobs, and bare Pods grouped by `k8s.sustain.io/owner-name`) across the cluster, whether or not a policy governs it. Jobs spawned by a CronJob are folded under their CronJob row.
 
 - **Stat strip** — Total, Automated (managed by a policy) and Manual counts.
-- **Filters** — namespace, kind, status (Automated / Manual), lifecycle (Active / Inactive, default any), risk (Safe / Drifted / At risk / Blocked), autoscaler (Has / No autoscaler), and a name search.
-- **Columns** — Namespace, Kind, Name, **Risk**, **Drift** (stale/total pods, e.g. `2/5`), **Policy** (links to the policy) and container count.
+- **Filters** — namespace, kind, status (Automated / Manual), lifecycle (Active / Inactive, default any), risk (Safe / Drifted / At risk / Blocked), autoscaler (Has / No autoscaler), and a name search. **Reset filters** clears them all and returns to page 1, keeping the sort order. Filters, sort order and page are kept in the URL query string (e.g. `/workloads?namespace=prod&risk=at-risk&sort=-stalePods`), so browser Back from a workload restores the list and a filtered view can be bookmarked or shared.
+- **Columns** — Namespace, Kind, Name, **Risk**, **Drift** (stale/total pods, e.g. `2/5`), **Policy** (links to the policy) and container count. Sorted by name by default; click Namespace, Kind, Name, Drift or Policy to sort across all pages, click again to reverse.
 - **Risk** — `At risk` (OOM kill in the last 24h) takes precedence over `Blocked` (retry backoff), then `Drift` (stale pods), otherwise `Safe`.
 - **Name badges** — **Autoscaler** when an HPA or KEDA ScaledObject targets the workload; **Coordinated** when autoscaler coordination adjusts its recommendation, followed by the non-trivial factors (`×1.15 CPU`, `×1.10 mem` overhead, `· replica ×0.80`); **Inactive · last seen X ago** for a workload with no live object.
 
@@ -127,11 +129,11 @@ A stat strip shows **Total policies**, **Workloads covered**, **Cluster CPU save
 
 ### Policy Detail
 
-- **Stat strip** — Status, Matched Workloads, CPU saved, Memory saved.
+- **Stat strip** — Status, Matched Workloads (every workload the policy manages, unaffected by the table filters), CPU saved, Memory saved.
 - **Configuration** — per resource: window, percentile, headroom, min, max, keep request, and limits strategy. Below: update mode per kind (Deploy, STS, DS, CJ, Job, Rollout), ignore safe-to-evict annotations, exclude init containers, and autoscaler coordination (with `replicaBudgetAnchor` when set). **View as YAML** opens the Policy spec in a modal.
 - **Selector** — target namespaces (or "all namespaces"), `matchLabels` and `matchExpressions`.
 - **Effectiveness over time** — CPU and memory savings for this policy over the selected range.
-- **Matched Workloads** — Namespace, Kind, Name (with Inactive badge), Risk, Drift, containers and their current CPU/memory requests; namespace filter and pagination (50 per page).
+- **Matched Workloads** — Namespace, Kind, Name (with Inactive badge), Risk, Drift, containers and their current CPU/memory requests; namespace filter, name search, **Reset filters**, and pagination (50 per page). Sorted by name by default; click Namespace, Kind, Name or Drift to sort across all pages. Filters, sort and page live in the URL alongside the time range, so Back from a workload restores the list.
 - **Simulate All** — runs the recommender with this policy's configuration over every matched workload (`GET /api/policies/{name}/batch-simulate`) and shows a **Batch Simulation Results** card: aggregate CPU and memory savings (current → recommended) and a per-container table. "Current" is the container's measured usage from Prometheus, not its configured request. A workload that fails to compute shows its error on its own row.
 
 ### Policy Simulator
@@ -174,9 +176,9 @@ The dashboard backs every UI page with a small JSON API under `/api/`. The same 
 |---|---|---|
 | `GET` | `/api/policies` | Policies with per-policy rollups (workloads, savings, at-risk) |
 | `GET` | `/api/policies/{name}` | One Policy |
-| `GET` | `/api/policies/{name}/workloads` | Workloads matched by the policy (`page`, `pageSize`, `namespace`) |
+| `GET` | `/api/policies/{name}/workloads` | Workloads matched by the policy (`namespace`, `search`, `page`, `pageSize`); `sort` = `name` (default), `namespace`, `kind` or `stalePods`, prefix `-` for descending. `total` counts rows after filters, `matched` before |
 | `GET` | `/api/policies/{name}/batch-simulate` | Recommendations for every matched workload with aggregate savings |
-| `GET` | `/api/workloads` | Every workload in the cluster (filters: `namespace`, `kind`, `automated`, `active`, `risk`, `autoscaler`, `search`, `page`, `pageSize`) |
+| `GET` | `/api/workloads` | Every workload in the cluster (filters: `namespace`, `kind`, `automated`, `active`, `risk`, `autoscaler`, `search`, `page`, `pageSize`); `sort` = `name` (default), `namespace`, `kind`, `stalePods` or `policyName`, prefix `-` for descending |
 | `GET` | `/api/workloads/{namespace}/{kind}/{name}` | Status snapshot (mode, drift, OOM 24h, blocked, coordination) |
 | `GET` | `/api/workloads/{namespace}/{kind}/{name}/metrics` | Usage, request, limit and OOM time-series |
 | `GET` | `/api/workloads/{namespace}/{kind}/{name}/recommendations` | Current recommendation per container |
@@ -246,4 +248,4 @@ An `/api/*` path that matches no registered route returns the JSON 404 error env
 
 ### Validation
 
-Query parameters are validated strictly. Unknown enum values (`?risk=foo`, `?autoscaler=maybe`, `?kind=ReplicaSet`) return 400 with the `field` set, instead of silently filtering out every workload. Likewise out-of-range integers (`?page=-1`, `?limit=10000`) and malformed durations (`?window=junk`) get a 400 pointing at the offending input.
+Query parameters are validated strictly. Unknown enum values (`?risk=foo`, `?autoscaler=maybe`, `?kind=ReplicaSet`, `?sort=containers`) return 400 with the `field` set, instead of silently filtering out every workload. Likewise out-of-range integers (`?page=-1`, `?limit=10000`) and malformed durations (`?window=junk`) get a 400 pointing at the offending input.
