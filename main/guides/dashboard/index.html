@@ -2479,6 +2479,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <p>The dashboard has <strong>no built-in authentication</strong>. It listens on a <code>ClusterIP</code> Service, so it stays cluster-internal until you add an Ingress/Gateway. When you expose it beyond <code>kubectl port-forward</code>, never expose it directly — front it with an identity-aware proxy such as <strong>Cloudflare Access</strong>, <code>oauth2-proxy</code>, or an authenticating Ingress (OIDC/SSO, mTLS). See <a href="../../security/#hardening-options">Hardening options</a>.</p>
 </div>
 <h2 id="using-the-dashboard">Using the Dashboard<a class="headerlink" href="#using-the-dashboard" title="Permanent link">&para;</a></h2>
+<p>Every navigation target — table rows, names, policy links, breadcrumbs, the Overview KPI cards and attention queue, <strong>Open in Simulator</strong> — behaves like a regular link: <strong>Cmd/Ctrl-click</strong> or <strong>middle-click</strong> opens it in a new tab, and right-clicking a name offers "Open in new tab".</p>
 <h3 id="time-range-and-auto-refresh">Time range and auto-refresh<a class="headerlink" href="#time-range-and-auto-refresh" title="Permanent link">&para;</a></h3>
 <p>Overview, Workload Detail, Policy Detail and Simulator share one <strong>time range picker</strong>.</p>
 <ul>
@@ -2517,8 +2518,8 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <p>Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, standalone Jobs, and bare Pods grouped by <code>k8s.sustain.io/owner-name</code>) across the cluster, whether or not a policy governs it. Jobs spawned by a CronJob are folded under their CronJob row.</p>
 <ul>
 <li><strong>Stat strip</strong> — Total, Automated (managed by a policy) and Manual counts.</li>
-<li><strong>Filters</strong> — namespace, kind, status (Automated / Manual), lifecycle (Active / Inactive, default any), risk (Safe / Drifted / At risk / Blocked), autoscaler (Has / No autoscaler), and a name search.</li>
-<li><strong>Columns</strong> — Namespace, Kind, Name, <strong>Risk</strong>, <strong>Drift</strong> (stale/total pods, e.g. <code>2/5</code>), <strong>Policy</strong> (links to the policy) and container count.</li>
+<li><strong>Filters</strong> — namespace, kind, status (Automated / Manual), lifecycle (Active / Inactive, default any), risk (Safe / Drifted / At risk / Blocked), autoscaler (Has / No autoscaler), and a name search. <strong>Reset filters</strong> clears them all and returns to page 1, keeping the sort order. Filters, sort order and page are kept in the URL query string (e.g. <code>/workloads?namespace=prod&amp;risk=at-risk&amp;sort=-stalePods</code>), so browser Back from a workload restores the list and a filtered view can be bookmarked or shared.</li>
+<li><strong>Columns</strong> — Namespace, Kind, Name, <strong>Risk</strong>, <strong>Drift</strong> (stale/total pods, e.g. <code>2/5</code>), <strong>Policy</strong> (links to the policy) and container count. Sorted by name by default; click Namespace, Kind, Name, Drift or Policy to sort across all pages, click again to reverse.</li>
 <li><strong>Risk</strong> — <code>At risk</code> (OOM kill in the last 24h) takes precedence over <code>Blocked</code> (retry backoff), then <code>Drift</code> (stale pods), otherwise <code>Safe</code>.</li>
 <li><strong>Name badges</strong> — <strong>Autoscaler</strong> when an HPA or KEDA ScaledObject targets the workload; <strong>Coordinated</strong> when autoscaler coordination adjusts its recommendation, followed by the non-trivial factors (<code>×1.15 CPU</code>, <code>×1.10 mem</code> overhead, <code>· replica ×0.80</code>); <strong>Inactive · last seen X ago</strong> for a workload with no live object.</li>
 </ul>
@@ -2538,11 +2539,11 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <p>A stat strip shows <strong>Total policies</strong>, <strong>Workloads covered</strong>, <strong>Cluster CPU saved</strong> and <strong>Cluster Mem saved</strong>. The table lists each policy's Name, <strong>Status</strong> (Ready condition), <strong>Mode</strong> (per-kind update modes), <strong>Workloads</strong>, <strong>CPU saved</strong>, <strong>Mem saved</strong>, <strong>At risk</strong> (blocked workloads) and <strong>Last applied</strong>. Click a row for the policy detail page.</p>
 <h3 id="policy-detail">Policy Detail<a class="headerlink" href="#policy-detail" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>Stat strip</strong> — Status, Matched Workloads, CPU saved, Memory saved.</li>
+<li><strong>Stat strip</strong> — Status, Matched Workloads (every workload the policy manages, unaffected by the table filters), CPU saved, Memory saved.</li>
 <li><strong>Configuration</strong> — per resource: window, percentile, headroom, min, max, keep request, and limits strategy. Below: update mode per kind (Deploy, STS, DS, CJ, Job, Rollout), ignore safe-to-evict annotations, exclude init containers, and autoscaler coordination (with <code>replicaBudgetAnchor</code> when set). <strong>View as YAML</strong> opens the Policy spec in a modal.</li>
 <li><strong>Selector</strong> — target namespaces (or "all namespaces"), <code>matchLabels</code> and <code>matchExpressions</code>.</li>
 <li><strong>Effectiveness over time</strong> — CPU and memory savings for this policy over the selected range.</li>
-<li><strong>Matched Workloads</strong> — Namespace, Kind, Name (with Inactive badge), Risk, Drift, containers and their current CPU/memory requests; namespace filter and pagination (50 per page).</li>
+<li><strong>Matched Workloads</strong> — Namespace, Kind, Name (with Inactive badge), Risk, Drift, containers and their current CPU/memory requests; namespace filter, name search, <strong>Reset filters</strong>, and pagination (50 per page). Sorted by name by default; click Namespace, Kind, Name or Drift to sort across all pages. Filters, sort and page live in the URL alongside the time range, so Back from a workload restores the list.</li>
 <li><strong>Simulate All</strong> — runs the recommender with this policy's configuration over every matched workload (<code>GET /api/policies/{name}/batch-simulate</code>) and shows a <strong>Batch Simulation Results</strong> card: aggregate CPU and memory savings (current → recommended) and a per-container table. "Current" is the container's measured usage from Prometheus, not its configured request. A workload that fails to compute shows its error on its own row.</li>
 </ul>
 <h3 id="policy-simulator">Policy Simulator<a class="headerlink" href="#policy-simulator" title="Permanent link">&para;</a></h3>
@@ -2599,7 +2600,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <tr>
 <td><code>GET</code></td>
 <td><code>/api/policies/{name}/workloads</code></td>
-<td>Workloads matched by the policy (<code>page</code>, <code>pageSize</code>, <code>namespace</code>)</td>
+<td>Workloads matched by the policy (<code>namespace</code>, <code>search</code>, <code>page</code>, <code>pageSize</code>); <code>sort</code> = <code>name</code> (default), <code>namespace</code>, <code>kind</code> or <code>stalePods</code>, prefix <code>-</code> for descending. <code>total</code> counts rows after filters, <code>matched</code> before</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
@@ -2609,7 +2610,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <tr>
 <td><code>GET</code></td>
 <td><code>/api/workloads</code></td>
-<td>Every workload in the cluster (filters: <code>namespace</code>, <code>kind</code>, <code>automated</code>, <code>active</code>, <code>risk</code>, <code>autoscaler</code>, <code>search</code>, <code>page</code>, <code>pageSize</code>)</td>
+<td>Every workload in the cluster (filters: <code>namespace</code>, <code>kind</code>, <code>automated</code>, <code>active</code>, <code>risk</code>, <code>autoscaler</code>, <code>search</code>, <code>page</code>, <code>pageSize</code>); <code>sort</code> = <code>name</code> (default), <code>namespace</code>, <code>kind</code>, <code>stalePods</code> or <code>policyName</code>, prefix <code>-</code> for descending</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
@@ -2700,7 +2701,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <p>Routes use Go 1.22 method-specific patterns, so the wrong HTTP verb returns <code>405 Method Not Allowed</code> with an <code>Allow</code> header listing the supported method(s). Path parameters (<code>{name}</code>, <code>{namespace}</code>, <code>{kind}</code>) are URL-decoded by the standard library.</p>
 <p>An <code>/api/*</code> path that matches no registered route returns the JSON 404 error envelope (it is never rewritten to the SPA's <code>index.html</code>). Endpoints that fetch a single Kubernetes object return 404 only when the object is actually missing; any other API-server failure surfaces as a 500. <code>/api/summary/trend</code> returns <code>503 Service Unavailable</code> when every Prometheus query fails (a full outage), while partial failures still return the series that succeeded.</p>
 <h3 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h3>
-<p>Query parameters are validated strictly. Unknown enum values (<code>?risk=foo</code>, <code>?autoscaler=maybe</code>, <code>?kind=ReplicaSet</code>) return 400 with the <code>field</code> set, instead of silently filtering out every workload. Likewise out-of-range integers (<code>?page=-1</code>, <code>?limit=10000</code>) and malformed durations (<code>?window=junk</code>) get a 400 pointing at the offending input.</p>
+<p>Query parameters are validated strictly. Unknown enum values (<code>?risk=foo</code>, <code>?autoscaler=maybe</code>, <code>?kind=ReplicaSet</code>, <code>?sort=containers</code>) return 400 with the <code>field</code> set, instead of silently filtering out every workload. Likewise out-of-range integers (<code>?page=-1</code>, <code>?limit=10000</code>) and malformed durations (<code>?window=junk</code>) get a 400 pointing at the offending input.</p>
 
 
 
