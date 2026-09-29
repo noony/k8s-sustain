@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -44,6 +45,20 @@ func parsePageParams(q url.Values, defaultSize, maxSize int) (page, pageSize int
 		pageSize = n
 	}
 	return page, pageSize, nil
+}
+
+// parseSortParam reads ?sort=<key> (ascending) or ?sort=-<key> (descending),
+// defaulting to defaultKey ascending when absent.
+func parseSortParam(q url.Values, allowed []string, defaultKey string) (key string, desc bool, err *paramError) {
+	v := q.Get("sort")
+	if v == "" {
+		return defaultKey, false, nil
+	}
+	key, desc = strings.CutPrefix(v, "-")
+	if !slices.Contains(allowed, key) {
+		return "", false, badParam("sort", "invalid sort %q: must be one of %v, optionally prefixed with '-'", v, allowed)
+	}
+	return key, desc, nil
 }
 
 // parseEnumParam returns the param's value if it is in `allowed`, the empty

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import Sparkline from './Sparkline.vue'
 
 defineProps<{
@@ -8,20 +9,16 @@ defineProps<{
   tone?: 'positive' | 'negative' | 'neutral' | 'warn' | 'danger'
   sparkPoints?: number[]
   sparkColor?: string
-  clickable?: boolean
-}>()
-defineEmits<{
-  (e: 'click'): void
+  to?: RouteLocationRaw
 }>()
 </script>
 
 <template>
   <component
-    :is="clickable ? 'button' : 'div'"
+    :is="to ? RouterLink : 'div'"
     class="kpi-card"
-    :class="[tone ? 'tone-' + tone : '', clickable ? 'kpi-clickable' : '']"
-    :type="clickable ? 'button' : undefined"
-    @click="clickable ? $emit('click') : null"
+    :class="[tone ? 'tone-' + tone : '', to ? 'kpi-clickable' : '']"
+    :to="to"
   >
     <div class="kpi-label">{{ label }}</div>
     <div class="kpi-row">

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
 import {
   api,
   type MetricsData,
@@ -38,7 +37,6 @@ const props = defineProps<{
   name: string
 }>()
 
-const router = useRouter()
 const { range } = useTimeRange()
 const loading = ref(true)
 const error = ref('')
@@ -315,8 +313,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
   <ErrorState v-else-if="error" :message="error" @retry="load" />
   <template v-else-if="metrics && recs">
     <div class="breadcrumb">
-      <a href="#" @click.prevent="router.push('/workloads')">Workloads</a><span>/</span
-      ><span>{{ name }}</span>
+      <RouterLink to="/workloads">Workloads</RouterLink><span>/</span><span>{{ name }}</span>
     </div>
 
     <PageHeader :title="name">
@@ -332,11 +329,8 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
           >
           <template v-if="recs.automated">
             <span class="badge badge-green">Automated</span>
-            <a
-              class="meta-chip"
-              href="#"
-              @click.prevent="router.push(`/policies/${recs.policyName}`)"
-              ><span class="meta-key">Policy</span>{{ recs.policyName }}</a
+            <RouterLink class="meta-chip" :to="`/policies/${recs.policyName}`"
+              ><span class="meta-key">Policy</span>{{ recs.policyName }}</RouterLink
             >
           </template>
           <span v-else class="badge badge-dim">Manual</span>
@@ -528,10 +522,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
     />
 
     <div class="row mt-3">
-      <button
-        class="btn btn-secondary"
-        @click="router.push(`/simulator/${namespace}/${kind}/${name}`)"
-      >
+      <RouterLink class="btn btn-secondary" :to="`/simulator/${namespace}/${kind}/${name}`">
         <svg
           viewBox="0 0 24 24"
           width="16"
@@ -545,7 +536,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
           />
         </svg>
         Open in Simulator
-      </button>
+      </RouterLink>
     </div>
   </template>
 </template>

@@ -168,13 +168,23 @@ const nameOptions = computed(() =>
   ),
 )
 
+// Must stay within the server's pageSize cap (200) or the API answers 400.
+const WORKLOAD_PAGE_SIZE = 200
+
 async function loadWorkloads() {
+  const items: WorkloadListData['items'] = []
   try {
-    const list = await api<WorkloadListData>('/api/workloads?pageSize=500')
-    workloadList.value = list.items || []
+    for (let page = 1; ; page++) {
+      const list = await api<WorkloadListData>(
+        `/api/workloads?pageSize=${WORKLOAD_PAGE_SIZE}&page=${page}`,
+      )
+      items.push(...(list.items || []))
+      if (!list.items?.length || items.length >= list.total) break
+    }
   } catch {
-    workloadList.value = []
+    // Dropdown options are best-effort; keep whatever pages loaded.
   }
+  workloadList.value = items
 }
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let requestId = 0

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRowLink } from '../composables/useRowLink'
+import { workloadPath } from '../lib/routes'
 import { api, type PolicySpec, type PolicyWorkloadsData, type BatchSimulateData } from '../lib/api'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useTimeRange } from '../composables/useTimeRange'
-import { useSorting } from '../composables/useSorting'
+import { useListQuery } from '../composables/useListQuery'
 import { formatBytes, timeAgo } from '../lib/format'
 import { rangeQueryParams, resolveRange } from '../lib/timerange'
 import StatusBadge from '../components/StatusBadge.vue'
@@ -20,13 +21,11 @@ import EmptyState from '../components/EmptyState.vue'
 import Combobox from '../components/Combobox.vue'
 
 const props = defineProps<{ name: string }>()
-const router = useRouter()
+const { openRow } = useRowLink()
 const loading = ref(true)
 const error = ref('')
 const policy = ref<PolicySpec | null>(null)
 const workloadData = ref<PolicyWorkloadsData | null>(null)
-const nsFilter = ref('')
-const page = ref(1)
 const batchLoading = ref(false)
 const batchData = ref<BatchSimulateData | null>(null)
 const batchError = ref('')
@@ -39,19 +38,39 @@ const trendWindow = computed(() => {
   return resolveRange(range.value, Date.now())
 })
 
-const { sort, sortArrow, applySorting } = useSorting('policyWorkloads')
+const {
+  filterRef,
+  page,
+  sort,
+  sortArrow,
+  searchInput,
+  onSearch,
+  hasFilters,
+  clearFilters,
+  apiQuery,
+  onQueryChange,
+  totalPagesOf,
+  clampPage,
+} = useListQuery({ filterKeys: ['namespace', 'search'], defaultSort: 'name' })
+const nsFilter = filterRef('namespace')
 
-async function load() {
+function fetchPolicy() {
+  const p = new URLSearchParams(rangeQueryParams(range.value, Date.now()))
+  return api<PolicySpec>(`/api/policies/${props.name}?${p.toString()}`)
+}
+
+let workloadsRequest = 0
+async function fetchWorkloads() {
+  const id = ++workloadsRequest
+  const w = await api<PolicyWorkloadsData>(
+    `/api/policies/${props.name}/workloads?${apiQuery.value}`,
+  )
+  return id === workloadsRequest ? w : null
+}
+
+async function track(work: Promise<unknown>) {
   try {
-    const p = new URLSearchParams(rangeQueryParams(range.value, Date.now()))
-    const [pol, w] = await Promise.all([
-      api<PolicySpec>(`/api/policies/${props.name}?${p.toString()}`),
-      api<PolicyWorkloadsData>(
-        `/api/policies/${props.name}/workloads?page=${page.value}&pageSize=50${nsFilter.value ? '&namespace=' + encodeURIComponent(nsFilter.value) : ''}`,
-      ),
-    ])
-    policy.value = pol
-    workloadData.value = w
+    await work
     error.value = ''
   } catch (e: any) {
     error.value = e.message
@@ -60,12 +79,28 @@ async function load() {
   }
 }
 
+async function loadWorkloads() {
+  const w = await fetchWorkloads()
+  if (w) workloadData.value = w
+}
+
+function load() {
+  return track(
+    Promise.all([fetchPolicy(), fetchWorkloads()]).then(([pol, w]) => {
+      policy.value = pol
+      if (w) workloadData.value = w
+    }),
+  )
+}
+
 useAutoRefresh(() => {
   if (range.value.kind === 'relative') load()
 })
 
 onMounted(load)
-watch([nsFilter, page, range], load)
+watch(range, () => track(fetchPolicy().then((pol) => (policy.value = pol))))
+onQueryChange(() => track(loadWorkloads()))
+watch(() => workloadData.value, clampPage)
 
 function rs() {
   return policy.value?.spec?.rightSizing?.resourcesConfigs || {}
@@ -111,12 +146,11 @@ function matchExprs(): string[] {
 }
 
 function sortedWorkloads() {
-  return applySorting(workloadData.value?.items || [])
+  return workloadData.value?.items || []
 }
 
 function totalPages() {
-  if (!workloadData.value) return 1
-  return Math.ceil(workloadData.value.total / (workloadData.value.pageSize || 50))
+  return totalPagesOf(workloadData.value)
 }
 
 async function runBatchSimulate() {
@@ -170,8 +204,7 @@ function renderYaml(p: typeof policy.value): string {
   <ErrorState v-else-if="error" :message="error" @retry="load" />
   <template v-else-if="policy && workloadData">
     <div class="breadcrumb">
-      <a href="#" @click.prevent="router.push('/policies')">Policies</a><span>/</span
-      ><span>{{ name }}</span>
+      <RouterLink to="/policies">Policies</RouterLink><span>/</span><span>{{ name }}</span>
     </div>
 
     <PageHeader :title="name" subtitle="Policy configuration and matched workloads">
@@ -187,7 +220,7 @@ function renderYaml(p: typeof policy.value): string {
       </div>
       <div class="stat-card">
         <div class="stat-label">Matched Workloads</div>
-        <div class="stat-value">{{ workloadData.total }}</div>
+        <div class="stat-value">{{ workloadData.matched ?? workloadData.total }}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">CPU saved</div>
@@ -406,8 +439,22 @@ function renderYaml(p: typeof policy.value): string {
             :options="workloadData.namespaces || []"
             placeholder="Namespace…"
             all-label="All namespaces"
-            @update:model-value="page = 1"
           />
+          <input
+            type="text"
+            placeholder="Search by name..."
+            :value="searchInput"
+            @input="onSearch(($event.target as HTMLInputElement).value)"
+          />
+          <button
+            class="btn btn-secondary btn-sm"
+            type="button"
+            data-test="reset-filters"
+            :disabled="!hasFilters"
+            @click="clearFilters"
+          >
+            Reset filters
+          </button>
           <span class="badge badge-blue">{{ workloadData.total }} workloads</span>
           <button class="btn btn-primary btn-sm" @click="runBatchSimulate">Simulate All</button>
         </div>
@@ -416,8 +463,18 @@ function renderYaml(p: typeof policy.value): string {
       <EmptyState
         v-if="sortedWorkloads().length === 0"
         compact
-        message="No workloads matched by this policy yet."
-      />
+        :message="
+          hasFilters
+            ? 'No workloads match the current filters.'
+            : 'No workloads matched by this policy yet.'
+        "
+      >
+        <template v-if="hasFilters" #actions>
+          <button class="btn btn-secondary btn-sm" type="button" @click="clearFilters">
+            Clear filters
+          </button>
+        </template>
+      </EmptyState>
       <template v-else>
         <div class="table-wrap">
           <table>
@@ -445,14 +502,17 @@ function renderYaml(p: typeof policy.value): string {
               <tr
                 v-for="w in sortedWorkloads()"
                 :key="w.namespace + '/' + w.name"
-                @click="router.push(`/workloads/${w.namespace}/${w.kind}/${w.name}`)"
+                @click="openRow(workloadPath(w), $event)"
+                @auxclick="openRow(workloadPath(w), $event)"
               >
                 <td style="color: var(--text-dim)">{{ w.namespace }}</td>
                 <td>
                   <span class="kind-badge" :class="'kind-' + w.kind">{{ w.kind }}</span>
                 </td>
                 <td style="font-weight: 600">
-                  {{ w.name }}
+                  <RouterLink :to="workloadPath(w)" class="row-link" @click.stop @auxclick.stop>{{
+                    w.name
+                  }}</RouterLink>
                   <span
                     v-if="w.active === false"
                     class="badge badge-dim gap-2"
