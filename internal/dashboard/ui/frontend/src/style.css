@@ -1605,6 +1605,10 @@ a.kpi-card {
   background: var(--accent-soft);
   color: var(--accent-light);
 }
+.risk-conflicted {
+  background: var(--red);
+  color: var(--bg);
+}
 
 /* Savings value coloring */
 .savings-positive {

@@ -41,9 +41,8 @@ type simulateRequest struct {
 	CPU    simulateResourceConfig `json:"cpu"`
 	Memory simulateResourceConfig `json:"memory"`
 
-	// AutoscalerCoordination overrides the managing Policy's setting; absent
-	// means "what the controller does today", so an untouched simulation
-	// matches the recommendations endpoint.
+	// AutoscalerCoordination overrides the governing Policy's setting; absent
+	// means "what the controller does today".
 	AutoscalerCoordination *sustainv1alpha1.AutoscalerCoordination `json:"autoscalerCoordination,omitempty"`
 }
 

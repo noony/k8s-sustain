@@ -9,7 +9,11 @@ import (
 // identityHealth is one identity's health signals. The zero value is an
 // identity with no signal at all.
 type identityHealth struct {
-	OOM24h    int
+	// Conflicted comes from the inventory, never from HealthSignals: no
+	// Policy governs a Conflicted identity, so no controller series exists
+	// for it.
+	Conflicted bool
+	OOM24h     int
 	Blocked   *blockedSignal
 	StalePods int
 	TotalPods int
@@ -42,19 +46,22 @@ type HealthSignals interface {
 type riskState string
 
 const (
-	riskSafe    riskState = "safe"
-	riskDrifted riskState = "drifted"
-	riskAtRisk  riskState = "at-risk"
-	riskBlocked riskState = "blocked"
+	riskSafe       riskState = "safe"
+	riskDrifted    riskState = "drifted"
+	riskAtRisk     riskState = "at-risk"
+	riskBlocked    riskState = "blocked"
+	riskConflicted riskState = "conflicted"
 )
 
-var riskStates = []string{string(riskSafe), string(riskDrifted), string(riskAtRisk), string(riskBlocked)}
+var riskStates = []string{string(riskSafe), string(riskDrifted), string(riskAtRisk), string(riskBlocked), string(riskConflicted)}
 
-// riskStateOf classifies one identity in the glossary's precedence: Blocked,
-// then At risk (an OOM kill in the last 24h), then Drifted (stale pods), else
-// Safe. Conflicted, which outranks them all, is not derived here yet.
+// riskStateOf classifies one identity in the glossary's precedence:
+// Conflicted, then Blocked, then At risk (an OOM kill in the last 24h), then
+// Drifted (stale pods), else Safe.
 func riskStateOf(h identityHealth) riskState {
 	switch {
+	case h.Conflicted:
+		return riskConflicted
 	case h.Blocked != nil:
 		return riskBlocked
 	case h.OOM24h > 0:

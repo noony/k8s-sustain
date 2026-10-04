@@ -29,14 +29,14 @@ const {
   totalPagesOf,
   clampPage,
 } = useListQuery({
-  filterKeys: ['namespace', 'kind', 'automated', 'active', 'risk', 'autoscaler', 'search'],
+  filterKeys: ['namespace', 'kind', 'automated', 'departed', 'risk', 'autoscaler', 'search'],
   defaultSort: 'name',
 })
 
 const nsFilter = filterRef('namespace')
 const kindFilter = filterRef('kind')
 const automatedFilter = filterRef('automated')
-const activeFilter = filterRef('active')
+const departedFilter = filterRef('departed')
 const riskFilter = filterRef('risk')
 const autoscalerFilter = filterRef('autoscaler')
 
@@ -91,6 +91,10 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         <div class="stat-label">Manual</div>
         <div class="stat-value text-dim">{{ list.data.value.counts.manual }}</div>
       </div>
+      <div v-if="list.data.value.counts.conflicted" class="stat-card">
+        <div class="stat-label">Conflicted</div>
+        <div class="stat-value text-error">{{ list.data.value.counts.conflicted }}</div>
+      </div>
     </div>
 
     <div class="card">
@@ -115,10 +119,10 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
             <option value="true">Automated</option>
             <option value="false">Manual</option>
           </select>
-          <select v-model="activeFilter">
+          <select v-model="departedFilter">
             <option value="">Any lifecycle</option>
-            <option value="true">Active</option>
-            <option value="false">Inactive</option>
+            <option value="false">Live</option>
+            <option value="true">Departed</option>
           </select>
           <select v-model="riskFilter">
             <option value="">Any risk</option>
@@ -126,6 +130,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
             <option value="drifted">Drifted</option>
             <option value="at-risk">At risk</option>
             <option value="blocked">Blocked</option>
+            <option value="conflicted">Conflicted</option>
           </select>
           <select v-model="autoscalerFilter">
             <option value="">Any autoscaler</option>
@@ -205,11 +210,8 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
                   <RouterLink :to="workloadPath(w)" class="row-link" @click.stop @auxclick.stop>{{
                     w.name
                   }}</RouterLink>
-                  <span
-                    v-if="w.active === false"
-                    class="badge badge-dim gap-2"
-                    :title="w.lastSeenAt"
-                    >Inactive<template v-if="w.lastSeenAt">
+                  <span v-if="w.departed" class="badge badge-dim gap-2" :title="w.lastSeenAt"
+                    >Departed<template v-if="w.lastSeenAt">
                       · last seen {{ timeAgo(w.lastSeenAt) }}</template
                     ></span
                   >
@@ -242,6 +244,11 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
                     @click.stop
                     @auxclick.stop
                     >{{ w.policyName }}</RouterLink
+                  ><span
+                    v-else-if="w.conflictingPolicies?.length"
+                    class="text-error"
+                    :title="'Members opt into ' + w.conflictingPolicies.join(', ')"
+                    >{{ w.conflictingPolicies.join(' / ') }}</span
                   ><span v-else>-</span>
                 </td>
                 <td data-label="Containers" class="text-dim">{{ w.containers.length }}</td>

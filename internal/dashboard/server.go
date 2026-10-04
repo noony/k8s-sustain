@@ -116,9 +116,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/workloads/{namespace}/{kind}/{name}/metrics", func(w http.ResponseWriter, r *http.Request) {
 		s.handleWorkloadMetrics(w, r, r.PathValue("namespace"), r.PathValue("kind"), r.PathValue("name"))
 	})
-	mux.HandleFunc("GET /api/workloads/{namespace}/{kind}/{name}/recommendations", func(w http.ResponseWriter, r *http.Request) {
-		s.handleWorkloadRecommendations(w, r, r.PathValue("namespace"), r.PathValue("kind"), r.PathValue("name"))
-	})
 
 	mux.HandleFunc("POST /api/simulate", s.handleSimulate)
 

@@ -513,11 +513,8 @@ function renderYaml(p: typeof policy.value): string {
                   <RouterLink :to="workloadPath(w)" class="row-link" @click.stop @auxclick.stop>{{
                     w.name
                   }}</RouterLink>
-                  <span
-                    v-if="w.active === false"
-                    class="badge badge-dim gap-2"
-                    :title="w.lastSeenAt"
-                    >Inactive<template v-if="w.lastSeenAt">
+                  <span v-if="w.departed" class="badge badge-dim gap-2" :title="w.lastSeenAt"
+                    >Departed<template v-if="w.lastSeenAt">
                       · last seen {{ timeAgo(w.lastSeenAt) }}</template
                     ></span
                   >

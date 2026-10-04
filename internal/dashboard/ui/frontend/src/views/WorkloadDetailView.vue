@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import {
   api,
   type MetricsData,
-  type RecommendationsData,
   type RecommendationContainer,
+  type RecommendationOutcome,
   type WorkloadDetailSnapshot,
   type CoordinationFactors,
 } from '../lib/api'
-import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs } from '../lib/format'
+import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs, timeAgo } from '../lib/format'
 import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
@@ -41,26 +41,34 @@ const { range } = useTimeRange()
 const loading = ref(true)
 const error = ref('')
 const metrics = ref<MetricsData | null>(null)
-const recs = ref<RecommendationsData | null>(null)
 
 const snapshot = useApi<WorkloadDetailSnapshot>(() =>
   api<WorkloadDetailSnapshot>(`/api/workloads/${props.namespace}/${props.kind}/${props.name}`),
 )
 
+// The Recommendation the controller stored; the detail page never recomputes
+// one (that is the Simulator's job).
+const stored = computed(() => snapshot.data.value?.recommendation)
+
+const outcomeLabels: Record<RecommendationOutcome, string> = {
+  Computed: 'Computed',
+  NoData: 'No data',
+  TooYoung: 'Too young',
+  FetchFailed: 'Fetch failed',
+  Conflicted: 'Conflicted (frozen)',
+}
+
 async function load() {
   const p = new URLSearchParams(rangeQueryParams(range.value, Date.now()))
   try {
-    const [m, r] = await Promise.all([
+    const [m] = await Promise.all([
       api<MetricsData>(
         `/api/workloads/${props.namespace}/${props.kind}/${props.name}/metrics?${p.toString()}`,
       ),
-      api<RecommendationsData>(
-        `/api/workloads/${props.namespace}/${props.kind}/${props.name}/recommendations?${p.toString()}`,
-      ),
       snapshot.run(),
     ])
+    if (snapshot.error.value) throw new Error(snapshot.error.value)
     metrics.value = m
-    recs.value = r
     error.value = ''
     loading.value = false
     await nextTick()
@@ -111,8 +119,7 @@ function containers(): string[] {
 }
 
 function initContainerSet(): Set<string> {
-  const names = metrics.value?.initContainers ?? recs.value?.initContainers ?? []
-  return new Set(names)
+  return new Set(metrics.value?.initContainers ?? [])
 }
 
 function regularContainers(): string[] {
@@ -127,13 +134,13 @@ function initContainers(): string[] {
 
 function regularRecContainers(): [string, RecommendationContainer][] {
   const inits = initContainerSet()
-  const all = recs.value?.containers || {}
+  const all = stored.value?.containers || {}
   return Object.entries(all).filter(([name]) => !inits.has(name))
 }
 
 function initRecContainers(): [string, RecommendationContainer][] {
   const inits = initContainerSet()
-  const all = recs.value?.containers || {}
+  const all = stored.value?.containers || {}
   return Object.entries(all).filter(([name]) => inits.has(name))
 }
 
@@ -157,8 +164,7 @@ function renderCharts() {
   const memoryRequests = metrics.value.memoryRequests || {}
   const cpuLimits = metrics.value.cpuLimits || {}
   const memoryLimits = metrics.value.memoryLimits || {}
-  const cpuRecSeries = recs.value?.cpuRecommendations || {}
-  const memRecSeries = recs.value?.memoryRecommendations || {}
+  const storedRecs = stored.value?.containers || {}
   const ooms = oomByContainer()
   const stepMs = parseStepToMs(rangeQueryParams(range.value, Date.now()).step)
   const chartWindow = resolveRange(range.value, Date.now())
@@ -199,13 +205,13 @@ function renderCharts() {
           dash: [1, 4],
         })
       }
-      if (recs.value?.automated && cpuRecSeries[cname]?.length) {
-        cpuExtra.push({
-          data: cpuRecSeries[cname],
-          label: 'Recommendation',
+      const cpuRec = storedRecs[cname]?.cpuRequest
+      if (cpuRec) {
+        cpuAnnotations.push({
+          value: parseCPUQuantity(cpuRec),
+          label: 'Recommendation: ' + cpuRec,
           color: 'rec',
           dash: [8, 4],
-          stepped: false,
         })
       }
       createTimeSeriesChart('cpu-' + cname, metrics.value!.cpu[cname], {
@@ -254,13 +260,13 @@ function renderCharts() {
           dash: [1, 4],
         })
       }
-      if (recs.value?.automated && memRecSeries[cname]?.length) {
-        memExtra.push({
-          data: memRecSeries[cname],
-          label: 'Recommendation',
+      const memRec = storedRecs[cname]?.memoryRequest
+      if (memRec) {
+        memAnnotations.push({
+          value: parseMemoryQuantity(memRec),
+          label: 'Recommendation: ' + memRec,
           color: 'rec',
           dash: [8, 4],
-          stepped: false,
         })
       }
       createTimeSeriesChart('mem-' + cname, metrics.value!.memory[cname], {
@@ -302,7 +308,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
 <template>
   <LoadingState v-if="loading" variant="kpi" message="Loading workload…" />
   <ErrorState v-else-if="error" :message="error" @retry="load" />
-  <template v-else-if="metrics && recs">
+  <template v-else-if="metrics && snapshot.data.value">
     <div class="breadcrumb">
       <RouterLink to="/workloads">Workloads</RouterLink><span>/</span><span>{{ name }}</span>
     </div>
@@ -318,13 +324,20 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
           <span class="meta-chip"
             ><span class="meta-key">Containers</span>{{ containers().length }}</span
           >
-          <template v-if="recs.automated">
+          <template v-if="snapshot.data.value.automated">
             <span class="badge badge-green">Automated</span>
-            <RouterLink class="meta-chip" :to="`/policies/${recs.policyName}`"
-              ><span class="meta-key">Policy</span>{{ recs.policyName }}</RouterLink
+            <RouterLink class="meta-chip" :to="`/policies/${snapshot.data.value.policyName}`"
+              ><span class="meta-key">Policy</span>{{ snapshot.data.value.policyName }}</RouterLink
             >
           </template>
+          <span
+            v-else-if="snapshot.data.value.conflictingPolicies?.length"
+            class="badge badge-red"
+            :title="'Members opt into ' + snapshot.data.value.conflictingPolicies.join(', ')"
+            >Conflicted: {{ snapshot.data.value.conflictingPolicies.join(' / ') }}</span
+          >
           <span v-else class="badge badge-dim">Manual</span>
+          <span v-if="snapshot.data.value.departed" class="badge badge-dim">Departed</span>
         </span>
       </template>
       <template #meta>
@@ -383,10 +396,19 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       </p>
     </div>
 
-    <!-- Recommendations -->
-    <div v-if="recs.automated && allRecContainers().length > 0" class="card">
-      <div class="card-header"><h2>Recommendations</h2></div>
-      <div class="container-grid">
+    <!-- Stored Recommendation -->
+    <div v-if="stored" class="card">
+      <div class="card-header">
+        <h2>Recommendation</h2>
+        <span v-if="stored.outcome" class="badge" data-test="outcome">{{
+          outcomeLabels[stored.outcome] ?? stored.outcome
+        }}</span>
+        <span v-if="stored.observedAt" class="text-dim" :title="stored.observedAt"
+          >computed {{ timeAgo(stored.observedAt) }}</span
+        >
+      </div>
+      <p v-if="allRecContainers().length === 0" class="text-dim">No Recommendation stored yet.</p>
+      <div v-else class="container-grid">
         <div
           v-for="{ name: cname, rec, isInit } in allRecContainers()"
           :key="cname"

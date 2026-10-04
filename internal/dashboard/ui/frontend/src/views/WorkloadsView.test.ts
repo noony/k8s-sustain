@@ -158,7 +158,7 @@ describe('WorkloadsView', () => {
     expect(w.text()).toContain('2/5')
   })
 
-  it('marks inactive rows with a badge and last-seen', async () => {
+  it('marks departed rows with a badge and last-seen', async () => {
     ;(api.api as any).mockResolvedValue({
       items: [
         {
@@ -172,7 +172,7 @@ describe('WorkloadsView', () => {
           stalePods: 0,
           totalPods: 3,
           autoscalerPresent: false,
-          active: false,
+          departed: true,
           lastSeenAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
         },
       ],
@@ -184,13 +184,43 @@ describe('WorkloadsView', () => {
     })
     const w = mount(WorkloadsView, { global: { plugins: [router] } })
     await flushPromises()
-    expect(w.text()).toContain('Inactive')
+    expect(w.text()).toContain('Departed')
     expect(w.text()).toContain('last seen')
+  })
+
+  it('shows a Conflicted identity with the Policies its members opt into', async () => {
+    ;(api.api as any).mockResolvedValue({
+      items: [
+        {
+          namespace: 'a',
+          kind: 'Deployment',
+          name: 'api',
+          containers: [],
+          automated: false,
+          conflictingPolicies: ['p', 'q'],
+          riskState: 'conflicted',
+          stalePods: 0,
+          totalPods: 0,
+          autoscalerPresent: false,
+          departed: false,
+        },
+      ],
+      total: 1,
+      pageSize: 50,
+      namespaces: ['a'],
+      kinds: ['Deployment'],
+      counts: { total: 1, automated: 0, manual: 0, conflicted: 1 },
+    })
+    const w = mount(WorkloadsView, { global: { plugins: [router] } })
+    await flushPromises()
+    expect(w.findComponent({ name: 'RiskBadge' }).text()).toBe('Conflicted')
+    expect(w.text()).toContain('p / q')
+    expect(w.findAll('.stat-label').map((l) => l.text())).toContain('Conflicted')
   })
 
   it('resets every filter but keeps the sort order', async () => {
     const { w, r } = await mountAt(
-      '/workloads?namespace=a&kind=Deployment&automated=true&active=false&risk=safe&autoscaler=no-autoscaler&search=web&page=2&sort=-kind',
+      '/workloads?namespace=a&kind=Deployment&automated=true&departed=true&risk=safe&autoscaler=no-autoscaler&search=web&page=2&sort=-kind',
     )
     const reset = w.find('button[data-test="reset-filters"]')
     expect(reset.attributes('disabled')).toBeUndefined()

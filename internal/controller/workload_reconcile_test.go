@@ -302,12 +302,11 @@ func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *test
 // A Kind == "Pod" target must never reach the selector-driven recycle path —
 // no controller could recreate the pod after an eviction.
 //
-// The target's Selector is deliberately populated (production
-// listBarePodTargets never sets it) and matches a running pod that carries
-// neither the policy nor the owner-name annotation, so it belongs to no bare-pod
-// group either. It stays at 999m only if the Kind == "Pod" branch holds AND the
-// bare-pod resize path resolves members from the grouping rule rather than the
-// selector.
+// The target's Selector is deliberately populated (production targetsOf never
+// sets it) and matches a running pod that carries neither the policy nor the
+// owner-name annotation, so it belongs to no bare-pod identity either. It stays
+// at 999m only if the Kind == "Pod" branch holds AND the bare-pod resize path
+// takes members from the target rather than the selector.
 func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

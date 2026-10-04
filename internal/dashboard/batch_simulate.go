@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -13,6 +12,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -65,7 +65,17 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	workloads := s.collectPolicyWorkloads(ctx, policyName, policy)
+	governed, err := s.governedBy(ctx, policy)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("listing workloads: %v", err))
+		return
+	}
+	workloads := governed[:0:0]
+	for _, id := range governed {
+		if !id.Departed() {
+			workloads = append(workloads, id)
+		}
+	}
 	results := s.computeRecommendations(ctx, policy, workloads)
 
 	resp := batchSimulateResponse{PolicyName: policyName}
@@ -74,9 +84,9 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 	for i, r := range results {
 		wl := workloads[i]
 		wbr := workloadBatchResult{
-			Namespace:  wl.Namespace,
-			Kind:       wl.Kind,
-			Name:       wl.Name,
+			Namespace:  wl.Key.Namespace,
+			Kind:       wl.Key.OwnerKind,
+			Name:       wl.Key.OwnerName,
 			Containers: make(map[string]batchContainerResult),
 		}
 
@@ -154,15 +164,15 @@ type recResult struct {
 	err  error
 }
 
-// computeRecommendations fetches every workload's inputs in one batch and
+// computeRecommendations fetches every identity's inputs in one batch and
 // runs the shared algorithm on each under the policy's own configuration,
 // exactly as the controller would.
-func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1alpha1.Policy, workloads []automatedWorkload) []recResult {
+func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1alpha1.Policy, workloads []*inventory.Identity) []recResult {
 	specs := make([]simulationSpec, len(workloads))
 	containers := make([][]corev1.Container, len(workloads))
 	reqs := make([]recommender.InputsRequest, len(workloads))
 	for i, wl := range workloads {
-		specs[i] = policySpec(policy, wl.Namespace, wl.Kind, wl.Name)
+		specs[i] = policySpec(policy, wl.Key.Namespace, wl.Key.OwnerKind, wl.Key.OwnerName)
 		containers[i], _ = workload.MergeContainersForRecommendation(wl.Containers, wl.InitContainers, specs[i].excludeInit)
 		reqs[i] = recommender.InputsRequest{Identity: specs[i].identity(), Containers: len(containers[i])}
 	}
@@ -177,7 +187,7 @@ func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1al
 			out[i].err = f.Err
 			continue
 		}
-		res := computeWorkloadRecs(spec, containers[i], time.Time{}, s.autoscalerInfo(ctx, autoSnap, spec), f.Inputs)
+		res := computeWorkloadRecs(spec, containers[i], workloads[i].Since, s.autoscalerInfo(ctx, autoSnap, spec), f.Inputs)
 		out[i].recs = simulationContainers(res, f.Inputs)
 	}
 	return out

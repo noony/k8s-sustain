@@ -5,15 +5,24 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 type workloadDetailResponse struct {
+	// Automated is set when a Policy governs the identity; PolicyName names it.
+	Automated  bool   `json:"automated"`
+	PolicyName string `json:"policyName,omitempty"`
+	// ConflictingPolicies names the Policies a Conflicted identity's members
+	// opt into.
+	ConflictingPolicies []string               `json:"conflictingPolicies,omitempty"`
+	Departed            bool                   `json:"departed"`
 	UpdateMode          string                 `json:"updateMode,omitempty"`
 	RiskState           riskState              `json:"riskState"`
 	StalePods           int                    `json:"stalePods"`
@@ -22,6 +31,9 @@ type workloadDetailResponse struct {
 	Blocked             *workloadDetailBlocked `json:"blocked,omitempty"`
 	RecentEvents        []activityItem         `json:"recentEvents"`
 	CoordinationFactors *coordinationFactors   `json:"coordinationFactors,omitempty"`
+	// Recommendation is what the identity's WorkloadRecommendation holds, nil
+	// until it has one. It is never recomputed here: that is a Simulation.
+	Recommendation *storedRecommendation `json:"recommendation,omitempty"`
 }
 
 type workloadDetailBlocked struct {
@@ -31,49 +43,85 @@ type workloadDetailBlocked struct {
 	LastError   string `json:"lastError,omitempty"`
 }
 
+// storedRecommendation is a WorkloadRecommendation's status as the detail page
+// shows it.
+type storedRecommendation struct {
+	Outcome    sustainv1alpha1.RecommendationOutcome `json:"outcome,omitempty"`
+	ObservedAt string                                `json:"observedAt,omitempty"`
+	Containers map[string]simulationContainerResult  `json:"containers,omitempty"`
+}
+
 func (s *Server) handleWorkloadDetail(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	ctx := r.Context()
+	key := promclient.WorkloadIdentity{Namespace: namespace, OwnerKind: kind, OwnerName: name}
+	id, err := s.identity(ctx, key)
+	if err != nil {
+		writeIdentityError(w, key, err)
+		return
+	}
+
+	resp := workloadDetailResponse{
+		Automated:           id.Policy != "",
+		PolicyName:          id.Policy,
+		ConflictingPolicies: conflictingPolicies(id),
+		Departed:            id.Departed(),
+		Recommendation:      storedRecommendationOf(id.Recommendation),
+	}
+	if policy := s.governingPolicy(ctx, id); policy != nil {
+		if mode := policy.Spec.RightSizing.Update.Types.ModeForKind(kind); mode != nil {
+			resp.UpdateMode = string(*mode)
+		}
+	}
+	s.fillDetailHealth(ctx, &resp, id)
+	resp.RecentEvents = s.recentSustainEvents(ctx, id, 10)
+
 	w.Header().Set("Cache-Control", "public, max-age=30")
-
-	resp := workloadDetailResponse{}
-	resp.UpdateMode = s.lookupUpdateMode(ctx, namespace, kind, name)
-	s.fillDetailHealth(ctx, &resp, promclient.WorkloadIdentity{Namespace: namespace, OwnerKind: kind, OwnerName: name})
-	resp.RecentEvents = s.recentSustainEvents(ctx, namespace, kind, name, 10)
-
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// lookupUpdateMode resolves the per-kind update mode the workload's owning
-// policy specifies, or "" if the workload is unmanaged or the policy can't be
-// read.
-func (s *Server) lookupUpdateMode(ctx context.Context, namespace, kind, name string) string {
-	policyName, _ := s.getWorkloadPolicyAnnotation(ctx, namespace, kind, name)
-	if policyName == "" {
-		return ""
+func storedRecommendationOf(wlr *sustainv1alpha1.WorkloadRecommendation) *storedRecommendation {
+	if wlr == nil {
+		return nil
 	}
-	policy := &sustainv1alpha1.Policy{}
-	if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: policyName}, policy); err != nil {
-		return ""
+	out := &storedRecommendation{Outcome: wlr.Status.Outcome}
+	if !wlr.Status.ObservedAt.IsZero() {
+		out.ObservedAt = wlr.Status.ObservedAt.UTC().Format(time.RFC3339)
 	}
-	mode := updateModeForKind(policy, kind)
-	if mode == nil {
-		return ""
+	if len(wlr.Status.Containers) > 0 {
+		out.Containers = make(map[string]simulationContainerResult, len(wlr.Status.Containers))
 	}
-	return string(*mode)
+	for name, rec := range wlr.Status.Containers {
+		c := simulationContainerResult{CPULimitRemoved: rec.RemoveCPULimit, MemoryLimitRemoved: rec.RemoveMemoryLimit}
+		if rec.CPURequest != nil {
+			c.CPURequest = rec.CPURequest.String()
+		}
+		if rec.MemoryRequest != nil {
+			c.MemoryRequest = rec.MemoryRequest.String()
+		}
+		if rec.CPULimit != nil {
+			c.CPULimit = rec.CPULimit.String()
+		}
+		if rec.MemoryLimit != nil {
+			c.MemoryLimit = rec.MemoryLimit.String()
+		}
+		out.Containers[name] = c
+	}
+	return out
 }
 
 // fillDetailHealth overlays the identity's health and Risk state; a failed
 // read degrades to the signals that could be read.
-func (s *Server) fillDetailHealth(ctx context.Context, resp *workloadDetailResponse, id promclient.WorkloadIdentity) {
-	health, err := s.Health.forIdentities(ctx, []promclient.WorkloadIdentity{id})
+func (s *Server) fillDetailHealth(ctx context.Context, resp *workloadDetailResponse, id *inventory.Identity) {
+	health, err := s.Health.forIdentities(ctx, []promclient.WorkloadIdentity{id.Key})
 	if err != nil {
 		s.Logger.V(1).Info("reading identity health failed; detail shows what could be read", "error", err.Error())
 	}
-	h := health[id]
+	h := health[id.Key]
+	h.Conflicted = id.Conflicted
 	resp.RiskState = riskStateOf(h)
 	resp.OOM24h = h.OOM24h
 	resp.StalePods = h.StalePods
@@ -84,22 +132,31 @@ func (s *Server) fillDetailHealth(ctx context.Context, resp *workloadDetailRespo
 	}
 }
 
-// recentSustainEvents returns up to `limit` k8s-sustain-emitted events for one
-// workload, most-recent first.
-func (s *Server) recentSustainEvents(ctx context.Context, namespace, kind, name string, limit int) []activityItem {
+// recentSustainEvents returns up to limit k8s-sustain events about any member
+// of the identity, most recent first. The controller attributes events to the
+// member it acted on, so an owner-name group's events sit on several objects
+// and a bare-pod identity's on its pods. A Departed identity has no member
+// left; its events may still name the identity itself.
+func (s *Server) recentSustainEvents(ctx context.Context, id *inventory.Identity, limit int) []activityItem {
+	names := map[string]bool{}
+	for _, m := range id.Members {
+		names[m.Object.GetName()] = true
+	}
+	if len(names) == 0 {
+		names[id.Key.OwnerName] = true
+	}
+	// Narrowed server-side through the built-in involvedObject.* field
+	// selectors, so the activityListLimit cap cannot truncate this identity's
+	// events the way a namespace-wide backlog could. A field selector cannot
+	// OR names, so several members are matched by kind and filtered here.
+	fields := client.MatchingFields{"source": "k8s-sustain", "involvedObject.kind": id.Key.OwnerKind}
+	if len(names) == 1 {
+		for name := range names {
+			fields["involvedObject.name"] = name
+		}
+	}
 	var list corev1.EventList
-	// Narrow server-side via the built-in involvedObject.* field selectors, so
-	// the activityListLimit cap cannot truncate this workload's events the way a
-	// namespace-wide backlog could.
-	_ = s.K8sClient.List(ctx, &list,
-		client.InNamespace(namespace),
-		client.Limit(activityListLimit),
-		client.MatchingFields{
-			"source":              "k8s-sustain",
-			"involvedObject.kind": kind,
-			"involvedObject.name": name,
-		},
-	)
+	_ = s.K8sClient.List(ctx, &list, client.InNamespace(id.Key.Namespace), client.Limit(activityListLimit), fields)
 	// The API server does not guarantee Events come back ordered by recency, so
 	// sort newest-first before applying the keep-limit cap.
 	slices.SortFunc(list.Items, func(a, b corev1.Event) int {
@@ -107,8 +164,7 @@ func (s *Server) recentSustainEvents(ctx context.Context, namespace, kind, name 
 	})
 	out := []activityItem{}
 	for _, e := range list.Items {
-		// Guard against a fake/permissive lister that ignores the selector.
-		if e.InvolvedObject.Kind != kind || e.InvolvedObject.Name != name {
+		if e.InvolvedObject.Kind != id.Key.OwnerKind || !names[e.InvolvedObject.Name] {
 			continue
 		}
 		out = append(out, activityItem{

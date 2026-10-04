@@ -1,100 +1,15 @@
 package dashboard
 
 import (
-	"context"
 	"fmt"
 	"net/http"
-	"net/url"
-	"strconv"
+	"slices"
 	"sync"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-
+	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
-	"github.com/noony/k8s-sustain/internal/recommender"
 )
-
-type recommendationResult struct {
-	Automated          bool                                 `json:"automated"`
-	PolicyName         string                               `json:"policyName,omitempty"`
-	Containers         map[string]simulationContainerResult `json:"containers,omitempty"`
-	InitContainers     []string                             `json:"initContainers,omitempty"`
-	TooYoung           bool                                 `json:"tooYoung,omitempty"`
-	CPURecommendations promclient.ContainerTimeSeries       `json:"cpuRecommendations,omitempty"`
-	MemRecommendations promclient.ContainerTimeSeries       `json:"memoryRecommendations,omitempty"`
-}
-
-func (s *Server) handleWorkloadRecommendations(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
-	ctx := r.Context()
-
-	// The entry is threaded into runSimulationWithEntry so the simulation does
-	// not re-Get the object.
-	entry, err := s.getWorkloadEntry(ctx, namespace, kind, name)
-	if err != nil {
-		writeK8sGetError(w, err, fmt.Sprintf("workload %s/%s/%s: %v", namespace, kind, name, err))
-		return
-	}
-
-	// resolveManagingPolicy searches every member behind a grouped identity so
-	// this endpoint and /api/workloads reach the same verdict. A Policy List
-	// failure fails the request; Automated: false would blame the workload.
-	policies, err := s.policiesByName(ctx)
-	if err != nil {
-		writeK8sGetError(w, err, fmt.Sprintf("listing policies: %v", err))
-		return
-	}
-	policyName, ok := resolveManagingPolicy(entry, policies, s.ExcludedNamespaces)
-	if !ok {
-		w.Header().Set("Cache-Control", "public, max-age=60")
-		writeJSON(w, http.StatusOK, recommendationResult{Automated: false})
-		return
-	}
-	policy := policies[policyName]
-
-	spec, perr := chartParams(r.URL.Query(), policySpec(policy, namespace, kind, name))
-	if perr != nil {
-		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
-		return
-	}
-
-	result, err := s.runSimulationWithEntry(ctx, spec, entry)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("computing recommendations: %v", err))
-		return
-	}
-
-	w.Header().Set("Cache-Control", "public, max-age=60")
-	writeJSON(w, http.StatusOK, recommendationResult{
-		Automated:          true,
-		PolicyName:         policyName,
-		Containers:         result.Containers,
-		InitContainers:     result.InitContainers,
-		TooYoung:           result.TooYoung,
-		CPURecommendations: result.CPURecommendations,
-		MemRecommendations: result.MemRecommendations,
-	})
-}
-
-// chartParams overlays the chart window, step and absolute range from the
-// query string onto spec. The chart window defaults to the CPU
-// recommendation window.
-func chartParams(q url.Values, spec simulationSpec) (simulationSpec, *paramError) {
-	var perr *paramError
-	if spec.window, perr = parseDurationParam(q, recommender.ResourceWindow(spec.resources.CPU.Window)); perr != nil {
-		return spec, perr
-	}
-	if spec.step, perr = parseStepParam(q, "5m"); perr != nil {
-		return spec, perr
-	}
-	if v := q.Get("from"); v != "" {
-		spec.fromTs, _ = strconv.ParseInt(v, 10, 64)
-	}
-	if v := q.Get("to"); v != "" {
-		spec.toTs, _ = strconv.ParseInt(v, 10, 64)
-	}
-	return spec, nil
-}
 
 func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
 	q := r.URL.Query()
@@ -152,14 +67,13 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		return
 	}
 
-	// A failed Get is tolerated: resources and init containers come back nil.
-	entry, err := s.getWorkloadEntry(ctx, namespace, kind, name)
+	// A failed read is tolerated: resources and init containers come back nil.
+	id, err := s.identity(ctx, promclient.WorkloadIdentity{Namespace: namespace, OwnerKind: kind, OwnerName: name})
 	if err != nil {
-		s.Logger.Error(err, "failed to get workload entry", "namespace", namespace, "kind", kind, "name", name)
-		entry = workloadEntry{}
+		s.Logger.Error(err, "failed to read the workload identity", "namespace", namespace, "kind", kind, "name", name)
 	}
-	resources := containerResourcesFromEntry(entry)
-	initContainers := initContainerNamesFromEntry(entry)
+	resources := containerResourcesOf(id)
+	initContainers := initContainerNamesOf(id)
 
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -182,28 +96,13 @@ type containerResources struct {
 	MemoryLimit   string `json:"memoryLimit,omitempty"`
 }
 
-// getWorkloadPolicyAnnotation resolves the Policy that manages a workload, or
-// "" when no real object behind its identity both opts into a Policy and
-// matches its selector.
-func (s *Server) getWorkloadPolicyAnnotation(ctx context.Context, namespace, kind, name string) (string, error) {
-	e, err := s.getWorkloadEntry(ctx, namespace, kind, name)
-	if err != nil {
-		return "", err
+// containerResourcesOf returns the requests and limits each of the identity's
+// containers runs with, nil when the identity is unknown.
+func containerResourcesOf(id *inventory.Identity) map[string]containerResources {
+	if id == nil {
+		return nil
 	}
-	policies, err := s.policiesByName(ctx)
-	if err != nil {
-		return "", err
-	}
-	policyName, ok := resolveManagingPolicy(e, policies, s.ExcludedNamespaces)
-	if !ok {
-		return "", nil
-	}
-	return policyName, nil
-}
-
-func containerResourcesFromEntry(e workloadEntry) map[string]containerResources {
-	all := append([]corev1.Container{}, e.Containers()...)
-	all = append(all, e.InitContainers()...)
+	all := append(slices.Clone(id.Containers), id.InitContainers...)
 	if len(all) == 0 {
 		// Keep the nil map so the JSON stays null rather than {}.
 		return nil
@@ -221,11 +120,11 @@ func containerResourcesFromEntry(e workloadEntry) map[string]containerResources 
 	return result
 }
 
-func initContainerNamesFromEntry(e workloadEntry) []string {
-	initCs := e.InitContainers()
-	if len(initCs) == 0 {
+func initContainerNamesOf(id *inventory.Identity) []string {
+	if id == nil || len(id.InitContainers) == 0 {
 		return nil
 	}
+	initCs := id.InitContainers
 	out := make([]string, len(initCs))
 	for i, c := range initCs {
 		out[i] = c.Name

@@ -62,6 +62,8 @@ func TestRiskStateOfPrecedence(t *testing.T) {
 		{"blocked over stale pods", identityHealth{Blocked: blocked, StalePods: 2}, riskBlocked},
 		{"blocked over OOM", identityHealth{Blocked: blocked, OOM24h: 3}, riskBlocked},
 		{"blocked over OOM and stale pods", identityHealth{Blocked: blocked, OOM24h: 3, StalePods: 2}, riskBlocked},
+		{"conflicted", identityHealth{Conflicted: true}, riskConflicted},
+		{"conflicted over everything", identityHealth{Conflicted: true, Blocked: blocked, OOM24h: 3, StalePods: 2}, riskConflicted},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
