@@ -195,8 +195,8 @@ func TestUpsertWorkloadRecommendation_CreatesObjectOnFirstCall(t *testing.T) {
 	if got.Status.ObservedAt.IsZero() {
 		t.Error("ObservedAt not stamped")
 	}
-	if got.Status.Source != "prometheus" {
-		t.Errorf("source = %q, want prometheus", got.Status.Source)
+	if got.Status.Outcome != sustainv1alpha1.OutcomeComputed {
+		t.Errorf("outcome = %q, want Computed", got.Status.Outcome)
 	}
 	if c := got.Status.Containers["app"]; c.CPURequest == nil || c.CPURequest.Cmp(cpu) != 0 {
 		t.Errorf("container cpu mismatch: %v", c.CPURequest)
@@ -494,7 +494,7 @@ func noDataStub(ns, name, policy string, observed metav1.Time) *sustainv1alpha1.
 		},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{Policy: policy},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
-			Source:     sustainv1alpha1.RecommendationSourceNoData,
+			Outcome:    sustainv1alpha1.OutcomeNoData,
 			ObservedAt: observed,
 		},
 	}

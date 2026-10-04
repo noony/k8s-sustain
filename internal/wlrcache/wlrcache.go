@@ -104,7 +104,7 @@ func Upsert(
 
 // EnsureExists creates the WorkloadRecommendation for ref if missing and keeps
 // its spec, policy label and observed-resources snapshot current. It never
-// writes Containers, Source or ObservedAt.
+// writes Containers, Outcome or ObservedAt.
 //
 // It is the discovery half of the write path: Upsert deliberately refuses to
 // create an object with no recommendation in it, but under WLR-driven
@@ -200,19 +200,19 @@ func getOrCreate(
 	return key, existing, nil
 }
 
-// MarkNoData records that a computation produced nothing for an identity that
-// has never produced anything.
+// RecordOutcome records an outcome that carries no new Recommendation:
+// NoData, TooYoung, FetchFailed or Conflicted.
 //
-// The no-op when Containers is already populated is the whole contract: every
-// identity is recomputed every cycle, including departed ones whose samples
-// eventually age out of the query window, and overwriting a retained
-// last-known-good would strip exactly the recommendation retention exists to
-// preserve. The state is NOT terminal — the next cycle recomputes.
-func MarkNoData(
+// It never touches Containers or ObservedAt: every identity is recomputed
+// every cycle, including departed ones whose samples eventually age out of
+// the query window, and clearing a retained last-known-good would strip
+// exactly the recommendation retention exists to preserve. A missing object
+// is left missing; an unchanged outcome costs no write.
+func RecordOutcome(
 	ctx context.Context,
 	c client.Client,
 	ref sustainv1alpha1.WorkloadReference,
-	now metav1.Time,
+	outcome sustainv1alpha1.RecommendationOutcome,
 ) error {
 	logger := log.FromContext(ctx).WithValues("kind", ref.Kind, "name", ref.Name, "namespace", ref.Namespace)
 	key := types.NamespacedName{Namespace: ref.Namespace, Name: Name(ref.Kind, ref.Name)}
@@ -224,15 +224,11 @@ func MarkNoData(
 		logger.V(1).Info("failed to read WorkloadRecommendation", "err", err)
 		return fmt.Errorf("reading WorkloadRecommendation %s: %w", key, err)
 	}
-	if len(existing.Status.Containers) > 0 {
+	if existing.Status.Outcome == outcome {
 		return nil
 	}
-	if existing.Status.Source == sustainv1alpha1.RecommendationSourceNoData {
-		return nil // already recorded; avoid a write every cycle
-	}
 	patched := existing.DeepCopy()
-	patched.Status.Source = sustainv1alpha1.RecommendationSourceNoData
-	patched.Status.ObservedAt = now
+	patched.Status.Outcome = outcome
 	if err := c.Status().Patch(ctx, patched, client.MergeFrom(&existing)); err != nil {
 		logger.V(1).Info("failed to patch WorkloadRecommendation status", "err", err)
 		return fmt.Errorf("patching WorkloadRecommendation %s status: %w", key, err)
@@ -300,7 +296,7 @@ func buildStatus(
 ) sustainv1alpha1.WorkloadRecommendationStatus {
 	out := sustainv1alpha1.WorkloadRecommendationStatus{
 		ObservedAt:        now,
-		Source:            sustainv1alpha1.RecommendationSourcePrometheus,
+		Outcome:           sustainv1alpha1.OutcomeComputed,
 		Containers:        map[string]sustainv1alpha1.ContainerRecommendation{},
 		ObservedResources: observed,
 	}
@@ -358,7 +354,7 @@ func setQuantity(rl *corev1.ResourceList, name corev1.ResourceName, q *resource.
 // statusEquivalent compares two statuses ignoring ObservedAt, so write
 // amplification scales with change rather than workload count.
 func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
-	if a.Source != b.Source {
+	if a.Outcome != b.Outcome {
 		return false
 	}
 	// A departed identity coming back must write even with unchanged values: the

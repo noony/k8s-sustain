@@ -33,6 +33,21 @@ const (
 	outcomeNotFetched
 )
 
+// stored is the WorkloadRecommendation outcome an outcome with no new
+// Recommendation records; false for the outcomes that record nothing.
+func (o outcome) stored() (sustainv1alpha1.RecommendationOutcome, bool) {
+	switch o {
+	case outcomeTooYoung:
+		return sustainv1alpha1.OutcomeTooYoung, true
+	case outcomeNoData:
+		return sustainv1alpha1.OutcomeNoData, true
+	case outcomeFetchFailed:
+		return sustainv1alpha1.OutcomeFetchFailed, true
+	default:
+		return "", false
+	}
+}
+
 // identityResult is the recommendation pass's verdict on one identity.
 type identityResult struct {
 	item    computeItem

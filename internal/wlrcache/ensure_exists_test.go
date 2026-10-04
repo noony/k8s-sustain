@@ -80,7 +80,7 @@ func TestEnsureExistsClearsDeparted(t *testing.T) {
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			Departed:   true,
 			ObservedAt: observedAt,
-			Source:     sustainv1alpha1.RecommendationSourcePrometheus,
+			Outcome:    sustainv1alpha1.OutcomeComputed,
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
 				"main": {CPURequest: &q},
 			},
@@ -102,7 +102,7 @@ func TestEnsureExistsClearsDeparted(t *testing.T) {
 	if got.Status.Departed {
 		t.Error("Departed must be cleared: the identity is in the target listing again")
 	}
-	// The realistic path for "never writes Containers, Source or ObservedAt":
+	// The realistic path for "never writes Containers, Outcome or ObservedAt":
 	// in TestEnsureExistsCreatesEmptyWLR those fields are zero by construction
 	// and the assertion would be vacuous.
 	if len(got.Status.Containers) != 1 {
@@ -111,15 +111,15 @@ func TestEnsureExistsClearsDeparted(t *testing.T) {
 	if got.Status.Containers["main"].CPURequest.Cmp(q) != 0 {
 		t.Errorf("containers[main].cpuRequest = %v, want unchanged %v", got.Status.Containers["main"].CPURequest, q)
 	}
-	if got.Status.Source != sustainv1alpha1.RecommendationSourcePrometheus {
-		t.Errorf("source = %q, want unchanged %q", got.Status.Source, sustainv1alpha1.RecommendationSourcePrometheus)
+	if got.Status.Outcome != sustainv1alpha1.OutcomeComputed {
+		t.Errorf("outcome = %q, want unchanged %q", got.Status.Outcome, sustainv1alpha1.OutcomeComputed)
 	}
 	if !got.Status.ObservedAt.Equal(&observedAt) {
 		t.Errorf("observedAt = %v, want unchanged %v: EnsureExists must not stamp freshness", got.Status.ObservedAt, observedAt)
 	}
 }
 
-func TestMarkNoDataLeavesPopulatedStatusAlone(t *testing.T) {
+func TestRecordOutcomeKeepsTheLastRecommendation(t *testing.T) {
 	ref := sustainv1alpha1.WorkloadReference{Kind: "Job", Namespace: "ns", Name: "nightly"}
 	// Rfc3339Copy: the fake tracker serializes metav1.Time at second precision
 	// (as a real apiserver does), so a sub-second value would fail the compare
@@ -135,7 +135,7 @@ func TestMarkNoDataLeavesPopulatedStatusAlone(t *testing.T) {
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{WorkloadRef: ref, Policy: "pol"},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			ObservedAt: observedAt,
-			Source:     sustainv1alpha1.RecommendationSourcePrometheus,
+			Outcome:    sustainv1alpha1.OutcomeComputed,
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
 				"main": {CPURequest: &q},
 			},
@@ -145,8 +145,8 @@ func TestMarkNoDataLeavesPopulatedStatusAlone(t *testing.T) {
 		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
 		WithObjects(existing).Build()
 
-	if err := wlrcache.MarkNoData(context.Background(), c, ref, metav1.Now()); err != nil {
-		t.Fatalf("MarkNoData: %v", err)
+	if err := wlrcache.RecordOutcome(context.Background(), c, ref, sustainv1alpha1.OutcomeNoData); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
 	}
 
 	var got sustainv1alpha1.WorkloadRecommendation
@@ -160,12 +160,12 @@ func TestMarkNoDataLeavesPopulatedStatusAlone(t *testing.T) {
 	if !got.Status.ObservedAt.Equal(&observedAt) {
 		t.Error("ObservedAt bumped: that would tell the webhook stale data is fresh")
 	}
-	if got.Status.Source != sustainv1alpha1.RecommendationSourcePrometheus {
-		t.Errorf("source = %q, want unchanged", got.Status.Source)
+	if got.Status.Outcome != sustainv1alpha1.OutcomeNoData {
+		t.Errorf("outcome = %q, want NoData", got.Status.Outcome)
 	}
 }
 
-func TestMarkNoDataWritesWhenNeverPopulated(t *testing.T) {
+func TestRecordOutcomeWritesWhenNeverPopulated(t *testing.T) {
 	ref := sustainv1alpha1.WorkloadReference{Kind: "Pod", Namespace: "ns", Name: "fresh"}
 	existing := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{
@@ -179,9 +179,8 @@ func TestMarkNoDataWritesWhenNeverPopulated(t *testing.T) {
 		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
 		WithObjects(existing).Build()
 
-	now := metav1.Now()
-	if err := wlrcache.MarkNoData(context.Background(), c, ref, now); err != nil {
-		t.Fatalf("MarkNoData: %v", err)
+	if err := wlrcache.RecordOutcome(context.Background(), c, ref, sustainv1alpha1.OutcomeTooYoung); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
 	}
 
 	var got sustainv1alpha1.WorkloadRecommendation
@@ -189,11 +188,11 @@ func TestMarkNoDataWritesWhenNeverPopulated(t *testing.T) {
 	if err := c.Get(context.Background(), key, &got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.Status.Source != sustainv1alpha1.RecommendationSourceNoData {
-		t.Errorf("source = %q, want %q", got.Status.Source, sustainv1alpha1.RecommendationSourceNoData)
+	if got.Status.Outcome != sustainv1alpha1.OutcomeTooYoung {
+		t.Errorf("outcome = %q, want TooYoung", got.Status.Outcome)
 	}
-	if got.Status.ObservedAt.IsZero() {
-		t.Error("ObservedAt not set: the reaper needs something to age against")
+	if !got.Status.ObservedAt.IsZero() {
+		t.Error("ObservedAt set: nothing was computed")
 	}
 }
 

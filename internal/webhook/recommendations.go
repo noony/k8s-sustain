@@ -33,9 +33,9 @@ const DefaultRecommendationRetention = 168 * time.Hour
 // reconciled — and the recommendation-source metric must tell them apart.
 var ErrRecommendationStale = errors.New("workloadrecommendation is stale")
 
-// ErrRecommendationNoData reports that a WorkloadRecommendation exists but the
-// identity produced nothing recommendable — the "nodata" state
-// wlrcache.MarkNoData writes. Kept distinct from the plain (nil, nil) result
+// ErrRecommendationNoData reports that a WorkloadRecommendation exists and the
+// controller recorded an outcome for it, but it holds no Recommendation (too
+// young, no data, fetch failed, Conflicted). Kept distinct from the plain (nil, nil) result
 // because that result drives stub creation, and a nodata object already
 // exists: collapsing them would fire a doomed Create per pod for exactly the
 // high-churn identities that stay nodata longest.
@@ -62,14 +62,13 @@ func (h *Handler) fetchRecommendations(
 	if err != nil {
 		return nil, false, fmt.Errorf("reading WorkloadRecommendation %s/%s: %w", namespace, objName, err)
 	}
-	if wlr.Status.ObservedAt.IsZero() {
-		return nil, false, nil
-	}
-	// Nodata is checked BEFORE staleness, and the order is load-bearing:
-	// MarkNoData stamps ObservedAt once and never refreshes it, so checked the
-	// other way round every such admission would report source="stale" and
-	// swamp the signal operators alert on.
-	if len(wlr.Status.Containers) == 0 && wlr.Status.Source == sustainv1alpha1.RecommendationSourceNoData {
+	// An object the controller has not decided anything for yet reads as
+	// missing; one it has, but which holds no Recommendation, as nodata. Both
+	// are checked before staleness: an empty object has no ObservedAt to age.
+	if len(wlr.Status.Containers) == 0 {
+		if wlr.Status.Outcome == "" {
+			return nil, false, nil
+		}
 		return nil, false, ErrRecommendationNoData
 	}
 	// A recommendation retained for a departed identity is exempt from the

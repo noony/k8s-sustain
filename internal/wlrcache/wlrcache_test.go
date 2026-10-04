@@ -12,14 +12,14 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-func TestStatusEquivalent_DistinguishesSameValuesFromDifferentSources(t *testing.T) {
+func TestStatusEquivalent_DistinguishesSameValuesFromDifferentOutcomes(t *testing.T) {
 	cpu := resource.MustParse("250m")
 	now := metav1.NewTime(time.Now())
 	later := metav1.NewTime(now.Add(time.Minute))
 
 	a := sustainv1alpha1.WorkloadRecommendationStatus{
 		ObservedAt: now,
-		Source:     "prometheus",
+		Outcome:    sustainv1alpha1.OutcomeComputed,
 		Containers: map[string]sustainv1alpha1.ContainerRecommendation{
 			"app": {CPURequest: &cpu},
 		},
@@ -31,9 +31,9 @@ func TestStatusEquivalent_DistinguishesSameValuesFromDifferentSources(t *testing
 	}
 
 	c := a
-	c.Source = "fallback"
+	c.Outcome = sustainv1alpha1.OutcomeNoData
 	if statusEquivalent(a, c) {
-		t.Error("different Source → should NOT be equivalent")
+		t.Error("different Outcome → should NOT be equivalent")
 	}
 }
 

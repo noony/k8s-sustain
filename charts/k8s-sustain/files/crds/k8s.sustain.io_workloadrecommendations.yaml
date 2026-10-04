@@ -26,6 +26,9 @@ spec:
     - jsonPath: .spec.policy
       name: Policy
       type: string
+    - jsonPath: .status.outcome
+      name: Outcome
+      type: string
     - jsonPath: .status.observedAt
       name: ObservedAt
       type: date
@@ -62,9 +65,9 @@ spec:
               applies to, and the Policy that produced it.
             properties:
               policy:
-                description: Policy is the name of the Policy that produced this recommendation;
-                  empty means no Policy matches the workload anymore and the object
-                  will be garbage-collected.
+                description: Policy is the Policy that last governed the identity
+                  and produced this recommendation. A Conflicted identity keeps it,
+                  and the webhook injects only into pods that opt into this Policy.
                 type: string
               workloadRef:
                 description: WorkloadRef identifies the workload these recommendations
@@ -143,8 +146,8 @@ spec:
                   between runs), whose ObservedAt is therefore frozen.
                 type: boolean
               observedAt:
-                description: ObservedAt is when the recommendation was last refreshed
-                  from Prometheus.
+                description: ObservedAt is when containers was last computed from
+                  Prometheus.
                 format: date-time
                 type: string
               observedResources:
@@ -186,9 +189,16 @@ spec:
                   and limits the container actually ran with when the recommendation
                   was written.
                 type: object
-              source:
-                description: 'Source describes where the recommendation came from:
-                  "prometheus" or "nodata".'
+              outcome:
+                description: 'Outcome is what the controller''s last pass decided
+                  for the identity: Computed, NoData, TooYoung, FetchFailed or Conflicted.
+                  Every outcome but Computed keeps the containers of the last Recommendation.'
+                enum:
+                - Computed
+                - NoData
+                - TooYoung
+                - FetchFailed
+                - Conflicted
                 type: string
             type: object
         type: object

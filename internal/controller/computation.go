@@ -197,14 +197,15 @@ func (r *PolicyReconciler) persist(ctx context.Context, policyName string, resul
 }
 
 func (r *PolicyReconciler) persistLive(ctx context.Context, policyName string, res *identityResult) {
-	switch res.outcome {
-	case outcomeRecommended:
+	if res.outcome == outcomeRecommended {
 		_ = r.upsertWorkloadRecommendation(ctx, res.item, policyName, res.recs, metav1.Now())
-	case outcomeTooYoung, outcomeNoData:
-		// Record the absence: a zero ObservedAt reads as "missing" to the webhook
-		// and costs a stub Create/Get per admission. MarkNoData no-ops once
-		// Containers is populated, so last-known-good survives an empty query.
-		_ = wlrcache.MarkNoData(ctx, r.Client, res.item.WLR.Spec.WorkloadRef, metav1.Now())
+		return
+	}
+	// Recorded so the webhook reads "nothing to inject" instead of "missing",
+	// which would cost a stub Create per admission. The last Recommendation
+	// survives.
+	if stored, ok := res.outcome.stored(); ok {
+		_ = wlrcache.RecordOutcome(ctx, r.Client, res.item.WLR.Spec.WorkloadRef, stored)
 	}
 }
 
@@ -225,7 +226,7 @@ func (r *PolicyReconciler) persistDeparted(ctx context.Context, policyName strin
 		return nil
 	case outcomeTooYoung, outcomeNoData:
 		// A cold start and a recommendation whose samples aged out share this branch;
-		// only the second is worth an alert. MarkNoData no-ops once Containers is set.
+		// only the second is worth an alert. RecordOutcome keeps the containers.
 		refresh := WLRRefreshNoData
 		if len(it.WLR.Status.Containers) > 0 {
 			refresh = WLRRefreshRetainedEmpty
@@ -233,9 +234,11 @@ func (r *PolicyReconciler) persistDeparted(ctx context.Context, policyName strin
 				"kind", it.Identity.OwnerKind, "name", it.Identity.OwnerName, "namespace", ns)
 		}
 		EmitWLRRefresh(ns, kind, refresh)
-		return wlrcache.MarkNoData(ctx, r.Client, it.WLR.Spec.WorkloadRef, metav1.Now())
+		stored, _ := res.outcome.stored()
+		return wlrcache.RecordOutcome(ctx, r.Client, it.WLR.Spec.WorkloadRef, stored)
 	case outcomeFetchFailed:
 		EmitWLRRefresh(ns, kind, WLRRefreshError)
+		_ = wlrcache.RecordOutcome(ctx, r.Client, it.WLR.Spec.WorkloadRef, sustainv1alpha1.OutcomeFetchFailed)
 		return res.err
 	default:
 		return nil

@@ -160,7 +160,7 @@ func TestAdmitDoesNotRequestRecommendationWhenWLRStale(t *testing.T) {
 // exactly the high-churn identities that stay nodata longest.
 func TestAdmitDoesNotRequestRecommendationWhenNoData(t *testing.T) {
 	nodata := freshWLR("Deployment", "prod", "api", nil)
-	nodata.Status.Source = sustainv1alpha1.RecommendationSourceNoData
+	nodata.Status.Outcome = sustainv1alpha1.OutcomeNoData
 
 	env := newAdmitEnv(t,
 		basicPolicy("p1", sustainv1alpha1.UpdateModeOnCreate),
@@ -188,7 +188,7 @@ func TestAdmitDoesNotRequestRecommendationWhenNoData(t *testing.T) {
 	if err := env.handler.Client.Get(context.Background(), key, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status.Source != sustainv1alpha1.RecommendationSourceNoData {
+	if got.Status.Outcome != sustainv1alpha1.OutcomeNoData {
 		t.Fatalf("nodata status was disturbed by admission: %+v", got.Status)
 	}
 }
@@ -367,11 +367,11 @@ func TestCreateStubRecordsObservedResources(t *testing.T) {
 
 func TestCreateStubFillsSnapshotOnAlreadyExistsForPreExistingEmptyStub(t *testing.T) {
 	// Reachable state only: an object that already exists with an empty status
-	// and no Source — an older webhook binary's stub, or one whose snapshot
+	// and no Outcome — an older webhook binary's stub, or one whose snapshot
 	// patch failed after its Create succeeded. A later admission's Create
 	// returns AlreadyExists, and this is its only remaining chance to fill it.
 	//
-	// A nodata WLR is deliberately not modelled: MarkNoData is only reached
+	// A NoData WLR is deliberately not modelled: that outcome is only recorded
 	// after computation found a non-empty snapshot, so that state is
 	// unreachable here.
 	existing := &sustainv1alpha1.WorkloadRecommendation{

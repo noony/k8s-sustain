@@ -318,7 +318,7 @@ func TestReconcile_DepartedRefreshNeverWipesGoodRecommendation(t *testing.T) {
 	old := metav1.NewTime(time.Now().Add(-90 * time.Minute).Truncate(time.Second))
 	wlr := departedWLR(ns)
 	wlr.Status.ObservedAt = old
-	wlr.Status.Source = sustainv1alpha1.RecommendationSourcePrometheus
+	wlr.Status.Outcome = sustainv1alpha1.OutcomeComputed
 	wlr.Status.Containers = map[string]sustainv1alpha1.ContainerRecommendation{"app": {CPURequest: &q}}
 	policy := policyForReconcileWorkload(t, "pol")
 	policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
@@ -518,11 +518,8 @@ func TestReconcile_MarksNoDataForLiveIdentityWithoutSamples(t *testing.T) {
 	reconcileOnce(t, r, "p")
 
 	got := getWLRFor(t, r, ns, "Deployment", "api")
-	if got.Status.ObservedAt.IsZero() {
-		t.Error("live identity with no samples left a zero ObservedAt; the webhook reads that as source=missing " +
-			"and answers every admission with a stub write")
-	}
-	if got.Status.Source != sustainv1alpha1.RecommendationSourceNoData {
-		t.Errorf("status.source = %q, want %q", got.Status.Source, sustainv1alpha1.RecommendationSourceNoData)
+	if got.Status.Outcome != sustainv1alpha1.OutcomeNoData {
+		t.Errorf("status.outcome = %q, want %q: an empty outcome reads to the webhook as source=missing "+
+			"and answers every admission with a stub write", got.Status.Outcome, sustainv1alpha1.OutcomeNoData)
 	}
 }
