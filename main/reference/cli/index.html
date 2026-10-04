@@ -2499,7 +2499,7 @@
 <tr>
 <td><code>--query-shard-max-samples</code></td>
 <td><code>10000000</code></td>
-<td>Projected Prometheus sample budget (containers × window-minutes, summed across a shard's workloads) a single batched CPU/memory/OOM shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own <code>--query.max-samples</code> (default <code>50000000</code>): that server-side limit <em>rejects</em> an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default leaves a 5x margin.</td>
+<td>Projected Prometheus sample budget (containers × samples per container, summed across a shard's workloads: window-minutes for the CPU and memory queries, one per rule for the OOM query) a single batched shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own <code>--query.max-samples</code> (default <code>50000000</code>): that server-side limit <em>rejects</em> an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default leaves a 5x margin.</td>
 </tr>
 </tbody>
 </table>

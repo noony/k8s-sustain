@@ -2564,7 +2564,7 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 <tr>
 <td><code>controller.queryShardMaxSamples</code></td>
 <td><code>10000000</code></td>
-<td>Projected sample budget (containers × window-minutes, summed across a shard's workloads) one batched CPU/memory/OOM query may reach before a new shard is started. Must stay under Prometheus's <code>--query.max-samples</code> (default <code>50000000</code>): that limit <em>rejects</em> an over-budget query outright, failing every workload in the shard rather than just the excess. The default leaves a 5x margin.</td>
+<td>Projected sample budget (containers × samples per container, summed across a shard's workloads: window-minutes for the CPU and memory queries, one per rule for the OOM query) one batched query may reach before a new shard is started. Must stay under Prometheus's <code>--query.max-samples</code> (default <code>50000000</code>): that limit <em>rejects</em> an over-budget query outright, failing every workload in the shard rather than just the excess. The default leaves a 5x margin.</td>
 </tr>
 <tr>
 <td><code>controller.logLevel</code></td>

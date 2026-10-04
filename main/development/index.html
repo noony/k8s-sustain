@@ -1985,6 +1985,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#adding-a-recommendation-signal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a recommendation signal
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#dashboard-health-signals" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2767,6 +2778,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#adding-a-recommendation-signal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a recommendation signal
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#dashboard-health-signals" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3219,8 +3241,11 @@ through the <code>recommender.InputsFetcher</code> port. Their tests inject
 <code>recommendertest.StaticInputs</code> instead of serving PromQL from an
 <code>httptest</code> server:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nx">inputs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">recommendertest</span><span class="p">.</span><span class="nx">NewStaticInputs</span><span class="p">().</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nx">Set</span><span class="p">(</span><span class="nx">id</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">recommender</span><span class="p">.</span><span class="nx">WorkloadInputs</span><span class="p">{</span><span class="nx">CPUPerPod</span><span class="p">:</span><span class="w"> </span><span class="nx">promclient</span><span class="p">.</span><span class="nx">ContainerValues</span><span class="p">{</span><span class="s">"app"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.1</span><span class="p">}}).</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nx">Fail</span><span class="p">(</span><span class="nx">otherID</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">"prometheus down"</span><span class="p">))</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nx">Set</span><span class="p">(</span><span class="nx">id</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">recommender</span><span class="p">.</span><span class="nx">WorkloadInputs</span><span class="p">{</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">        </span><span class="nx">CPUPerPod</span><span class="p">:</span><span class="w"> </span><span class="nx">promclient</span><span class="p">.</span><span class="nx">ContainerValues</span><span class="p">{</span><span class="s">"app"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.1</span><span class="p">},</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">        </span><span class="nx">OOM</span><span class="p">:</span><span class="w">       </span><span class="kt">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">recommender</span><span class="p">.</span><span class="nx">OOM</span><span class="p">{</span><span class="s">"app"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nx">Kills</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nx">PeakBytes</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="nx">HasPeak</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}},</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="p">}).</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nx">Fail</span><span class="p">(</span><span class="nx">otherID</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">"prometheus down"</span><span class="p">))</span>
 </code></pre></div>
 <p>An identity with neither gets empty inputs, as Prometheus answers for one with
 no samples. <code>Calls()</code> and <code>Requested(id)</code> report what was fetched, so a test
@@ -3228,7 +3253,8 @@ can assert that an identity was, or was not, part of the batch. Prefer driving
 <code>PolicyReconciler.Reconcile</code> end to end with the fake client and
 <code>StaticInputs</code>. The Prometheus adapter, <code>recommender.PromInputs</code>, is the only
 code tested against a fake PromQL server: sharding, retry, the one-identity
-fallback and the best-effort OOM signal.</p>
+fallback and each signal's failure policy. A signal's own query and parsing
+are tested without a server, from its query text and from <code>ShardSample</code>s.</p>
 <h2 id="lint">Lint<a class="headerlink" href="#lint" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>lint<span class="w">   </span><span class="c1"># golangci-lint run</span>
 </code></pre></div>
@@ -3278,7 +3304,7 @@ runs. The full posture and the verification commands are documented in
 <a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>│   ├── oomwatch/          # Live OOMKilled detection, re-triggers reconciles
 <a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>│   ├── policymatch/       # Policy resolution (ResolvePolicy) and selector matching
 <a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>│   ├── prometheus/        # Prometheus HTTP API client + metric name constants
-<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>│   ├── recommender/       # Recommendation algorithm (Compute) and the batch-inputs port with its Prometheus adapter
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>│   ├── recommender/       # Recommendation signals (one module each), Compute composing their stages, and the batch-inputs port with its Prometheus adapter
 <a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>│   │   └── recommendertest/  # In-memory inputs adapter for tests
 <a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>│   ├── version/           # Build version
 <a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>│   ├── webhook/           # Admission webhook HTTP handler
@@ -3445,6 +3471,43 @@ kind (say <code>Rollout</code> from Argo) is mostly a matter of registering it t
 <li>If the kind is a CRD, register its scheme in <code>internal/config/config.go</code> and <code>internal/dashboard/server.go</code></li>
 <li>If the kind's pods cannot be evicted (job-like workloads), add an in-place-only branch in <code>reconcileWorkload</code> (<code>internal/controller/workload_reconcile.go</code>) alongside the Job, CronJob and bare-pod ones; selector-based kinds need nothing more</li>
 <li>Add RBAC markers (<code>+kubebuilder:rbac:...</code>) to the controller and the Helm RBAC rule in <code>charts/k8s-sustain/templates/rbac.yaml</code></li>
+</ol>
+<h2 id="adding-a-recommendation-signal">Adding a recommendation signal<a class="headerlink" href="#adding-a-recommendation-signal" title="Permanent link">&para;</a></h2>
+<p>A <a href="../concepts/recommendation-pipeline/#signals">signal</a> is one module of
+<code>internal/recommender</code> (<code>signal_usage.go</code> holds the CPU and memory usage
+signals, <code>signal_oom.go</code> the OOM floor) implementing the <code>signal</code> interface in
+<code>signal.go</code>: its query and shard cost, how it collects samples into
+per-container values, its failure policy, where its stage runs (<code>slot</code>: base or
+adjuster, CPU or memory), its contribution to a container's request, and its
+trace entry. <code>PromInputs</code> fetches every signal in the <code>signals</code> list, and
+<code>Compute</code> runs their stages in a fixed order: base signals, adjusters,
+headroom and clamp, coordination, limit. Neither has a line specific to any
+signal. To add one:</p>
+<ol>
+<li>Write <code>internal/recommender/signal_&lt;name&gt;.go</code>. Build its PromQL from the
+   <code>internal/prometheus</code> primitives (<code>Shard.Selector</code>, <code>Shard.MetricsSelector</code>,
+   <code>QuantileOverTime</code>, <code>WindowMinutes</code>); <code>PromInputs</code> runs it through
+   <code>Client.QueryShard</code>, with the batching, retry and one-identity fallback
+   every signal shares. Give its per-container values a field in
+   <code>WorkloadInputs</code>, which is what <code>recommendertest.StaticInputs</code> serves</li>
+<li>List it in <code>signals</code> (<code>internal/recommender/signal.go</code>). Within a role,
+   stages run in list order</li>
+<li>If it reads new Policy settings or records a new trace entry, add the
+   fields to <code>api/v1alpha1</code> (<code>ResourcesConfigs</code>, <code>ResourceTrace</code>), then run
+   <code>make generate manifests</code></li>
+<li>If it reads a new recording rule, add the name to
+   <code>internal/prometheus/metricnames.go</code> and the rule to
+   <code>charts/k8s-sustain/values.yaml</code> under <code>prometheusRule.groups</code>, and document
+   it in <a href="../reference/recording-rules/">Recording Rules</a></li>
+<li>Test it at its own interface, next to <code>signal_usage_test.go</code> and
+   <code>signal_oom_test.go</code>: the query built from settings, the values collected
+   from <code>ShardSample</code>s, its failure policy, its contribution and trace entry.
+   Test what it does to a whole recommendation through <code>Compute</code>.
+   <code>signal_test.go</code> shows that a signal defined only in a test is fetched and
+   computed from its list entry alone</li>
+<li>Add it to the signals table in
+   <a href="../concepts/recommendation-pipeline/#signals">Recommendation Pipeline</a> and
+   describe its stage there</li>
 </ol>
 <h2 id="dashboard-health-signals">Dashboard health signals<a class="headerlink" href="#dashboard-health-signals" title="Permanent link">&para;</a></h2>
 <p>Every dashboard view reads workload health — OOM kills in 24h, Blocked, stale
@@ -3632,7 +3695,7 @@ transport-related ones:</p>
 <ul>
 <li><strong>The backoff split, taken once.</strong> Backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out. The pass records which members to apply and which it skipped, and the apply step uses that split.</li>
 <li><strong>The fetch.</strong> One <code>InputsFetcher</code> call per policy; the pass never sees shards, retries or the fallback (<a href="../adr/0001-single-identity-is-a-batch-of-one/">ADR 0001</a>).</li>
-<li><strong>The computation.</strong> <code>recommender.Compute</code> decides everything about one identity from its inputs, its live OOM records and its age (the inventory's <code>Since</code>): the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply. Alongside each container's values it returns their <a href="../concepts/recommendation-pipeline/#trace">trace</a>, the value after every stage that ran; <code>persist</code> stores it with the values, and the controller's computation metrics (<code>k8s_sustain_oom_floor_applied_total</code>, <code>…_oom_reaction_latency_seconds</code>) read it. Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new trace field.</li>
+<li><strong>The computation.</strong> <code>recommender.Compute</code> decides everything about one identity from its inputs, its live OOM records and its age (the inventory's <code>Since</code>): the age gate, then every container through the stages of every <a href="#adding-a-recommendation-signal">signal</a>. Its OOM floor signal merges the live records the controller reads from the OOM watcher's cache with the Prometheus window and is the one place that decides whether a kill is recent, for both the bypass of the age gate and the memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply. Alongside each container's values it returns their <a href="../concepts/recommendation-pipeline/#trace">trace</a>, the value after every stage that ran; <code>persist</code> stores it with the values, and the controller's computation metrics (<code>k8s_sustain_oom_floor_applied_total</code>, <code>…_oom_reaction_latency_seconds</code>) read it. Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new trace field.</li>
 </ul>
 <p>The batch metrics are counted from the outcomes, not from the fetch's internals. <code>persist</code> records every outcome but "not fetched" in the <code>WorkloadRecommendation</code>'s <code>status.outcome</code> (<code>wlrcache.Upsert</code> for <code>Computed</code>, <code>wlrcache.RecordOutcome</code> for the rest), keeping the last Recommendation.</p>
 <p>A Conflicted identity never enters the pass (<a href="../adr/0002-conflicted-identity-freezes-its-recommendation/">ADR 0002</a>). Each Policy party to the conflict records <code>status.outcome: Conflicted</code> (<code>recordConflicted</code>) and nothing else; <code>EnsureExists</code>, which rewrites <code>spec.policy</code>, is only ever called by the governing Policy, which is what stops two Policies flipping one object between them.</p>
@@ -3649,7 +3712,7 @@ transport-related ones:</p>
 <li><strong>Identity and timestamps</strong> (pod name/UID, terminated-at, observed-at, restart count) come from the newest observation, ordered by <code>(terminated-at, restart-count)</code>. Restart count only breaks ties on an equal timestamp, which <code>metav1.Time</code>'s one-second resolution makes common; across two pods the counters are unrelated, so a cross-pod tie picks arbitrarily between two equally recent stamps.</li>
 <li><strong>The OOM-time memory limit</strong> (the bump anchor for the memory floor) is the largest limit seen across those pods, not the most recent. A Deployment bumped 128Mi → 256Mi can have an old un-resized pod (128Mi) OOM after an already-resized one (256Mi); anchoring on the newer 128Mi would bump the floor to a value 256Mi already proved insufficient. The recommender <code>max()</code>es this record against the Prometheus anchor for the same reason.</li>
 </ul>
-<p>An out-of-order observation still counts as a new kill for triggering an immediate reconcile; it contributes its limit, not its identity. The accepted cost is on a deliberate downsize: an older, larger limit keeps anchoring the floor high until it ages out of the cache (bounded by the TTL and the recommender's freshness window). That errs toward brief over-provisioning rather than an under-bump into another OOM, and it cannot compound, because every merged value is a limit the kernel actually applied.</p>
+<p>An out-of-order observation still counts as a new kill for triggering an immediate reconcile; it contributes its limit, not its identity. The accepted cost is on a deliberate downsize: an older, larger limit keeps anchoring the floor high until it ages out of the cache, after <code>recommender.LiveOOMWindow</code>, which is both the cache's TTL and how long the OOM floor counts a kill as recent. That errs toward brief over-provisioning rather than an under-bump into another OOM, and it cannot compound, because every merged value is a limit the kernel actually applied.</p>
 <p>The watcher captures the limit from <code>ContainerStatus.Resources</code> (falling back to the pod spec when the status carries none). The spec holds the desired limit, which the recommender itself rewrites on every in-place resize, so anchoring on the spec would feed the OOM floor its own previous output and compound on each kill.</p>
 <h4 id="predicate-and-dedup">Predicate and dedup<a class="headerlink" href="#predicate-and-dedup" title="Permanent link">&para;</a></h4>
 <p>The watcher's event predicate is local (no apiserver calls): a pod is queued when it carries the <code>k8s.sustain.io/policy</code> annotation itself or has ever had an <code>OOMKilled</code> container status. The OOM arm is sticky — <code>LastTerminationState.Terminated</code> persists for the container's lifetime — so every later event for such a pod re-queues a reconcile. Before resolving the owner or Namespace, the watcher checks whether this exact termination (pod UID + container + restart count + terminated-at) was already resolved, so a chronically restarting pod's owner resolution runs once per distinct kill, not once per status write, including for pods managed by no Policy.</p>
