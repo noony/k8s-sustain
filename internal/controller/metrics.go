@@ -92,7 +92,7 @@ var (
 
 	oomFloorApplied = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_oom_floor_applied_total",
-		Help: "Memory recommendations where the recent-OOM floor raised the value above the percentile.",
+		Help: "Memory recommendations whose final request the recent-OOM floor determined: it beat the percentile and no min/max clamp replaced it.",
 	}, []string{"namespace", "owner_kind", "owner_name", "container"})
 
 	coordinationFactor = prometheus.NewGaugeVec(

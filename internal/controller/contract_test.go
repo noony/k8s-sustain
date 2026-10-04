@@ -79,6 +79,7 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 		map[string]workload.ContainerRecommendation{
 			"app": {CPURequest: &wantCPU, MemoryRequest: &wantMem},
 		},
+		nil,
 		metav1.Now(),
 	)
 
@@ -172,6 +173,7 @@ func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 		map[string]workload.ContainerRecommendation{
 			"app": {CPURequest: &wantCPU},
 		},
+		nil,
 		stale,
 	)
 

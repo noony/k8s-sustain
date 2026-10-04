@@ -7,7 +7,6 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // Autoscaler-coordination tuning. Scaling a request by
@@ -22,37 +21,29 @@ const (
 	overheadTargetMax       int32 = 99
 )
 
-// ApplyOverhead scales qty by (overheadSafetyMarginPct / target_pct).
-// Returns qty unchanged (a deep copy) when target_pct <= 0 (no HPA target),
-// or nil when qty is nil. target_pct is clamped to [1, 99] before division.
+// applyOverhead scales qty by (overheadSafetyMarginPct / target_pct) and
+// returns the factor it applied. qty is returned unchanged, with factor 1,
+// when target_pct <= 0 (no autoscaler target on this resource). target_pct is
+// clamped to [1, 99] before division.
 //
 // Math is in millivalues for CPU precision; memory quantities (BinarySI)
 // are scaled in whole bytes and rounded up to the next byte — milli math
 // would produce fractional-byte quantities whenever 110/target isn't
 // byte-exact, and Kubernetes warns on fractional byte values in pod specs.
-//
-// Exported so callers (the controller) can compute overhead-only ratios for
-// observability without re-running the full ApplyCoordination pipeline.
-func ApplyOverhead(qty *resource.Quantity, targetPct int32) *resource.Quantity {
-	if qty == nil {
-		return nil
-	}
+func applyOverhead(qty resource.Quantity, targetPct int32) (resource.Quantity, float64) {
 	if targetPct <= 0 {
-		cp := qty.DeepCopy()
-		return &cp
+		return qty, 1
 	}
-	if targetPct < overheadTargetMin {
-		targetPct = overheadTargetMin
-	}
-	if targetPct > overheadTargetMax {
-		targetPct = overheadTargetMax
-	}
+	targetPct = min(max(targetPct, overheadTargetMin), overheadTargetMax)
+	factor := float64(overheadSafetyMarginPct) / float64(targetPct)
+	// Multiply before dividing, not by factor: 110/target is rarely exact in
+	// float64, and the ceil would turn its error into a whole unit.
 	if qty.Format == resource.BinarySI {
 		raw := float64(qty.Value()) * float64(overheadSafetyMarginPct) / float64(targetPct)
-		return resource.NewQuantity(int64(math.Ceil(raw)), qty.Format)
+		return *resource.NewQuantity(int64(math.Ceil(raw)), qty.Format), factor
 	}
 	raw := float64(qty.MilliValue()) * float64(overheadSafetyMarginPct) / float64(targetPct)
-	return resource.NewMilliQuantity(int64(math.Ceil(raw)), qty.Format)
+	return *resource.NewMilliQuantity(int64(math.Ceil(raw)), qty.Format), factor
 }
 
 const (
@@ -61,84 +52,58 @@ const (
 )
 
 // applyReplicaCorrection nudges qty by clamp(current/target_replicas, 0.5, 2.0)
-// where target_replicas = round(min + anchor * (max - min)). The factor
-// pushes workloads above the budget anchor toward consolidation (factor > 1)
-// and workloads below toward spreading (factor < 1).
+// where target_replicas = round(min + anchor * (max - min)), and returns the
+// factor it applied. The factor pushes workloads above the budget anchor
+// toward consolidation (factor > 1) and workloads below toward spreading
+// (factor < 1).
 //
-// No-op (returns a deep copy of qty) when:
-//   - qty is nil → nil
-//   - anchor is nil
-//   - max <= min (no replica budget)
-//   - current <= 0 (workload scaled to zero)
+// No-op (qty unchanged, factor 1) when max <= min (no replica budget) or
+// current <= 0 (workload scaled to zero).
 //
 // Anchor is clamped to [0, 1]; target_replicas is clamped to [min, max].
-func applyReplicaCorrection(qty *resource.Quantity, anchor *float64, current, minR, maxR int32) *resource.Quantity {
-	if qty == nil {
-		return nil
+func applyReplicaCorrection(qty resource.Quantity, anchor float64, current, minR, maxR int32) (resource.Quantity, float64) {
+	if maxR <= minR || current <= 0 {
+		return qty, 1
 	}
-	cp := qty.DeepCopy()
-	if anchor == nil || maxR <= minR || current <= 0 {
-		return &cp
-	}
-	a := *anchor
-	if a < 0 {
-		a = 0
-	}
-	if a > 1 {
-		a = 1
-	}
+	a := min(max(anchor, 0), 1)
 	target := int32(math.Round(float64(minR) + a*float64(maxR-minR)))
 	target = min(max(target, minR), maxR)
 	if target <= 0 {
-		return &cp
+		return qty, 1
 	}
-	raw := float64(current) / float64(target)
-	if raw < replicaFactorMin {
-		raw = replicaFactorMin
-	}
-	if raw > replicaFactorMax {
-		raw = replicaFactorMax
-	}
-	scaled := float64(cp.MilliValue()) * raw
-	return resource.NewMilliQuantity(int64(math.Ceil(scaled)), qty.Format)
+	factor := min(max(float64(current)/float64(target), replicaFactorMin), replicaFactorMax)
+	scaled := float64(qty.MilliValue()) * factor
+	return *resource.NewMilliQuantity(int64(math.Ceil(scaled)), qty.Format), factor
 }
 
-// ApplyCoordination layers the overhead formula and (optionally) the replica
-// correction onto a baseline ContainerRecommendation. No-op when cfg.Enabled
-// is false or when no autoscaler targets the workload.
+// coordinate shapes a clamped request for the autoscaler targeting the
+// workload: the overhead for the autoscaler's utilization target on res, then
+// for CPU the replica correction when the Policy sets a ReplicaBudgetAnchor,
+// then the min/max clamp again so explicit operator caps survive
+// coordination. Nil when coordination is off or no autoscaler targets the
+// workload.
 //
-// CPU receives both overhead and replica correction; memory receives only
-// overhead because memory consumption doesn't track requests the way CPU
-// does, so replica-budget bumping on memory wouldn't change HPA behaviour.
-//
-// MinAllowed/MaxAllowed clamps from res are re-applied to the adjusted
-// requests so explicit operator caps survive coordination. Limits are NOT
-// recomputed here — callers derive limits from the adjusted requests using
-// the existing ComputeLimit logic.
-func ApplyCoordination(
-	base workload.ContainerRecommendation,
+// Memory receives only the overhead because memory consumption doesn't track
+// requests the way CPU does, so replica-budget bumping on memory wouldn't
+// change HPA behaviour.
+func coordinate(
+	clamped resource.Quantity,
+	res string,
 	cfg sustainv1alpha1.AutoscalerCoordination,
 	info autoscaler.Info,
-	res sustainv1alpha1.ResourcesConfigs,
-) workload.ContainerRecommendation {
+	req sustainv1alpha1.ResourceRequestsConfig,
+) *sustainv1alpha1.CoordinationTrace {
 	if !cfg.Enabled || info.Kind == autoscaler.KindNone {
-		return base
+		return nil
 	}
-
-	out := base
-
-	if base.CPURequest != nil {
-		adjusted := ApplyOverhead(base.CPURequest, info.ConfiguredTargets[autoscaler.ResourceCPU])
-		adjusted = applyReplicaCorrection(adjusted, cfg.ReplicaBudgetAnchor, info.CurrentReplicas, info.MinReplicas, info.MaxReplicas)
-		clampQuantity(adjusted, res.CPU.Requests.MinAllowed, res.CPU.Requests.MaxAllowed)
-		out.CPURequest = adjusted
+	scaled, overhead := applyOverhead(clamped, info.ConfiguredTargets[res])
+	t := &sustainv1alpha1.CoordinationTrace{OverheadFactor: overhead}
+	if res == autoscaler.ResourceCPU && cfg.ReplicaBudgetAnchor != nil {
+		var replica float64
+		scaled, replica = applyReplicaCorrection(scaled, *cfg.ReplicaBudgetAnchor, info.CurrentReplicas, info.MinReplicas, info.MaxReplicas)
+		t.ReplicaFactor = &replica
 	}
-
-	if base.MemoryRequest != nil {
-		adjusted := ApplyOverhead(base.MemoryRequest, info.ConfiguredTargets[autoscaler.ResourceMemory])
-		clampQuantity(adjusted, res.Memory.Requests.MinAllowed, res.Memory.Requests.MaxAllowed)
-		out.MemoryRequest = adjusted
-	}
-
-	return out
+	t.Scaled = scaled
+	t.Value = clamp(scaled, req.MinAllowed, req.MaxAllowed)
+	return t
 }

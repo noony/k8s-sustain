@@ -45,17 +45,18 @@ const wlrRefreshInterval = wlrcache.RefreshInterval
 // wlrPolicyLabel labels each WorkloadRecommendation with its Policy.
 const wlrPolicyLabel = sustainv1alpha1.WLRPolicyLabel
 
-// upsertWorkloadRecommendation persists an identity's recommendation. Called
-// once per computeItem; it writes the identity's own snapshot so the two
-// writers of status.observedResources agree.
+// upsertWorkloadRecommendation persists an identity's recommendation and its
+// trace. Called once per computeItem; it writes the identity's own snapshot so
+// the two writers of status.observedResources agree.
 func (r *PolicyReconciler) upsertWorkloadRecommendation(
 	ctx context.Context,
 	it computeItem,
 	policyName string,
 	recs map[string]workload.ContainerRecommendation,
+	traces map[string]sustainv1alpha1.ContainerTrace,
 	now metav1.Time,
 ) error {
-	return wlrcache.Upsert(ctx, r.Client, it.ref(), policyName, recs, it.Observed, now)
+	return wlrcache.Upsert(ctx, r.Client, it.ref(), policyName, recs, traces, it.Observed, now)
 }
 
 // wlrDeleteGuard says how strongly a cleanup path conditions its deletes, and

@@ -261,8 +261,8 @@ func TestReconcile_FetchesEveryIdentityInOneCall(t *testing.T) {
 	}
 }
 
-// The normal path: the identity's Recommendation is written to its
-// WorkloadRecommendation and applied to its running pod.
+// The normal path: the identity's Recommendation and its trace are written to
+// its WorkloadRecommendation and applied to its running pod.
 func TestReconcile_RecommendsPersistsAndApplies(t *testing.T) {
 	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true,
 		ongoingDeployments("p"), establishedDeployment("default", "web", "p"), runningPod("default", "web-pod", "web"))
@@ -272,6 +272,9 @@ func TestReconcile_RecommendsPersistsAndApplies(t *testing.T) {
 	wlr := getWLRFor(t, r, "default", "Deployment", "web")
 	if got := wlr.Status.Containers["app"].CPURequest; got == nil || got.String() != "100m" {
 		t.Errorf("stored CPU recommendation = %v, want 100m", got)
+	}
+	if tr := wlr.Status.Trace["app"].CPU; tr == nil || tr.Percentile == nil || tr.Clamped.String() != "100m" {
+		t.Errorf("stored CPU trace = %+v, want the stages that arrived at 100m", tr)
 	}
 	if cpu := podCPU(t, r, "default", "web-pod"); cpu != "100m" {
 		t.Errorf("pod CPU = %s, want the 100m recommendation applied in place", cpu)

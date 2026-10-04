@@ -286,7 +286,7 @@ func TestUpsertWritesStatusWhenTheCacheLagsBehindTheCreate(t *testing.T) {
 	cpu := resource.MustParse("250m")
 	recs := map[string]workload.ContainerRecommendation{"main": {CPURequest: &cpu}}
 
-	if err := wlrcache.Upsert(context.Background(), c, ref, "pol", recs, nil, metav1.Now()); err != nil {
+	if err := wlrcache.Upsert(context.Background(), c, ref, "pol", recs, nil, nil, metav1.Now()); err != nil {
 		t.Fatalf("Upsert must not depend on reading back its own create: %v", err)
 	}
 
@@ -301,5 +301,52 @@ func TestUpsertWritesStatusWhenTheCacheLagsBehindTheCreate(t *testing.T) {
 	}
 	if got.Status.Containers["main"].CPURequest.Cmp(cpu) != 0 {
 		t.Errorf("containers[main].cpuRequest = %v, want %v", got.Status.Containers["main"].CPURequest, cpu)
+	}
+}
+
+// The trace is written with the values it explains: a pass whose values are
+// unchanged but whose trace moved (a percentile that rounds to the same
+// request) costs no write, and one whose values changed writes its trace.
+func TestUpsertWritesTheTraceOnlyWithTheValues(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
+	ref := sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: "ns", Name: "web"}
+	key := types.NamespacedName{Namespace: "ns", Name: wlrcache.Name("Deployment", "web")}
+	upsert := func(request, percentile string) sustainv1alpha1.WorkloadRecommendation {
+		t.Helper()
+		req, p := resource.MustParse(request), resource.MustParse(percentile)
+		recs := map[string]workload.ContainerRecommendation{"main": {CPURequest: &req}}
+		traces := map[string]sustainv1alpha1.ContainerTrace{"main": {CPU: &sustainv1alpha1.ResourceTrace{
+			Percentile: &p, WithHeadroom: req, Clamped: req,
+		}}}
+		if err := wlrcache.Upsert(context.Background(), c, ref, "pol", recs, traces, nil, metav1.Now()); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+		var got sustainv1alpha1.WorkloadRecommendation
+		if err := c.Get(context.Background(), key, &got); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		return got
+	}
+	percentileOf := func(wlr sustainv1alpha1.WorkloadRecommendation) string {
+		return wlr.Status.Trace["main"].CPU.Percentile.String()
+	}
+
+	first := upsert("250m", "249500u")
+	if got := percentileOf(first); got != "249500u" {
+		t.Fatalf("trace percentile = %s, want 249500u", got)
+	}
+
+	second := upsert("250m", "249900u")
+	if second.ResourceVersion != first.ResourceVersion {
+		t.Error("a trace-only change wrote the status")
+	}
+	if got := percentileOf(second); got != "249500u" {
+		t.Errorf("trace percentile = %s, want the 249500u written with the values", got)
+	}
+
+	third := upsert("300m", "299900u")
+	if got := percentileOf(third); got != "299900u" {
+		t.Errorf("trace percentile = %s, want the 299900u written with the new values", got)
 	}
 }

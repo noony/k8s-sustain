@@ -59,8 +59,9 @@ func Name(kind, name string) string {
 // timestamp. Must stay well under the webhook's DefaultCacheStaleness (30m).
 const RefreshInterval = 10 * time.Minute
 
-// Upsert writes (or updates) the WorkloadRecommendation for ref. Idempotent: an
-// unchanged status makes no API call, subject to RefreshInterval.
+// Upsert writes (or updates) the WorkloadRecommendation for ref: recs and the
+// traces of how they were derived. Idempotent: an unchanged status makes no
+// API call, subject to RefreshInterval.
 //
 // Every failure is both logged at V(1) and returned. The reconcile path may
 // ignore the result — a failed cache write does not invalidate the recycle it
@@ -73,12 +74,13 @@ func Upsert(
 	ref sustainv1alpha1.WorkloadReference,
 	policyName string,
 	recs map[string]workload.ContainerRecommendation,
+	traces map[string]sustainv1alpha1.ContainerTrace,
 	observed map[string]sustainv1alpha1.ObservedContainerResources,
 	now metav1.Time,
 ) error {
 	logger := log.FromContext(ctx).WithValues("kind", ref.Kind, "name", ref.Name, "namespace", ref.Namespace)
 
-	desired := buildStatus(recs, observed, now)
+	desired := buildStatus(recs, traces, observed, now)
 	if len(desired.Containers) == 0 {
 		return nil
 	}
@@ -207,7 +209,7 @@ func getOrCreate(
 // RecordOutcome records an outcome that carries no new Recommendation:
 // NoData, TooYoung, FetchFailed or Conflicted.
 //
-// It never touches Containers or ObservedAt: every identity is recomputed
+// It never touches Containers, Trace or ObservedAt: every identity is recomputed
 // every cycle, including departed ones whose samples eventually age out of
 // the query window, and clearing a retained last-known-good would strip
 // exactly the recommendation retention exists to preserve. A missing object
@@ -295,6 +297,7 @@ func quantityFrom(rl corev1.ResourceList, name corev1.ResourceName) *resource.Qu
 
 func buildStatus(
 	recs map[string]workload.ContainerRecommendation,
+	traces map[string]sustainv1alpha1.ContainerTrace,
 	observed map[string]sustainv1alpha1.ObservedContainerResources,
 	now metav1.Time,
 ) sustainv1alpha1.WorkloadRecommendationStatus {
@@ -302,6 +305,7 @@ func buildStatus(
 		ObservedAt:        now,
 		Outcome:           sustainv1alpha1.OutcomeComputed,
 		Containers:        map[string]sustainv1alpha1.ContainerRecommendation{},
+		Trace:             traces,
 		ObservedResources: observed,
 	}
 	for name, rec := range recs {
@@ -355,8 +359,10 @@ func setQuantity(rl *corev1.ResourceList, name corev1.ResourceName, q *resource.
 	(*rl)[name] = *q
 }
 
-// statusEquivalent compares two statuses ignoring ObservedAt, so write
-// amplification scales with change rather than workload count.
+// statusEquivalent compares two statuses ignoring ObservedAt and Trace, so
+// write amplification scales with change rather than workload count. The
+// trace moves with every sample (a percentile that rounds to the same request)
+// and is only worth a write together with the values it explains.
 func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
 	if a.Outcome != b.Outcome {
 		return false
