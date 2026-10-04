@@ -116,10 +116,17 @@ function memTrendSeries() {
         spark-color="#3fb950"
       />
       <KpiCard
+        label="Blocked"
+        :value="String(summary.data.value.kpi.blockedCount)"
+        :tone="summary.data.value.kpi.blockedCount > 0 ? 'danger' : 'neutral'"
+        detail="retry backoff"
+        to="/workloads?risk=blocked"
+      />
+      <KpiCard
         label="At risk"
         :value="String(summary.data.value.kpi.atRiskCount)"
         :tone="summary.data.value.kpi.atRiskCount > 0 ? 'danger' : 'neutral'"
-        detail="OOM / blocked"
+        detail="OOM in 24h"
         to="/workloads?risk=at-risk"
       />
       <KpiCard
@@ -207,7 +214,7 @@ function memTrendSeries() {
               <th>Workloads</th>
               <th>CPU saved</th>
               <th>Mem saved</th>
-              <th>At risk</th>
+              <th>Blocked</th>
             </tr>
           </thead>
           <tbody>
@@ -233,8 +240,8 @@ function memTrendSeries() {
               <td data-label="Mem saved">
                 <code>{{ formatBytes(p.memSavingsBytes) }}</code>
               </td>
-              <td data-label="At risk">
-                <span v-if="p.atRiskCount > 0" class="badge badge-red">{{ p.atRiskCount }}</span
+              <td data-label="Blocked">
+                <span v-if="p.blockedCount > 0" class="badge badge-red">{{ p.blockedCount }}</span
                 ><span v-else>-</span>
               </td>
             </tr>

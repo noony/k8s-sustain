@@ -175,11 +175,14 @@ func (r *PolicyReconciler) computeIdentity(
 		return nil, r.refreshDepartedRecommendation(ctx, policy, it, inputs, fetchErr)
 	}
 
+	autoInfo := r.groupAutoscalerInfo(ctx, it.Identity, it.Targets, autoSnap)
+	EmitAutoscalerPresent(it.Identity, string(autoInfo.Kind))
+	EmitAutoscalerTargetsConfigured(it.Identity, string(autoInfo.Kind), autoInfo.ConfiguredTargets)
 	recs, err := r.buildRecommendations(ctx, recRequest{
 		Policy:            policy,
 		Identity:          it.Identity,
 		Containers:        containersFromObserved(it.Observed, policy.Spec.RightSizing.ExcludeInitContainers),
-		AutoInfo:          r.groupAutoscalerInfo(ctx, it.Identity, it.Targets, autoSnap),
+		AutoInfo:          autoInfo,
 		WorkloadCreated:   earliestTargetCreation(it.Targets),
 		IdentityFirstSeen: it.WLR.CreationTimestamp.Time,
 		Inputs:            inputs,

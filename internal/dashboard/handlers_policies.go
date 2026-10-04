@@ -21,7 +21,7 @@ type policyListItem struct {
 	WorkloadCount   int                         `json:"workloadCount"`
 	CPUSavingsCores float64                     `json:"cpuSavingsCores"`
 	MemSavingsBytes float64                     `json:"memSavingsBytes"`
-	AtRiskCount     int                         `json:"atRiskCount"`
+	BlockedCount    int                         `json:"blockedCount"`
 }
 
 type conditionSummary struct {
@@ -42,15 +42,15 @@ type policyRollups struct {
 	workloadCount   map[string]float64
 	cpuSavingsCores map[string]float64
 	memSavingsBytes map[string]float64
-	atRiskCount     map[string]float64
+	blockedCount    map[string]float64
 }
 
 func (s *Server) fetchPolicyRollups(ctx context.Context) policyRollups {
 	wl, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyWorkloadCount, "policy")
 	cpu, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyCPUSavingsCores, "policy")
 	mem, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyMemorySavingsBytes, "policy")
-	risk, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyAtRiskCount, "policy")
-	return policyRollups{workloadCount: wl, cpuSavingsCores: cpu, memSavingsBytes: mem, atRiskCount: risk}
+	blocked, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyBlockedCount, "policy")
+	return policyRollups{workloadCount: wl, cpuSavingsCores: cpu, memSavingsBytes: mem, blockedCount: blocked}
 }
 
 func policyListItemFor(p sustainv1alpha1.Policy, rollups policyRollups) policyListItem {
@@ -63,7 +63,7 @@ func policyListItemFor(p sustainv1alpha1.Policy, rollups policyRollups) policyLi
 		WorkloadCount:   int(rollups.workloadCount[p.Name]),
 		CPUSavingsCores: rollups.cpuSavingsCores[p.Name],
 		MemSavingsBytes: rollups.memSavingsBytes[p.Name],
-		AtRiskCount:     int(rollups.atRiskCount[p.Name]),
+		BlockedCount:    int(rollups.blockedCount[p.Name]),
 	}
 }
 

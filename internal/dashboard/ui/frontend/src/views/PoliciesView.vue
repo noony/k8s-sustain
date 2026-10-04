@@ -105,8 +105,8 @@ function updateTypeBadges(update?: Record<string, string>): string {
                 <th class="sort-header" @click="sort('memSavingsBytes')">
                   Mem saved<span>{{ sortArrow('memSavingsBytes') }}</span>
                 </th>
-                <th class="sort-header" @click="sort('atRiskCount')">
-                  At risk<span>{{ sortArrow('atRiskCount') }}</span>
+                <th class="sort-header" @click="sort('blockedCount')">
+                  Blocked<span>{{ sortArrow('blockedCount') }}</span>
                 </th>
                 <th>Last applied</th>
               </tr>
@@ -136,8 +136,8 @@ function updateTypeBadges(update?: Record<string, string>): string {
                 <td data-label="Mem saved">
                   <code>{{ formatBytes(p.memSavingsBytes || 0) }}</code>
                 </td>
-                <td data-label="At risk">
-                  <span v-if="p.atRiskCount" class="badge badge-red">{{ p.atRiskCount }}</span
+                <td data-label="Blocked">
+                  <span v-if="p.blockedCount" class="badge badge-red">{{ p.blockedCount }}</span
                   ><span v-else>-</span>
                 </td>
                 <td data-label="Last applied" class="text-dim">

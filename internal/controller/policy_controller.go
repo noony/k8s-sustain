@@ -90,7 +90,7 @@ type PolicyReconciler struct {
 	patcher  *workload.Patcher
 	retries  *retryTracker
 
-	podGauges podGaugeTracker
+	health healthTracker
 }
 
 // LiveOOMConfig groups the inputs from the OOM Pod watcher. MaxAge zero means
@@ -187,7 +187,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 			// Ordered after cleanup so a retried deletion re-emits nothing.
 			DeletePolicyMetrics(policy.Name)
-			r.podGauges.forget(policy.Name)
+			r.health.forget(policy.Name)
 			r.recorder.Eventf(policy, nil, corev1.EventTypeNormal, "Cleanup", "Cleanup", "Policy deleted, removing finalizer.")
 			controllerutil.RemoveFinalizer(policy, finalizerName)
 			if err := r.Update(ctx, policy); err != nil {
@@ -219,13 +219,8 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	logger.Info("collected workload targets", "count", len(targets))
 
-	gaugeKeys := make([]podGaugeKey, 0, len(targets))
-	for i := range targets {
-		gaugeKeys = append(gaugeKeys, podGaugeKey{Namespace: targets[i].Namespace, Kind: targets[i].Kind, Name: targets[i].Name})
-	}
-	r.podGauges.observe(policy.Name, gaugeKeys)
-
 	targetsByIdentity, discoveryFailures := r.discover(ctx, policy, targets)
+	r.health.observe(policy.Name, targetsByIdentity)
 
 	// Computation is driven by the WLR list, not the target list, so departed
 	// identities are still recomputed.
@@ -357,12 +352,8 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		"failed", failCount.Load(),
 		"concurrency", r.WorkloadConcurrencyLimit)
 
-	keys := make([]string, 0, len(targets))
-	for i := range targets {
-		keys = append(keys, targets[i].key())
-	}
-	atRisk := r.retries.blockedCountAmong(keys)
-	EmitPolicyRollup(policy.Name, len(targets), atRisk)
+	blocked := r.health.emit(policy.Name, r.retries)
+	EmitPolicyRollup(policy.Name, len(targetsByIdentity), blocked)
 
 	// "resolved" means at least one sample came back, which a young workload on
 	// a healthy Prometheus also fails; batchStats.Failures tells outages apart.

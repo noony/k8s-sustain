@@ -3,6 +3,8 @@ package controller
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 var (
@@ -39,38 +41,38 @@ var (
 
 	workloadPods = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_pods",
-		Help: "Live pods owned by the workload that the last reconcile evaluated.",
+		Help: "Live pods of the workload identity that the last reconcile evaluated, summed over its members.",
 	}, []string{"namespace", "owner_kind", "owner_name"})
 
 	workloadStalePods = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_stale_pods",
-		Help: "Live pods whose resources the controller would still change (outside the downsize threshold) after the last reconcile.",
+		Help: "Live pods of the workload identity whose resources the controller would still change (outside the downsize threshold) after the last reconcile, summed over its members.",
 	}, []string{"namespace", "owner_kind", "owner_name"})
 
 	workloadRetryState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_retry_state",
-		Help: "1 when the workload is currently in retry-backoff, 0 otherwise.",
+		Help: "1 while any member of the workload identity is in retry backoff, with the failed phase of the first such member as reason; absent otherwise.",
 	}, []string{"namespace", "owner_kind", "owner_name", "reason"})
 
 	workloadRetryAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_workload_retry_attempts",
-		Help: "Total retry attempts per workload.",
+		Help: "Total failed reconcile steps across the workload identity's members.",
 	}, []string{"namespace", "owner_kind", "owner_name"})
 
 	policyWorkloadCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_policy_workload_count",
-		Help: "Number of workloads matched by a policy.",
+		Help: "Number of live workload identities matched by a policy.",
 	}, []string{"policy"})
 
-	policyAtRiskCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "k8s_sustain_policy_at_risk_count",
-		Help: "Number of policy-matched workloads in retry backoff.",
+	policyBlockedCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "k8s_sustain_policy_blocked_count",
+		Help: "Number of a policy's live workload identities with a member in retry backoff.",
 	}, []string{"policy"})
 
 	autoscalerPresent = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "k8s_sustain_autoscaler_present",
-			Help: "Set to 1 when an autoscaler (HPA or KEDA ScaledObject) targets the workload, with the autoscaler kind as a label.",
+			Help: "Set to 1 when an autoscaler (HPA or KEDA ScaledObject) shapes the workload identity's recommendation, with the autoscaler kind as a label.",
 		},
 		[]string{"namespace", "owner_kind", "owner_name", "kind"},
 	)
@@ -78,7 +80,7 @@ var (
 	autoscalerTargetConfigured = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "k8s_sustain_autoscaler_target_configured",
-			Help: "Configured autoscaler averageUtilization (%) for a workload's resource trigger.",
+			Help: "Configured averageUtilization (%) of the autoscaler shaping the workload identity's recommendation, per resource trigger.",
 		},
 		[]string{"namespace", "owner_kind", "owner_name", "kind", "resource"},
 	)
@@ -179,7 +181,7 @@ func init() {
 		workloadRetryState,
 		workloadRetryAttempts,
 		policyWorkloadCount,
-		policyAtRiskCount,
+		policyBlockedCount,
 		autoscalerPresent,
 		autoscalerTargetConfigured,
 		coordinationFactor,
@@ -214,9 +216,9 @@ func SetOOMCacheEntries(n int) {
 }
 
 // EmitRecycleSuppressed increments the counter for a resource decrease that the
-// downsize threshold held back on a workload.
-func EmitRecycleSuppressed(namespace, ownerKind, ownerName, resource string) {
-	recycleSuppressedTotal.WithLabelValues(namespace, ownerKind, ownerName, resource).Inc()
+// downsize threshold held back on a pod of the identity.
+func EmitRecycleSuppressed(id promclient.WorkloadIdentity, resource string) {
+	recycleSuppressedTotal.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, resource).Inc()
 }
 
 // WorkloadRecommendation refresh outcomes for EmitWLRRefresh.

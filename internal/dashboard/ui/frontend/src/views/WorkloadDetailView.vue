@@ -287,15 +287,6 @@ function driftLabel(): string {
   return s.stalePods > 0 ? String(s.stalePods) : '-'
 }
 
-function snapshotRiskState(): 'safe' | 'drifted' | 'at-risk' | 'blocked' | '' {
-  const s = snapshot.data.value
-  if (!s) return ''
-  if (s.blocked) return 'blocked'
-  if (s.oom24h > 0) return 'at-risk'
-  if (s.stalePods > 0) return 'drifted'
-  return 'safe'
-}
-
 function isMeaningful(v: number | undefined): v is number {
   return typeof v === 'number' && Math.abs(v - 1) > 1e-6
 }
@@ -337,7 +328,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         </span>
       </template>
       <template #meta>
-        <RiskBadge v-if="snapshotRiskState()" :state="snapshotRiskState() as any" />
+        <RiskBadge v-if="snapshot.data.value" :state="snapshot.data.value.riskState" />
         <span v-if="snapshot.data.value?.coordinationFactors?.enabled" class="badge badge-blue"
           >Coordinated<template
             v-if="hasCoordinationFactors(snapshot.data.value.coordinationFactors)"

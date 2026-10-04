@@ -14,6 +14,10 @@ The chart can create a `ServiceMonitor` for each (see [Helm values](helm-values.
 
 ## Metrics emitted by the controller
 
+### What `owner_kind` and `owner_name` name
+
+Except for the four recommendation gauges below, `namespace`, `owner_kind` and `owner_name` name the workload **identity**: the `k8s.sustain.io/owner-name` override when the pod template carries one, the group name for [bare pods](../guides/standalone-pods-and-grouping.md), the object's own kind and name otherwise. That is the key the `WorkloadRecommendation`, the recording rules and the dashboard use. Members of one owner-name group never get series of their own: their values aggregate into the identity's single series, as described per metric below.
+
 ### Reconcile
 
 | Name | Type | Labels | Meaning |
@@ -31,6 +35,8 @@ The chart can create a `ServiceMonitor` for each (see [Helm values](helm-values.
 | `k8s_sustain_workload_template_memory_bytes` | gauge | `namespace`, `owner_kind`, `owner_name`, `container`, `container_kind`, `policy` |
 
 `container_kind` is `regular` or `init`, identifying whether the container originated as a regular pod container or an init container (including restartable sidecars). Use it to slice dashboards by container kind.
+
+These four gauges are emitted per member object: `owner_kind` and `owner_name` are the real object's kind and name, even inside an owner-name group.
 
 `k8s_sustain_workload_template_cpu_cores` and `k8s_sustain_workload_template_memory_bytes` record the CPU/memory request from the workload's pod-template spec (the pre-injection value). Stable across webhook injection so savings rules can compare against the template.
 
@@ -55,7 +61,7 @@ The chart can create a `ServiceMonitor` for each (see [Helm values](helm-values.
 | `k8s_sustain_workload_retry_state`      | gauge   | `namespace`, `owner_kind`, `owner_name`, `reason` |
 | `k8s_sustain_workload_retry_attempts`   | counter | `namespace`, `owner_kind`, `owner_name` |
 | `k8s_sustain_policy_workload_count`     | gauge   | `policy` |
-| `k8s_sustain_policy_at_risk_count`      | gauge   | `policy` |
+| `k8s_sustain_policy_blocked_count`      | gauge   | `policy` |
 | `k8s_sustain_policy_batch_requested_count` | gauge | `policy` |
 | `k8s_sustain_policy_batch_resolved_count`  | gauge | `policy` |
 | `k8s_sustain_policy_batch_failures_total`  | counter | `policy` |
@@ -66,7 +72,12 @@ The chart can create a `ServiceMonitor` for each (see [Helm values](helm-values.
 | `k8s_sustain_wlr_refresh_total`         | counter | `namespace`, `owner_kind`, `outcome` |
 | `k8s_sustain_group_autoscaler_mismatch_total` | counter | `namespace`, `owner_kind`, `owner_name` |
 
-- `recycle_suppressed_total` — decreases held back by the policy's [`downsizeThreshold`](policy.md#cpudownsizethreshold-memorydownsizethreshold), once per resource per pod per reconcile. Increases are never counted.
+- `workload_retry_state` — `1` while any member of the identity is **Blocked**: its last reconcile step failed with a transient error and no step has succeeded since. `reason` is the failed step (`prometheus`, `patch` or `resize`) of the first blocked member in name order; the identity has at most one series, absent when nothing is blocked.
+- `workload_retry_attempts` — failed steps summed over the identity's members.
+- `policy_workload_count` — live identities the policy matches (an owner-name group counts once).
+- `policy_blocked_count` — those identities that are Blocked, i.e. have a `workload_retry_state` series.
+- `autoscaler_present`, `autoscaler_target_configured` — the autoscaler the identity's recommendation is shaped against: the first member, in name order, that an HPA or KEDA ScaledObject targets.
+- `recycle_suppressed_total` — decreases held back by the policy's [`downsizeThreshold`](policy.md#cpudownsizethreshold-memorydownsizethreshold), once per resource per pod per reconcile, summed over the identity's members. Increases are never counted.
 - `group_autoscaler_mismatch_total` — once per reconcile for an [owner-name group](../guides/standalone-pods-and-grouping.md) whose members disagree on autoscaler presence or kind. The group's single recommendation follows the first sorted member's autoscaler, so any non-zero rate is a misconfiguration.
 
 #### Batch prefetch coverage vs. failures
@@ -83,6 +94,10 @@ Each reconcile fetches Prometheus data for all of a policy's workloads in one sh
 
 Every series with a `policy` label is removed by the Policy's `k8s.sustain.io/cleanup` finalizer, together with its `WorkloadRecommendation`s. Recreating a Policy under the same name restarts its counters from zero.
 
+#### Series lifetime when an identity departs
+
+When no Policy targets an identity any more (its last member was deleted, opted out or left the selector), its `workload_pods`, `workload_stale_pods`, `workload_retry_state`, `workload_retry_attempts`, `autoscaler_present`, `autoscaler_target_configured`, `coordination_factor` and `recycle_suppressed_total` series are deleted in the next reconcile, so a departed identity never reports a frozen state.
+
 #### `k8s_sustain_wlr_refresh_total`
 
 Refresh outcomes, once per reconcile, for **departed** identities only — a `WorkloadRecommendation` with no live workload object (a finished Job, a bare-pod group between runs). Live workloads are covered by the batch counters above.
@@ -97,7 +112,7 @@ Refresh outcomes, once per reconcile, for **departed** identities only — a `Wo
 
 #### `k8s_sustain_workload_pods`
 
-Live pods (not terminating, not `Succeeded`/`Failed`) owned by the workload at the last apply pass. For `OnCreate` workloads it is measured with a dry run. Absent in recommend-only mode and before the first recommendation; removed when the workload stops being a target of its policy.
+Live pods (not terminating, not `Succeeded`/`Failed`) owned by the identity's members at the last apply pass, summed over the members. A member skipped this cycle (retry backoff, a failed pass) contributes its last measured count. For `OnCreate` workloads it is measured with a dry run. Absent in recommend-only mode and before the first recommendation; removed when the identity departs.
 
 #### `k8s_sustain_workload_stale_pods`
 
@@ -105,7 +120,7 @@ Subset of `workload_pods` whose resources still differ from the recommendation b
 
 #### `k8s_sustain_autoscaler_target_configured`
 
-Configured autoscaler `averageUtilization` (%) for a workload's resource trigger.
+Configured `averageUtilization` (%) of the autoscaler shaping the identity's recommendation, per resource trigger.
 `kind` is `HPA` or `KEDA`; `resource` is `cpu` or `memory`.
 
 #### `k8s_sustain_coordination_factor`

@@ -3,7 +3,6 @@ package dashboard
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"net/http"
 	"slices"
 
@@ -16,6 +15,7 @@ import (
 
 type workloadDetailResponse struct {
 	UpdateMode          string                 `json:"updateMode,omitempty"`
+	RiskState           riskState              `json:"riskState"`
 	StalePods           int                    `json:"stalePods"`
 	TotalPods           int                    `json:"totalPods"`
 	OOM24h              int                    `json:"oom24h"`
@@ -41,11 +41,8 @@ func (s *Server) handleWorkloadDetail(w http.ResponseWriter, r *http.Request, na
 
 	resp := workloadDetailResponse{}
 	resp.UpdateMode = s.lookupUpdateMode(ctx, namespace, kind, name)
-	s.fillDetailPrometheusSignals(ctx, &resp, namespace, kind, name)
+	s.fillDetailHealth(ctx, &resp, promclient.WorkloadIdentity{Namespace: namespace, OwnerKind: kind, OwnerName: name})
 	resp.RecentEvents = s.recentSustainEvents(ctx, namespace, kind, name, 10)
-	if cf := s.fetchCoordinationFactors(ctx, namespace, kind, name); cf != nil {
-		resp.CoordinationFactors = cf
-	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -69,30 +66,22 @@ func (s *Server) lookupUpdateMode(ctx context.Context, namespace, kind, name str
 	return string(*mode)
 }
 
-func (s *Server) fillDetailPrometheusSignals(ctx context.Context, resp *workloadDetailResponse, namespace, kind, name string) {
-	// The OOM rule is per-container; sum across containers for the
-	// workload-level 24h count shown on the detail page.
-	sel := promclient.WorkloadSelector(namespace, kind, name)
-	if v, _ := s.PromClient.QueryInstant(ctx, fmt.Sprintf("sum(%s%s)", promclient.MetricWorkloadOOM24h, sel)); v > 0 {
-		resp.OOM24h = int(v)
+// fillDetailHealth overlays the identity's health and Risk state; a failed
+// read degrades to the signals that could be read.
+func (s *Server) fillDetailHealth(ctx context.Context, resp *workloadDetailResponse, id promclient.WorkloadIdentity) {
+	health, err := s.Health.forIdentities(ctx, []promclient.WorkloadIdentity{id})
+	if err != nil {
+		s.Logger.V(1).Info("reading identity health failed; detail shows what could be read", "error", err.Error())
 	}
-	if v, _ := s.PromClient.QueryInstant(ctx, fmt.Sprintf("max(%s%s)", promclient.MetricWorkloadStalePods, sel)); v > 0 {
-		resp.StalePods = int(v)
+	h := health[id]
+	resp.RiskState = riskStateOf(h)
+	resp.OOM24h = h.OOM24h
+	resp.StalePods = h.StalePods
+	resp.TotalPods = h.TotalPods
+	resp.CoordinationFactors = h.CoordinationFactors
+	if h.Blocked != nil {
+		resp.Blocked = &workloadDetailBlocked{Reason: h.Blocked.Reason, Attempts: h.Blocked.Attempts}
 	}
-	if v, _ := s.PromClient.QueryInstant(ctx, fmt.Sprintf("max(%s%s)", promclient.MetricWorkloadPods, sel)); v > 0 {
-		resp.TotalPods = int(v)
-	}
-	blockedByReason, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricWorkloadRetryState+sel+" == 1", "reason")
-	if len(blockedByReason) == 0 {
-		return
-	}
-	var reason string
-	for k := range blockedByReason {
-		reason = k
-		break
-	}
-	attempts, _ := s.PromClient.QueryInstant(ctx, promclient.MetricWorkloadRetryAttempts+sel)
-	resp.Blocked = &workloadDetailBlocked{Reason: reason, Attempts: int(attempts)}
 }
 
 // recentSustainEvents returns up to `limit` k8s-sustain-emitted events for one

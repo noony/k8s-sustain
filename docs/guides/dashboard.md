@@ -66,6 +66,17 @@ kubectl port-forward svc/k8s-sustain-dashboard 8090:8090
 
 Every navigation target — table rows, names, policy links, breadcrumbs, the Overview KPI cards and attention queue, **Open in Simulator** — behaves like a regular link: **Cmd/Ctrl-click** or **middle-click** opens it in a new tab, and right-clicking a name offers "Open in new tab".
 
+### Risk state
+
+Every row, badge, KPI and attention list shows one **Risk state** per workload identity (an owner-name group or bare-pod group is one identity), classified once by the backend in this precedence:
+
+1. **Blocked** — the controller keeps failing to apply the identity's recommendation and is backing off (any member in retry backoff).
+2. **At risk** — an OOM kill in the last 24 hours.
+3. **Drift** — pods whose running resources still differ from the recommendation beyond the policy's `downsizeThreshold`; a decrease the policy suppresses is not drift.
+4. **Safe** — none of the above.
+
+An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. The signals come from the controller's identity-keyed metrics and the `k8s_sustain:workload_oom_24h` rule (see [Metrics](../reference/metrics.md#what-owner_kind-and-owner_name-name)), so an owner-name group shows its members' combined state under the group's name.
+
 ### Time range and auto-refresh
 
 Overview, Workload Detail, Policy Detail and Simulator share one **time range picker**.
@@ -82,10 +93,9 @@ Charts always span the full selected window: a workload with less history than t
 
 The overview is a vertical flow of six bands:
 
-1. **KPI strip** — five cards:
+1. **KPI strip** — six cards:
     - **CPU saved** and **Memory saved** — absolute saving, share of cluster requests, and a 7-day sparkline.
-    - **At risk** — workloads the controller holds in retry backoff, summed across policies. Click to open the filtered Workloads list.
-    - **Drifted** — workloads with at least one pod not yet running the recommendation. Click to open the filtered Workloads list.
+    - **Blocked**, **At risk** and **Drifted** — how many identities are in each [Risk state](#risk-state); each identity counts once, under its state. Click one to open the Workloads list filtered to that state.
     - **Coordinated** — workloads whose recommendation is adjusted for an HPA or KEDA ScaledObject (see [Autoscaler coordination](../concepts/autoscaler-coordination.md)).
 2. **Savings** — CPU and memory side by side, each plotting three lines over the selected range:
     - **Usage** — measured CPU rate or memory working set, summed across containers in policy-managed workloads.
@@ -94,8 +104,8 @@ The overview is a vertical flow of six bands:
 
     All three are scoped to managed workloads (usage and current-request queries are joined `and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*`). The gap between *original* and *current request* is the realised saving; the gap between *current request* and *usage* is the remaining headroom.
 3. **Cluster headroom** — a stacked bar for CPU and memory split into `used`, `idle` and `free`, from the `k8s_sustain:cluster_cpu_headroom_breakdown` and `..._memory_headroom_breakdown` recording rules.
-4. **Needs attention** — three lists: **At risk** (an OOM kill in the last 24h), **Drifted** (sorted by stale pod count), and **Blocked** (in retry backoff). Each row links to the workload detail page.
-5. **Policy effectiveness** — per-policy workload count, CPU/memory saved, and the number of blocked workloads.
+4. **Needs attention** — three lists, one per non-Safe [Risk state](#risk-state), each identity in exactly one: **Risk** (At risk, most OOM kills first), **Drift** (most stale pods first) and **Blocked** (most retry attempts first), ten rows each. Each row links to the identity's detail page.
+5. **Policy effectiveness** — per-policy identity count, CPU/memory saved, and the number of Blocked identities.
 6. **Recent activity** — the latest reconcile and pod-recycle events from the controller.
 
 ### Workloads Page
@@ -105,16 +115,16 @@ Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, Cron
 - **Stat strip** — Total, Automated (managed by a policy) and Manual counts.
 - **Filters** — namespace, kind, status (Automated / Manual), lifecycle (Active / Inactive, default any), risk (Safe / Drifted / At risk / Blocked), autoscaler (Has / No autoscaler), and a name search. **Reset filters** clears them all and returns to page 1, keeping the sort order. Filters, sort order and page are kept in the URL query string (e.g. `/workloads?namespace=prod&risk=at-risk&sort=-stalePods`), so browser Back from a workload restores the list and a filtered view can be bookmarked or shared.
 - **Columns** — Namespace, Kind, Name, **Risk**, **Drift** (stale/total pods, e.g. `2/5`), **Policy** (links to the policy) and container count. Sorted by name by default; click Namespace, Kind, Name, Drift or Policy to sort across all pages, click again to reverse.
-- **Risk** — `At risk` (OOM kill in the last 24h) takes precedence over `Blocked` (retry backoff), then `Drift` (stale pods), otherwise `Safe`.
+- **Risk** — the identity's [Risk state](#risk-state): `Blocked`, then `At risk`, then `Drift`, otherwise `Safe`.
 - **Name badges** — **Autoscaler** when an HPA or KEDA ScaledObject targets the workload; **Coordinated** when autoscaler coordination adjusts its recommendation, followed by the non-trivial factors (`×1.15 CPU`, `×1.10 mem` overhead, `· replica ×0.80`); **Inactive · last seen X ago** for a workload with no live object.
 
 Inactive rows come from a retained `WorkloadRecommendation` whose object is gone (a completed bare pod, a deleted or terminal Job). They stay listed for the retention window (`--recommendation-retention`, default `168h`); see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads).
 
 ### Workload Detail
 
-- **Header** — kind, namespace, container count, **Automated** + policy link or **Manual**, the **Risk** badge, and the **Coordinated** badge with its factors when autoscaler coordination applies.
+- **Header** — kind, namespace, container count, **Automated** + policy link or **Manual**, the [Risk state](#risk-state) badge, and the **Coordinated** badge with its factors when autoscaler coordination applies.
 - **Status** — three cards: **Mode** (`OnCreate` / `Ongoing`), **Drift** (stale/total pods), **OOM 24h**.
-- **Currently blocked** — shown only while the controller holds a retry record: reason, attempt count and last error.
+- **Currently blocked** — shown only while a member of the identity is in retry backoff: the failed step (`prometheus`, `patch` or `resize`) and the attempt count across members.
 - **Recommendations** — for automated workloads, current vs. recommended CPU and memory request per container (init containers flagged).
 - **Charts** — per container, CPU and memory usage with the workload's **historical request** (amber dashed, stepped) and **limit** (amber dotted), plus the **sliding-window recommendation** (green long-dashed) for automated workloads, computed at each point with the policy's window and parameters. Without historical request data in Prometheus, the request line falls back to the current spec. Lines break across gaps longer than ~1.5× the query step (between CronJob runs, scaled to zero). Memory charts show **OOM kills** as red markers with a count, from kube-state-metrics; without kube-state-metrics the markers are omitted.
 - **Open in Simulator** — jumps to the simulator with the workload pre-filled.
@@ -125,7 +135,7 @@ An **inactive** workload's detail page resolves from the retained `WorkloadRecom
 
 ### Policies Page
 
-A stat strip shows **Total policies**, **Workloads covered**, **Cluster CPU saved** and **Cluster Mem saved**. The table lists each policy's Name, **Status** (Ready condition), **Mode** (per-kind update modes), **Workloads**, **CPU saved**, **Mem saved**, **At risk** (blocked workloads) and **Last applied**. Click a row for the policy detail page.
+A stat strip shows **Total policies**, **Workloads covered**, **Cluster CPU saved** and **Cluster Mem saved**. The table lists each policy's Name, **Status** (Ready condition), **Mode** (per-kind update modes), **Workloads**, **CPU saved**, **Mem saved**, **Blocked** (identities in retry backoff) and **Last applied**. Click a row for the policy detail page.
 
 ### Policy Detail
 
@@ -174,16 +184,16 @@ The dashboard backs every UI page with a small JSON API under `/api/`. The same 
 
 | Method | Path | Returns |
 |---|---|---|
-| `GET` | `/api/policies` | Policies with per-policy rollups (workloads, savings, at-risk) |
+| `GET` | `/api/policies` | Policies with per-policy rollups (`workloadCount`, savings, `blockedCount`) |
 | `GET` | `/api/policies/{name}` | One Policy |
 | `GET` | `/api/policies/{name}/workloads` | Workloads matched by the policy (`namespace`, `search`, `page`, `pageSize`); `sort` = `name` (default), `namespace`, `kind` or `stalePods`, prefix `-` for descending. `total` counts rows after filters, `matched` before |
 | `GET` | `/api/policies/{name}/batch-simulate` | Recommendations for every matched workload with aggregate savings |
 | `GET` | `/api/workloads` | Every workload in the cluster (filters: `namespace`, `kind`, `automated`, `active`, `risk`, `autoscaler`, `search`, `page`, `pageSize`); `sort` = `name` (default), `namespace`, `kind`, `stalePods` or `policyName`, prefix `-` for descending |
-| `GET` | `/api/workloads/{namespace}/{kind}/{name}` | Status snapshot (mode, drift, OOM 24h, blocked, coordination) |
+| `GET` | `/api/workloads/{namespace}/{kind}/{name}` | Status snapshot (mode, `riskState`, drift, OOM 24h, blocked, coordination) |
 | `GET` | `/api/workloads/{namespace}/{kind}/{name}/metrics` | Usage, request, limit and OOM time-series |
 | `GET` | `/api/workloads/{namespace}/{kind}/{name}/recommendations` | Current recommendation per container |
 | `POST` | `/api/simulate` | What-if recommendation for one workload |
-| `GET` | `/api/summary` | Overview snapshot (KPIs, headroom, attention, policy rollups) |
+| `GET` | `/api/summary` | Overview snapshot (savings and Risk-state KPIs, headroom, attention, policy rollups) |
 | `GET` | `/api/summary/trend` | Overview savings time-series |
 | `GET` | `/api/summary/activity` | Recent controller events |
 | `GET` | `/healthz` | Liveness: always `200` |
@@ -236,7 +246,7 @@ Responses that must not carry a body (`204`, `304`, `1xx`), responses the handle
 
 Three behaviours matter when the cache misses:
 
-- **One recompute at a time.** The snapshot costs ~16 Prometheus queries, so concurrent misses (a dashboard open in several tabs, or a TTL that just lapsed under load) are collapsed onto a single shared computation instead of each firing its own fan-out. Each request still honours its own context deadline: a caller that gives up does not abort the shared work for the others, and a slow computation cannot make a fast one wait indefinitely.
+- **One recompute at a time.** The snapshot costs ~19 Prometheus queries, so concurrent misses (a dashboard open in several tabs, or a TTL that just lapsed under load) are collapsed onto a single shared computation instead of each firing its own fan-out. Each request still honours its own context deadline: a caller that gives up does not abort the shared work for the others, and a slow computation cannot make a fast one wait indefinitely.
 - **A partial Prometheus failure never poisons the cache.** Only a fully successful recompute is stored. When some queries fail, the dashboard prefers the most recent complete snapshot for up to 10 minutes (10x the TTL) so a brief blip is invisible; past that it serves the fresh-but-partial result rather than pretending an arbitrarily old snapshot is current.
 - **A cancelled request** that was waiting on a recompute falls back to that same recent snapshot when one exists, and otherwise returns `503 Service Unavailable` instead of an all-zeroes `200`.
 

@@ -16,10 +16,10 @@ import (
 )
 
 // reconcileWorkload APPLIES an identity's recommendation to a single workload
-// target: recycles or resizes its pods, emits events and metrics, and tracks
-// retries. It does not compute anything and does not write the
-// WorkloadRecommendation — computeIdentity did both, once for the identity,
-// before any member reached this function.
+// target: recycles or resizes its pods, emits events, records its pod counts
+// for the identity's health series, and tracks retries. It does not compute
+// anything and does not write the WorkloadRecommendation — computeIdentity did
+// both, once for the identity, before any member reached this function.
 //
 // recs is that shared recommendation, covering the union of the identity's
 // members' containers; this function narrows it to the containers this member
@@ -47,7 +47,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 	excludeInit := policy.Spec.RightSizing.ExcludeInitContainers
 	tol := buildTolerance(policy.Spec.RightSizing.ResourcesConfigs)
 	suppressionObserver := func(resource string) {
-		EmitRecycleSuppressed(t.Namespace, t.Kind, t.Name, resource)
+		EmitRecycleSuppressed(t.identity(), resource)
 	}
 	containers, initNames := t.recommendableContainers(excludeInit)
 	logger.V(1).Info("reconciling workload",
@@ -56,8 +56,8 @@ func (r *PolicyReconciler) reconcileWorkload(
 		"excludeInitContainers", excludeInit,
 		"recommending", len(containers))
 
-	// Read-only: a replica-count fallback for workload-level recommendations,
-	// and observability.
+	// Only for the member's event: the identity's autoscaler series follow the
+	// autoscaler computeIdentity shaped the recommendation with.
 	autoInfo, autoErr := autoSnap.Lookup(ctx, t.Namespace, t.Kind, t.Name)
 	if autoErr != nil {
 		logger.Error(autoErr, "autoscaler detection failed, proceeding without it")
@@ -68,8 +68,6 @@ func (r *PolicyReconciler) reconcileWorkload(
 			"%s %s detected targeting %s/%s (replicas %d–%d)",
 			autoInfo.Kind, autoInfo.Name, t.Kind, t.Name, autoInfo.MinReplicas, autoInfo.MaxReplicas)
 	}
-	EmitAutoscalerPresent(t.Namespace, t.Kind, t.Name, string(autoInfo.Kind))
-	EmitAutoscalerTargetsConfigured(t.Namespace, t.Kind, t.Name, string(autoInfo.Kind), autoInfo.ConfiguredTargets)
 
 	if computeErr != nil {
 		return r.handleStepError(ctx, t, "prometheus", "Prometheus query failed", computeErr)
@@ -80,7 +78,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 	recs = recsForTarget(recs, containers)
 	if len(recs) == 0 {
 		logger.V(1).Info("no recommendations available yet (no Prometheus data)")
-		DeleteWorkloadPods(t.Namespace, t.Kind, t.Name)
+		r.health.clearPods(t.key())
 		r.recordStepSuccess(t)
 		return nil
 	}
@@ -96,7 +94,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 			source = "flag"
 		}
 		logger.Info("recommend-only: computed recommendations", "source", source, "recommendations", recs)
-		DeleteWorkloadPods(t.Namespace, t.Kind, t.Name)
+		r.health.clearPods(t.key())
 		r.recordStepSuccess(t)
 		return nil
 	}
@@ -149,7 +147,6 @@ func (r *PolicyReconciler) reconcileWorkload(
 	sel, err := metav1.LabelSelectorAsSelector(t.Selector)
 	if err != nil {
 		r.retries.clear(t.key())
-		EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 		return err
 	}
 
@@ -175,7 +172,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 		return r.handleStepError(ctx, t, "patch", "Pod recycle failed", err)
 	}
 
-	EmitWorkloadPods(t.Namespace, t.Kind, t.Name, counts)
+	r.health.setPods(t.key(), counts)
 	r.recordStepSuccess(t)
 
 	// The pod template is never patched, so it differs from the recommendation
@@ -213,7 +210,7 @@ func (r *PolicyReconciler) resizeInPlaceTarget(ctx context.Context, t *workloadT
 		return r.handleStepError(ctx, t, "resize", t.Kind+" pod resize failed", err)
 	}
 	r.recordStepSuccess(t)
-	EmitWorkloadPods(t.Namespace, t.Kind, t.Name, *counts)
+	r.health.setPods(t.key(), *counts)
 	if resized > 0 {
 		if changed := changedContainers(containers, recs, tol); len(changed) > 0 {
 			r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
@@ -225,10 +222,10 @@ func (r *PolicyReconciler) resizeInPlaceTarget(ctx context.Context, t *workloadT
 
 // skipFailedDryRun treats a failed OnCreate count-only pass as success: the
 // pass never touches pods, and retry backoff would skip the compute phase and
-// freeze the WorkloadRecommendation the webhook relies on. The pod gauges keep
-// their previous values.
+// freeze the WorkloadRecommendation the webhook relies on. The member keeps
+// its previous pod counts.
 func (r *PolicyReconciler) skipFailedDryRun(ctx context.Context, t *workloadTarget, err error) error {
-	log.FromContext(ctx).Info("OnCreate stale-pod count failed, pod gauges left unchanged",
+	log.FromContext(ctx).Info("OnCreate stale-pod count failed, pod counts left unchanged",
 		"kind", t.Kind, "name", t.Name, "namespace", t.Namespace, "error", err.Error())
 	r.recordStepSuccess(t)
 	return nil
@@ -236,13 +233,13 @@ func (r *PolicyReconciler) skipFailedDryRun(ctx context.Context, t *workloadTarg
 
 // handleStepError applies the retry/event/metric policy for a failed reconcile
 // step. Returns nil for non-transient errors (drop from retry tracker, no
-// requeue) or err for transient ones (record attempt, schedule retry, emit
-// event + metrics). phase labels EmitRetryState/IncrementRetryAttempt; msg is
-// the human-readable description used in the event and log line.
+// requeue) or err for transient ones (record attempt and phase, schedule
+// retry, emit event). phase becomes the identity's retry-state reason when
+// this member is the one it reports; msg is the human-readable description
+// used in the event and log line.
 func (r *PolicyReconciler) handleStepError(ctx context.Context, t *workloadTarget, phase, msg string, err error) error {
 	if !isTransientError(err) {
 		r.retries.clear(t.key())
-		EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 		// Context cancellation is graceful shutdown, not a misconfiguration —
 		// don't spam events/logs on the way out.
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -258,18 +255,16 @@ func (r *PolicyReconciler) handleStepError(ctx context.Context, t *workloadTarge
 	// reading it back: another goroutine holding the same workload key can
 	// clear it in between (recordSuccess deletes the entry), and this runs
 	// inside an errgroup closure, where a nil deref takes the process down.
-	state := r.retries.recordFailure(t.key())
+	state := r.retries.recordFailure(t.key(), phase)
 	r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, "ReconciliationRetryScheduled", "ReconciliationRetryScheduled",
 		"%s: %v. Retry attempt %d at %s", msg, err, state.attempts, state.nextRetry.Format(time.RFC3339))
 	log.FromContext(ctx).Error(err, msg+", retry scheduled", "attempt", state.attempts)
-	EmitRetryState(t.Namespace, t.Kind, t.Name, phase, true)
-	IncrementRetryAttempt(t.Namespace, t.Kind, t.Name)
+	IncrementRetryAttempt(t.identity())
 	return err
 }
 
-// recordStepSuccess clears retry state and emits the "no longer retrying"
-// metric for a workload target whose latest step succeeded.
+// recordStepSuccess clears retry state for a workload target whose latest
+// step succeeded.
 func (r *PolicyReconciler) recordStepSuccess(t *workloadTarget) {
 	r.retries.clear(t.key())
-	EmitRetryState(t.Namespace, t.Kind, t.Name, "", false)
 }

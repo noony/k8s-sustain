@@ -22,6 +22,7 @@ describe('OverviewView', () => {
             memSavedRatio: 0.1,
             memSpark7d: [1],
             atRiskCount: 1,
+            blockedCount: 4,
             driftedCount: 2,
           },
           headroom: {
@@ -35,7 +36,7 @@ describe('OverviewView', () => {
               workloadCount: 1,
               cpuSavingsCores: 0.5,
               memSavingsBytes: 1,
-              atRiskCount: 0,
+              blockedCount: 0,
             },
           ],
         })
@@ -58,5 +59,46 @@ describe('OverviewView', () => {
     expect(headers).toContain('Savings')
     expect(w.text()).toContain('CPU')
     expect(w.text()).toContain('Memory')
+  })
+
+  it('shows Blocked and At risk as separate identity counts', async () => {
+    const apiMock = api.api as unknown as ReturnType<typeof vi.fn>
+    apiMock.mockImplementation((path: string) => {
+      if (path === '/api/summary')
+        return Promise.resolve({
+          kpi: {
+            cpuSavedCores: 0,
+            cpuSavedRatio: 0,
+            cpuSpark7d: [],
+            memSavedBytes: 0,
+            memSavedRatio: 0,
+            memSpark7d: [],
+            atRiskCount: 1,
+            blockedCount: 4,
+            driftedCount: 2,
+          },
+          headroom: {
+            cpu: { used: 0, idle: 0, free: 0 },
+            memory: { used: 0, idle: 0, free: 0 },
+          },
+          attention: { risk: [], drift: [], blocked: [] },
+          policies: [],
+        })
+      if (path.startsWith('/api/summary/trend'))
+        return Promise.resolve({
+          cpu: { usage: [], request: [], originalRequest: [] },
+          memory: { usage: [], request: [], originalRequest: [] },
+        })
+      if (path.startsWith('/api/summary/activity')) return Promise.resolve({ items: [] })
+      return Promise.resolve({})
+    })
+    const w = mount(OverviewView, { global: { stubs: ['router-link', 'TrendChart'] } })
+    await flushPromises()
+    const cards = w.findAllComponents({ name: 'KpiCard' })
+    const byLabel = (label: string) => cards.find((c) => c.props('label') === label)
+    expect(byLabel('At risk')?.props('value')).toBe('1')
+    expect(byLabel('At risk')?.props('to')).toBe('/workloads?risk=at-risk')
+    expect(byLabel('Blocked')?.props('value')).toBe('4')
+    expect(byLabel('Blocked')?.props('to')).toBe('/workloads?risk=blocked')
   })
 })

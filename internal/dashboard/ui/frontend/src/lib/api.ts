@@ -73,7 +73,7 @@ export interface PolicySummary {
   workloadCount?: number
   cpuSavingsCores?: number
   memSavingsBytes?: number
-  atRiskCount?: number
+  blockedCount?: number
   lastAppliedAt?: string
 }
 
@@ -132,7 +132,7 @@ export interface PolicySpec {
   workloadCount?: number
   cpuSavingsCores?: number
   memSavingsBytes?: number
-  atRiskCount?: number
+  blockedCount?: number
   effectivenessSeries?: { cpu: TimeValue[]; memory: TimeValue[] }
 }
 
@@ -344,6 +344,7 @@ export interface SummaryV2 {
     memSavedRatio: number
     memSpark7d: number[]
     atRiskCount: number
+    blockedCount: number
     driftedCount: number
   }
   headroom: { cpu: HeadroomBreakdown; memory: HeadroomBreakdown }
@@ -376,7 +377,7 @@ export interface PolicyRollup {
   workloadCount: number
   cpuSavingsCores: number
   memSavingsBytes: number
-  atRiskCount: number
+  blockedCount: number
   lastAppliedAt?: string
 }
 
@@ -407,8 +408,11 @@ export interface CoordinationFactors {
   cpuReplica?: number
 }
 
+export type RiskState = 'safe' | 'drifted' | 'at-risk' | 'blocked'
+
 export interface WorkloadDetailSnapshot {
   updateMode?: string
+  riskState: RiskState
   stalePods: number
   totalPods: number
   oom24h: number
@@ -418,7 +422,7 @@ export interface WorkloadDetailSnapshot {
 }
 
 export interface WorkloadItemV2 extends WorkloadItem {
-  riskState: 'safe' | 'drifted' | 'at-risk' | 'blocked'
+  riskState: RiskState
   stalePods: number
   totalPods: number
   autoscalerPresent: boolean

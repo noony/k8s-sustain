@@ -65,6 +65,7 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 	srv := &dashboard.Server{
 		K8sClient:          k8sClient,
 		PromClient:         promClient,
+		Health:             dashboard.NewPrometheusHealthSignals(promClient),
 		Logger:             log,
 		CORSOrigins:        cfg.CORSAllowedOrigins,
 		ExcludedNamespaces: cfg.ExcludedNamespaces,

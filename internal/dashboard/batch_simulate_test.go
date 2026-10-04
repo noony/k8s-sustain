@@ -79,10 +79,6 @@ func (f *blockingBatchPromClient) QueryByLabel(context.Context, string, string) 
 	return map[string]float64{}, nil
 }
 
-func (f *blockingBatchPromClient) QueryByLabels(context.Context, string, ...string) (map[string]float64, error) {
-	return map[string]float64{}, nil
-}
-
 func (f *blockingBatchPromClient) QueryWorkloadMemoryByContainer(context.Context, string, string, string, float64, string) (promclient.ContainerValues, error) {
 	return promclient.ContainerValues{}, nil
 }

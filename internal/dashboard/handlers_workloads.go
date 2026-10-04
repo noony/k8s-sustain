@@ -13,6 +13,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/policymatch"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 // workloadRow is what every list endpoint returns per workload; endpoints
@@ -22,7 +23,7 @@ type workloadRow struct {
 	Kind                string               `json:"kind"`
 	Name                string               `json:"name"`
 	Containers          []containerStatus    `json:"containers"`
-	RiskState           string               `json:"riskState"` // safe | drifted | at-risk | blocked
+	RiskState           riskState            `json:"riskState"`
 	StalePods           int                  `json:"stalePods"`
 	TotalPods           int                  `json:"totalPods"`
 	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
@@ -33,12 +34,16 @@ type workloadRow struct {
 
 func (r *workloadRow) key() string { return workloadKey(r.Namespace, r.Kind, r.Name) }
 
-func (r *workloadRow) setSignals(sig workloadSignals) {
-	r.RiskState = sig.RiskState
-	r.StalePods = sig.StalePods
-	r.TotalPods = sig.TotalPods
-	r.AutoscalerPresent = sig.AutoscalerPresent
-	r.CoordinationFactors = sig.CoordinationFactors
+func (r *workloadRow) identity() promclient.WorkloadIdentity {
+	return promclient.WorkloadIdentity{Namespace: r.Namespace, OwnerKind: r.Kind, OwnerName: r.Name}
+}
+
+func (r *workloadRow) setHealth(h identityHealth) {
+	r.RiskState = riskStateOf(h)
+	r.StalePods = h.StalePods
+	r.TotalPods = h.TotalPods
+	r.AutoscalerPresent = h.AutoscalerPresent
+	r.CoordinationFactors = h.CoordinationFactors
 }
 
 func liveRow(kind string, e workloadEntry) workloadRow {
@@ -90,14 +95,14 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 	matched := len(workloads)
 	namespaces := uniqueValues(workloads, func(w workloadRow) string { return w.Namespace })
 
-	// Narrow before the signal decoration so it only covers returned rows.
+	// Narrow before the health decoration so it only covers returned rows.
 	if nsFilter != "" {
 		workloads = filterInPlace(workloads, func(w workloadRow) bool { return w.Namespace == nsFilter })
 	}
 	if search != "" {
 		workloads = filterInPlace(workloads, func(w workloadRow) bool { return nameMatches(&w, search) })
 	}
-	applySignals(ctx, s, workloads, identityRow)
+	applyHealth(ctx, s, workloads, identityRow)
 	sortWorkloads(workloads, identityRow, rowOrder(sortKey), sortDesc)
 
 	total := len(workloads)
@@ -198,16 +203,20 @@ func liveKeys[T any](rows []T, rowOf func(*T) *workloadRow) map[string]struct{} 
 	return live
 }
 
-// applySignals batches the signal queries for every row and overlays the
-// result onto each row in place.
-func applySignals[T any](ctx context.Context, s *Server, rows []T, rowOf func(*T) *workloadRow) {
-	keys := make([]string, len(rows))
+// applyHealth reads every row's identity health in one batch and overlays it,
+// with its Risk state, onto each row in place. A failed read degrades to the
+// signals that could be read.
+func applyHealth[T any](ctx context.Context, s *Server, rows []T, rowOf func(*T) *workloadRow) {
+	ids := make([]promclient.WorkloadIdentity, len(rows))
 	for i := range rows {
-		keys[i] = rowOf(&rows[i]).key()
+		ids[i] = rowOf(&rows[i]).identity()
 	}
-	signals := s.fetchWorkloadSignals(ctx, keys)
+	health, err := s.Health.forIdentities(ctx, ids)
+	if err != nil {
+		s.Logger.V(1).Info("reading identity health failed; rows show what could be read", "error", err.Error())
+	}
 	for i := range rows {
-		rowOf(&rows[i]).setSignals(signals[keys[i]])
+		rowOf(&rows[i]).setHealth(health[ids[i]])
 	}
 }
 
@@ -269,7 +278,7 @@ func parseAllWorkloadFilters(q url.Values) (allWorkloadFilters, *paramError) {
 	if f.active, perr = parseBoolParam(q, "active"); perr != nil {
 		return f, perr
 	}
-	if f.risk, perr = parseEnumParam(q, "risk", []string{"safe", "drifted", "at-risk", "blocked"}); perr != nil {
+	if f.risk, perr = parseEnumParam(q, "risk", riskStates); perr != nil {
 		return f, perr
 	}
 	if f.autoscaler, perr = parseEnumParam(q, "autoscaler", []string{"has-autoscaler", "no-autoscaler"}); perr != nil {
@@ -303,9 +312,9 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	namespaces := uniqueValues(workloads, func(w allWorkloadSummary) string { return w.Namespace })
 	kinds := uniqueValues(workloads, func(w allWorkloadSummary) string { return w.Kind })
 
-	// Narrow before the signal decoration so it only covers returned rows.
+	// Narrow before the health decoration so it only covers returned rows.
 	workloads = filterByNamespaceAndKind(workloads, filters)
-	applySignals(ctx, s, workloads, allRowOf)
+	applyHealth(ctx, s, workloads, allRowOf)
 
 	workloads = applyAllWorkloadFilters(workloads, filters)
 	sortWorkloads(workloads, allRowOf, allWorkloadOrder(filters.sortKey), filters.sortDesc)
@@ -414,7 +423,7 @@ func resolveManagingPolicy(e workloadEntry, policies map[string]*sustainv1alpha1
 }
 
 // filterByNamespaceAndKind applies the identity filters that do not depend on
-// signal decoration, so the signal queries see already-narrowed rows.
+// health decoration, so the health read sees already-narrowed rows.
 func filterByNamespaceAndKind(workloads []allWorkloadSummary, f allWorkloadFilters) []allWorkloadSummary {
 	if f.namespace != "" {
 		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.Namespace == f.namespace })
@@ -440,7 +449,7 @@ func applyAllWorkloadFilters(workloads []allWorkloadSummary, f allWorkloadFilter
 		})
 	}
 	if f.risk != "" {
-		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.RiskState == f.risk })
+		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return string(w.RiskState) == f.risk })
 	}
 	if f.autoscaler != "" {
 		want := f.autoscaler == "has-autoscaler"

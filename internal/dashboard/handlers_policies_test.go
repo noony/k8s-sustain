@@ -24,7 +24,7 @@ func TestHandlePoliciesIncludesEffectiveness(t *testing.T) {
 			"k8s_sustain_policy_workload_count":       {"p": 5},
 			"k8s_sustain:policy_cpu_savings_cores":    {"p": 1.2},
 			"k8s_sustain:policy_memory_savings_bytes": {"p": 2_000_000_000},
-			"k8s_sustain_policy_at_risk_count":        {"p": 1},
+			"k8s_sustain_policy_blocked_count":        {"p": 1},
 		},
 	}
 	rec := httptest.NewRecorder()
@@ -33,6 +33,9 @@ func TestHandlePoliciesIncludesEffectiveness(t *testing.T) {
 	decodeEnvelopeData(t, rec.Body, &got)
 	if len(got) != 1 || got[0]["cpuSavingsCores"] != 1.2 {
 		t.Fatalf("unexpected: %+v", got)
+	}
+	if got[0]["blockedCount"] != 1.0 {
+		t.Errorf("blockedCount = %v, want 1", got[0]["blockedCount"])
 	}
 }
 

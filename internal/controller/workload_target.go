@@ -7,6 +7,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/policymatch"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -70,6 +71,12 @@ type workloadTarget struct {
 // key returns a unique identifier for this workload target, used as the retry map key.
 func (w *workloadTarget) key() string {
 	return w.Kind + "/" + w.Namespace + "/" + w.Name
+}
+
+// identity is the identity this target reports into: what Prometheus, the
+// WorkloadRecommendation and every health series are keyed by.
+func (w *workloadTarget) identity() promclient.WorkloadIdentity {
+	return promclient.WorkloadIdentity{Namespace: w.Namespace, OwnerKind: w.IdentityKind, OwnerName: w.IdentityName}
 }
 
 // recommendableContainers returns the containers to feed into the recommendation

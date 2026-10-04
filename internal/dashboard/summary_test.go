@@ -30,7 +30,6 @@ func testLogger(t *testing.T) logr.Logger { return testr.New(t) }
 type fakePromClient struct {
 	instant    map[string]float64
 	byLabel    map[string]map[string]float64
-	byLabels   map[string]map[string]float64
 	instantErr map[string]error
 	byLabelErr map[string]error
 
@@ -57,13 +56,6 @@ func (f *fakePromClient) QueryByLabel(_ context.Context, expr, _ string) (map[st
 		return nil, err
 	}
 	if v, ok := f.byLabel[expr]; ok {
-		return v, nil
-	}
-	return map[string]float64{}, nil
-}
-
-func (f *fakePromClient) QueryByLabels(_ context.Context, expr string, _ ...string) (map[string]float64, error) {
-	if v, ok := f.byLabels[expr]; ok {
 		return v, nil
 	}
 	return map[string]float64{}, nil
@@ -148,6 +140,7 @@ func TestHandleSummaryShape(t *testing.T) {
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: fp,
+		Health:     memHealthSignals{},
 		Logger:     testr.New(t),
 	}
 
@@ -176,7 +169,7 @@ func TestHandleSummaryShape(t *testing.T) {
 	}
 }
 
-func TestHandleSummaryHeadroomAttentionPolicies(t *testing.T) {
+func TestHandleSummaryHeadroomAndPolicies(t *testing.T) {
 	fp := &fakePromClient{
 		instant: map[string]float64{},
 		byLabel: map[string]map[string]float64{
@@ -185,17 +178,13 @@ func TestHandleSummaryHeadroomAttentionPolicies(t *testing.T) {
 			"k8s_sustain_policy_workload_count":             {"prod-policy": 7},
 			"k8s_sustain:policy_cpu_savings_cores":          {"prod-policy": 1.5},
 			"k8s_sustain:policy_memory_savings_bytes":       {"prod-policy": 2048},
-			"k8s_sustain_policy_at_risk_count":              {"prod-policy": 2},
-		},
-		byLabels: map[string]map[string]float64{
-			"sum by (namespace, owner_kind, owner_name) (k8s_sustain:workload_oom_24h) > 0":    {"shop|Deployment|checkout": 3, "prod|StatefulSet|api": 1},
-			"max by (namespace, owner_kind, owner_name) (k8s_sustain_workload_stale_pods) > 0": {"prod|Deployment|web": 1},
-			"k8s_sustain_workload_retry_state == 1":                                            {"prod|Deployment|worker": 1},
+			"k8s_sustain_policy_blocked_count":              {"prod-policy": 2},
 		},
 	}
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: fp,
+		Health:     memHealthSignals{},
 		Logger:     testr.New(t),
 	}
 
@@ -218,20 +207,6 @@ func TestHandleSummaryHeadroomAttentionPolicies(t *testing.T) {
 		t.Errorf("headroom.memory = %+v, want used=0.5 idle=0.2 free=0.3", memHR)
 	}
 
-	risk := got.Attention["risk"]
-	if len(risk) == 0 {
-		t.Fatalf("expected attention.risk length > 0")
-	}
-	if risk[0].Signal != "OOM" {
-		t.Errorf("attention.risk[0].Signal = %q, want OOM", risk[0].Signal)
-	}
-	if risk[0].Namespace != "shop" || risk[0].Kind != "Deployment" || risk[0].Name != "checkout" {
-		t.Errorf("attention.risk[0] = %+v, want shop/Deployment/checkout (highest value)", risk[0])
-	}
-	if risk[1].Namespace != "prod" || risk[1].Kind != "StatefulSet" || risk[1].Name != "api" {
-		t.Errorf("attention.risk[1] = %+v, want prod/StatefulSet/api", risk[1])
-	}
-
 	if len(got.Policies) != 1 || got.Policies[0].Name != "prod-policy" {
 		t.Fatalf("policies = %+v, want one entry named prod-policy", got.Policies)
 	}
@@ -245,8 +220,8 @@ func TestHandleSummaryHeadroomAttentionPolicies(t *testing.T) {
 	if pol.MemSavingsBytes != 2048 {
 		t.Errorf("policies[0].MemSavingsBytes = %v, want 2048", pol.MemSavingsBytes)
 	}
-	if pol.AtRiskCount != 2 {
-		t.Errorf("policies[0].AtRiskCount = %d, want 2", pol.AtRiskCount)
+	if pol.BlockedCount != 2 {
+		t.Errorf("policies[0].BlockedCount = %d, want 2", pol.BlockedCount)
 	}
 }
 
@@ -259,6 +234,7 @@ func TestHandleSummaryCacheHit(t *testing.T) {
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: fp,
+		Health:     memHealthSignals{},
 		Logger:     testr.New(t),
 	}
 	handler := srv.Handler()
@@ -309,6 +285,7 @@ func TestHandleSummaryDoesNotCacheOnPromError(t *testing.T) {
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: fp,
+		Health:     memHealthSignals{},
 		Logger:     testr.New(t),
 	}
 
@@ -333,6 +310,7 @@ func TestHandleSummaryServesRecentLastGoodOnPartialError(t *testing.T) {
 	srv := &Server{
 		K8sClient:    fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient:   fp,
+		Health:       memHealthSignals{},
 		Logger:       testr.New(t),
 		summaryCache: cache,
 	}
@@ -371,6 +349,7 @@ func TestHandleSummaryServesFreshPartialWhenLastGoodTooOld(t *testing.T) {
 	srv := &Server{
 		K8sClient:    fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient:   fp,
+		Health:       memHealthSignals{},
 		Logger:       testr.New(t),
 		summaryCache: cache,
 	}
@@ -487,6 +466,7 @@ func TestHandleSummaryConcurrentMissesCollapseToOneRecompute(t *testing.T) {
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: bp,
+		Health:     memHealthSignals{},
 		Logger:     testr.New(t),
 		sfJoinHook: func(string) {
 			if atomic.AddInt32(&joined, 1) == n {
@@ -556,6 +536,7 @@ func TestHandleSummaryFollowerHonoursOwnContextDeadline(t *testing.T) {
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: bp,
+		Health:     memHealthSignals{},
 		Logger:     testr.New(t),
 	}
 	handler := srv.Handler()
@@ -608,6 +589,7 @@ func TestComputeAndCacheSummaryRecoversPanic(t *testing.T) {
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
+		Health:     memHealthSignals{},
 		Logger:     testr.New(t),
 	}
 
