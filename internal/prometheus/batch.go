@@ -24,16 +24,16 @@ func (c *Client) queryShardIdentityValues(ctx context.Context, expr string) (Ide
 	return vectorToIdentityValues(vector), nil
 }
 
-// QueryShardCPU is the batched counterpart of QueryWorkloadCPUByContainer:
-// same per-pod-percentile semantics, but one round trip for every workload in
-// the shard.
+// QueryShardCPU returns, for every workload in the shard, the per-container
+// CPU quantile (cores) of the busiest replica over window, from the
+// workload_max_pod_cpu rule, in one round trip.
 func (c *Client) QueryShardCPU(ctx context.Context, shard Shard, quantile float64, window string) (IdentityValues, error) {
 	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodCPUCores, shard.Selector(), window)
 	return c.queryShardIdentityValues(ctx, expr)
 }
 
-// QueryShardMemory is the batched counterpart of
-// QueryWorkloadMemoryByContainer, with the same semantics as QueryShardCPU.
+// QueryShardMemory is QueryShardCPU for memory (bytes), from the
+// workload_max_pod_memory rule.
 func (c *Client) QueryShardMemory(ctx context.Context, shard Shard, quantile float64, window string) (IdentityValues, error) {
 	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodMemoryBytes, shard.Selector(), window)
 	return c.queryShardIdentityValues(ctx, expr)
@@ -71,9 +71,9 @@ func partitionOOMVectorByIdentity(vec model.Vector) map[WorkloadIdentity]model.V
 	return out
 }
 
-// QueryShardOOMSignal is the batched counterpart of QueryWorkloadOOMSignal.
-// Each identity's partition is folded with the same foldOOMVector the
-// single-workload path uses, so the two paths cannot drift apart.
+// QueryShardOOMSignal returns, for every workload in the shard, the 24h
+// per-container OOM counts, peak memory and OOM-time limit, fetched in one
+// query and folded per identity by foldOOMVector.
 //
 // The returned map is sparse: it holds only identities with samples in the
 // window, which for most shards is a small minority. Callers must treat a

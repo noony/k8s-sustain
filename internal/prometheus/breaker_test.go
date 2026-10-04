@@ -184,7 +184,7 @@ func TestClient_CircuitOpensOnRepeatedFailures(t *testing.T) {
 
 	ctx := context.Background()
 	for i := range 3 {
-		_, err := c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "foo", 0.95, "1h")
+		_, err := c.QueryShardCPU(ctx, Shard{Namespace: "ns", OwnerKind: "Deployment", Names: []string{"foo"}}, 0.95, "1h")
 		if err == nil {
 			t.Fatalf("call %d: expected error from failing server", i)
 		}
@@ -193,7 +193,7 @@ func TestClient_CircuitOpensOnRepeatedFailures(t *testing.T) {
 		}
 	}
 
-	_, err = c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "foo", 0.95, "1h")
+	_, err = c.QueryShardCPU(ctx, Shard{Namespace: "ns", OwnerKind: "Deployment", Names: []string{"foo"}}, 0.95, "1h")
 	if !errors.Is(err, ErrCircuitOpen) {
 		t.Fatalf("expected ErrCircuitOpen after threshold, got %v", err)
 	}
@@ -319,11 +319,11 @@ func TestClient_CircuitClosesAfterPrometheusRecovers(t *testing.T) {
 
 	ctx := context.Background()
 	for i := range 3 {
-		if _, err := c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "foo", 0.95, "1h"); err == nil {
+		if _, err := c.QueryShardCPU(ctx, Shard{Namespace: "ns", OwnerKind: "Deployment", Names: []string{"foo"}}, 0.95, "1h"); err == nil {
 			t.Fatalf("call %d: expected error from failing server", i)
 		}
 	}
-	if _, err := c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "foo", 0.95, "1h"); !errors.Is(err, ErrCircuitOpen) {
+	if _, err := c.QueryShardCPU(ctx, Shard{Namespace: "ns", OwnerKind: "Deployment", Names: []string{"foo"}}, 0.95, "1h"); !errors.Is(err, ErrCircuitOpen) {
 		t.Fatalf("expected ErrCircuitOpen once the breaker trips, got %v", err)
 	}
 
@@ -331,7 +331,7 @@ func TestClient_CircuitClosesAfterPrometheusRecovers(t *testing.T) {
 	before := hits.Load()
 	time.Sleep(cooldown + 20*time.Millisecond)
 
-	if _, err := c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "foo", 0.95, "1h"); err != nil {
+	if _, err := c.QueryShardCPU(ctx, Shard{Namespace: "ns", OwnerKind: "Deployment", Names: []string{"foo"}}, 0.95, "1h"); err != nil {
 		t.Fatalf("the half-open probe must reach a recovered Prometheus, got %v", err)
 	}
 	if hits.Load() == before {
@@ -339,7 +339,7 @@ func TestClient_CircuitClosesAfterPrometheusRecovers(t *testing.T) {
 			"rejected by its own probe in acquire(), so success() is never called and the circuit " +
 			"can never close")
 	}
-	if _, err := c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "foo", 0.95, "1h"); err != nil {
+	if _, err := c.QueryShardCPU(ctx, Shard{Namespace: "ns", OwnerKind: "Deployment", Names: []string{"foo"}}, 0.95, "1h"); err != nil {
 		t.Fatalf("the circuit must be closed after a successful probe, got %v", err)
 	}
 }

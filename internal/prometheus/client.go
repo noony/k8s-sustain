@@ -131,17 +131,6 @@ func (c *Client) runRange(ctx context.Context, expr string, r prometheusv1.Range
 	return v, nil
 }
 
-func vectorToContainerValues(vec model.Vector) ContainerValues {
-	values := make(ContainerValues, len(vec))
-	for _, sample := range vec {
-		name := string(sample.Metric["container"])
-		if name != "" {
-			values[name] = float64(sample.Value)
-		}
-	}
-	return values
-}
-
 // Client wraps the Prometheus HTTP API for k8s-sustain queries.
 type Client struct {
 	api          prometheusv1.API
@@ -251,20 +240,6 @@ func New(addr string, opts ...Option) (*Client, error) {
 	return cli, nil
 }
 
-// QueryWorkloadCPUByContainer returns the per-container CPU quantile (cores)
-// of the busiest replica over window, from the workload_max_pod_cpu rule.
-func (c *Client) QueryWorkloadCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodCPUCores, WorkloadSelector(namespace, ownerKind, ownerName), window)
-	return c.queryByContainer(ctx, expr)
-}
-
-// QueryWorkloadMemoryByContainer returns the per-container memory quantile
-// (bytes) of the busiest replica over window, from the workload_max_pod_memory rule.
-func (c *Client) QueryWorkloadMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (ContainerValues, error) {
-	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodMemoryBytes, WorkloadSelector(namespace, ownerKind, ownerName), window)
-	return c.queryByContainer(ctx, expr)
-}
-
 // TimeSeries holds a single time-series: metric labels plus timestamped values.
 type TimeSeries struct {
 	Labels map[string]string `json:"labels"`
@@ -320,16 +295,16 @@ func (c *Client) queryMaxByContainerForWorkload(ctx context.Context, ruleName, n
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
-// QueryWorkloadCPURecommendationRangeByContainer is the range counterpart of
-// QueryWorkloadCPUByContainer: at each step, the per-container CPU quantile
+// QueryWorkloadCPURecommendationRangeByContainer is the one-workload range
+// counterpart of QueryShardCPU: at each step, the per-container CPU quantile
 // (cores) of the busiest replica over the trailing recWindow.
 func (c *Client) QueryWorkloadCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodCPUCores, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
-// QueryWorkloadMemoryRecommendationRangeByContainer is the range counterpart
-// of QueryWorkloadMemoryByContainer: at each step, the per-container memory
+// QueryWorkloadMemoryRecommendationRangeByContainer is the one-workload range
+// counterpart of QueryShardMemory: at each step, the per-container memory
 // quantile (bytes) of the busiest replica over the trailing recWindow.
 func (c *Client) QueryWorkloadMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodMemoryBytes, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
@@ -361,13 +336,6 @@ var oomMetricNames = []string{
 	MetricWorkloadOOM24h,
 	MetricContainerPeakMemory24hBytes,
 	MetricContainerOOMLimit24hBytes,
-}
-
-// oomSignalSelector builds the combined __name__ regex plus identity selector.
-// Rule names are interpolated unescaped, so they must stay RE2-literal.
-func oomSignalSelector(namespace, ownerKind, ownerName string) string {
-	return fmt.Sprintf("{__name__=~%q,namespace=%q,owner_kind=%q,owner_name=%q}",
-		strings.Join(oomMetricNames, "|"), namespace, ownerKind, ownerName)
 }
 
 // foldOOMVector aggregates the OOM vector client-side: sum by container for
@@ -402,21 +370,6 @@ func foldOOMVector(vec model.Vector) OOMSignal {
 		}
 	}
 	return sig
-}
-
-// QueryWorkloadOOMSignal returns the 24h per-container OOM counts, peak memory
-// and OOM-time limit for a workload, fetched in one query and folded client-side.
-func (c *Client) QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKind, ownerName string) (OOMSignal, error) {
-	expr := oomSignalSelector(namespace, ownerKind, ownerName)
-	result, err := c.execInstant(ctx, expr, time.Now(), c.queryTimeout)
-	if err != nil {
-		return OOMSignal{}, wrapQueryErr("oom signal query", expr, err)
-	}
-	vector, ok := result.(model.Vector)
-	if !ok {
-		return OOMSignal{}, fmt.Errorf("unexpected prometheus result type %T for oom signal", result)
-	}
-	return foldOOMVector(vector), nil
 }
 
 // OOMEvent represents a single OOM kill event for a container.
@@ -546,19 +499,6 @@ func wrapQueryErr(prefix, expr string, err error) error {
 		return err
 	}
 	return fmt.Errorf("%s %q: %w", prefix, expr, err)
-}
-
-func (c *Client) queryByContainer(ctx context.Context, expr string) (ContainerValues, error) {
-	result, err := c.execInstant(ctx, expr, time.Now(), c.queryTimeout)
-	if err != nil {
-		return nil, wrapQueryErr("prometheus query", expr, err)
-	}
-
-	vector, ok := result.(model.Vector)
-	if !ok {
-		return nil, fmt.Errorf("unexpected prometheus result type %T", result)
-	}
-	return vectorToContainerValues(vector), nil
 }
 
 // dashboardQueryTimeout bounds dashboard-side reads of recording rules.

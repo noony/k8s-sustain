@@ -1,19 +1,13 @@
 package recommender
 
 import (
-	"context"
-	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	"golang.org/x/sync/errgroup"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -75,76 +69,6 @@ func AgeForLog(start time.Time) string {
 		return "none"
 	}
 	return time.Since(start).String()
-}
-
-// WorkloadQuerier is the slice of the Prometheus client one workload's
-// recommendation needs. An interface so the dashboard can inject fakes.
-type WorkloadQuerier interface {
-	QueryWorkloadCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
-	QueryWorkloadMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
-	QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKind, ownerName string) (promclient.OOMSignal, error)
-}
-
-// FetchWorkloadInputs runs the Prometheus queries shared by the controller and
-// dashboard paths, in parallel so wall time is bounded by the slowest query
-// rather than the sum. An OOM-signal failure degrades to an empty value; the
-// CPU and memory percentiles are fatal because they are the recommendation's
-// primary inputs.
-func FetchWorkloadInputs(
-	ctx context.Context,
-	pc WorkloadQuerier,
-	ns, ownerKind, ownerName string,
-	rsCfg sustainv1alpha1.ResourcesConfigs,
-) (*WorkloadInputs, error) {
-	cpuQuantile := PercentileQuantile(rsCfg.CPU.Requests.Percentile)
-	cpuWindow := ResourceWindow(rsCfg.CPU.Window)
-	memQuantile := PercentileQuantile(rsCfg.Memory.Requests.Percentile)
-	memWindow := ResourceWindow(rsCfg.Memory.Window)
-
-	logger := log.FromContext(ctx)
-
-	var (
-		cpuPerPod, memPerPod promclient.ContainerValues
-		oomSignal            promclient.OOMSignal
-	)
-
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		var err error
-		cpuPerPod, err = pc.QueryWorkloadCPUByContainer(gctx, ns, ownerKind, ownerName, cpuQuantile, cpuWindow)
-		if err != nil {
-			return fmt.Errorf("workload cpu query: %w", err)
-		}
-		return nil
-	})
-	g.Go(func() error {
-		var err error
-		memPerPod, err = pc.QueryWorkloadMemoryByContainer(gctx, ns, ownerKind, ownerName, memQuantile, memWindow)
-		if err != nil {
-			return fmt.Errorf("workload memory query: %w", err)
-		}
-		return nil
-	})
-	// Best-effort query: swallow the error inside the goroutine so an
-	// OOM-signal failure doesn't cancel the errgroup.
-	g.Go(func() error {
-		v, err := pc.QueryWorkloadOOMSignal(gctx, ns, ownerKind, ownerName)
-		if err != nil {
-			logger.V(1).Info("oom signal query failed; proceeding without OOM floor", "err", err)
-			return nil
-		}
-		oomSignal = v
-		return nil
-	})
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	return &WorkloadInputs{
-		CPUPerPod: cpuPerPod,
-		MemPerPod: memPerPod,
-		OOM:       oomSignal,
-	}, nil
 }
 
 // ContainerInputs is the per-container slice of WorkloadInputs plus the

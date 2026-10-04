@@ -12,6 +12,18 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
+// shardFetchConcurrency bounds concurrent shard queries within one signal. It
+// is a goroutine bound only; the client's in-flight semaphore throttles
+// Prometheus.
+const shardFetchConcurrency = 8
+
+// fallbackFetchConcurrency bounds the one-identity re-queries of one failed
+// shard. A shard can hold ~1000 identities and the over-budget failure that
+// triggers the fallback is deterministic, so a serial walk could outlast the
+// reconcile interval. Kept below shardFetchConcurrency because the two
+// multiply.
+const fallbackFetchConcurrency = 4
+
 // PromInputs is the InputsFetcher backed by Prometheus. It packs identities
 // into sharded batch queries and retries a failed shard once. A shard that
 // still fails is re-queried one identity at a time, so one sick shard cannot
