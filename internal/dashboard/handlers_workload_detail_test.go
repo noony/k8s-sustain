@@ -10,11 +10,10 @@ func TestHandleWorkloadDetailReturnsSnapshot(t *testing.T) {
 	srv := newTestServerWithDeployment(t, "default", "web")
 	srv.Health = memHealthSignals{
 		identity("default", "Deployment", "web"): {
-			OOM24h:              1,
-			StalePods:           2,
-			TotalPods:           5,
-			AutoscalerPresent:   true,
-			CoordinationFactors: &coordinationFactors{Enabled: true, CPUOverhead: 1.25, MemoryOverhead: 1.10, CPUReplica: 0.80},
+			OOM24h:            1,
+			StalePods:         2,
+			TotalPods:         5,
+			AutoscalerPresent: true,
 		},
 	}
 	rec := httptest.NewRecorder()
@@ -24,12 +23,11 @@ func TestHandleWorkloadDetailReturnsSnapshot(t *testing.T) {
 		t.Fatalf("status %d", rec.Code)
 	}
 	var got struct {
-		RiskState           riskState            `json:"riskState"`
-		OOM24h              int                  `json:"oom24h"`
-		StalePods           int                  `json:"stalePods"`
-		TotalPods           int                  `json:"totalPods"`
-		Blocked             *struct{}            `json:"blocked"`
-		CoordinationFactors *coordinationFactors `json:"coordinationFactors"`
+		RiskState riskState `json:"riskState"`
+		OOM24h    int       `json:"oom24h"`
+		StalePods int       `json:"stalePods"`
+		TotalPods int       `json:"totalPods"`
+		Blocked   *struct{} `json:"blocked"`
 	}
 	decodeEnvelopeData(t, rec.Body, &got)
 	if got.RiskState != riskAtRisk {
@@ -40,9 +38,6 @@ func TestHandleWorkloadDetailReturnsSnapshot(t *testing.T) {
 	}
 	if got.Blocked != nil {
 		t.Errorf("blocked = %+v, want absent", got.Blocked)
-	}
-	if cf := got.CoordinationFactors; cf == nil || !cf.Enabled || cf.CPUOverhead != 1.25 || cf.MemoryOverhead != 1.10 || cf.CPUReplica != 0.80 {
-		t.Errorf("coordinationFactors = %+v", cf)
 	}
 }
 

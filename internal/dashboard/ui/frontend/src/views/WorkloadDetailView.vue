@@ -24,6 +24,7 @@ import { useTimeRange } from '../composables/useTimeRange'
 import { rangeQueryParams, resolveRange, DEFAULT_RANGE, type TimeRange } from '../lib/timerange'
 import TimeRangePicker from '../components/TimeRangePicker.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
+import RecommendationTrace from '../components/RecommendationTrace.vue'
 import KpiCard from '../components/KpiCard.vue'
 import RiskBadge from '../components/RiskBadge.vue'
 import PageHeader from '../components/PageHeader.vue'
@@ -434,6 +435,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
               resource-type="memory"
             />
           </div>
+          <RecommendationTrace v-if="stored.trace?.[cname]" :trace="stored.trace[cname]" />
         </div>
       </div>
     </div>

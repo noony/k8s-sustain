@@ -200,6 +200,230 @@ spec:
                 - FetchFailed
                 - Conflicted
                 type: string
+              trace:
+                additionalProperties:
+                  description: |-
+                    ContainerTrace is the record of how one container's recommendation was
+                    derived. A resource whose request is kept, or that had nothing to recommend
+                    from, has none.
+                  properties:
+                    cpu:
+                      description: |-
+                        ResourceTrace is one resource's request after each stage of the
+                        computation, in the order the stages run: usage percentile, OOM floor
+                        (memory only), headroom, min/max clamp, autoscaler coordination, then the
+                        limit derived from the final request. A stage that did not run is unset.
+                      properties:
+                        clamped:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: 'Clamped is WithHeadroom after the minAllowed/maxAllowed
+                            clamp: the request, unless coordination is set.'
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        coordination:
+                          description: Coordination is set when autoscaler coordination
+                            shaped the request.
+                          properties:
+                            overheadFactor:
+                              description: OverheadFactor is 110 / the autoscaler's
+                                averageUtilization target for this resource (clamped
+                                to 1-99), or 1 when it has none.
+                              type: number
+                            replicaFactor:
+                              description: ReplicaFactor is the replica-budget correction,
+                                clamp(current / target replicas, 0.5, 2). CPU only,
+                                set when the Policy has a replicaBudgetAnchor.
+                              type: number
+                            scaled:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: Scaled is the clamped request multiplied
+                                by the factors.
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            value:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: 'Value is Scaled clamped to minAllowed/maxAllowed
+                                again: the final request.'
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                          required:
+                          - overheadFactor
+                          - scaled
+                          - value
+                          type: object
+                        limit:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: Limit is the limit derived from the final request.
+                            Unset with removeLimit false keeps the container's own
+                            limit.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        oomFloor:
+                          description: OOMFloor is set when the container was OOM-killed
+                            recently. Memory only.
+                          properties:
+                            determined:
+                              description: 'Determined is true when the floor set
+                                the final request: it beat the percentile and no min/max
+                                clamp, before or after coordination, replaced the
+                                value.'
+                              type: boolean
+                            value:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: Value is the higher of the 24h peak working
+                                set and the limit the container was killed at times
+                                the bump factor. It replaces the percentile when higher.
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                          required:
+                          - value
+                          type: object
+                        percentile:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: Percentile is the usage percentile of the busiest
+                            pod over the window. Unset for a memory request anchored
+                            on an OOM kill alone.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        removeLimit:
+                          description: RemoveLimit is true when the limit is stripped.
+                          type: boolean
+                        withHeadroom:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: WithHeadroom is the higher of the percentile
+                            and the OOM floor, plus headroom, rounded up to a whole
+                            millicore or MiB and raised to the 1m / 1Mi minimum.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                      required:
+                      - clamped
+                      - withHeadroom
+                      type: object
+                    memory:
+                      description: |-
+                        ResourceTrace is one resource's request after each stage of the
+                        computation, in the order the stages run: usage percentile, OOM floor
+                        (memory only), headroom, min/max clamp, autoscaler coordination, then the
+                        limit derived from the final request. A stage that did not run is unset.
+                      properties:
+                        clamped:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: 'Clamped is WithHeadroom after the minAllowed/maxAllowed
+                            clamp: the request, unless coordination is set.'
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        coordination:
+                          description: Coordination is set when autoscaler coordination
+                            shaped the request.
+                          properties:
+                            overheadFactor:
+                              description: OverheadFactor is 110 / the autoscaler's
+                                averageUtilization target for this resource (clamped
+                                to 1-99), or 1 when it has none.
+                              type: number
+                            replicaFactor:
+                              description: ReplicaFactor is the replica-budget correction,
+                                clamp(current / target replicas, 0.5, 2). CPU only,
+                                set when the Policy has a replicaBudgetAnchor.
+                              type: number
+                            scaled:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: Scaled is the clamped request multiplied
+                                by the factors.
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            value:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: 'Value is Scaled clamped to minAllowed/maxAllowed
+                                again: the final request.'
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                          required:
+                          - overheadFactor
+                          - scaled
+                          - value
+                          type: object
+                        limit:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: Limit is the limit derived from the final request.
+                            Unset with removeLimit false keeps the container's own
+                            limit.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        oomFloor:
+                          description: OOMFloor is set when the container was OOM-killed
+                            recently. Memory only.
+                          properties:
+                            determined:
+                              description: 'Determined is true when the floor set
+                                the final request: it beat the percentile and no min/max
+                                clamp, before or after coordination, replaced the
+                                value.'
+                              type: boolean
+                            value:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: Value is the higher of the 24h peak working
+                                set and the limit the container was killed at times
+                                the bump factor. It replaces the percentile when higher.
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                          required:
+                          - value
+                          type: object
+                        percentile:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: Percentile is the usage percentile of the busiest
+                            pod over the window. Unset for a memory request anchored
+                            on an OOM kill alone.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        removeLimit:
+                          description: RemoveLimit is true when the limit is stripped.
+                          type: boolean
+                        withHeadroom:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: WithHeadroom is the higher of the percentile
+                            and the OOM floor, plus headroom, rounded up to a whole
+                            millicore or MiB and raised to the 1m / 1Mi minimum.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                      required:
+                      - clamped
+                      - withHeadroom
+                      type: object
+                  type: object
+                description: Trace maps container name to how its recommended resources
+                  were derived, stage by stage. Written with containers; a trace-only
+                  change does not cause a write.
+                type: object
             type: object
         type: object
     served: true

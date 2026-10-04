@@ -17,11 +17,10 @@ type identityHealth struct {
 	Blocked    *blockedSignal
 	StalePods  int
 	TotalPods  int
-	// AutoscalerPresent and CoordinationFactors describe the autoscaler the
-	// identity's recommendation is shaped against; CoordinationFactors is nil
-	// without one.
-	AutoscalerPresent   bool
-	CoordinationFactors *coordinationFactors
+	// AutoscalerPresent is whether an autoscaler shapes the identity's
+	// recommendation. The coordination factors it applied are read from the
+	// stored trace instead (coordinationFactorsOf).
+	AutoscalerPresent bool
 }
 
 type blockedSignal struct {

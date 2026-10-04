@@ -102,10 +102,6 @@ func TestPrometheusHealthSignalsFoldsSignalsPerIdentity(t *testing.T) {
 		promclient.MetricWorkloadRetryState:    {"prod|Deployment|api|patch": 1},
 		promclient.MetricWorkloadRetryAttempts: {"prod|Deployment|api": 4, "prod|Deployment|web": 9},
 		promclient.MetricAutoscalerPresent:     {"prod|Deployment|api": 1},
-		promclient.MetricCoordinationFactor: {
-			"prod|Deployment|api|cpu|overhead": 1.2,
-			"prod|Deployment|web|cpu|overhead": 1.5,
-		},
 	}}
 
 	got, err := NewPrometheusHealthSignals(q).forIdentities(context.Background(), []promclient.WorkloadIdentity{api, web})
@@ -119,15 +115,12 @@ func TestPrometheusHealthSignalsFoldsSignalsPerIdentity(t *testing.T) {
 	if a.Blocked == nil || a.Blocked.Reason != "patch" || a.Blocked.Attempts != 4 {
 		t.Errorf("api blocked = %+v, want patch after 4 attempts", a.Blocked)
 	}
-	if !a.AutoscalerPresent || a.CoordinationFactors == nil || a.CoordinationFactors.CPUOverhead != 1.2 {
-		t.Errorf("api autoscaler = %v %+v, want present with cpu overhead 1.2", a.AutoscalerPresent, a.CoordinationFactors)
+	if !a.AutoscalerPresent {
+		t.Error("api autoscaler absent, want present")
 	}
 	w := got[web]
-	if w.OOM24h != 2 || w.Blocked != nil {
-		t.Errorf("web = %+v, want 2 OOMs and not blocked despite a retry counter", w)
-	}
-	if w.CoordinationFactors != nil {
-		t.Errorf("web has no autoscaler, so its leftover coordination factors must not show, got %+v", w.CoordinationFactors)
+	if w.OOM24h != 2 || w.Blocked != nil || w.AutoscalerPresent {
+		t.Errorf("web = %+v, want 2 OOMs, not blocked despite a retry counter, no autoscaler", w)
 	}
 
 	unhealthy, err := NewPrometheusHealthSignals(q).unhealthy(context.Background())
@@ -244,30 +237,6 @@ func TestAllWorkloadsRiskFilterUsesClassifiedState(t *testing.T) {
 		if len(resp.Items) != 1 || resp.Items[0].Name != wantName {
 			t.Errorf("risk=%s: got %+v, want only %s", risk, resp.Items, wantName)
 		}
-	}
-}
-
-func TestAllWorkloadsCarriesAutoscalerAndCoordination(t *testing.T) {
-	srv := ownerNameGroupServer(t, memHealthSignals{
-		identity("prod", "Deployment", "api"): {
-			AutoscalerPresent:   true,
-			CoordinationFactors: &coordinationFactors{Enabled: true, CPUOverhead: 1.2, MemoryOverhead: 1.1, CPUReplica: 0.9},
-		},
-	})
-	rec := httptest.NewRecorder()
-	srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads?search=api", nil))
-	var resp struct {
-		Items []struct {
-			AutoscalerPresent   bool                 `json:"autoscalerPresent"`
-			CoordinationFactors *coordinationFactors `json:"coordinationFactors"`
-		} `json:"items"`
-	}
-	decodeEnvelopeData(t, rec.Body, &resp)
-	if len(resp.Items) != 1 || !resp.Items[0].AutoscalerPresent {
-		t.Fatalf("got %+v, want the api identity with its autoscaler", resp.Items)
-	}
-	if cf := resp.Items[0].CoordinationFactors; cf == nil || cf.CPUOverhead != 1.2 || cf.MemoryOverhead != 1.1 || cf.CPUReplica != 0.9 {
-		t.Errorf("coordinationFactors = %+v", cf)
 	}
 }
 

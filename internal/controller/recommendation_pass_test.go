@@ -20,21 +20,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
-func TestFactorRatio_GuardsAgainstNaN(t *testing.T) {
-	if factorRatio(nil, qty("100m")) != 1.0 {
-		t.Error("nil adjusted should yield 1.0 (no-op signal)")
-	}
-	if factorRatio(qty("100m"), nil) != 1.0 {
-		t.Error("nil baseline should yield 1.0")
-	}
-	if factorRatio(qty("100m"), qty("0")) != 1.0 {
-		t.Error("zero baseline should yield 1.0 — must not return Inf/NaN")
-	}
-	if got := factorRatio(qty("200m"), qty("100m")); got != 2.0 {
-		t.Errorf("factorRatio(200m, 100m) = %v, want 2.0", got)
-	}
-}
-
 // fakeOOMSource is a canned oomwatch.Source for live-OOM tests.
 type fakeOOMSource struct {
 	records map[string]*oomwatch.OOMRecord

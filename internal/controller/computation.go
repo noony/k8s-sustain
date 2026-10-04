@@ -122,7 +122,7 @@ func (r *PolicyReconciler) persist(ctx context.Context, policyName string, resul
 
 func (r *PolicyReconciler) persistLive(ctx context.Context, policyName string, res *identityResult) {
 	if res.outcome == outcomeRecommended {
-		_ = r.upsertWorkloadRecommendation(ctx, res.item, policyName, res.recs, metav1.Now())
+		_ = r.upsertWorkloadRecommendation(ctx, res.item, policyName, res.recs, res.traces, metav1.Now())
 		return
 	}
 	// Recorded so the webhook reads "nothing to inject" instead of "missing",
@@ -142,7 +142,7 @@ func (r *PolicyReconciler) persistDeparted(ctx context.Context, policyName strin
 	ns, kind := it.Identity.Namespace, it.Identity.OwnerKind
 	switch res.outcome {
 	case outcomeRecommended:
-		if err := r.upsertWorkloadRecommendation(ctx, it, policyName, res.recs, metav1.Now()); err != nil {
+		if err := r.upsertWorkloadRecommendation(ctx, it, policyName, res.recs, res.traces, metav1.Now()); err != nil {
 			EmitWLRRefresh(ns, kind, WLRRefreshError)
 			return err
 		}

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -52,8 +51,10 @@ func (o outcome) stored() (sustainv1alpha1.RecommendationOutcome, bool) {
 type identityResult struct {
 	item    computeItem
 	outcome outcome
-	// recs is the identity's Recommendation, set only for outcomeRecommended.
-	recs map[string]workload.ContainerRecommendation
+	// recs is the identity's Recommendation and traces how it was derived,
+	// both set only for outcomeRecommended.
+	recs   map[string]workload.ContainerRecommendation
+	traces map[string]sustainv1alpha1.ContainerTrace
 	// inputs is what the identity was computed from, nil unless fetched.
 	inputs *recommender.WorkloadInputs
 	// err is why the inputs are unavailable, set only for outcomeFetchFailed.
@@ -170,74 +171,23 @@ func (r *PolicyReconciler) computeIdentity(
 	default:
 		res.outcome = outcomeRecommended
 		res.recs = out.Recs
-		emitContainerComputation(id, rs.AutoscalerCoordination, autoInfo, out.Containers)
+		res.traces = out.Traces()
+		emitContainerComputation(id, out.Containers)
 	}
 }
 
-// emitContainerComputation records how each container's recommendation was
-// computed: the OOM floor and how long after a live kill it responded, and the
-// autoscaler coordination factors.
-func emitContainerComputation(
-	id promclient.WorkloadIdentity,
-	coordCfg sustainv1alpha1.AutoscalerCoordination,
-	autoInfo autoscaler.Info,
-	containers map[string]recommender.ContainerRecResult,
-) {
+// emitContainerComputation counts the containers whose memory request the OOM
+// floor determined, and how long after a live kill each responded.
+func emitContainerComputation(id promclient.WorkloadIdentity, containers map[string]recommender.ContainerRecResult) {
 	ns, kind, name := id.Namespace, id.OwnerKind, id.OwnerName
 	for container, res := range containers {
-		if res.MemFloorApplied {
-			oomFloorApplied.WithLabelValues(ns, kind, name, container).Inc()
-			if !res.OOM.LiveEventAt.IsZero() {
-				EmitOOMReactionLatency(ns, kind, name, time.Since(res.OOM.LiveEventAt).Seconds())
-			}
+		if mem := res.Trace.Memory; mem == nil || mem.OOMFloor == nil || !mem.OOMFloor.Determined {
+			continue
 		}
-		emitCoordinationFactors(ns, kind, name, coordCfg, autoInfo, res.Base, res.Rec)
-	}
-}
-
-// factorRatio returns adjusted/baseline as a float64. Returns 1.0 (no-op
-// signal) when either side is nil or the baseline is zero, so the metric
-// never emits NaN/Inf.
-func factorRatio(adjusted, baseline *resource.Quantity) float64 {
-	if adjusted == nil || baseline == nil || baseline.IsZero() {
-		return 1.0
-	}
-	return float64(adjusted.MilliValue()) / float64(baseline.MilliValue())
-}
-
-// emitCoordinationFactors records overhead and (CPU only) replica multipliers
-// applied by ApplyCoordination, decomposed for dashboard rendering. No-op when
-// coordination is disabled or no autoscaler targets the workload.
-func emitCoordinationFactors(
-	namespace, ownerKind, ownerName string,
-	cfg sustainv1alpha1.AutoscalerCoordination,
-	info autoscaler.Info,
-	base, adjusted workload.ContainerRecommendation,
-) {
-	if !cfg.Enabled || info.Kind == autoscaler.KindNone {
-		return
-	}
-
-	// CPU: overhead-only ratio computed independently so we can split it from
-	// the replica correction in the same metric family. Total = overhead × replica.
-	if base.CPURequest != nil {
-		cpuOverhead := recommender.ApplyOverhead(base.CPURequest, info.ConfiguredTargets[autoscaler.ResourceCPU])
-		overheadFactor := factorRatio(cpuOverhead, base.CPURequest)
-		EmitCoordinationFactor(namespace, ownerKind, ownerName, autoscaler.ResourceCPU, "overhead", overheadFactor)
-		if cfg.ReplicaBudgetAnchor != nil {
-			totalFactor := factorRatio(adjusted.CPURequest, base.CPURequest)
-			replicaFactor := 1.0
-			if overheadFactor != 0 {
-				replicaFactor = totalFactor / overheadFactor
-			}
-			EmitCoordinationFactor(namespace, ownerKind, ownerName, autoscaler.ResourceCPU, "replica", replicaFactor)
+		oomFloorApplied.WithLabelValues(ns, kind, name, container).Inc()
+		if !res.OOM.LiveEventAt.IsZero() {
+			EmitOOMReactionLatency(ns, kind, name, time.Since(res.OOM.LiveEventAt).Seconds())
 		}
-	}
-
-	// Memory: overhead only.
-	if base.MemoryRequest != nil {
-		EmitCoordinationFactor(namespace, ownerKind, ownerName, autoscaler.ResourceMemory, "overhead",
-			factorRatio(adjusted.MemoryRequest, base.MemoryRequest))
 	}
 }
 

@@ -65,7 +65,7 @@ func TestUpsertWorkloadRecommendation_UsesIdentityOverride(t *testing.T) {
 	recs := map[string]workload.ContainerRecommendation{
 		"app": {CPURequest: qtyp("100m"), MemoryRequest: qtyp("64Mi")},
 	}
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(target), "my-policy", recs, metav1.Now())
+	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(target), "my-policy", recs, nil, metav1.Now())
 
 	var wlr sustainv1alpha1.WorkloadRecommendation
 	key := types.NamespacedName{Namespace: "prod", Name: "deployment-app"}
@@ -194,6 +194,7 @@ func TestUpsertWorkloadRecommendation_CreatesObjectOnFirstCall(t *testing.T) {
 		map[string]workload.ContainerRecommendation{
 			"app": {CPURequest: &cpu, MemoryRequest: &mem},
 		},
+		nil,
 		now,
 	)
 
@@ -237,6 +238,7 @@ func TestUpsertWorkloadRecommendation_PersistsRemoveFlags(t *testing.T) {
 				RemoveMemoryLimit: true,
 			},
 		},
+		nil,
 		metav1.Now(),
 	)
 
@@ -264,14 +266,14 @@ func TestUpsertWorkloadRecommendation_NoOpWhenUnchanged(t *testing.T) {
 		"app": {CPURequest: &cpu, MemoryRequest: &mem},
 	}
 
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, metav1.Now())
+	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, nil, metav1.Now())
 	var first sustainv1alpha1.WorkloadRecommendation
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &first); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	rvBefore := first.ResourceVersion
 
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, metav1.Now())
+	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, nil, metav1.Now())
 	var second sustainv1alpha1.WorkloadRecommendation
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &second); err != nil {
 		t.Fatalf("get: %v", err)
@@ -292,10 +294,10 @@ func TestUpsertWorkloadRecommendation_RefreshesStaleObservedAt(t *testing.T) {
 	recs := map[string]workload.ContainerRecommendation{"app": {CPURequest: &cpu}}
 
 	past := metav1.NewTime(time.Now().Add(-2 * wlrRefreshInterval))
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, past)
+	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, nil, past)
 
 	now := metav1.Now()
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, now)
+	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, nil, now)
 
 	var got sustainv1alpha1.WorkloadRecommendation
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &got); err != nil {
@@ -313,10 +315,10 @@ func TestUpsertWorkloadRecommendation_UpdatesOnChange(t *testing.T) {
 	tgt := &workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}
 
 	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p",
-		map[string]workload.ContainerRecommendation{"app": {CPURequest: &cpu1}}, metav1.Now())
+		map[string]workload.ContainerRecommendation{"app": {CPURequest: &cpu1}}, nil, metav1.Now())
 
 	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p",
-		map[string]workload.ContainerRecommendation{"app": {CPURequest: &cpu2}}, metav1.Now())
+		map[string]workload.ContainerRecommendation{"app": {CPURequest: &cpu2}}, nil, metav1.Now())
 
 	var got sustainv1alpha1.WorkloadRecommendation
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &got); err != nil {
@@ -584,7 +586,7 @@ func TestUpsertWorkloadRecommendation_SnapshotsObservedResources(t *testing.T) {
 		InitContainers: []corev1.Container{{Name: "init-db"}},
 	}
 	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(target), "p",
-		map[string]workload.ContainerRecommendation{"main": {CPURequest: qtyp("250m")}}, metav1.Now())
+		map[string]workload.ContainerRecommendation{"main": {CPURequest: qtyp("250m")}}, nil, metav1.Now())
 
 	var wlr sustainv1alpha1.WorkloadRecommendation
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "airflow", Name: "pod-etl"}, &wlr); err != nil {
@@ -628,10 +630,10 @@ func TestUpsertWorkloadRecommendation_RewritesWhenObservedResourcesChange(t *tes
 			},
 		}},
 	}
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(target), "p", recs, metav1.Now())
+	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(target), "p", recs, nil, metav1.Now())
 
 	target.Containers[0].Resources.Requests[corev1.ResourceCPU] = resource.MustParse("750m")
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(target), "p", recs, metav1.Now())
+	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(target), "p", recs, nil, metav1.Now())
 
 	var wlr sustainv1alpha1.WorkloadRecommendation
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &wlr); err != nil {

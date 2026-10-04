@@ -3,7 +3,6 @@ package controller
 import (
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 	corev1 "k8s.io/api/core/v1"
@@ -141,17 +140,6 @@ func TestEmitAutoscalerPresentNoneClearsSeries(t *testing.T) {
 	series := seriesForWorkload(t, "k8s_sustain_autoscaler_present", ns, kind, name)
 	if len(series) != 0 {
 		t.Errorf("expected series cleared on None, got %d", len(series))
-	}
-}
-
-func TestEmitCoordinationFactor(t *testing.T) {
-	EmitCoordinationFactor("ns", "Deployment", "w", "cpu", "overhead", 1.57)
-	val := testutil.ToFloat64(coordinationFactor.With(prometheus.Labels{
-		"namespace": "ns", "owner_kind": "Deployment", "owner_name": "w",
-		"resource": "cpu", "kind": "overhead",
-	}))
-	if got, want := val, 1.57; got < want-1e-6 || got > want+1e-6 {
-		t.Errorf("coordination factor: got %v, want %v", got, want)
 	}
 }
 

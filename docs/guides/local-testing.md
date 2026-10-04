@@ -436,7 +436,9 @@ container, Kubernetes restarts it, and the cycle repeats.
   `max(kernel high-water peak, OOM-time cgroup limit × 1.20)` plus headroom —
   i.e. ≥ ~115Mi before headroom.
 - `k8s_sustain_oom_floor_applied_total{owner_name="stress"}` increments on
-  each reconcile while the OOM is within the 24 h window.
+  each reconcile while the OOM is within the 24 h window, and the
+  `WorkloadRecommendation`'s `status.trace.stress.memory.oomFloor` shows the
+  floor with `determined: true`.
 
 ```bash
 kubectl get wlrec -n scenario-oom-kill deployment-stress -o yaml

@@ -35,6 +35,15 @@ func TestStatusEquivalent_DistinguishesSameValuesFromDifferentOutcomes(t *testin
 	if statusEquivalent(a, c) {
 		t.Error("different Outcome → should NOT be equivalent")
 	}
+
+	percentile := resource.MustParse("249900u")
+	d := a
+	d.Trace = map[string]sustainv1alpha1.ContainerTrace{"app": {CPU: &sustainv1alpha1.ResourceTrace{
+		Percentile: &percentile, WithHeadroom: cpu, Clamped: cpu,
+	}}}
+	if !statusEquivalent(a, d) {
+		t.Error("differ only by Trace → should be equivalent")
+	}
 }
 
 func TestContainersFromObserved_SplitsAndSorts(t *testing.T) {
@@ -68,7 +77,7 @@ func TestRecsFromStatus_RoundTripsBuildStatus(t *testing.T) {
 	in := map[string]workload.ContainerRecommendation{
 		"app": {CPURequest: &cpu, MemoryRequest: &mem, MemoryLimit: &mem, RemoveCPULimit: true},
 	}
-	got := RecsFromStatus(buildStatus(in, nil, metav1.Now()))
+	got := RecsFromStatus(buildStatus(in, nil, nil, metav1.Now()))
 	if !reflect.DeepEqual(got, in) {
 		t.Fatalf("round trip = %+v, want %+v", got, in)
 	}

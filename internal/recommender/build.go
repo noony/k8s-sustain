@@ -81,21 +81,19 @@ type ContainerInputs struct {
 	CoordCfg   sustainv1alpha1.AutoscalerCoordination
 }
 
-// ContainerRecResult is the output of ComputeContainerRec. Base holds the
-// pre-coordination recommendation so the caller can emit coordination-factor
-// metrics by comparing Base vs Rec; OOM is the signal the memory request was
-// floored against.
+// ContainerRecResult is the output of ComputeContainerRec: the container's
+// recommendation, the trace of how it was derived, and the OOM signal its
+// memory request was floored against.
 type ContainerRecResult struct {
-	Rec             workload.ContainerRecommendation
-	Base            workload.ContainerRecommendation
-	OOM             OOMSignal
-	HasData         bool
-	MemFloorApplied bool
+	Rec     workload.ContainerRecommendation
+	Trace   sustainv1alpha1.ContainerTrace
+	OOM     OOMSignal
+	HasData bool
 }
 
-// ComputeContainerRec runs the shared per-container compute pipeline: CPU
-// request, memory request (with optional OOM floor), autoscaler coordination,
-// and limit derivation. HasData=false means neither CPU nor memory had enough
+// ComputeContainerRec runs the shared per-container compute pipeline, each
+// resource through its stages (see sustainv1alpha1.ResourceTrace), then
+// derives the limits. HasData=false means neither CPU nor memory had enough
 // signal to emit a recommendation — the caller should skip the container.
 //
 // Memory is emitted when EITHER usage samples are present OR a recent/live
@@ -105,51 +103,31 @@ type ContainerRecResult struct {
 // no anchor at all emits nothing: the only possible output would be the hard
 // 1Mi minimum, which would guarantee the next OOM.
 func ComputeContainerRec(in ContainerInputs) ContainerRecResult {
-	var rec workload.ContainerRecommendation
-	hasData := false
-	floorApplied := false
-
-	if in.HasCPU {
-		rec.CPURequest = ComputeCPURequest(in.CPUPerPod, in.RsCfg.CPU.Requests)
-		hasData = true
-	}
-
-	recent := in.OOM.Recent || !in.OOM.LiveEventAt.IsZero()
-	emitMem := in.HasMemUsage || (recent && (in.HasOOMPeak || in.OOM.OOMTimeLimitBytes > 0))
-	if emitMem {
-		var perPod float64
-		if in.HasMemUsage {
-			perPod = in.MemPerPod
-		}
-		rec.MemoryRequest, floorApplied = ComputeMemoryRequestWithOOMFloorReport(perPod, in.OOM, in.RsCfg.Memory.Requests)
-		hasData = true
-	}
-
-	if !hasData {
+	emitMem := in.HasMemUsage || (in.OOM.recent() && (in.HasOOMPeak || in.OOM.OOMTimeLimitBytes > 0))
+	if !in.HasCPU && !emitMem {
 		return ContainerRecResult{}
 	}
 
-	base := rec
-	rec = ApplyCoordination(rec, in.CoordCfg, in.AutoInfo, in.RsCfg)
-
-	if rec.CPURequest != nil {
-		lr := ComputeLimit(rec.CPURequest, in.Container.Resources.Requests.Cpu(), in.Container.Resources.Limits.Cpu(), in.RsCfg.CPU.Limits)
-		rec.CPULimit = lr.Quantity
-		rec.RemoveCPULimit = lr.Remove
+	res := ContainerRecResult{OOM: in.OOM, HasData: true}
+	if in.HasCPU {
+		res.Trace.CPU = cpuTrace(in)
 	}
-	if rec.MemoryRequest != nil {
-		lr := ComputeLimit(rec.MemoryRequest, in.Container.Resources.Requests.Memory(), in.Container.Resources.Limits.Memory(), in.RsCfg.Memory.Limits)
-		rec.MemoryLimit = lr.Quantity
-		rec.RemoveMemoryLimit = lr.Remove
+	if emitMem {
+		res.Trace.Memory = memoryTrace(in)
 	}
 
-	return ContainerRecResult{
-		Rec:             rec,
-		Base:            base,
-		OOM:             in.OOM,
-		HasData:         true,
-		MemFloorApplied: floorApplied,
+	resources := in.Container.Resources
+	if t := res.Trace.CPU; t != nil {
+		var lr LimitResult
+		res.Rec.CPURequest, lr = finish(t, resources.Requests.Cpu(), resources.Limits.Cpu(), in.RsCfg.CPU.Limits)
+		res.Rec.CPULimit, res.Rec.RemoveCPULimit = lr.Quantity, lr.Remove
 	}
+	if t := res.Trace.Memory; t != nil {
+		var lr LimitResult
+		res.Rec.MemoryRequest, lr = finish(t, resources.Requests.Memory(), resources.Limits.Memory(), in.RsCfg.Memory.Limits)
+		res.Rec.MemoryLimit, res.Rec.RemoveMemoryLimit = lr.Quantity, lr.Remove
+	}
+	return res
 }
 
 // Outcome says whether a Result is a Recommendation, and why not.
@@ -197,6 +175,15 @@ type Result struct {
 	Recs map[string]workload.ContainerRecommendation
 	// Containers details how each container in Recs was computed.
 	Containers map[string]ContainerRecResult
+}
+
+// Traces returns the trace of each container in Recs.
+func (r Result) Traces() map[string]sustainv1alpha1.ContainerTrace {
+	out := make(map[string]sustainv1alpha1.ContainerTrace, len(r.Containers))
+	for name, c := range r.Containers {
+		out[name] = c.Trace
+	}
+	return out
 }
 
 // Compute is the recommendation algorithm: the age gate, then the

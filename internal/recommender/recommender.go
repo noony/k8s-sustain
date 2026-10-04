@@ -7,6 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/autoscaler"
 )
 
 const (
@@ -72,43 +73,107 @@ type LimitResult struct {
 	Remove bool
 }
 
-// ComputeCPURequest applies headroom and min/max clamping to a raw CPU percentile
-// value (cores). Returns nil when KeepRequest is true.
-func ComputeCPURequest(rawCores float64, cfg sustainv1alpha1.ResourceRequestsConfig) *resource.Quantity {
-	if cfg.KeepRequest {
-		return nil
-	}
-
-	milliCores := rawCores * 1000
-	if cfg.Headroom != nil && *cfg.Headroom > 0 {
-		milliCores *= 1.0 + float64(*cfg.Headroom)/100.0
-	}
-
-	m := max(int64(math.Ceil(milliCores)), int64(minCPUMillicores))
-	qty := resource.NewMilliQuantity(m, resource.DecimalSI)
-	clampQuantity(qty, cfg.MinAllowed, cfg.MaxAllowed)
-	return qty
+// cpuQuantity renders a CPU percentile (cores) at nanocore precision, so the
+// trace shows the value headroom was applied to rather than a rounded one.
+func cpuQuantity(cores float64) *resource.Quantity {
+	return resource.NewScaledQuantity(int64(math.Round(cores*1e9)), resource.Nano)
 }
 
-// ComputeMemoryRequest applies headroom and min/max clamping to a raw memory
-// percentile value (bytes). Returns nil when KeepRequest is true.
-// Arithmetic is done in integer bytes to avoid float64 drift, then rounded up
-// to the nearest MiB for clean Kubernetes quantity values.
-func ComputeMemoryRequest(rawBytes float64, cfg sustainv1alpha1.ResourceRequestsConfig) *resource.Quantity {
+// memoryQuantity renders a memory value (bytes) in whole bytes, as
+// memoryWithHeadroom reads it.
+func memoryQuantity(b float64) *resource.Quantity {
+	return resource.NewQuantity(int64(b), resource.BinarySI)
+}
+
+// cpuWithHeadroom applies headroom to a CPU value (cores), rounding up to a
+// whole millicore and raising it to the hard minimum.
+func cpuWithHeadroom(rawCores float64, headroom *int32) resource.Quantity {
+	milliCores := rawCores * 1000
+	if headroom != nil && *headroom > 0 {
+		milliCores *= 1.0 + float64(*headroom)/100.0
+	}
+	m := max(int64(math.Ceil(milliCores)), int64(minCPUMillicores))
+	return *resource.NewMilliQuantity(m, resource.DecimalSI)
+}
+
+// memoryWithHeadroom applies headroom to a memory value (bytes). Arithmetic is
+// done in integer bytes to avoid float64 drift, then rounded up to the nearest
+// MiB for clean Kubernetes quantity values.
+func memoryWithHeadroom(rawBytes float64, headroom *int32) resource.Quantity {
+	// Truncate to integer bytes first; headroom provides the safety margin.
+	b := int64(rawBytes)
+	if headroom != nil && *headroom > 0 {
+		b = b * int64(100+*headroom) / 100
+	}
+	mib := max((b+mebibyte-1)/mebibyte, int64(minMemoryMiB))
+	return *resource.NewQuantity(mib*mebibyte, resource.BinarySI)
+}
+
+// cpuTrace runs a container's CPU percentile through headroom, the min/max
+// clamp and autoscaler coordination. Nil when the Policy keeps the request.
+func cpuTrace(in ContainerInputs) *sustainv1alpha1.ResourceTrace {
+	cfg := in.RsCfg.CPU.Requests
 	if cfg.KeepRequest {
 		return nil
 	}
-
-	// Truncate to integer bytes first; headroom provides the safety margin.
-	b := int64(rawBytes)
-	if cfg.Headroom != nil && *cfg.Headroom > 0 {
-		b = b * int64(100+*cfg.Headroom) / 100
+	t := &sustainv1alpha1.ResourceTrace{
+		Percentile:   cpuQuantity(in.CPUPerPod),
+		WithHeadroom: cpuWithHeadroom(in.CPUPerPod, cfg.Headroom),
 	}
+	t.Clamped = clamp(t.WithHeadroom, cfg.MinAllowed, cfg.MaxAllowed)
+	t.Coordination = coordinate(t.Clamped, autoscaler.ResourceCPU, in.CoordCfg, in.AutoInfo, cfg)
+	return t
+}
 
-	mib := max((b+mebibyte-1)/mebibyte, int64(minMemoryMiB))
-	qty := resource.NewQuantity(mib*mebibyte, resource.BinarySI)
-	clampQuantity(qty, cfg.MinAllowed, cfg.MaxAllowed)
-	return qty
+// memoryTrace runs a container's memory percentile through the OOM floor,
+// headroom, the min/max clamp and autoscaler coordination. Nil when the Policy
+// keeps the request.
+func memoryTrace(in ContainerInputs) *sustainv1alpha1.ResourceTrace {
+	cfg := in.RsCfg.Memory.Requests
+	if cfg.KeepRequest {
+		return nil
+	}
+	t := &sustainv1alpha1.ResourceTrace{}
+	var effective float64
+	if in.HasMemUsage {
+		effective = in.MemPerPod
+		t.Percentile = memoryQuantity(in.MemPerPod)
+	}
+	floorWins := false
+	if in.OOM.recent() {
+		floor := in.OOM.floor()
+		t.OOMFloor = &sustainv1alpha1.OOMFloorTrace{Value: *memoryQuantity(floor)}
+		if floor > effective {
+			effective, floorWins = floor, true
+		}
+	}
+	t.WithHeadroom = memoryWithHeadroom(effective, cfg.Headroom)
+	t.Clamped = clamp(t.WithHeadroom, cfg.MinAllowed, cfg.MaxAllowed)
+	t.Coordination = coordinate(t.Clamped, autoscaler.ResourceMemory, in.CoordCfg, in.AutoInfo, cfg)
+	// Judged on the final request: a clamp on either side of coordination
+	// means an operator bound, not the floor, set it.
+	if floorWins {
+		t.OOMFloor.Determined = t.Clamped.Cmp(t.WithHeadroom) == 0 &&
+			(t.Coordination == nil || t.Coordination.Value.Cmp(t.Coordination.Scaled) == 0)
+	}
+	return t
+}
+
+// finish derives the request a trace arrives at and the limit from it, and
+// records the limit in the trace.
+func finish(t *sustainv1alpha1.ResourceTrace, currentRequest, currentLimit *resource.Quantity, cfg sustainv1alpha1.ResourceLimitsConfig) (*resource.Quantity, LimitResult) {
+	final := t.Clamped
+	if t.Coordination != nil {
+		final = t.Coordination.Value
+	}
+	request := final.DeepCopy()
+	lr := ComputeLimit(&request, currentRequest, currentLimit, cfg)
+	if lr.Quantity != nil {
+		limit := lr.Quantity.DeepCopy()
+		t.Limit = &limit
+	}
+	t.RemoveLimit = lr.Remove
+	return &request, lr
 }
 
 // OOMSignal carries an OOM-aware floor for memory recommendations. Recent=true
@@ -141,55 +206,20 @@ type OOMSignal struct {
 	LiveEventAt       time.Time
 }
 
-// ComputeMemoryRequestWithOOM is ComputeMemoryRequest with an OOM-aware floor.
-// When signal.Recent is true, the result is floored at PeakBytes (with
-// headroom applied once). MinAllowed/MaxAllowed clamps still apply last so
-// user overrides win.
-func ComputeMemoryRequestWithOOM(rawBytes float64, signal OOMSignal, cfg sustainv1alpha1.ResourceRequestsConfig) *resource.Quantity {
-	q, _ := ComputeMemoryRequestWithOOMFloorReport(rawBytes, signal, cfg)
-	return q
+// recent reports whether the floor applies: an OOM within the lookback window
+// or a kill the live watcher saw.
+func (s OOMSignal) recent() bool {
+	return s.Recent || !s.LiveEventAt.IsZero()
 }
 
-// ComputeMemoryRequestWithOOMFloorReport is the same as ComputeMemoryRequestWithOOM
-// but also reports whether the OOM floor produced the final value. Used by the
-// controller to emit a metric when the floor is applied.
-//
-// floorApplied is true only when the floor actually drove the final returned
-// quantity: floor must beat the raw percentile AND no MinAllowed/MaxAllowed
-// clamp may have replaced the floor's (headroomed, MiB-rounded) value. If a
-// clamp moved the result (MaxAllowed below the floor, or MinAllowed above
-// it), the user override produced the value and floorApplied is false.
-func ComputeMemoryRequestWithOOMFloorReport(rawBytes float64, signal OOMSignal, cfg sustainv1alpha1.ResourceRequestsConfig) (*resource.Quantity, bool) {
-	if cfg.KeepRequest {
-		return nil, false
+// floor is max(PeakBytes, OOMTimeLimitBytes*BumpFactor); a BumpFactor of 1 or
+// less disables the OOM-time-limit anchor.
+func (s OOMSignal) floor() float64 {
+	floor := s.PeakBytes
+	if s.BumpFactor > 1 && s.OOMTimeLimitBytes > 0 {
+		floor = max(floor, s.OOMTimeLimitBytes*s.BumpFactor)
 	}
-	effective := rawBytes
-	floorWins := false
-	recent := signal.Recent || !signal.LiveEventAt.IsZero()
-	if recent {
-		floor := signal.PeakBytes
-		if signal.BumpFactor > 1 && signal.OOMTimeLimitBytes > 0 {
-			if bumped := signal.OOMTimeLimitBytes * signal.BumpFactor; bumped > floor {
-				floor = bumped
-			}
-		}
-		if floor > effective {
-			effective = floor
-			floorWins = true
-		}
-	}
-	finalQty := ComputeMemoryRequest(effective, cfg)
-	if !floorWins {
-		return finalQty, false
-	}
-	// Floor beat the raw percentile, but a MinAllowed/MaxAllowed clamp may
-	// still have replaced the floor-derived value. Recompute the unclamped
-	// floor-with-headroom quantity and only report floorApplied when the
-	// final quantity is exactly that value — anything else means a user
-	// override drove the result.
-	floorQty := ComputeMemoryRequest(effective, sustainv1alpha1.ResourceRequestsConfig{Headroom: cfg.Headroom})
-	floorApplied := finalQty != nil && floorQty != nil && finalQty.Cmp(*floorQty) == 0
-	return finalQty, floorApplied
+	return floor
 }
 
 // ComputeLimit derives a resource limit from the computed request and the limit
@@ -233,11 +263,13 @@ func scaleByRatio(request *resource.Quantity, ratio float64) *resource.Quantity 
 	)
 }
 
-func clampQuantity(qty *resource.Quantity, min, max *resource.Quantity) {
-	if min != nil && qty.Cmp(*min) < 0 {
-		*qty = min.DeepCopy()
+// clamp raises q to minQ and caps it at maxQ, maxQ winning a conflict.
+func clamp(q resource.Quantity, minQ, maxQ *resource.Quantity) resource.Quantity {
+	if minQ != nil && q.Cmp(*minQ) < 0 {
+		q = minQ.DeepCopy()
 	}
-	if max != nil && qty.Cmp(*max) > 0 {
-		*qty = max.DeepCopy()
+	if maxQ != nil && q.Cmp(*maxQ) > 0 {
+		q = maxQ.DeepCopy()
 	}
+	return q
 }

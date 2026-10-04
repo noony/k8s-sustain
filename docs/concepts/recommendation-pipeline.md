@@ -43,14 +43,18 @@ The recommender runs each container through the following stages, in order:
     - Losing Prometheus data (retention loss, reinstall) while the cache object survives lets an identity pass on only minutes of samples.
 2. **Keep request.** When `requests.keepRequest: true` is set for a resource, its request and limit are left unchanged and the remaining stages are skipped for that resource.
 3. **Query.** Read the percentile-of-usage from a recording rule over the configured window (`spec.rightSizing.resourcesConfigs.<cpu|memory>.window`). The signal is a genuine per-pod percentile: `quantile_over_time(p, …[window])` over the `k8s_sustain:workload_max_pod_<cpu|memory>` recording rule, which at each instant is the **busiest replica** (`max by` across pods, per container). The query reads that rule as a plain range vector at the rule's own 1m evaluation interval; raising that interval to cut Prometheus load would coarsen every recommendation percentile. Collapsing across pods in the recording rule (rather than at query time) keeps this scan cheap — one series per workload×container — and immune to pod-name churn, since dead pods drop out of the `max`. Because the percentile already covers the hottest replica, there is **no replica division and no separate per-pod floor**.
-4. **OOM floor (memory only, per container).** When THIS container OOM'd in the last 24 h (`k8s_sustain:workload_oom_24h` keeps the `container` label, so the recency check is per-container), its memory recommendation is floored at `max(peak_working_set_24h, oom_time_limit × 1.20)` before headroom. The floor never applies to innocent siblings: if container A OOMs, a sidecar B in the same pod keeps its pure percentile recommendation — even though the (non-OOM-scoped) peak rule reports a 24h high-water mark for B — and B gets no memory recommendation via the OOM bypass if it has no usage data. Two anchors are combined so the floor degrades gracefully: the peak working-set is precise when cAdvisor observes it, while the OOM-time limit bump is the safety net when peak is unreliable (cgroup v2 / sub-scrape OOM kills can hide the real high-water). The bump factor (`1.20`, matching VPA's `MemoryBumpUpRatio`) lifts the recommendation above the limit the kernel killed at, breaking the OOM loop. The OOM-time-limit anchor only refreshes when a NEW OOM event fires, so once the workload fits after a bump, the recorded limit stays at its pre-bump value and stops growing. The metric `k8s_sustain_oom_floor_applied_total{container}` increments when this floor wins.
+4. **OOM floor (memory only, per container).** When THIS container OOM'd in the last 24 h (`k8s_sustain:workload_oom_24h` keeps the `container` label, so the recency check is per-container), its memory recommendation is floored at `max(peak_working_set_24h, oom_time_limit × 1.20)` before headroom. The floor never applies to innocent siblings: if container A OOMs, a sidecar B in the same pod keeps its pure percentile recommendation — even though the (non-OOM-scoped) peak rule reports a 24h high-water mark for B — and B gets no memory recommendation via the OOM bypass if it has no usage data. Two anchors are combined so the floor degrades gracefully: the peak working-set is precise when cAdvisor observes it, while the OOM-time limit bump is the safety net when peak is unreliable (cgroup v2 / sub-scrape OOM kills can hide the real high-water). The bump factor (`1.20`, matching VPA's `MemoryBumpUpRatio`) lifts the recommendation above the limit the kernel killed at, breaking the OOM loop. The OOM-time-limit anchor only refreshes when a NEW OOM event fires, so once the workload fits after a bump, the recorded limit stays at its pre-bump value and stops growing. The metric `k8s_sustain_oom_floor_applied_total{container}` increments when the floor determined the final request: it beat the percentile and no min/max clamp, before or after coordination, replaced the value (the trace's `oomFloor.determined`).
 
     The floor also fires when the in-memory [Pod OOM watcher](architecture.md#pod-oom-watcher) reports a fresh kill for this container, before the recording rule surfaces it. Its anchor is the memory limit the kubelet had actually applied at the kill (`ContainerStatus.Resources`), combined with the Prometheus anchor by `max()`: Prometheus survives a controller restart but lags a cycle behind a resize, while the live record is exact but in-memory only. Reading the *applied* limit rather than the spec keeps the anchor from compounding on the pipeline's own previous output.
 5. **Headroom.** Multiply by `(1 + headroom/100)` to add a safety buffer.
 6. **Clamp.** Floor to `minAllowed`, cap at `maxAllowed` (when set). `maxAllowed` always wins, including over the OOM floor.
-7. **HPA overhead.** When `autoscalerCoordination.enabled` and the workload is targeted by an HPA or KEDA `ScaledObject` on `averageUtilization`, multiply by `(100 / hpa_target_pct) × 1.10`. The clamps from step 6 are re-applied so explicit policy caps survive coordination.
-8. **Replica-budget correction (CPU only).** When `autoscalerCoordination.replicaBudgetAnchor` is set, multiply CPU request by `clamp(current_replicas / target_replicas, 0.5, 2.0)`, where `target_replicas = round(min + anchor × (max - min))` — see [Autoscaler Coordination](autoscaler-coordination.md#replica-budget-correction-opt-in).
-9. **Limits derivation.** Apply the `limits` strategy (`keepLimit` / `keepLimitRequestRatio` / `equalsToRequest` / `noLimit` / `requestsLimitsRatio`).
+7. **Autoscaler coordination.** When `autoscalerCoordination.enabled` and the workload is targeted by an HPA or KEDA `ScaledObject`:
+    - **Overhead.** Multiply by `(100 / hpa_target_pct) × 1.10`, or by 1 for a resource the autoscaler has no `averageUtilization` target on.
+    - **Replica-budget correction (CPU only).** When `autoscalerCoordination.replicaBudgetAnchor` is set, multiply the CPU request by `clamp(current_replicas / target_replicas, 0.5, 2.0)`, where `target_replicas = round(min + anchor × (max - min))` — see [Autoscaler Coordination](autoscaler-coordination.md#replica-budget-correction-opt-in).
+    - **Clamp again.** The clamps from step 6 are re-applied so explicit policy caps survive coordination.
+8. **Limits derivation.** Apply the `limits` strategy (`keepLimit` / `keepLimitRequestRatio` / `equalsToRequest` / `noLimit` / `requestsLimitsRatio`) to the final request.
+
+Every stage that runs is recorded in the identity's `WorkloadRecommendation` as the [trace](#trace).
 
 ## Diagram
 
@@ -62,7 +66,8 @@ flowchart LR
     H --> C[clamp min/max]
     C --> O[HPA overhead]
     O --> R[replica anchor<br/>CPU only]
-    R --> L[derive limits]
+    R --> C2[clamp min/max again]
+    C2 --> L[derive limits]
     L --> OUT[ContainerRecommendation]
 ```
 
@@ -91,7 +96,29 @@ spec:
           keepLimitRequestRatio: true
 ```
 
-Per-pod CPU p95 over 168h: `100m`. Headroom 10% → `110m`. Within clamp `[50m, 4000m]` → `110m`. HPA targets CPU at 70% utilization → overhead factor `(100 / 70) × 1.10 ≈ 1.57` → `173m`. No `replicaBudgetAnchor` → unchanged. Existing limit was 2× request → new limit `346m`.
+Per-pod CPU p95 over 168h: `100m`. Headroom 10% → `110m`. Within clamp `[50m, 4000m]` → `110m`. HPA targets CPU at 70% utilization → overhead factor `(100 / 70) × 1.10 ≈ 1.57` → `173m`. No `replicaBudgetAnchor` → unchanged. Within the clamp again → `173m`. Existing limit was 2× request → new limit `346m`.
+
+The stored trace of that container reads:
+
+```yaml
+trace:
+  app:
+    cpu:
+      percentile: 100m
+      withHeadroom: 110m
+      clamped: 110m
+      coordination:
+        overheadFactor: 1.5714285714285714
+        scaled: 173m
+        value: 173m
+      limit: 346m
+```
+
+## Trace
+
+The trace is the record of how a Recommendation was derived. `recommender.Compute` returns it alongside the values, for every container: per resource, the value after each stage that actually ran (percentile, OOM floor, headroom, clamp, coordination with its overhead and replica factors, limit). The controller stores it in `status.trace` of the identity's `WorkloadRecommendation` together with the values, never on its own (see [Schema](workload-recommendations.md#schema)), and reads it for its own metrics, so nothing re-derives a stage after the fact. The dashboard shows it per container on the workload detail page and reads the **Coordinated** factors of its list rows from it.
+
+A Simulation computes a trace too, but the dashboard only shows the stored one: what explains the applied values is what the controller stored.
 
 ## Choosing a percentile
 

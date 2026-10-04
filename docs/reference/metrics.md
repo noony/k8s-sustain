@@ -49,7 +49,7 @@ These four gauges are emitted per member object: `owner_kind` and `owner_name` a
 | `k8s_sustain_oom_cache_entries`             | gauge   | — |
 
 - `recommendation_skipped_total` — recommendations not emitted, by `reason`. `workload_too_young`: the identity is younger than the 10-minute [workload-age gate](../concepts/recommendation-pipeline.md#stages).
-- `oom_floor_applied_total` — memory recommendations raised above the percentile by the OOM floor (`max(peak_24h, oom_time_limit × 1.20)` plus headroom) after an OOM in the last 24h.
+- `oom_floor_applied_total` — memory recommendations whose final request the OOM floor (`max(peak_24h, oom_time_limit × 1.20)` plus headroom, after an OOM in the last 24h) determined: it beat the percentile and no min/max clamp, before or after autoscaler coordination, replaced it. Matches `oomFloor.determined` in the [trace](../concepts/recommendation-pipeline.md#trace).
 - `oom_observed_total`, `oom_reaction_latency_seconds`, `oom_cache_entries` — from the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher): deduped OOM kills, delay from `TerminatedAt` to the responding recommendation, and current cache size.
 
 ### Drift, retry, autoscaler
@@ -67,7 +67,6 @@ These four gauges are emitted per member object: `owner_kind` and `owner_name` a
 | `k8s_sustain_policy_batch_failures_total`  | counter | `policy` |
 | `k8s_sustain_autoscaler_present`        | gauge   | `namespace`, `owner_kind`, `owner_name`, `kind` |
 | `k8s_sustain_autoscaler_target_configured` | gauge | `namespace`, `owner_kind`, `owner_name`, `kind`, `resource` |
-| `k8s_sustain_coordination_factor`       | gauge   | `namespace`, `owner_kind`, `owner_name`, `resource`, `kind` |
 | `k8s_sustain_recycle_suppressed_total`  | counter | `namespace`, `owner_kind`, `owner_name`, `resource` |
 | `k8s_sustain_wlr_refresh_total`         | counter | `namespace`, `owner_kind`, `outcome` |
 | `k8s_sustain_group_autoscaler_mismatch_total` | counter | `namespace`, `owner_kind`, `owner_name` |
@@ -76,7 +75,7 @@ These four gauges are emitted per member object: `owner_kind` and `owner_name` a
 - `workload_retry_attempts` — failed steps summed over the identity's members.
 - `policy_workload_count` — live identities the policy governs: an owner-name or bare-pod group counts once however many members it has, a Departed identity does not count, and a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity counts for no policy.
 - `policy_blocked_count` — those identities that are Blocked, i.e. have a `workload_retry_state` series.
-- `autoscaler_present`, `autoscaler_target_configured` — the autoscaler the identity's recommendation is shaped against: the first member, in name order, that an HPA or KEDA ScaledObject targets.
+- `autoscaler_present`, `autoscaler_target_configured` — the autoscaler the identity's recommendation is shaped against: the first member, in name order, that an HPA or KEDA ScaledObject targets. The coordination factors it led to are not a metric: they are in the `WorkloadRecommendation`'s [trace](../concepts/recommendation-pipeline.md#trace).
 - `recycle_suppressed_total` — decreases held back by the policy's [`downsizeThreshold`](policy.md#cpudownsizethreshold-memorydownsizethreshold), once per resource per pod per reconcile, summed over the identity's members. Increases are never counted.
 - `group_autoscaler_mismatch_total` — once per reconcile for an [owner-name group](../guides/standalone-pods-and-grouping.md) whose members disagree on autoscaler presence or kind. The group's single recommendation follows the first sorted member's autoscaler, so any non-zero rate is a misconfiguration.
 
@@ -96,7 +95,7 @@ Every series with a `policy` label is removed by the Policy's `k8s.sustain.io/cl
 
 #### Series lifetime when an identity departs
 
-When no Policy governs an identity any more (its last member was deleted, opted out or left the selector, or its members now opt into different Policies and it is Conflicted), its `workload_pods`, `workload_stale_pods`, `workload_retry_state`, `workload_retry_attempts`, `autoscaler_present`, `autoscaler_target_configured`, `coordination_factor` and `recycle_suppressed_total` series are deleted in the next reconcile, so a departed identity never reports a frozen state.
+When no Policy governs an identity any more (its last member was deleted, opted out or left the selector, or its members now opt into different Policies and it is Conflicted), its `workload_pods`, `workload_stale_pods`, `workload_retry_state`, `workload_retry_attempts`, `autoscaler_present`, `autoscaler_target_configured` and `recycle_suppressed_total` series are deleted in the next reconcile, so a departed identity never reports a frozen state.
 
 #### `k8s_sustain_wlr_refresh_total`
 
@@ -122,13 +121,6 @@ Subset of `workload_pods` whose resources still differ from the recommendation b
 
 Configured `averageUtilization` (%) of the autoscaler shaping the identity's recommendation, per resource trigger.
 `kind` is `HPA` or `KEDA`; `resource` is `cpu` or `memory`.
-
-#### `k8s_sustain_coordination_factor`
-
-Multiplier applied by autoscaler coordination to the per-pod request.
-`kind` is `overhead` (`(100 / hpa_target_pct) × 1.10`) or `replica` (CPU-only
-replica-budget correction); `1.0` when nothing applied. See
-[Autoscaler Coordination](../concepts/autoscaler-coordination.md).
 
 ### Dashboard server
 

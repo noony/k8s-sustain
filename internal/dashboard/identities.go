@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 
@@ -156,21 +157,45 @@ func containerStatusFor(c corev1.Container, isInit bool) containerStatus {
 	}
 }
 
-// assembleCoordinationFactors maps {resource|kind: value} series onto a
-// coordinationFactors payload.
-func assembleCoordinationFactors(byLabels map[string]float64) *coordinationFactors {
-	out := &coordinationFactors{Enabled: true}
-	for k, v := range byLabels {
-		switch k {
-		case "cpu|overhead":
-			out.CPUOverhead = v
-		case "memory|overhead":
-			out.MemoryOverhead = v
-		case "cpu|replica":
-			out.CPUReplica = v
+// coordinationFactorsOf reads the autoscaler coordination factors from the
+// trace of the stored Recommendation; nil when coordination did not shape it.
+// The factors depend on the autoscaler, not the container, so the first
+// container by name that records one speaks for all.
+func coordinationFactorsOf(wlr *sustainv1alpha1.WorkloadRecommendation) *coordinationFactors {
+	if wlr == nil {
+		return nil
+	}
+	var out *coordinationFactors
+	for _, name := range slices.Sorted(maps.Keys(wlr.Status.Trace)) {
+		tr := wlr.Status.Trace[name]
+		if c := coordinationOf(tr.CPU); c != nil {
+			if out == nil {
+				out = &coordinationFactors{Enabled: true}
+			}
+			if out.CPUOverhead == 0 {
+				out.CPUOverhead = c.OverheadFactor
+				if c.ReplicaFactor != nil {
+					out.CPUReplica = *c.ReplicaFactor
+				}
+			}
+		}
+		if c := coordinationOf(tr.Memory); c != nil {
+			if out == nil {
+				out = &coordinationFactors{Enabled: true}
+			}
+			if out.MemoryOverhead == 0 {
+				out.MemoryOverhead = c.OverheadFactor
+			}
 		}
 	}
 	return out
+}
+
+func coordinationOf(t *sustainv1alpha1.ResourceTrace) *sustainv1alpha1.CoordinationTrace {
+	if t == nil {
+		return nil
+	}
+	return t.Coordination
 }
 
 // writeIdentityError answers a failed identity read: 404 for an unknown

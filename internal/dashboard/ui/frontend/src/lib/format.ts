@@ -1,5 +1,7 @@
 export function parseCPUQuantity(str: string): number {
   if (!str) return NaN
+  if (str.endsWith('n')) return parseInt(str) / 1e9
+  if (str.endsWith('u')) return parseInt(str) / 1e6
   if (str.endsWith('m')) return parseInt(str) / 1000
   return parseFloat(str)
 }

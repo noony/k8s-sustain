@@ -257,11 +257,42 @@ export interface RecommendationContainer {
 export type RecommendationOutcome =
   'Computed' | 'NoData' | 'TooYoung' | 'FetchFailed' | 'Conflicted'
 
+export interface OOMFloorTrace {
+  value: string
+  /** The floor, not the percentile or a min/max clamp, set the final request. */
+  determined?: boolean
+}
+
+export interface CoordinationTrace {
+  overheadFactor: number
+  replicaFactor?: number
+  scaled: string
+  value: string
+}
+
+/** One resource's request after each stage that ran, as Kubernetes quantities. */
+export interface ResourceTrace {
+  percentile?: string
+  oomFloor?: OOMFloorTrace
+  withHeadroom: string
+  clamped: string
+  coordination?: CoordinationTrace
+  limit?: string
+  removeLimit?: boolean
+}
+
+export interface ContainerTrace {
+  cpu?: ResourceTrace
+  memory?: ResourceTrace
+}
+
 /** The Recommendation an identity's WorkloadRecommendation stores; never recomputed by the dashboard. */
 export interface StoredRecommendation {
   outcome?: RecommendationOutcome
   observedAt?: string
   containers?: Record<string, RecommendationContainer>
+  /** How each container's values were derived, stage by stage. */
+  trace?: Record<string, ContainerTrace>
 }
 
 export interface SimulateRequest {

@@ -134,6 +134,16 @@ spec:
 
 ## Observability
 
-The metric `k8s_sustain_coordination_factor{namespace, owner_kind,
-owner_name, resource, kind}` records the multiplier applied. `kind` is
-`overhead` or `replica`. The value is `1.0` when no effect was applied.
+The factors applied are recorded per container in the identity's
+`WorkloadRecommendation`, in `status.trace.<container>.<cpu|memory>.coordination`:
+`overheadFactor`, `replicaFactor` (CPU, with a `replicaBudgetAnchor`), the
+request they `scaled` to and the `value` after the min/max clamp is applied
+again (see [Trace](recommendation-pipeline.md#trace)). The dashboard shows them
+as the **Coordinated** badge on the workload list and detail page.
+
+```bash
+kubectl get wlrec -n example deployment-web -o jsonpath='{.status.trace.app.cpu.coordination}'
+```
+
+`k8s_sustain_autoscaler_present` and `k8s_sustain_autoscaler_target_configured`
+report which autoscaler and targets were detected.

@@ -49,6 +49,8 @@ type storedRecommendation struct {
 	Outcome    sustainv1alpha1.RecommendationOutcome `json:"outcome,omitempty"`
 	ObservedAt string                                `json:"observedAt,omitempty"`
 	Containers map[string]simulationContainerResult  `json:"containers,omitempty"`
+	// Trace is how each container's values were derived, stage by stage.
+	Trace map[string]sustainv1alpha1.ContainerTrace `json:"trace,omitempty"`
 }
 
 func (s *Server) handleWorkloadDetail(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
@@ -69,6 +71,7 @@ func (s *Server) handleWorkloadDetail(w http.ResponseWriter, r *http.Request, na
 		PolicyName:          id.Policy,
 		ConflictingPolicies: conflictingPolicies(id),
 		Departed:            id.Departed(),
+		CoordinationFactors: coordinationFactorsOf(id.Recommendation),
 		Recommendation:      storedRecommendationOf(id.Recommendation),
 	}
 	if policy := s.governingPolicy(ctx, id); policy != nil {
@@ -87,7 +90,7 @@ func storedRecommendationOf(wlr *sustainv1alpha1.WorkloadRecommendation) *stored
 	if wlr == nil {
 		return nil
 	}
-	out := &storedRecommendation{Outcome: wlr.Status.Outcome}
+	out := &storedRecommendation{Outcome: wlr.Status.Outcome, Trace: wlr.Status.Trace}
 	if !wlr.Status.ObservedAt.IsZero() {
 		out.ObservedAt = wlr.Status.ObservedAt.UTC().Format(time.RFC3339)
 	}
@@ -126,7 +129,6 @@ func (s *Server) fillDetailHealth(ctx context.Context, resp *workloadDetailRespo
 	resp.OOM24h = h.OOM24h
 	resp.StalePods = h.StalePods
 	resp.TotalPods = h.TotalPods
-	resp.CoordinationFactors = h.CoordinationFactors
 	if h.Blocked != nil {
 		resp.Blocked = &workloadDetailBlocked{Reason: h.Blocked.Reason, Attempts: h.Blocked.Attempts}
 	}

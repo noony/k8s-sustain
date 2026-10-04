@@ -45,19 +45,19 @@ func (r *workloadRow) setHealth(h identityHealth) {
 	r.StalePods = h.StalePods
 	r.TotalPods = h.TotalPods
 	r.AutoscalerPresent = h.AutoscalerPresent
-	r.CoordinationFactors = h.CoordinationFactors
 }
 
 // rowFor renders one identity. A Departed identity shows the containers of
 // its stored snapshot and when its Recommendation was last refreshed.
 func rowFor(id *inventory.Identity) workloadRow {
 	row := workloadRow{
-		Namespace:  id.Key.Namespace,
-		Kind:       id.Key.OwnerKind,
-		Name:       id.Key.OwnerName,
-		Containers: containerStatuses(id.Containers, id.InitContainers),
-		Departed:   id.Departed(),
-		conflicted: id.Conflicted,
+		Namespace:           id.Key.Namespace,
+		Kind:                id.Key.OwnerKind,
+		Name:                id.Key.OwnerName,
+		Containers:          containerStatuses(id.Containers, id.InitContainers),
+		CoordinationFactors: coordinationFactorsOf(id.Recommendation),
+		Departed:            id.Departed(),
+		conflicted:          id.Conflicted,
 	}
 	if id.Departed() {
 		if seen := id.Recommendation.Status.ObservedAt; !seen.IsZero() {

@@ -62,7 +62,7 @@ var identityLabels = []string{"namespace", "owner_kind", "owner_name"}
 // stale target) collapse into one.
 func (p promHealthSignals) read(ctx context.Context, sel string) (map[promclient.WorkloadIdentity]identityHealth, error) {
 	var (
-		oom, stale, total, blocked, attempts, autoscaler, coord map[string]float64
+		oom, stale, total, blocked, attempts, autoscaler map[string]float64
 
 		wg   sync.WaitGroup
 		mu   sync.Mutex
@@ -89,12 +89,10 @@ func (p promHealthSignals) read(ctx context.Context, sel string) (map[promclient
 	query(&blocked, "max", promclient.MetricWorkloadRetryState, " == 1", "reason")
 	query(&attempts, "max", promclient.MetricWorkloadRetryAttempts, "")
 	query(&autoscaler, "max", promclient.MetricAutoscalerPresent, "")
-	query(&coord, "max", promclient.MetricCoordinationFactor, "", "resource", "kind")
 	wg.Wait()
 
 	byID := map[promclient.WorkloadIdentity]*identityHealth{}
-	factors := map[promclient.WorkloadIdentity]map[string]float64{}
-	each := func(m map[string]float64, extra int, fold func(id promclient.WorkloadIdentity, h *identityHealth, rest []string, v float64)) {
+	each := func(m map[string]float64, extra int, fold func(h *identityHealth, rest []string, v float64)) {
 		for key, v := range m {
 			parts := strings.Split(key, "|")
 			if len(parts) != len(identityLabels)+extra {
@@ -106,34 +104,23 @@ func (p promHealthSignals) read(ctx context.Context, sel string) (map[promclient
 				h = &identityHealth{}
 				byID[id] = h
 			}
-			fold(id, h, parts[len(identityLabels):], v)
+			fold(h, parts[len(identityLabels):], v)
 		}
 	}
-	each(oom, 0, func(_ promclient.WorkloadIdentity, h *identityHealth, _ []string, v float64) { h.OOM24h = int(v) })
-	each(stale, 0, func(_ promclient.WorkloadIdentity, h *identityHealth, _ []string, v float64) { h.StalePods = int(v) })
-	each(total, 0, func(_ promclient.WorkloadIdentity, h *identityHealth, _ []string, v float64) { h.TotalPods = int(v) })
-	each(blocked, 1, func(_ promclient.WorkloadIdentity, h *identityHealth, rest []string, _ float64) {
+	each(oom, 0, func(h *identityHealth, _ []string, v float64) { h.OOM24h = int(v) })
+	each(stale, 0, func(h *identityHealth, _ []string, v float64) { h.StalePods = int(v) })
+	each(total, 0, func(h *identityHealth, _ []string, v float64) { h.TotalPods = int(v) })
+	each(blocked, 1, func(h *identityHealth, rest []string, _ float64) {
 		h.Blocked = &blockedSignal{Reason: rest[0]}
 	})
-	each(autoscaler, 0, func(_ promclient.WorkloadIdentity, h *identityHealth, _ []string, v float64) {
+	each(autoscaler, 0, func(h *identityHealth, _ []string, v float64) {
 		h.AutoscalerPresent = v > 0
-	})
-	each(coord, 2, func(id promclient.WorkloadIdentity, _ *identityHealth, rest []string, v float64) {
-		if factors[id] == nil {
-			factors[id] = map[string]float64{}
-		}
-		factors[id][rest[0]+"|"+rest[1]] = v
 	})
 
 	out := make(map[promclient.WorkloadIdentity]identityHealth, len(byID))
 	for id, h := range byID {
 		if h.Blocked != nil {
 			h.Blocked.Attempts = int(attempts[workloadKey(id.Namespace, id.OwnerKind, id.OwnerName)])
-		}
-		// Coordination factors are not cleared when an autoscaler goes away,
-		// so they only count while one is present.
-		if h.AutoscalerPresent && len(factors[id]) > 0 {
-			h.CoordinationFactors = assembleCoordinationFactors(factors[id])
 		}
 		out[id] = *h
 	}

@@ -75,6 +75,28 @@ status:
       memoryLimit: 512Mi
       removeCpuLimit: false         # true when the policy says NoLimit
       removeMemoryLimit: false
+  trace:                            # how each container's values were derived
+    app:
+      cpu:
+        percentile: 227500u         # usage percentile of the busiest pod
+        withHeadroom: 228m          # + headroom, rounded up
+        clamped: 228m               # after minAllowed/maxAllowed
+        coordination:               # only when an autoscaler shapes it
+          overheadFactor: 1.375     # 110 / HPA target (80%)
+          scaled: 314m
+          value: 314m               # re-clamped: the final request
+        limit: 628m
+      memory:
+        percentile: "183500800"
+        oomFloor:                   # only after a recent OOM kill
+          value: 240Mi
+          determined: true          # the floor set the final request
+        withHeadroom: 264Mi
+        clamped: 264Mi
+        coordination:
+          overheadFactor: 1         # the HPA has no memory target
+          scaled: 264Mi
+          value: 264Mi
   observedResources:                # what the workload actually ran with
     app:
       cpuRequest: "1"
@@ -89,13 +111,15 @@ status:
 
 `removeCpuLimit` / `removeMemoryLimit` carry the Policy's `NoLimit` intent, since a nil `cpuLimit`/`memoryLimit` alone cannot distinguish "leave alone" from "remove".
 
+`trace` is the record of how each container's values were derived: per resource, the request after every [stage](recommendation-pipeline.md#stages) that ran, in order, then the limit derived from the final request (`limit`, or `removeLimit`; neither means the container keeps its own). A stage that did not run is absent: `oomFloor` without a recent OOM kill, `coordination` without autoscaler coordination, `percentile` for memory anchored on an OOM kill alone; a resource whose request is kept has no trace. `percentile` is stored at full precision (nanocores, bytes). `coordination.replicaFactor` appears for CPU when the Policy sets a `replicaBudgetAnchor`, and `coordination.value` differs from `scaled` when a min/max clamp capped the coordinated request. `oomFloor.determined` says the floor set the final request: it beat the percentile and no clamp, before or after coordination, replaced it. The trace is written together with `containers`; a pass whose values are unchanged but whose trace moved (a percentile that rounds to the same request) writes nothing, so the trace can lag the latest samples by up to the 10-minute refresh.
+
 `observedResources` is written by discovery from the union of the identity's governed members' containers (or by the webhook from the admitted pod). It keeps current-vs-recommended visible on the dashboard after the workload is gone, and supplies the container list for identities with no workload object.
 
 `kubectl get wlrec` shows `outcome` as a column next to the policy.
 
 | `status.outcome` | Meaning | `containers` |
 | --- | --- | --- |
-| `Computed` | A Recommendation was computed on the last pass | Fresh |
+| `Computed` | A Recommendation was computed on the last pass | Fresh, with its `trace` |
 | `NoData` | Prometheus answered with nothing recommendable | Last Recommendation kept, if any |
 | `TooYoung` | The identity is younger than the [minimum age](recommendation-pipeline.md#stages) | Last Recommendation kept, if any |
 | `FetchFailed` | The identity's inputs could not be read; retried with backoff | Last Recommendation kept, if any |
@@ -157,6 +181,7 @@ The webhook never sees pods in the release namespace, `kube-system`, `kube-publi
 - `kubectl get wlrec -A` lists every cached recommendation.
 - `kubectl describe wlrec deployment-web -n example` shows the full status for one workload.
 - `status.observedAt` shows how fresh the data the webhook would serve is.
+- `status.trace` shows why a container has the values it has; the dashboard's workload detail page renders it as a table.
 
 ## RBAC
 
