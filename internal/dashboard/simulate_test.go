@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -13,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/autoscaler"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
@@ -62,6 +64,33 @@ func TestRunSimulation_InheritsManagingPolicyCoordination(t *testing.T) {
 	}
 	if got := res.Containers["main"].CPURequest; got != "2200m" {
 		t.Errorf("cpu = %q, want 2200m (managing policy's coordination applied by default)", got)
+	}
+}
+
+// Each chart point is computed as the point value is: with headroom, and with
+// the OOM floor of the container that was killed only.
+func TestRecommendationSeries_ComputesEachPointWithTheIdentitysOOMs(t *testing.T) {
+	const mib = 1 << 20
+	spec := simulationSpec{resources: sustainv1alpha1.ResourcesConfigs{
+		CPU: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)}},
+	}}
+	inputs := &recommender.WorkloadInputs{OOM: map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}}}
+	at := time.Unix(1_700_000_000, 0)
+	points := func(v float64) []promclient.TimeValue { return []promclient.TimeValue{{Timestamp: at, Value: v}} }
+
+	mem := recommendationSeries(promclient.ContainerTimeSeries{"app": points(100 * mib), "side": points(100 * mib)},
+		spec, autoscaler.Info{Kind: autoscaler.KindNone}, inputs, true)
+	cpu := recommendationSeries(promclient.ContainerTimeSeries{"app": points(0.1)},
+		spec, autoscaler.Info{Kind: autoscaler.KindNone}, inputs, false)
+
+	if got := mem["app"][0].Value; got != 200*mib {
+		t.Errorf("app memory = %v, want the 200Mi OOM floor", got)
+	}
+	if got := mem["side"][0].Value; got != 100*mib {
+		t.Errorf("side memory = %v, want its 100Mi point: it was not killed", got)
+	}
+	if got := cpu["app"][0]; got.Value != 0.15 || !got.Timestamp.Equal(at) {
+		t.Errorf("app cpu = %+v, want 0.15 cores (0.1 + 50%%) at the point's time", got)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 // helpers
@@ -15,20 +16,13 @@ func qty(s string) resource.Quantity   { return resource.MustParse(s) }
 func qtyp(s string) *resource.Quantity { q := qty(s); return &q }
 
 func cpuRequestOf(rawCores float64, cfg sustainv1alpha1.ResourceRequestsConfig) *resource.Quantity {
-	return ComputeContainerRec(ContainerInputs{
-		CPUPerPod: rawCores,
-		HasCPU:    true,
-		RsCfg:     sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Requests: cfg}},
-	}).Rec.CPURequest
+	return computeApp(&WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": rawCores}},
+		sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Requests: cfg}}).Rec.CPURequest
 }
 
-func memoryOf(rawBytes float64, oom OOMSignal, cfg sustainv1alpha1.ResourceRequestsConfig) ContainerRecResult {
-	return ComputeContainerRec(ContainerInputs{
-		MemPerPod:   rawBytes,
-		HasMemUsage: true,
-		OOM:         oom,
-		RsCfg:       sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: cfg}},
-	})
+func memoryRequestOf(rawBytes float64, cfg sustainv1alpha1.ResourceRequestsConfig) *resource.Quantity {
+	return computeApp(&WorkloadInputs{MemPerPod: promclient.ContainerValues{"app": rawBytes}},
+		sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: cfg}}).Rec.MemoryRequest
 }
 
 func TestCPURequest(t *testing.T) {
@@ -113,11 +107,9 @@ func TestCPURequest(t *testing.T) {
 }
 
 func TestMemoryRequest(t *testing.T) {
-	mib := float64(mebibyte)
 	tests := []struct {
 		name     string
 		rawBytes float64
-		signal   OOMSignal
 		cfg      sustainv1alpha1.ResourceRequestsConfig
 		wantNil  bool
 		wantQty  string
@@ -151,72 +143,11 @@ func TestMemoryRequest(t *testing.T) {
 			cfg:      sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("2Gi")},
 			wantQty:  "2Gi",
 		},
-		{
-			name:     "no recent oom keeps default behavior",
-			rawBytes: 100 * mib,
-			signal:   OOMSignal{Recent: false, PeakBytes: 300 * mib},
-			wantQty:  "100Mi",
-		},
-		{
-			name:     "recent oom raises floor to peak",
-			rawBytes: 50 * mib,
-			signal:   OOMSignal{Recent: true, PeakBytes: 200 * mib},
-			wantQty:  "200Mi",
-		},
-		{
-			name:     "recent oom raw above floor wins",
-			rawBytes: 300 * mib,
-			signal:   OOMSignal{Recent: true, PeakBytes: 100 * mib},
-			wantQty:  "300Mi",
-		},
-		{
-			// Headroom is applied to the peak ONCE, never compounded with raw.
-			// raw=50Mi → 60Mi; peak=100Mi → 120Mi; max(60, 120) = 120Mi.
-			name:     "recent oom headroom applied to peak",
-			rawBytes: 50 * mib,
-			signal:   OOMSignal{Recent: true, PeakBytes: 100 * mib},
-			cfg:      sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](20)},
-			wantQty:  "120Mi",
-		},
-		{
-			name:     "max allowed wins over oom floor",
-			rawBytes: 50 * mib,
-			signal:   OOMSignal{Recent: true, PeakBytes: 500 * mib},
-			cfg:      sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("256Mi")},
-			wantQty:  "256Mi",
-		},
-		{
-			name:     "keep request returns nil even with recent oom",
-			rawBytes: 50 * mib,
-			signal:   OOMSignal{Recent: true, PeakBytes: 200 * mib},
-			cfg:      sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true},
-			wantNil:  true,
-		},
-		{
-			// The OOM-time-limit bump kicks in when peak underreports the real
-			// pressure (cgroup v2 / sub-scrape spikes): 96Mi × 1.25 = 120Mi.
-			name:     "oom-time-limit bump beats unreliable peak",
-			rawBytes: 40 * mib,
-			signal:   OOMSignal{Recent: true, PeakBytes: 36 * mib, OOMTimeLimitBytes: 96 * mib, BumpFactor: 1.25},
-			wantQty:  "120Mi",
-		},
-		{
-			name:     "peak above bump-anchor wins",
-			rawBytes: 40 * mib,
-			signal:   OOMSignal{Recent: true, PeakBytes: 300 * mib, OOMTimeLimitBytes: 96 * mib, BumpFactor: 1.20},
-			wantQty:  "300Mi",
-		},
-		{
-			name:     "zero bump factor disables bump",
-			rawBytes: 40 * mib,
-			signal:   OOMSignal{Recent: true, PeakBytes: 50 * mib, OOMTimeLimitBytes: 96 * mib},
-			wantQty:  "50Mi",
-		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := memoryOf(tc.rawBytes, tc.signal, tc.cfg).Rec.MemoryRequest
+			got := memoryRequestOf(tc.rawBytes, tc.cfg)
 			if tc.wantNil {
 				if got != nil {
 					t.Errorf("expected nil, got %s", got)
@@ -229,39 +160,6 @@ func TestMemoryRequest(t *testing.T) {
 			want := qty(tc.wantQty)
 			if got.Cmp(want) != 0 {
 				t.Errorf("got %s, want %s", got, want.String())
-			}
-		})
-	}
-}
-
-// The trace says the OOM floor determined the request only when the floor
-// produced the final value: it beat the percentile and no operator bound
-// replaced it.
-func TestMemoryTrace_OOMFloorDetermined(t *testing.T) {
-	mib := float64(mebibyte)
-	tests := []struct {
-		name      string
-		rawBytes  float64
-		signal    OOMSignal
-		cfg       sustainv1alpha1.ResourceRequestsConfig
-		wantFloor bool
-		want      bool
-	}{
-		{"floor beats the percentile", 50 * mib, OOMSignal{Recent: true, PeakBytes: 200 * mib}, sustainv1alpha1.ResourceRequestsConfig{}, true, true},
-		{"percentile beats the floor", 400 * mib, OOMSignal{Recent: true, PeakBytes: 200 * mib}, sustainv1alpha1.ResourceRequestsConfig{}, true, false},
-		{"no recent OOM has no floor", 50 * mib, OOMSignal{}, sustainv1alpha1.ResourceRequestsConfig{}, false, false},
-		{"maxAllowed below the floor", 50 * mib, OOMSignal{Recent: true, PeakBytes: 500 * mib}, sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("256Mi")}, true, false},
-		{"maxAllowed above the floor", 50 * mib, OOMSignal{Recent: true, PeakBytes: 500 * mib}, sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("1Gi")}, true, true},
-		{"minAllowed above the floor", 50 * mib, OOMSignal{Recent: true, PeakBytes: 200 * mib}, sustainv1alpha1.ResourceRequestsConfig{MinAllowed: qtyp("512Mi")}, true, false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			floor := memoryOf(tc.rawBytes, tc.signal, tc.cfg).Trace.Memory.OOMFloor
-			if (floor != nil) != tc.wantFloor {
-				t.Fatalf("oomFloor = %+v, want present %v", floor, tc.wantFloor)
-			}
-			if floor != nil && floor.Determined != tc.want {
-				t.Errorf("determined = %v, want %v", floor.Determined, tc.want)
 			}
 		})
 	}

@@ -88,25 +88,15 @@ type PolicyReconciler struct {
 	health healthTracker
 }
 
-// LiveOOMConfig groups the inputs from the OOM Pod watcher. MaxAge zero means
-// oomwatch.DefaultRecentMaxAge.
+// LiveOOMConfig groups the inputs from the OOM Pod watcher.
 type LiveOOMConfig struct {
 	Source    oomwatch.Source
 	TriggerCh <-chan event.GenericEvent
-	MaxAge    time.Duration
 }
 
 // Enabled reports whether both halves of the live-OOM path are wired.
 func (c LiveOOMConfig) Enabled() bool {
 	return c.Source != nil && c.TriggerCh != nil
-}
-
-// EffectiveMaxAge returns MaxAge or DefaultRecentMaxAge when MaxAge <= 0.
-func (c LiveOOMConfig) EffectiveMaxAge() time.Duration {
-	if c.MaxAge <= 0 {
-		return oomwatch.DefaultRecentMaxAge
-	}
-	return c.MaxAge
 }
 
 // SetupWithManager registers the PolicyReconciler with the given manager.

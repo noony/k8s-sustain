@@ -125,7 +125,7 @@ func TestBatchSimulateAggregateSkipsRecsWithoutCurrentUsage(t *testing.T) {
 			MemPerPod: promclient.ContainerValues{"main": 200 * mib},
 		}).
 		Set(batchID("wl-b"), &recommender.WorkloadInputs{
-			OOM: promclient.OOMSignal{OOMCounts: promclient.ContainerValues{"main": 1}, PeakMemoryBytes: promclient.ContainerValues{"main": 300 * mib}},
+			OOM: map[string]recommender.OOM{"main": {Kills: 1, PeakBytes: 300 * mib, HasPeak: true}},
 		})
 	srv := newBatchSimulateServer(t, inputs, 2)
 

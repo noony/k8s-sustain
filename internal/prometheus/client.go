@@ -296,80 +296,21 @@ func (c *Client) queryMaxByContainerForWorkload(ctx context.Context, ruleName, n
 }
 
 // QueryWorkloadCPURecommendationRangeByContainer is the one-workload range
-// counterpart of QueryShardCPU: at each step, the per-container CPU quantile
-// (cores) of the busiest replica over the trailing recWindow.
+// counterpart of the recommender's CPU usage signal: at each step, the
+// per-container CPU quantile (cores) of the busiest replica over the trailing
+// recWindow.
 func (c *Client) QueryWorkloadCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := QuantileOverTime(quantile, MetricWorkloadMaxPodCPUCores, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
 // QueryWorkloadMemoryRecommendationRangeByContainer is the one-workload range
-// counterpart of QueryShardMemory: at each step, the per-container memory
-// quantile (bytes) of the busiest replica over the trailing recWindow.
+// counterpart of the recommender's memory usage signal: at each step, the
+// per-container memory quantile (bytes) of the busiest replica over the
+// trailing recWindow.
 func (c *Client) QueryWorkloadMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
 	expr := QuantileOverTime(quantile, MetricWorkloadMaxPodMemoryBytes, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
 	return c.queryRangeByContainer(ctx, expr, r, step)
-}
-
-// OOMSignal carries the OOM context for a single workload over the past 24h.
-type OOMSignal struct {
-	// OOMCounts is the per-container OOM count over 24h, so only containers
-	// that OOMed get a memory floor.
-	OOMCounts       ContainerValues
-	PeakMemoryBytes ContainerValues
-	// OOMLimitBytes is the cgroup limit observed at OOM time, per container.
-	// Used as the bump anchor because peak working set can miss sub-scrape spikes.
-	OOMLimitBytes ContainerValues
-}
-
-// TotalOOMs sums the per-container OOM counts.
-func (s OOMSignal) TotalOOMs() float64 {
-	var total float64
-	for _, v := range s.OOMCounts {
-		total += v
-	}
-	return total
-}
-
-// oomMetricNames are the recording rules fetched together by one __name__ regex.
-var oomMetricNames = []string{
-	MetricWorkloadOOM24h,
-	MetricContainerPeakMemory24hBytes,
-	MetricContainerOOMLimit24hBytes,
-}
-
-// foldOOMVector aggregates the OOM vector client-side: sum by container for
-// counts, max by container for peak and OOM-time limit, collapsing duplicate
-// series from multiple kube-state-metrics replicas.
-func foldOOMVector(vec model.Vector) OOMSignal {
-	sig := OOMSignal{
-		OOMCounts:       ContainerValues{},
-		PeakMemoryBytes: ContainerValues{},
-		OOMLimitBytes:   ContainerValues{},
-	}
-	// The !ok check is load-bearing: a first sample of 0 must still create the
-	// key, because ComputeContainerRec gates on key presence.
-	maxInto := func(m ContainerValues, key string, v float64) {
-		if cur, ok := m[key]; !ok || v > cur {
-			m[key] = v
-		}
-	}
-	for _, sample := range vec {
-		container := string(sample.Metric["container"])
-		if container == "" {
-			continue
-		}
-		v := float64(sample.Value)
-		switch string(sample.Metric[model.MetricNameLabel]) {
-		case MetricWorkloadOOM24h:
-			sig.OOMCounts[container] += v
-		case MetricContainerPeakMemory24hBytes:
-			maxInto(sig.PeakMemoryBytes, container, v)
-		case MetricContainerOOMLimit24hBytes:
-			maxInto(sig.OOMLimitBytes, container, v)
-		}
-	}
-	return sig
 }
 
 // OOMEvent represents a single OOM kill event for a container.

@@ -88,7 +88,7 @@ func applyReplicaCorrection(qty resource.Quantity, anchor float64, current, minR
 // change HPA behaviour.
 func coordinate(
 	clamped resource.Quantity,
-	res string,
+	res resourceKind,
 	cfg sustainv1alpha1.AutoscalerCoordination,
 	info autoscaler.Info,
 	req sustainv1alpha1.ResourceRequestsConfig,
@@ -96,9 +96,9 @@ func coordinate(
 	if !cfg.Enabled || info.Kind == autoscaler.KindNone {
 		return nil
 	}
-	scaled, overhead := applyOverhead(clamped, info.ConfiguredTargets[res])
+	scaled, overhead := applyOverhead(clamped, info.ConfiguredTargets[string(res)])
 	t := &sustainv1alpha1.CoordinationTrace{OverheadFactor: overhead}
-	if res == autoscaler.ResourceCPU && cfg.ReplicaBudgetAnchor != nil {
+	if res == cpuResource && cfg.ReplicaBudgetAnchor != nil {
 		var replica float64
 		scaled, replica = applyReplicaCorrection(scaled, *cfg.ReplicaBudgetAnchor, info.CurrentReplicas, info.MinReplicas, info.MaxReplicas)
 		t.ReplicaFactor = &replica

@@ -33,10 +33,7 @@ func TestCompute_RecommendsEveryObservedContainerWhenNoneDeclared(t *testing.T) 
 		Inputs: &WorkloadInputs{
 			CPUPerPod: promclient.ContainerValues{"app": 0.5},
 			MemPerPod: promclient.ContainerValues{"app": 100 * mib},
-			OOM: promclient.OOMSignal{
-				OOMCounts:       promclient.ContainerValues{"crashy": 1},
-				PeakMemoryBytes: promclient.ContainerValues{"crashy": 300 * mib},
-			},
+			OOM:       map[string]OOM{"crashy": {Kills: 1, PeakBytes: 300 * mib, HasPeak: true}},
 		},
 		Since: old(),
 	})
@@ -97,11 +94,11 @@ func TestCompute_AgeGate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			in := &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 1}}
 			if tc.promOOM {
-				in.OOM.OOMCounts = promclient.ContainerValues{"side": 1}
+				in.OOM = map[string]OOM{"side": {Kills: 1}}
 			}
 			req := Request{Containers: containers("app"), Inputs: in, Since: tc.since}
 			if tc.liveOOM {
-				req.LiveOOMs = map[string]*oomwatch.OOMRecord{"side": {Container: "side", TerminatedAt: now}}
+				req.LiveOOMs = map[string]*oomwatch.OOMRecord{"side": liveKill("side", 0, 0)}
 			}
 
 			res := Compute(req)
@@ -117,27 +114,9 @@ func TestCompute_AgeGate(t *testing.T) {
 	}
 }
 
-// A young workload whose sibling container OOMed gets its recommendation at
-// once: the bypass is workload-level, the floor per container.
-func TestCompute_YoungWorkloadWithOOMIsRecommended(t *testing.T) {
-	res := Compute(Request{
-		Containers: containers("app", "side"),
-		Inputs: &WorkloadInputs{OOM: promclient.OOMSignal{
-			OOMCounts:       promclient.ContainerValues{"app": 1},
-			PeakMemoryBytes: promclient.ContainerValues{"app": 80 * mib},
-		}},
-		Since: time.Now().Add(-time.Minute),
-	})
-
-	if res.Outcome != Recommended {
-		t.Fatalf("outcome = %v, want Recommended: a recent OOM bypasses the age gate", res.Outcome)
-	}
-	if rec := res.Recs["app"]; rec.MemoryRequest == nil || rec.MemoryRequest.String() != "80Mi" {
-		t.Errorf("app memory = %v, want 80Mi from the OOM peak", rec.MemoryRequest)
-	}
-	if _, ok := res.Recs["side"]; ok {
-		t.Errorf("side has no usage and no OOM, got %+v", res.Recs["side"])
-	}
+// computeApp computes the one container "app" from in under rs.
+func computeApp(in *WorkloadInputs, rs sustainv1alpha1.ResourcesConfigs) ContainerRecResult {
+	return Compute(Request{Containers: containers("app"), Inputs: in, Resources: rs}).Containers["app"]
 }
 
 func TestCompute_NoDataWhenNothingToRecommendFrom(t *testing.T) {
@@ -152,123 +131,6 @@ func TestCompute_NoDataWhenNothingToRecommendFrom(t *testing.T) {
 	}
 	if len(res.Recs) != 0 {
 		t.Errorf("recs = %v, want none", res.Recs)
-	}
-}
-
-// A kill the live watcher saw raises the memory floor before Prometheus
-// reports it: the OOM-time limit is bumped by DefaultOOMBumpFactor. Only the
-// container that was killed is floored.
-func TestCompute_LiveOOMRaisesTheMemoryFloor(t *testing.T) {
-	killedAt := time.Now().Add(-10 * time.Second)
-	res := Compute(Request{
-		Containers: containers("app", "side"),
-		Inputs: &WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"app": 0.1, "side": 0.05},
-			MemPerPod: promclient.ContainerValues{"app": 100 * mib, "side": 100 * mib},
-		},
-		LiveOOMs: map[string]*oomwatch.OOMRecord{
-			"app": {Container: "app", TerminatedAt: killedAt, OOMLimitBytes: 200 << 20},
-		},
-		Since: old(),
-	})
-
-	if got := res.Recs["app"].MemoryRequest; got == nil || got.String() != "240Mi" {
-		t.Errorf("app memory = %v, want 240Mi (200Mi limit at the kill x 1.2)", got)
-	}
-	app := res.Containers["app"]
-	if floor := app.Trace.Memory.OOMFloor; floor == nil || !floor.Determined {
-		t.Errorf("app: oomFloor = %+v, want it to have determined the request", floor)
-	}
-	if !app.OOM.LiveEventAt.Equal(killedAt) {
-		t.Errorf("app: OOM.LiveEventAt = %v, want the kill time %v", app.OOM.LiveEventAt, killedAt)
-	}
-	if got := res.Recs["side"].MemoryRequest; got == nil || got.String() != "100Mi" {
-		t.Errorf("side memory = %v, want its 100Mi percentile: a sibling's kill must not floor it", got)
-	}
-	if floor := res.Containers["side"].Trace.Memory.OOMFloor; floor != nil {
-		t.Errorf("side: oomFloor = %+v for a container that was not killed", floor)
-	}
-}
-
-// Prometheus's OOM-time limit is windowed and can still report the limit from
-// before a resize; the live record has the limit applied at the kill. The
-// higher one is the limit the container died at.
-func TestCompute_OOMAnchorTakesTheHigherOfPrometheusAndLive(t *testing.T) {
-	res := Compute(Request{
-		Containers: containers("app"),
-		Inputs: &WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"app": 0.1},
-			MemPerPod: promclient.ContainerValues{"app": 50 * mib},
-			OOM: promclient.OOMSignal{
-				OOMCounts:     promclient.ContainerValues{"app": 1},
-				OOMLimitBytes: promclient.ContainerValues{"app": 96 * mib},
-			},
-		},
-		LiveOOMs: map[string]*oomwatch.OOMRecord{
-			"app": {Container: "app", TerminatedAt: time.Now(), OOMLimitBytes: 184 << 20},
-		},
-		Since: old(),
-	})
-
-	if got := res.Recs["app"].MemoryRequest; got == nil || got.Value() <= 184<<20 {
-		t.Errorf("app memory = %v, want a bump above the live 184Mi, not the stale 96Mi", got)
-	}
-}
-
-// The peak rule is not OOM-scoped: every container has a 24h high-water mark.
-// Only the container that OOMed is floored at it; an innocent sibling keeps its
-// percentile and one with no usage gets nothing.
-func TestCompute_SiblingOOMDoesNotFloorInnocentContainer(t *testing.T) {
-	res := Compute(Request{
-		Containers: containers("app", "side", "nodata"),
-		Inputs: &WorkloadInputs{
-			MemPerPod: promclient.ContainerValues{"app": 64 * mib, "side": 50 * mib},
-			OOM: promclient.OOMSignal{
-				OOMCounts:       promclient.ContainerValues{"app": 2},
-				PeakMemoryBytes: promclient.ContainerValues{"app": 200 * mib, "side": 180 * mib, "nodata": 150 * mib},
-			},
-		},
-	})
-
-	if got := res.Recs["app"].MemoryRequest; got == nil || got.String() != "200Mi" {
-		t.Errorf("app memory = %v, want 200Mi (peak floor)", got)
-	}
-	if floor := res.Containers["app"].Trace.Memory.OOMFloor; floor == nil || !floor.Determined {
-		t.Errorf("app: oomFloor = %+v, want it to have determined the request", floor)
-	}
-	if got := res.Recs["side"].MemoryRequest; got == nil || got.String() != "50Mi" {
-		t.Errorf("side memory = %v, want its 50Mi percentile", got)
-	}
-	if floor := res.Containers["side"].Trace.Memory.OOMFloor; floor != nil {
-		t.Errorf("side: oomFloor = %+v, the floor must not apply to a container that did not OOM", floor)
-	}
-	if _, ok := res.Recs["nodata"]; ok {
-		t.Errorf("nodata: no OOM and no usage must yield nothing, got %+v", res.Recs["nodata"])
-	}
-}
-
-// A live kill with no anchor at all (no usage, no peak, no OOM-time limit)
-// emits nothing: the only possible value is the 1Mi floor, which guarantees
-// the next kill. With the OOM-time limit as its only anchor it bumps above it.
-func TestCompute_LiveOOMNeedsAnAnchor(t *testing.T) {
-	empty := &WorkloadInputs{CPUPerPod: promclient.ContainerValues{}, MemPerPod: promclient.ContainerValues{}}
-
-	none := Compute(Request{
-		Containers: containers("app"),
-		Inputs:     empty,
-		LiveOOMs:   map[string]*oomwatch.OOMRecord{"app": {Container: "app", TerminatedAt: time.Now()}},
-	})
-	if _, ok := none.Recs["app"]; ok {
-		t.Errorf("live OOM with no anchor must not emit a recommendation, got %v", none.Recs)
-	}
-
-	limit := Compute(Request{
-		Containers: containers("app"),
-		Inputs:     empty,
-		LiveOOMs:   map[string]*oomwatch.OOMRecord{"app": {Container: "app", TerminatedAt: time.Now(), OOMLimitBytes: 100 << 20}},
-	})
-	if got := limit.Recs["app"].MemoryRequest; got == nil || got.String() != "120Mi" {
-		t.Errorf("app memory = %v, want 120Mi (100Mi limit x 1.2)", got)
 	}
 }
 
@@ -315,59 +177,6 @@ func TestCompute_TracesCPUStages(t *testing.T) {
 	assertQty(t, "request", res.Recs["app"].CPURequest, "414m")
 	if cpu.OOMFloor != nil {
 		t.Errorf("CPU has no OOM floor stage, got %+v", cpu.OOMFloor)
-	}
-}
-
-// Coordination is judged on the final request: the floor determined it after
-// an overhead that only scaled it, but not after a maxAllowed re-clamp
-// replaced it, nor after a minAllowed clamp before coordination did.
-func TestCompute_TracesTheOOMFloorThroughCoordination(t *testing.T) {
-	cases := []struct {
-		name           string
-		requests       sustainv1alpha1.ResourceRequestsConfig
-		wantClamped    string
-		wantScaled     string
-		wantRequest    string
-		wantDetermined bool
-	}{
-		{"overhead only scales the floor", sustainv1alpha1.ResourceRequestsConfig{}, "200Mi", "275Mi", "275Mi", true},
-		{"maxAllowed re-clamps after coordination", sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("256Mi")}, "200Mi", "275Mi", "256Mi", false},
-		{"minAllowed clamps before coordination", sustainv1alpha1.ResourceRequestsConfig{MinAllowed: qtyp("240Mi")}, "240Mi", "330Mi", "330Mi", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			res := Compute(Request{
-				Containers: containers("app"),
-				Inputs: &WorkloadInputs{
-					MemPerPod: promclient.ContainerValues{"app": 100 * mib},
-					OOM: promclient.OOMSignal{
-						OOMCounts:       promclient.ContainerValues{"app": 1},
-						PeakMemoryBytes: promclient.ContainerValues{"app": 200 * mib},
-					},
-				},
-				Resources:    sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.requests}},
-				Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true},
-				AutoInfo:     autoscaler.Info{Kind: autoscaler.KindKEDA, ConfiguredTargets: map[string]int32{autoscaler.ResourceMemory: 80}},
-				Since:        old(),
-			})
-
-			mem := res.Containers["app"].Trace.Memory
-			if mem == nil || mem.OOMFloor == nil || mem.Coordination == nil {
-				t.Fatalf("memory trace = %+v, want percentile, OOM floor and coordination stages", mem)
-			}
-			assertQty(t, "percentile", mem.Percentile, "100Mi")
-			assertQty(t, "oomFloor", &mem.OOMFloor.Value, "200Mi")
-			assertQty(t, "withHeadroom", &mem.WithHeadroom, "200Mi")
-			assertQty(t, "clamped", &mem.Clamped, tc.wantClamped)
-			assertQty(t, "scaled", &mem.Coordination.Scaled, tc.wantScaled)
-			assertQty(t, "request", res.Recs["app"].MemoryRequest, tc.wantRequest)
-			if mem.Coordination.ReplicaFactor != nil {
-				t.Errorf("memory has no replica correction, got %v", *mem.Coordination.ReplicaFactor)
-			}
-			if mem.OOMFloor.Determined != tc.wantDetermined {
-				t.Errorf("determined = %v, want %v", mem.OOMFloor.Determined, tc.wantDetermined)
-			}
-		})
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
@@ -62,72 +63,12 @@ func AgeForLog(start time.Time) string {
 	return time.Since(start).String()
 }
 
-// ContainerInputs is the per-container slice of WorkloadInputs plus the
-// OOM/autoscaler/config context needed to compute one recommendation. CPUPerPod
-// and MemPerPod are already per-pod percentiles (busiest replica) — they feed
-// the request computation directly without replica division.
-type ContainerInputs struct {
-	Container   corev1.Container
-	CPUPerPod   float64
-	HasCPU      bool
-	MemPerPod   float64
-	HasMemUsage bool
-	// OOM is the per-container memory floor signal. HasOOMPeak gates memory
-	// emission when usage samples are absent — see ComputeContainerRec.
-	OOM        OOMSignal
-	HasOOMPeak bool
-	AutoInfo   autoscaler.Info
-	RsCfg      sustainv1alpha1.ResourcesConfigs
-	CoordCfg   sustainv1alpha1.AutoscalerCoordination
-}
-
-// ContainerRecResult is the output of ComputeContainerRec: the container's
-// recommendation, the trace of how it was derived, and the OOM signal its
-// memory request was floored against.
+// ContainerRecResult is one container's recommendation, the trace of how it
+// was derived, and the OOM kills its memory request was floored against.
 type ContainerRecResult struct {
-	Rec     workload.ContainerRecommendation
-	Trace   sustainv1alpha1.ContainerTrace
-	OOM     OOMSignal
-	HasData bool
-}
-
-// ComputeContainerRec runs the shared per-container compute pipeline, each
-// resource through its stages (see sustainv1alpha1.ResourceTrace), then
-// derives the limits. HasData=false means neither CPU nor memory had enough
-// signal to emit a recommendation — the caller should skip the container.
-//
-// Memory is emitted when EITHER usage samples are present OR a recent/live
-// OOM comes with a positive anchor (kernel-observed peak or OOM-time limit).
-// This lets crash-looping containers — which can't accumulate usage samples
-// — still receive a recommendation anchored on real data. An OOM event with
-// no anchor at all emits nothing: the only possible output would be the hard
-// 1Mi minimum, which would guarantee the next OOM.
-func ComputeContainerRec(in ContainerInputs) ContainerRecResult {
-	emitMem := in.HasMemUsage || (in.OOM.recent() && (in.HasOOMPeak || in.OOM.OOMTimeLimitBytes > 0))
-	if !in.HasCPU && !emitMem {
-		return ContainerRecResult{}
-	}
-
-	res := ContainerRecResult{OOM: in.OOM, HasData: true}
-	if in.HasCPU {
-		res.Trace.CPU = cpuTrace(in)
-	}
-	if emitMem {
-		res.Trace.Memory = memoryTrace(in)
-	}
-
-	resources := in.Container.Resources
-	if t := res.Trace.CPU; t != nil {
-		var lr LimitResult
-		res.Rec.CPURequest, lr = finish(t, resources.Requests.Cpu(), resources.Limits.Cpu(), in.RsCfg.CPU.Limits)
-		res.Rec.CPULimit, res.Rec.RemoveCPULimit = lr.Quantity, lr.Remove
-	}
-	if t := res.Trace.Memory; t != nil {
-		var lr LimitResult
-		res.Rec.MemoryRequest, lr = finish(t, resources.Requests.Memory(), resources.Limits.Memory(), in.RsCfg.Memory.Limits)
-		res.Rec.MemoryLimit, res.Rec.RemoveMemoryLimit = lr.Quantity, lr.Remove
-	}
-	return res
+	Rec   workload.ContainerRecommendation
+	Trace sustainv1alpha1.ContainerTrace
+	OOM   OOM
 }
 
 // Outcome says whether a Result is a Recommendation, and why not.
@@ -158,8 +99,9 @@ type Request struct {
 	Coordination sustainv1alpha1.AutoscalerCoordination
 	AutoInfo     autoscaler.Info
 	Inputs       *WorkloadInputs
-	// LiveOOMs are the kills the OOM Pod watcher saw, by container. Each counts
-	// as a recent OOM before the recording rules surface it.
+	// LiveOOMs are the kills the OOM Pod watcher saw, by container. One seen
+	// within LiveOOMWindow counts as a recent OOM before the recording rules
+	// surface it.
 	LiveOOMs map[string]*oomwatch.OOMRecord
 	// Since dates the identity for the age gate; see shouldSkipYoungWorkload.
 	// Zero disables the gate.
@@ -186,34 +128,31 @@ func (r Result) Traces() map[string]sustainv1alpha1.ContainerTrace {
 	return out
 }
 
-// Compute is the recommendation algorithm: the age gate, then the
-// per-container pipeline of ComputeContainerRec. Every reader of a
+// Compute is the recommendation algorithm: the age gate, then each
+// container's resources through the stages of every signal. Every reader of a
 // recommendation goes through here so the number the dashboard shows is the
 // number the controller applies.
 func Compute(req Request) Result {
 	containers := req.Containers
 	if len(containers) == 0 {
-		containers = req.Inputs.ObservedContainers()
+		containers = observedContainers(req.Inputs)
 	}
+	in := withLiveOOMs(req.Inputs, req.LiveOOMs)
 	res := Result{
 		Recs:       make(map[string]workload.ContainerRecommendation, len(containers)),
 		Containers: make(map[string]ContainerRecResult, len(containers)),
 	}
 	for _, c := range containers {
-		cr := computeContainer(c, req)
-		if !cr.HasData {
+		cr, ok := computeContainer(c, in, req)
+		if !ok {
 			continue
 		}
 		res.Recs[c.Name] = cr.Rec
 		res.Containers[c.Name] = cr
 	}
 
-	// Workload-level recency only excuses the age gate. The memory floor uses
-	// per-container recency, so a sibling's OOM never floors an innocent
-	// container.
-	recentOOM := req.Inputs.HasRecentOOM() || len(req.LiveOOMs) > 0
 	switch {
-	case shouldSkipYoungWorkload(req.Since, recentOOM):
+	case shouldSkipYoungWorkload(req.Since, oomExcusesAge(in)):
 		res.Outcome = TooYoung
 	case len(res.Recs) == 0:
 		res.Outcome = NoData
@@ -223,38 +162,94 @@ func Compute(req Request) Result {
 	return res
 }
 
-// computeContainer runs ComputeContainerRec for one container, folding the
-// live OOM watcher's record into the Prometheus OOM signal.
-//
-// The OOM-time limit anchors on whichever source reports the HIGHER value. The
-// two have complementary blind spots and neither can be inflated by
-// k8s-sustain's own resize: Prometheus survives a controller restart but is
-// windowed, so right after a resize-then-OOM it can still report the PREVIOUS
-// limit; the live record has the exact limit applied at that kill but is lost
-// on restart. Preferring Prometheus anchors on the stale, lower limit and
-// under-bumps a container that is still OOM-looping.
-func computeContainer(c corev1.Container, req Request) ContainerRecResult {
-	in := req.Inputs
-	cpuPerPod, hasCPU := in.CPUPerPod[c.Name]
-	memPerPod, hasMem := in.MemPerPod[c.Name]
-	_, hasPeak := in.OOM.PeakMemoryBytes[c.Name]
-
-	oom := NewOOMSignal(in.OOM.OOMCounts[c.Name] > 0, in.OOM.PeakMemoryBytes[c.Name], in.OOM.OOMLimitBytes[c.Name])
-	if live := req.LiveOOMs[c.Name]; live != nil {
-		oom.LiveEventAt = live.TerminatedAt
-		oom.OOMTimeLimitBytes = max(oom.OOMTimeLimitBytes, float64(live.OOMLimitBytes))
+// computeContainer runs one container's CPU and memory requests through their
+// stages and derives the limits. False when no signal justified a request for
+// either resource: the container is skipped rather than recommended at the
+// hard floor.
+func computeContainer(c corev1.Container, in *WorkloadInputs, req Request) (ContainerRecResult, bool) {
+	cpu, cpuOK := requestTrace(cpuResource, c.Name, in, req)
+	mem, memOK := requestTrace(memoryResource, c.Name, in, req)
+	if !cpuOK && !memOK {
+		return ContainerRecResult{}, false
 	}
 
-	return ComputeContainerRec(ContainerInputs{
-		Container:   c,
-		CPUPerPod:   cpuPerPod,
-		HasCPU:      hasCPU,
-		MemPerPod:   memPerPod,
-		HasMemUsage: hasMem,
-		OOM:         oom,
-		HasOOMPeak:  hasPeak,
-		AutoInfo:    req.AutoInfo,
-		RsCfg:       req.Resources,
-		CoordCfg:    req.Coordination,
-	})
+	res := ContainerRecResult{Trace: sustainv1alpha1.ContainerTrace{CPU: cpu, Memory: mem}, OOM: in.OOM[c.Name]}
+	resources := c.Resources
+	if cpu != nil {
+		var lr LimitResult
+		res.Rec.CPURequest, lr = finish(cpu, resources.Requests.Cpu(), resources.Limits.Cpu(), req.Resources.CPU.Limits)
+		res.Rec.CPULimit, res.Rec.RemoveCPULimit = lr.Quantity, lr.Remove
+	}
+	if mem != nil {
+		var lr LimitResult
+		res.Rec.MemoryRequest, lr = finish(mem, resources.Requests.Memory(), resources.Limits.Memory(), req.Resources.Memory.Limits)
+		res.Rec.MemoryLimit, res.Rec.RemoveMemoryLimit = lr.Quantity, lr.Remove
+	}
+	return res, true
+}
+
+// stageValue is what one signal contributed to a request.
+type stageValue struct {
+	signal signal
+	value  float64
+}
+
+// requestTrace runs one container's request for a resource through its stages
+// in their fixed order: the base signals, the adjusters, headroom and the
+// min/max clamp, then autoscaler coordination. justified is false when no
+// signal justified a request; the trace is nil then, and when the Policy keeps
+// the request.
+func requestTrace(res resourceKind, container string, in *WorkloadInputs, req Request) (t *sustainv1alpha1.ResourceTrace, justified bool) {
+	var stages []stageValue
+	var value float64
+	winner := -1
+	for _, r := range []role{base, adjuster} {
+		for _, s := range signals {
+			if s.slot() != (slot{role: r, resource: res}) {
+				continue
+			}
+			c, ok := s.contribute(in, container)
+			if !ok {
+				continue
+			}
+			justified = justified || c.anchors
+			if r == base || c.value > value {
+				value, winner = c.value, len(stages)
+			}
+			stages = append(stages, stageValue{signal: s, value: c.value})
+		}
+	}
+	cfg := res.config(req.Resources).Requests
+	if !justified || cfg.KeepRequest {
+		return nil, justified
+	}
+
+	t = &sustainv1alpha1.ResourceTrace{WithHeadroom: res.withHeadroom(value, cfg.Headroom)}
+	t.Clamped = clamp(t.WithHeadroom, cfg.MinAllowed, cfg.MaxAllowed)
+	t.Coordination = coordinate(t.Clamped, res, req.Coordination, req.AutoInfo, cfg)
+	// Judged on the final request: a clamp on either side of coordination
+	// means an operator bound, not the winning signal, set it.
+	unbounded := t.Clamped.Cmp(t.WithHeadroom) == 0 &&
+		(t.Coordination == nil || t.Coordination.Value.Cmp(t.Coordination.Scaled) == 0)
+	for i, st := range stages {
+		st.signal.record(t, st.value, unbounded && i == winner)
+	}
+	return t, true
+}
+
+// finish derives the request a trace arrives at and the limit from it, and
+// records the limit in the trace.
+func finish(t *sustainv1alpha1.ResourceTrace, currentRequest, currentLimit *resource.Quantity, cfg sustainv1alpha1.ResourceLimitsConfig) (*resource.Quantity, LimitResult) {
+	final := t.Clamped
+	if t.Coordination != nil {
+		final = t.Coordination.Value
+	}
+	request := final.DeepCopy()
+	lr := ComputeLimit(&request, currentRequest, currentLimit, cfg)
+	if lr.Quantity != nil {
+		limit := lr.Quantity.DeepCopy()
+		t.Limit = &limit
+	}
+	t.RemoveLimit = lr.Remove
+	return &request, lr
 }

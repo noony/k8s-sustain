@@ -176,8 +176,8 @@ func (s *Server) simulate(ctx context.Context, spec simulationSpec, id *inventor
 		Resources:          containerResourcesOf(id),
 		CPURequests:        cpuRequests,
 		MemoryRequests:     memRequests,
-		CPURecommendations: recommendationSeries(cpuRecSeries, spec, autoInfo, fetched.Inputs.OOM, false),
-		MemRecommendations: recommendationSeries(memRecSeries, spec, autoInfo, fetched.Inputs.OOM, true),
+		CPURecommendations: recommendationSeries(cpuRecSeries, spec, autoInfo, fetched.Inputs, false),
+		MemRecommendations: recommendationSeries(memRecSeries, spec, autoInfo, fetched.Inputs, true),
 	}, nil
 }
 
@@ -235,35 +235,30 @@ func simulationContainers(res recommender.Result, inputs *recommender.WorkloadIn
 	return out
 }
 
-// recommendationSeries runs each raw percentile point through the same
-// per-container pipeline as the point value (headroom, min/max, OOM floor,
-// autoscaler coordination), so the chart shows exactly what would be applied
-// at each step. OOM recency is per container, so only the series of
-// containers that actually OOMed get floored.
-func recommendationSeries(series promclient.ContainerTimeSeries, spec simulationSpec, autoInfo autoscaler.Info, oom promclient.OOMSignal, memory bool) promclient.ContainerTimeSeries {
+// recommendationSeries computes each raw percentile point as the point value
+// is computed, with the identity's OOM kills, so the chart shows exactly what
+// would be applied at each step.
+func recommendationSeries(series promclient.ContainerTimeSeries, spec simulationSpec, autoInfo autoscaler.Info, inputs *recommender.WorkloadInputs, memory bool) promclient.ContainerTimeSeries {
 	if series == nil {
 		return nil
 	}
 	out := make(promclient.ContainerTimeSeries, len(series))
 	for name, points := range series {
-		in := recommender.ContainerInputs{
-			Container: corev1.Container{Name: name},
-			AutoInfo:  autoInfo,
-			RsCfg:     spec.resources,
-			CoordCfg:  spec.coordination,
-		}
-		if memory {
-			in.OOM = recommender.NewOOMSignal(oom.OOMCounts[name] > 0, oom.PeakMemoryBytes[name], oom.OOMLimitBytes[name])
-			_, in.HasOOMPeak = oom.PeakMemoryBytes[name]
-		}
 		clamped := make([]promclient.TimeValue, len(points))
 		for i, p := range points {
+			point := recommender.WorkloadInputs{OOM: inputs.OOM}
 			if memory {
-				in.MemPerPod, in.HasMemUsage = p.Value, true
+				point.MemPerPod = promclient.ContainerValues{name: p.Value}
 			} else {
-				in.CPUPerPod, in.HasCPU = p.Value, true
+				point.CPUPerPod = promclient.ContainerValues{name: p.Value}
 			}
-			rec := recommender.ComputeContainerRec(in).Rec
+			rec := recommender.Compute(recommender.Request{
+				Containers:   []corev1.Container{{Name: name}},
+				Resources:    spec.resources,
+				Coordination: spec.coordination,
+				AutoInfo:     autoInfo,
+				Inputs:       &point,
+			}).Recs[name]
 			var v float64
 			switch {
 			case memory && rec.MemoryRequest != nil:

@@ -34,6 +34,8 @@ func parseShardQuery(q string) shardQuery {
 		sq.signal = "cpu"
 	case strings.Contains(q, "workload_max_pod_memory"):
 		sq.signal = "memory"
+	case strings.Contains(q, listedSignalRule):
+		sq.signal = "listed"
 	default:
 		sq.signal = "unknown: " + q
 	}
@@ -169,10 +171,10 @@ func TestPromInputs_BatchesIdentitiesIntoOneShardPerSignal(t *testing.T) {
 	if api.Inputs.MemPerPod["app"] != 100 || web.Inputs.MemPerPod["app"] != 200 {
 		t.Errorf("memory = %v / %v, want 100 / 200", api.Inputs.MemPerPod, web.Inputs.MemPerPod)
 	}
-	if api.Inputs.OOM.OOMCounts["app"] != 3 {
-		t.Errorf("api OOM count = %v, want 3", api.Inputs.OOM.OOMCounts["app"])
+	if api.Inputs.OOM["app"].Kills != 3 {
+		t.Errorf("api OOM = %+v, want 3 kills", api.Inputs.OOM["app"])
 	}
-	if web.Inputs.HasRecentOOM() {
+	if len(web.Inputs.OOM) != 0 {
 		t.Errorf("web has no OOM series, got %+v", web.Inputs.OOM)
 	}
 }
@@ -339,7 +341,7 @@ func TestPromInputs_OOMFailureIsBestEffort(t *testing.T) {
 	if r.Inputs.CPUPerPod["app"] != 0.5 {
 		t.Errorf("cpu = %v, want 0.5", r.Inputs.CPUPerPod)
 	}
-	if r.Inputs.HasRecentOOM() {
+	if len(r.Inputs.OOM) != 0 {
 		t.Errorf("OOM = %+v, want empty", r.Inputs.OOM)
 	}
 }
@@ -364,7 +366,7 @@ func TestPromInputs_EmptyResponseYieldsEmptyInputs(t *testing.T) {
 		if res.Inputs.CPUPerPod == nil || res.Inputs.MemPerPod == nil {
 			t.Errorf("%v: CPUPerPod and MemPerPod must be non-nil", r.Identity)
 		}
-		if len(res.Inputs.CPUPerPod) != 0 || len(res.Inputs.MemPerPod) != 0 || res.Inputs.HasRecentOOM() {
+		if len(res.Inputs.CPUPerPod) != 0 || len(res.Inputs.MemPerPod) != 0 || len(res.Inputs.OOM) != 0 {
 			t.Errorf("%v: want empty inputs, got %+v", r.Identity, res.Inputs)
 		}
 	}

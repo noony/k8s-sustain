@@ -148,7 +148,7 @@ func (r *PolicyReconciler) computeIdentity(
 	}
 	var liveOOMs map[string]*oomwatch.OOMRecord
 	if r.LiveOOM.Enabled() {
-		liveOOMs = r.LiveOOM.Source.RecentByWorkload(id.Namespace, id.OwnerKind, id.OwnerName, r.LiveOOM.EffectiveMaxAge())
+		liveOOMs = r.LiveOOM.Source.RecentByWorkload(id.Namespace, id.OwnerKind, id.OwnerName, recommender.LiveOOMWindow)
 	}
 	out := recommender.Compute(recommender.Request{
 		Containers:   containersFromObserved(it.Observed, rs.ExcludeInitContainers),
@@ -185,8 +185,8 @@ func emitContainerComputation(id promclient.WorkloadIdentity, containers map[str
 			continue
 		}
 		oomFloorApplied.WithLabelValues(ns, kind, name, container).Inc()
-		if !res.OOM.LiveEventAt.IsZero() {
-			EmitOOMReactionLatency(ns, kind, name, time.Since(res.OOM.LiveEventAt).Seconds())
+		if !res.OOM.LiveAt.IsZero() {
+			EmitOOMReactionLatency(ns, kind, name, time.Since(res.OOM.LiveAt).Seconds())
 		}
 	}
 }
