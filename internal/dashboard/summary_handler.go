@@ -18,6 +18,7 @@ import (
 )
 
 // summaryKPI is the top-row of cluster-wide KPIs surfaced by /api/summary.
+// The three counts are identities by Risk state, so an identity counts once.
 type summaryKPI struct {
 	CPUSavedCores float64   `json:"cpuSavedCores"`
 	CPUSavedRatio float64   `json:"cpuSavedRatio"`
@@ -26,6 +27,7 @@ type summaryKPI struct {
 	MemSavedRatio float64   `json:"memSavedRatio"`
 	MemSpark7d    []float64 `json:"memSpark7d"`
 	AtRiskCount   int       `json:"atRiskCount"`
+	BlockedCount  int       `json:"blockedCount"`
 	DriftedCount  int       `json:"driftedCount"`
 }
 
@@ -50,7 +52,7 @@ type policyRollup struct {
 	WorkloadCount   int     `json:"workloadCount"`
 	CPUSavingsCores float64 `json:"cpuSavingsCores"`
 	MemSavingsBytes float64 `json:"memSavingsBytes"`
-	AtRiskCount     int     `json:"atRiskCount"`
+	BlockedCount    int     `json:"blockedCount"`
 	LastAppliedAt   string  `json:"lastAppliedAt,omitempty"`
 }
 
@@ -174,12 +176,11 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 	}
 
 	var (
-		atRiskByPolicy           map[string]float64
+		blockedByPolicy          map[string]float64
 		wlByPolicy               map[string]float64
 		cpuByPolicy, memByPolicy map[string]float64
 		cpuHeadroom, memHeadroom headroomBreakdown
-		riskRows, driftRows      []attentionRow
-		blockedRows              []attentionRow
+		unhealthy                map[promclient.WorkloadIdentity]identityHealth
 	)
 
 	var wg sync.WaitGroup
@@ -217,12 +218,12 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 	})
 	wg.Go(func() {
 		v, err := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyBlockedCount, "policy")
-		atRiskByPolicy = v
+		blockedByPolicy = v
 		recordErr(err)
 	})
 	wg.Go(func() {
-		v, err := s.PromClient.QueryInstant(ctx, fmt.Sprintf("count(%s == 1)", promclient.MetricWorkloadDrifted))
-		resp.KPI.DriftedCount = int(v)
+		v, err := s.Health.unhealthy(ctx)
+		unhealthy = v
 		recordErr(err)
 	})
 	wg.Go(func() {
@@ -233,22 +234,6 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 	wg.Go(func() {
 		v, err := readHeadroom(ctx, s.PromClient, promclient.MetricClusterMemoryHeadroomBreakdown)
 		memHeadroom = v
-		recordErr(err)
-	})
-	wg.Go(func() {
-		// The OOM rule is per-container; re-aggregate to one row per workload.
-		v, err := collectAttention(ctx, s.PromClient, fmt.Sprintf("sum by (namespace, owner_kind, owner_name) (%s) > 0", promclient.MetricWorkloadOOM24h), "OOM")
-		riskRows = v
-		recordErr(err)
-	})
-	wg.Go(func() {
-		v, err := collectAttention(ctx, s.PromClient, fmt.Sprintf("max by (namespace, owner_kind, owner_name) (%s) > 0", promclient.MetricWorkloadStalePods), "drift")
-		driftRows = v
-		recordErr(err)
-	})
-	wg.Go(func() {
-		v, err := collectAttention(ctx, s.PromClient, promclient.MetricWorkloadRetryState+" == 1", "blocked")
-		blockedRows = v
 		recordErr(err)
 	})
 	wg.Go(func() {
@@ -270,13 +255,10 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 
 	resp.Headroom["cpu"] = cpuHeadroom
 	resp.Headroom["memory"] = memHeadroom
-	resp.Attention["risk"] = riskRows
-	resp.Attention["drift"] = driftRows
-	resp.Attention["blocked"] = blockedRows
-
-	for _, n := range atRiskByPolicy {
-		resp.KPI.AtRiskCount += int(n)
-	}
+	counts := fillAttention(resp.Attention, unhealthy)
+	resp.KPI.AtRiskCount = counts[riskAtRisk]
+	resp.KPI.BlockedCount = counts[riskBlocked]
+	resp.KPI.DriftedCount = counts[riskDrifted]
 
 	// Union of policy keys so partial-data rollups still surface.
 	policyNames := make(map[string]struct{}, len(wlByPolicy)+len(cpuByPolicy)+len(memByPolicy))
@@ -296,7 +278,7 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 			WorkloadCount:   int(wlByPolicy[name]),
 			CPUSavingsCores: cpuByPolicy[name],
 			MemSavingsBytes: memByPolicy[name],
-			AtRiskCount:     int(atRiskByPolicy[name]),
+			BlockedCount:    int(blockedByPolicy[name]),
 		})
 	}
 
@@ -326,30 +308,55 @@ func readHeadroom(ctx context.Context, p PromQuerier, expr string) (headroomBrea
 	return headroomBreakdown{Used: bySeg["used"], Idle: bySeg["idle"], Free: bySeg["free"]}, nil
 }
 
-func collectAttention(ctx context.Context, p PromQuerier, expr, signal string) ([]attentionRow, error) {
-	rows := []attentionRow{}
-	// Key by the full namespace|kind|name triple so identically-named workloads
-	// in different namespaces stay distinct.
-	bySeries, err := p.QueryByLabels(ctx, expr, "namespace", "owner_kind", "owner_name")
-	if err != nil {
-		return rows, err
+// attentionGroups maps each non-Safe Risk state to its attention-queue group
+// and row signal.
+var attentionGroups = map[riskState]struct{ group, signal string }{
+	riskAtRisk:  {"risk", "OOM"},
+	riskBlocked: {"blocked", "blocked"},
+	riskDrifted: {"drift", "drift"},
+}
+
+const maxAttentionRows = 10
+
+// fillAttention files every unhealthy identity under the group of its Risk
+// state, so an identity appears once, and returns how many identities each
+// state has. Rows are ordered worst first (most OOM kills, retry attempts or
+// stale pods) and capped per group.
+func fillAttention(attention map[string][]attentionRow, unhealthy map[promclient.WorkloadIdentity]identityHealth) map[riskState]int {
+	counts := map[riskState]int{}
+	type ranked struct {
+		id       promclient.WorkloadIdentity
+		severity int
 	}
-	if len(bySeries) == 0 {
-		return rows, nil
-	}
-	keys := slices.Collect(maps.Keys(bySeries))
-	slices.SortFunc(keys, func(a, b string) int {
-		if c := cmp.Compare(bySeries[b], bySeries[a]); c != 0 {
-			return c
+	byState := map[riskState][]ranked{}
+	for id, h := range unhealthy {
+		state := riskStateOf(h)
+		if _, ok := attentionGroups[state]; !ok {
+			continue
 		}
-		return cmp.Compare(a, b)
-	})
-	if len(keys) > 10 {
-		keys = keys[:10]
+		counts[state]++
+		severity := h.StalePods
+		switch state {
+		case riskAtRisk:
+			severity = h.OOM24h
+		case riskBlocked:
+			severity = h.Blocked.Attempts
+		}
+		byState[state] = append(byState[state], ranked{id: id, severity: severity})
 	}
-	for _, key := range keys {
-		ns, kind, name := splitWorkloadKey(key)
-		rows = append(rows, attentionRow{Namespace: ns, Kind: kind, Name: name, Signal: signal})
+	for state, g := range attentionGroups {
+		entries := byState[state]
+		slices.SortFunc(entries, func(a, b ranked) int {
+			return cmp.Or(
+				cmp.Compare(b.severity, a.severity),
+				promclient.CompareIdentity(a.id, b.id),
+			)
+		})
+		rows := []attentionRow{}
+		for _, e := range entries[:min(len(entries), maxAttentionRows)] {
+			rows = append(rows, attentionRow{Namespace: e.id.Namespace, Kind: e.id.OwnerKind, Name: e.id.OwnerName, Signal: g.signal})
+		}
+		attention[g.group] = rows
 	}
-	return rows, nil
+	return counts
 }

@@ -34,6 +34,9 @@ func TestHandlePoliciesIncludesEffectiveness(t *testing.T) {
 	if len(got) != 1 || got[0]["cpuSavingsCores"] != 1.2 {
 		t.Fatalf("unexpected: %+v", got)
 	}
+	if got[0]["blockedCount"] != 1.0 {
+		t.Errorf("blockedCount = %v, want 1", got[0]["blockedCount"])
+	}
 }
 
 func TestHandlePolicyDetailIncludesEffectivenessSeries(t *testing.T) {

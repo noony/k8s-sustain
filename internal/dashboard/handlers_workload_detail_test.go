@@ -8,18 +8,13 @@ import (
 
 func TestHandleWorkloadDetailReturnsSnapshot(t *testing.T) {
 	srv := newTestServerWithDeployment(t, "default", "web")
-	srv.PromClient = &fakePromClient{
-		instant: map[string]float64{
-			"sum(k8s_sustain:workload_oom_24h{namespace=\"default\",owner_kind=\"Deployment\",owner_name=\"web\"})":    1,
-			"max(k8s_sustain_workload_stale_pods{namespace=\"default\",owner_kind=\"Deployment\",owner_name=\"web\"})": 2,
-			"max(k8s_sustain_workload_pods{namespace=\"default\",owner_kind=\"Deployment\",owner_name=\"web\"})":       5,
-		},
-		byLabels: map[string]map[string]float64{
-			`k8s_sustain_coordination_factor{namespace="default",owner_kind="Deployment",owner_name="web"}`: {
-				"cpu|overhead":    1.25,
-				"memory|overhead": 1.10,
-				"cpu|replica":     0.80,
-			},
+	srv.Health = memHealthSignals{
+		identity("default", "Deployment", "web"): {
+			OOM24h:              1,
+			StalePods:           2,
+			TotalPods:           5,
+			AutoscalerPresent:   true,
+			CoordinationFactors: &coordinationFactors{Enabled: true, CPUOverhead: 1.25, MemoryOverhead: 1.10, CPUReplica: 0.80},
 		},
 	}
 	rec := httptest.NewRecorder()
@@ -29,37 +24,38 @@ func TestHandleWorkloadDetailReturnsSnapshot(t *testing.T) {
 		t.Fatalf("status %d", rec.Code)
 	}
 	var got struct {
-		UpdateMode          string `json:"updateMode"`
-		OOM24h              int    `json:"oom24h"`
-		StalePods           int    `json:"stalePods"`
-		TotalPods           int    `json:"totalPods"`
-		CoordinationFactors *struct {
-			Enabled        bool    `json:"enabled"`
-			CPUOverhead    float64 `json:"cpuOverhead"`
-			MemoryOverhead float64 `json:"memoryOverhead"`
-			CPUReplica     float64 `json:"cpuReplica"`
-		} `json:"coordinationFactors"`
+		RiskState           riskState            `json:"riskState"`
+		OOM24h              int                  `json:"oom24h"`
+		StalePods           int                  `json:"stalePods"`
+		TotalPods           int                  `json:"totalPods"`
+		Blocked             *struct{}            `json:"blocked"`
+		CoordinationFactors *coordinationFactors `json:"coordinationFactors"`
 	}
 	decodeEnvelopeData(t, rec.Body, &got)
-	if got.OOM24h != 1 {
-		t.Fatalf("oom24h: got %d want 1", got.OOM24h)
+	if got.RiskState != riskAtRisk {
+		t.Errorf("riskState = %q, want at-risk", got.RiskState)
 	}
-	if got.StalePods != 2 || got.TotalPods != 5 {
-		t.Errorf("StalePods/TotalPods = %d/%d, want 2/5", got.StalePods, got.TotalPods)
+	if got.OOM24h != 1 || got.StalePods != 2 || got.TotalPods != 5 {
+		t.Errorf("oom24h/stale/total = %d/%d/%d, want 1/2/5", got.OOM24h, got.StalePods, got.TotalPods)
 	}
-	if got.CoordinationFactors == nil {
-		t.Fatalf("expected CoordinationFactors to be populated")
+	if got.Blocked != nil {
+		t.Errorf("blocked = %+v, want absent", got.Blocked)
 	}
-	if !got.CoordinationFactors.Enabled {
-		t.Errorf("CoordinationFactors.Enabled = false, want true")
+	if cf := got.CoordinationFactors; cf == nil || !cf.Enabled || cf.CPUOverhead != 1.25 || cf.MemoryOverhead != 1.10 || cf.CPUReplica != 0.80 {
+		t.Errorf("coordinationFactors = %+v", cf)
 	}
-	if got.CoordinationFactors.CPUOverhead != 1.25 {
-		t.Errorf("CoordinationFactors.CPUOverhead = %v, want 1.25", got.CoordinationFactors.CPUOverhead)
+}
+
+func TestHandleWorkloadDetailWithoutSignalsIsSafe(t *testing.T) {
+	srv := newTestServerWithDeployment(t, "default", "web")
+	rec := httptest.NewRecorder()
+	srv.handleWorkloadDetail(rec, httptest.NewRequest(http.MethodGet, "/api/workloads/default/Deployment/web", nil),
+		"default", "Deployment", "web")
+	var got struct {
+		RiskState riskState `json:"riskState"`
 	}
-	if got.CoordinationFactors.MemoryOverhead != 1.10 {
-		t.Errorf("CoordinationFactors.MemoryOverhead = %v, want 1.10", got.CoordinationFactors.MemoryOverhead)
-	}
-	if got.CoordinationFactors.CPUReplica != 0.80 {
-		t.Errorf("CoordinationFactors.CPUReplica = %v, want 0.80", got.CoordinationFactors.CPUReplica)
+	decodeEnvelopeData(t, rec.Body, &got)
+	if got.RiskState != riskSafe {
+		t.Errorf("riskState = %q, want safe for an identity with no signal", got.RiskState)
 	}
 }

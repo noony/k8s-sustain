@@ -32,7 +32,6 @@ type PromQuerier interface {
 	QueryInstant(ctx context.Context, expr string) (float64, error)
 	QueryRange(ctx context.Context, expr string, r promclient.TimeRange, step string) ([]promclient.TimeValue, error)
 	QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error)
-	QueryByLabels(ctx context.Context, query string, labels ...string) (map[string]float64, error)
 
 	// recommender.WorkloadQuerier: the recommendation inputs, shared with the
 	// controller so the dashboard computes what the controller applies.
@@ -66,7 +65,10 @@ func Scheme() *runtime.Scheme { return dashboardScheme }
 type Server struct {
 	K8sClient  client.Client
 	PromClient PromQuerier
-	Logger     logr.Logger
+	// Health is where every view reads identity health from; production
+	// wires NewPrometheusHealthSignals.
+	Health HealthSignals
+	Logger logr.Logger
 	// CORSOrigins is the allowed origin allowlist: empty means same-origin
 	// only, ["*"] allows every origin.
 	CORSOrigins []string

@@ -17,7 +17,6 @@ const (
 	MetricPolicyBlockedCount       = "k8s_sustain_policy_blocked_count"
 
 	MetricWorkloadOOM24h              = "k8s_sustain:workload_oom_24h"
-	MetricWorkloadDrifted             = "k8s_sustain:workload_drifted"
 	MetricWorkloadPods                = "k8s_sustain_workload_pods"
 	MetricWorkloadStalePods           = "k8s_sustain_workload_stale_pods"
 	MetricWorkloadRetryState          = "k8s_sustain_workload_retry_state"

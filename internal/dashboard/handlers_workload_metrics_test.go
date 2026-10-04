@@ -260,7 +260,7 @@ func TestHandleWorkloadRecommendations_GroupedIdentitySiblingOptsInAndMatches(t 
 		map[string]string{"track": "green"}, baseTime)
 
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(p, q, older, newer).Build()
-	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Health: memHealthSignals{}, Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,

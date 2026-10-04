@@ -1,5 +1,7 @@
 <script setup lang="ts">
-defineProps<{ state?: 'safe' | 'drifted' | 'at-risk' | 'blocked' | string }>()
+import type { RiskState } from '../lib/api'
+
+defineProps<{ state?: RiskState | string }>()
 const labels: Record<string, { text: string; cls: string }> = {
   safe: { text: 'Safe', cls: 'risk-safe' },
   drifted: { text: 'Drift', cls: 'risk-drift' },

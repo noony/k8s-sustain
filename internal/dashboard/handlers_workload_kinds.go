@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -17,7 +16,6 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/policymatch"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -311,20 +309,10 @@ func (s *Server) inactiveWorkloadEntry(ctx context.Context, namespace, kind, nam
 	return workloadEntry{}, false
 }
 
-// workloadKey builds the "namespace|kind|name" key used for Prometheus signal
-// maps.
+// workloadKey builds the "namespace|kind|name" key rows and Prometheus
+// label maps are matched on.
 func workloadKey(namespace, kind, name string) string {
 	return namespace + "|" + kind + "|" + name
-}
-
-// splitWorkloadKey is the inverse of workloadKey. Missing components come
-// back empty; any extra "|" separators stay in the name component.
-func splitWorkloadKey(key string) (namespace, kind, name string) {
-	parts := strings.SplitN(key, "|", 3)
-	for len(parts) < 3 {
-		parts = append(parts, "")
-	}
-	return parts[0], parts[1], parts[2]
 }
 
 // paginateRange clamps page/pageSize into a valid [start, end) slice index
@@ -382,71 +370,6 @@ func containerStatusFor(c corev1.Container, isInit bool) containerStatus {
 	}
 }
 
-// workloadSignals is the Prometheus-derived per-workload state overlaid onto
-// list rows.
-type workloadSignals struct {
-	RiskState           string
-	StalePods           int
-	TotalPods           int
-	AutoscalerPresent   bool
-	CoordinationFactors *coordinationFactors
-}
-
-// fetchWorkloadSignals batches the signal queries for every workload at once
-// and returns a map keyed by workloadKey covering every requested key.
-func (s *Server) fetchWorkloadSignals(ctx context.Context, keys []string) map[string]workloadSignals {
-	if len(keys) == 0 {
-		return nil
-	}
-	// The OOM rule is per-container; re-aggregate so a 0-count sibling container
-	// cannot overwrite an OOMed one.
-	oom, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("sum by (namespace, owner_kind, owner_name) (%s)", promclient.MetricWorkloadOOM24h), "namespace", "owner_kind", "owner_name")
-	stale, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("max by (namespace, owner_kind, owner_name) (%s)", promclient.MetricWorkloadStalePods), "namespace", "owner_kind", "owner_name")
-	total, _ := s.PromClient.QueryByLabels(ctx, fmt.Sprintf("max by (namespace, owner_kind, owner_name) (%s)", promclient.MetricWorkloadPods), "namespace", "owner_kind", "owner_name")
-	blocked, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricWorkloadRetryState+" == 1", "namespace", "owner_kind", "owner_name")
-	autoscaler, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricAutoscalerPresent, "namespace", "owner_kind", "owner_name")
-	coord, _ := s.PromClient.QueryByLabels(ctx, promclient.MetricCoordinationFactor, "namespace", "owner_kind", "owner_name", "resource", "kind")
-
-	out := make(map[string]workloadSignals, len(keys))
-	for _, key := range keys {
-		sig := workloadSignals{
-			AutoscalerPresent: autoscaler[key] > 0,
-			StalePods:         int(stale[key]),
-			TotalPods:         int(total[key]),
-		}
-		switch {
-		case oom[key] > 0:
-			sig.RiskState = "at-risk"
-		case blocked[key] > 0:
-			sig.RiskState = "blocked"
-		case sig.StalePods > 0:
-			sig.RiskState = "drifted"
-		default:
-			sig.RiskState = "safe"
-		}
-		if sig.AutoscalerPresent {
-			sig.CoordinationFactors = coordinationFactorsFor(coord, key)
-		}
-		out[key] = sig
-	}
-	return out
-}
-
-// coordinationFactorsFor extracts one workload's factors from the batched
-// map; nil when none exist.
-func coordinationFactorsFor(coord map[string]float64, prefix string) *coordinationFactors {
-	byLabels := map[string]float64{}
-	for _, suffix := range []string{"cpu|overhead", "memory|overhead", "cpu|replica"} {
-		if v, ok := coord[prefix+"|"+suffix]; ok {
-			byLabels[suffix] = v
-		}
-	}
-	if len(byLabels) == 0 {
-		return nil
-	}
-	return assembleCoordinationFactors(byLabels)
-}
-
 // assembleCoordinationFactors maps {resource|kind: value} series onto a
 // coordinationFactors payload.
 func assembleCoordinationFactors(byLabels map[string]float64) *coordinationFactors {
@@ -462,17 +385,6 @@ func assembleCoordinationFactors(byLabels map[string]float64) *coordinationFacto
 		}
 	}
 	return out
-}
-
-// fetchCoordinationFactors queries the coordination factors for one workload;
-// nil when none exist.
-func (s *Server) fetchCoordinationFactors(ctx context.Context, namespace, kind, name string) *coordinationFactors {
-	expr := promclient.MetricCoordinationFactor + promclient.WorkloadSelector(namespace, kind, name)
-	byLabels, err := s.PromClient.QueryByLabels(ctx, expr, "resource", "kind")
-	if err != nil || len(byLabels) == 0 {
-		return nil
-	}
-	return assembleCoordinationFactors(byLabels)
 }
 
 func kindEnabledInPolicy(p *sustainv1alpha1.Policy, kind string) bool {

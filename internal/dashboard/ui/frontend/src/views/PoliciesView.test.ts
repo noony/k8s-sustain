@@ -15,7 +15,7 @@ describe('PoliciesView', () => {
         workloadCount: 5,
         cpuSavingsCores: 1.2,
         memSavingsBytes: 1e9,
-        atRiskCount: 1,
+        blockedCount: 3,
       },
     ])
     const router = createRouter({
@@ -29,5 +29,7 @@ describe('PoliciesView', () => {
     expect(w.text()).toContain('Workloads')
     expect(w.text()).toContain('CPU saved')
     expect(w.text()).toContain('1.20')
+    expect(w.text()).toContain('Blocked')
+    expect(w.find('td[data-label="Blocked"]').text()).toBe('3')
   })
 })

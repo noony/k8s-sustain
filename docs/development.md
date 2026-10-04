@@ -296,6 +296,23 @@ kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 6. If the kind's pods cannot be evicted (job-like workloads), add an in-place-only branch in `reconcileWorkload` (`internal/controller/workload_reconcile.go`) alongside the Job, CronJob and bare-pod ones; selector-based kinds need nothing more
 7. Add RBAC markers (`+kubebuilder:rbac:...`) to the controller and the Helm RBAC rule in `charts/k8s-sustain/templates/rbac.yaml`
 
+## Dashboard health signals
+
+Every dashboard view reads workload health — OOM kills in 24h, Blocked, stale
+and total pods, the autoscaler and its coordination factors — through one port,
+`HealthSignals` (`internal/dashboard/health.go`), keyed by identity. Its
+Prometheus adapter (`health_prometheus.go`) holds the only health PromQL;
+tests use the in-memory `memHealthSignals` instead of faking query text. The
+Risk state is classified in exactly one place, `riskStateOf`, and returned in
+every payload (`riskState`); the SPA renders it and never derives its own.
+
+The port works because the controller emits every health metric under the
+identity's labels: `internal/controller/identity_health.go` aggregates the
+apply outcomes of an identity's members (pod counts summed, Blocked if any
+member is) and deletes the series of identities no policy targets any more.
+A new health signal therefore needs both halves: an identity-keyed metric in
+the controller and a field on `identityHealth` filled by the adapter.
+
 ## Dashboard frontend
 
 The dashboard frontend is a Vue 3 + TypeScript SPA built with Vite in
