@@ -378,6 +378,26 @@
   
 
       
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../adr/" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -1810,6 +1830,121 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A single identity is a batch of one
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1994,11 +2129,13 @@ restartable sidecar drifts from the recommendation. Drift in classic init
 containers does not trigger recycle — they have already exited; the new
 requests apply on next pod creation via webhook injection.</p>
 <h2 id="how-the-data-is-fetched">How the data is fetched<a class="headerlink" href="#how-the-data-is-fetched" title="Permanent link">&para;</a></h2>
-<p>Before running the stages below, the controller fetches every identity's Prometheus inputs for a policy in <strong>one sharded batch call per policy</strong>, not one query set per workload. A policy matching 2,000 workloads issues a handful of queries rather than several thousand.</p>
+<p>Before running the stages below, the controller fetches every identity's Prometheus inputs for a policy in <strong>one batched call per policy</strong>, not one query set per workload. A policy matching 2,000 workloads issues a handful of queries rather than several thousand.</p>
 <p>The batch covers the policy's whole work-list, including identities with no live workload object — see <a href="../architecture/#computation">Computation</a>.</p>
-<p>Shards are sized by a projected sample budget — containers × window-minutes, summed across the workloads packed into a shard — capped by <code>--query-shard-max-samples</code> (default <code>10,000,000</code>). The cap exists because Prometheus's own <code>--query.max-samples</code> (default <code>50,000,000</code>) <em>rejects</em> an over-budget query outright, which would fail every workload sharing that shard rather than just the excess ones; the default leaves a 5× margin. Independently, <code>--prometheus-max-inflight</code> (default 8) caps concurrent queries across the whole controller process so k8s-sustain cannot saturate a Prometheus shared with dashboards and alerting.</p>
-<p>Every kind batches identically, including <code>Job</code> and <code>Pod</code>. An identity with no observed-resources snapshot to size a shard with is fetched individually; a departed identity with no snapshot at all is skipped, since there is no container set to compute against.</p>
-<p>Coverage and health are observed separately and must not be derived from one another — see <a href="../../reference/metrics/#batch-prefetch-coverage-vs-failures">Batch prefetch coverage vs. failures</a>.</p>
+<p>The batch is split into shards, each read with one query per signal (CPU, memory, OOM). Shards are sized by a projected sample budget — containers × window-minutes, summed across the workloads packed into a shard — capped by <code>--query-shard-max-samples</code> (default <code>10,000,000</code>). The cap exists because Prometheus's own <code>--query.max-samples</code> (default <code>50,000,000</code>) <em>rejects</em> an over-budget query outright, which would fail every workload sharing that shard rather than just the excess ones; the default leaves a 5× margin. Independently, <code>--prometheus-max-inflight</code> (default 8) caps concurrent queries across the whole controller process so k8s-sustain cannot saturate a Prometheus shared with dashboards and alerting.</p>
+<p>A shard query that fails is retried once. If it fails again, its identities are re-queried one shard each, with the same query narrowed to one name, so a shard Prometheus rejects as a whole does not cost its healthy members their inputs — a single identity is just a batch of one (<a href="../../adr/0001-single-identity-is-a-batch-of-one/">ADR 0001</a>). An identity whose CPU or memory query still fails on its own has failed its fetch: each of its workloads is retried with backoff (see <a href="../architecture/#application">Application</a>). The OOM signal is best-effort: when it cannot be read, the identity is computed without an OOM floor.</p>
+<p>Every kind batches identically, including <code>Job</code> and <code>Pod</code>. An identity whose container count is unknown (no observed-resources snapshot to size it by) gets a shard of its own; a departed identity with no snapshot at all is skipped, since there is no container set to compute against. An identity whose every workload is in retry backoff is not fetched.</p>
+<p>The dashboard's simulations read their inputs the same way, one workload or a whole policy per call.</p>
+<p>Coverage and health are observed separately and must not be derived from one another — see <a href="../../reference/metrics/#batch-fetch-coverage-vs-failures">Batch fetch coverage vs. failures</a>.</p>
 <h2 id="stages">Stages<a class="headerlink" href="#stages" title="Permanent link">&para;</a></h2>
 <p>The recommender runs each container through the following stages, in order:</p>
 <ol>

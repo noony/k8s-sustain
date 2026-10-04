@@ -378,6 +378,26 @@
   
 
       
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../adr/" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -1693,10 +1713,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#batch-prefetch-coverage-vs-failures" class="md-nav__link">
+  <a href="#batch-fetch-coverage-vs-failures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Batch prefetch coverage vs. failures
+        Batch fetch coverage vs. failures
       
     </span>
   </a>
@@ -1960,6 +1980,121 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A single identity is a batch of one
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -2044,10 +2179,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#batch-prefetch-coverage-vs-failures" class="md-nav__link">
+  <a href="#batch-fetch-coverage-vs-failures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Batch prefetch coverage vs. failures
+        Batch fetch coverage vs. failures
       
     </span>
   </a>
@@ -2508,12 +2643,12 @@
 <li><code>recycle_suppressed_total</code> — decreases held back by the policy's <a href="../policy/#cpudownsizethreshold-memorydownsizethreshold"><code>downsizeThreshold</code></a>, once per resource per pod per reconcile, summed over the identity's members. Increases are never counted.</li>
 <li><code>group_autoscaler_mismatch_total</code> — once per reconcile for an <a href="../../guides/standalone-pods-and-grouping/">owner-name group</a> whose members disagree on autoscaler presence or kind. The group's single recommendation follows the first sorted member's autoscaler, so any non-zero rate is a misconfiguration.</li>
 </ul>
-<h4 id="batch-prefetch-coverage-vs-failures">Batch prefetch coverage vs. failures<a class="headerlink" href="#batch-prefetch-coverage-vs-failures" title="Permanent link">&para;</a></h4>
-<p>Each reconcile fetches Prometheus data for all of a policy's workloads in one sharded batch (see <a href="../../concepts/architecture/">Architecture</a>):</p>
+<h4 id="batch-fetch-coverage-vs-failures">Batch fetch coverage vs. failures<a class="headerlink" href="#batch-fetch-coverage-vs-failures" title="Permanent link">&para;</a></h4>
+<p>Each reconcile fetches Prometheus data for all of a policy's workloads in one batched call (see <a href="../../concepts/recommendation-pipeline/#how-the-data-is-fetched">How the data is fetched</a>):</p>
 <ul>
-<li><code>policy_batch_requested_count</code> — identities in the batch this cycle.</li>
+<li><code>policy_batch_requested_count</code> — identities in the batch this cycle. An identity whose every workload is in retry backoff is not fetched.</li>
 <li><code>policy_batch_resolved_count</code> — identities that returned at least one CPU or memory sample.</li>
-<li><code>policy_batch_failures_total</code> — identities whose shard query and per-workload fallback both failed.</li>
+<li><code>policy_batch_failures_total</code> — identities whose CPU or memory could not be read, even when re-queried on their own.</li>
 </ul>
 <p><code>resolved &lt; requested</code> with flat <code>failures_total</code> is normal (young or quiet workloads). Alert on <code>failures_total</code>; treat a low resolved/requested ratio as a data-maturity signal.</p>
 <h4 id="series-lifetime-when-a-policy-is-deleted">Series lifetime when a Policy is deleted<a class="headerlink" href="#series-lifetime-when-a-policy-is-deleted" title="Permanent link">&para;</a></h4>

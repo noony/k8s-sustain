@@ -10,13 +10,11 @@
       
       
       
-        <link rel="canonical" href="https://noony.github.io/k8s-sustain/main/guides/jobs-and-cronjobs/">
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/main/adr/0001-single-identity-is-a-batch-of-one/">
       
       
-        <link rel="prev" href="../deployments/">
+        <link rel="prev" href="../">
       
-      
-        <link rel="next" href="../argo-rollouts/">
       
       
         
@@ -27,7 +25,7 @@
     
     
       
-        <title>Jobs & CronJobs - k8s-sustain</title>
+        <title>A single identity is a batch of one - k8s-sustain</title>
       
     
     
@@ -74,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#jobs-and-cronjobs" class="md-skip">
+        <a href="#1-a-single-identity-is-a-batch-of-one" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +111,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Jobs & CronJobs
+              A single identity is a batch of one
             
           </span>
         </div>
@@ -292,8 +290,6 @@
   
   
   
-    
-  
   
     
     
@@ -301,13 +297,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../deployments/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../guides/deployments/" class="md-tabs__link">
           
   
   
@@ -384,11 +378,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
           
   
   
@@ -879,31 +875,26 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -921,7 +912,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -936,31 +927,26 @@
                 
   
   
-    
   
   
-  
     
     
     
     
       
       
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" >
         
           
-          
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" checked>
-        
-          
-          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
             
   
   
@@ -978,7 +964,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_1">
             <span class="md-nav__icon md-icon"></span>
             
@@ -996,7 +982,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../deployments/" class="md-nav__link">
+      <a href="../../guides/deployments/" class="md-nav__link">
         
   
   
@@ -1021,37 +1007,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Jobs & CronJobs
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../guides/jobs-and-cronjobs/" class="md-nav__link">
         
   
   
@@ -1067,103 +1026,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#policy" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Policy
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#opting-in" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Opting in
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#ongoing-mode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Ongoing mode
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cold-start" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cold start
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#collecting-enough-history" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Collecting enough history
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#guaranteed-qos-for-batch-jobs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Guaranteed QoS for batch jobs
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#oom-detection-for-one-shot-pods" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        OOM detection for one-shot pods
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1176,7 +1038,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../argo-rollouts/" class="md-nav__link">
+      <a href="../../guides/argo-rollouts/" class="md-nav__link">
         
   
   
@@ -1204,7 +1066,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../standalone-pods-and-grouping/" class="md-nav__link">
+      <a href="../../guides/standalone-pods-and-grouping/" class="md-nav__link">
         
   
   
@@ -1246,20 +1108,17 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
         
           
-          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
             
   
   
@@ -1295,7 +1154,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../argocd/" class="md-nav__link">
+      <a href="../../guides/argocd/" class="md-nav__link">
         
   
   
@@ -1323,7 +1182,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../keda/" class="md-nav__link">
+      <a href="../../guides/keda/" class="md-nav__link">
         
   
   
@@ -1351,7 +1210,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../cert-manager/" class="md-nav__link">
+      <a href="../../guides/cert-manager/" class="md-nav__link">
         
   
   
@@ -1393,20 +1252,17 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" >
         
           
-          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
             
   
   
@@ -1442,7 +1298,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../dashboard/" class="md-nav__link">
+      <a href="../../guides/dashboard/" class="md-nav__link">
         
   
   
@@ -1470,7 +1326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../authenticated-prometheus/" class="md-nav__link">
+      <a href="../../guides/authenticated-prometheus/" class="md-nav__link">
         
   
   
@@ -1498,7 +1354,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../local-testing/" class="md-nav__link">
+      <a href="../../guides/local-testing/" class="md-nav__link">
         
   
   
@@ -1526,7 +1382,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../managing-policies-with-helm/" class="md-nav__link">
+      <a href="../../guides/managing-policies-with-helm/" class="md-nav__link">
         
   
   
@@ -1847,26 +1703,31 @@
       
   
   
+    
   
   
+  
     
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
         
           
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
             
   
   
@@ -1884,7 +1745,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_8">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1902,7 +1763,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -1927,10 +1788,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A single identity is a batch of one
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1946,6 +1834,59 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#consequences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consequences
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1985,10 +1926,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#policy" class="md-nav__link">
+  <a href="#context" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Policy
+        Context
       
     </span>
   </a>
@@ -1996,10 +1937,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#opting-in" class="md-nav__link">
+  <a href="#decision" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Opting in
+        Decision
       
     </span>
   </a>
@@ -2007,54 +1948,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#ongoing-mode" class="md-nav__link">
+  <a href="#consequences" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Ongoing mode
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cold-start" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Cold start
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#collecting-enough-history" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Collecting enough history
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#guaranteed-qos-for-batch-jobs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Guaranteed QoS for batch jobs
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#oom-detection-for-one-shot-pods" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        OOM detection for one-shot pods
+        Consequences
       
     </span>
   </a>
@@ -2103,37 +2000,11 @@
   
     
     
-      
-  
-  
-    
-    
       <li class="md-path__item">
-        <a href="../deployments/" class="md-path__link">
+        <a href="../" class="md-path__link">
           
   <span class="md-ellipsis">
-    Guides
-  </span>
-
-        </a>
-      </li>
-    
-  
-
-    
-  
-
-      
-        
-  
-  
-    
-    
-      <li class="md-path__item">
-        <a href="../deployments/" class="md-path__link">
-          
-  <span class="md-ellipsis">
-    Workloads
+    Architecture Decisions
   </span>
 
         </a>
@@ -2155,87 +2026,28 @@
   
 
 
-<h1 id="jobs-and-cronjobs">Jobs and CronJobs<a class="headerlink" href="#jobs-and-cronjobs" title="Permanent link">&para;</a></h1>
-<p>k8s-sustain right-sizes both standalone <code>Job</code>s and scheduled <code>CronJob</code>s. Every run creates a fresh pod, so the webhook injects the current recommendation at the start of each run.</p>
-<h2 id="policy">Policy<a class="headerlink" href="#policy" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch-rightsizing</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">        </span><span class="nt">job</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">        </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnCreate</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="nt">resourcesConfigs</span><span class="p">:</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">336h</span><span class="w">          </span><span class="c1"># 14 days — more history for irregular jobs</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">          </span><span class="nt">percentile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">90</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">          </span><span class="nt">headroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">          </span><span class="nt">equalsToRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">   </span><span class="c1"># Guaranteed QoS for batch jobs</span>
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">336h</span>
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">          </span><span class="nt">percentile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">95</span>
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">          </span><span class="nt">headroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">15</span>
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span>
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">          </span><span class="nt">equalsToRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-</code></pre></div>
-<p><code>job</code> applies to standalone Jobs; Jobs created by a CronJob are handled through their CronJob under <code>cronJob</code>.</p>
-<h2 id="opting-in">Opting in<a class="headerlink" href="#opting-in" title="Permanent link">&para;</a></h2>
-<p>For a CronJob, the pod-template annotation is two levels deep:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch/v1</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CronJob</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">nightly-report</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">schedule</span><span class="p">:</span><span class="w"> </span><span class="s">"0</span><span class="nv"> </span><span class="s">2</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">*"</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="nt">jobTemplate</span><span class="p">:</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">      </span><span class="nt">template</span><span class="p">:</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">        </span><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">          </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">            </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch-rightsizing</span><span class="w">  </span><span class="c1"># (1)!</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">        </span><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">          </span><span class="nt">restartPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OnFailure</span>
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">          </span><span class="nt">containers</span><span class="p">:</span>
-<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">report</span>
-<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">              </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">busybox:1.36</span>
-</code></pre></div>
-<ol>
-<li><code>spec.jobTemplate.spec.template.metadata.annotations</code>. The CronJob's own <code>metadata.annotations</code> and its Namespace also work — see <a href="../../reference/annotation/#resolution-order">Resolution order</a>.</li>
-</ol>
-<p>A standalone Job is annotated on <code>spec.template.metadata.annotations</code>. The webhook resolves <code>Pod → Job</code> for a standalone Job and <code>Pod → Job → CronJob</code> for a scheduled one.</p>
-<p>On the dashboard, standalone Jobs appear as kind <code>Job</code>; Jobs owned by a CronJob appear under their CronJob row.</p>
-<h2 id="ongoing-mode">Ongoing mode<a class="headerlink" href="#ongoing-mode" title="Permanent link">&para;</a></h2>
-<p><code>Ongoing</code> additionally resizes <strong>running</strong> job pods in place through the <code>pods/resize</code> subresource. Job and CronJob pods are never evicted, and the Job/CronJob spec is never modified. In-place resize of <code>restartPolicy: Never</code>/<code>OnFailure</code> pods has its own Kubernetes version requirement — see <a href="../../concepts/in-place-updates/#version-matrix">Version matrix</a> and <a href="../../concepts/in-place-updates/#kinds-that-are-never-evicted">Kinds that are never evicted</a>. When a resize is not possible, the running pod keeps its resources and the next run gets the recommendation from the webhook.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="nt">job</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="nt">cronJob</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
-</code></pre></div>
-<p><code>Ongoing</code> is worthwhile for <strong>long-running</strong> runs (daily ETL, ML training, backfills, migrations), where it can correct a pod mid-run. For runs that finish within seconds it behaves like <code>OnCreate</code>, at the cost of one extra Job/Pod list per reconcile.</p>
-<h2 id="cold-start">Cold start<a class="headerlink" href="#cold-start" title="Permanent link">&para;</a></h2>
-<p>The first run of a new Job or CronJob is admitted with its template resources; the webhook records a stub <code>WorkloadRecommendation</code> so the controller starts computing the identity, and later runs are injected once a recommendation exists. See <a href="../../concepts/workload-recommendations/#cold-start-stub-recommendations">Cold start</a> and keep <code>--recommendation-retention</code> above the gap between runs (<a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>).</p>
-<p>A Job whose <strong>name changes every run</strong> (a timestamp or hash suffix) is a new identity each time and never converges. Use a stable Job name, or run it under a CronJob. The signature is a <code>k8s_sustain_wlr_refresh_total{outcome="nodata"}</code> rate that never turns into <code>computed</code>, alongside a <code>WorkloadRecommendation</code> count that grows with every run.</p>
-<h2 id="collecting-enough-history">Collecting enough history<a class="headerlink" href="#collecting-enough-history" title="Permanent link">&para;</a></h2>
-<p>CronJobs that run infrequently (e.g. weekly) may not have enough data for a meaningful percentile. Use a longer window:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">resourcesConfigs</span><span class="p">:</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">cpu</span><span class="p">:</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">720h</span><span class="w">   </span><span class="c1"># 30 days</span>
-</code></pre></div>
-<p>When the window holds no usable samples, no recommendation is written and resources stay unchanged until a later reconcile finds data.</p>
-<h2 id="guaranteed-qos-for-batch-jobs">Guaranteed QoS for batch jobs<a class="headerlink" href="#guaranteed-qos-for-batch-jobs" title="Permanent link">&para;</a></h2>
-<p>Setting <code>equalsToRequest: true</code> for both CPU and memory limits makes the pod <a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/#guaranteed">Guaranteed QoS</a>, which makes the pod the last candidate for node-pressure eviction.</p>
-<h2 id="oom-detection-for-one-shot-pods">OOM detection for one-shot pods<a class="headerlink" href="#oom-detection-for-one-shot-pods" title="Permanent link">&para;</a></h2>
-<p>Job pods typically run with <code>restartPolicy: Never</code> (or <code>backoffLimit: 0</code>), so an OOM kill does not increment <code>kube_pod_container_status_restarts_total</code>. The <code>k8s_sustain:workload_oom_24h</code> rule therefore also flags any container whose <code>kube_pod_container_status_last_terminated_reason</code> was <code>OOMKilled</code> in the last 24h, so the OOM-driven memory floor and the dashboard's "OOM 24h" badge work for Jobs and CronJobs too.</p>
-<p>This requires the failed pod to survive long enough for kube-state-metrics to scrape it. Pods removed by <code>failedJobsHistoryLimit</code> within ~30s of failing can slip through; keep <code>failedJobsHistoryLimit</code> above 0.</p>
+<h1 id="1-a-single-identity-is-a-batch-of-one">1. A single identity is a batch of one<a class="headerlink" href="#1-a-single-identity-is-a-batch-of-one" title="Permanent link">&para;</a></h1>
+<ul>
+<li><strong>Status:</strong> Accepted</li>
+<li><strong>Date:</strong> 2026-10-04</li>
+</ul>
+<h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
+<p>Recommendation inputs (CPU and memory percentiles, the 24h OOM signal) were read two ways. The controller packed a policy's identities into sharded PromQL queries; the dashboard, identities with no observed-resources snapshot to size a shard by, and the fallback for a failed shard each queried one workload at a time through a second set of queries with exact-match selectors.</p>
+<p>Both sets had to return identical values, so every query change was made twice, and comments guarded the duplication. The fallback ran through the very path that had not failed: a shard Prometheus rejected (typically over <code>--query.max-samples</code>) was re-read with different queries, and callers had to know which path had produced an identity's inputs, or that none had.</p>
+<h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
+<p>There is one query path, the sharded one. A single identity is a shard with one name: a batch of one.</p>
+<ul>
+<li>Recommendation inputs are read through one port, <code>recommender.InputsFetcher</code>. In: a <code>ResourcesConfigs</code> and the identities to fetch, each with a container-count size hint that may be unknown. Out: one result per identity, its inputs or the error that made them unavailable.</li>
+<li>The Prometheus adapter, <code>recommender.PromInputs</code>, plans shards from the sample budget, retries a failed shard once, then re-queries its identities as one-identity shards. An identity of unknown size gets a one-identity shard from the start. CPU and memory are required; OOM is best-effort.</li>
+<li>The controller and the dashboard both fetch through the port.</li>
+</ul>
+<h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
+<ul>
+<li>One query construction per signal. A failed shard degrades to the same queries narrowed to one name, so the fallback cannot drift from the batch.</li>
+<li>Callers know nothing of shards, retries or fallback. Tests substitute an in-memory adapter, <code>recommendertest.StaticInputs</code>, instead of serving PromQL.</li>
+<li>A one-identity shard selects with an alternation of one escaped name (<code>owner_name=~"…"</code>) rather than an exact match; the selected series are the same.</li>
+<li>The dashboard has no shard-budget flag; it batches with the controller's default budget.</li>
+</ul>
 
 
 
@@ -2273,7 +2085,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../deployments/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Deployments, StatefulSets &amp; DaemonSets">
+          <a href="../" class="md-footer__link md-footer__link--prev" aria-label="Previous: Architecture Decisions">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -2283,27 +2095,11 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Deployments, StatefulSets & DaemonSets
+                Architecture Decisions
               </div>
             </div>
           </a>
         
-        
-          
-          <a href="../argo-rollouts/" class="md-footer__link md-footer__link--next" aria-label="Next: Argo Rollouts">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                Argo Rollouts
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
-          </a>
         
       </nav>
     

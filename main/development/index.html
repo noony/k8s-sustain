@@ -16,6 +16,8 @@
         <link rel="prev" href="../security/">
       
       
+        <link rel="next" href="../adr/">
+      
       
         
       
@@ -373,6 +375,26 @@
 
       </a>
     </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../adr/" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
   
 
       
@@ -1749,6 +1771,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Run tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommendation-inputs-in-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendation inputs in tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2074,6 +2113,17 @@
     <span class="md-ellipsis">
       
         Per-identity computation under owner-name grouping
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommendation-pass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendation pass
       
     </span>
   </a>
@@ -2281,6 +2331,121 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A single identity is a batch of one
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -2337,6 +2502,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Run tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommendation-inputs-in-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendation inputs in tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2663,6 +2845,17 @@
     <span class="md-ellipsis">
       
         Per-identity computation under owner-name grouping
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommendation-pass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendation pass
       
     </span>
   </a>
@@ -2948,8 +3141,24 @@
 <p>CI runs the race detector and goroutine-leak detection (via <code>go.uber.org/goleak</code>
 on the <code>dashboard</code>, <code>k8s</code>, <code>oomwatch</code>, <code>prometheus</code>, and <code>webhook</code> packages), so
 flakes or leaks introduced by new tests surface in the test job.</p>
+<h3 id="recommendation-inputs-in-tests">Recommendation inputs in tests<a class="headerlink" href="#recommendation-inputs-in-tests" title="Permanent link">&para;</a></h3>
+<p>The controller and the dashboard read Prometheus recommendation inputs only
+through the <code>recommender.InputsFetcher</code> port. Their tests inject
+<code>recommendertest.StaticInputs</code> instead of serving PromQL from an
+<code>httptest</code> server:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nx">inputs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">recommendertest</span><span class="p">.</span><span class="nx">NewStaticInputs</span><span class="p">().</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nx">Set</span><span class="p">(</span><span class="nx">id</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">recommender</span><span class="p">.</span><span class="nx">WorkloadInputs</span><span class="p">{</span><span class="nx">CPUPerPod</span><span class="p">:</span><span class="w"> </span><span class="nx">promclient</span><span class="p">.</span><span class="nx">ContainerValues</span><span class="p">{</span><span class="s">"app"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.1</span><span class="p">}}).</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nx">Fail</span><span class="p">(</span><span class="nx">otherID</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">"prometheus down"</span><span class="p">))</span>
+</code></pre></div>
+<p>An identity with neither gets empty inputs, as Prometheus answers for one with
+no samples. <code>Calls()</code> and <code>Requested(id)</code> report what was fetched, so a test
+can assert that an identity was, or was not, part of the batch. Prefer driving
+<code>PolicyReconciler.Reconcile</code> end to end with the fake client and
+<code>StaticInputs</code>. The Prometheus adapter, <code>recommender.PromInputs</code>, is the only
+code tested against a fake PromQL server: sharding, retry, the one-identity
+fallback and the best-effort OOM signal.</p>
 <h2 id="lint">Lint<a class="headerlink" href="#lint" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>lint<span class="w">   </span><span class="c1"># golangci-lint run</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>lint<span class="w">   </span><span class="c1"># golangci-lint run</span>
 </code></pre></div>
 <p><code>.golangci.yml</code> enables the standard linters plus <code>bodyclose</code>, <code>errorlint</code>,
 <code>nilerr</code>, <code>copyloopvar</code>, <code>durationcheck</code>, <code>unconvert</code>, <code>unparam</code>, <code>gocritic</code>,
@@ -2964,7 +3173,7 @@ modules, and Docker base images — PRs are opened weekly.</p>
 <h3 id="pinning-github-actions">Pinning GitHub Actions<a class="headerlink" href="#pinning-github-actions" title="Permanent link">&para;</a></h3>
 <p>Every <code>uses:</code> in every workflow must be pinned to a full 40-character commit
 SHA, with the version in a trailing comment:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1</span><span class="w"> </span><span class="c1"># v7.0.1</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1</span><span class="w"> </span><span class="c1"># v7.0.1</span>
 </code></pre></div>
 <p>A mutable tag (<code>@v5</code>) lets whoever controls the action's repository repoint it
 at new code that then runs with your workflow's token. <code>hack/verify-action-pins.sh</code>
@@ -2979,61 +3188,62 @@ that sign. If you touch a job's <code>permissions:</code> block, check that sign
 runs. The full posture and the verification commands are documented in
 <a href="../security/">Security</a>.</p>
 <h2 id="project-structure">Project structure<a class="headerlink" href="#project-structure" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>k8s-sustain/
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>├── api/v1alpha1/          # CRD Go types (Policy, WorkloadRecommendation) and deepcopy
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>├── cmd/
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>│   ├── controller/        # Root cobra command + start subcommand
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>│   ├── webhook/           # webhook subcommand
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>│   └── dashboard/         # dashboard subcommand
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>├── internal/
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>│   ├── autoscaler/        # HPA / KEDA detection used by recommender + webhook
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>│   ├── config/            # Centralized Viper config (flags, env, file)
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>│   ├── controller/        # Policy reconciler
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>│   ├── dashboard/         # Dashboard HTTP server + embedded Vue SPA (ui/)
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>│   ├── httpx/             # Shared HTTP stack: envelope, middleware, hardened NewServer, shutdown
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>│   ├── k8s/               # client.New helper used by webhook + dashboard
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>│   ├── logging/           # Shared zap logger setup
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>│   ├── oomwatch/          # Live OOMKilled detection, re-triggers reconciles
-<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>│   ├── policymatch/       # Policy resolution (ResolvePolicy) and selector matching
-<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>│   ├── prometheus/        # Prometheus HTTP API client + metric name constants
-<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>│   ├── recommender/       # Resource recommendation logic (pure functions)
-<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>│   ├── version/           # Build version
-<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>│   ├── webhook/           # Admission webhook HTTP handler
-<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>│   ├── wlrcache/          # WorkloadRecommendation naming and upsert
-<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>│   └── workload/          # Pod recycler, template/owner-ref helpers
-<a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>├── charts/
-<a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>│   ├── k8s-sustain/          # Operator chart
-<a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a>│   └── k8s-sustain-policies/ # Policy objects chart
-<a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a>├── hack/
-<a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a>│   ├── docscheck/         # Docs drift guards (run by go test)
-<a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a>│   └── scenarios/         # kind end-to-end scenarios
-<a id="__codelineno-4-29" name="__codelineno-4-29" href="#__codelineno-4-29"></a>├── docs/                  # This documentation
-<a id="__codelineno-4-30" name="__codelineno-4-30" href="#__codelineno-4-30"></a>├── Dockerfile
-<a id="__codelineno-4-31" name="__codelineno-4-31" href="#__codelineno-4-31"></a>├── Makefile
-<a id="__codelineno-4-32" name="__codelineno-4-32" href="#__codelineno-4-32"></a>├── Makefile.scenarios     # kind end-to-end harness
-<a id="__codelineno-4-33" name="__codelineno-4-33" href="#__codelineno-4-33"></a>└── main.go
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>k8s-sustain/
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>├── api/v1alpha1/          # CRD Go types (Policy, WorkloadRecommendation) and deepcopy
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>├── cmd/
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>│   ├── controller/        # Root cobra command + start subcommand
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>│   ├── webhook/           # webhook subcommand
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>│   └── dashboard/         # dashboard subcommand
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>├── internal/
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>│   ├── autoscaler/        # HPA / KEDA detection used by recommender + webhook
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>│   ├── config/            # Centralized Viper config (flags, env, file)
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>│   ├── controller/        # Policy reconciler
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>│   ├── dashboard/         # Dashboard HTTP server + embedded Vue SPA (ui/)
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>│   ├── httpx/             # Shared HTTP stack: envelope, middleware, hardened NewServer, shutdown
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>│   ├── k8s/               # client.New helper used by webhook + dashboard
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>│   ├── logging/           # Shared zap logger setup
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>│   ├── oomwatch/          # Live OOMKilled detection, re-triggers reconciles
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>│   ├── policymatch/       # Policy resolution (ResolvePolicy) and selector matching
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>│   ├── prometheus/        # Prometheus HTTP API client + metric name constants
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>│   ├── recommender/       # Recommendation algorithm (Compute) and the batch-inputs port with its Prometheus adapter
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>│   │   └── recommendertest/  # In-memory inputs adapter for tests
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>│   ├── version/           # Build version
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>│   ├── webhook/           # Admission webhook HTTP handler
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>│   ├── wlrcache/          # WorkloadRecommendation naming and upsert
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>│   └── workload/          # Pod recycler, template/owner-ref helpers
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>├── charts/
+<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>│   ├── k8s-sustain/          # Operator chart
+<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>│   └── k8s-sustain-policies/ # Policy objects chart
+<a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>├── hack/
+<a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a>│   ├── docscheck/         # Docs drift guards (run by go test)
+<a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>│   └── scenarios/         # kind end-to-end scenarios
+<a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a>├── docs/                  # This documentation
+<a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>├── Dockerfile
+<a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>├── Makefile
+<a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>├── Makefile.scenarios     # kind end-to-end harness
+<a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>└── main.go
 </code></pre></div>
 <h2 id="running-locally-against-a-cluster">Running locally against a cluster<a class="headerlink" href="#running-locally-against-a-cluster" title="Permanent link">&para;</a></h2>
 <h3 id="start-the-controller">Start the controller<a class="headerlink" href="#start-the-controller" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Point KUBECONFIG at your cluster</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">KUBECONFIG</span><span class="o">=</span>~/.kube/config
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># Forward Prometheus if needed</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-prometheus-server<span class="w"> </span><span class="m">9090</span>:80<span class="w"> </span><span class="p">&amp;</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>--prometheus-address<span class="o">=</span>http://localhost:9090<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>--reconcile-interval<span class="o">=</span>1m<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span>--log-level<span class="o">=</span>debug
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Point KUBECONFIG at your cluster</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">KUBECONFIG</span><span class="o">=</span>~/.kube/config
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Forward Prometheus if needed</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>svc/k8s-sustain-prometheus-server<span class="w"> </span><span class="m">9090</span>:80<span class="w"> </span><span class="p">&amp;</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span>--prometheus-address<span class="o">=</span>http://localhost:9090<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span>--reconcile-interval<span class="o">=</span>1m<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span>--log-level<span class="o">=</span>debug
 </code></pre></div>
 <p>To develop against an authenticated Prometheus (a shared Thanos/Mimir gateway,
 a staging cluster behind an auth proxy), pass the same auth flags the
 deployment uses:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--prometheus-address<span class="o">=</span>https://mimir-gateway.example.com/prometheus<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--prometheus-bearer-token-file<span class="o">=</span><span class="nv">$HOME</span>/.config/mimir/token<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--prometheus-headers<span class="o">=</span>X-Scope-OrgID<span class="o">=</span>tenant-a<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--log-level<span class="o">=</span>debug
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>go<span class="w"> </span>run<span class="w"> </span>main.go<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>--prometheus-address<span class="o">=</span>https://mimir-gateway.example.com/prometheus<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>--prometheus-bearer-token-file<span class="o">=</span><span class="nv">$HOME</span>/.config/mimir/token<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span>--prometheus-headers<span class="o">=</span>X-Scope-OrgID<span class="o">=</span>tenant-a<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span>--log-level<span class="o">=</span>debug
 </code></pre></div>
 <p>The flag names are identical on <code>go run main.go dashboard</code>; the environment
 variables are not — see
@@ -3050,24 +3260,24 @@ for the targets, variables and the scenario catalog.</p>
 <h2 id="deploying-on-kind-manually">Deploying on kind manually<a class="headerlink" href="#deploying-on-kind-manually" title="Permanent link">&para;</a></h2>
 <p>The manual equivalent of <code>make test-kind-up</code>, useful to understand or deviate
 from what the harness does.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kind<span class="w"> </span>create<span class="w"> </span>cluster<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># The webhook needs a serving certificate; cert-manager issues it.</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>helm<span class="w"> </span>repo<span class="w"> </span>add<span class="w"> </span>jetstack<span class="w"> </span>https://charts.jetstack.io<span class="w"> </span>--force-update
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>cert-manager<span class="w"> </span>jetstack/cert-manager<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span>--namespace<span class="w"> </span>cert-manager<span class="w"> </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span>--set<span class="w"> </span>crds.enabled<span class="o">=</span><span class="nb">true</span><span class="w"> </span>--wait
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>k8s-sustain:dev
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>k8s-sustain:dev<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
-<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>
-<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>helm<span class="w"> </span>dependency<span class="w"> </span>build<span class="w"> </span>charts/k8s-sustain
-<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>k8s-sustain<span class="w"> </span>./charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span>--create-namespace<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="w">  </span>--set<span class="w"> </span>image.repository<span class="o">=</span>k8s-sustain<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="w">  </span>--set<span class="w"> </span>image.tag<span class="o">=</span>dev<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">  </span>--set<span class="w"> </span>image.pullPolicy<span class="o">=</span>Never<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="w">  </span>--wait
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>kind<span class="w"> </span>create<span class="w"> </span>cluster<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="c1"># The webhook needs a serving certificate; cert-manager issues it.</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>helm<span class="w"> </span>repo<span class="w"> </span>add<span class="w"> </span>jetstack<span class="w"> </span>https://charts.jetstack.io<span class="w"> </span>--force-update
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>cert-manager<span class="w"> </span>jetstack/cert-manager<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span>--namespace<span class="w"> </span>cert-manager<span class="w"> </span>--create-namespace<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span>--set<span class="w"> </span>crds.enabled<span class="o">=</span><span class="nb">true</span><span class="w"> </span>--wait
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>k8s-sustain:dev
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>k8s-sustain:dev<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>helm<span class="w"> </span>dependency<span class="w"> </span>build<span class="w"> </span>charts/k8s-sustain
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>k8s-sustain<span class="w"> </span>./charts/k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">  </span>--namespace<span class="w"> </span>k8s-sustain<span class="w"> </span>--create-namespace<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="w">  </span>--set<span class="w"> </span>image.repository<span class="o">=</span>k8s-sustain<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="w">  </span>--set<span class="w"> </span>image.tag<span class="o">=</span>dev<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="w">  </span>--set<span class="w"> </span>image.pullPolicy<span class="o">=</span>Never<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a><span class="w">  </span>--wait
 </code></pre></div>
 <p><code>image.pullPolicy=Never</code> makes Kubernetes use the locally loaded image. The
 dashboard is enabled by default and <code>prometheusAddress</code> resolves to the bundled
@@ -3075,27 +3285,27 @@ Prometheus subchart. Open the dashboard with
 <code>kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090</code>, then
 create a Policy (see <a href="../getting-started/quick-start/">Quick start</a>).</p>
 <p>After changing code, rebuild, reload and restart:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>k8s-sustain:dev
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>k8s-sustain:dev<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>kubectl<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deploy/k8s-sustain<span class="w"> </span>deploy/k8s-sustain-webhook<span class="w"> </span>deploy/k8s-sustain-dashboard
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>k8s-sustain:dev
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>kind<span class="w"> </span>load<span class="w"> </span>docker-image<span class="w"> </span>k8s-sustain:dev<span class="w"> </span>--name<span class="w"> </span>k8s-sustain
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>kubectl<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deploy/k8s-sustain<span class="w"> </span>deploy/k8s-sustain-webhook<span class="w"> </span>deploy/k8s-sustain-dashboard
 </code></pre></div>
 <p>Tear down with <code>kind delete cluster --name k8s-sustain</code>.</p>
 <h2 id="regenerating-code">Regenerating code<a class="headerlink" href="#regenerating-code" title="Permanent link">&para;</a></h2>
 <p>After modifying types in <code>api/v1alpha1/</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>make<span class="w"> </span>generate<span class="w">      </span><span class="c1"># deepcopy methods</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>make<span class="w"> </span>manifests<span class="w">     </span><span class="c1"># CRD YAML into charts/k8s-sustain/files/crds/</span>
-<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>make<span class="w"> </span>verify-crds<span class="w">   </span><span class="c1"># what CI checks</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>make<span class="w"> </span>generate<span class="w">      </span><span class="c1"># deepcopy methods</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>make<span class="w"> </span>manifests<span class="w">     </span><span class="c1"># CRD YAML into charts/k8s-sustain/files/crds/</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>make<span class="w"> </span>verify-crds<span class="w">   </span><span class="c1"># what CI checks</span>
 </code></pre></div>
 <p><code>controller-gen</code> is a Go tool dependency pinned in <code>go.mod</code> and run with
 <code>go tool controller-gen</code>; there is nothing to install.</p>
 <h2 id="building-the-container-image">Building the container image<a class="headerlink" href="#building-the-container-image" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>ghcr.io/noony/k8s-sustain:dev
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>make<span class="w"> </span>docker-build<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>ghcr.io/noony/k8s-sustain:dev
 </code></pre></div>
 <p>This builds a single-arch image for the host's native platform (e.g. <code>linux/arm64</code> on Apple Silicon, <code>linux/amd64</code> on Intel) using <code>docker buildx --load</code>. The Dockerfile is multi-arch aware: it honors <code>TARGETOS</code>/<code>TARGETARCH</code> and runs the Go and Node build stages on <code>$BUILDPLATFORM</code> so cross-compilation is native, not emulated.</p>
 <p><strong>Note for Apple Silicon + colima users:</strong> running an emulated <code>linux/amd64</code> binary inside colima has produced random stdlib panics (memory-model mismatches under x86-on-ARM translation). Always build natively — the default <code>make docker-build</code> does this.</p>
 <h3 id="multi-arch-publish">Multi-arch publish<a class="headerlink" href="#multi-arch-publish" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>docker<span class="w"> </span>buildx<span class="w"> </span>create<span class="w"> </span>--use<span class="w"> </span>--name<span class="w"> </span>k8s-sustain-builder<span class="w">   </span><span class="c1"># one-time</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>make<span class="w"> </span>docker-buildx<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>ghcr.io/noony/k8s-sustain:dev<span class="w">    </span><span class="c1"># builds + pushes linux/amd64 + linux/arm64</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>docker<span class="w"> </span>buildx<span class="w"> </span>create<span class="w"> </span>--use<span class="w"> </span>--name<span class="w"> </span>k8s-sustain-builder<span class="w">   </span><span class="c1"># one-time</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>make<span class="w"> </span>docker-buildx<span class="w"> </span><span class="nv">IMG</span><span class="o">=</span>ghcr.io/noony/k8s-sustain:dev<span class="w">    </span><span class="c1"># builds + pushes linux/amd64 + linux/arm64</span>
 </code></pre></div>
 <p>Override <code>PLATFORMS</code> to change the matrix, e.g. <code>PLATFORMS=linux/arm64 make docker-buildx</code>. CI (<code>.github/workflows/release.yml</code>) publishes both <code>linux/amd64</code> and <code>linux/arm64</code> automatically on tag pushes.</p>
 <p>The <code>helm</code> job in that same workflow also pushes both charts as OCI artifacts to <code>oci://ghcr.io/noony/helm-charts/&lt;chart&gt;</code>, in addition to attaching the packaged <code>.tgz</code> files to the GitHub release.</p>
@@ -3135,12 +3345,12 @@ kind harness). The ones used most:</p>
 under <code>charts/k8s-sustain/tests/</code> — one <code>*_test.yaml</code> file per template, asserting on
 default rendering, every enable/disable conditional, and value wiring. Install the plugin
 once, then run the suite:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># --verify=false: helm v4 verifies plugin provenance by default, which git-source installs don't support</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>helm<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>https://github.com/helm-unittest/helm-unittest.git<span class="w"> </span>--version<span class="w"> </span><span class="m">1</span>.0.0<span class="w"> </span>--verify<span class="o">=</span><span class="nb">false</span>
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>make<span class="w"> </span>helm-unittest
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># --verify=false: helm v4 verifies plugin provenance by default, which git-source installs don't support</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>helm<span class="w"> </span>plugin<span class="w"> </span>install<span class="w"> </span>https://github.com/helm-unittest/helm-unittest.git<span class="w"> </span>--version<span class="w"> </span><span class="m">1</span>.0.0<span class="w"> </span>--verify<span class="o">=</span><span class="nb">false</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>make<span class="w"> </span>helm-unittest
 </code></pre></div>
 <p>Run a single suite with the plugin's <code>-f</code> flag (paths are relative to the chart root):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>helm<span class="w"> </span>unittest<span class="w"> </span>charts/k8s-sustain<span class="w"> </span>-f<span class="w"> </span><span class="s1">'tests/deployment_test.yaml'</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>helm<span class="w"> </span>unittest<span class="w"> </span>charts/k8s-sustain<span class="w"> </span>-f<span class="w"> </span><span class="s1">'tests/deployment_test.yaml'</span>
 </code></pre></div>
 <p>CI runs the full suite in the <code>helm</code> job alongside <code>helm lint</code> and <code>helm template</code>.
 <code>make helm-promtool</code> additionally validates the rendered PrometheusRule
@@ -3183,12 +3393,12 @@ the controller and a field on <code>identityHealth</code> filled by the adapter.
 <code>npm ci &amp;&amp; npm run build</code> into <code>internal/dashboard/ui/dist/</code>, which is
 embedded into the Go binary via <code>go:embed</code>. The Docker build runs the frontend
 build in its own stage.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nb">cd</span><span class="w"> </span>internal/dashboard/ui/frontend
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>npm<span class="w"> </span>install
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>npm<span class="w"> </span>run<span class="w"> </span>dev<span class="w">        </span><span class="c1"># Vite dev server on http://localhost:5173</span>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>npm<span class="w"> </span>run<span class="w"> </span><span class="nb">test</span><span class="w">       </span><span class="c1"># vitest</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>npm<span class="w"> </span>run<span class="w"> </span>typecheck<span class="w">  </span><span class="c1"># vue-tsc --noEmit</span>
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>npm<span class="w"> </span>run<span class="w"> </span>lint<span class="w">       </span><span class="c1"># eslint src/</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nb">cd</span><span class="w"> </span>internal/dashboard/ui/frontend
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>npm<span class="w"> </span>install
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>npm<span class="w"> </span>run<span class="w"> </span>dev<span class="w">        </span><span class="c1"># Vite dev server on http://localhost:5173</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>npm<span class="w"> </span>run<span class="w"> </span><span class="nb">test</span><span class="w">       </span><span class="c1"># vitest</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>npm<span class="w"> </span>run<span class="w"> </span>typecheck<span class="w">  </span><span class="c1"># vue-tsc --noEmit</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>npm<span class="w"> </span>run<span class="w"> </span>lint<span class="w">       </span><span class="c1"># eslint src/</span>
 </code></pre></div>
 <p>The dev server proxies <code>/api</code> and <code>/healthz</code> to <code>localhost:8090</code>: run the
 backend with <code>go run main.go dashboard --bind-address=:8090</code>, or port-forward
@@ -3226,8 +3436,8 @@ Restyle by changing tokens, not by adding per-view colours.</p>
 <code>versions.json</code> on the <code>gh-pages</code> branch — it only appears on the deployed
 site, not in a local <code>mkdocs serve</code>/<code>mkdocs build</code> preview.</p>
 <p>To preview docs locally:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements-docs.txt
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>mkdocs<span class="w"> </span>serve
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements-docs.txt
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>mkdocs<span class="w"> </span>serve
 </code></pre></div>
 <p>CI builds with <code>mkdocs build --strict</code> and lints with markdownlint. The
 <code>validation</code> block in <code>mkdocs.yml</code> turns broken links and anchors into
@@ -3329,7 +3539,15 @@ transport-related ones:</p>
 <h4 id="work-list-union-and-informer-lag">Work-list union and informer lag<a class="headerlink" href="#work-list-union-and-informer-lag" title="Permanent link">&para;</a></h4>
 <p>The controller's reads go through a watch-populated informer cache, so a <code>WorkloadRecommendation</code> that discovery created moments earlier in the same reconcile is often not yet visible to a list, and nothing watches <code>WorkloadRecommendation</code> to re-trigger a reconcile when it becomes visible. The computation work-list is therefore the union of the listed cache objects and the identities discovery just ensured. Without the union a freshly matched workload would wait a full <code>--reconcile-interval</code> before being computed. Discovery already holds the container set for those identities, so the union costs no extra API calls.</p>
 <h4 id="per-identity-computation-under-owner-name-grouping">Per-identity computation under owner-name grouping<a class="headerlink" href="#per-identity-computation-under-owner-name-grouping" title="Permanent link">&para;</a></h4>
-<p>The computation unit is the identity, not the workload object: a group of workloads sharing an owner-name produces exactly one computation and one write, against the union of the members' containers. Computing per member would give the single shared <code>WorkloadRecommendation</code> several competing answers, with the survivor decided by whichever member's goroutine finished last. Retry backoff is also per member: an identity is withheld from the batch prefetch only when every member is backed off, so one failing member cannot deny its healthy siblings their inputs.</p>
+<p>The computation unit is the identity, not the workload object: a group of workloads sharing an owner-name produces exactly one computation and one write, against the union of the members' containers. Computing per member would give the single shared <code>WorkloadRecommendation</code> several competing answers, with the survivor decided by whichever member's goroutine finished last. Retry backoff is also per member: an identity is withheld from the fetch only when every member is backed off, so one failing member cannot deny its healthy siblings their inputs.</p>
+<h4 id="recommendation-pass">Recommendation pass<a class="headerlink" href="#recommendation-pass" title="Permanent link">&para;</a></h4>
+<p><code>Reconcile</code> runs collect → discover → recommendation pass → persist → apply → rollup. The pass (<code>internal/controller/recommendation_pass.go</code>) gives every identity on the work-list exactly one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff). It owns the three things that used to be spread across <code>Reconcile</code>:</p>
+<ul>
+<li><strong>The backoff split, taken once.</strong> Backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out. The pass records which members to apply and which it skipped, and the apply step uses that split.</li>
+<li><strong>The fetch.</strong> One <code>InputsFetcher</code> call per policy; the pass never sees shards, retries or the fallback (<a href="../adr/0001-single-identity-is-a-batch-of-one/">ADR 0001</a>).</li>
+<li><strong>The computation.</strong> <code>recommender.Compute</code> decides everything about one identity from its inputs, its live OOM records and its age facts: the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply.</li>
+</ul>
+<p>The batch metrics are counted from the outcomes, not from the fetch's internals.</p>
 <h4 id="owner-name-group-merge-order-and-write-cost">Owner-name group: merge order and write cost<a class="headerlink" href="#owner-name-group-merge-order-and-write-cost" title="Permanent link">&para;</a></h4>
 <p>For an owner-name group, the union snapshot in <code>status.observedResources</code> is built from the members' containers. Where two members declare the same container name with different requests/limits, the entry from the member whose <code>kind/namespace/name</code> sorts first is kept whole, rather than mixing one member's request with another's limit. The recommendation is computed against that union, using the autoscaler of the first member (same sort order) that has one, and treating the identity as being as old as its oldest member.</p>
 <p>Every choice is decided by the members' names or by an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. Discovery (<code>EnsureExists</code>) and the computation phase (<code>wlrcache.Upsert</code>) both write <code>status.observedResources</code>, but always the same merged value computed once per identity, so the two writers never disagree, and a group whose members and metrics are unchanged costs no status write on subsequent reconciles rather than one write per member per cycle.</p>
@@ -3375,13 +3593,13 @@ liveness probe alone would kill the container after
 end in <code>CrashLoopBackOff</code> on exactly the install the wait exists to survive.</p>
 <p>The startup probe's budget must therefore stay <strong>larger than that two-minute
 wait</strong> (<code>crdWaitTimeout</code> in <code>internal/k8s/client.go</code>):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nt">webhook</span><span class="p">:</span>
-<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span><span class="nt">startupProbe</span><span class="p">:</span>
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">    </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
-<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">    </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">      </span><span class="c1"># 5 + 5 × 36 = 185s &gt; 120s</span>
-<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">    </span><span class="nt">timeoutSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
-<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">    </span><span class="nt">successThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
-<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">    </span><span class="nt">failureThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">36</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nt">webhook</span><span class="p">:</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span><span class="nt">startupProbe</span><span class="p">:</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">    </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">    </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">      </span><span class="c1"># 5 + 5 × 36 = 185s &gt; 120s</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">    </span><span class="nt">timeoutSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">    </span><span class="nt">successThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">    </span><span class="nt">failureThreshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">36</span>
 </code></pre></div>
 <p>If you shorten it, shorten it to something still comfortably above two minutes.
 A Go unit test reads this value out of <code>values.yaml</code> and fails if the two sides
@@ -3458,6 +3676,22 @@ while the <code>values.yaml</code> side still passes.</p>
             </div>
           </a>
         
+        
+          
+          <a href="../adr/" class="md-footer__link md-footer__link--next" aria-label="Next: Architecture Decisions">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Architecture Decisions
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
         
       </nav>
     

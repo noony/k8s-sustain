@@ -378,6 +378,26 @@
   
 
       
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../adr/" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -1860,6 +1880,121 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A single identity is a batch of one
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -2122,12 +2257,13 @@
 <h3 id="computation">Computation<a class="headerlink" href="#computation" title="Permanent link">&para;</a></h3>
 <p>The work-list is <strong>the policy's <code>WorkloadRecommendation</code> objects</strong>, united with the identities discovery just ensured (a cache object created moments earlier may not be visible to a list yet). Because the work-list comes from cache objects rather than the target listing, an identity that appears in no listing — a completed Job, a bare-pod group between runs — is still recomputed on every cycle.</p>
 <ul>
-<li>Prefetch every identity's Prometheus inputs in <strong>one sharded batch call per policy</strong> (see <a href="../recommendation-pipeline/#how-the-data-is-fetched">Recommendation Pipeline</a>) — a handful of queries for the whole policy instead of several per workload. Every kind batches identically, including <code>Job</code> and <code>Pod</code></li>
-<li>Skip identities in retry backoff from a previous transient failure</li>
-<li>Process the work-list in parallel (bounded by <code>--workload-concurrency-limit</code>, default 5): detect autoscalers (HPA / KEDA <code>ScaledObject</code>) targeting the workload — read-only, no patches — and compute a per-container recommendation (see <a href="../recommendation-pipeline/">Recommendation Pipeline</a>)</li>
+<li>Set aside workloads in retry backoff from a previous transient failure. The decision is taken once, before the fetch, and holds until the application phase; an identity whose every workload is set aside is not fetched</li>
+<li>Fetch every other identity's Prometheus inputs in <strong>one batched call per policy</strong> (see <a href="../recommendation-pipeline/#how-the-data-is-fetched">Recommendation Pipeline</a>) — a handful of queries for the whole policy instead of several per workload. Every kind batches identically, including <code>Job</code> and <code>Pod</code></li>
+<li>Compute the fetched identities in parallel (bounded by <code>--workload-concurrency-limit</code>, default 5): detect autoscalers (HPA / KEDA <code>ScaledObject</code>) targeting the workload — read-only, no patches — and compute a per-container recommendation (see <a href="../recommendation-pipeline/">Recommendation Pipeline</a>)</li>
+<li>Each identity leaves this pass with one outcome: a recommendation, too young, no data, fetch failed, or not fetched</li>
 <li>The unit is the <strong>identity</strong>, not the workload object: a group of workloads sharing an owner-name produces one computation and one write, against the union of the members' containers</li>
-<li>Write the result back to the <code>WorkloadRecommendation</code>, regardless of update mode — this keeps <code>OnCreate</code> workloads visible on the dashboard and is the webhook's only source of recommendations at admission (it never queries Prometheus itself)</li>
-<li>An identity that produces nothing recommendable this cycle is marked <code>status.source: nodata</code>, unless it already holds a recommendation — a last-known-good is never overwritten. It is recomputed on the next cycle and converges as soon as Prometheus has enough history</li>
+<li>Write the result back to the <code>WorkloadRecommendation</code>, regardless of update mode and before any pod is touched — this keeps <code>OnCreate</code> workloads visible on the dashboard and is the webhook's only source of recommendations at admission (it never queries Prometheus itself)</li>
+<li>An identity that produces nothing recommendable this cycle, too young or with no data, is marked <code>status.source: nodata</code>, unless it already holds a recommendation — a last-known-good is never overwritten. It is recomputed on the next cycle and converges as soon as Prometheus has enough history</li>
 <li>A <strong>departed</strong> identity — one with a cache object but no live workload object behind it — stops here. It is computed and cached so the webhook can inject it into that identity's <em>next</em> pod, but there are no running pods to align</li>
 </ul>
 <p>Departed refreshes are counted in <code>k8s_sustain_wlr_refresh_total{namespace, owner_kind, outcome}</code>, the only signal that reports on a population no listing contains; see <a href="../../reference/metrics/#k8s_sustain_wlr_refresh_total">Metrics</a>.</p>
@@ -2141,7 +2277,7 @@
 <li>Emit a <code>ResourcesUpdated</code> event on the workload object <strong>only when at least one pod was actually resized in place or evicted</strong> in that reconcile. The workload's pod template is never patched, so it permanently differs from the recommendation — a reconcile that finds every pod already at target stays silent. The message names the pod count and the containers (e.g. <code>Updated resources on 2 pod(s) for containers: [app]</code>); the applied values are on each pod's own <code>ResizeStarted</code> event. The events API groups events by object and reason, so updates of the same workload less than ~6 minutes apart are folded into one Event whose <code>series.count</code> and <code>lastObservedTime</code> advance</li>
 <li>On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a <code>ReconciliationRetryScheduled</code> warning event on the workload</li>
 </ul>
-<p><code>--policy-concurrency-limit</code> × <code>--workload-concurrency-limit</code> bounds how many workloads are in flight at once (50 by default), each issuing several Prometheus queries — enough to burst well past Prometheus's own <code>--query.max-concurrency</code> (default 20, shared with every other consumer of that server: Grafana dashboards, alerting rules). <code>--prometheus-max-inflight</code> (default 8) is a separate, global cap on concurrent Prometheus queries across the whole controller process, independent of the two concurrency-limit flags above — it throttles the client itself rather than the workload fan-out, so it protects Prometheus even if the concurrency limits are turned up.</p>
+<p>Up to <code>--policy-concurrency-limit</code> policies (10 by default) fetch at once, each running up to 8 shard queries concurrently, more while a failed shard is re-queried one identity at a time — enough to burst well past Prometheus's own <code>--query.max-concurrency</code> (default 20, shared with every other consumer of that server: Grafana dashboards, alerting rules). <code>--prometheus-max-inflight</code> (default 8) is a separate, global cap on concurrent Prometheus queries across the whole controller process — it throttles the client itself rather than the fan-out, so it protects Prometheus even if the concurrency limits are turned up.</p>
 <h3 id="pod-oom-watcher">Pod OOM watcher<a class="headerlink" href="#pod-oom-watcher" title="Permanent link">&para;</a></h3>
 <p>A second controller-runtime reconciler runs alongside the Policy reconciler and watches <code>Pod</code> objects cluster-wide, filtered by a local event predicate to those carrying the <code>k8s.sustain.io/policy</code> annotation OR a fresh <code>OOMKilled</code> container status. It exists to close the multi-minute latency window between an OOM kill and the next recording-rule-driven reconcile (kube-state-metrics scrape → Prometheus scrape → 1m rule evaluation → 5–10m reconcile interval).</p>
 <p>When a container's <code>LastTerminationState.Terminated.Reason == "OOMKilled"</code> is observed for a kill not already handled, the watcher resolves the pod's policy the same way every other reader does and, if the pod is managed by some policy:</p>
