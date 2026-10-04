@@ -107,10 +107,14 @@ func Upsert(
 // writes Containers, Outcome or ObservedAt.
 //
 // It is the discovery half of the write path: Upsert deliberately refuses to
-// create an object with no recommendation in it, but under WLR-driven
-// computation the object must exist BEFORE anything can compute it. Clearing
-// Departed here makes discovery the authority on that flag — an identity in a
-// target listing is by definition not departed.
+// create an object with no recommendation in it, but the object must exist
+// BEFORE anything can compute it. Clearing Departed here makes discovery the
+// authority on that flag — an identity with a live member is by definition
+// not departed.
+//
+// It rewrites spec.policy and the label to policyName, so only the Policy
+// governing the identity may call it: two callers would flip the object
+// between them every cycle.
 func EnsureExists(
 	ctx context.Context,
 	c client.Client,

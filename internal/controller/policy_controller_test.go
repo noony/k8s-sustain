@@ -22,6 +22,7 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
 func reconcileOnce(t *testing.T, r *PolicyReconciler, name string) {
@@ -380,5 +381,74 @@ func TestReconcile_EmptySuccessfulResponse_DeploymentSucceedsWithNoRetry(t *test
 	}
 	if state := r.retries.getState("Deployment/default/app"); state != nil && state.attempts != 0 {
 		t.Errorf("expected no retry state for a successful-but-empty response, got %+v", state)
+	}
+}
+
+// A Conflicted identity is governed by no Policy (ADR 0002): neither party
+// rewrites its WorkloadRecommendation's spec.policy, recomputes it, or applies
+// it. The stored Recommendation stays frozen, the outcome records why, and the
+// identity counts towards neither Policy.
+func TestReconcile_ConflictedIdentityFreezesItsRecommendation(t *testing.T) {
+	const ns = "conflicted"
+	blue := establishedDeployment(ns, "api-blue", "p")
+	blue.Spec.Template.Annotations[sustainv1alpha1.OwnerNameAnnotation] = "api"
+	green := establishedDeployment(ns, "api-green", "q")
+	green.Spec.Template.Annotations[sustainv1alpha1.OwnerNameAnnotation] = "api"
+	frozen := &sustainv1alpha1.WorkloadRecommendation{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns, Name: wlrcache.Name("Deployment", "api"),
+			Labels:            map[string]string{wlrPolicyLabel: "p"},
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour)),
+		},
+		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
+			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: ns, Name: "api"},
+			Policy:      "p",
+		},
+		Status: sustainv1alpha1.WorkloadRecommendationStatus{
+			ObservedAt: metav1.NewTime(time.Now().Add(-time.Hour).Truncate(time.Second)),
+			Outcome:    sustainv1alpha1.OutcomeComputed,
+			Containers: map[string]sustainv1alpha1.ContainerRecommendation{"app": {CPURequest: qty("250m")}},
+		},
+	}
+	inputs := usageFor(ns, "Deployment", "api").Set(identityOf(ns, "Deployment", "solo"), appUsage())
+	r := reconcilerWithInputs(t, inputs, true,
+		ongoingDeployments("p"), ongoingDeployments("q"), blue, green, frozen,
+		runningPod(ns, "blue-pod", "api-blue"), runningPod(ns, "green-pod", "api-green"),
+		establishedDeployment(ns, "solo", "p"), runningPod(ns, "solo-pod", "solo"))
+
+	reconcileOnce(t, r, "p")
+	reconcileOnce(t, r, "q")
+	reconcileOnce(t, r, "p")
+
+	got := getWLRFor(t, r, ns, "Deployment", "api")
+	if got.Spec.Policy != "p" || got.Labels[wlrPolicyLabel] != "p" {
+		t.Errorf("spec.policy/label = %q/%q, want both still p: no Policy governs a Conflicted identity",
+			got.Spec.Policy, got.Labels[wlrPolicyLabel])
+	}
+	if got.Status.Outcome != sustainv1alpha1.OutcomeConflicted {
+		t.Errorf("outcome = %q, want Conflicted", got.Status.Outcome)
+	}
+	if cpu := got.Status.Containers["app"].CPURequest; cpu == nil || cpu.String() != "250m" {
+		t.Errorf("stored CPU = %v, want the frozen 250m", cpu)
+	}
+	if !got.Status.ObservedAt.Equal(&frozen.Status.ObservedAt) {
+		t.Errorf("observedAt = %v, want it frozen at %v", got.Status.ObservedAt, frozen.Status.ObservedAt)
+	}
+	if inputs.Requested(identityOf(ns, "Deployment", "api")) {
+		t.Error("a Conflicted identity was fetched for recomputation")
+	}
+	for _, pod := range []string{"blue-pod", "green-pod"} {
+		if cpu := podCPU(t, r, ns, pod); cpu != "10m" {
+			t.Errorf("%s CPU = %s, want it untouched at 10m", pod, cpu)
+		}
+	}
+	if cpu := podCPU(t, r, ns, "solo-pod"); cpu != "100m" {
+		t.Errorf("solo-pod CPU = %s, want p to keep governing its other identity", cpu)
+	}
+	if got := gaugeValue(t, "k8s_sustain_policy_workload_count", map[string]string{"policy": "p"}); got != 1 {
+		t.Errorf("p workload count = %v, want 1: the Conflicted identity counts for no Policy", got)
+	}
+	if got := gaugeValue(t, "k8s_sustain_policy_workload_count", map[string]string{"policy": "q"}); got != 0 {
+		t.Errorf("q workload count = %v, want 0", got)
 	}
 }

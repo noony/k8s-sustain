@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -42,34 +43,29 @@ func barePod(ns, name, ownerName string) *corev1.Pod {
 	}
 }
 
-// barePodTarget builds the target the way listBarePodTargets does — running
-// workload.GroupBarePods over the namespace's pods — so membership comes from
-// the production rule rather than being hand-assembled. pods is everything the
-// namespace holds, including pods of other identities and pods disqualified by
-// the grouping rule, which must not end up as members.
-func barePodTarget(ns, ownerName string, pods ...*corev1.Pod) *workloadTarget {
-	items := make([]corev1.Pod, 0, len(pods))
+// barePodTarget builds the target the way Reconcile does — an inventory
+// snapshot of the namespace's pods, then targetsOf under policy "p" — so
+// membership comes from the production rule rather than being hand-assembled.
+// pods is everything the cluster holds, including pods of other identities and
+// pods the rule disqualifies, which must not end up as members.
+func barePodTarget(t *testing.T, ns, ownerName string, pods ...*corev1.Pod) *workloadTarget {
+	t.Helper()
+	ongoing := sustainv1alpha1.UpdateModeOngoing
+	objs := []client.Object{ongoingPolicy("p", sustainv1alpha1.UpdateTypes{Pod: &ongoing})}
 	for _, p := range pods {
-		items = append(items, *p)
+		objs = append(objs, p.DeepCopy())
 	}
-	t := &workloadTarget{
-		Kind:         "Pod",
-		Name:         ownerName,
-		Namespace:    ns,
-		IdentityKind: "Pod",
-		IdentityName: ownerName,
-		PolicyName:   "p",
+	c := fake.NewClientBuilder().WithScheme(testFullScheme(t)).WithObjects(objs...).Build()
+	snap, err := inventory.Take(context.Background(), c, inventory.Options{})
+	if err != nil {
+		t.Fatalf("inventory: %v", err)
 	}
-	for _, g := range workload.GroupBarePods(items, nil) {
-		if g.Namespace == ns && g.Name == ownerName {
-			t.Containers = g.Containers
-			t.InitContainers = g.InitContainers
-			t.Object = g.Representative
-			t.BarePodMembers = g.Members
-			break
+	if id, ok := snap.Lookup(identityOf(ns, "Pod", ownerName)); ok {
+		if targets := targetsOf(id, "p", ongoing); len(targets) == 1 {
+			return targets[0]
 		}
 	}
-	return t
+	return &workloadTarget{Kind: "Pod", Name: ownerName, Namespace: ns, IdentityKind: "Pod", IdentityName: ownerName}
 }
 
 // resizeRecorder wraps a fake client that records which pods received a
@@ -107,8 +103,8 @@ func newResizeRecorderClient(t *testing.T, r *PolicyReconciler, objs ...client.O
 	return rec
 }
 
-// The ownerRef guard: membership comes from workload.GroupBarePods precisely so
-// that a shared owner-name label cannot pull a ReplicaSet-owned pod in.
+// The ownerRef guard: membership comes from the inventory precisely so that a
+// shared owner-name label cannot pull a ReplicaSet-owned pod in.
 func TestResizeBarePods_SkipsControlledPod(t *testing.T) {
 	member := barePod("ns", "member", "dag-task")
 	impostor := member.DeepCopy()
@@ -120,7 +116,7 @@ func TestResizeBarePods_SkipsControlledPod(t *testing.T) {
 	r := makeReconciler(t)
 	rec := newResizeRecorderClient(t, r, member, impostor)
 
-	target := barePodTarget("ns", "dag-task", member, impostor)
+	target := barePodTarget(t, "ns", "dag-task", member, impostor)
 	recs := map[string]workload.ContainerRecommendation{"worker": {CPURequest: qty("200m")}}
 
 	resized, err := r.resizeBarePods(context.Background(), target, recs, workload.Tolerance{}, func(string) {})
@@ -149,7 +145,7 @@ func TestResizeBarePods_ResizesEveryMemberNeverEvicts(t *testing.T) {
 	r := makeReconciler(t)
 	rec := newResizeRecorderClient(t, r, a, b, other)
 
-	target := barePodTarget("airflow", "etl-daily", a, b, other)
+	target := barePodTarget(t, "airflow", "etl-daily", a, b, other)
 	recs := map[string]workload.ContainerRecommendation{"worker": {CPURequest: qty("200m")}}
 
 	resized, err := r.resizeBarePods(context.Background(), target, recs, workload.Tolerance{}, nil)
@@ -176,7 +172,7 @@ func TestResizeBarePods_ZeroWhenNoInPlaceSupport(t *testing.T) {
 	r := makeReconciler(t, pod)
 	r.patcher = workload.New(r.Client, false /* no in-place */)
 
-	target := barePodTarget("airflow", "etl-daily", pod)
+	target := barePodTarget(t, "airflow", "etl-daily", pod)
 	recs := map[string]workload.ContainerRecommendation{"worker": {CPURequest: qty("200m")}}
 
 	resized, err := r.resizeBarePods(context.Background(), target, recs, workload.Tolerance{}, nil)
@@ -195,7 +191,7 @@ func TestResizeBarePods_NoLivePodsForIdentity(t *testing.T) {
 	r := makeReconciler(t, other)
 	r.patcher = workload.New(r.Client, true /* in-place */)
 
-	target := barePodTarget("airflow", "etl-daily", other)
+	target := barePodTarget(t, "airflow", "etl-daily", other)
 	recs := map[string]workload.ContainerRecommendation{"worker": {CPURequest: qty("200m")}}
 
 	resized, err := r.resizeBarePods(context.Background(), target, recs, workload.Tolerance{}, nil)
@@ -207,13 +203,13 @@ func TestResizeBarePods_NoLivePodsForIdentity(t *testing.T) {
 	}
 }
 
-// Pins the grouping to the listing phase: re-deriving membership here cost one
+// Pins membership to the snapshot: re-deriving it here cost one
 // namespace-wide, cache-backed pod List per identity per cycle, concurrently
 // under the errgroup. A List interceptor that always fails makes the regression
 // loud — with the members carried on the target no List is needed.
 func TestResizeBarePods_DoesNotReListTheNamespace(t *testing.T) {
 	pod := barePod("airflow", "etl-run-1", "etl-daily")
-	target := barePodTarget("airflow", "etl-daily", pod)
+	target := barePodTarget(t, "airflow", "etl-daily", pod)
 
 	r := makeReconciler(t)
 	rec := &resizeRecorder{resized: map[string]bool{}}
@@ -254,7 +250,7 @@ func TestReconcileWorkload_BarePodOngoing_ResizesRunningPod(t *testing.T) {
 	r := reconcilerWithInputs(t, usageFor("airflow", "Pod", "etl-daily"), true /* in-place */)
 	rec := newResizeRecorderClient(t, r, pod)
 
-	target := barePodTarget("airflow", "etl-daily", pod)
+	target := barePodTarget(t, "airflow", "etl-daily", pod)
 	target.UpdateMode = sustainv1alpha1.UpdateModeOngoing
 	policy := policyForReconcileWorkload(t, "p")
 
@@ -278,7 +274,7 @@ func TestReconcileWorkload_BarePodOnCreate_NeverResizes(t *testing.T) {
 	r := reconcilerWithInputs(t, usageFor("airflow", "Pod", "etl-daily"), true /* in-place */)
 	rec := newResizeRecorderClient(t, r, pod)
 
-	target := barePodTarget("airflow", "etl-daily", pod)
+	target := barePodTarget(t, "airflow", "etl-daily", pod)
 	target.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
 	policy := policyForReconcileWorkload(t, "p")
 
@@ -295,10 +291,10 @@ func TestReconcileWorkload_BarePodOnCreate_NeverResizes(t *testing.T) {
 
 // Every other kind verifies ownerRef UID and selector before the patcher
 // touches a pod; this path has neither, and resizeBarePods feeds the whole
-// member list straight to ResizePodsInPlace. A pod annotated for a different
-// policy that happens to share the group's (namespace, owner-name) must not be
-// resized under this group's recommendation — for memory an in-place resize can
-// restart the container.
+// member list straight to ResizePodsInPlace. A pod sharing the group's
+// (namespace, owner-name) that this Policy does not govern — here it opts into
+// a Policy that does not exist — must not be resized under this group's
+// recommendation: for memory an in-place resize can restart the container.
 func TestResizeBarePods_SkipsPodOfAnotherPolicy(t *testing.T) {
 	mine := barePod("airflow", "etl-run-1", "etl-daily")
 	theirs := barePod("airflow", "etl-run-2", "etl-daily")
@@ -307,7 +303,7 @@ func TestResizeBarePods_SkipsPodOfAnotherPolicy(t *testing.T) {
 	r := makeReconciler(t)
 	rec := newResizeRecorderClient(t, r, mine, theirs)
 
-	target := barePodTarget("airflow", "etl-daily", mine, theirs)
+	target := barePodTarget(t, "airflow", "etl-daily", mine, theirs)
 	recs := map[string]workload.ContainerRecommendation{"worker": {CPURequest: qty("200m")}}
 
 	resized, err := r.resizeBarePods(context.Background(), target, recs, workload.Tolerance{}, nil)

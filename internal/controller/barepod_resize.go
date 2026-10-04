@@ -15,14 +15,12 @@ import (
 // container and discard an Airflow task's in-flight work; that is the same
 // tradeoff Job and CronJob already make, bounded by downsize suppression.
 //
-// Membership comes from workload.GroupBarePods rather than a label selector:
-// the mirrored owner-name label only exists on pods the webhook admitted, and
-// the grouping helper additionally excludes controller-owned pods and pods
-// naming a different policy. Those two are the bare-pod analogue of the
-// ownerRef-UID and selector checks protecting every other kind.
-//
-// The grouping runs ONCE per (policy, namespace), in listBarePodTargets, and
-// the members ride along on the target — see workloadTarget.BarePodMembers.
+// Membership comes from the inventory rather than a label selector: the
+// mirrored owner-name label only exists on pods the webhook admitted, and the
+// inventory additionally excludes controller-owned pods and pods the Policy
+// does not govern. Those two are the bare-pod analogue of the ownerRef-UID and
+// selector checks protecting every other kind. The members ride along on the
+// target — see workloadTarget.BarePodMembers.
 //
 // Returns the number of pods the API server actually resized, so
 // resizeInPlaceTarget can suppress the ResourcesUpdated event when nothing was

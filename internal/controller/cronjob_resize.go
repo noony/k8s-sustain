@@ -76,7 +76,7 @@ func (r *PolicyReconciler) listActiveJobsForCronJob(ctx context.Context, cj *bat
 		if !workload.IsOwnedBy(j.OwnerReferences, cj.UID) {
 			continue
 		}
-		if jobIsTerminal(j) {
+		if workload.JobFinished(j) {
 			continue
 		}
 		out = append(out, *j)
@@ -108,18 +108,4 @@ func (r *PolicyReconciler) listPodsForJob(ctx context.Context, job *batchv1.Job)
 		out = append(out, *pod)
 	}
 	return out, nil
-}
-
-// jobIsTerminal reports whether the Job has reached a terminal state
-// (Complete or Failed) and therefore has no pods worth resizing.
-func jobIsTerminal(job *batchv1.Job) bool {
-	for _, c := range job.Status.Conditions {
-		if c.Status != corev1.ConditionTrue {
-			continue
-		}
-		if c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed {
-			return true
-		}
-	}
-	return false
 }

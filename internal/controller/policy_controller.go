@@ -26,6 +26,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -153,6 +154,27 @@ func (r *PolicyReconciler) applyTuningDefaults() {
 	}
 }
 
+// snapshot reads the identities in policy's namespaces and kinds. Every
+// member of an identity shares its namespace and kind, so the narrowed
+// snapshot still sees whole identities, and what makes one Conflicted.
+func (r *PolicyReconciler) snapshot(ctx context.Context, policy *sustainv1alpha1.Policy) (*inventory.Snapshot, error) {
+	var kinds []string
+	for _, kind := range workload.SupportedKinds {
+		if policy.Spec.RightSizing.Update.Types.ModeForKind(kind) != nil {
+			kinds = append(kinds, kind)
+		}
+	}
+	// An empty Kinds would read every kind.
+	if len(kinds) == 0 {
+		return &inventory.Snapshot{}, nil
+	}
+	return inventory.Take(ctx, r.Client, inventory.Options{
+		Namespaces:         policy.Spec.Selector.Namespaces,
+		Kinds:              kinds,
+		ExcludedNamespaces: r.ExcludedNamespaces,
+	})
+}
+
 // Reconcile is the main reconciliation loop for Policy objects.
 func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("policy", req.Name)
@@ -200,7 +222,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	logger.Info("starting reconcile cycle")
 
-	targets, listErr := r.collectTargets(ctx, policy)
+	snap, listErr := r.snapshot(ctx, policy)
 	if listErr != nil {
 		logger.Error(listErr, "failed to list workloads")
 		_ = r.failCondition(ctx, policy, "ListFailed", listErr)
@@ -208,20 +230,13 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		reconcileTotal.WithLabelValues(policy.Name, "error").Inc()
 		return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
 	}
-	logger.Info("collected workload targets", "count", len(targets))
+	governed := snap.GovernedBy(policy.Name)
+	logger.Info("collected governed identities", "count", len(governed))
 
-	targetsByIdentity, discoveryFailures := r.discover(ctx, policy, targets)
-	r.health.observe(policy.Name, targetsByIdentity)
-
-	// Computation is driven by the WLR list, not the target list, so departed
-	// identities are still recomputed.
-	items, itemsErr := r.collectComputeItems(ctx, policy, targetsByIdentity)
-	if itemsErr != nil {
-		logger.Error(itemsErr, "failed to list WorkloadRecommendations for computation")
-		_ = r.failCondition(ctx, policy, "ListFailed", itemsErr)
-		reconcileTotal.WithLabelValues(policy.Name, "error").Inc()
-		return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
-	}
+	items := computeItems(ctx, policy, governed)
+	discoveryFailures := r.discover(ctx, policy.Name, items)
+	r.health.observe(policy.Name, items)
+	r.recordConflicted(ctx, policy.Name, snap)
 
 	// One autoscaler snapshot per pass; it lists each namespace once, lazily.
 	autoSnap := autoscaler.NewNamespacedSnapshot(r.Client)
@@ -237,7 +252,6 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	failed += departedFailed
 
 	logger.Info("reconcile cycle complete",
-		"targets", len(targets),
 		"identities", len(items),
 		"dispatched", units,
 		"discoveryFailures", discoveryFailures,
@@ -246,13 +260,13 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		"concurrency", r.WorkloadConcurrencyLimit)
 
 	blocked := r.health.emit(policy.Name, r.retries)
-	EmitPolicyRollup(policy.Name, len(targetsByIdentity), blocked)
+	EmitPolicyRollup(policy.Name, liveIdentities(governed), blocked)
 
 	requested, resolved, fetchFailures := passCoverage(results)
 	EmitPolicyBatchCoverage(policy.Name, requested, resolved)
 	EmitPolicyBatchFailures(policy.Name, fetchFailures)
 
-	r.sweepWorkloadRecommendations(ctx, policy.Name, targets)
+	r.sweepWorkloadRecommendations(ctx, policy.Name, snap)
 
 	// failed is per dispatched unit, so units is the denominator.
 	// discoveryFailures is reported separately so a persistent EnsureExists
@@ -284,4 +298,16 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
+}
+
+// liveIdentities counts the governed identities with a live member, which is
+// what k8s_sustain_policy_workload_count reports.
+func liveIdentities(governed []*inventory.Identity) int {
+	n := 0
+	for _, id := range governed {
+		if !id.Departed() {
+			n++
+		}
+	}
+	return n
 }

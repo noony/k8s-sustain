@@ -100,7 +100,7 @@ func TestEnsureExistsClearsDeparted(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 	if got.Status.Departed {
-		t.Error("Departed must be cleared: the identity is in the target listing again")
+		t.Error("Departed must be cleared: the identity has a live member again")
 	}
 	// The realistic path for "never writes Containers, Outcome or ObservedAt":
 	// in TestEnsureExistsCreatesEmptyWLR those fields are zero by construction

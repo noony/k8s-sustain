@@ -25,6 +25,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
@@ -303,6 +304,18 @@ func reconcilerCountingWLRStatusWrites(
 	return r
 }
 
+// targetFromObject builds the apply target of the single-member identity obj
+// forms, as the inventory and targetsOf would.
+func targetFromObject(obj client.Object, kind string) workloadTarget {
+	m := inventory.Member{Object: obj}
+	name := obj.GetName()
+	if tmpl, _, ok := workload.PodTemplateOf(obj); ok {
+		m.Containers, m.InitContainers = tmpl.Spec.Containers, tmpl.Spec.InitContainers
+		_, name = workload.ApplyOwnerNameOverride(kind, name, tmpl.Annotations)
+	}
+	return *targetFromMember(identityOf(obj.GetNamespace(), kind, name), m, "")
+}
+
 // itemForTarget builds the computeItem the reconciler's computation phase would
 // hand a single-member identity, so a test can drive computeIdentity or the WLR
 // write path without standing up a full Reconcile.
@@ -316,17 +329,24 @@ func itemForTarget(t *workloadTarget) computeItem {
 }
 
 // itemForTargetWithWLR is itemForTarget for tests that need the identity's
-// WorkloadRecommendation to carry something in particular — its
-// CreationTimestamp is what the workload-age gate reads for identities whose
-// own object age says nothing.
+// WorkloadRecommendation to carry something in particular. The identity is
+// dated as the inventory dates it: by its member or its WorkloadRecommendation,
+// whichever is older.
 func itemForTargetWithWLR(t *workloadTarget, wlr *sustainv1alpha1.WorkloadRecommendation) computeItem {
 	ref := sustainv1alpha1.WorkloadReference{Kind: t.IdentityKind, Namespace: t.Namespace, Name: t.IdentityName}
 	wlr.Spec.WorkloadRef = ref
+	since := wlr.CreationTimestamp.Time
+	if t.Object != nil {
+		if created := t.Object.GetCreationTimestamp().Time; !created.IsZero() && (since.IsZero() || created.Before(since)) {
+			since = created
+		}
+	}
 	return computeItem{
 		WLR:      wlr,
 		Targets:  []*workloadTarget{t},
 		Identity: promclient.WorkloadIdentity{Namespace: t.Namespace, OwnerKind: t.IdentityKind, OwnerName: t.IdentityName},
-		Observed: mergedObservedResources([]*workloadTarget{t}),
+		Observed: wlrcache.BuildObservedResources(t.Containers, t.InitContainers),
+		Since:    since,
 	}
 }
 
@@ -336,7 +356,7 @@ func itemForTargetWithWLR(t *workloadTarget, wlr *sustainv1alpha1.WorkloadRecomm
 // through handleStepError and the retry tracker exactly as Reconcile does, and
 // the identity's health emission.
 func runComputeAndApply(ctx context.Context, r *PolicyReconciler, policy *sustainv1alpha1.Policy, it computeItem) error {
-	r.health.observe(policy.Name, targetIndex{it.Identity: it.Targets})
+	r.health.observe(policy.Name, []computeItem{it})
 	snap := autoscaler.NewNamespacedSnapshot(r.Client)
 	results := r.recommend(ctx, policy, []computeItem{it}, snap)
 	r.persist(ctx, policy.Name, results)

@@ -14,7 +14,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -24,146 +23,24 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-func TestCollectComputeItemsIncludesDepartedIdentity(t *testing.T) {
-	// A bare-pod identity with a recommendation but NO live target: exactly
-	// the Airflow shape that used to be uncomputable.
-	departed := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "ns",
-			Name:      wlrcache.Name("Pod", "dag-task"),
-			Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: "pol"},
-		},
-		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
-			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Pod", Namespace: "ns", Name: "dag-task"},
-			Policy:      "pol",
-		},
-		Status: sustainv1alpha1.WorkloadRecommendationStatus{
-			Departed: true,
-			ObservedResources: map[string]sustainv1alpha1.ObservedContainerResources{
-				"worker": {},
-			},
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
-		WithObjects(departed).Build()
-	r := &PolicyReconciler{Client: c}
-	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "pol"}}
-
-	items, err := r.collectComputeItems(context.Background(), policy, targetIndex{})
-	if err != nil {
-		t.Fatalf("collectComputeItems: %v", err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("got %d items, want 1: a departed identity must still be computed", len(items))
-	}
-	if len(items[0].Targets) != 0 {
-		t.Error("Targets must be empty for a departed identity")
-	}
-	if items[0].Identity.OwnerName != "dag-task" {
-		t.Errorf("identity = %q, want dag-task", items[0].Identity.OwnerName)
-	}
-}
-
-func TestCollectComputeItemsLinksLiveTarget(t *testing.T) {
-	live := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "ns",
-			Name:      wlrcache.Name("Deployment", "api"),
-			Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: "pol"},
-		},
-		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
-			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: "ns", Name: "api"},
-			Policy:      "pol",
-		},
-		Status: sustainv1alpha1.WorkloadRecommendationStatus{
-			ObservedResources: map[string]sustainv1alpha1.ObservedContainerResources{"main": {}},
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
-		WithObjects(live).Build()
-	r := &PolicyReconciler{Client: c}
-	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "pol"}}
-
-	target := &workloadTarget{
-		Kind: "Deployment", Name: "api", Namespace: "ns",
-		IdentityKind: "Deployment", IdentityName: "api",
-	}
-	idx := targetIndex{
-		{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "api"}: {target},
-	}
-
-	items, err := r.collectComputeItems(context.Background(), policy, idx)
-	if err != nil {
-		t.Fatalf("collectComputeItems: %v", err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("got %d items, want 1", len(items))
-	}
-	if len(items[0].Targets) != 1 || items[0].Targets[0] != target {
-		t.Error("live identity must be linked to its target so application can run")
-	}
-}
-
-func TestCollectComputeItemsIgnoresOtherPolicies(t *testing.T) {
-	other := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "ns",
-			Name:      wlrcache.Name("Deployment", "other"),
-			Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: "different"},
-		},
-		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
-			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: "ns", Name: "other"},
-			Policy:      "different",
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
-		WithObjects(other).Build()
-	r := &PolicyReconciler{Client: c}
-	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "pol"}}
-
-	items, err := r.collectComputeItems(context.Background(), policy, targetIndex{})
-	if err != nil {
-		t.Fatalf("collectComputeItems: %v", err)
-	}
-	if len(items) != 0 {
-		t.Fatalf("got %d items, want 0: another policy's WLRs are not this policy's work", len(items))
-	}
-}
-
 // A departed identity with no observed-resources snapshot has no container
-// set to compute against, so it is not a compute item; the skip is counted so
-// a stuck snapshot write cannot hide.
+// set to compute against, so it is not computed; the skip is counted so a
+// stuck snapshot write cannot hide.
 //
 // The namespace is its own: wlrRefreshTotal is a package-level collector
 // other tests count from zero.
-func TestCollectComputeItemsSkipsDepartedIdentityWithoutSnapshot(t *testing.T) {
+func TestReconcileSkipsDepartedIdentityWithoutSnapshot(t *testing.T) {
 	const ns = "nosnapshot"
-	bare := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ns,
-			Name:      wlrcache.Name("Pod", "dag-task"),
-			Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: "pol"},
-		},
-		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
-			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Pod", Namespace: ns, Name: "dag-task"},
-			Policy:      "pol",
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
-		WithObjects(bare).Build()
-	r := &PolicyReconciler{Client: c}
+	bare := departedWLR(ns)
+	bare.Status.ObservedResources = nil
+	inputs := recommendertest.NewStaticInputs()
+	r := reconcilerWithInputs(t, inputs, false, barePodPolicy(t, "pol"), bare)
 	before := testutil.ToFloat64(wlrRefreshTotal.WithLabelValues(ns, "Pod", WLRRefreshNoSnapshot))
 
-	items, err := r.collectComputeItems(context.Background(), &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "pol"}}, targetIndex{})
-	if err != nil {
-		t.Fatalf("collectComputeItems: %v", err)
-	}
-	if len(items) != 0 {
-		t.Errorf("got %d items, want none: a departed identity without a snapshot cannot be computed", len(items))
+	reconcileOnce(t, r, "pol")
+
+	if inputs.Requested(identityOf(ns, "Pod", "dag-task")) {
+		t.Error("a departed identity without a snapshot cannot be computed, yet it was fetched")
 	}
 	if after := testutil.ToFloat64(wlrRefreshTotal.WithLabelValues(ns, "Pod", WLRRefreshNoSnapshot)); after-before != 1 {
 		t.Errorf("no-snapshot refresh delta = %v, want 1", after-before)
@@ -269,6 +146,17 @@ func TestReconcileAppliesToEveryMemberOfAnOwnerNameGroup(t *testing.T) {
 	}
 }
 
+// barePodPolicy computes like policyForReconcileWorkload and manages bare
+// pods, so it governs departedWLR's identity.
+func barePodPolicy(t *testing.T, name string) *sustainv1alpha1.Policy {
+	t.Helper()
+	p := policyForReconcileWorkload(t, name)
+	p.Finalizers = []string{"k8s.sustain.io/cleanup"}
+	ongoing := sustainv1alpha1.UpdateModeOngoing
+	p.Spec.RightSizing.Update.Types.Pod = &ongoing
+	return p
+}
+
 // departedWLR is the WorkloadRecommendation of a bare-pod identity whose pods
 // are all gone, known for two days, with a snapshot of container "app".
 func departedWLR(ns string) *sustainv1alpha1.WorkloadRecommendation {
@@ -294,9 +182,7 @@ func departedWLR(ns string) *sustainv1alpha1.WorkloadRecommendation {
 // its runs between them.
 func TestReconcile_RefreshesDepartedIdentity(t *testing.T) {
 	const ns = "airflow-refresh"
-	policy := policyForReconcileWorkload(t, "pol")
-	policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
-	r := reconcilerWithInputs(t, usageFor(ns, "Pod", "dag-task"), false, policy, departedWLR(ns))
+	r := reconcilerWithInputs(t, usageFor(ns, "Pod", "dag-task"), false, barePodPolicy(t, "pol"), departedWLR(ns))
 	r.RecommendationRetention = 24 * time.Hour
 
 	reconcileOnce(t, r, "pol")
@@ -320,10 +206,8 @@ func TestReconcile_DepartedRefreshNeverWipesGoodRecommendation(t *testing.T) {
 	wlr.Status.ObservedAt = old
 	wlr.Status.Outcome = sustainv1alpha1.OutcomeComputed
 	wlr.Status.Containers = map[string]sustainv1alpha1.ContainerRecommendation{"app": {CPURequest: &q}}
-	policy := policyForReconcileWorkload(t, "pol")
-	policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
 	// Prometheus returns nothing: the identity's samples aged out of the window.
-	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), false, policy, wlr)
+	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), false, barePodPolicy(t, "pol"), wlr)
 	r.RecommendationRetention = 24 * time.Hour
 
 	reconcileOnce(t, r, "pol")
@@ -340,11 +224,12 @@ func TestReconcile_DepartedRefreshNeverWipesGoodRecommendation(t *testing.T) {
 	}
 }
 
-// discover() Creates the WorkloadRecommendation objects and collectComputeItems
-// immediately Lists them back through the same cache-backed client — the
+// The snapshot Lists WorkloadRecommendations through the cache-backed client,
+// which has not caught up on the one discover() is about to Create — the
 // read-after-write race internal/wlrcache documents. Nothing watches
-// WorkloadRecommendation, so an identity the cache has not caught up on gets no
-// recommendation until the next --reconcile-interval.
+// WorkloadRecommendation, so an identity the cache has not caught up on must
+// still be computed from its members, not wait for the next
+// --reconcile-interval.
 //
 // The interceptor models that lag. A fake client is read-your-writes and cannot
 // express it on its own, which is why the defect was invisible to the suite.
@@ -376,7 +261,7 @@ func TestReconcile_ComputesIdentityMissingFromLaggingWLRList(t *testing.T) {
 	}
 	if len(wlr.Status.Containers) == 0 {
 		t.Error("a newly discovered workload produced no recommendation on the cycle it was first seen: " +
-			"collectComputeItems trusted a cache-backed List that cannot yet see what discover just created")
+			"the pass trusted a cache-backed List that cannot yet see what discover just created")
 	}
 }
 

@@ -197,12 +197,12 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, spec simulationSpec
 // workload under spec, on inputs already fetched.
 func computeWorkloadRecs(spec simulationSpec, containers []corev1.Container, created time.Time, autoInfo autoscaler.Info, inputs *recommender.WorkloadInputs) recommender.Result {
 	return recommender.Compute(recommender.Request{
-		Containers:      containers,
-		Resources:       spec.resources,
-		Coordination:    spec.coordination,
-		AutoInfo:        autoInfo,
-		Inputs:          inputs,
-		WorkloadCreated: created,
+		Containers:   containers,
+		Resources:    spec.resources,
+		Coordination: spec.coordination,
+		AutoInfo:     autoInfo,
+		Inputs:       inputs,
+		Since:        created,
 	})
 }
 

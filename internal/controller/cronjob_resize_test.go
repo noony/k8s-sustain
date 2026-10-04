@@ -41,28 +41,6 @@ func TestIsOwnedBy_ControllerRefMatch(t *testing.T) {
 	}
 }
 
-func TestJobIsTerminal_TrueOnCompleteOrFailed(t *testing.T) {
-	tests := []struct {
-		name       string
-		conditions []batchv1.JobCondition
-		want       bool
-	}{
-		{"none", nil, false},
-		{"complete-true", []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}, true},
-		{"failed-true", []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}, true},
-		{"complete-false", []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionFalse}}, false},
-		{"suspended", []batchv1.JobCondition{{Type: batchv1.JobSuspended, Status: corev1.ConditionTrue}}, false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			job := &batchv1.Job{Status: batchv1.JobStatus{Conditions: tc.conditions}}
-			if got := jobIsTerminal(job); got != tc.want {
-				t.Errorf("jobIsTerminal = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestListActiveJobsForCronJob_FiltersOwnerAndState(t *testing.T) {
 	cj := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "nightly", UID: "cj-uid"},

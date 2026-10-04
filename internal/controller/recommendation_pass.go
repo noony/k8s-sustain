@@ -149,18 +149,14 @@ func (r *PolicyReconciler) computeIdentity(
 	if r.LiveOOM.Enabled() {
 		liveOOMs = r.LiveOOM.Source.RecentByWorkload(id.Namespace, id.OwnerKind, id.OwnerName, r.LiveOOM.EffectiveMaxAge())
 	}
-	created := earliestTargetCreation(it.Targets)
-	firstSeen := it.WLR.CreationTimestamp.Time
-
 	out := recommender.Compute(recommender.Request{
-		Containers:        containersFromObserved(it.Observed, rs.ExcludeInitContainers),
-		Resources:         rs.ResourcesConfigs,
-		Coordination:      rs.AutoscalerCoordination,
-		AutoInfo:          autoInfo,
-		Inputs:            res.inputs,
-		LiveOOMs:          liveOOMs,
-		WorkloadCreated:   created,
-		IdentityFirstSeen: firstSeen,
+		Containers:   containersFromObserved(it.Observed, rs.ExcludeInitContainers),
+		Resources:    rs.ResourcesConfigs,
+		Coordination: rs.AutoscalerCoordination,
+		AutoInfo:     autoInfo,
+		Inputs:       res.inputs,
+		LiveOOMs:     liveOOMs,
+		Since:        it.Since,
 	})
 	switch out.Outcome {
 	case recommender.TooYoung:
@@ -168,8 +164,7 @@ func (r *PolicyReconciler) computeIdentity(
 		recommendationSkipped.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, "workload_too_young").Inc()
 		log.FromContext(ctx).Info("skipping recommendation: workload too young",
 			"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
-			"age", recommender.AgeForLog(created), "identityAge", recommender.AgeForLog(firstSeen),
-			"minAge", recommender.MinWorkloadAge)
+			"age", recommender.AgeForLog(it.Since), "minAge", recommender.MinWorkloadAge)
 	case recommender.NoData:
 		res.outcome = outcomeNoData
 	default:

@@ -3,25 +3,26 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/go-logr/logr"
 
-	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/inventory"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // sweepGracePeriod protects freshly created WorkloadRecommendations from the
-// sweep: an identity first written after this cycle's target listing was
-// built would otherwise be deleted by the same pass. Anchored on
+// sweep: an identity first written after this cycle's snapshot was taken
+// would otherwise be deleted by the same pass. Anchored on
 // CreationTimestamp, not ObservedAt, which the computation phase rewrites
 // every cycle and would make the guard self-satisfying.
 const sweepGracePeriod = 10 * time.Minute
@@ -54,12 +55,7 @@ func (r *PolicyReconciler) upsertWorkloadRecommendation(
 	recs map[string]workload.ContainerRecommendation,
 	now metav1.Time,
 ) error {
-	ref := sustainv1alpha1.WorkloadReference{
-		Kind:      it.Identity.OwnerKind,
-		Namespace: it.Identity.Namespace,
-		Name:      it.Identity.OwnerName,
-	}
-	return wlrcache.Upsert(ctx, r.Client, ref, policyName, recs, it.Observed, now)
+	return wlrcache.Upsert(ctx, r.Client, it.ref(), policyName, recs, it.Observed, now)
 }
 
 // wlrDeleteGuard says how strongly a cleanup path conditions its deletes, and
@@ -125,16 +121,13 @@ func (r *PolicyReconciler) deleteWLRsWhere(
 }
 
 // sweepWorkloadRecommendations deletes this policy's WorkloadRecommendations
-// whose target is absent from the current set, subject to the grace period
-// and retainDepartedWLR. Best-effort.
-func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, policyName string, targets []workloadTarget) {
+// whose identity it no longer governs, judged against snap: one whose members
+// opted out, or that fell out of the Policy's namespaces or kinds. A Departed
+// identity's is kept for the retention window, a Conflicted one's is kept
+// frozen, and one now governed by another Policy is left for that Policy to
+// adopt. Best-effort.
+func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, policyName string, snap *inventory.Snapshot) {
 	logger := log.FromContext(ctx).WithValues("policy", policyName)
-
-	wanted := make(map[string]struct{}, len(targets))
-	for i := range targets {
-		t := &targets[i]
-		wanted[t.Namespace+"/"+wlrcache.Name(t.IdentityKind, t.IdentityName)] = struct{}{}
-	}
 
 	now := time.Now()
 	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, deleteIfUnchanged,
@@ -144,13 +137,20 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 			if wlr.Spec.Policy != policyName {
 				return true
 			}
-			if _, ok := wanted[wlr.Namespace+"/"+wlr.Name]; ok {
-				return true
-			}
+			// Also covers an object written after snap was taken.
 			if now.Sub(wlr.CreationTimestamp.Time) < sweepGracePeriod {
 				return true
 			}
-			return r.retainDepartedWLR(ctx, logger, wlr, now)
+			ref := wlr.Spec.WorkloadRef
+			id, ok := snap.Lookup(promclient.WorkloadIdentity{Namespace: ref.Namespace, OwnerKind: ref.Kind, OwnerName: ref.Name})
+			switch {
+			case !ok:
+				return false
+			case id.Departed():
+				return r.retainDepartedWLR(ctx, logger, wlr, now)
+			default:
+				return id.Conflicted || id.Policy != ""
+			}
 		})
 	if listErr != nil {
 		logger.V(1).Info("failed to list WorkloadRecommendations for sweep", "err", listErr)
@@ -161,26 +161,9 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 	}
 }
 
-// retainDepartedWLR decides whether a WorkloadRecommendation whose target left
-// the target set is kept: a gone workload is retained for the retention
-// window, an existing one older than the grace period has opted out and is
-// deleted, and a check error fails open.
+// retainDepartedWLR keeps a Departed identity's WorkloadRecommendation for the
+// retention window, marking it departed so the webhook keeps serving it.
 func (r *PolicyReconciler) retainDepartedWLR(ctx context.Context, logger logr.Logger, wlr *sustainv1alpha1.WorkloadRecommendation, now time.Time) bool {
-	gone, created, err := r.workloadGone(ctx, wlr.Spec.WorkloadRef)
-	if err != nil {
-		// Not marked departed: the check was inconclusive, and the mark waives the
-		// webhook's freshness gate.
-		logger.V(1).Info("workload existence check failed; keeping WorkloadRecommendation",
-			"name", wlr.Name, "namespace", wlr.Namespace, "err", err)
-		return true
-	}
-	if !gone {
-		// Still running but unmatched: opted out, unless the object postdates this
-		// cycle's listing.
-		return now.Sub(created) < sweepGracePeriod
-	}
-	// Checked after the opt-out branch so disabling retention cannot delete a
-	// workload that merely raced the listing.
 	if r.RecommendationRetention <= 0 {
 		return false
 	}
@@ -209,29 +192,30 @@ func (r *PolicyReconciler) markDeparted(ctx context.Context, logger logr.Logger,
 		"name", wlr.Name, "namespace", wlr.Namespace)
 }
 
-// workloadGone reports whether the referenced workload object no longer
-// exists, and its CreationTimestamp when it does. Terminal Jobs and bare-pod
-// identities count as gone.
-func (r *PolicyReconciler) workloadGone(
-	ctx context.Context,
-	ref sustainv1alpha1.WorkloadReference,
-) (bool, time.Time, error) {
-	// "Pod" (a bare-pod identity) and unknown future kinds have no object.
-	obj := workload.ObjectForKind(ref.Kind)
-	if obj == nil {
-		return true, time.Time{}, nil
+// recordConflicted records the Conflicted outcome on the stored
+// WorkloadRecommendation of every Conflicted identity policyName is party to,
+// and nothing else: its spec.policy and Recommendation stay frozen as the
+// last governing Policy left them (ADR 0002). Best-effort.
+func (r *PolicyReconciler) recordConflicted(ctx context.Context, policyName string, snap *inventory.Snapshot) {
+	logger := log.FromContext(ctx)
+	for i := range snap.Identities {
+		id := &snap.Identities[i]
+		policies := id.MemberPolicies()
+		if !id.Conflicted || !slices.Contains(policies, policyName) {
+			continue
+		}
+		logger.Info("identity is Conflicted: its members opt into different Policies, so none governs it "+
+			"and its recommendation stays frozen until they agree",
+			"kind", id.Key.OwnerKind, "name", id.Key.OwnerName, "namespace", id.Key.Namespace,
+			"policies", policies)
+		if id.Recommendation == nil {
+			continue
+		}
+		if err := wlrcache.RecordOutcome(ctx, r.Client, id.Recommendation.Spec.WorkloadRef, sustainv1alpha1.OutcomeConflicted); err != nil {
+			logger.V(1).Info("failed to record the Conflicted outcome", "name", id.Recommendation.Name,
+				"namespace", id.Recommendation.Namespace, "err", err)
+		}
 	}
-	err := r.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, obj)
-	if apierrors.IsNotFound(err) {
-		return true, time.Time{}, nil
-	}
-	if err != nil {
-		return false, time.Time{}, err
-	}
-	if job, ok := obj.(*batchv1.Job); ok && jobIsTerminal(job) {
-		return true, time.Time{}, nil
-	}
-	return false, obj.GetCreationTimestamp().Time, nil
 }
 
 // deleteAllRecommendationsForPolicy removes every WorkloadRecommendation for
