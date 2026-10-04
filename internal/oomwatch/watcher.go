@@ -174,7 +174,7 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 	// early, and when the pod template alone decides the policy the failed
 	// ResolvePodOwner is never retried here. Marking anyway would suppress the
 	// walk for the whole cache TTL, permanently pinning the OOM under the
-	// degraded bucket (e.g. ReplicaSet, which RecentByWorkload never queries)
+	// degraded bucket (e.g. ReplicaSet, which ByWorkload never queries)
 	// instead of self-healing to the real owner.
 	if !degradedOwner {
 		for _, t := range terms {
@@ -193,7 +193,7 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 	// Keep the live-OOM cache key consistent with the identity the
 	// controller/webhook query Prometheus and the WorkloadRecommendation
 	// under — otherwise an overridden identity's live OOM signal is cached
-	// under the real owner and never found by RecentByWorkload lookups.
+	// under the real owner and never found by ByWorkload lookups.
 	ownerKind, ownerName = workload.ApplyOwnerNameOverride(ownerKind, ownerName, pod.GetAnnotations())
 	if ownerKind == "" {
 		return ctrl.Result{}, nil

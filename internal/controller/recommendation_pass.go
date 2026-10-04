@@ -148,7 +148,7 @@ func (r *PolicyReconciler) computeIdentity(
 	}
 	var liveOOMs map[string]*oomwatch.OOMRecord
 	if r.LiveOOM.Enabled() {
-		liveOOMs = r.LiveOOM.Source.RecentByWorkload(id.Namespace, id.OwnerKind, id.OwnerName, recommender.LiveOOMWindow)
+		liveOOMs = r.LiveOOM.Source.ByWorkload(id.Namespace, id.OwnerKind, id.OwnerName)
 	}
 	out := recommender.Compute(recommender.Request{
 		Containers:   containersFromObserved(it.Observed, rs.ExcludeInitContainers),

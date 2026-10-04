@@ -133,7 +133,7 @@ func TestRecordEvictsOldestAtCap(t *testing.T) {
 	if c.Size() != 2 {
 		t.Fatalf("Size() after cap eviction = %d, want 2", c.Size())
 	}
-	fresh := c.RecentByWorkload("default", "Deployment", "app", time.Hour)
+	fresh := c.ByWorkload("default", "Deployment", "app")
 	if _, ok := fresh["a"]; ok {
 		t.Errorf("oldest entry still present after eviction")
 	}
@@ -163,10 +163,10 @@ func TestSecondaryIndexCleanupOnEviction(t *testing.T) {
 	rec.ObservedAt = time.Now().Add(-time.Hour) // already stale
 	c.Record(key, rec)
 
-	// RecentByWorkload must not see the stale entry and must drop it.
-	got := c.RecentByWorkload("default", "Deployment", "app", time.Minute)
+	// ByWorkload must not see the stale entry and must drop it.
+	got := c.ByWorkload("default", "Deployment", "app")
 	if len(got) != 0 {
-		t.Errorf("RecentByWorkload returned %d entries, want 0", len(got))
+		t.Errorf("ByWorkload returned %d entries, want 0", len(got))
 	}
 	if c.Size() != 0 {
 		t.Errorf("Size() = %d, want 0 after lazy eviction", c.Size())
@@ -182,60 +182,39 @@ func TestSecondaryIndexCleanupOnEviction(t *testing.T) {
 	}
 }
 
-func TestRecentByWorkloadStaleByMaxAge(t *testing.T) {
-	c := NewCache(time.Hour)
-	key := makeKey("web")
-	rec := makeRecord(1, time.Now())
-	rec.ObservedAt = time.Now().Add(-5 * time.Minute)
-	c.Record(key, rec)
-
-	// maxAge < age -> filtered out, but ttl > age -> still present in map.
-	if got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Minute); len(got) != 0 {
-		t.Fatalf("RecentByWorkload returned stale entry: %+v", got)
-	}
-	if c.Size() != 1 {
-		t.Fatalf("maxAge filter must not evict; size=%d", c.Size())
-	}
-
-	// maxAge > age -> returned.
-	if got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, 10*time.Minute); len(got) == 0 {
-		t.Fatalf("RecentByWorkload did not return fresh entry")
-	}
-}
-
-func TestRecentByWorkloadReturnsCopy(t *testing.T) {
+func TestByWorkloadReturnsCopy(t *testing.T) {
 	c := NewCache(time.Minute)
 	key := makeKey("web")
 	c.Record(key, makeRecord(1, time.Now()))
 
-	got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Minute)
+	got := c.ByWorkload(key.Namespace, key.OwnerKind, key.OwnerName)
 	if got[key.Container] == nil {
 		t.Fatalf("expected record")
 	}
 	got[key.Container].RestartCount = 999
 
-	got2 := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Minute)
+	got2 := c.ByWorkload(key.Namespace, key.OwnerKind, key.OwnerName)
 	if got2[key.Container].RestartCount == 999 {
 		t.Fatalf("mutation through returned pointer leaked into cache")
 	}
 }
 
-func TestRecentByWorkload(t *testing.T) {
-	c := NewCache(time.Hour)
+func TestByWorkload(t *testing.T) {
+	c := NewCache(10 * time.Minute)
 	now := time.Now()
 
 	c.Record(Key{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "app", Container: "web"},
 		OOMRecord{Container: "web", ObservedAt: now, RestartCount: 1, TerminatedAt: now})
 	c.Record(Key{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "app", Container: "sidecar"},
 		OOMRecord{Container: "sidecar", ObservedAt: now, RestartCount: 1, TerminatedAt: now})
-	// Stale for the maxAge filter we'll use.
+	// Older than the TTL.
 	c.Record(Key{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "app", Container: "old"},
 		OOMRecord{Container: "old", ObservedAt: now.Add(-30 * time.Minute), RestartCount: 1, TerminatedAt: now})
 	// Different workload entirely.
 	c.Record(Key{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "other", Container: "web"},
 		OOMRecord{Container: "web", ObservedAt: now, RestartCount: 1, TerminatedAt: now})
 
-	got := c.RecentByWorkload("ns", "Deployment", "app", 5*time.Minute)
+	got := c.ByWorkload("ns", "Deployment", "app")
 	if len(got) != 2 {
 		t.Fatalf("len=%d, want 2; got=%+v", len(got), got)
 	}
@@ -250,9 +229,9 @@ func TestRecentByWorkload(t *testing.T) {
 	}
 
 	// Empty result is non-nil per contract.
-	empty := c.RecentByWorkload("ns", "Deployment", "nonexistent", time.Minute)
+	empty := c.ByWorkload("ns", "Deployment", "nonexistent")
 	if empty == nil {
-		t.Fatalf("RecentByWorkload returned nil for no matches; want empty map")
+		t.Fatalf("ByWorkload returned nil for no matches; want empty map")
 	}
 	if len(empty) != 0 {
 		t.Fatalf("len(empty)=%d, want 0", len(empty))
@@ -274,7 +253,7 @@ func TestSweepEviction(t *testing.T) {
 	if c.Size() != 1 {
 		t.Fatalf("after sweep size=%d, want 1", c.Size())
 	}
-	survivors := c.RecentByWorkload("default", "Deployment", "app", time.Minute)
+	survivors := c.ByWorkload("default", "Deployment", "app")
 	if _, ok := survivors["fresh"]; !ok {
 		t.Fatalf("fresh entry should survive sweep")
 	}
@@ -362,7 +341,7 @@ func TestConcurrentAccess(t *testing.T) {
 		})
 		wg.Go(func() {
 			for i := range perWorker {
-				_ = c.RecentByWorkload("ns", "Deployment", fmt.Sprintf("app-%d", i%4), time.Minute)
+				_ = c.ByWorkload("ns", "Deployment", fmt.Sprintf("app-%d", i%4))
 				_ = c.Size()
 			}
 		})
@@ -482,9 +461,9 @@ func TestRecordLatestWins(t *testing.T) {
 			c.Record(key, tc.first)
 			c.Record(key, tc.write)
 
-			got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Hour)[key.Container]
+			got := c.ByWorkload(key.Namespace, key.OwnerKind, key.OwnerName)[key.Container]
 			if got == nil {
-				t.Fatalf("RecentByWorkload lost the entry entirely")
+				t.Fatalf("ByWorkload lost the entry entirely")
 			}
 			if got.RestartCount != tc.want.RestartCount {
 				t.Errorf("RestartCount = %d, want %d", got.RestartCount, tc.want.RestartCount)
@@ -546,9 +525,9 @@ func TestRecordConcurrentLatestWins(t *testing.T) {
 	}
 	wg.Wait()
 
-	got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Hour)[key.Container]
+	got := c.ByWorkload(key.Namespace, key.OwnerKind, key.OwnerName)[key.Container]
 	if got == nil {
-		t.Fatalf("RecentByWorkload lost the entry entirely")
+		t.Fatalf("ByWorkload lost the entry entirely")
 	}
 	if want := int32(writers - 1); got.RestartCount != want {
 		t.Errorf("RestartCount = %d, want %d (newest write must win)", got.RestartCount, want)
@@ -600,9 +579,9 @@ func TestRecordMergesLargestOOMLimit(t *testing.T) {
 				c.Record(key, r)
 			}
 
-			got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Hour)[key.Container]
+			got := c.ByWorkload(key.Namespace, key.OwnerKind, key.OwnerName)[key.Container]
 			if got == nil {
-				t.Fatalf("RecentByWorkload lost the entry entirely")
+				t.Fatalf("ByWorkload lost the entry entirely")
 			}
 			// Identity and timestamps come from the newest observation.
 			if !got.TerminatedAt.Equal(podA.TerminatedAt) {
@@ -662,9 +641,9 @@ func TestRecordMergesOOMLimitOnEqualTerminatedAt(t *testing.T) {
 				c.Record(key, r)
 			}
 
-			got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Hour)[key.Container]
+			got := c.ByWorkload(key.Namespace, key.OwnerKind, key.OwnerName)[key.Container]
 			if got == nil {
-				t.Fatalf("RecentByWorkload lost the entry entirely")
+				t.Fatalf("ByWorkload lost the entry entirely")
 			}
 			if got.OOMLimitBytes != big {
 				t.Errorf("OOMLimitBytes = %d, want %d (largest killed limit)", got.OOMLimitBytes, int64(big))
@@ -713,9 +692,9 @@ func TestRecordReturnValueWithMergedLimit(t *testing.T) {
 			t.Errorf("Record(duplicate of stored) = true, want false")
 		}
 	}
-	got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, time.Hour)[key.Container]
+	got := c.ByWorkload(key.Namespace, key.OwnerKind, key.OwnerName)[key.Container]
 	if got == nil {
-		t.Fatalf("RecentByWorkload lost the entry entirely")
+		t.Fatalf("ByWorkload lost the entry entirely")
 	}
 	if got.OOMLimitBytes != big {
 		t.Errorf("OOMLimitBytes = %d, want %d (duplicate must not drop the merged anchor)", got.OOMLimitBytes, int64(big))
@@ -729,7 +708,7 @@ func TestRecordReturnValueWithMergedLimit(t *testing.T) {
 // per-field merge. An out-of-order observation still reports true — the
 // watcher fans it out and triggers an immediate reconcile — so it must also
 // keep the entry it contributed to alive: ObservedAt is what sweep and
-// RecentByWorkload age entries off, not TerminatedAt. Taking ObservedAt from
+// ByWorkload age entries off, not TerminatedAt. Taking ObservedAt from
 // the identity winner let a kill observed seconds ago be swept on a stored
 // entry's much older clock, losing the memory-floor evidence right after
 // announcing it.
@@ -743,7 +722,7 @@ func TestRecordOutOfOrderKillRefreshesObservedAt(t *testing.T) {
 		big   = 256 * 1024 * 1024
 	)
 
-	c := NewCache(time.Hour)
+	c := NewCache(5 * time.Minute)
 	key := makeKey("web")
 
 	// Seen long ago: the newer kill, on the stale 128Mi spec.
@@ -762,11 +741,11 @@ func TestRecordOutOfOrderKillRefreshesObservedAt(t *testing.T) {
 		t.Fatal("Record reported a distinct kill as a duplicate")
 	}
 
-	// A 5m window is far inside the 50m-old stored clock: the entry is only
+	// A 5m TTL is far inside the 50m-old stored clock: the entry is only
 	// visible here if the second observation advanced ObservedAt.
-	got := c.RecentByWorkload(key.Namespace, key.OwnerKind, key.OwnerName, 5*time.Minute)[key.Container]
+	got := c.ByWorkload(key.Namespace, key.OwnerKind, key.OwnerName)[key.Container]
 	if got == nil {
-		t.Fatal("entry aged out of a 5m window although it was observed just now")
+		t.Fatal("entry aged out of a 5m TTL although it was observed just now")
 	}
 	if got.ObservedAt.Before(now) {
 		t.Errorf("ObservedAt = %v, want >= %v (the later of the two observations)", got.ObservedAt, now)
