@@ -39,6 +39,5 @@ const (
 	MetricContainerCPULimitsByWorkloadCores      = "k8s_sustain:container_cpu_limits_by_workload:cores"
 	MetricContainerMemoryLimitsByWorkloadBytes   = "k8s_sustain:container_memory_limits_by_workload:bytes"
 
-	MetricAutoscalerPresent  = "k8s_sustain_autoscaler_present"
-	MetricCoordinationFactor = "k8s_sustain_coordination_factor"
+	MetricAutoscalerPresent = "k8s_sustain_autoscaler_present"
 )

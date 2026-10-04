@@ -176,13 +176,11 @@ func (r *PolicyReconciler) computeIdentity(
 	}
 }
 
-// emitContainerComputation records how each container's recommendation was
-// computed, read from its trace: the OOM floor and how long after a live kill
-// it responded, and the autoscaler coordination factors.
+// emitContainerComputation counts the containers whose memory request the OOM
+// floor determined, and how long after a live kill each responded.
 func emitContainerComputation(id promclient.WorkloadIdentity, containers map[string]recommender.ContainerRecResult) {
 	ns, kind, name := id.Namespace, id.OwnerKind, id.OwnerName
 	for container, res := range containers {
-		emitCoordinationFactors(ns, kind, name, res.Trace)
 		if mem := res.Trace.Memory; mem == nil || mem.OOMFloor == nil || !mem.OOMFloor.Determined {
 			continue
 		}
@@ -190,21 +188,6 @@ func emitContainerComputation(id promclient.WorkloadIdentity, containers map[str
 		if !res.OOM.LiveEventAt.IsZero() {
 			EmitOOMReactionLatency(ns, kind, name, time.Since(res.OOM.LiveEventAt).Seconds())
 		}
-	}
-}
-
-// emitCoordinationFactors records the overhead and (CPU only) replica factors
-// a container's trace holds. No-op when coordination did not run.
-func emitCoordinationFactors(namespace, ownerKind, ownerName string, tr sustainv1alpha1.ContainerTrace) {
-	if tr.CPU != nil && tr.CPU.Coordination != nil {
-		c := tr.CPU.Coordination
-		EmitCoordinationFactor(namespace, ownerKind, ownerName, autoscaler.ResourceCPU, "overhead", c.OverheadFactor)
-		if c.ReplicaFactor != nil {
-			EmitCoordinationFactor(namespace, ownerKind, ownerName, autoscaler.ResourceCPU, "replica", *c.ReplicaFactor)
-		}
-	}
-	if tr.Memory != nil && tr.Memory.Coordination != nil {
-		EmitCoordinationFactor(namespace, ownerKind, ownerName, autoscaler.ResourceMemory, "overhead", tr.Memory.Coordination.OverheadFactor)
 	}
 }
 

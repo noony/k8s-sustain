@@ -225,10 +225,12 @@ func TestConflictedIdentityIsListedOnceUnderNoPolicy(t *testing.T) {
 	}
 }
 
-// The detail page shows the Recommendation the WorkloadRecommendation stores
-// and the outcome of the controller's last pass; it computes nothing.
+// The detail page shows the Recommendation the WorkloadRecommendation stores,
+// how it was derived and the outcome of the controller's last pass; it
+// computes nothing.
 func TestWorkloadDetailShowsStoredRecommendation(t *testing.T) {
 	cpu, mem := resource.MustParse("250m"), resource.MustParse("128Mi")
+	percentile := resource.MustParse("227500u")
 	stored := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: wlrcache.Name("Deployment", "web")},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
@@ -240,6 +242,9 @@ func TestWorkloadDetailShowsStoredRecommendation(t *testing.T) {
 			Outcome:    sustainv1alpha1.OutcomeNoData,
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
 				"web": {CPURequest: &cpu, MemoryRequest: &mem, RemoveCPULimit: true},
+			},
+			Trace: map[string]sustainv1alpha1.ContainerTrace{
+				"web": {CPU: &sustainv1alpha1.ResourceTrace{Percentile: &percentile, WithHeadroom: cpu, Clamped: cpu, RemoveLimit: true}},
 			},
 		},
 	}
@@ -260,6 +265,71 @@ func TestWorkloadDetailShowsStoredRecommendation(t *testing.T) {
 	}
 	if c := rec.Containers["web"]; c.CPURequest != "250m" || c.MemoryRequest != "128Mi" || !c.CPULimitRemoved {
 		t.Errorf("web = %+v, want the stored 250m/128Mi with the CPU limit removed", c)
+	}
+	if tr := rec.Trace["web"].CPU; tr == nil || tr.Percentile.Cmp(percentile) != 0 || tr.Clamped.Cmp(cpu) != 0 || !tr.RemoveLimit {
+		t.Errorf("web cpu trace = %+v, want the stored one", tr)
+	}
+}
+
+// Coordination factors are read from the trace of the stored Recommendation,
+// on list rows and the detail page alike; no Prometheus series carries them.
+func TestCoordinationFactorsComeFromTheStoredTrace(t *testing.T) {
+	cpu, mem := resource.MustParse("300m"), resource.MustParse("176Mi")
+	replica := 0.9
+	stored := &sustainv1alpha1.WorkloadRecommendation{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: wlrcache.Name("Deployment", "api")},
+		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
+			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: "prod", Name: "api"},
+			Policy:      "p",
+		},
+		Status: sustainv1alpha1.WorkloadRecommendationStatus{
+			Outcome:    sustainv1alpha1.OutcomeComputed,
+			Containers: map[string]sustainv1alpha1.ContainerRecommendation{"api": {CPURequest: &cpu, MemoryRequest: &mem}},
+			Trace: map[string]sustainv1alpha1.ContainerTrace{"api": {
+				CPU: &sustainv1alpha1.ResourceTrace{WithHeadroom: cpu, Clamped: cpu, Coordination: &sustainv1alpha1.CoordinationTrace{
+					OverheadFactor: 1.2, ReplicaFactor: &replica, Scaled: cpu, Value: cpu,
+				}},
+				Memory: &sustainv1alpha1.ResourceTrace{WithHeadroom: mem, Clamped: mem, Coordination: &sustainv1alpha1.CoordinationTrace{
+					OverheadFactor: 1.1, Scaled: mem, Value: mem,
+				}},
+			}},
+		},
+	}
+	srv := identityServer(t, memHealthSignals{identity("prod", "Deployment", "api"): {AutoscalerPresent: true}},
+		deploymentPolicy("p"), deploymentOptingInto("p", "prod", "api", "", time.Now()),
+		deploymentOptingInto("p", "prod", "web", "", time.Now()), stored)
+	want := coordinationFactors{Enabled: true, CPUOverhead: 1.2, MemoryOverhead: 1.1, CPUReplica: 0.9}
+
+	rec := httptest.NewRecorder()
+	srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads", nil))
+	var page struct {
+		Items []struct {
+			Name                string               `json:"name"`
+			AutoscalerPresent   bool                 `json:"autoscalerPresent"`
+			CoordinationFactors *coordinationFactors `json:"coordinationFactors"`
+		} `json:"items"`
+	}
+	decodeEnvelopeData(t, rec.Body, &page)
+	if len(page.Items) != 2 {
+		t.Fatalf("rows = %+v, want api and web", page.Items)
+	}
+	for _, row := range page.Items {
+		switch row.Name {
+		case "api":
+			if !row.AutoscalerPresent || row.CoordinationFactors == nil || *row.CoordinationFactors != want {
+				t.Errorf("api row = %v %+v, want the autoscaler and the traced factors %+v", row.AutoscalerPresent, row.CoordinationFactors, want)
+			}
+		case "web":
+			if row.CoordinationFactors != nil {
+				t.Errorf("web has no stored trace, got factors %+v", row.CoordinationFactors)
+			}
+		}
+	}
+
+	var got workloadDetailResponse
+	detail(t, srv, "prod", "Deployment", "api", &got)
+	if got.CoordinationFactors == nil || *got.CoordinationFactors != want {
+		t.Errorf("detail factors = %+v, want %+v", got.CoordinationFactors, want)
 	}
 }
 

@@ -232,15 +232,6 @@ func EmitAutoscalerTargetsConfigured(id promclient.WorkloadIdentity, autoscalerK
 	}
 }
 
-// EmitCoordinationFactor records the multiplier applied for one resource and
-// factor kind. Pass 1.0 to clear (matches "no effect").
-func EmitCoordinationFactor(namespace, ownerKind, ownerName, resourceKey, factorKind string, factor float64) {
-	coordinationFactor.With(prometheus.Labels{
-		"namespace": namespace, "owner_kind": ownerKind, "owner_name": ownerName,
-		"resource": resourceKey, "kind": factorKind,
-	}).Set(factor)
-}
-
 // containerRequestCPUCores returns the CPU request in cores, or 0 if unset.
 func containerRequestCPUCores(c corev1.Container) float64 {
 	q := c.Resources.Requests.Cpu()
@@ -281,7 +272,6 @@ func DeleteIdentityHealth(id promclient.WorkloadIdentity) {
 		workloadRetryAttempts,
 		autoscalerPresent,
 		autoscalerTargetConfigured,
-		coordinationFactor,
 		recycleSuppressedTotal,
 	} {
 		c.DeletePartialMatch(l)

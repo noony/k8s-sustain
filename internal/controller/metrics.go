@@ -95,14 +95,6 @@ var (
 		Help: "Memory recommendations whose final request the recent-OOM floor determined: it beat the percentile and no min/max clamp replaced it.",
 	}, []string{"namespace", "owner_kind", "owner_name", "container"})
 
-	coordinationFactor = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "k8s_sustain_coordination_factor",
-			Help: "Multiplier applied by autoscaler coordination. 1.0 when off or no match.",
-		},
-		[]string{"namespace", "owner_kind", "owner_name", "resource", "kind"},
-	)
-
 	oomObservedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_oom_observed_total",
 		Help: "Total OOM kills observed by the active Pod watcher.",
@@ -184,7 +176,6 @@ func init() {
 		policyBlockedCount,
 		autoscalerPresent,
 		autoscalerTargetConfigured,
-		coordinationFactor,
 		recommendationSkipped,
 		oomFloorApplied,
 		oomObservedTotal,
