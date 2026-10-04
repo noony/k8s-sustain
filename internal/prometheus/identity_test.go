@@ -7,49 +7,40 @@ import (
 	"github.com/prometheus/common/model"
 )
 
-func TestVectorToIdentityValuesGroupsByFullIdentity(t *testing.T) {
+// One shard response carries many identities; each sample must keep its own,
+// even when only the namespace tells two apart, and keep its metric name.
+func TestShardSamplesKeepIdentityContainerAndMetric(t *testing.T) {
+	named := identitySample("prod", "Deployment", "api", "app", 2)
+	named.Metric[model.MetricNameLabel] = "k8s_sustain:workload_oom_24h"
 	vec := model.Vector{
-		identitySample("prod", "Deployment", "api", "app", 0.42),
-		identitySample("prod", "Deployment", "api", "sidecar", 0.03),
-		identitySample("prod", "Deployment", "web", "app", 1.2),
+		named,
 		identitySample("staging", "Deployment", "api", "app", 0.1),
 	}
 
-	out := vectorToIdentityValues(vec)
+	got := shardSamples(vec)
 
-	if len(out) != 3 {
-		t.Fatalf("got %d identities want 3: %v", len(out), out)
+	want := []ShardSample{
+		{Identity: WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "api"}, Container: "app", Metric: "k8s_sustain:workload_oom_24h", Value: 2},
+		{Identity: WorkloadIdentity{Namespace: "staging", OwnerKind: "Deployment", OwnerName: "api"}, Container: "app", Value: 0.1},
 	}
-	prodAPI := WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "api"}
-	if got := out[prodAPI]["app"]; got != 0.42 {
-		t.Fatalf("prod/api app: got %v want 0.42", got)
-	}
-	if got := out[prodAPI]["sidecar"]; got != 0.03 {
-		t.Fatalf("prod/api sidecar: got %v want 0.03", got)
-	}
-	// The collision case this type exists to prevent: same owner_name and
-	// container, different namespace.
-	stagingAPI := WorkloadIdentity{Namespace: "staging", OwnerKind: "Deployment", OwnerName: "api"}
-	if got := out[stagingAPI]["app"]; got != 0.1 {
-		t.Fatalf("staging/api app: got %v want 0.1 (must not collide with prod/api)", got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("got  %+v\nwant %+v", got, want)
 	}
 }
 
-func TestVectorToIdentityValuesDropsIncompleteSeries(t *testing.T) {
+func TestShardSamplesDropIncompleteSeries(t *testing.T) {
 	vec := model.Vector{
-		identitySample("prod", "Deployment", "api", "", 1),   // no container
-		identitySample("", "Deployment", "api", "app", 1),    // no namespace
-		identitySample("prod", "", "api", "app", 1),          // no owner_kind
-		identitySample("prod", "Deployment", "", "app", 1),   // no owner_name
-		identitySample("prod", "Deployment", "ok", "app", 7), // the only valid one
+		identitySample("prod", "Deployment", "api", "", 1),
+		identitySample("", "Deployment", "api", "app", 1),
+		identitySample("prod", "", "api", "app", 1),
+		identitySample("prod", "Deployment", "", "app", 1),
+		identitySample("prod", "Deployment", "ok", "app", 7),
 	}
-	out := vectorToIdentityValues(vec)
-	if len(out) != 1 {
-		t.Fatalf("got %d identities want 1: %v", len(out), out)
-	}
-	valid := WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "ok"}
-	if got := out[valid]["app"]; got != 7 {
-		t.Fatalf("valid series: got %v want 7", got)
+
+	got := shardSamples(vec)
+
+	if len(got) != 1 || got[0].Identity.OwnerName != "ok" || got[0].Value != 7 {
+		t.Fatalf("got %+v, want only the complete prod/Deployment/ok series", got)
 	}
 }
 

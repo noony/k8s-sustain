@@ -27,13 +27,13 @@ type Shard struct {
 	Names     []string
 }
 
-// escapedNameAlternation joins the shard's owner names into an RE2 alternation.
-// Names are RFC 1123 subdomains and may contain '.', so each is QuoteMeta'd.
-// Every selector built from Shard.Names must go through here.
-func (s Shard) escapedNameAlternation() string {
-	escaped := make([]string, len(s.Names))
-	for i, n := range s.Names {
-		escaped[i] = regexp.QuoteMeta(n)
+// literalAlternation joins values into an RE2 alternation matching each one
+// exactly. Owner names are RFC 1123 subdomains and may contain '.', so each is
+// QuoteMeta'd. Every regex matcher built from Shard.Names must go through here.
+func literalAlternation(values []string) string {
+	escaped := make([]string, len(values))
+	for i, v := range values {
+		escaped[i] = regexp.QuoteMeta(v)
 	}
 	return strings.Join(escaped, "|")
 }
@@ -43,7 +43,14 @@ func (s Shard) escapedNameAlternation() string {
 // lexer un-escapes string literals before the regex engine sees them, and a
 // lone `\.` is a parse error.
 func (s Shard) Selector() string {
-	return fmt.Sprintf(`{namespace=%q,owner_kind=%q,owner_name=~%q}`, s.Namespace, s.OwnerKind, s.escapedNameAlternation())
+	return fmt.Sprintf(`{namespace=%q,owner_kind=%q,owner_name=~%q}`, s.Namespace, s.OwnerKind, literalAlternation(s.Names))
+}
+
+// MetricsSelector is Selector narrowed to the named metrics, so one query
+// reads several recording rules for the shard.
+func (s Shard) MetricsSelector(metrics ...string) string {
+	return fmt.Sprintf(`{__name__=~%q,namespace=%q,owner_kind=%q,owner_name=~%q}`,
+		literalAlternation(metrics), s.Namespace, s.OwnerKind, literalAlternation(s.Names))
 }
 
 // shardGroupKey identifies one (namespace, owner_kind) group. Shards never
@@ -55,19 +62,20 @@ type shardGroupKey struct {
 }
 
 // maxShardMembers caps names per shard regardless of sample cost. Cost scales
-// with the window, so a short window would otherwise permit a selector
-// hundreds of kilobytes long. 1000 is above what the shipped defaults produce.
+// with the window, so a short window, or a signal read as an instant vector,
+// would otherwise permit a selector hundreds of kilobytes long. 1000 is above
+// what the shipped defaults produce for a windowed signal.
 const maxShardMembers = 1000
 
 // BuildShards partitions candidates into shards, one per (namespace,
 // owner_kind) pair, closing a shard when the next member would exceed
-// maxSamples (containers * windowMinutes, summed) or maxShardMembers.
+// maxSamples (containers * samplesPerContainer, summed) or maxShardMembers.
 // Candidates with an empty namespace, kind or name are returned in dropped;
 // output order is deterministic, and an over-budget workload still gets a
 // shard of its own.
-func BuildShards(cands []ShardCandidate, windowMinutes, maxSamples int) (shards []Shard, dropped []ShardCandidate) {
-	if windowMinutes <= 0 {
-		windowMinutes = 1
+func BuildShards(cands []ShardCandidate, samplesPerContainer, maxSamples int) (shards []Shard, dropped []ShardCandidate) {
+	if samplesPerContainer <= 0 {
+		samplesPerContainer = 1
 	}
 
 	type member struct {
@@ -94,7 +102,7 @@ func BuildShards(cands []ShardCandidate, windowMinutes, maxSamples int) (shards 
 		if _, ok := groups[key]; !ok {
 			groupOrder = append(groupOrder, key)
 		}
-		groups[key] = append(groups[key], member{name: name, cost: containers * windowMinutes})
+		groups[key] = append(groups[key], member{name: name, cost: containers * samplesPerContainer})
 	}
 
 	slices.SortFunc(groupOrder, func(a, b shardGroupKey) int {
@@ -131,8 +139,9 @@ func BuildShards(cands []ShardCandidate, windowMinutes, maxSamples int) (shards 
 // unparseableWindowMinutes is WindowMinutes' fallback: 30 days, an overestimate.
 const unparseableWindowMinutes = 30 * 24 * 60
 
-// WindowMinutes converts a Prometheus duration string to whole minutes for
-// BuildShards. Failures overestimate: sub-minute windows floor at 1 and an
+// WindowMinutes converts a Prometheus duration string to whole minutes: the
+// samples per series a windowed read of a 1m recording rule loads, as
+// BuildShards counts them. Failures overestimate: sub-minute windows floor at 1 and an
 // unparseable window counts as 30 days, since underestimating packs shards
 // past --query.max-samples.
 func WindowMinutes(window string) int {

@@ -12,11 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// DefaultRecentMaxAge is the freshness window the recommender uses when
-// LiveOOMConfig.MaxAge is zero. It matches defaultTTL so a record that the
-// recommender would still consider live cannot have been swept by the cache.
-const DefaultRecentMaxAge = defaultTTL
-
 // Key identifies an OOM record by workload + container.
 type Key struct {
 	Namespace string
@@ -55,12 +50,12 @@ type OOMRecord struct {
 	OOMLimitBytes int64
 }
 
-// Source is the read-only API consumed by the recommender. It returns recent
-// OOM observations for a given workload or container, filtered by maxAge.
+// Source is the read-only API consumed by the recommender, which decides
+// which of the observations it returns are still recent.
 type Source interface {
-	// RecentByWorkload returns all per-container records for a workload that
-	// are younger than maxAge. Returns an empty map when there is nothing.
-	RecentByWorkload(ns, kind, name string, maxAge time.Duration) map[string]*OOMRecord
+	// ByWorkload returns a workload's per-container records, none older than
+	// the source's retention. Returns an empty map when there is nothing.
+	ByWorkload(ns, kind, name string) map[string]*OOMRecord
 }
 
 // Sink is the write-only API used by the watcher to persist observations.

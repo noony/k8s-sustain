@@ -22,7 +22,7 @@ const minSweepInterval = 30 * time.Second
 const defaultMaxEntries = 5_000
 
 // workloadKey is the (ns, kind, name) tuple used as the secondary-index key so
-// RecentByWorkload is O(containers) instead of O(N).
+// ByWorkload is O(containers) instead of O(N).
 type workloadKey struct {
 	Namespace string
 	OwnerKind string
@@ -110,9 +110,10 @@ func NewCacheWithLimit(ttl time.Duration, maxEntries int) *Cache {
 //     newerThan; without an explicit order "newest" degrades to "whichever
 //     goroutine took the lock last".
 //   - ObservedAt takes the later of the two regardless of which identity won.
-//     It is the freshness clock sweep and RecentByWorkload age entries off,
-//     so an out-of-order kill must still refresh the entry — otherwise it is
-//     fanned out as new and then swept moments later on the older clock.
+//     It is the freshness clock sweep, ByWorkload and the recommender's OOM
+//     floor age entries off, so an out-of-order kill must still refresh the
+//     entry — otherwise it is fanned out as new and then swept moments later
+//     on the older clock.
 //   - OOMLimitBytes takes the max, because the useful memory-floor anchor is
 //     the largest limit that still got OOM-killed. A workload bumped
 //     128Mi -> 256Mi can have a stale 128Mi pod OOM after a resized 256Mi
@@ -235,15 +236,16 @@ func (c *Cache) markResolvedAt(now time.Time, podUID types.UID, container string
 	c.resolved[key] = now
 }
 
-// RecentByWorkload returns a per-container map of fresh records for the given
-// workload identity. The map is always non-nil so callers can range over it
-// without a nil check; an empty map means "no fresh observations".
+// ByWorkload returns the records the cache holds for the given workload
+// identity, by container. The map is always non-nil so callers can range over
+// it without a nil check. Whether a kill is still recent is the reader's call:
+// the cache only drops records older than its TTL.
 //
 // Reads run under RLock with the help of a secondary index keyed by workload,
 // so the recommender does not serialize against concurrent Record calls. Any
 // stale entries discovered along the way are deleted via a brief write lock
 // after the read pass completes.
-func (c *Cache) RecentByWorkload(ns, kind, name string, maxAge time.Duration) map[string]*OOMRecord {
+func (c *Cache) ByWorkload(ns, kind, name string) map[string]*OOMRecord {
 	out := make(map[string]*OOMRecord)
 	now := time.Now()
 	wk := workloadKey{Namespace: ns, OwnerKind: kind, OwnerName: name}
@@ -258,9 +260,6 @@ func (c *Cache) RecentByWorkload(ns, kind, name string, maxAge time.Duration) ma
 		}
 		if now.Sub(entry.ObservedAt) > c.ttl {
 			stale = append(stale, key)
-			continue
-		}
-		if now.Sub(entry.ObservedAt) > maxAge {
 			continue
 		}
 		rec := entry
@@ -279,7 +278,7 @@ func (c *Cache) RecentByWorkload(ns, kind, name string, maxAge time.Duration) ma
 }
 
 // Size returns the number of cached entries, including stale-but-not-yet-swept
-// ones. For a fresh-only count, use RecentByWorkload.
+// ones. For unexpired entries only, use ByWorkload.
 func (c *Cache) Size() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -400,7 +399,7 @@ func (c *Cache) deleteEntryLocked(key Key) {
 }
 
 // deleteIfStaleLocked is the shared lazy-eviction primitive used by
-// RecentByWorkload and sweep. The re-check under the write lock handles the
+// ByWorkload and sweep. The re-check under the write lock handles the
 // TOCTOU window where a concurrent Record refreshed the entry between the
 // initial RLock read and the Lock upgrade.
 func (c *Cache) deleteIfStaleLocked(key Key, now time.Time) {

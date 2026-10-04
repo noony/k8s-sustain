@@ -88,7 +88,9 @@ func runStart(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	oomCache := oomwatch.NewCache(oomwatch.DefaultRecentMaxAge)
+	// The cache keeps a kill exactly as long as the OOM floor counts it as
+	// recent: a shorter TTL would sweep kills the floor still needs.
+	oomCache := oomwatch.NewCache(recommender.LiveOOMWindow)
 	oomCache.SizeObserver = controller.SetOOMCacheEntries
 	// Big enough to absorb a rolling-restart burst across a few hundred pods;
 	// small enough that a stuck reconciler does not pile up unbounded events.

@@ -94,9 +94,9 @@ When a container's `LastTerminationState.Terminated.Reason == "OOMKilled"` is ob
 - Records the memory limit the kubelet had actually applied to the container (`ContainerStatus.Resources`, falling back to the pod spec), so the recommender has a bump anchor before Prometheus surfaces the OOM-time limit
 - Enqueues the owning Policy for immediate reconcile via a `source.Channel` wired into the Policy reconciler's work queue.
 
-The recommender reads the cache during recommendation build: a hit sets the live OOM signal for that container only — equivalent to the per-container Prometheus `workload_oom_24h` recency signal — and feeds the OOM-floor stage of the [Recommendation Pipeline](recommendation-pipeline.md#stages). The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.
+The recommender reads the cache when it computes an identity, and its [OOM floor signal](recommendation-pipeline.md#signals) merges what it finds with the Prometheus 24h window: a kill the watcher saw in the last 30 minutes counts as a recent OOM for that container only — equivalent to the per-container `workload_oom_24h` recency signal — and feeds the OOM-floor stage of the [Recommendation Pipeline](recommendation-pipeline.md#stages). The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.
 
-**Operational notes.** The cache is in-memory and lives only for the lifetime of the controller process; on restart, the 24h Prometheus history (`k8s_sustain:workload_oom_24h`, `k8s_sustain:container_oom_limit_24h:bytes`) repopulates the floor on the next reconcile. The watcher is leader-elected like other controllers — non-leaders idle.
+**Operational notes.** The cache is in-memory and lives only for the lifetime of the controller process; it keeps a kill for the same 30 minutes the OOM floor counts it as recent. On restart, the 24h Prometheus history (`k8s_sustain:workload_oom_24h`, `k8s_sustain:container_oom_limit_24h:bytes`) repopulates the floor on the next reconcile. The watcher is leader-elected like other controllers — non-leaders idle.
 
 ## Admission Webhook (`k8s-sustain webhook`)
 

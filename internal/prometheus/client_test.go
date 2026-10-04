@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -472,9 +471,9 @@ func TestQueryOOMKillEvents_HistoricalOOMEmits(t *testing.T) {
 	}
 }
 
-// webShard is a one-workload shard, the smallest query that runs through
-// execInstant with the client's query timeout.
-var webShard = Shard{Namespace: "ns", OwnerKind: "Deployment", Names: []string{"web"}}
+// webShardQuery is a one-workload shard query, the smallest one that runs
+// through execInstant with the client's query timeout.
+const webShardQuery = `k8s_sustain:workload_max_pod_cpu:cores{namespace="ns",owner_kind="Deployment",owner_name=~"web"}`
 
 // breakerFailures reads the breaker's failure counter under its mutex.
 func breakerFailures(c *Client) int {
@@ -512,7 +511,7 @@ func TestExecInstant_GenuineErrorCountsOne(t *testing.T) {
 	c, _ := New(server.URL)
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryShardCPU(context.Background(), webShard, 0.9, "7d")
+	_, err := c.QueryShard(context.Background(), webShardQuery)
 	if err == nil {
 		t.Fatal("expected an error from the failing query")
 	}
@@ -533,7 +532,7 @@ func TestExecInstant_PerCallTimeoutCountsOne(t *testing.T) {
 	c, _ := New(server.URL, WithQueryTimeout(50*time.Millisecond))
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryShardCPU(context.Background(), webShard, 0.9, "7d")
+	_, err := c.QueryShard(context.Background(), webShardQuery)
 	if err == nil {
 		t.Fatal("expected an error from the per-call timeout")
 	}
@@ -578,7 +577,7 @@ func TestExecInstant_ParentCancelCountsOne(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := c.QueryShardCPU(ctx, webShard, 0.9, "7d")
+	_, err := c.QueryShard(ctx, webShardQuery)
 	if err == nil {
 		t.Fatal("expected an error from the parent-context cancellation")
 	}
@@ -609,7 +608,7 @@ func TestExecInstant_OuterSiblingCancelCountsZero(t *testing.T) {
 	}()
 	defer cancelCause(nil)
 
-	_, err := c.QueryShardCPU(ctx, webShard, 0.9, "7d")
+	_, err := c.QueryShard(ctx, webShardQuery)
 	if err == nil {
 		t.Fatal("expected an error from the sibling cancellation")
 	}
@@ -716,11 +715,11 @@ func TestErrgroupSiblings_SingleOutageCountsOnce(t *testing.T) {
 
 	g, gctx := errgroup.WithContext(context.Background())
 	g.Go(func() error {
-		_, err := c.QueryShardCPU(gctx, webShard, 0.9, "7d")
+		_, err := c.QueryShard(gctx, webShardQuery)
 		return err
 	})
 	g.Go(func() error {
-		_, err := c.QueryShardMemory(gctx, webShard, 0.9, "7d")
+		_, err := c.QueryShard(gctx, `k8s_sustain:workload_max_pod_memory:bytes{namespace="ns"}`)
 		return err
 	})
 	if err := g.Wait(); err == nil {
@@ -756,8 +755,8 @@ func TestPing_Error(t *testing.T) {
 	}
 }
 
-func TestQuantileOverTimeExprUsesRangeVectorNotSubquery(t *testing.T) {
-	got := quantileOverTimeExpr(0.95, "k8s_sustain:workload_max_pod_cpu:cores",
+func TestQuantileOverTimeUsesRangeVectorNotSubquery(t *testing.T) {
+	got := QuantileOverTime(0.95, "k8s_sustain:workload_max_pod_cpu:cores",
 		`{namespace="prod",owner_kind="Deployment",owner_name="api"}`, "7d")
 
 	want := `quantile_over_time(0.95, k8s_sustain:workload_max_pod_cpu:cores{namespace="prod",owner_kind="Deployment",owner_name="api"}[7d])`
@@ -766,49 +765,6 @@ func TestQuantileOverTimeExprUsesRangeVectorNotSubquery(t *testing.T) {
 	}
 	if strings.Contains(got, ":1m]") {
 		t.Fatalf("expression still contains a 1m subquery step: %s", got)
-	}
-}
-
-// Three metric families arrive in one vector, with DUPLICATE series per
-// container simulating two kube-state-metrics replicas. Counts must sum,
-// peaks and limits must take the max.
-func TestQueryShardOOMSignalAggregatesDuplicates(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-			{"metric":{"__name__":"k8s_sustain:workload_oom_24h","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"app","instance":"ksm-a"},"value":[1700000000,"2"]},
-			{"metric":{"__name__":"k8s_sustain:workload_oom_24h","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"app","instance":"ksm-b"},"value":[1700000000,"3"]},
-			{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"app","instance":"ksm-a"},"value":[1700000000,"1000"]},
-			{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"app","instance":"ksm-b"},"value":[1700000000,"2000"]},
-			{"metric":{"__name__":"k8s_sustain:container_oom_limit_24h:bytes","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"app","instance":"ksm-a"},"value":[1700000000,"4096"]},
-			{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"sidecar"},"value":[1700000000,"0"]}
-		]}}`))
-	}))
-	defer server.Close()
-
-	c, err := New(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := c.QueryShardOOMSignal(context.Background(), Shard{Namespace: "prod", OwnerKind: "Deployment", Names: []string{"api"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sig := got[WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "api"}]
-
-	if got := sig.OOMCounts["app"]; got != 5 {
-		t.Fatalf("OOMCounts[app]: got %v want 5 (sum of 2+3)", got)
-	}
-	if got := sig.PeakMemoryBytes["app"]; got != 2000 {
-		t.Fatalf("PeakMemoryBytes[app]: got %v want 2000 (max of 1000,2000)", got)
-	}
-	if got := sig.OOMLimitBytes["app"]; got != 4096 {
-		t.Fatalf("OOMLimitBytes[app]: got %v want 4096", got)
-	}
-	// A legitimately-zero peak must still be PRESENT — ComputeContainerRec
-	// gates memory emission on key presence, not on the value.
-	if _, ok := sig.PeakMemoryBytes["sidecar"]; !ok {
-		t.Fatal("PeakMemoryBytes[sidecar] missing: zero-valued samples must retain key presence")
 	}
 }
 
@@ -864,29 +820,6 @@ func TestAcquireAbortWrapsSentinelAndSkipsBreaker(t *testing.T) {
 	close(release)
 	if err := g.Wait(); err != nil {
 		t.Fatalf("parked query: %v", err)
-	}
-}
-
-// oomShardSelector interpolates metric names into an RE2 alternation without
-// escaping them. That is only safe while every name is composed of RE2
-// literals. Renaming a recording rule to include a metacharacter would widen
-// what the selector matches — silently, since nothing else would fail. This
-// pins the invariant so such a rename breaks here instead of in production.
-func TestOOMSignalSelectorUsesLiteralAlternation(t *testing.T) {
-	for _, name := range oomMetricNames {
-		if got := regexp.QuoteMeta(name); got != name {
-			t.Errorf("metric name %q contains RE2 metacharacters (quoted form %q); "+
-				"oomShardSelector interpolates it unescaped and would match more than intended",
-				name, got)
-		}
-	}
-
-	// The rendered selector must be an exact literal alternation of the three
-	// names, anchored inside the __name__ matcher.
-	got := oomShardSelector(Shard{Namespace: "prod", OwnerKind: "Deployment", Names: []string{"api"}})
-	want := `{__name__=~"` + strings.Join(oomMetricNames, "|") + `",namespace="prod",owner_kind="Deployment",owner_name=~"api"}`
-	if got != want {
-		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }
 

@@ -24,10 +24,11 @@ const shardFetchConcurrency = 8
 // multiply.
 const fallbackFetchConcurrency = 4
 
-// PromInputs is the InputsFetcher backed by Prometheus. It packs identities
-// into sharded batch queries and retries a failed shard once. A shard that
-// still fails is re-queried one identity at a time, so one sick shard cannot
-// deny its healthy shard-mates their inputs (docs/adr/0001).
+// PromInputs is the InputsFetcher backed by Prometheus. It reads every signal,
+// packing identities into sharded batch queries sized by that signal's own
+// cost and retrying a failed shard once. A shard that still fails is
+// re-queried one identity at a time, so one sick shard cannot deny its healthy
+// shard-mates their inputs (docs/adr/0001).
 type PromInputs struct {
 	client     *promclient.Client
 	maxSamples int
@@ -36,15 +37,15 @@ type PromInputs struct {
 var _ InputsFetcher = (*PromInputs)(nil)
 
 // NewPromInputs returns a PromInputs whose shards stay within maxSamples,
-// counted as containers times window minutes. A non-positive budget puts every
-// identity in a shard of its own.
+// counted as each signal's samples per container times containers. A
+// non-positive budget puts every identity in a shard of its own.
 func NewPromInputs(c *promclient.Client, maxSamples int) *PromInputs {
 	return &PromInputs{client: c, maxSamples: maxSamples}
 }
 
-// FetchInputs fetches CPU, memory and OOM inputs, one signal after the other.
-// CPU and memory are required: an identity whose query fails even on its own
-// gets that error. OOM is best-effort: a failure leaves an empty OOM signal.
+// FetchInputs fetches every signal, one after the other. An identity whose
+// query for a required signal fails even on its own gets that error. A failed
+// best-effort signal leaves it holding that signal's empty values.
 func (p *PromInputs) FetchInputs(
 	ctx context.Context,
 	cfg sustainv1alpha1.ResourcesConfigs,
@@ -52,59 +53,56 @@ func (p *PromInputs) FetchInputs(
 ) map[promclient.WorkloadIdentity]InputsResult {
 	logger := log.FromContext(ctx)
 
-	cpuQuantile := PercentileQuantile(cfg.CPU.Requests.Percentile)
-	cpuWindow := ResourceWindow(cfg.CPU.Window)
-	memQuantile := PercentileQuantile(cfg.Memory.Requests.Percentile)
-	memWindow := ResourceWindow(cfg.Memory.Window)
+	inputs := make(map[promclient.WorkloadIdentity]*WorkloadInputs, len(reqs))
+	for _, r := range reqs {
+		if inputs[r.Identity] != nil {
+			continue
+		}
+		in := &WorkloadInputs{}
+		for _, s := range signals {
+			s.collect(in, nil)
+		}
+		inputs[r.Identity] = in
+	}
 
-	cpuShards, dropped := p.plan(reqs, cpuWindow)
-	memShards, _ := p.plan(reqs, memWindow)
-	for _, id := range dropped {
+	failed := make(map[promclient.WorkloadIdentity]error)
+	dropped := make(map[promclient.WorkloadIdentity]bool)
+	for _, s := range signals {
+		shards, d := p.plan(reqs, s.samplesPerContainer(cfg))
+		for _, id := range d {
+			dropped[id] = true
+		}
+		for id, err := range p.fetchSignal(ctx, s, cfg, shards, inputs) {
+			if !s.required() {
+				logger.V(1).Info(s.name()+" inputs unavailable; computing without them",
+					"namespace", id.Namespace, "ownerKind", id.OwnerKind, "ownerName", id.OwnerName, "err", err)
+				continue
+			}
+			if failed[id] == nil {
+				failed[id] = fmt.Errorf("%s inputs: %w", s.name(), err)
+			}
+		}
+	}
+	for id := range dropped {
 		logger.V(1).Info("identity with an empty namespace, kind or name cannot be queried; treating it as having no samples",
 			"namespace", id.Namespace, "ownerKind", id.OwnerKind, "ownerName", id.OwnerName)
 	}
 
-	cpu, cpuErrs := fetchSignal(ctx, "cpu", cpuShards,
-		func(ctx context.Context, s promclient.Shard) (map[promclient.WorkloadIdentity]promclient.ContainerValues, error) {
-			return p.client.QueryShardCPU(ctx, s, cpuQuantile, cpuWindow)
-		})
-	mem, memErrs := fetchSignal(ctx, "memory", memShards,
-		func(ctx context.Context, s promclient.Shard) (map[promclient.WorkloadIdentity]promclient.ContainerValues, error) {
-			return p.client.QueryShardMemory(ctx, s, memQuantile, memWindow)
-		})
-	// OOM reuses the CPU partition: its recording rules are pre-aggregated, so
-	// shard cost does not depend on the window.
-	oom, oomErrs := fetchSignal(ctx, "oom", cpuShards, p.client.QueryShardOOMSignal)
-
-	out := make(map[promclient.WorkloadIdentity]InputsResult, len(reqs))
-	for _, r := range reqs {
-		id := r.Identity
-		if err := cpuErrs[id]; err != nil {
-			out[id] = InputsResult{Err: fmt.Errorf("cpu inputs: %w", err)}
+	out := make(map[promclient.WorkloadIdentity]InputsResult, len(inputs))
+	for id, in := range inputs {
+		if err := failed[id]; err != nil {
+			out[id] = InputsResult{Err: err}
 			continue
 		}
-		if err := memErrs[id]; err != nil {
-			out[id] = InputsResult{Err: fmt.Errorf("memory inputs: %w", err)}
-			continue
-		}
-		if err := oomErrs[id]; err != nil {
-			logger.V(1).Info("oom inputs unavailable; proceeding without the OOM floor",
-				"namespace", id.Namespace, "ownerKind", id.OwnerKind, "ownerName", id.OwnerName, "err", err)
-		}
-		out[id] = InputsResult{Inputs: &WorkloadInputs{
-			CPUPerPod: nonNil(cpu[id]),
-			MemPerPod: nonNil(mem[id]),
-			OOM:       oom[id],
-		}}
+		out[id] = InputsResult{Inputs: in}
 	}
 	return out
 }
 
-// plan partitions reqs into shards for one window. An identity of unknown
-// size gets a shard of its own, since packing it blind could push a shard past
-// the sample budget. Malformed identities are returned in dropped.
-func (p *PromInputs) plan(reqs []InputsRequest, window string) (shards []promclient.Shard, dropped []promclient.WorkloadIdentity) {
-	minutes := promclient.WindowMinutes(window)
+// plan partitions reqs into shards at one cost per container. An identity of
+// unknown size gets a shard of its own, since packing it blind could push a
+// shard past the sample budget. Malformed identities are returned in dropped.
+func (p *PromInputs) plan(reqs []InputsRequest, samplesPerContainer int) (shards []promclient.Shard, dropped []promclient.WorkloadIdentity) {
 	seen := make(map[promclient.WorkloadIdentity]bool, len(reqs))
 	var sized []promclient.ShardCandidate
 	var unsized []promclient.ShardCandidate
@@ -122,7 +120,7 @@ func (p *PromInputs) plan(reqs []InputsRequest, window string) (shards []promcli
 	}
 
 	collect := func(cands []promclient.ShardCandidate) {
-		s, d := promclient.BuildShards(cands, minutes, p.maxSamples)
+		s, d := promclient.BuildShards(cands, samplesPerContainer, p.maxSamples)
 		shards = append(shards, s...)
 		for _, c := range d {
 			dropped = append(dropped, c.Identity)
@@ -135,40 +133,44 @@ func (p *PromInputs) plan(reqs []InputsRequest, window string) (shards []promcli
 	return shards, dropped
 }
 
-// fetchSignal runs query over every shard, retrying each once. A shard that
+// fetchSignal runs s's query over every shard, retrying each once, and
+// collects each answered identity's samples into its inputs. A shard that
 // still fails is re-queried as one-identity shards, each retried once too, so
 // errs holds only identities whose query failed on its own.
-func fetchSignal[V any](
+func (p *PromInputs) fetchSignal(
 	ctx context.Context,
-	what string,
+	s signal,
+	cfg sustainv1alpha1.ResourcesConfigs,
 	shards []promclient.Shard,
-	query func(context.Context, promclient.Shard) (map[promclient.WorkloadIdentity]V, error),
-) (vals map[promclient.WorkloadIdentity]V, errs map[promclient.WorkloadIdentity]error) {
+	inputs map[promclient.WorkloadIdentity]*WorkloadInputs,
+) (errs map[promclient.WorkloadIdentity]error) {
 	logger := log.FromContext(ctx)
-	vals = make(map[promclient.WorkloadIdentity]V)
 	errs = make(map[promclient.WorkloadIdentity]error)
 	var mu sync.Mutex
 
 	run := func(shard promclient.Shard) error {
-		got, err := query(ctx, shard)
+		expr := s.query(cfg, shard)
+		samples, err := p.client.QueryShard(ctx, expr)
 		if err != nil && ctx.Err() == nil {
-			got, err = query(ctx, shard)
+			samples, err = p.client.QueryShard(ctx, expr)
 		}
 		if err != nil {
 			return err
+		}
+		byIdentity := make(map[promclient.WorkloadIdentity][]promclient.ShardSample, len(shard.Names))
+		for _, smp := range samples {
+			byIdentity[smp.Identity] = append(byIdentity[smp.Identity], smp)
 		}
 		mu.Lock()
 		defer mu.Unlock()
 		for _, name := range shard.Names {
 			id := promclient.WorkloadIdentity{Namespace: shard.Namespace, OwnerKind: shard.OwnerKind, OwnerName: name}
-			if v, ok := got[id]; ok {
-				vals[id] = v
-			}
+			s.collect(inputs[id], byIdentity[id])
 		}
 		return nil
 	}
 	fail := func(id promclient.WorkloadIdentity, err error) {
-		logger.V(1).Info(what+" query failed after retry",
+		logger.V(1).Info(s.name()+" query failed after retry",
 			"namespace", id.Namespace, "ownerKind", id.OwnerKind, "ownerName", id.OwnerName, "err", err)
 		mu.Lock()
 		errs[id] = err
@@ -191,7 +193,7 @@ func fetchSignal[V any](
 				}
 				return nil
 			}
-			logger.V(1).Info(what+" shard query failed after retry; re-querying its identities one at a time",
+			logger.V(1).Info(s.name()+" shard query failed after retry; re-querying its identities one at a time",
 				"namespace", shard.Namespace, "ownerKind", shard.OwnerKind, "names", len(shard.Names), "err", err)
 			var fg errgroup.Group
 			fg.SetLimit(fallbackFetchConcurrency)
@@ -209,12 +211,5 @@ func fetchSignal[V any](
 		})
 	}
 	_ = g.Wait()
-	return vals, errs
-}
-
-func nonNil(v promclient.ContainerValues) promclient.ContainerValues {
-	if v == nil {
-		return promclient.ContainerValues{}
-	}
-	return v
+	return errs
 }

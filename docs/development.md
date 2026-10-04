@@ -43,7 +43,10 @@ through the `recommender.InputsFetcher` port. Their tests inject
 
 ```go
 inputs := recommendertest.NewStaticInputs().
-    Set(id, &recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 0.1}}).
+    Set(id, &recommender.WorkloadInputs{
+        CPUPerPod: promclient.ContainerValues{"app": 0.1},
+        OOM:       map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 300 << 20, HasPeak: true}},
+    }).
     Fail(otherID, errors.New("prometheus down"))
 ```
 
@@ -53,7 +56,8 @@ can assert that an identity was, or was not, part of the batch. Prefer driving
 `PolicyReconciler.Reconcile` end to end with the fake client and
 `StaticInputs`. The Prometheus adapter, `recommender.PromInputs`, is the only
 code tested against a fake PromQL server: sharding, retry, the one-identity
-fallback and the best-effort OOM signal.
+fallback and each signal's failure policy. A signal's own query and parsing
+are tested without a server, from its query text and from `ShardSample`s.
 
 ## Lint
 
@@ -120,7 +124,7 @@ k8s-sustain/
 │   ├── oomwatch/          # Live OOMKilled detection, re-triggers reconciles
 │   ├── policymatch/       # Policy resolution (ResolvePolicy) and selector matching
 │   ├── prometheus/        # Prometheus HTTP API client + metric name constants
-│   ├── recommender/       # Recommendation algorithm (Compute) and the batch-inputs port with its Prometheus adapter
+│   ├── recommender/       # Recommendation signals (one module each), Compute composing their stages, and the batch-inputs port with its Prometheus adapter
 │   │   └── recommendertest/  # In-memory inputs adapter for tests
 │   ├── version/           # Build version
 │   ├── webhook/           # Admission webhook HTTP handler
@@ -318,6 +322,44 @@ kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 5. If the kind is a CRD, register its scheme in `internal/config/config.go` and `internal/dashboard/server.go`
 6. If the kind's pods cannot be evicted (job-like workloads), add an in-place-only branch in `reconcileWorkload` (`internal/controller/workload_reconcile.go`) alongside the Job, CronJob and bare-pod ones; selector-based kinds need nothing more
 7. Add RBAC markers (`+kubebuilder:rbac:...`) to the controller and the Helm RBAC rule in `charts/k8s-sustain/templates/rbac.yaml`
+
+## Adding a recommendation signal
+
+A [signal](concepts/recommendation-pipeline.md#signals) is one module of
+`internal/recommender` (`signal_usage.go` holds the CPU and memory usage
+signals, `signal_oom.go` the OOM floor) implementing the `signal` interface in
+`signal.go`: its query and shard cost, how it collects samples into
+per-container values, its failure policy, where its stage runs (`slot`: base or
+adjuster, CPU or memory), its contribution to a container's request, and its
+trace entry. `PromInputs` fetches every signal in the `signals` list, and
+`Compute` runs their stages in a fixed order: base signals, adjusters,
+headroom and clamp, coordination, limit. Neither has a line specific to any
+signal. To add one:
+
+1. Write `internal/recommender/signal_<name>.go`. Build its PromQL from the
+   `internal/prometheus` primitives (`Shard.Selector`, `Shard.MetricsSelector`,
+   `QuantileOverTime`, `WindowMinutes`); `PromInputs` runs it through
+   `Client.QueryShard`, with the batching, retry and one-identity fallback
+   every signal shares. Give its per-container values a field in
+   `WorkloadInputs`, which is what `recommendertest.StaticInputs` serves
+2. List it in `signals` (`internal/recommender/signal.go`). Within a role,
+   stages run in list order
+3. If it reads new Policy settings or records a new trace entry, add the
+   fields to `api/v1alpha1` (`ResourcesConfigs`, `ResourceTrace`), then run
+   `make generate manifests`
+4. If it reads a new recording rule, add the name to
+   `internal/prometheus/metricnames.go` and the rule to
+   `charts/k8s-sustain/values.yaml` under `prometheusRule.groups`, and document
+   it in [Recording Rules](reference/recording-rules.md)
+5. Test it at its own interface, next to `signal_usage_test.go` and
+   `signal_oom_test.go`: the query built from settings, the values collected
+   from `ShardSample`s, its failure policy, its contribution and trace entry.
+   Test what it does to a whole recommendation through `Compute`.
+   `signal_test.go` shows that a signal defined only in a test is fetched and
+   computed from its list entry alone
+6. Add it to the signals table in
+   [Recommendation Pipeline](concepts/recommendation-pipeline.md#signals) and
+   describe its stage there
 
 ## Dashboard health signals
 
@@ -527,7 +569,7 @@ The computation unit is the identity, not the workload object: a group of worklo
 
 - **The backoff split, taken once.** Backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out. The pass records which members to apply and which it skipped, and the apply step uses that split.
 - **The fetch.** One `InputsFetcher` call per policy; the pass never sees shards, retries or the fallback ([ADR 0001](adr/0001-single-identity-is-a-batch-of-one.md)).
-- **The computation.** `recommender.Compute` decides everything about one identity from its inputs, its live OOM records and its age (the inventory's `Since`): the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the value after every stage that ran; `persist` stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read it. Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new trace field.
+- **The computation.** `recommender.Compute` decides everything about one identity from its inputs, its live OOM records and its age (the inventory's `Since`): the age gate, then every container through the stages of every [signal](#adding-a-recommendation-signal). Its OOM floor signal merges the live records the controller reads from the OOM watcher's cache with the Prometheus window and is the one place that decides whether a kill is recent, for both the bypass of the age gate and the memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the value after every stage that ran; `persist` stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read it. Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new trace field.
 
 The batch metrics are counted from the outcomes, not from the fetch's internals. `persist` records every outcome but "not fetched" in the `WorkloadRecommendation`'s `status.outcome` (`wlrcache.Upsert` for `Computed`, `wlrcache.RecordOutcome` for the rest), keeping the last Recommendation.
 
@@ -554,7 +596,7 @@ The OOM cache is keyed by `(namespace, ownerKind, ownerName, container)`, so eve
 - **Identity and timestamps** (pod name/UID, terminated-at, observed-at, restart count) come from the newest observation, ordered by `(terminated-at, restart-count)`. Restart count only breaks ties on an equal timestamp, which `metav1.Time`'s one-second resolution makes common; across two pods the counters are unrelated, so a cross-pod tie picks arbitrarily between two equally recent stamps.
 - **The OOM-time memory limit** (the bump anchor for the memory floor) is the largest limit seen across those pods, not the most recent. A Deployment bumped 128Mi → 256Mi can have an old un-resized pod (128Mi) OOM after an already-resized one (256Mi); anchoring on the newer 128Mi would bump the floor to a value 256Mi already proved insufficient. The recommender `max()`es this record against the Prometheus anchor for the same reason.
 
-An out-of-order observation still counts as a new kill for triggering an immediate reconcile; it contributes its limit, not its identity. The accepted cost is on a deliberate downsize: an older, larger limit keeps anchoring the floor high until it ages out of the cache (bounded by the TTL and the recommender's freshness window). That errs toward brief over-provisioning rather than an under-bump into another OOM, and it cannot compound, because every merged value is a limit the kernel actually applied.
+An out-of-order observation still counts as a new kill for triggering an immediate reconcile; it contributes its limit, not its identity. The accepted cost is on a deliberate downsize: an older, larger limit keeps anchoring the floor high until it ages out of the cache, after `recommender.LiveOOMWindow`, which is both the cache's TTL and how long the OOM floor counts a kill as recent. That errs toward brief over-provisioning rather than an under-bump into another OOM, and it cannot compound, because every merged value is a limit the kernel actually applied.
 
 The watcher captures the limit from `ContainerStatus.Resources` (falling back to the pod spec when the status carries none). The spec holds the desired limit, which the recommender itself rewrites on every in-place resize, so anchoring on the spec would feed the OOM floor its own previous output and compound on each kill.
 

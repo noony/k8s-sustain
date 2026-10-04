@@ -25,7 +25,7 @@ type fakeOOMSource struct {
 	records map[string]*oomwatch.OOMRecord
 }
 
-func (f *fakeOOMSource) RecentByWorkload(_, _, _ string, _ time.Duration) map[string]*oomwatch.OOMRecord {
+func (f *fakeOOMSource) ByWorkload(_, _, _ string) map[string]*oomwatch.OOMRecord {
 	return f.records
 }
 
@@ -55,7 +55,7 @@ func TestRecommend_LiveOOMRaisesTheFloorAndIsCounted(t *testing.T) {
 	}), true)
 	r.LiveOOM = LiveOOMConfig{
 		Source: &fakeOOMSource{records: map[string]*oomwatch.OOMRecord{
-			"app": {Container: "app", TerminatedAt: time.Now().Add(-10 * time.Second), OOMLimitBytes: 200 << 20},
+			"app": {Container: "app", ObservedAt: time.Now(), TerminatedAt: time.Now().Add(-10 * time.Second), OOMLimitBytes: 200 << 20},
 		}},
 		TriggerCh: make(chan event.GenericEvent),
 	}
