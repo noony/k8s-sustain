@@ -50,7 +50,7 @@ _Avoid_: preview, dry-run (dry-run means recommend-only)
 The single most actionable condition of an identity, in this precedence: Conflicted, then Blocked, then At risk, then Drifted, then Safe.
 
 **Blocked**:
-The controller keeps failing to apply an identity's Recommendation and is backing off.
+The controller keeps failing to apply an identity's Recommendation and is backing off. One failing member is enough to block the identity.
 
 **At risk**:
 An identity with an OOM kill in the last 24 hours.
