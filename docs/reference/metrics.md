@@ -74,7 +74,7 @@ These four gauges are emitted per member object: `owner_kind` and `owner_name` a
 
 - `workload_retry_state` — `1` while any member of the identity is **Blocked**: its last reconcile step failed with a transient error and no step has succeeded since. `reason` is the failed step (`prometheus`, `patch` or `resize`) of the first blocked member in name order; the identity has at most one series, absent when nothing is blocked.
 - `workload_retry_attempts` — failed steps summed over the identity's members.
-- `policy_workload_count` — live identities the policy matches (an owner-name group counts once).
+- `policy_workload_count` — live identities the policy governs: an owner-name or bare-pod group counts once however many members it has, a Departed identity does not count, and a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity counts for no policy.
 - `policy_blocked_count` — those identities that are Blocked, i.e. have a `workload_retry_state` series.
 - `autoscaler_present`, `autoscaler_target_configured` — the autoscaler the identity's recommendation is shaped against: the first member, in name order, that an HPA or KEDA ScaledObject targets.
 - `recycle_suppressed_total` — decreases held back by the policy's [`downsizeThreshold`](policy.md#cpudownsizethreshold-memorydownsizethreshold), once per resource per pod per reconcile, summed over the identity's members. Increases are never counted.
@@ -96,7 +96,7 @@ Every series with a `policy` label is removed by the Policy's `k8s.sustain.io/cl
 
 #### Series lifetime when an identity departs
 
-When no Policy targets an identity any more (its last member was deleted, opted out or left the selector), its `workload_pods`, `workload_stale_pods`, `workload_retry_state`, `workload_retry_attempts`, `autoscaler_present`, `autoscaler_target_configured`, `coordination_factor` and `recycle_suppressed_total` series are deleted in the next reconcile, so a departed identity never reports a frozen state.
+When no Policy governs an identity any more (its last member was deleted, opted out or left the selector, or its members now opt into different Policies and it is Conflicted), its `workload_pods`, `workload_stale_pods`, `workload_retry_state`, `workload_retry_attempts`, `autoscaler_present`, `autoscaler_target_configured`, `coordination_factor` and `recycle_suppressed_total` series are deleted in the next reconcile, so a departed identity never reports a frozen state.
 
 #### `k8s_sustain_wlr_refresh_total`
 
@@ -157,10 +157,11 @@ The outcome of every admission's `WorkloadRecommendation` read, by `source`. A p
 | `source` | Meaning |
 |----------|---------|
 | `hit` | A fresh recommendation was injected. |
-| `retained` | Injected from a kept recommendation of a departed identity (finished Job, bare-pod group between runs). Its age is bounded by `--recommendation-retention` instead of the staleness budget — see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). Steady `retained` is normal for recurring workloads; `retained` turning into `missing` means the gap between runs exceeds the retention window. |
+| `retained` | Injected from a kept recommendation of a departed identity (finished Job, bare-pod group between runs), or the frozen one of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity into a pod of the Policy it names. Its age is bounded by `--recommendation-retention` instead of the staleness budget — see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). Steady `retained` is normal for recurring workloads; `retained` turning into `missing` means the gap between runs exceeds the retention window. |
 | `stale` | `observedAt` is older than the 30-minute staleness budget (or, for a departed identity, older than the retention window): the controller is behind, stuck, or the workload left its policy's scope. |
 | `missing` | No recommendation exists yet. The webhook creates a [stub](../concepts/workload-recommendations.md#cold-start-stub-recommendations) so the controller picks it up. Transient for new workloads; sustained for one identity means the controller never computes it. |
-| `nodata` | The recommendation exists and was evaluated but has no usable samples (too young, quiet, or unmatched by the recording rules). No stub is created. Takes precedence over `stale`. |
+| `nodata` | The recommendation exists and has an outcome but holds no values yet (too young, quiet, unmatched by the recording rules, or its fetch failed). No stub is created. Takes precedence over `stale`. |
+| `other-policy` | The recommendation was produced under a Policy other than the one the pod opts into: the other side of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity, or an identity moving between Policies until the new one adopts it. Admitted unchanged; no stub is created. |
 | `error` | The read failed with an apiserver error other than NotFound. |
 
 #### About the `path` label

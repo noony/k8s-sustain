@@ -61,7 +61,7 @@ var (
 
 	policyWorkloadCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_policy_workload_count",
-		Help: "Number of live workload identities matched by a policy.",
+		Help: "Number of live workload identities a policy governs; a Conflicted identity counts for no policy.",
 	}, []string{"policy"})
 
 	policyBlockedCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{

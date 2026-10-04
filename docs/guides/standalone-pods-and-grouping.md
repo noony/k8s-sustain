@@ -74,25 +74,30 @@ task means losing in-flight work. The
 [downsize threshold](../concepts/update-modes.md#downsize-threshold) bounds how
 often it fires. If your tasks cannot tolerate a restart, use `pod: OnCreate`.
 
-**Group membership.** A pod belongs to the identity when it has no controller
-`ownerReference`, a valid `owner-name`, and a resolved policy (pod or Namespace
-annotation — see [Resolution order](../reference/annotation.md#resolution-order))
-matching the group's. A ReplicaSet-owned pod that merely carries the mirrored
-`owner-name` label is never touched by this path.
+**Group membership.** A pod is a member of the identity when it has no
+controller `ownerReference` and a valid `owner-name`. It is governed by the
+policy it resolves to (pod or Namespace annotation — see
+[Resolution order](../reference/annotation.md#resolution-order)) when that
+policy manages `pod` and selects it, and only governed pods supply containers
+and are resized. A ReplicaSet-owned pod that merely carries the mirrored
+`owner-name` label is never a member.
 
-**One owner-name, one policy.** The group is claimed by the policy named on the
-first of its pods the controller sees. A pod sharing the
-`(namespace, owner-name)` but naming a *different* policy is excluded from the
-group: it never supplies containers and is never resized under the group's
-recommendation. The controller logs it on every reconcile:
+**One owner-name, one policy.** When the pods of one `(namespace, owner-name)`
+are governed by *different* policies, the identity is
+[Conflicted](../concepts/workload-recommendations.md#conflicted-identities): no
+policy governs it, nothing is recomputed or resized, and its recommendation is
+frozen, still injected only into pods of the policy that last governed it. The
+controller logs it on every reconcile of either policy:
 
 ```text
-bare pods share an owner-name identity but name a different policy; they are
-excluded from the group and will not be rightsized under it
+identity is Conflicted: its members opt into different Policies, so none
+governs it and its recommendation stays frozen until they agree
 ```
 
 Fix it by giving those pods their own `owner-name`, or by aligning their
-`k8s.sustain.io/policy` annotation with the rest of the group.
+`k8s.sustain.io/policy` annotation with the rest of the group. A pod that opts
+out, or names a policy that does not exist or does not select it, is no party
+to a conflict.
 
 **Namespace scoping.** The grouping key is `namespace + owner-name`. The same
 `owner-name` in two namespaces produces two separate identities; cross-namespace
@@ -133,7 +138,13 @@ The recommendation covers the **union** of the members' containers, so a
 container only `app-green` declares is still sized. **Applying stays per real
 Deployment**: each Deployment's own pods are resized or evicted independently,
 against the shared recommendation narrowed to the containers that Deployment
-declares. Health is reported for the identity, not per Deployment: pod and
+declares. Where both declare a container, the newest Deployment's requests and
+limits are the ones recorded. The identity is as old as its oldest member (or
+its `WorkloadRecommendation`), so a fresh `app-green` does not reset the
+[minimum age](../concepts/recommendation-pipeline.md#stages). Members opting
+into different policies make the identity
+[Conflicted](../concepts/workload-recommendations.md#conflicted-identities).
+Health is reported for the identity, not per Deployment: pod and
 stale-pod counts are summed over the members and the identity is Blocked when
 any member is (see [Metrics](../reference/metrics.md#what-owner_kind-and-owner_name-name)),
 so the dashboard row `Deployment/app` carries every member's state.
@@ -149,5 +160,7 @@ the autoscaler on the other members.
 
 `Pod` is a regular workload kind in the dashboard: it appears in the workload
 list and facet filters, and the simulator accepts `ownerKind: Pod`,
-`ownerName: <owner-name value>`. Live pods are grouped by
-`(namespace, owner-name)` the same way the controller groups them.
+`ownerName: <owner-name value>`. The dashboard reads identities from the same
+inventory as the controller, so groups, their union containers, their age and
+a Conflicted state show exactly as the controller treats them, and a group's
+detail page lists the events of all its members.

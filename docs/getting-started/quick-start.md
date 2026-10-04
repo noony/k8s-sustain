@@ -85,7 +85,7 @@ spec:
 ## 4. Wait for data
 
 !!! note "Cold start"
-    Recommendations need a workload that is at least 10 minutes old and a few hours of Prometheus history to be meaningful; until then its `WorkloadRecommendation` exists but its `status` stays empty or reads `source: nodata`. See [Cold start](../concepts/workload-recommendations.md#cold-start-stub-recommendations).
+    Recommendations need a workload that is at least 10 minutes old and a few hours of Prometheus history to be meaningful; until then its `WorkloadRecommendation` exists but its `status` stays empty or reads `outcome: TooYoung` or `outcome: NoData`. See [Cold start](../concepts/workload-recommendations.md#cold-start-stub-recommendations).
 
 ## 5. Check the Policy status
 

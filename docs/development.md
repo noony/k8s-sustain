@@ -114,6 +114,7 @@ k8s-sustain/
 │   ├── controller/        # Policy reconciler
 │   ├── dashboard/         # Dashboard HTTP server + embedded Vue SPA (ui/)
 │   ├── httpx/             # Shared HTTP stack: envelope, middleware, hardened NewServer, shutdown
+│   ├── inventory/         # Workload objects → identities (members, containers, age, Departed, governing Policy or Conflicted)
 │   ├── k8s/               # client.New helper used by webhook + dashboard
 │   ├── logging/           # Shared zap logger setup
 │   ├── oomwatch/          # Live OOMKilled detection, re-triggers reconciles
@@ -311,7 +312,7 @@ Every reader of workload objects goes through one table, so supporting a new
 kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 
 1. Add `<Kind> *UpdateMode` to `UpdateTypes` in `api/v1alpha1/policy_types.go`, add the case to `UpdateTypes.ModeForKind`, then run `make generate` and `make manifests`
-2. Add the kind to the `ownerKinds` table in `internal/workload/kindobjects.go` (object and list constructors plus its `GroupResource`) and, if the controller and dashboard should list it, to `workload.SupportedKinds`. This single table drives the controller's target listing, the dashboard's listing and NotFound errors, the workload-level annotation reads in the webhook and the OOM watcher, and the retention sweep's existence check. A kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)
+2. Add the kind to the `ownerKinds` table in `internal/workload/kindobjects.go` (object and list constructors plus its `GroupResource`) and, if the controller and dashboard should list it, to `workload.SupportedKinds`. This single table drives the inventory's listing (`internal/inventory`, which both the controller and the dashboard read identities from), the dashboard's NotFound errors, and the workload-level annotation reads in the webhook and the OOM watcher. A kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)
 3. Add the kind's pod template and selector to `workload.PodTemplateOf` in `internal/workload/templates.go`. Return a nil selector for kinds whose pods must never be recycled (see Job and CronJob)
 4. Add the same kind to `k8s.OwnerChainDisableFor()` in `internal/k8s/client.go`. Every kind in `ownerKinds` must appear here too, or its first Get on the admission hot path stands up a cluster-wide informer over every object of that kind instead of costing one Get. `TestDisableForCoversOwnerAnnotationKinds` (`internal/webhook/optin_test.go`) cross-checks the two lists and fails if one is missing from the other
 5. If the kind is a CRD, register its scheme in `internal/config/config.go` and `internal/dashboard/server.go`
@@ -327,6 +328,16 @@ Prometheus adapter (`health_prometheus.go`) holds the only health PromQL;
 tests use the in-memory `memHealthSignals` instead of faking query text. The
 Risk state is classified in exactly one place, `riskStateOf`, and returned in
 every payload (`riskState`); the SPA renders it and never derives its own.
+Conflicted, the top of the precedence, is the one input that does not come
+from the port: views set `identityHealth.Conflicted` from the inventory before
+classifying.
+
+Every list and detail endpoint builds its identities from `internal/inventory`
+(`Server.identities` / `Server.identity`), so a row, a detail page and the
+controller agree on members, containers, age, Departed and the governing
+Policy. The detail page shows the Recommendation stored in the identity's
+`WorkloadRecommendation` and its `status.outcome`; only the Simulator
+recomputes.
 
 The port works because the controller emits every health metric under the
 identity's labels: `internal/controller/identity_health.go` aggregates the
@@ -493,9 +504,17 @@ Before touching `internal/prometheus/transport.go`:
 
 ### Controller
 
-#### Work-list union and informer lag
+#### Identity inventory
 
-The controller's reads go through a watch-populated informer cache, so a `WorkloadRecommendation` that discovery created moments earlier in the same reconcile is often not yet visible to a list, and nothing watches `WorkloadRecommendation` to re-trigger a reconcile when it becomes visible. The computation work-list is therefore the union of the listed cache objects and the identities discovery just ensured. Without the union a freshly matched workload would wait a full `--reconcile-interval` before being computed. Discovery already holds the container set for those identities, so the union costs no extra API calls.
+`internal/inventory` is the one place workload objects become identities. Its interface is one call, `inventory.Take(ctx, reader, Options)`, returning a `Snapshot` of `Identity` values (key, live members each with the Policy governing it, union containers, `Since`, governing Policy or `Conflicted`, stored `WorkloadRecommendation`). Behind it: listing every kind in scope (a kind the cluster does not serve, such as Argo Rollouts without its CRD, has no identities rather than failing the snapshot), skipping CronJob-owned Jobs and finished standalone Jobs, owner-name and bare-pod grouping, the three-level opt-in walk (`policymatch.ResolvePolicy`, reading a Namespace only when an object's own annotations leave it undecided), each Policy's consent (`policymatch.Matches` plus the kind), the Conflicted rule, and attaching each stored `WorkloadRecommendation` (which is what makes a Departed identity).
+
+The controller takes one snapshot per reconcile through its informer cache, narrowed to the Policy's namespaces and managed kinds, and works on `Snapshot.GovernedBy(policy)`. Every member of an identity shares its namespace and kind, so the narrowing never splits one. The dashboard takes snapshots through its uncached client, narrowed to what each view shows: one namespace and kind for a detail page, the Policy's scope for its list, everything for `/api/workloads`.
+
+A new identity rule goes in the inventory and its contract tests (`internal/inventory/inventory_test.go`), never in a caller.
+
+#### Informer lag
+
+The controller's reads go through a watch-populated informer cache, so a `WorkloadRecommendation` that discovery created moments earlier in the same reconcile is often not yet visible, and nothing watches `WorkloadRecommendation` to re-trigger a reconcile when it becomes visible. The work-list is built from the snapshot's identities, not from the listed objects: a live identity whose object the cache cannot see yet is computed from its members' containers and dated by its earliest member, and its write lands through `wlrcache`'s read-after-write-safe path. Without that a freshly matched workload would wait a full `--reconcile-interval` before being computed.
 
 #### Per-identity computation under owner-name grouping
 
@@ -503,23 +522,27 @@ The computation unit is the identity, not the workload object: a group of worklo
 
 #### Recommendation pass
 
-`Reconcile` runs collect → discover → recommendation pass → persist → apply → rollup. The pass (`internal/controller/recommendation_pass.go`) gives every identity on the work-list exactly one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff). It owns the three things that used to be spread across `Reconcile`:
+`Reconcile` runs inventory → discover → recommendation pass → persist → apply → rollup → sweep. The pass (`internal/controller/recommendation_pass.go`) gives every identity on the work-list exactly one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff). It owns the three things that used to be spread across `Reconcile`:
 
 - **The backoff split, taken once.** Backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out. The pass records which members to apply and which it skipped, and the apply step uses that split.
 - **The fetch.** One `InputsFetcher` call per policy; the pass never sees shards, retries or the fallback ([ADR 0001](adr/0001-single-identity-is-a-batch-of-one.md)).
-- **The computation.** `recommender.Compute` decides everything about one identity from its inputs, its live OOM records and its age facts: the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply.
+- **The computation.** `recommender.Compute` decides everything about one identity from its inputs, its live OOM records and its age (the inventory's `Since`): the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply.
 
-The batch metrics are counted from the outcomes, not from the fetch's internals.
+The batch metrics are counted from the outcomes, not from the fetch's internals. `persist` records every outcome but "not fetched" in the `WorkloadRecommendation`'s `status.outcome` (`wlrcache.Upsert` for `Computed`, `wlrcache.RecordOutcome` for the rest), keeping the last Recommendation.
+
+A Conflicted identity never enters the pass ([ADR 0002](adr/0002-conflicted-identity-freezes-its-recommendation.md)). Each Policy party to the conflict records `status.outcome: Conflicted` (`recordConflicted`) and nothing else; `EnsureExists`, which rewrites `spec.policy`, is only ever called by the governing Policy, which is what stops two Policies flipping one object between them.
 
 #### Owner-name group: merge order and write cost
 
-For an owner-name group, the union snapshot in `status.observedResources` is built from the members' containers. Where two members declare the same container name with different requests/limits, the entry from the member whose `kind/namespace/name` sorts first is kept whole, rather than mixing one member's request with another's limit. The recommendation is computed against that union, using the autoscaler of the first member (same sort order) that has one, and treating the identity as being as old as its oldest member.
+For an owner-name group, the union snapshot in `status.observedResources` is built from the governed members' containers. Where several members declare the same container name with different requests/limits, the newest member's entry is kept whole (ties broken by name), rather than mixing one member's request with another's limit: an older member's spec may predate a change the newer ones already run. The recommendation is computed against that union, using the autoscaler of the first member in `kind/namespace/name` order that has one, and treating the identity as being as old as its oldest member or its `WorkloadRecommendation`, whichever is older.
 
-Every choice is decided by the members' names or by an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. Discovery (`EnsureExists`) and the computation phase (`wlrcache.Upsert`) both write `status.observedResources`, but always the same merged value computed once per identity, so the two writers never disagree, and a group whose members and metrics are unchanged costs no status write on subsequent reconciles rather than one write per member per cycle.
+Every choice is decided by the members' names, creation times or an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. Discovery (`EnsureExists`) and the computation phase (`wlrcache.Upsert`) both write `status.observedResources`, but always the same union computed once per identity by the inventory, so the two writers never disagree, and a group whose members and metrics are unchanged costs no status write on subsequent reconciles.
 
-#### Bare-pod grouping implementation
+A bare-pod identity's governed pods form one apply target (`targetsOf`), attributed to the newest pod for events; its pods are resized together and never evicted.
 
-Bare-pod groups are built by `workload.GroupBarePods`, used by both the controller and the dashboard. It resolves each pod's policy across the pod's own annotations and the namespace annotation map it is passed, so Namespace-level opt-in works for bare pods. The dashboard displays the containers and annotations of the most recently created pod in the group.
+#### Identity health series
+
+The health series (`k8s_sustain_workload_pods`, `…_stale_pods`, `…_retry_state`, `…_retry_attempts`) are per identity, aggregated over its members by `healthTracker`. A Conflicted identity is governed by no Policy, so no Policy observes it and its series are deleted on the next reconcile of the Policy that last governed it; the dashboard shows its Conflicted state from the inventory instead.
 
 ### OOM watcher
 
@@ -566,9 +589,13 @@ A stub becomes visible to the webhook's informer only after the create and watch
 
 Stub goroutines outlive the admission that started them (up to 30s queued plus 5s for the write), so on shutdown SIGTERM cancels in-flight stub writes and the process waits, bounded, for them to unwind before stopping the informer cache they read through. An abandoned request is re-issued by the next admission for the same identity.
 
-The status snapshot (`status.observedResources`) is also written on the `AlreadyExists` path, so an object lacking one can be filled in by a later admission; a snapshot discovery already wrote from the pod template wins. Only the missing case creates a stub: on a stale object a create is a guaranteed no-op.
+The status snapshot (`status.observedResources`) is also written on the `AlreadyExists` path, so an object lacking one can be filled in by a later admission; a snapshot discovery already wrote from the members' containers wins. Only the missing case creates a stub: on a stale object a create is a guaranteed no-op.
 
 The `k8s.sustain.io/stub` label is provenance, not control flow. The controller's own write path must `Create` before it can patch status (the status subresource discards status supplied at create), so every controller-written recommendation is transiently empty-status too.
+
+#### Policy check
+
+The webhook injects only when the `WorkloadRecommendation`'s `spec.policy` is the Policy the pod resolves to (`ErrRecommendationOtherPolicy`, counted as `other-policy`). That is what keeps a Conflicted identity's frozen numbers out of the other Policy's pods, and it also keeps an identity moving between Policies from receiving numbers computed under the old one until the new one adopts it. A Conflicted object is exempt from the staleness gate like a departed one, bounded by the same retention window.
 
 #### Cache staleness constant
 
@@ -622,8 +649,10 @@ while the `values.yaml` side still passes.
 
 #### Freshness grace
 
-Independently of retention, a `WorkloadRecommendation` created within the last 10 minutes is never swept, nor is one whose workload object was created in that window; it protects an identity first written just after a reconcile built its target list. The grace keys off creation timestamps, not `status.observedAt`: the computation phase refreshes `observedAt` for every object in its list each cycle, departed identities included, so an `observedAt`-based guard would be self-satisfying and an opted-out workload would keep its recommendation (and its share of Prometheus load) indefinitely.
+The sweep judges each of the Policy's `WorkloadRecommendation`s against the reconcile's inventory snapshot: one whose identity is Departed is retained, one whose identity is Conflicted or governed by another Policy is kept, one whose identity is live but governed by no Policy, or is outside the snapshot (namespace or kind no longer in the Policy's scope), is deleted.
+
+Independently of retention, a `WorkloadRecommendation` created within the last 10 minutes is never swept; it protects an identity first written just after a reconcile took its snapshot. The grace keys off the creation timestamp, not `status.observedAt`: the computation phase refreshes `observedAt` for every identity it computes each cycle, departed identities included, so an `observedAt`-based guard would be self-satisfying and an opted-out workload would keep its recommendation (and its share of Prometheus load) indefinitely.
 
 #### Departed waiver bound
 
-The webhook bounds the `departed` staleness waiver with its own `--recommendation-retention` (rendered from the same `controller.recommendationRetention` Helm value as the controller's). Relying on the sweep to delete a lapsed object would leave the waiver unbounded whenever the controller stops sweeping: both the sweep and the clearing of `departed` live inside the reconcile, which returns early when a workload listing fails (RBAC revoked on one kind, an unreachable API group, a removed CRD). `departed` is only set on a positively confirmed absence, never when the existence check errors.
+The webhook bounds the `departed` (and Conflicted) staleness waiver with its own `--recommendation-retention` (rendered from the same `controller.recommendationRetention` Helm value as the controller's). Relying on the sweep to delete a lapsed object would leave the waiver unbounded whenever the controller stops sweeping: both the sweep and the clearing of `departed` live inside the reconcile, which returns early when the inventory cannot be read (RBAC revoked on one kind, an unreachable API group). `departed` is only set from a snapshot that read successfully, never on a failed read.

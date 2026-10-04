@@ -128,6 +128,7 @@ nav:
   - Architecture Decisions:
       - adr/index.md
       - A single identity is a batch of one: adr/0001-single-identity-is-a-batch-of-one.md
+      - A Conflicted identity freezes its recommendation: adr/0002-conflicted-identity-freezes-its-recommendation.md
 
 extra:
   version:

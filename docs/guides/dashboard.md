@@ -70,12 +70,13 @@ Every navigation target — table rows, names, policy links, breadcrumbs, the Ov
 
 Every row, badge, KPI and attention list shows one **Risk state** per workload identity (an owner-name group or bare-pod group is one identity), classified once by the backend in this precedence:
 
-1. **Blocked** — the controller keeps failing to apply the identity's recommendation and is backing off (any member in retry backoff).
-2. **At risk** — an OOM kill in the last 24 hours.
-3. **Drift** — pods whose running resources still differ from the recommendation beyond the policy's `downsizeThreshold`; a decrease the policy suppresses is not drift.
-4. **Safe** — none of the above.
+1. **Conflicted** — the identity's members opt into different Policies, so no Policy governs it and its recommendation is frozen (see [Conflicted identities](../concepts/workload-recommendations.md#conflicted-identities)). Shown on the Workloads list and detail pages; the Overview does not count it yet.
+2. **Blocked** — the controller keeps failing to apply the identity's recommendation and is backing off (any member in retry backoff).
+3. **At risk** — an OOM kill in the last 24 hours.
+4. **Drift** — pods whose running resources still differ from the recommendation beyond the policy's `downsizeThreshold`; a decrease the policy suppresses is not drift.
+5. **Safe** — none of the above.
 
-An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. The signals come from the controller's identity-keyed metrics and the `k8s_sustain:workload_oom_24h` rule (see [Metrics](../reference/metrics.md#what-owner_kind-and-owner_name-name)), so an owner-name group shows its members' combined state under the group's name.
+An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. Blocked, At risk and Drift come from the controller's identity-keyed metrics and the `k8s_sustain:workload_oom_24h` rule (see [Metrics](../reference/metrics.md#what-owner_kind-and-owner_name-name)), so an owner-name group shows its members' combined state under the group's name. Conflicted comes from the identity inventory the dashboard shares with the controller.
 
 ### Time range and auto-refresh
 
@@ -110,28 +111,29 @@ The overview is a vertical flow of six bands:
 
 ### Workloads Page
 
-Lists every workload (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, standalone Jobs, and bare Pods grouped by `k8s.sustain.io/owner-name`) across the cluster, whether or not a policy governs it. Jobs spawned by a CronJob are folded under their CronJob row.
+Lists every workload identity (Deployments, StatefulSets, DaemonSets, Argo Rollouts, CronJobs, standalone Jobs, and bare Pods carrying `k8s.sustain.io/owner-name`) across the cluster, whether or not a policy governs it. Objects sharing an owner-name are one row, with the union of their containers. Jobs spawned by a CronJob are folded under their CronJob row.
 
-- **Stat strip** — Total, Automated (managed by a policy) and Manual counts.
-- **Filters** — namespace, kind, status (Automated / Manual), lifecycle (Active / Inactive, default any), risk (Safe / Drifted / At risk / Blocked), autoscaler (Has / No autoscaler), and a name search. **Reset filters** clears them all and returns to page 1, keeping the sort order. Filters, sort order and page are kept in the URL query string (e.g. `/workloads?namespace=prod&risk=at-risk&sort=-stalePods`), so browser Back from a workload restores the list and a filtered view can be bookmarked or shared.
-- **Columns** — Namespace, Kind, Name, **Risk**, **Drift** (stale/total pods, e.g. `2/5`), **Policy** (links to the policy) and container count. Sorted by name by default; click Namespace, Kind, Name, Drift or Policy to sort across all pages, click again to reverse.
-- **Risk** — the identity's [Risk state](#risk-state): `Blocked`, then `At risk`, then `Drift`, otherwise `Safe`.
-- **Name badges** — **Autoscaler** when an HPA or KEDA ScaledObject targets the workload; **Coordinated** when autoscaler coordination adjusts its recommendation, followed by the non-trivial factors (`×1.15 CPU`, `×1.10 mem` overhead, `· replica ×0.80`); **Inactive · last seen X ago** for a workload with no live object.
+The rows come from the same identity inventory the controller reconciles from (`internal/inventory`), so membership, containers, age, Departed and the governing Policy agree with what the controller does.
 
-Inactive rows come from a retained `WorkloadRecommendation` whose object is gone (a completed bare pod, a deleted or terminal Job). They stay listed for the retention window (`--recommendation-retention`, default `168h`); see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads).
+- **Stat strip** — Total, Automated (governed by a policy) and Manual counts, plus **Conflicted** when any identity is.
+- **Filters** — namespace, kind, status (Automated / Manual), lifecycle (Live / Departed, default any), risk (Safe / Drifted / At risk / Blocked / Conflicted), autoscaler (Has / No autoscaler), and a name search. **Reset filters** clears them all and returns to page 1, keeping the sort order. Filters, sort order and page are kept in the URL query string (e.g. `/workloads?namespace=prod&risk=at-risk&sort=-stalePods`), so browser Back from a workload restores the list and a filtered view can be bookmarked or shared.
+- **Columns** — Namespace, Kind, Name, **Risk**, **Drift** (stale/total pods, e.g. `2/5`), **Policy** (links to the governing policy; a Conflicted identity names the policies its members opt into, in red) and container count. Sorted by name by default; click Namespace, Kind, Name, Drift or Policy to sort across all pages, click again to reverse.
+- **Risk** — the identity's [Risk state](#risk-state): `Conflicted`, then `Blocked`, then `At risk`, then `Drift`, otherwise `Safe`.
+- **Name badges** — **Autoscaler** when an HPA or KEDA ScaledObject targets the workload; **Coordinated** when autoscaler coordination adjusts its recommendation, followed by the non-trivial factors (`×1.15 CPU`, `×1.10 mem` overhead, `· replica ×0.80`); **Departed · last seen X ago** for an identity with no live member.
+
+Departed rows come from a retained `WorkloadRecommendation` whose identity has no live member left (completed bare pods, a deleted or finished standalone Job). They stay listed for the retention window (`--recommendation-retention`, default `168h`); see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads).
 
 ### Workload Detail
 
-- **Header** — kind, namespace, container count, **Automated** + policy link or **Manual**, the [Risk state](#risk-state) badge, and the **Coordinated** badge with its factors when autoscaler coordination applies.
+- **Header** — kind, namespace, container count, **Automated** + policy link, **Conflicted** with the policies its members opt into, or **Manual**; **Departed** when no member is live; the [Risk state](#risk-state) badge, and the **Coordinated** badge with its factors when autoscaler coordination applies.
 - **Status** — three cards: **Mode** (`OnCreate` / `Ongoing`), **Drift** (stale/total pods), **OOM 24h**.
 - **Currently blocked** — shown only while a member of the identity is in retry backoff: the failed step (`prometheus`, `patch` or `resize`) and the attempt count across members.
-- **Recommendations** — for automated workloads, current vs. recommended CPU and memory request per container (init containers flagged).
-- **Charts** — per container, CPU and memory usage with the workload's **historical request** (amber dashed, stepped) and **limit** (amber dotted), plus the **sliding-window recommendation** (green long-dashed) for automated workloads, computed at each point with the policy's window and parameters. Without historical request data in Prometheus, the request line falls back to the current spec. Lines break across gaps longer than ~1.5× the query step (between CronJob runs, scaled to zero). Memory charts show **OOM kills** as red markers with a count, from kube-state-metrics; without kube-state-metrics the markers are omitted.
+- **Recommendation** — the Recommendation stored in the identity's `WorkloadRecommendation`, current vs. recommended CPU and memory request per container (init containers flagged), with the outcome of the controller's last pass (`Computed`, `No data`, `Too young`, `Fetch failed`, `Conflicted (frozen)`) and when it was last computed. Nothing is recomputed here; use the Simulator for that.
+- **Charts** — per container, CPU and memory usage with the workload's **historical request** (amber dashed, stepped) and **limit** (amber dotted), plus the **stored recommendation** (green long-dashed line). Without historical request data in Prometheus, the request line falls back to the current spec. Lines break across gaps longer than ~1.5× the query step (between CronJob runs, scaled to zero). Memory charts show **OOM kills** as red markers with a count, from kube-state-metrics; without kube-state-metrics the markers are omitted.
+- **Recent events** — k8s-sustain events about every member of the identity (the controller attributes each event to the member it acted on, so an owner-name group's or bare-pod group's events sit on several objects).
 - **Open in Simulator** — jumps to the simulator with the workload pre-filled.
 
-When a container OOM'd in the last 24h, its displayed memory recommendation is floored at `max(kernel high-water peak, OOM-time cgroup limit × 1.20)`, exactly as the controller applies it (see [Recommendation pipeline](../concepts/recommendation-pipeline.md)). Sibling containers that did not OOM keep their plain percentile.
-
-An **inactive** workload's detail page resolves from the retained `WorkloadRecommendation`, so the recommendation and the usage history for the time it ran remain visible.
+A **Departed** identity's detail page resolves from the retained `WorkloadRecommendation`, so the recommendation and the usage history for the time it ran remain visible.
 
 ### Policies Page
 
@@ -139,11 +141,11 @@ A stat strip shows **Total policies**, **Workloads covered**, **Cluster CPU save
 
 ### Policy Detail
 
-- **Stat strip** — Status, Matched Workloads (every workload the policy manages, unaffected by the table filters), CPU saved, Memory saved.
+- **Stat strip** — Status, Matched Workloads (every identity the policy governs, Departed ones included, unaffected by the table filters), CPU saved, Memory saved.
 - **Configuration** — per resource: window, percentile, headroom, min, max, keep request, and limits strategy. Below: update mode per kind (Deploy, STS, DS, CJ, Job, Rollout), ignore safe-to-evict annotations, exclude init containers, and autoscaler coordination (with `replicaBudgetAnchor` when set). **View as YAML** opens the Policy spec in a modal.
 - **Selector** — target namespaces (or "all namespaces"), `matchLabels` and `matchExpressions`.
 - **Effectiveness over time** — CPU and memory savings for this policy over the selected range.
-- **Matched Workloads** — Namespace, Kind, Name (with Inactive badge), Risk, Drift, containers and their current CPU/memory requests; namespace filter, name search, **Reset filters**, and pagination (50 per page). Sorted by name by default; click Namespace, Kind, Name or Drift to sort across all pages. Filters, sort and page live in the URL alongside the time range, so Back from a workload restores the list.
+- **Matched Workloads** — the identities the policy governs: Namespace, Kind, Name (with Departed badge), Risk, Drift, containers and their current CPU/memory requests; namespace filter, name search, **Reset filters**, and pagination (50 per page). Sorted by name by default; click Namespace, Kind, Name or Drift to sort across all pages. Filters, sort and page live in the URL alongside the time range, so Back from a workload restores the list.
 - **Simulate All** — runs the recommender with this policy's configuration over every matched workload (`GET /api/policies/{name}/batch-simulate`) and shows a **Batch Simulation Results** card: aggregate CPU and memory savings (current → recommended) and a per-container table. "Current" is the container's measured usage from Prometheus, not its configured request. A workload that fails to compute shows its error on its own row.
 
 ### Policy Simulator
@@ -163,7 +165,9 @@ The simulation re-runs automatically (debounced) whenever a parameter changes. R
 - Per container: CPU/memory request and limit, current vs. recommended (`— removed —` under `noLimit`).
 - Charts with the sliding-window recommendation, historical request and current limit over usage.
 
-The simulator, the workload recommendations endpoint and the controller share one algorithm (`internal/recommender`): percentile over the busiest replica, OOM-aware memory floor, limits derived from the real containers, and **autoscaler coordination** when an HPA or KEDA ScaledObject targets the workload. The simulator inherits the coordination setting of the workload's managing policy; the `autoscalerCoordination` field of the `POST /api/simulate` body overrides it. It skips only the workload-age gate (reported as `tooYoung` instead of hiding the number) and the live OOM watcher.
+The simulator, the batch simulation and the controller share one algorithm (`internal/recommender`): percentile over the busiest replica, OOM-aware memory floor, limits derived from the real containers, and **autoscaler coordination** when an HPA or KEDA ScaledObject targets the workload. A Simulation is the only place the dashboard computes a recommendation; what is applied is what the controller stored. The simulator inherits the coordination setting of the workload's governing policy; the `autoscalerCoordination` field of the `POST /api/simulate` body overrides it. It dates the identity as the controller does (its earliest member or its `WorkloadRecommendation`, whichever is older) and reports a Too young identity as `tooYoung` instead of hiding the number; it skips only the live OOM watcher.
+
+When a container OOM'd in the last 24h, its simulated memory recommendation is floored at `max(kernel high-water peak, OOM-time cgroup limit × 1.20)`, exactly as the controller applies it (see [Recommendation pipeline](../concepts/recommendation-pipeline.md)). Sibling containers that did not OOM keep their plain percentile.
 
 ## Troubleshooting
 
@@ -186,12 +190,11 @@ The dashboard backs every UI page with a small JSON API under `/api/`. The same 
 |---|---|---|
 | `GET` | `/api/policies` | Policies with per-policy rollups (`workloadCount`, savings, `blockedCount`) |
 | `GET` | `/api/policies/{name}` | One Policy |
-| `GET` | `/api/policies/{name}/workloads` | Workloads matched by the policy (`namespace`, `search`, `page`, `pageSize`); `sort` = `name` (default), `namespace`, `kind` or `stalePods`, prefix `-` for descending. `total` counts rows after filters, `matched` before |
+| `GET` | `/api/policies/{name}/workloads` | Identities the policy governs, Departed ones included, Conflicted ones never (`namespace`, `search`, `page`, `pageSize`); `sort` = `name` (default), `namespace`, `kind` or `stalePods`, prefix `-` for descending. `total` counts rows after filters, `matched` before |
 | `GET` | `/api/policies/{name}/batch-simulate` | Recommendations for every matched workload with aggregate savings |
-| `GET` | `/api/workloads` | Every workload in the cluster (filters: `namespace`, `kind`, `automated`, `active`, `risk`, `autoscaler`, `search`, `page`, `pageSize`); `sort` = `name` (default), `namespace`, `kind`, `stalePods` or `policyName`, prefix `-` for descending |
-| `GET` | `/api/workloads/{namespace}/{kind}/{name}` | Status snapshot (mode, `riskState`, drift, OOM 24h, blocked, coordination) |
+| `GET` | `/api/workloads` | Every identity in the cluster (filters: `namespace`, `kind`, `automated`, `departed`, `risk`, `autoscaler`, `search`, `page`, `pageSize`); `sort` = `name` (default), `namespace`, `kind`, `stalePods` or `policyName`, prefix `-` for descending. Each row carries `departed`, `policyName`, and `conflictingPolicies` for a Conflicted identity; `counts` adds `conflicted` |
+| `GET` | `/api/workloads/{namespace}/{kind}/{name}` | Identity detail: governing policy (or `conflictingPolicies`), `departed`, mode, `riskState`, drift, OOM 24h, blocked, coordination, events of every member, and the stored `recommendation` (`outcome`, `observedAt`, per-container values). `404` for an unknown identity |
 | `GET` | `/api/workloads/{namespace}/{kind}/{name}/metrics` | Usage, request, limit and OOM time-series |
-| `GET` | `/api/workloads/{namespace}/{kind}/{name}/recommendations` | Current recommendation per container |
 | `POST` | `/api/simulate` | What-if recommendation for one workload |
 | `GET` | `/api/summary` | Overview snapshot (savings and Risk-state KPIs, headroom, attention, policy rollups) |
 | `GET` | `/api/summary/trend` | Overview savings time-series |
