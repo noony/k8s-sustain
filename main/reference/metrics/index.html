@@ -1789,17 +1789,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#k8s_sustain_coordination_factor" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        k8s_sustain_coordination_factor
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -2283,17 +2272,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#k8s_sustain_coordination_factor" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        k8s_sustain_coordination_factor
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -2572,7 +2550,7 @@
 </table>
 <ul>
 <li><code>recommendation_skipped_total</code> — recommendations not emitted, by <code>reason</code>. <code>workload_too_young</code>: the identity is younger than the 10-minute <a href="../../concepts/recommendation-pipeline/#stages">workload-age gate</a>.</li>
-<li><code>oom_floor_applied_total</code> — memory recommendations raised above the percentile by the OOM floor (<code>max(peak_24h, oom_time_limit × 1.20)</code> plus headroom) after an OOM in the last 24h.</li>
+<li><code>oom_floor_applied_total</code> — memory recommendations whose final request the OOM floor (<code>max(peak_24h, oom_time_limit × 1.20)</code> plus headroom, after an OOM in the last 24h) determined: it beat the percentile and no min/max clamp, before or after autoscaler coordination, replaced it. Matches <code>oomFloor.determined</code> in the <a href="../../concepts/recommendation-pipeline/#trace">trace</a>.</li>
 <li><code>oom_observed_total</code>, <code>oom_reaction_latency_seconds</code>, <code>oom_cache_entries</code> — from the <a href="../../concepts/architecture/#pod-oom-watcher">Pod OOM watcher</a>: deduped OOM kills, delay from <code>TerminatedAt</code> to the responding recommendation, and current cache size.</li>
 </ul>
 <h3 id="drift-retry-autoscaler">Drift, retry, autoscaler<a class="headerlink" href="#drift-retry-autoscaler" title="Permanent link">&para;</a></h3>
@@ -2641,11 +2619,6 @@
 <td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>kind</code>, <code>resource</code></td>
 </tr>
 <tr>
-<td><code>k8s_sustain_coordination_factor</code></td>
-<td>gauge</td>
-<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>resource</code>, <code>kind</code></td>
-</tr>
-<tr>
 <td><code>k8s_sustain_recycle_suppressed_total</code></td>
 <td>counter</td>
 <td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>resource</code></td>
@@ -2667,7 +2640,7 @@
 <li><code>workload_retry_attempts</code> — failed steps summed over the identity's members.</li>
 <li><code>policy_workload_count</code> — live identities the policy governs: an owner-name or bare-pod group counts once however many members it has, a Departed identity does not count, and a <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted</a> identity counts for no policy.</li>
 <li><code>policy_blocked_count</code> — those identities that are Blocked, i.e. have a <code>workload_retry_state</code> series.</li>
-<li><code>autoscaler_present</code>, <code>autoscaler_target_configured</code> — the autoscaler the identity's recommendation is shaped against: the first member, in name order, that an HPA or KEDA ScaledObject targets.</li>
+<li><code>autoscaler_present</code>, <code>autoscaler_target_configured</code> — the autoscaler the identity's recommendation is shaped against: the first member, in name order, that an HPA or KEDA ScaledObject targets. The coordination factors it led to are not a metric: they are in the <code>WorkloadRecommendation</code>'s <a href="../../concepts/recommendation-pipeline/#trace">trace</a>.</li>
 <li><code>recycle_suppressed_total</code> — decreases held back by the policy's <a href="../policy/#cpudownsizethreshold-memorydownsizethreshold"><code>downsizeThreshold</code></a>, once per resource per pod per reconcile, summed over the identity's members. Increases are never counted.</li>
 <li><code>group_autoscaler_mismatch_total</code> — once per reconcile for an <a href="../../guides/standalone-pods-and-grouping/">owner-name group</a> whose members disagree on autoscaler presence or kind. The group's single recommendation follows the first sorted member's autoscaler, so any non-zero rate is a misconfiguration.</li>
 </ul>
@@ -2682,7 +2655,7 @@
 <h4 id="series-lifetime-when-a-policy-is-deleted">Series lifetime when a Policy is deleted<a class="headerlink" href="#series-lifetime-when-a-policy-is-deleted" title="Permanent link">&para;</a></h4>
 <p>Every series with a <code>policy</code> label is removed by the Policy's <code>k8s.sustain.io/cleanup</code> finalizer, together with its <code>WorkloadRecommendation</code>s. Recreating a Policy under the same name restarts its counters from zero.</p>
 <h4 id="series-lifetime-when-an-identity-departs">Series lifetime when an identity departs<a class="headerlink" href="#series-lifetime-when-an-identity-departs" title="Permanent link">&para;</a></h4>
-<p>When no Policy governs an identity any more (its last member was deleted, opted out or left the selector, or its members now opt into different Policies and it is Conflicted), its <code>workload_pods</code>, <code>workload_stale_pods</code>, <code>workload_retry_state</code>, <code>workload_retry_attempts</code>, <code>autoscaler_present</code>, <code>autoscaler_target_configured</code>, <code>coordination_factor</code> and <code>recycle_suppressed_total</code> series are deleted in the next reconcile, so a departed identity never reports a frozen state.</p>
+<p>When no Policy governs an identity any more (its last member was deleted, opted out or left the selector, or its members now opt into different Policies and it is Conflicted), its <code>workload_pods</code>, <code>workload_stale_pods</code>, <code>workload_retry_state</code>, <code>workload_retry_attempts</code>, <code>autoscaler_present</code>, <code>autoscaler_target_configured</code> and <code>recycle_suppressed_total</code> series are deleted in the next reconcile, so a departed identity never reports a frozen state.</p>
 <h4 id="k8s_sustain_wlr_refresh_total"><code>k8s_sustain_wlr_refresh_total</code><a class="headerlink" href="#k8s_sustain_wlr_refresh_total" title="Permanent link">&para;</a></h4>
 <p>Refresh outcomes, once per reconcile, for <strong>departed</strong> identities only — a <code>WorkloadRecommendation</code> with no live workload object (a finished Job, a bare-pod group between runs). Live workloads are covered by the batch counters above.</p>
 <table>
@@ -2722,11 +2695,6 @@
 <h4 id="k8s_sustain_autoscaler_target_configured"><code>k8s_sustain_autoscaler_target_configured</code><a class="headerlink" href="#k8s_sustain_autoscaler_target_configured" title="Permanent link">&para;</a></h4>
 <p>Configured <code>averageUtilization</code> (%) of the autoscaler shaping the identity's recommendation, per resource trigger.
 <code>kind</code> is <code>HPA</code> or <code>KEDA</code>; <code>resource</code> is <code>cpu</code> or <code>memory</code>.</p>
-<h4 id="k8s_sustain_coordination_factor"><code>k8s_sustain_coordination_factor</code><a class="headerlink" href="#k8s_sustain_coordination_factor" title="Permanent link">&para;</a></h4>
-<p>Multiplier applied by autoscaler coordination to the per-pod request.
-<code>kind</code> is <code>overhead</code> (<code>(100 / hpa_target_pct) × 1.10</code>) or <code>replica</code> (CPU-only
-replica-budget correction); <code>1.0</code> when nothing applied. See
-<a href="../../concepts/autoscaler-coordination/">Autoscaler Coordination</a>.</p>
 <h3 id="dashboard-server">Dashboard server<a class="headerlink" href="#dashboard-server" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

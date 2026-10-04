@@ -825,6 +825,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#trace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trace
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#choosing-a-percentile" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2055,6 +2066,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#trace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trace
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#choosing-a-percentile" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2178,15 +2200,18 @@ requests apply on next pod creation via webhook injection.</p>
 <li><strong>Keep request.</strong> When <code>requests.keepRequest: true</code> is set for a resource, its request and limit are left unchanged and the remaining stages are skipped for that resource.</li>
 <li><strong>Query.</strong> Read the percentile-of-usage from a recording rule over the configured window (<code>spec.rightSizing.resourcesConfigs.&lt;cpu|memory&gt;.window</code>). The signal is a genuine per-pod percentile: <code>quantile_over_time(p, …[window])</code> over the <code>k8s_sustain:workload_max_pod_&lt;cpu|memory&gt;</code> recording rule, which at each instant is the <strong>busiest replica</strong> (<code>max by</code> across pods, per container). The query reads that rule as a plain range vector at the rule's own 1m evaluation interval; raising that interval to cut Prometheus load would coarsen every recommendation percentile. Collapsing across pods in the recording rule (rather than at query time) keeps this scan cheap — one series per workload×container — and immune to pod-name churn, since dead pods drop out of the <code>max</code>. Because the percentile already covers the hottest replica, there is <strong>no replica division and no separate per-pod floor</strong>.</li>
 <li>
-<p><strong>OOM floor (memory only, per container).</strong> When THIS container OOM'd in the last 24 h (<code>k8s_sustain:workload_oom_24h</code> keeps the <code>container</code> label, so the recency check is per-container), its memory recommendation is floored at <code>max(peak_working_set_24h, oom_time_limit × 1.20)</code> before headroom. The floor never applies to innocent siblings: if container A OOMs, a sidecar B in the same pod keeps its pure percentile recommendation — even though the (non-OOM-scoped) peak rule reports a 24h high-water mark for B — and B gets no memory recommendation via the OOM bypass if it has no usage data. Two anchors are combined so the floor degrades gracefully: the peak working-set is precise when cAdvisor observes it, while the OOM-time limit bump is the safety net when peak is unreliable (cgroup v2 / sub-scrape OOM kills can hide the real high-water). The bump factor (<code>1.20</code>, matching VPA's <code>MemoryBumpUpRatio</code>) lifts the recommendation above the limit the kernel killed at, breaking the OOM loop. The OOM-time-limit anchor only refreshes when a NEW OOM event fires, so once the workload fits after a bump, the recorded limit stays at its pre-bump value and stops growing. The metric <code>k8s_sustain_oom_floor_applied_total{container}</code> increments when this floor wins.</p>
+<p><strong>OOM floor (memory only, per container).</strong> When THIS container OOM'd in the last 24 h (<code>k8s_sustain:workload_oom_24h</code> keeps the <code>container</code> label, so the recency check is per-container), its memory recommendation is floored at <code>max(peak_working_set_24h, oom_time_limit × 1.20)</code> before headroom. The floor never applies to innocent siblings: if container A OOMs, a sidecar B in the same pod keeps its pure percentile recommendation — even though the (non-OOM-scoped) peak rule reports a 24h high-water mark for B — and B gets no memory recommendation via the OOM bypass if it has no usage data. Two anchors are combined so the floor degrades gracefully: the peak working-set is precise when cAdvisor observes it, while the OOM-time limit bump is the safety net when peak is unreliable (cgroup v2 / sub-scrape OOM kills can hide the real high-water). The bump factor (<code>1.20</code>, matching VPA's <code>MemoryBumpUpRatio</code>) lifts the recommendation above the limit the kernel killed at, breaking the OOM loop. The OOM-time-limit anchor only refreshes when a NEW OOM event fires, so once the workload fits after a bump, the recorded limit stays at its pre-bump value and stops growing. The metric <code>k8s_sustain_oom_floor_applied_total{container}</code> increments when the floor determined the final request: it beat the percentile and no min/max clamp, before or after coordination, replaced the value (the trace's <code>oomFloor.determined</code>).</p>
 <p>The floor also fires when the in-memory <a href="../architecture/#pod-oom-watcher">Pod OOM watcher</a> reports a fresh kill for this container, before the recording rule surfaces it. Its anchor is the memory limit the kubelet had actually applied at the kill (<code>ContainerStatus.Resources</code>), combined with the Prometheus anchor by <code>max()</code>: Prometheus survives a controller restart but lags a cycle behind a resize, while the live record is exact but in-memory only. Reading the <em>applied</em> limit rather than the spec keeps the anchor from compounding on the pipeline's own previous output.
 5. <strong>Headroom.</strong> Multiply by <code>(1 + headroom/100)</code> to add a safety buffer.
 6. <strong>Clamp.</strong> Floor to <code>minAllowed</code>, cap at <code>maxAllowed</code> (when set). <code>maxAllowed</code> always wins, including over the OOM floor.
-7. <strong>HPA overhead.</strong> When <code>autoscalerCoordination.enabled</code> and the workload is targeted by an HPA or KEDA <code>ScaledObject</code> on <code>averageUtilization</code>, multiply by <code>(100 / hpa_target_pct) × 1.10</code>. The clamps from step 6 are re-applied so explicit policy caps survive coordination.
-8. <strong>Replica-budget correction (CPU only).</strong> When <code>autoscalerCoordination.replicaBudgetAnchor</code> is set, multiply CPU request by <code>clamp(current_replicas / target_replicas, 0.5, 2.0)</code>, where <code>target_replicas = round(min + anchor × (max - min))</code> — see <a href="../autoscaler-coordination/#replica-budget-correction-opt-in">Autoscaler Coordination</a>.
-9. <strong>Limits derivation.</strong> Apply the <code>limits</code> strategy (<code>keepLimit</code> / <code>keepLimitRequestRatio</code> / <code>equalsToRequest</code> / <code>noLimit</code> / <code>requestsLimitsRatio</code>).</p>
+7. <strong>Autoscaler coordination.</strong> When <code>autoscalerCoordination.enabled</code> and the workload is targeted by an HPA or KEDA <code>ScaledObject</code>:
+- <strong>Overhead.</strong> Multiply by <code>(100 / hpa_target_pct) × 1.10</code>, or by 1 for a resource the autoscaler has no <code>averageUtilization</code> target on.
+- <strong>Replica-budget correction (CPU only).</strong> When <code>autoscalerCoordination.replicaBudgetAnchor</code> is set, multiply the CPU request by <code>clamp(current_replicas / target_replicas, 0.5, 2.0)</code>, where <code>target_replicas = round(min + anchor × (max - min))</code> — see <a href="../autoscaler-coordination/#replica-budget-correction-opt-in">Autoscaler Coordination</a>.
+- <strong>Clamp again.</strong> The clamps from step 6 are re-applied so explicit policy caps survive coordination.
+8. <strong>Limits derivation.</strong> Apply the <code>limits</code> strategy (<code>keepLimit</code> / <code>keepLimitRequestRatio</code> / <code>equalsToRequest</code> / <code>noLimit</code> / <code>requestsLimitsRatio</code>) to the final request.</p>
 </li>
 </ol>
+<p>Every stage that runs is recorded in the identity's <code>WorkloadRecommendation</code> as the <a href="#trace">trace</a>.</p>
 <h2 id="diagram">Diagram<a class="headerlink" href="#diagram" title="Permanent link">&para;</a></h2>
 <pre class="mermaid"><code>flowchart LR
     G[workload-age gate&lt;br/&gt;≥10 min, bypassed on OOM] --&gt; K[keepRequest&lt;br/&gt;skip resource] --&gt; Q[Prometheus query&lt;br/&gt;percentile over window]
@@ -2195,7 +2220,8 @@ requests apply on next pod creation via webhook injection.</p>
     H --&gt; C[clamp min/max]
     C --&gt; O[HPA overhead]
     O --&gt; R[replica anchor&lt;br/&gt;CPU only]
-    R --&gt; L[derive limits]
+    R --&gt; C2[clamp min/max again]
+    C2 --&gt; L[derive limits]
     L --&gt; OUT[ContainerRecommendation]</code></pre>
 <h2 id="worked-example">Worked example<a class="headerlink" href="#worked-example" title="Permanent link">&para;</a></h2>
 <p>Configuration:</p>
@@ -2218,7 +2244,23 @@ requests apply on next pod creation via webhook injection.</p>
 <a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span>
 <a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">          </span><span class="nt">keepLimitRequestRatio</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 </code></pre></div>
-<p>Per-pod CPU p95 over 168h: <code>100m</code>. Headroom 10% → <code>110m</code>. Within clamp <code>[50m, 4000m]</code> → <code>110m</code>. HPA targets CPU at 70% utilization → overhead factor <code>(100 / 70) × 1.10 ≈ 1.57</code> → <code>173m</code>. No <code>replicaBudgetAnchor</code> → unchanged. Existing limit was 2× request → new limit <code>346m</code>.</p>
+<p>Per-pod CPU p95 over 168h: <code>100m</code>. Headroom 10% → <code>110m</code>. Within clamp <code>[50m, 4000m]</code> → <code>110m</code>. HPA targets CPU at 70% utilization → overhead factor <code>(100 / 70) × 1.10 ≈ 1.57</code> → <code>173m</code>. No <code>replicaBudgetAnchor</code> → unchanged. Within the clamp again → <code>173m</code>. Existing limit was 2× request → new limit <code>346m</code>.</p>
+<p>The stored trace of that container reads:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">trace</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">app</span><span class="p">:</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">cpu</span><span class="p">:</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">      </span><span class="nt">percentile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">      </span><span class="nt">withHeadroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">110m</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">      </span><span class="nt">clamped</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">110m</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">      </span><span class="nt">coordination</span><span class="p">:</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">        </span><span class="nt">overheadFactor</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1.5714285714285714</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">        </span><span class="nt">scaled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">173m</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">173m</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">      </span><span class="nt">limit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">346m</span>
+</code></pre></div>
+<h2 id="trace">Trace<a class="headerlink" href="#trace" title="Permanent link">&para;</a></h2>
+<p>The trace is the record of how a Recommendation was derived. <code>recommender.Compute</code> returns it alongside the values, for every container: per resource, the value after each stage that actually ran (percentile, OOM floor, headroom, clamp, coordination with its overhead and replica factors, limit). The controller stores it in <code>status.trace</code> of the identity's <code>WorkloadRecommendation</code> together with the values, never on its own (see <a href="../workload-recommendations/#schema">Schema</a>), and reads it for its own metrics, so nothing re-derives a stage after the fact. The dashboard shows it per container on the workload detail page and reads the <strong>Coordinated</strong> factors of its list rows from it.</p>
+<p>A Simulation computes a trace too, but the dashboard only shows the stored one: what explains the applied values is what the controller stored.</p>
 <h2 id="choosing-a-percentile">Choosing a percentile<a class="headerlink" href="#choosing-a-percentile" title="Permanent link">&para;</a></h2>
 <p>The percentile knob (<code>spec.rightSizing.resourcesConfigs.&lt;cpu|memory&gt;.requests.percentile</code>) maps directly to a <code>quantile_over_time(p, …)</code> against the recording rule. Pick by intent, not by gut feel:</p>
 <table>

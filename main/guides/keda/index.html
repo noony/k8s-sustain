@@ -2136,7 +2136,9 @@
 <p>Each reconcile that finds an autoscaler emits an <code>AutoscalerDetected</code> event on the workload:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>events<span class="w"> </span>-n<span class="w"> </span>example<span class="w"> </span>--field-selector<span class="w"> </span><span class="nv">reason</span><span class="o">=</span>AutoscalerDetected
 </code></pre></div>
-<p>With coordination enabled, the <code>k8s_sustain_coordination_factor</code> metric reports the applied multiplier (<code>kind="overhead"</code>) for the workload.</p>
+<p>With coordination enabled, the workload's <code>WorkloadRecommendation</code> records the applied multiplier as <code>overheadFactor</code> in <code>status.trace.&lt;container&gt;.&lt;cpu|memory&gt;.coordination</code>, and the dashboard shows it on the <strong>Coordinated</strong> badge:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>example<span class="w"> </span>deployment-web<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.trace}'</span>
+</code></pre></div>
 <h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Per-pod signal.</strong> k8s-sustain sizes from the busiest replica's per-pod percentile (<code>max by</code> across pods), not a sum or per-pod average, so KEDA scaling 3 → 6 pods does not change the recommendation.</li>

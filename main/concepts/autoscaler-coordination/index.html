@@ -2272,9 +2272,16 @@ anchor=0.10</code>:</p>
 <a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">          </span><span class="nt">headroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
 </code></pre></div>
 <h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
-<p>The metric <code>k8s_sustain_coordination_factor{namespace, owner_kind,
-owner_name, resource, kind}</code> records the multiplier applied. <code>kind</code> is
-<code>overhead</code> or <code>replica</code>. The value is <code>1.0</code> when no effect was applied.</p>
+<p>The factors applied are recorded per container in the identity's
+<code>WorkloadRecommendation</code>, in <code>status.trace.&lt;container&gt;.&lt;cpu|memory&gt;.coordination</code>:
+<code>overheadFactor</code>, <code>replicaFactor</code> (CPU, with a <code>replicaBudgetAnchor</code>), the
+request they <code>scaled</code> to and the <code>value</code> after the min/max clamp is applied
+again (see <a href="../recommendation-pipeline/#trace">Trace</a>). The dashboard shows them
+as the <strong>Coordinated</strong> badge on the workload list and detail page.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>example<span class="w"> </span>deployment-web<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.trace.app.cpu.coordination}'</span>
+</code></pre></div>
+<p><code>k8s_sustain_autoscaler_present</code> and <code>k8s_sustain_autoscaler_target_configured</code>
+report which autoscaler and targets were detected.</p>
 
 
 

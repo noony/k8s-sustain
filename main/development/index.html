@@ -3448,7 +3448,7 @@ kind (say <code>Rollout</code> from Argo) is mostly a matter of registering it t
 </ol>
 <h2 id="dashboard-health-signals">Dashboard health signals<a class="headerlink" href="#dashboard-health-signals" title="Permanent link">&para;</a></h2>
 <p>Every dashboard view reads workload health — OOM kills in 24h, Blocked, stale
-and total pods, the autoscaler and its coordination factors — through one port,
+and total pods, whether an autoscaler is present — through one port,
 <code>HealthSignals</code> (<code>internal/dashboard/health.go</code>), keyed by identity. Its
 Prometheus adapter (<code>health_prometheus.go</code>) holds the only health PromQL;
 tests use the in-memory <code>memHealthSignals</code> instead of faking query text. The
@@ -3461,8 +3461,9 @@ classifying.</p>
 (<code>Server.identities</code> / <code>Server.identity</code>), so a row, a detail page and the
 controller agree on members, containers, age, Departed and the governing
 Policy. The detail page shows the Recommendation stored in the identity's
-<code>WorkloadRecommendation</code> and its <code>status.outcome</code>; only the Simulator
-recomputes.</p>
+<code>WorkloadRecommendation</code>, its <code>status.outcome</code> and its <code>status.trace</code>; only the
+Simulator recomputes. Coordination factors are not a health signal: list rows
+and the detail page read them from the stored trace (<code>coordinationFactorsOf</code>).</p>
 <p>The port works because the controller emits every health metric under the
 identity's labels: <code>internal/controller/identity_health.go</code> aggregates the
 apply outcomes of an identity's members (pod counts summed, Blocked if any
@@ -3631,7 +3632,7 @@ transport-related ones:</p>
 <ul>
 <li><strong>The backoff split, taken once.</strong> Backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out. The pass records which members to apply and which it skipped, and the apply step uses that split.</li>
 <li><strong>The fetch.</strong> One <code>InputsFetcher</code> call per policy; the pass never sees shards, retries or the fallback (<a href="../adr/0001-single-identity-is-a-batch-of-one/">ADR 0001</a>).</li>
-<li><strong>The computation.</strong> <code>recommender.Compute</code> decides everything about one identity from its inputs, its live OOM records and its age (the inventory's <code>Since</code>): the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply.</li>
+<li><strong>The computation.</strong> <code>recommender.Compute</code> decides everything about one identity from its inputs, its live OOM records and its age (the inventory's <code>Since</code>): the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply. Alongside each container's values it returns their <a href="../concepts/recommendation-pipeline/#trace">trace</a>, the value after every stage that ran; <code>persist</code> stores it with the values, and the controller's computation metrics (<code>k8s_sustain_oom_floor_applied_total</code>, <code>…_oom_reaction_latency_seconds</code>) read it. Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new trace field.</li>
 </ul>
 <p>The batch metrics are counted from the outcomes, not from the fetch's internals. <code>persist</code> records every outcome but "not fetched" in the <code>WorkloadRecommendation</code>'s <code>status.outcome</code> (<code>wlrcache.Upsert</code> for <code>Computed</code>, <code>wlrcache.RecordOutcome</code> for the rest), keeping the last Recommendation.</p>
 <p>A Conflicted identity never enters the pass (<a href="../adr/0002-conflicted-identity-freezes-its-recommendation/">ADR 0002</a>). Each Policy party to the conflict records <code>status.outcome: Conflicted</code> (<code>recordConflicted</code>) and nothing else; <code>EnsureExists</code>, which rewrites <code>spec.policy</code>, is only ever called by the governing Policy, which is what stops two Policies flipping one object between them.</p>
