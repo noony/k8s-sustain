@@ -331,7 +331,7 @@ func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *test
 	policy := policyForReconcileWorkload(t, "p")
 
 	// Prime the retry tracker so we can confirm it gets cleared on success.
-	r.retries.recordFailure(tgt.key())
+	r.retries.recordFailure(tgt.key(), "patch")
 
 	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
@@ -624,7 +624,7 @@ func TestReconcileWorkload_OnCreate_CountsStaleWithoutTouchingPods(t *testing.T)
 func TestReconcileWorkload_RecommendOnly_DeletesPodCounts(t *testing.T) {
 	server := promServerForReconcile(t)
 	defer server.Close()
-	EmitWorkloadPods("default", "Deployment", "web", workload.PodCounts{Total: 3, Stale: 3})
+	EmitWorkloadPods(testIdentity("default", "Deployment", "web"), workload.PodCounts{Total: 3, Stale: 3})
 	r := reconcilerWithProm(t, server, false, webPod("999m"))
 	r.RecommendOnly = true
 	tgt := deploymentTarget("default", "web")

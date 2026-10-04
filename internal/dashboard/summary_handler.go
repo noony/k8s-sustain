@@ -216,7 +216,7 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 		recordErr(err)
 	})
 	wg.Go(func() {
-		v, err := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyAtRiskCount, "policy")
+		v, err := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyBlockedCount, "policy")
 		atRiskByPolicy = v
 		recordErr(err)
 	})

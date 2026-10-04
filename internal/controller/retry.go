@@ -30,6 +30,7 @@ const (
 type retryState struct {
 	attempts  int
 	nextRetry time.Time
+	phase     string
 }
 
 type retryTracker struct {
@@ -53,15 +54,15 @@ func (rt *retryTracker) shouldSkip(key string) bool {
 	return time.Now().Before(s.nextRetry)
 }
 
-// recordFailure increments the attempt counter and sets the next retry time
-// with exponential backoff capped at maxRetryDelay. It returns a copy of the
-// resulting state, never nil.
+// recordFailure increments the attempt counter, records the failing phase and
+// sets the next retry time with exponential backoff capped at maxRetryDelay.
+// It returns a copy of the resulting state, never nil.
 //
 // Callers must use the returned value rather than a separate getState call: a
 // concurrent recordSuccess for the same key can delete the entry in between, so
 // the read comes back nil. Computing it under the one lock makes the pair
 // atomic, and the copy keeps the caller off the map's live value.
-func (rt *retryTracker) recordFailure(key string) *retryState {
+func (rt *retryTracker) recordFailure(key, phase string) *retryState {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	now := time.Now()
@@ -71,6 +72,7 @@ func (rt *retryTracker) recordFailure(key string) *retryState {
 		rt.states[key] = s
 	}
 	s.attempts++
+	s.phase = phase
 	// time.Duration is an int64 of nanoseconds, so `baseRetryDelay << shift`
 	// overflows for a large shift and wraps to zero once shift >= 64.
 	// maxShift=16 puts 30s << 16 ≈ 23 days: far above maxRetryDelay, nowhere
@@ -120,23 +122,16 @@ func (rt *retryTracker) getState(key string) *retryState {
 	return &cp
 }
 
-// blockedCountAmong returns the number of given keys currently in retry-backoff.
-// Used to compute per-policy at-risk counts after a reconcile cycle.
-func (rt *retryTracker) blockedCountAmong(keys []string) int {
+// blockedPhase reports whether the workload is blocked — its last step failed
+// transiently and no step has succeeded since — and the phase that failed.
+func (rt *retryTracker) blockedPhase(key string) (string, bool) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	now := time.Now()
-	count := 0
-	for _, k := range keys {
-		s, ok := rt.states[k]
-		if !ok {
-			continue
-		}
-		if now.Before(s.nextRetry) {
-			count++
-		}
+	s, ok := rt.states[key]
+	if !ok {
+		return "", false
 	}
-	return count
+	return s.phase, true
 }
 
 // isTransientError returns true for errors that should trigger a retry with backoff.

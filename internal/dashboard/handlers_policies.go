@@ -49,7 +49,7 @@ func (s *Server) fetchPolicyRollups(ctx context.Context) policyRollups {
 	wl, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyWorkloadCount, "policy")
 	cpu, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyCPUSavingsCores, "policy")
 	mem, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyMemorySavingsBytes, "policy")
-	risk, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyAtRiskCount, "policy")
+	risk, _ := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyBlockedCount, "policy")
 	return policyRollups{workloadCount: wl, cpuSavingsCores: cpu, memSavingsBytes: mem, atRiskCount: risk}
 }
 

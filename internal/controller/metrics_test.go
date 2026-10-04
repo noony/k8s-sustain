@@ -21,7 +21,7 @@ func TestNewMetricsRegistered(t *testing.T) {
 		{"k8s_sustain_workload_retry_state", []string{"namespace", "owner_kind", "owner_name", "reason"}},
 		{"k8s_sustain_workload_retry_attempts", []string{"namespace", "owner_kind", "owner_name"}},
 		{"k8s_sustain_policy_workload_count", []string{"policy"}},
-		{"k8s_sustain_policy_at_risk_count", []string{"policy"}},
+		{"k8s_sustain_policy_blocked_count", []string{"policy"}},
 		{"k8s_sustain_policy_batch_requested_count", []string{"policy"}},
 		{"k8s_sustain_policy_batch_resolved_count", []string{"policy"}},
 		{"k8s_sustain_policy_batch_failures_total", []string{"policy"}},
@@ -108,7 +108,7 @@ func seedMetricsForRegistrationCheck() {
 	workloadRetryState.WithLabelValues(ns, "Deployment", name, "test").Set(0)
 	workloadRetryAttempts.WithLabelValues(ns, "Deployment", name).Add(0)
 	policyWorkloadCount.WithLabelValues(policy).Set(0)
-	policyAtRiskCount.WithLabelValues(policy).Set(0)
+	policyBlockedCount.WithLabelValues(policy).Set(0)
 	policyBatchRequested.WithLabelValues(policy).Set(0)
 	policyBatchResolved.WithLabelValues(policy).Set(0)
 	policyBatchFailuresTotal.WithLabelValues(policy).Add(0)

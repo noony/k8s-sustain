@@ -14,6 +14,7 @@ import (
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -232,6 +233,7 @@ func reconcilerWithProm(t *testing.T, server *httptest.Server, inPlace bool, ext
 	t.Helper()
 	scheme := runtime.NewScheme()
 	_ = appsv1.AddToScheme(scheme)
+	_ = autoscalingv2.AddToScheme(scheme)
 	_ = rolloutsv1alpha1.AddToScheme(scheme)
 	_ = sustainv1alpha1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
@@ -424,15 +426,19 @@ func itemForTargetWithWLR(t *workloadTarget, wlr *sustainv1alpha1.WorkloadRecomm
 	}
 }
 
-// runComputeAndApply drives BOTH phases Reconcile runs for a single-member
+// runComputeAndApply drives the phases Reconcile runs for a single-member
 // identity: one computation for the identity (which also writes its
-// WorkloadRecommendation), then the apply for its one member — including the
+// WorkloadRecommendation), the apply for its one member — including the
 // computation's error, exactly as Reconcile threads it through, so a Prometheus
-// failure still surfaces through handleStepError and the retry tracker.
+// failure still surfaces through handleStepError and the retry tracker — and
+// the identity's health emission.
 func runComputeAndApply(ctx context.Context, r *PolicyReconciler, policy *sustainv1alpha1.Policy, it computeItem) error {
+	r.health.observe(policy.Name, targetIndex{it.Identity: it.Targets})
 	snap := autoscaler.NewNamespacedSnapshot(r.Client)
 	recs, err := r.computeIdentity(ctx, policy, it, snap, nil, nil, false)
-	return r.reconcileWorkload(ctx, policy, it.Targets[0], snap, recs, err)
+	applyErr := r.reconcileWorkload(ctx, policy, it.Targets[0], snap, recs, err)
+	r.health.emit(policy.Name, r.retries)
+	return applyErr
 }
 
 // promServerFor is a Prometheus stub that serves one identity's CPU and

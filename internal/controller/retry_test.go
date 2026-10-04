@@ -21,7 +21,7 @@ func TestRetryTracker_ShouldSkip_NoEntry(t *testing.T) {
 
 func TestRetryTracker_RecordFailure_ThenSkip(t *testing.T) {
 	rt := newRetryTracker()
-	rt.recordFailure("Deployment/prod/web")
+	rt.recordFailure("Deployment/prod/web", "patch")
 
 	if !rt.shouldSkip("Deployment/prod/web") {
 		t.Error("should skip after failure")
@@ -30,7 +30,7 @@ func TestRetryTracker_RecordFailure_ThenSkip(t *testing.T) {
 
 func TestRetryTracker_RecordSuccess_ClearsEntry(t *testing.T) {
 	rt := newRetryTracker()
-	rt.recordFailure("Deployment/prod/web")
+	rt.recordFailure("Deployment/prod/web", "patch")
 	rt.clear("Deployment/prod/web")
 
 	if rt.shouldSkip("Deployment/prod/web") {
@@ -41,11 +41,11 @@ func TestRetryTracker_RecordSuccess_ClearsEntry(t *testing.T) {
 func TestRetryTracker_ExponentialBackoff(t *testing.T) {
 	rt := newRetryTracker()
 
-	rt.recordFailure("Deployment/prod/web")
+	rt.recordFailure("Deployment/prod/web", "patch")
 	state1 := rt.getState("Deployment/prod/web")
 	delay1 := time.Until(state1.nextRetry)
 
-	rt.recordFailure("Deployment/prod/web")
+	rt.recordFailure("Deployment/prod/web", "patch")
 	state2 := rt.getState("Deployment/prod/web")
 	delay2 := time.Until(state2.nextRetry)
 
@@ -60,7 +60,7 @@ func TestRetryTracker_ExponentialBackoff(t *testing.T) {
 func TestRetryTracker_MaxBackoff(t *testing.T) {
 	rt := newRetryTracker()
 	for range 20 {
-		rt.recordFailure("Deployment/prod/web")
+		rt.recordFailure("Deployment/prod/web", "patch")
 	}
 	state := rt.getState("Deployment/prod/web")
 	delay := time.Until(state.nextRetry)
@@ -79,7 +79,7 @@ func TestRetryTracker_MaxBackoff_NoOverflow(t *testing.T) {
 	const key = "Deployment/prod/web"
 	for i := range 200 {
 		before := time.Now()
-		rt.recordFailure(key)
+		rt.recordFailure(key, "patch")
 		state := rt.getState(key)
 		delay := state.nextRetry.Sub(before)
 		if delay < 0 {
@@ -93,7 +93,7 @@ func TestRetryTracker_MaxBackoff_NoOverflow(t *testing.T) {
 
 func TestRetryTracker_RemoveSilently(t *testing.T) {
 	rt := newRetryTracker()
-	rt.recordFailure("Deployment/prod/web")
+	rt.recordFailure("Deployment/prod/web", "patch")
 	rt.clear("Deployment/prod/web")
 
 	if rt.shouldSkip("Deployment/prod/web") {
@@ -131,19 +131,21 @@ func TestIsTransientError(t *testing.T) {
 
 var _ = http.StatusOK
 
-func TestBlockedCountAmong(t *testing.T) {
+func TestRetryTracker_BlockedPhase(t *testing.T) {
 	rt := newRetryTracker()
-	keys := []string{
-		"Deployment/prod/web",
-		"Deployment/prod/api",
-		"Deployment/prod/worker",
-	}
-	// Two of the three workloads are in backoff; the third has no entry.
-	rt.recordFailure(keys[0])
-	rt.recordFailure(keys[1])
+	const key = "Deployment/prod/web"
 
-	if got := rt.blockedCountAmong(keys); got != 2 {
-		t.Errorf("blockedCountAmong: got %d, want 2", got)
+	if _, blocked := rt.blockedPhase(key); blocked {
+		t.Fatal("a workload that never failed must not be blocked")
+	}
+	rt.recordFailure(key, "prometheus")
+	rt.recordFailure(key, "patch")
+	if phase, blocked := rt.blockedPhase(key); !blocked || phase != "patch" {
+		t.Errorf("blockedPhase = (%q, %v), want the latest failed phase (patch, true)", phase, blocked)
+	}
+	rt.clear(key)
+	if _, blocked := rt.blockedPhase(key); blocked {
+		t.Error("a cleared workload must not be blocked")
 	}
 }
 
@@ -155,7 +157,7 @@ func TestRetryTracker_RecordFailure_ReturnsResultingState(t *testing.T) {
 	rt := newRetryTracker()
 	const key = "Deployment/prod/web"
 
-	first := rt.recordFailure(key)
+	first := rt.recordFailure(key, "patch")
 	if first == nil {
 		t.Fatal("recordFailure must return the resulting state, got nil")
 	}
@@ -166,7 +168,7 @@ func TestRetryTracker_RecordFailure_ReturnsResultingState(t *testing.T) {
 		t.Error("nextRetry must be set")
 	}
 
-	second := rt.recordFailure(key)
+	second := rt.recordFailure(key, "patch")
 	if second.attempts != 2 {
 		t.Errorf("attempts = %d, want 2", second.attempts)
 	}
@@ -194,7 +196,7 @@ func TestRetryTracker_RecordFailure_RacesRecordSuccess(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			state := rt.recordFailure(key)
+			state := rt.recordFailure(key, "patch")
 			if state == nil {
 				t.Error("recordFailure returned nil state")
 				return

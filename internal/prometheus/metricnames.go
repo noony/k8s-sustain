@@ -14,7 +14,7 @@ const (
 	MetricPolicyCPUSavingsCores    = "k8s_sustain:policy_cpu_savings_cores"
 	MetricPolicyMemorySavingsBytes = "k8s_sustain:policy_memory_savings_bytes"
 	MetricPolicyWorkloadCount      = "k8s_sustain_policy_workload_count"
-	MetricPolicyAtRiskCount        = "k8s_sustain_policy_at_risk_count"
+	MetricPolicyBlockedCount       = "k8s_sustain_policy_blocked_count"
 
 	MetricWorkloadOOM24h              = "k8s_sustain:workload_oom_24h"
 	MetricWorkloadDrifted             = "k8s_sustain:workload_drifted"

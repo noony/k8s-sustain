@@ -52,12 +52,7 @@ func (r *PolicyReconciler) discover(
 
 	for i := range targets {
 		t := &targets[i]
-		id := promclient.WorkloadIdentity{
-			Namespace: t.Namespace,
-			OwnerKind: t.IdentityKind,
-			OwnerName: t.IdentityName,
-		}
-		idx[id] = append(idx[id], t)
+		idx[t.identity()] = append(idx[t.identity()], t)
 	}
 
 	// ONE EnsureExists per identity, not per target: an identity owns exactly

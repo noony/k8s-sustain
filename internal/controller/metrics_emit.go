@@ -4,6 +4,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -71,43 +72,46 @@ func EmitWorkloadMetrics(w WorkloadMetrics) {
 	}
 }
 
-// EmitRetryState marks a workload as blocked (state=1) for the given reason.
-// When blocked is false, every reason variant for the workload is removed so
-// that no stale series persists at 1 after recovery.
-func EmitRetryState(namespace, kind, name, reason string, blocked bool) {
+// identityLabels selects every series of one identity, whatever its other
+// labels.
+func identityLabels(id promclient.WorkloadIdentity) prometheus.Labels {
+	return prometheus.Labels{"namespace": id.Namespace, "owner_kind": id.OwnerKind, "owner_name": id.OwnerName}
+}
+
+// EmitRetryState sets the identity's single retry-state series: 1 under
+// reason when blocked, absent otherwise. A changed reason replaces the old
+// series rather than adding a second one.
+func EmitRetryState(id promclient.WorkloadIdentity, reason string, blocked bool) {
+	workloadRetryState.DeletePartialMatch(identityLabels(id))
 	if !blocked {
-		workloadRetryState.DeletePartialMatch(prometheus.Labels{
-			"namespace": namespace, "owner_kind": kind, "owner_name": name,
-		})
 		return
 	}
-	workloadRetryState.WithLabelValues(namespace, kind, name, reason).Set(1)
+	workloadRetryState.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, reason).Set(1)
 }
 
-// IncrementRetryAttempt bumps the retry counter for a workload.
-func IncrementRetryAttempt(namespace, kind, name string) {
-	workloadRetryAttempts.WithLabelValues(namespace, kind, name).Inc()
+// IncrementRetryAttempt counts one failed step of one of the identity's
+// members.
+func IncrementRetryAttempt(id promclient.WorkloadIdentity) {
+	workloadRetryAttempts.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName).Inc()
 }
 
-// EmitAutoscalerPresent records the autoscaler kind targeting the workload.
-// kind is one of "None", "HPA", "KEDA". When the kind changes between reconciles,
-// prior label values for the workload are cleared so only one series remains.
-func EmitAutoscalerPresent(namespace, ownerKind, ownerName, autoscalerKind string) {
-	autoscalerPresent.DeletePartialMatch(prometheus.Labels{
-		"namespace":  namespace,
-		"owner_kind": ownerKind,
-		"owner_name": ownerName,
-	})
+// EmitAutoscalerPresent records the kind of the autoscaler shaping the
+// identity's recommendation: "None", "HPA" or "KEDA". When the kind changes
+// between reconciles, prior label values are cleared so only one series
+// remains.
+func EmitAutoscalerPresent(id promclient.WorkloadIdentity, autoscalerKind string) {
+	autoscalerPresent.DeletePartialMatch(identityLabels(id))
 	if autoscalerKind == "" || autoscalerKind == "None" {
 		return
 	}
-	autoscalerPresent.WithLabelValues(namespace, ownerKind, ownerName, autoscalerKind).Set(1)
+	autoscalerPresent.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, autoscalerKind).Set(1)
 }
 
-// EmitPolicyRollup sets per-policy workload and at-risk counts after a reconcile.
-func EmitPolicyRollup(policy string, workloadCount, atRiskCount int) {
-	policyWorkloadCount.WithLabelValues(policy).Set(float64(workloadCount))
-	policyAtRiskCount.WithLabelValues(policy).Set(float64(atRiskCount))
+// EmitPolicyRollup sets a policy's live identity count and how many of those
+// identities are Blocked.
+func EmitPolicyRollup(policy string, identities, blocked int) {
+	policyWorkloadCount.WithLabelValues(policy).Set(float64(identities))
+	policyBlockedCount.WithLabelValues(policy).Set(float64(blocked))
 }
 
 // EmitPolicyBatchCoverage records how many workload identities a policy's
@@ -154,7 +158,7 @@ func DeletePolicyMetrics(policy string) {
 		reconcileTotal,
 		reconcileDuration,
 		policyWorkloadCount,
-		policyAtRiskCount,
+		policyBlockedCount,
 		policyBatchRequested,
 		policyBatchResolved,
 		policyBatchFailuresTotal,
@@ -213,23 +217,18 @@ func emitWorkloadFromRecs(t *workloadTarget, policyName string, recs map[string]
 	EmitWorkloadMetrics(m)
 }
 
-// EmitAutoscalerTargetsConfigured records configured autoscaler averageUtilization
-// targets for a workload. Per-workload series are cleared first so that resource
-// removal (e.g. a memory trigger dropped) or kind changes never leave stale
-// series behind. Pass autoscalerKind="" or "None" to clear-only.
-func EmitAutoscalerTargetsConfigured(namespace, ownerKind, ownerName, autoscalerKind string, configured map[string]int32) {
-	wl := prometheus.Labels{
-		"namespace":  namespace,
-		"owner_kind": ownerKind,
-		"owner_name": ownerName,
-	}
-	autoscalerTargetConfigured.DeletePartialMatch(wl)
-
+// EmitAutoscalerTargetsConfigured records the configured averageUtilization
+// targets of the autoscaler shaping the identity's recommendation. The
+// identity's series are cleared first so that resource removal (e.g. a memory
+// trigger dropped) or kind changes never leave stale series behind. Pass
+// autoscalerKind="" or "None" to clear-only.
+func EmitAutoscalerTargetsConfigured(id promclient.WorkloadIdentity, autoscalerKind string, configured map[string]int32) {
+	autoscalerTargetConfigured.DeletePartialMatch(identityLabels(id))
 	if autoscalerKind == "" || autoscalerKind == "None" {
 		return
 	}
 	for res, v := range configured {
-		autoscalerTargetConfigured.WithLabelValues(namespace, ownerKind, ownerName, autoscalerKind, res).Set(float64(v))
+		autoscalerTargetConfigured.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, autoscalerKind, res).Set(float64(v))
 	}
 }
 
@@ -260,12 +259,31 @@ func containerRequestMemoryBytes(c corev1.Container) float64 {
 	return float64(q.Value())
 }
 
-func EmitWorkloadPods(namespace, kind, name string, c workload.PodCounts) {
-	workloadPods.WithLabelValues(namespace, kind, name).Set(float64(c.Total))
-	workloadStalePods.WithLabelValues(namespace, kind, name).Set(float64(c.Stale))
+func EmitWorkloadPods(id promclient.WorkloadIdentity, c workload.PodCounts) {
+	workloadPods.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName).Set(float64(c.Total))
+	workloadStalePods.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName).Set(float64(c.Stale))
 }
 
-func DeleteWorkloadPods(namespace, kind, name string) {
-	workloadPods.DeleteLabelValues(namespace, kind, name)
-	workloadStalePods.DeleteLabelValues(namespace, kind, name)
+func DeleteWorkloadPods(id promclient.WorkloadIdentity) {
+	workloadPods.DeleteLabelValues(id.Namespace, id.OwnerKind, id.OwnerName)
+	workloadStalePods.DeleteLabelValues(id.Namespace, id.OwnerKind, id.OwnerName)
+}
+
+// DeleteIdentityHealth removes every health series of an identity no policy
+// targets any more, so a departed or re-scoped identity does not keep
+// reporting its last state.
+func DeleteIdentityHealth(id promclient.WorkloadIdentity) {
+	l := identityLabels(id)
+	for _, c := range []interface{ DeletePartialMatch(prometheus.Labels) int }{
+		workloadPods,
+		workloadStalePods,
+		workloadRetryState,
+		workloadRetryAttempts,
+		autoscalerPresent,
+		autoscalerTargetConfigured,
+		coordinationFactor,
+		recycleSuppressedTotal,
+	} {
+		c.DeletePartialMatch(l)
+	}
 }

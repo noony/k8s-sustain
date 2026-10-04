@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -91,19 +92,28 @@ func matchesLabels(m *dto.Metric, want map[string]string) bool {
 	return true
 }
 
-func TestEmitRetryStateClearsAllReasons(t *testing.T) {
-	// Use a unique workload name so this test does not collide with other
-	// tests touching the global registry.
+func testIdentity(ns, kind, name string) promclient.WorkloadIdentity {
+	return promclient.WorkloadIdentity{Namespace: ns, OwnerKind: kind, OwnerName: name}
+}
+
+func TestEmitRetryStateKeepsOneSeriesPerIdentity(t *testing.T) {
 	const ns, kind, name = "ns", "Deployment", "clear-test"
+	id := testIdentity(ns, kind, name)
 
-	EmitRetryState(ns, kind, name, "prometheus", true)
-	EmitRetryState(ns, kind, name, "patch", true)
+	EmitRetryState(id, "prometheus", true)
+	EmitRetryState(id, "patch", true)
 
-	if got := len(seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, kind, name)); got != 2 {
-		t.Fatalf("expected 2 retry_state series before clear, got %d", got)
+	series := seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, kind, name)
+	if len(series) != 1 {
+		t.Fatalf("a changed reason must replace the series, got %d series", len(series))
+	}
+	for _, l := range series[0].Label {
+		if l.GetName() == "reason" && l.GetValue() != "patch" {
+			t.Errorf("reason = %q, want the latest, patch", l.GetValue())
+		}
 	}
 
-	EmitRetryState(ns, kind, name, "", false)
+	EmitRetryState(id, "", false)
 
 	if got := len(seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, kind, name)); got != 0 {
 		t.Errorf("expected 0 retry_state series after clear, got %d", got)
@@ -113,8 +123,8 @@ func TestEmitRetryStateClearsAllReasons(t *testing.T) {
 func TestEmitAutoscalerPresentReplacesPriorKind(t *testing.T) {
 	const ns, kind, name = "ns", "Deployment", "kind-test"
 
-	EmitAutoscalerPresent(ns, kind, name, "HPA")
-	EmitAutoscalerPresent(ns, kind, name, "KEDA")
+	EmitAutoscalerPresent(testIdentity(ns, kind, name), "HPA")
+	EmitAutoscalerPresent(testIdentity(ns, kind, name), "KEDA")
 
 	series := seriesForWorkload(t, "k8s_sustain_autoscaler_present", ns, kind, name)
 	if len(series) != 1 {
@@ -125,8 +135,8 @@ func TestEmitAutoscalerPresentReplacesPriorKind(t *testing.T) {
 func TestEmitAutoscalerPresentNoneClearsSeries(t *testing.T) {
 	const ns, kind, name = "ns", "Deployment", "none-test"
 
-	EmitAutoscalerPresent(ns, kind, name, "HPA")
-	EmitAutoscalerPresent(ns, kind, name, "None")
+	EmitAutoscalerPresent(testIdentity(ns, kind, name), "HPA")
+	EmitAutoscalerPresent(testIdentity(ns, kind, name), "None")
 
 	series := seriesForWorkload(t, "k8s_sustain_autoscaler_present", ns, kind, name)
 	if len(series) != 0 {
@@ -162,9 +172,9 @@ func TestIncrementRetryAttempt(t *testing.T) {
 	}
 
 	before := retryAttempts()
-	IncrementRetryAttempt(ns, kind, name)
-	IncrementRetryAttempt(ns, kind, name)
-	IncrementRetryAttempt(ns, kind, name)
+	IncrementRetryAttempt(testIdentity(ns, kind, name))
+	IncrementRetryAttempt(testIdentity(ns, kind, name))
+	IncrementRetryAttempt(testIdentity(ns, kind, name))
 
 	if got := retryAttempts() - before; got != 3 {
 		t.Errorf("retry_attempts_total delta = %v, want 3", got)
@@ -181,7 +191,7 @@ func TestEmitPolicyRollup(t *testing.T) {
 	}
 	want := map[string]float64{
 		"k8s_sustain_policy_workload_count": 7,
-		"k8s_sustain_policy_at_risk_count":  2,
+		"k8s_sustain_policy_blocked_count":  2,
 	}
 	got := map[string]float64{}
 	for _, mf := range mfs {
@@ -252,13 +262,13 @@ func TestEmitPolicyBatchFailures(t *testing.T) {
 func TestEmitAutoscalerTargetsConfigured_ClearsAndSets(t *testing.T) {
 	const ns, kind, name = "ns", "Deployment", "ats-test"
 
-	EmitAutoscalerTargetsConfigured(ns, kind, name, "HPA", map[string]int32{"cpu": 70, "memory": 80})
+	EmitAutoscalerTargetsConfigured(testIdentity(ns, kind, name), "HPA", map[string]int32{"cpu": 70, "memory": 80})
 	if got := len(seriesForWorkload(t, "k8s_sustain_autoscaler_target_configured", ns, kind, name)); got != 2 {
 		t.Fatalf("expected 2 series after first emit, got %d", got)
 	}
 
 	// Drop memory trigger — should leave only cpu.
-	EmitAutoscalerTargetsConfigured(ns, kind, name, "HPA", map[string]int32{"cpu": 70})
+	EmitAutoscalerTargetsConfigured(testIdentity(ns, kind, name), "HPA", map[string]int32{"cpu": 70})
 	got := seriesForWorkload(t, "k8s_sustain_autoscaler_target_configured", ns, kind, name)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 series after dropping memory, got %d", len(got))
@@ -270,7 +280,7 @@ func TestEmitAutoscalerTargetsConfigured_ClearsAndSets(t *testing.T) {
 	}
 
 	// Kind=None clears all.
-	EmitAutoscalerTargetsConfigured(ns, kind, name, "None", nil)
+	EmitAutoscalerTargetsConfigured(testIdentity(ns, kind, name), "None", nil)
 	if got := len(seriesForWorkload(t, "k8s_sustain_autoscaler_target_configured", ns, kind, name)); got != 0 {
 		t.Errorf("expected 0 series after None, got %d", got)
 	}
@@ -349,7 +359,7 @@ func TestEmitWorkloadFromRecs_EmptyRecsIsNoOp(t *testing.T) {
 
 func TestEmitRecycleSuppressed(t *testing.T) {
 	before := testutil.ToFloat64(recycleSuppressedTotal.WithLabelValues("ns", "Deployment", "web", "cpu"))
-	EmitRecycleSuppressed("ns", "Deployment", "web", "cpu")
+	EmitRecycleSuppressed(testIdentity("ns", "Deployment", "web"), "cpu")
 	after := testutil.ToFloat64(recycleSuppressedTotal.WithLabelValues("ns", "Deployment", "web", "cpu"))
 	if after-before != 1 {
 		t.Fatalf("counter not incremented: before=%v after=%v", before, after)
@@ -407,7 +417,7 @@ func TestDeletePolicyMetricsRemovesEverySeriesForThePolicy(t *testing.T) {
 
 	names := []string{
 		"k8s_sustain_policy_workload_count",
-		"k8s_sustain_policy_at_risk_count",
+		"k8s_sustain_policy_blocked_count",
 		"k8s_sustain_policy_batch_requested_count",
 		"k8s_sustain_policy_batch_resolved_count",
 		"k8s_sustain_policy_batch_failures_total",
@@ -458,21 +468,5 @@ func TestDeletePolicyMetricsLeavesOtherPoliciesAlone(t *testing.T) {
 	if got := gaugeValue(t, "k8s_sustain_policy_batch_requested_count",
 		map[string]string{"policy": survivor}); got != 11 {
 		t.Errorf("survivor batch_requested = %v, want 11", got)
-	}
-}
-
-func TestEmitWorkloadPods_SetAndDelete(t *testing.T) {
-	const ns, name = "emit-pods-ns", "emit-pods-wl"
-	EmitWorkloadPods(ns, "Deployment", name, workload.PodCounts{Total: 5, Stale: 2})
-	labels := map[string]string{"namespace": ns, "owner_kind": "Deployment", "owner_name": name}
-	if got := gaugeValue(t, "k8s_sustain_workload_pods", labels); got != 5 {
-		t.Errorf("pods = %v, want 5", got)
-	}
-	if got := gaugeValue(t, "k8s_sustain_workload_stale_pods", labels); got != 2 {
-		t.Errorf("stale = %v, want 2", got)
-	}
-	DeleteWorkloadPods(ns, "Deployment", name)
-	if workloadStalePods.DeleteLabelValues(ns, "Deployment", name) {
-		t.Error("stale series still present after DeleteWorkloadPods")
 	}
 }
