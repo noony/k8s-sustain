@@ -127,10 +127,10 @@ var (
 	// policyBatchRequested and policyBatchResolved are a coverage pair, kept
 	// separate from policyBatchFailuresTotal below: an identity can resolve
 	// with zero samples because it is legitimately new, which is not the same
-	// thing as a Prometheus fetch failure. See recommender.BatchStats.
+	// thing as a Prometheus fetch failure.
 	policyBatchRequested = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_policy_batch_requested_count",
-		Help: "Number of workload identities requested in a policy's sharded Prometheus batch prefetch this reconcile cycle.",
+		Help: "Number of workload identities requested in a policy's batched Prometheus fetch this reconcile cycle.",
 	}, []string{"policy"})
 
 	policyBatchResolved = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -139,12 +139,12 @@ var (
 	}, []string{"policy"})
 
 	// policyBatchFailuresTotal is the "Prometheus is unwell" signal: it only
-	// grows when a batch shard query AND its per-workload fallback both failed
-	// for an identity (recommender.BatchStats.Failures). Never derive it from
-	// requested/resolved -- a low resolved count says nothing about failures.
+	// grows for an identity whose inputs could not be read even when queried
+	// on its own. Never derive it from requested/resolved -- a low resolved
+	// count says nothing about failures.
 	policyBatchFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_policy_batch_failures_total",
-		Help: "Cumulative count of workload identities whose batch Prometheus fetch (shard query and its per-workload fallback) genuinely failed, per policy. Distinct from batch_requested/batch_resolved: a workload resolving with zero samples because it has no history yet is never counted here.",
+		Help: "Cumulative count of workload identities whose batched Prometheus fetch failed even when retried on their own, per policy. Distinct from batch_requested/batch_resolved: a workload resolving with zero samples because it has no history yet is never counted here.",
 	}, []string{"policy"})
 
 	wlrRefreshTotal = prometheus.NewCounterVec(

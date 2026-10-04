@@ -139,7 +139,7 @@ func fetchSignal[V any](
 
 	run := func(shard promclient.Shard) error {
 		got, err := query(ctx, shard)
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			got, err = query(ctx, shard)
 		}
 		if err != nil {
@@ -171,8 +171,12 @@ func fetchSignal[V any](
 			if err == nil {
 				return nil
 			}
-			if len(shard.Names) == 1 {
-				fail(promclient.WorkloadIdentity{Namespace: shard.Namespace, OwnerKind: shard.OwnerKind, OwnerName: shard.Names[0]}, err)
+			// A cancelled context fails every re-query too, so shutdown does not
+			// fan a doomed shard out into one query per identity.
+			if len(shard.Names) == 1 || ctx.Err() != nil {
+				for _, name := range shard.Names {
+					fail(promclient.WorkloadIdentity{Namespace: shard.Namespace, OwnerKind: shard.OwnerKind, OwnerName: name}, err)
+				}
 				return nil
 			}
 			logger.V(1).Info(what+" shard query failed after retry; re-querying its identities one at a time",

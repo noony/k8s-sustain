@@ -420,6 +420,22 @@ func TestPromInputs_FallbackOverlapsWithinBound(t *testing.T) {
 	}
 }
 
+// On a cancelled context every identity reports the cancellation: a fetch cut
+// short must not read as "no samples".
+func TestPromInputs_CancelledContextFailsEveryIdentity(t *testing.T) {
+	_, c := startFakeShardProm(t, emptyAnswer)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got := NewPromInputs(c, 1_000_000).FetchInputs(ctx, promInputsCfg(), reqsFor(1, "api", "web"))
+
+	for _, n := range []string{"api", "web"} {
+		if r := got[prodID(n)]; !errors.Is(r.Err, context.Canceled) {
+			t.Errorf("%s = %+v, want a context.Canceled error", n, r)
+		}
+	}
+}
+
 // Once a sustained outage trips the client's breaker, ErrCircuitOpen is the
 // strongest "Prometheus is down" signal; the identity's error must still match
 // it with errors.Is. Twenty identities fail well past the breaker's five

@@ -24,6 +24,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -94,18 +95,10 @@ func TestReconcileSurfacesDiscoveryFailures(t *testing.T) {
 		},
 	}
 
-	server := promServerForReconcile(t)
-	defer server.Close()
-
 	scheme := runtime.NewScheme()
 	_ = appsv1.AddToScheme(scheme)
 	_ = sustainv1alpha1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
-
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
 
 	// Every WorkloadRecommendation create is rejected, as a missing RBAC rule
 	// on the resource would do.
@@ -128,10 +121,9 @@ func TestReconcileSurfacesDiscoveryFailures(t *testing.T) {
 	r := &PolicyReconciler{
 		Client:                   c,
 		Scheme:                   scheme,
-		PrometheusClient:         pc,
+		Inputs:                   recommendertest.NewStaticInputs(),
 		ReconcileInterval:        time.Hour,
 		WorkloadConcurrencyLimit: 1,
-		QueryShardMaxSamples:     10_000_000,
 		recorder:                 events.NewFakeRecorder(100),
 		patcher:                  workload.New(c, true),
 		retries:                  newRetryTracker(),
@@ -225,7 +217,7 @@ func TestDiscoverWritesOneStableSnapshotPerIdentity(t *testing.T) {
 	if len(first.Status.ObservedResources) != 2 {
 		t.Errorf("snapshot covers %d containers, want 2 (the union of the group's members): "+
 			"a container only one member declares would otherwise be missing from the recommendation "+
-			"and from the shard sizing", len(first.Status.ObservedResources))
+			"and from the size hint its fetch is batched by", len(first.Status.ObservedResources))
 	}
 
 	// Second cycle, same input in the REVERSE listing order — the API server

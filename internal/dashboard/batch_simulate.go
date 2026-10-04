@@ -177,12 +177,8 @@ func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1al
 			out[i].err = f.Err
 			continue
 		}
-		res, err := computeWorkloadRecs(ctx, spec, containers[i], time.Time{}, s.autoscalerInfo(ctx, autoSnap, spec), f.Inputs)
-		if err != nil {
-			out[i].err = err
-			continue
-		}
-		out[i].recs = simulationContainers(res)
+		res := computeWorkloadRecs(spec, containers[i], time.Time{}, s.autoscalerInfo(ctx, autoSnap, spec), f.Inputs)
+		out[i].recs = simulationContainers(res, f.Inputs)
 	}
 	return out
 }

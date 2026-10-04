@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -16,7 +18,6 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
-	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -36,8 +37,11 @@ type computeItem struct {
 // collectComputeItems builds the per-policy work-list from the
 // WorkloadRecommendation list, reconciled against the discovery index so an
 // identity discover() created moments ago is computed this cycle even when
-// the informer has not caught up. Scoped per policy because a shard must be
-// window-homogeneous.
+// the informer has not caught up. Scoped per policy because one fetch serves
+// one ResourcesConfigs.
+//
+// A departed identity with no observed-resources snapshot is left out: there
+// is no container set to compute against and nothing here can provide one.
 func (r *PolicyReconciler) collectComputeItems(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
@@ -48,11 +52,12 @@ func (r *PolicyReconciler) collectComputeItems(
 		return nil, fmt.Errorf("listing WorkloadRecommendations for policy %s: %w", policy.Name, err)
 	}
 
+	logger := log.FromContext(ctx)
 	items := make([]computeItem, 0, len(list.Items))
 	listed := make(map[promclient.WorkloadIdentity]bool, len(list.Items))
 	for i := range list.Items {
 		wlr := &list.Items[i]
-		// A stale label must not pull another policy's object into these shards.
+		// A stale label must not pull another policy's object into this fetch.
 		if wlr.Spec.Policy != policy.Name {
 			continue
 		}
@@ -62,16 +67,24 @@ func (r *PolicyReconciler) collectComputeItems(
 			OwnerName: wlr.Spec.WorkloadRef.Name,
 		}
 		listed[id] = true
-		items = append(items, computeItem{
+		it := computeItem{
 			WLR:      wlr,
 			Targets:  idx[id],
 			Identity: id,
 			Observed: identityObserved(wlr, idx[id]),
-		})
+		}
+		if len(it.Targets) == 0 && len(containersFromObserved(it.Observed, policy.Spec.RightSizing.ExcludeInitContainers)) == 0 {
+			// Never silent: this state once hid a read-after-write bug that
+			// stranded every new identity.
+			EmitWLRRefresh(id.Namespace, id.OwnerKind, WLRRefreshNoSnapshot)
+			logger.V(1).Info("departed identity has no observed-resources snapshot; skipping computation",
+				"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace, "wlr", wlr.Name)
+			continue
+		}
+		items = append(items, it)
 	}
 
 	// Identities discovery ensured that this List cannot see yet.
-	logger := log.FromContext(ctx)
 	for id, targets := range idx {
 		if listed[id] || len(targets) == 0 {
 			continue
@@ -152,58 +165,81 @@ func containersFromObserved(
 	return append(containers, initContainers...)
 }
 
-// computeIdentity produces the one recommendation an identity carries this
-// cycle and writes it to its WorkloadRecommendation. Called once per
-// computeItem, never per group member: members share a Prometheus series and
-// a WLR, so per-member computation produced competing answers. A departed
-// identity is refreshed but never applied.
-func (r *PolicyReconciler) computeIdentity(
-	ctx context.Context,
-	policy *sustainv1alpha1.Policy,
-	it computeItem,
-	autoSnap *autoscaler.NamespacedSnapshot,
-	inputs *recommender.WorkloadInputs,
-	fetchErr error,
-	snapshotPending bool,
-) (map[string]workload.ContainerRecommendation, error) {
-	// Bail out on a cancelled context so shutdown does not fan out doomed queries.
-	if err := ctx.Err(); err != nil {
-		return nil, nil //nolint:nilerr // ctx-cancel is graceful shutdown, not a workload error
+// persist writes every identity's outcome to its WorkloadRecommendation
+// before anything is applied, so the webhook serves the new value by the time
+// replacement pods are admitted. Departed identities are never applied, so
+// persist accounts for them: it returns how many there were and how many
+// failed. A live identity's write is best-effort; its apply step reports for
+// it.
+func (r *PolicyReconciler) persist(ctx context.Context, policyName string, results []identityResult) (departed, failed int) {
+	var failures atomic.Int32
+	var g errgroup.Group
+	g.SetLimit(r.WorkloadConcurrencyLimit)
+	for i := range results {
+		res := &results[i]
+		if len(res.item.Targets) > 0 {
+			g.Go(func() error {
+				r.persistLive(ctx, policyName, res)
+				return nil
+			})
+			continue
+		}
+		departed++
+		g.Go(func() error {
+			if err := r.persistDeparted(ctx, policyName, res); err != nil {
+				failures.Add(1)
+			}
+			return nil
+		})
 	}
+	_ = g.Wait()
+	return departed, int(failures.Load())
+}
 
-	if len(it.Targets) == 0 {
-		return nil, r.refreshDepartedRecommendation(ctx, policy, it, inputs, fetchErr)
-	}
-
-	autoInfo := r.groupAutoscalerInfo(ctx, it.Identity, it.Targets, autoSnap)
-	EmitAutoscalerPresent(it.Identity, string(autoInfo.Kind))
-	EmitAutoscalerTargetsConfigured(it.Identity, string(autoInfo.Kind), autoInfo.ConfiguredTargets)
-	recs, err := r.buildRecommendations(ctx, recRequest{
-		Policy:            policy,
-		Identity:          it.Identity,
-		Containers:        containersFromObserved(it.Observed, policy.Spec.RightSizing.ExcludeInitContainers),
-		AutoInfo:          autoInfo,
-		WorkloadCreated:   earliestTargetCreation(it.Targets),
-		IdentityFirstSeen: it.WLR.CreationTimestamp.Time,
-		Inputs:            inputs,
-		FetchErr:          fetchErr,
-		SnapshotPending:   snapshotPending,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(recs) == 0 {
+func (r *PolicyReconciler) persistLive(ctx context.Context, policyName string, res *identityResult) {
+	switch res.outcome {
+	case outcomeRecommended:
+		_ = r.upsertWorkloadRecommendation(ctx, res.item, policyName, res.recs, metav1.Now())
+	case outcomeTooYoung, outcomeNoData:
 		// Record the absence: a zero ObservedAt reads as "missing" to the webhook
 		// and costs a stub Create/Get per admission. MarkNoData no-ops once
 		// Containers is populated, so last-known-good survives an empty query.
-		_ = wlrcache.MarkNoData(ctx, r.Client, it.WLR.Spec.WorkloadRef, metav1.Now())
-		return nil, nil
+		_ = wlrcache.MarkNoData(ctx, r.Client, res.item.WLR.Spec.WorkloadRef, metav1.Now())
 	}
+}
 
-	// Cache before applying so the webhook serves the new value by the time
-	// replacement pods are admitted. Best-effort.
-	_ = r.upsertWorkloadRecommendation(ctx, it, policy.Name, recs, metav1.Now())
-	return recs, nil
+// persistDeparted refreshes an identity with no live workload object, such as
+// a completed Job or a bare-pod group between runs. Departed stays set on the
+// empty-result path so the webhook keeps serving the retained recommendation;
+// Upsert clears it once fresh samples appear.
+func (r *PolicyReconciler) persistDeparted(ctx context.Context, policyName string, res *identityResult) error {
+	it := res.item
+	ns, kind := it.Identity.Namespace, it.Identity.OwnerKind
+	switch res.outcome {
+	case outcomeRecommended:
+		if err := r.upsertWorkloadRecommendation(ctx, it, policyName, res.recs, metav1.Now()); err != nil {
+			EmitWLRRefresh(ns, kind, WLRRefreshError)
+			return err
+		}
+		EmitWLRRefresh(ns, kind, WLRRefreshComputed)
+		return nil
+	case outcomeTooYoung, outcomeNoData:
+		// A cold start and a recommendation whose samples aged out share this branch;
+		// only the second is worth an alert. MarkNoData no-ops once Containers is set.
+		refresh := WLRRefreshNoData
+		if len(it.WLR.Status.Containers) > 0 {
+			refresh = WLRRefreshRetainedEmpty
+			log.FromContext(ctx).V(1).Info("departed identity produced no recommendation; retaining last known good",
+				"kind", it.Identity.OwnerKind, "name", it.Identity.OwnerName, "namespace", ns)
+		}
+		EmitWLRRefresh(ns, kind, refresh)
+		return wlrcache.MarkNoData(ctx, r.Client, it.WLR.Spec.WorkloadRef, metav1.Now())
+	case outcomeFetchFailed:
+		EmitWLRRefresh(ns, kind, WLRRefreshError)
+		return res.err
+	default:
+		return nil
+	}
 }
 
 // groupAutoscalerInfo resolves the autoscaler an identity's recommendation is
@@ -285,65 +321,4 @@ func recsForTarget(
 		}
 	}
 	return out
-}
-
-// refreshDepartedRecommendation recomputes an identity with no live workload
-// object, such as a completed Job or a bare-pod group between runs. Departed
-// stays set on the empty-result path so the webhook keeps serving the retained
-// recommendation; Upsert clears it once fresh samples appear.
-func (r *PolicyReconciler) refreshDepartedRecommendation(
-	ctx context.Context,
-	policy *sustainv1alpha1.Policy,
-	it computeItem,
-	inputs *recommender.WorkloadInputs,
-	fetchErr error,
-) error {
-	logger := log.FromContext(ctx).WithValues(
-		"kind", it.Identity.OwnerKind, "name", it.Identity.OwnerName, "namespace", it.Identity.Namespace,
-	)
-
-	containers := containersFromObserved(it.Observed, policy.Spec.RightSizing.ExcludeInitContainers)
-	if len(containers) == 0 {
-		// Nothing to compute against and nothing here can fix it. Never silent: this
-		// state once hid a read-after-write bug that stranded every new identity.
-		EmitWLRRefresh(it.Identity.Namespace, it.Identity.OwnerKind, WLRRefreshNoSnapshot)
-		logger.V(1).Info("departed identity has no observed-resources snapshot; skipping computation",
-			"wlr", it.WLR.Name)
-		return nil
-	}
-
-	// A departed identity has no workload object, so the age gate rests on the
-	// WLR's own CreationTimestamp, and there is nothing for an HPA to scale.
-	recs, err := r.buildRecommendations(ctx, recRequest{
-		Policy:            policy,
-		Identity:          it.Identity,
-		Containers:        containers,
-		AutoInfo:          autoscaler.Info{Kind: autoscaler.KindNone},
-		IdentityFirstSeen: it.WLR.CreationTimestamp.Time,
-		Inputs:            inputs,
-		FetchErr:          fetchErr,
-	})
-	if err != nil {
-		EmitWLRRefresh(it.Identity.Namespace, it.Identity.OwnerKind, WLRRefreshError)
-		return err
-	}
-
-	if len(recs) == 0 {
-		// A cold start and a recommendation whose samples aged out share this branch;
-		// only the second is worth an alert. MarkNoData no-ops once Containers is set.
-		outcome := WLRRefreshNoData
-		if len(it.WLR.Status.Containers) > 0 {
-			outcome = WLRRefreshRetainedEmpty
-			logger.V(1).Info("departed identity produced no recommendation; retaining last known good")
-		}
-		EmitWLRRefresh(it.Identity.Namespace, it.Identity.OwnerKind, outcome)
-		return wlrcache.MarkNoData(ctx, r.Client, it.WLR.Spec.WorkloadRef, metav1.Now())
-	}
-
-	if err := r.upsertWorkloadRecommendation(ctx, it, policy.Name, recs, metav1.Now()); err != nil {
-		EmitWLRRefresh(it.Identity.Namespace, it.Identity.OwnerKind, WLRRefreshError)
-		return err
-	}
-	EmitWLRRefresh(it.Identity.Namespace, it.Identity.OwnerKind, WLRRefreshComputed)
-	return nil
 }

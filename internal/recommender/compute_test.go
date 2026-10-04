@@ -1,9 +1,7 @@
 package recommender
 
 import (
-	"context"
-	"errors"
-	"sync/atomic"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,50 +9,38 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-type fakeQuerier struct {
-	cpu, mem promclient.ContainerValues
-	oom      promclient.OOMSignal
-	err      error
-	calls    atomic.Int32
+const mib = float64(mebibyte)
+
+func containers(names ...string) []corev1.Container {
+	out := make([]corev1.Container, 0, len(names))
+	for _, n := range names {
+		out = append(out, corev1.Container{Name: n})
+	}
+	return out
 }
 
-func (f *fakeQuerier) QueryWorkloadCPUByContainer(context.Context, string, string, string, float64, string) (promclient.ContainerValues, error) {
-	f.calls.Add(1)
-	return f.cpu, f.err
-}
+// old dates an identity well past the age gate.
+func old() time.Time { return time.Now().Add(-time.Hour) }
 
-func (f *fakeQuerier) QueryWorkloadMemoryByContainer(context.Context, string, string, string, float64, string) (promclient.ContainerValues, error) {
-	f.calls.Add(1)
-	return f.mem, f.err
-}
-
-func (f *fakeQuerier) QueryWorkloadOOMSignal(context.Context, string, string, string) (promclient.OOMSignal, error) {
-	f.calls.Add(1)
-	return f.oom, nil
-}
-
-func TestCompute_FetchesAndRecommendsEveryObservedContainer(t *testing.T) {
-	const mib = 1 << 20
-	q := &fakeQuerier{
-		cpu: promclient.ContainerValues{"app": 0.5},
-		mem: promclient.ContainerValues{"app": 100 * mib},
-		oom: promclient.OOMSignal{
-			OOMCounts:       promclient.ContainerValues{"crashy": 1},
-			PeakMemoryBytes: promclient.ContainerValues{"crashy": 300 * mib},
+func TestCompute_RecommendsEveryObservedContainerWhenNoneDeclared(t *testing.T) {
+	res := Compute(Request{
+		Inputs: &WorkloadInputs{
+			CPUPerPod: promclient.ContainerValues{"app": 0.5},
+			MemPerPod: promclient.ContainerValues{"app": 100 * mib},
+			OOM: promclient.OOMSignal{
+				OOMCounts:       promclient.ContainerValues{"crashy": 1},
+				PeakMemoryBytes: promclient.ContainerValues{"crashy": 300 * mib},
+			},
 		},
-	}
-	res, err := Compute(context.Background(), q, Request{
-		Identity:        promclient.WorkloadIdentity{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "web"},
-		WorkloadCreated: time.Now().Add(-time.Hour),
+		WorkloadCreated: old(),
 	})
-	if err != nil {
-		t.Fatalf("Compute: %v", err)
-	}
-	if q.calls.Load() != 3 {
-		t.Errorf("querier calls = %d, want 3 (cpu, memory, oom)", q.calls.Load())
+
+	if res.Outcome != Recommended {
+		t.Fatalf("outcome = %v, want Recommended", res.Outcome)
 	}
 	if got := res.Recs["app"].CPURequest; got == nil || got.String() != "500m" {
 		t.Errorf("app cpu = %v, want 500m", got)
@@ -62,77 +48,281 @@ func TestCompute_FetchesAndRecommendsEveryObservedContainer(t *testing.T) {
 	if got := res.Recs["crashy"].MemoryRequest; got == nil || got.String() != "300Mi" {
 		t.Errorf("crashy memory = %v, want 300Mi from the OOM peak with no usage samples", got)
 	}
-	if res.Inputs == nil || res.Inputs.CPUPerPod["app"] != 0.5 {
-		t.Errorf("Inputs should carry the fetched usage, got %+v", res.Inputs)
-	}
-	if res.TooYoung {
-		t.Error("an hour-old workload is not too young")
-	}
 }
 
-func TestCompute_PrefetchedInputsSkipTheQuerier(t *testing.T) {
-	q := &fakeQuerier{err: errors.New("must not be called")}
-	res, err := Compute(context.Background(), q, Request{
-		Containers: []corev1.Container{{Name: "app"}},
-		Inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 1}},
+// Declared containers bound the result: one Prometheus still reports but the
+// workload no longer runs gets nothing, and one with no signal is skipped
+// rather than recommended at the hard floor.
+func TestCompute_DeclaredContainersBoundTheResult(t *testing.T) {
+	res := Compute(Request{
+		Containers: containers("app", "nodata"),
+		Inputs: &WorkloadInputs{
+			CPUPerPod: promclient.ContainerValues{"app": 1, "renamed-away": 1},
+			MemPerPod: promclient.ContainerValues{"app": 64 * mib},
+		},
 	})
-	if err != nil {
-		t.Fatalf("Compute: %v", err)
+
+	if len(res.Recs) != 1 || len(res.Containers) != 1 {
+		t.Fatalf("recs = %v, details = %v, want app only", res.Recs, res.Containers)
 	}
-	if q.calls.Load() != 0 {
-		t.Errorf("querier calls = %d, want 0 with prefetched inputs", q.calls.Load())
-	}
-	if got := res.Recs["app"].CPURequest; got == nil || got.String() != "1" {
-		t.Errorf("app cpu = %v, want 1", got)
+	if rec := res.Recs["app"]; rec.CPURequest == nil || rec.MemoryRequest == nil {
+		t.Errorf("app = %+v, want CPU and memory requests", rec)
 	}
 }
 
-func TestCompute_ExplicitContainersBoundTheResult(t *testing.T) {
-	q := &fakeQuerier{cpu: promclient.ContainerValues{"app": 1, "renamed-away": 1}}
-	res, err := Compute(context.Background(), q, Request{Containers: []corev1.Container{{Name: "app"}}})
-	if err != nil {
-		t.Fatalf("Compute: %v", err)
+// The age gate trusts the earliest of the object's age and how long the
+// identity has been known, and any recent OOM, from Prometheus or the live
+// watcher, excuses it so a crash-looping workload is not locked out.
+func TestCompute_AgeGate(t *testing.T) {
+	now := time.Now()
+	long := now.Add(-2 * MinWorkloadAge)
+	young := now.Add(-time.Minute)
+
+	cases := []struct {
+		name              string
+		created           time.Time
+		identityFirstSeen time.Time
+		promOOM           bool
+		liveOOM           bool
+		wantTooYoung      bool
+	}{
+		{"young object, unknown identity", young, time.Time{}, false, false, true},
+		{"young object, long-known identity", young, long, false, false, false},
+		{"young object, newly-known identity", young, now.Add(-2 * time.Minute), false, false, true},
+		{"old object, unknown identity", long, time.Time{}, false, false, false},
+		{"old object, newly-known identity stays old", long, young, false, false, false},
+		{"young object, Prometheus OOM bypasses", young, time.Time{}, true, false, false},
+		{"young object, live OOM bypasses", young, time.Time{}, false, true, false},
+		// Bare pods have no object age, so how long the identity has been known
+		// is the only signal.
+		{"zero created, newly-known identity", time.Time{}, young, false, false, true},
+		{"zero created, long-known identity", time.Time{}, long, false, false, false},
+		{"zero created, unknown identity", time.Time{}, time.Time{}, false, false, false},
 	}
-	if _, ok := res.Recs["renamed-away"]; ok {
-		t.Error("a container Prometheus reports but the workload no longer declares must not be recommended")
-	}
-	if _, ok := res.Recs["app"]; !ok {
-		t.Error("declared container missing from the result")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 1}}
+			if tc.promOOM {
+				in.OOM.OOMCounts = promclient.ContainerValues{"side": 1}
+			}
+			req := Request{Containers: containers("app"), Inputs: in, WorkloadCreated: tc.created, IdentityFirstSeen: tc.identityFirstSeen}
+			if tc.liveOOM {
+				req.LiveOOMs = map[string]*oomwatch.OOMRecord{"side": {Container: "side", TerminatedAt: now}}
+			}
+
+			res := Compute(req)
+
+			if got := res.Outcome == TooYoung; got != tc.wantTooYoung {
+				t.Errorf("TooYoung = %v, want %v (outcome %v)", got, tc.wantTooYoung, res.Outcome)
+			}
+			// A Simulation still wants the number for a Too young identity.
+			if len(res.Recs) != 1 {
+				t.Errorf("recs = %v, want app computed regardless of age", res.Recs)
+			}
+		})
 	}
 }
 
-func TestCompute_ReportsTooYoungButStillComputes(t *testing.T) {
-	q := &fakeQuerier{cpu: promclient.ContainerValues{"app": 1}}
-	res, err := Compute(context.Background(), q, Request{WorkloadCreated: time.Now()})
-	if err != nil {
-		t.Fatalf("Compute: %v", err)
+// A young workload whose sibling container OOMed gets its recommendation at
+// once: the bypass is workload-level, the floor per container.
+func TestCompute_YoungWorkloadWithOOMIsRecommended(t *testing.T) {
+	res := Compute(Request{
+		Containers: containers("app", "side"),
+		Inputs: &WorkloadInputs{OOM: promclient.OOMSignal{
+			OOMCounts:       promclient.ContainerValues{"app": 1},
+			PeakMemoryBytes: promclient.ContainerValues{"app": 80 * mib},
+		}},
+		WorkloadCreated: time.Now().Add(-time.Minute),
+	})
+
+	if res.Outcome != Recommended {
+		t.Fatalf("outcome = %v, want Recommended: a recent OOM bypasses the age gate", res.Outcome)
 	}
-	if !res.TooYoung {
-		t.Error("a just-created workload should be reported too young")
+	if rec := res.Recs["app"]; rec.MemoryRequest == nil || rec.MemoryRequest.String() != "80Mi" {
+		t.Errorf("app memory = %v, want 80Mi from the OOM peak", rec.MemoryRequest)
 	}
-	if len(res.Recs) != 1 {
-		t.Errorf("recs = %v, want the recommendation regardless of age", res.Recs)
+	if _, ok := res.Recs["side"]; ok {
+		t.Errorf("side has no usage and no OOM, got %+v", res.Recs["side"])
 	}
 }
 
-func TestCompute_UsageQueryFailureIsFatal(t *testing.T) {
-	q := &fakeQuerier{err: errors.New("prometheus down")}
-	if _, err := Compute(context.Background(), q, Request{}); err == nil {
-		t.Fatal("expected the usage query error to surface")
+func TestCompute_NoDataWhenNothingToRecommendFrom(t *testing.T) {
+	res := Compute(Request{
+		Containers:      containers("app"),
+		Inputs:          &WorkloadInputs{CPUPerPod: promclient.ContainerValues{}, MemPerPod: promclient.ContainerValues{}},
+		WorkloadCreated: old(),
+	})
+
+	if res.Outcome != NoData {
+		t.Errorf("outcome = %v, want NoData", res.Outcome)
+	}
+	if len(res.Recs) != 0 {
+		t.Errorf("recs = %v, want none", res.Recs)
+	}
+}
+
+// A kill the live watcher saw raises the memory floor before Prometheus
+// reports it: the OOM-time limit is bumped by DefaultOOMBumpFactor. Only the
+// container that was killed is floored.
+func TestCompute_LiveOOMRaisesTheMemoryFloor(t *testing.T) {
+	killedAt := time.Now().Add(-10 * time.Second)
+	res := Compute(Request{
+		Containers: containers("app", "side"),
+		Inputs: &WorkloadInputs{
+			CPUPerPod: promclient.ContainerValues{"app": 0.1, "side": 0.05},
+			MemPerPod: promclient.ContainerValues{"app": 100 * mib, "side": 100 * mib},
+		},
+		LiveOOMs: map[string]*oomwatch.OOMRecord{
+			"app": {Container: "app", TerminatedAt: killedAt, OOMLimitBytes: 200 << 20},
+		},
+		WorkloadCreated: old(),
+	})
+
+	if got := res.Recs["app"].MemoryRequest; got == nil || got.String() != "240Mi" {
+		t.Errorf("app memory = %v, want 240Mi (200Mi limit at the kill x 1.2)", got)
+	}
+	app := res.Containers["app"]
+	if !app.MemFloorApplied {
+		t.Error("app: MemFloorApplied = false, want the floor reported")
+	}
+	if !app.OOM.LiveEventAt.Equal(killedAt) {
+		t.Errorf("app: OOM.LiveEventAt = %v, want the kill time %v", app.OOM.LiveEventAt, killedAt)
+	}
+	if got := res.Recs["side"].MemoryRequest; got == nil || got.String() != "100Mi" {
+		t.Errorf("side memory = %v, want its 100Mi percentile: a sibling's kill must not floor it", got)
+	}
+	if res.Containers["side"].MemFloorApplied {
+		t.Error("side: MemFloorApplied = true for a container that was not killed")
+	}
+}
+
+// Prometheus's OOM-time limit is windowed and can still report the limit from
+// before a resize; the live record has the limit applied at the kill. The
+// higher one is the limit the container died at.
+func TestCompute_OOMAnchorTakesTheHigherOfPrometheusAndLive(t *testing.T) {
+	res := Compute(Request{
+		Containers: containers("app"),
+		Inputs: &WorkloadInputs{
+			CPUPerPod: promclient.ContainerValues{"app": 0.1},
+			MemPerPod: promclient.ContainerValues{"app": 50 * mib},
+			OOM: promclient.OOMSignal{
+				OOMCounts:     promclient.ContainerValues{"app": 1},
+				OOMLimitBytes: promclient.ContainerValues{"app": 96 * mib},
+			},
+		},
+		LiveOOMs: map[string]*oomwatch.OOMRecord{
+			"app": {Container: "app", TerminatedAt: time.Now(), OOMLimitBytes: 184 << 20},
+		},
+		WorkloadCreated: old(),
+	})
+
+	if got := res.Recs["app"].MemoryRequest; got == nil || got.Value() <= 184<<20 {
+		t.Errorf("app memory = %v, want a bump above the live 184Mi, not the stale 96Mi", got)
+	}
+}
+
+// The peak rule is not OOM-scoped: every container has a 24h high-water mark.
+// Only the container that OOMed is floored at it; an innocent sibling keeps its
+// percentile and one with no usage gets nothing.
+func TestCompute_SiblingOOMDoesNotFloorInnocentContainer(t *testing.T) {
+	res := Compute(Request{
+		Containers: containers("app", "side", "nodata"),
+		Inputs: &WorkloadInputs{
+			MemPerPod: promclient.ContainerValues{"app": 64 * mib, "side": 50 * mib},
+			OOM: promclient.OOMSignal{
+				OOMCounts:       promclient.ContainerValues{"app": 2},
+				PeakMemoryBytes: promclient.ContainerValues{"app": 200 * mib, "side": 180 * mib, "nodata": 150 * mib},
+			},
+		},
+	})
+
+	if got := res.Recs["app"].MemoryRequest; got == nil || got.String() != "200Mi" {
+		t.Errorf("app memory = %v, want 200Mi (peak floor)", got)
+	}
+	if !res.Containers["app"].MemFloorApplied {
+		t.Error("app: MemFloorApplied = false")
+	}
+	if got := res.Recs["side"].MemoryRequest; got == nil || got.String() != "50Mi" {
+		t.Errorf("side memory = %v, want its 50Mi percentile", got)
+	}
+	if res.Containers["side"].MemFloorApplied {
+		t.Error("side: the floor must not apply to a container that did not OOM")
+	}
+	if _, ok := res.Recs["nodata"]; ok {
+		t.Errorf("nodata: no OOM and no usage must yield nothing, got %+v", res.Recs["nodata"])
+	}
+}
+
+// A live kill with no anchor at all (no usage, no peak, no OOM-time limit)
+// emits nothing: the only possible value is the 1Mi floor, which guarantees
+// the next kill. With the OOM-time limit as its only anchor it bumps above it.
+func TestCompute_LiveOOMNeedsAnAnchor(t *testing.T) {
+	empty := &WorkloadInputs{CPUPerPod: promclient.ContainerValues{}, MemPerPod: promclient.ContainerValues{}}
+
+	none := Compute(Request{
+		Containers: containers("app"),
+		Inputs:     empty,
+		LiveOOMs:   map[string]*oomwatch.OOMRecord{"app": {Container: "app", TerminatedAt: time.Now()}},
+	})
+	if _, ok := none.Recs["app"]; ok {
+		t.Errorf("live OOM with no anchor must not emit a recommendation, got %v", none.Recs)
+	}
+
+	limit := Compute(Request{
+		Containers: containers("app"),
+		Inputs:     empty,
+		LiveOOMs:   map[string]*oomwatch.OOMRecord{"app": {Container: "app", TerminatedAt: time.Now(), OOMLimitBytes: 100 << 20}},
+	})
+	if got := limit.Recs["app"].MemoryRequest; got == nil || got.String() != "120Mi" {
+		t.Errorf("app memory = %v, want 120Mi (100Mi limit x 1.2)", got)
 	}
 }
 
 func TestCompute_AppliesCoordination(t *testing.T) {
-	q := &fakeQuerier{cpu: promclient.ContainerValues{"app": 1}}
-	res, err := Compute(context.Background(), q, Request{
+	res := Compute(Request{
+		Containers:   containers("app"),
+		Inputs:       &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 1}},
 		Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true},
 		AutoInfo:     autoscaler.Info{Kind: autoscaler.KindHPA, ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 50}},
 	})
-	if err != nil {
-		t.Fatalf("Compute: %v", err)
-	}
-	// 1 core * 110 / 50 = 2.2 cores.
+
+	// 1 core * 110 / 50 = 2.2 cores; Base keeps the pre-coordination value.
 	if got := res.Recs["app"].CPURequest; got == nil || got.String() != "2200m" {
 		t.Errorf("coordinated cpu = %v, want 2200m", got)
+	}
+	if got := res.Containers["app"].Base.CPURequest; got == nil || got.String() != "1" {
+		t.Errorf("base cpu = %v, want 1", got)
+	}
+}
+
+// With a ReplicaBudgetAnchor the replica-budget factor follows the overhead.
+func TestCompute_AppliesReplicaCorrection(t *testing.T) {
+	anchor := 0.0
+	res := Compute(Request{
+		Containers: containers("app"),
+		Inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 0.1}},
+		AutoInfo: autoscaler.Info{
+			Kind:              autoscaler.KindHPA,
+			MinReplicas:       2,
+			MaxReplicas:       10,
+			CurrentReplicas:   8, // 4x the anchor target, factor clamps to 2.0
+			ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 80},
+		},
+		Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true, ReplicaBudgetAnchor: &anchor},
+	})
+
+	// Overhead ceil(100x110/80) = 138m, then replica factor 2.0 -> 276m.
+	if got := res.Recs["app"].CPURequest.MilliValue(); got != 276 {
+		t.Errorf("CPURequest = %dm, want 276m (overhead + replica correction)", got)
+	}
+}
+
+func TestAgeForLog(t *testing.T) {
+	if got := AgeForLog(time.Time{}); got != "none" {
+		t.Errorf("AgeForLog(zero) = %q, want %q", got, "none")
+	}
+	got := AgeForLog(time.Now().Add(-30 * time.Minute))
+	if !strings.HasPrefix(got, "30m") {
+		t.Errorf("AgeForLog(30m ago) = %q, want ~30m duration string", got)
 	}
 }

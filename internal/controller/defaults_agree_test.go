@@ -39,7 +39,6 @@ func TestSetupDefaultsAgreeWithConfigDefaults(t *testing.T) {
 	}{
 		{"WorkloadConcurrencyLimit", r.WorkloadConcurrencyLimit, cfg.WorkloadConcurrencyLimit},
 		{"PolicyConcurrencyLimit", r.PolicyConcurrencyLimit, cfg.PolicyConcurrencyLimit},
-		{"QueryShardMaxSamples", r.QueryShardMaxSamples, cfg.QueryShardMaxSamples},
 	}
 	for _, tc := range cases {
 		if tc.fromSetup != tc.fromConfig {

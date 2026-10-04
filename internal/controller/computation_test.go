@@ -2,14 +2,12 @@ package controller
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"reflect"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -21,6 +19,7 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -134,59 +133,40 @@ func TestCollectComputeItemsIgnoresOtherPolicies(t *testing.T) {
 	}
 }
 
-// A collectComputeItems + containersFromObserved smoke check, NOT a pin on the
-// Job/Pod shard-candidacy exclusion: the loop simulated below re-implements only
-// the empty-containers half of Reconcile's filter, so it passes identically with
-// or without the kind-exclusion branch. TestReconcileBatchesJobAndPodIdentities
-// in policy_controller_test.go is what actually pins that.
-func TestJobAndPodIdentitiesBecomeShardCandidates(t *testing.T) {
-	mk := func(kind, name string) *sustainv1alpha1.WorkloadRecommendation {
-		return &sustainv1alpha1.WorkloadRecommendation{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: "ns",
-				Name:      wlrcache.Name(kind, name),
-				Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: "pol"},
-			},
-			Spec: sustainv1alpha1.WorkloadRecommendationSpec{
-				WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: kind, Namespace: "ns", Name: name},
-				Policy:      "pol",
-			},
-			Status: sustainv1alpha1.WorkloadRecommendationStatus{
-				ObservedResources: map[string]sustainv1alpha1.ObservedContainerResources{"main": {}},
-			},
-		}
+// A departed identity with no observed-resources snapshot has no container
+// set to compute against, so it is not a compute item; the skip is counted so
+// a stuck snapshot write cannot hide.
+//
+// The namespace is its own: wlrRefreshTotal is a package-level collector
+// other tests count from zero.
+func TestCollectComputeItemsSkipsDepartedIdentityWithoutSnapshot(t *testing.T) {
+	const ns = "nosnapshot"
+	bare := &sustainv1alpha1.WorkloadRecommendation{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      wlrcache.Name("Pod", "dag-task"),
+			Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: "pol"},
+		},
+		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
+			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Pod", Namespace: ns, Name: "dag-task"},
+			Policy:      "pol",
+		},
 	}
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
-		WithObjects(mk("Job", "nightly"), mk("Pod", "dag-task"), mk("Deployment", "api")).Build()
+		WithObjects(bare).Build()
 	r := &PolicyReconciler{Client: c}
-	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "pol"}}
+	before := testutil.ToFloat64(wlrRefreshTotal.WithLabelValues(ns, "Pod", WLRRefreshNoSnapshot))
 
-	items, err := r.collectComputeItems(context.Background(), policy, targetIndex{})
+	items, err := r.collectComputeItems(context.Background(), &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "pol"}}, targetIndex{})
 	if err != nil {
 		t.Fatalf("collectComputeItems: %v", err)
 	}
-
-	var cands []promclient.ShardCandidate
-	for i := range items {
-		containers := containersFromObserved(items[i].WLR.Status.ObservedResources, false)
-		if len(containers) == 0 {
-			continue
-		}
-		cands = append(cands, promclient.ShardCandidate{Identity: items[i].Identity, Containers: len(containers)})
+	if len(items) != 0 {
+		t.Errorf("got %d items, want none: a departed identity without a snapshot cannot be computed", len(items))
 	}
-
-	kinds := map[string]bool{}
-	for _, c := range cands {
-		kinds[c.Identity.OwnerKind] = true
-	}
-	for _, want := range []string{"Job", "Pod", "Deployment"} {
-		if !kinds[want] {
-			t.Errorf("%s missing after collectComputeItems + containersFromObserved: "+
-				"every kind's WLR must surface a non-empty container snapshot here regardless of kind "+
-				"(this does not, by itself, prove Reconcile's own candidate loop batches it -- see "+
-				"TestReconcileBatchesJobAndPodIdentities for that)", want)
-		}
+	if after := testutil.ToFloat64(wlrRefreshTotal.WithLabelValues(ns, "Pod", WLRRefreshNoSnapshot)); after-before != 1 {
+		t.Errorf("no-snapshot refresh delta = %v, want 1", after-before)
 	}
 }
 
@@ -211,8 +191,8 @@ func TestContainersFromObservedRespectsExcludeInit(t *testing.T) {
 // never applied to drifts forever while looking healthy, neither skipped nor
 // failed nor logged.
 //
-// The query-count bound is the other half: fanning out over members must reuse
-// the identity's already-batched inputs, not re-query per member.
+// The fetch-count bound is the other half: fanning out over members must reuse
+// the identity's inputs, not re-fetch per member.
 func TestReconcileAppliesToEveryMemberOfAnOwnerNameGroup(t *testing.T) {
 	const ns = "grouped"
 	ongoing := sustainv1alpha1.UpdateModeOngoing
@@ -253,27 +233,8 @@ func TestReconcileAppliesToEveryMemberOfAnOwnerNameGroup(t *testing.T) {
 		}
 	}
 
-	var requestCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		requestCount.Add(1)
-		_ = req.ParseForm()
-		q := req.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		// The sharded batch attributes samples back to an identity via the
-		// namespace/owner_kind/owner_name labels, so a bare {container} metric
-		// would silently resolve to no inputs at all.
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"grouped","owner_kind":"Deployment","owner_name":"api","container":"app"},"value":[0,"0.1"]}]}}`))
-		case strings.Contains(q, "workload_max_pod_memory"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"grouped","owner_kind":"Deployment","owner_name":"api","container":"app"},"value":[0,"67108864"]}]}}`))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
-	defer server.Close()
-
-	r := reconcilerWithProm(t, server, true /* in-place */, policy,
+	inputs := usageFor(ns, "Deployment", "api")
+	r := reconcilerWithInputs(t, inputs, true /* in-place */, policy,
 		dep("api-blue"), dep("api-green"), pod("blue-pod", "api-blue"), pod("green-pod", "api-green"))
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
@@ -301,28 +262,17 @@ func TestReconcileAppliesToEveryMemberOfAnOwnerNameGroup(t *testing.T) {
 		t.Errorf("WLR name = %q, want %q", list.Items[0].Name, want)
 	}
 
-	// One CPU + one memory + one OOM shard query for the single identity.
-	// Doubling would mean the fan-out re-queried Prometheus per member.
-	if got := requestCount.Load(); got > 3 {
-		t.Errorf("%d Prometheus requests, want <= 3: group members must share one computation", got)
+	// The group is one identity, fetched once. A second request would mean the
+	// fan-out re-fetched per member.
+	if calls := inputs.Calls(); len(calls) != 1 || len(calls[0]) != 1 {
+		t.Errorf("fetch calls = %v, want one call requesting the one identity: group members must share one computation", calls)
 	}
 }
 
-// A departed identity reaching refreshDepartedRecommendation with nil inputs
-// must fall back to the per-workload fetch rather than treat nil as "no data".
-// A departed bare pod is the most common shape here, so a nil that silently
-// produced nothing would re-freeze exactly the recommendations this refresh
-// exists to update.
-func TestDepartedRefreshWithNilInputsFetchesPerWorkload(t *testing.T) {
-	const ns = "airflow"
-	server := promServerForReconcile(t)
-	defer server.Close()
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-
-	wlr := &sustainv1alpha1.WorkloadRecommendation{
+// departedWLR is the WorkloadRecommendation of a bare-pod identity whose pods
+// are all gone, known for two days, with a snapshot of container "app".
+func departedWLR(ns string) *sustainv1alpha1.WorkloadRecommendation {
+	return &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns, Name: wlrcache.Name("Pod", "dag-task"),
 			Labels:            map[string]string{sustainv1alpha1.WLRPolicyLabel: "pol"},
@@ -337,34 +287,23 @@ func TestDepartedRefreshWithNilInputsFetchesPerWorkload(t *testing.T) {
 			ObservedResources: map[string]sustainv1alpha1.ObservedContainerResources{"app": {}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
-		WithObjects(wlr).Build()
-	r := &PolicyReconciler{Client: c, PrometheusClient: pc}
+}
 
-	it := computeItem{
-		WLR:      wlr,
-		Observed: identityObserved(wlr, nil),
-		Identity: promclient.WorkloadIdentity{Namespace: ns, OwnerKind: "Pod", OwnerName: "dag-task"},
-	}
-	// nil inputs: simulating a nil the batch never covered.
-	if err := r.refreshDepartedRecommendation(
-		context.Background(), policyForReconcileWorkload(t, "pol"), it, nil, nil); err != nil {
-		t.Fatalf("refreshDepartedRecommendation: %v", err)
-	}
+// A departed identity is still recomputed every cycle, from its stored
+// snapshot, so a recurring bare-pod identity's recommendation keeps up with
+// its runs between them.
+func TestReconcile_RefreshesDepartedIdentity(t *testing.T) {
+	const ns = "airflow-refresh"
+	policy := policyForReconcileWorkload(t, "pol")
+	policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
+	r := reconcilerWithInputs(t, usageFor(ns, "Pod", "dag-task"), false, policy, departedWLR(ns))
+	r.RecommendationRetention = 24 * time.Hour
 
-	var got sustainv1alpha1.WorkloadRecommendation
-	key := types.NamespacedName{Namespace: ns, Name: wlrcache.Name("Pod", "dag-task")}
-	if err := c.Get(context.Background(), key, &got); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if len(got.Status.Containers) != 1 {
-		t.Fatalf("containers = %d, want 1: a nil inputs must trigger the per-workload fetch, not be read as no data", len(got.Status.Containers))
-	}
-	// Fresh samples prove the identity ran again, so the successful write
-	// clears Departed. Only the empty-result path preserves it.
-	if got.Status.Departed {
-		t.Error("Departed must be cleared by a successful write")
+	reconcileOnce(t, r, "pol")
+
+	got := getWLRFor(t, r, ns, "Pod", "dag-task")
+	if rec := got.Status.Containers["app"]; rec.CPURequest == nil || rec.CPURequest.String() != "100m" {
+		t.Errorf("departed identity's recommendation = %+v, want it recomputed to 100m", got.Status.Containers)
 	}
 }
 
@@ -373,57 +312,23 @@ func TestDepartedRefreshWithNilInputsFetchesPerWorkload(t *testing.T) {
 // window still holds the recommendation. Writing anything on that path — even
 // just ObservedAt — would either wipe the retained last-known-good or tell the
 // webhook that data still exists behind it.
-//
-// The namespace is deliberately not "ns": that series is counted from zero by
-// TestEmitWLRRefreshRecordsOutcome, and wlrRefreshTotal is a package-level
-// collector the two tests would otherwise collide on under -shuffle=on.
-func TestDepartedRefreshNeverWipesGoodRecommendation(t *testing.T) {
+func TestReconcile_DepartedRefreshNeverWipesGoodRecommendation(t *testing.T) {
 	const ns = "airflow"
 	q := resource.MustParse("250m")
 	old := metav1.NewTime(time.Now().Add(-90 * time.Minute).Truncate(time.Second))
-	wlr := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ns, Name: wlrcache.Name("Pod", "dag-task"),
-			Labels:            map[string]string{sustainv1alpha1.WLRPolicyLabel: "pol"},
-			CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour)),
-		},
-		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
-			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Pod", Namespace: ns, Name: "dag-task"},
-			Policy:      "pol",
-		},
-		Status: sustainv1alpha1.WorkloadRecommendationStatus{
-			Departed:          true,
-			ObservedAt:        old,
-			Source:            sustainv1alpha1.RecommendationSourcePrometheus,
-			Containers:        map[string]sustainv1alpha1.ContainerRecommendation{"worker": {CPURequest: &q}},
-			ObservedResources: map[string]sustainv1alpha1.ObservedContainerResources{"worker": {}},
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
-		WithObjects(wlr).Build()
-	r := &PolicyReconciler{Client: c}
-
-	// Prometheus returns nothing: the identity's samples aged out of the window.
-	empty := &recommender.WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{},
-		MemPerPod: promclient.ContainerValues{},
-	}
-	it := computeItem{
-		WLR:      wlr,
-		Observed: identityObserved(wlr, nil),
-		Identity: promclient.WorkloadIdentity{Namespace: ns, OwnerKind: "Pod", OwnerName: "dag-task"},
-	}
+	wlr := departedWLR(ns)
+	wlr.Status.ObservedAt = old
+	wlr.Status.Source = sustainv1alpha1.RecommendationSourcePrometheus
+	wlr.Status.Containers = map[string]sustainv1alpha1.ContainerRecommendation{"app": {CPURequest: &q}}
 	policy := policyForReconcileWorkload(t, "pol")
-	if err := r.refreshDepartedRecommendation(context.Background(), policy, it, empty, nil); err != nil {
-		t.Fatalf("refreshDepartedRecommendation: %v", err)
-	}
+	policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
+	// Prometheus returns nothing: the identity's samples aged out of the window.
+	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), false, policy, wlr)
+	r.RecommendationRetention = 24 * time.Hour
 
-	var got sustainv1alpha1.WorkloadRecommendation
-	key := types.NamespacedName{Namespace: ns, Name: wlrcache.Name("Pod", "dag-task")}
-	if err := c.Get(context.Background(), key, &got); err != nil {
-		t.Fatalf("get: %v", err)
-	}
+	reconcileOnce(t, r, "pol")
+
+	got := getWLRFor(t, r, ns, "Pod", "dag-task")
 	if len(got.Status.Containers) != 1 {
 		t.Fatal("retained recommendation was wiped when its data aged out")
 	}
@@ -454,27 +359,8 @@ func TestReconcile_ComputesIdentityMissingFromLaggingWLRList(t *testing.T) {
 	// this test: the object's own age is the signal, and it is well past it.
 	dep.CreationTimestamp = metav1.NewTime(time.Now().Add(-24 * time.Hour))
 
-	// The sharded batch attributes samples back to an identity via the
-	// namespace/owner_kind/owner_name labels, so promServerForReconcile's bare
-	// {container} metric would resolve to no inputs at all.
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		_ = req.ParseForm()
-		q := req.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		const labels = `"namespace":"default","owner_kind":"Deployment","owner_name":"web","container":"app"`
-		switch {
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{` + labels + `},"value":[0,"0.1"]}]}}`))
-		case strings.Contains(q, "workload_max_pod_memory"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{` + labels + `},"value":[0,"67108864"]}]}}`))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
-	defer server.Close()
-
 	var wlrLists atomic.Int32
-	r := reconcilerWithLaggingWLRList(t, server, &wlrLists, policy, dep)
+	r := reconcilerWithLaggingWLRList(t, usageFor("default", "Deployment", "web"), &wlrLists, policy, dep)
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -540,29 +426,12 @@ func TestGroupedIdentityStopsWritingStatusAfterTheFirstCycle(t *testing.T) {
 	blue := dep("api-blue", withCPU("main", "100m"))
 	green := dep("api-green", withCPU("main", "250m"), corev1.Container{Name: "sidecar"})
 
-	sample := func(container, value string) string {
-		return `{"metric":{"namespace":"` + ns + `","owner_kind":"Deployment","owner_name":"api","container":"` +
-			container + `"},"value":[0,"` + value + `"]}`
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		_ = req.ParseForm()
-		q := req.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[` +
-				sample("main", "0.1") + `,` + sample("sidecar", "0.05") + `]}}`))
-		case strings.Contains(q, "workload_max_pod_memory"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[` +
-				sample("main", "67108864") + `,` + sample("sidecar", "33554432") + `]}}`))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
-	defer server.Close()
-
+	inputs := recommendertest.NewStaticInputs().Set(identityOf(ns, "Deployment", "api"), &recommender.WorkloadInputs{
+		CPUPerPod: promclient.ContainerValues{"main": 0.1, "sidecar": 0.05},
+		MemPerPod: promclient.ContainerValues{"main": 64 << 20, "sidecar": 32 << 20},
+	})
 	var statusWrites atomic.Int32
-	r := reconcilerCountingWLRStatusWrites(t, server, &statusWrites, policy, blue, green)
+	r := reconcilerCountingWLRStatusWrites(t, inputs, &statusWrites, policy, blue, green)
 
 	key := types.NamespacedName{Namespace: ns, Name: wlrcache.Name("Deployment", "api")}
 	cycle := func(n int) (sustainv1alpha1.WorkloadRecommendationStatus, int32) {
@@ -630,52 +499,23 @@ func TestRecsForTargetDropsContainersTheMemberDoesNotRun(t *testing.T) {
 	}
 }
 
-// A LIVE identity whose Prometheus queries come back empty must be recorded as
-// nodata, exactly as the departed path records it.
+// A LIVE identity whose fetch comes back empty must be recorded as nodata,
+// exactly as the departed path records it.
 //
 // The cost of leaving it unmarked is downstream: a zero status.observedAt reads
 // to the webhook as "no recommendation exists yet", which it answers with a stub
 // Create/Get per identity per dedup window for an object discovery had already
 // created — and it keeps the nodata bucket permanently empty.
-func TestComputeIdentity_MarksNoDataForLiveIdentityWithoutSamples(t *testing.T) {
+func TestReconcile_MarksNoDataForLiveIdentityWithoutSamples(t *testing.T) {
 	const ns = "nodata"
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	p95 := int32(95)
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p"},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-					CPU:    sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-					Memory: sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-				},
-				Update: sustainv1alpha1.UpdateSpec{Types: sustainv1alpha1.UpdateTypes{Deployment: &ongoing}},
-			},
-		},
-	}
-
 	dep := annotatedDeployment(ns, "api", "p")
 	dep.CreationTimestamp = metav1.NewTime(time.Now().Add(-48 * time.Hour)) // past MinWorkloadAge
-	dep.Spec.Template.Spec.Containers[0].Resources = corev1.ResourceRequirements{
-		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")},
-	}
-
-	// Prometheus knows nothing about this identity.
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-	}))
-	defer server.Close()
-
-	r := reconcilerWithProm(t, server, true, policy, dep)
+	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), true, ongoingDeployments("p"), dep)
 
 	// Two passes: discovery creates the WLR on the first, computation sees it
 	// on the second.
-	for i := range 2 {
-		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
-			t.Fatalf("Reconcile %d: %v", i, err)
-		}
-	}
+	reconcileOnce(t, r, "p")
+	reconcileOnce(t, r, "p")
 
 	got := getWLRFor(t, r, ns, "Deployment", "api")
 	if got.Status.ObservedAt.IsZero() {

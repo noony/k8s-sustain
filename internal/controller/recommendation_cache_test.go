@@ -540,8 +540,7 @@ func TestReconcile_PolicyDeletion_RemovesItsRecommendations(t *testing.T) {
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{Policy: "other"},
 	}
 
-	r, server := reconcilerForPolicy(t, policy, mine, other)
-	defer server.Close()
+	r := reconcilerForPolicy(t, policy, mine, other)
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -849,10 +848,8 @@ func TestSweep_DeletesWLRForOptedOutWorkloadStillRunning(t *testing.T) {
 	// Prometheus still serves samples for the identity — the workload is up.
 	// This is what refreshed ObservedAt and made the grace period
 	// self-satisfying.
-	server := promServerFor(ns, "Deployment", "api")
-	defer server.Close()
 
-	r := reconcilerWithProm(t, server, true, policy, dep, wlr)
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "api"), true, policy, dep, wlr)
 	r.RecommendationRetention = 0
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
@@ -1036,9 +1033,8 @@ func TestReconcile_PolicyDeletion_ConflictKeepsFinalizer(t *testing.T) {
 			DeletionTimestamp: &now,
 		},
 	}
-	r, server := reconcilerForPolicy(t, policy,
+	r := reconcilerForPolicy(t, policy,
 		wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour)))
-	defer server.Close()
 	r.Client = &conflictingWLRDeleteClient{Client: r.Client}
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err == nil {

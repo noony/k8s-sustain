@@ -40,8 +40,8 @@ type targetIndex map[promclient.WorkloadIdentity][]*workloadTarget
 // policy reporting success forever while doing nothing. The failure costs only
 // the cache write — collectComputeItems reconciles the WLR List against this
 // index, so the identity is still computed and applied this cycle. The retry
-// lands on the next reconcile's EnsureExists; computeIdentity's follow-up
-// Upsert cannot reliably repair it.
+// lands on the next reconcile's EnsureExists; persist's follow-up Upsert
+// cannot reliably repair it.
 func (r *PolicyReconciler) discover(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,

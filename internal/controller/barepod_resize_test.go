@@ -248,13 +248,10 @@ func TestResizeBarePods_DoesNotReListTheNamespace(t *testing.T) {
 }
 
 func TestReconcileWorkload_BarePodOngoing_ResizesRunningPod(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-
 	pod := barePod("airflow", "etl-run-1", "etl-daily")
-	pod.Spec.Containers[0].Name = "app" // the mock Prometheus reports on "app"
+	pod.Spec.Containers[0].Name = "app" // appUsage reports on "app"
 
-	r := reconcilerWithProm(t, server, true /* in-place */)
+	r := reconcilerWithInputs(t, usageFor("airflow", "Pod", "etl-daily"), true /* in-place */)
 	rec := newResizeRecorderClient(t, r, pod)
 
 	target := barePodTarget("airflow", "etl-daily", pod)
@@ -275,13 +272,10 @@ func TestReconcileWorkload_BarePodOngoing_ResizesRunningPod(t *testing.T) {
 // The OnCreate early return sits above the bare-pod branch, so an OnCreate
 // identity is computed and cached but never resized.
 func TestReconcileWorkload_BarePodOnCreate_NeverResizes(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-
 	pod := barePod("airflow", "etl-run-1", "etl-daily")
 	pod.Spec.Containers[0].Name = "app"
 
-	r := reconcilerWithProm(t, server, true /* in-place */)
+	r := reconcilerWithInputs(t, usageFor("airflow", "Pod", "etl-daily"), true /* in-place */)
 	rec := newResizeRecorderClient(t, r, pod)
 
 	target := barePodTarget("airflow", "etl-daily", pod)

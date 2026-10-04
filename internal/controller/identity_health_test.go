@@ -2,10 +2,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +20,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
 var identityHealthMetrics = []string{
@@ -36,30 +33,14 @@ var identityHealthMetrics = []string{
 	"k8s_sustain_recycle_suppressed_total",
 }
 
-// promServerForIdentities serves CPU and memory samples for each identity, so
-// one sharded batch resolves all of them.
-func promServerForIdentities(ids ...promclient.WorkloadIdentity) *httptest.Server {
-	series := func(value string) string {
-		parts := make([]string, 0, len(ids))
-		for _, id := range ids {
-			parts = append(parts, fmt.Sprintf(`{"metric":{"namespace":%q,"owner_kind":%q,"owner_name":%q,"container":"app"},"value":[0,%q]}`,
-				id.Namespace, id.OwnerKind, id.OwnerName, value))
-		}
-		return `{"status":"success","data":{"resultType":"vector","result":[` + strings.Join(parts, ",") + `]}}`
+// usageForIdentities serves appUsage for each identity, so one batch fetch
+// resolves all of them.
+func usageForIdentities(ids ...promclient.WorkloadIdentity) *recommendertest.StaticInputs {
+	in := recommendertest.NewStaticInputs()
+	for _, id := range ids {
+		in.Set(id, appUsage())
 	}
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		_ = req.ParseForm()
-		q := req.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			_, _ = w.Write([]byte(series("0.1")))
-		case strings.Contains(q, "workload_max_pod_memory"):
-			_, _ = w.Write([]byte(series("67108864")))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
+	return in
 }
 
 func groupedDeployment(ns, name, ownerName, policy string) *appsv1.Deployment {
@@ -69,7 +50,7 @@ func groupedDeployment(ns, name, ownerName, policy string) *appsv1.Deployment {
 	return d
 }
 
-func runningPod(ns, name string, labels, annotations map[string]string) *corev1.Pod {
+func identityPod(ns, name string, labels, annotations map[string]string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns, Name: name, Labels: labels, Annotations: annotations,
@@ -149,16 +130,14 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	}
 	objs := []runtime.Object{
 		policy, blue, green, hpa,
-		runningPod(ns, "api-blue-1", map[string]string{"app": "api-blue"}, nil),
-		runningPod(ns, "api-blue-2", map[string]string{"app": "api-blue"}, nil),
-		runningPod(ns, "api-green-1", map[string]string{"app": "api-green"}, nil),
-		runningPod(ns, "etl-run-1", nil, etlAnnotations),
-		runningPod(ns, "etl-run-2", nil, etlAnnotations),
+		identityPod(ns, "api-blue-1", map[string]string{"app": "api-blue"}, nil),
+		identityPod(ns, "api-blue-2", map[string]string{"app": "api-blue"}, nil),
+		identityPod(ns, "api-green-1", map[string]string{"app": "api-green"}, nil),
+		identityPod(ns, "etl-run-1", nil, etlAnnotations),
+		identityPod(ns, "etl-run-2", nil, etlAnnotations),
 	}
 
-	server := promServerForIdentities(api, etl)
-	defer server.Close()
-	r := reconcilerWithProm(t, server, false, objs...)
+	r := reconcilerWithInputs(t, usageForIdentities(api, etl), false, objs...)
 
 	reconcilePolicy(t, r, policyName)
 
@@ -253,13 +232,11 @@ func TestReconcile_PolicyDeletionRemovesIdentityHealth(t *testing.T) {
 	const ns, name, policyName = "health-deleted", "web", "health-deleted"
 	dep := annotatedDeployment(ns, name, policyName)
 	dep.CreationTimestamp = metav1.NewTime(time.Now().Add(-24 * time.Hour))
-	server := promServerFor(ns, "Deployment", name)
-	defer server.Close()
 	ongoing := sustainv1alpha1.UpdateModeOngoing
 	policy := policyForReconcileWorkload(t, policyName)
 	policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
 	policy.Spec.RightSizing.Update.Types = sustainv1alpha1.UpdateTypes{Deployment: &ongoing}
-	r := reconcilerWithProm(t, server, false, policy, dep)
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", name), false, policy, dep)
 
 	reconcilePolicy(t, r, policyName)
 	if got := len(seriesForWorkload(t, "k8s_sustain_workload_pods", ns, "Deployment", name)); got != 1 {
@@ -282,9 +259,7 @@ func TestReconcile_PolicyDeletionRemovesIdentityHealth(t *testing.T) {
 }
 
 func TestReconcileWorkload_RecycleSuppressedCountsUnderIdentity(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-	r := reconcilerWithProm(t, server, true, runningPod("default", "web-blue-pod", map[string]string{"app": "web-blue"}, nil))
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, identityPod("default", "web-blue-pod", map[string]string{"app": "web-blue"}, nil))
 	tgt := deploymentTarget("default", "web-blue")
 	tgt.IdentityName = "web"
 	policy := policyForReconcileWorkload(t, "p")
