@@ -17,6 +17,7 @@ import (
 	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
 	"github.com/noony/k8s-sustain/internal/logging"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/version"
 )
 
@@ -63,9 +64,12 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 	}
 
 	srv := &dashboard.Server{
-		K8sClient:          k8sClient,
-		PromClient:         promClient,
-		Health:             dashboard.NewPrometheusHealthSignals(promClient),
+		K8sClient:  k8sClient,
+		PromClient: promClient,
+		Health:     dashboard.NewPrometheusHealthSignals(promClient),
+		// The dashboard has no shard-budget flag of its own; the controller's
+		// default keeps a batch simulate within Prometheus's sample limit.
+		Inputs:             recommender.NewPromInputs(promClient, config.DefaultQueryShardMaxSamples),
 		Logger:             log,
 		CORSOrigins:        cfg.CORSAllowedOrigins,
 		ExcludedNamespaces: cfg.ExcludedNamespaces,

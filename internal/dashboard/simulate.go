@@ -153,8 +153,13 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, spec simulationSpec
 	}
 
 	containers, _ := workload.MergeContainersForRecommendation(entry.Containers(), entry.InitContainers(), spec.excludeInit)
+	id := spec.identity()
+	fetched := s.Inputs.FetchInputs(ctx, spec.resources, []recommender.InputsRequest{{Identity: id, Containers: len(containers)}})[id]
+	if fetched.Err != nil {
+		return nil, fetched.Err
+	}
 	autoInfo := s.autoscalerInfo(ctx, autoscaler.NewNamespacedSnapshot(s.K8sClient), spec)
-	res, err := s.computeWorkloadRecs(ctx, spec, containers, entry.CreationTimestamp, autoInfo)
+	res, err := computeWorkloadRecs(ctx, spec, containers, entry.CreationTimestamp, autoInfo, fetched.Inputs)
 	if err != nil {
 		return nil, err
 	}
@@ -192,14 +197,15 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, spec simulationSpec
 }
 
 // computeWorkloadRecs runs the shared recommendation algorithm for one
-// workload under spec.
-func (s *Server) computeWorkloadRecs(ctx context.Context, spec simulationSpec, containers []corev1.Container, created time.Time, autoInfo autoscaler.Info) (recommender.Result, error) {
-	return recommender.Compute(ctx, s.PromClient, recommender.Request{
+// workload under spec, on inputs already fetched.
+func computeWorkloadRecs(ctx context.Context, spec simulationSpec, containers []corev1.Container, created time.Time, autoInfo autoscaler.Info, inputs *recommender.WorkloadInputs) (recommender.Result, error) {
+	return recommender.Compute(ctx, nil, recommender.Request{
 		Identity:        spec.identity(),
 		Containers:      containers,
 		Resources:       spec.resources,
 		Coordination:    spec.coordination,
 		AutoInfo:        autoInfo,
+		Inputs:          inputs,
 		WorkloadCreated: created,
 	})
 }

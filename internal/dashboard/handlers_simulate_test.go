@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
 // TestHandleSimulate_RejectsNonPost verifies the handler rejects GET/PUT/etc.
@@ -93,6 +95,7 @@ func TestHandleSimulate_AcceptsJob(t *testing.T) {
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
+		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
 	}
 	body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Job", OwnerName: "oneshot"})
@@ -111,6 +114,7 @@ func TestHandleSimulate_AcceptsRollout(t *testing.T) {
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
+		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
 	}
 	body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Rollout", OwnerName: "web"})
@@ -131,6 +135,7 @@ func TestHandleSimulate_AcceptsPod(t *testing.T) {
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
+		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
 	}
 	body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Pod", OwnerName: "etl-daily"})
@@ -267,6 +272,7 @@ func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
 		srv := &Server{
 			K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 			PromClient: &fakePromClient{},
+			Inputs:     recommendertest.NewStaticInputs(),
 			Logger:     testLogger(t),
 		}
 		body := mustJSON(t, simulateRequest{
