@@ -19,7 +19,7 @@
 #
 #   # query it by the renamed identity, not by "stress"
 #   kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090 &
-#   curl -s localhost:8090/api/workloads/scenario-custom-name/Deployment/renamed-app/recommendations
+#   curl -s localhost:8090/api/workloads/scenario-custom-name/Deployment/renamed-app
 
 apiVersion: v1
 kind: Namespace

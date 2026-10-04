@@ -42,9 +42,9 @@
 #
 #   09:36:41Z  pod admitted on the template's 500m / 256Mi (memory limit
 #              256Mi). The webhook mirrors k8s.sustain.io/owner-name to a pod
-#              label and creates "pod-etl-daily" with an empty status —
-#              status.source is "" (not "nodata"): the identity is live, just
-#              dataless.
+#              label and creates "pod-etl-daily" with an empty status;
+#              the controller's first pass then records status.outcome
+#              TooYoung: the identity is live, just dataless.
 #   ..09:46:41Z  MinWorkloadAge holds for the full 10 minutes. Every cycle
 #              logs `skipping recommendation: workload too young` with
 #              kind=Pod, and recommendation_skipped_total{
@@ -82,7 +82,7 @@
 #   # the WorkloadRecommendation exists and reflects actual usage
 #   kubectl get workloadrecommendation -n scenario-bare-pod
 #   kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090 &
-#   curl -s localhost:8090/api/workloads/scenario-bare-pod/Pod/etl-daily/recommendations
+#   curl -s localhost:8090/api/workloads/scenario-bare-pod/Pod/etl-daily
 
 apiVersion: v1
 kind: Namespace

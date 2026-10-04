@@ -180,9 +180,10 @@
 #      (10m), so a perfectly stable recommendation advances it slowly while
 #      the counter keeps climbing — the counter is the sharper signal.
 #
-#   3. status.source stays "nodata" (no Containers) until the MinWorkloadAge
-#      gate clears — 10 minutes, gating on the EARLIER of a pod's own creation
-#      time and the identity's first-seen time (the WLR's creation timestamp).
+#   3. status.outcome stays TooYoung (no Containers) until the MinWorkloadAge
+#      gate clears — 10 minutes, gating on the EARLIER of the identity's
+#      earliest pod's creation time and its first-seen time (the WLR's
+#      creation timestamp).
 #      For a recurring identity the identity age is what matters, not any
 #      individual 30s pod's age: the gate clears ~10 minutes after the FIRST
 #      run ever creates "pod-etl-recurring". Before that,

@@ -2,8 +2,9 @@
 # Print a compact table of current vs. recommended resource requests for every
 # active scenario. Sources:
 #   - current requests:   the scenario's pods (targets_for picks the selector)
-#   - recommendations:    GET /api/workloads/<ns>/<kind>/<identity>/recommendations
-#                         on the k8s-sustain dashboard service (via kubectl proxy)
+#   - recommendations:    the stored Recommendation in
+#                         GET /api/workloads/<ns>/<kind>/<identity> on the
+#                         k8s-sustain dashboard service (via kubectl proxy)
 #   - recycled:           heuristic — the pod's CPU request differs from the
 #                         value baked into hack/scenarios/<name>.yaml.
 # Every scenario in Makefile.scenarios must be listed in SCENARIOS below.
@@ -65,7 +66,7 @@ for name in "${SCENARIOS[@]}"; do
   orig=$(grep -A2 'requests:' "$(dirname "$0")/${name}.yaml" | awk '/cpu:/ {print $2; exit}')
 
   while read -r wlkind wlname selector mode; do
-    rec_json=$(curl -fsS "${BASE}/api/workloads/${ns}/${wlkind}/${wlname}/recommendations" 2>/dev/null || echo '{}')
+    rec_json=$(curl -fsS "${BASE}/api/workloads/${ns}/${wlkind}/${wlname}" 2>/dev/null || echo '{}')
     cpu_rec=$(echo "${rec_json}" | grep -o '"cpuRequest":"[^"]*"' | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
     mem_rec=$(echo "${rec_json}" | grep -o '"memoryRequest":"[^"]*"' | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
     cpu_rec=${cpu_rec:-?}
