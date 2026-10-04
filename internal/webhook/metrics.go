@@ -8,7 +8,7 @@ import (
 
 // Recommendation-source label values for RecommendationSourceTotal. Kept as
 // named constants (rather than inline string literals at each call site) so
-// the four outcomes can't silently drift apart between admit() and any test
+// the outcomes can't silently drift apart between admit() and any test
 // or dashboard query that references them.
 const (
 	// RecSourceHit means a fresh, usable WorkloadRecommendation was read for
@@ -39,14 +39,21 @@ const (
 	RecSourceError = "error"
 	// RecSourceRetained means the injection came from an object the controller
 	// is deliberately keeping for a departed identity — a completed Job, a
-	// bare-pod group between runs. A success like "hit", but counted separately
-	// because the data is last-known-good rather than fresh: ObservedAt is
-	// frozen, so its age is bounded by --recommendation-retention (168h) rather
-	// than by the staleness budget, and past that window the read reports
-	// "stale". Steady traffic here is the healthy shape for recurring ephemeral
-	// workloads; an identity whose gap between runs exceeds the retention window
-	// is reaped in between and moves to "missing".
+	// bare-pod group between runs — or freezing for a Conflicted one. A success
+	// like "hit", but counted separately because the data is last-known-good
+	// rather than fresh: ObservedAt is frozen, so its age is bounded by
+	// --recommendation-retention (168h) rather than by the staleness budget,
+	// and past that window the read reports "stale". Steady traffic here is the
+	// healthy shape for recurring ephemeral workloads; an identity whose gap
+	// between runs exceeds the retention window is reaped in between and moves
+	// to "missing".
 	RecSourceRetained = "retained"
+	// RecSourceOtherPolicy means the WorkloadRecommendation was produced under a
+	// Policy other than the one the pod opts into, so nothing is injected: the
+	// pod belongs to the losing side of a Conflicted identity, or its identity
+	// is moving between Policies and the new one has not adopted it yet. No
+	// stub is created; the object exists.
+	RecSourceOtherPolicy = "other-policy"
 )
 
 // Panic label values for PanicTotal that are not HTTP routes. The singleflight
@@ -81,7 +88,7 @@ var (
 
 	RecommendationSourceTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_webhook_recommendation_source_total",
-		Help: "Outcome of each admission's WorkloadRecommendation read, by source: hit, retained, stale, missing, nodata, error.",
+		Help: "Outcome of each admission's WorkloadRecommendation read, by source: hit, retained, stale, missing, nodata, other-policy, error.",
 	}, []string{"source"})
 )
 

@@ -125,6 +125,7 @@ func TestAdmitDoesNotRequestRecommendationWhenWLRStale(t *testing.T) {
 	stale := freshWLR("Deployment", "prod", "api", map[string]sustainv1alpha1.ContainerRecommendation{
 		"app": wlrRec("100m", "128Mi"),
 	})
+	stale.Spec.Policy = "p1"
 	stale.Status.ObservedAt = metav1.NewTime(time.Now().Add(-24 * time.Hour))
 
 	env := newAdmitEnv(t,
@@ -160,6 +161,7 @@ func TestAdmitDoesNotRequestRecommendationWhenWLRStale(t *testing.T) {
 // exactly the high-churn identities that stay nodata longest.
 func TestAdmitDoesNotRequestRecommendationWhenNoData(t *testing.T) {
 	nodata := freshWLR("Deployment", "prod", "api", nil)
+	nodata.Spec.Policy = "p1"
 	nodata.Status.Outcome = sustainv1alpha1.OutcomeNoData
 
 	env := newAdmitEnv(t,

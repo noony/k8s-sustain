@@ -399,9 +399,15 @@ func wlrRec(cpu, mem string) sustainv1alpha1.ContainerRecommendation {
 
 // freshWLR builds a WorkloadRecommendation for (kind, ns, name) with a fresh
 // ObservedAt, keyed exactly as the controller writes and the webhook reads it.
+// freshWLR is a just-written WorkloadRecommendation produced under policy "p",
+// the Policy the admission tests' pods opt into.
 func freshWLR(kind, ns, name string, containers map[string]sustainv1alpha1.ContainerRecommendation) *sustainv1alpha1.WorkloadRecommendation {
 	return &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: wlrcache.Name(kind, name)},
+		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
+			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: kind, Namespace: ns, Name: name},
+			Policy:      "p",
+		},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			ObservedAt: metav1.Now(),
 			Containers: containers,
@@ -1230,5 +1236,37 @@ func TestAdmit_PodTemplateAnnotated_ConcurrentAdmissionsCollapseToOneReplicaSetG
 		if !a {
 			t.Errorf("admission %d not allowed", i)
 		}
+	}
+}
+
+// A pod whose Policy is not the one the WorkloadRecommendation was produced
+// under gets nothing injected (ADR 0002): those numbers were computed for the
+// other Policy, as for the losing side of a Conflicted identity.
+func TestAdmit_PodOfAnotherPolicyIsAdmittedUnmutated(t *testing.T) {
+	frozen := freshWLR("Deployment", "default", "my-app", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("500m", "512Mi"),
+	})
+	frozen.Status.Outcome = sustainv1alpha1.OutcomeConflicted
+	env := newAdmitEnv(t,
+		basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate),
+		basicPolicy("q", sustainv1alpha1.UpdateModeOnCreate),
+		deploymentReplicaSet("default", "my-app-rs", "my-app"),
+		frozen,
+	)
+
+	var resp *admissionv1.AdmissionResponse
+	delta := recSourceDelta(t, RecSourceOtherPolicy, func() {
+		resp = env.handler.admit(context.Background(), admissionRequestFor(t, podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "q")))
+	})
+	if !resp.Allowed || len(resp.Patch) != 0 {
+		t.Fatalf("a pod of another Policy must be admitted unmutated, got allowed=%v patch=%s", resp.Allowed, resp.Patch)
+	}
+	if delta != 1 {
+		t.Errorf("other-policy delta = %v, want 1", delta)
+	}
+
+	resp = env.handler.admit(context.Background(), admissionRequestFor(t, podWithRSOwner("default", "my-app-rs-abc", "my-app-rs", "p")))
+	if len(resp.Patch) == 0 {
+		t.Error("a pod of the WorkloadRecommendation's own Policy must keep receiving its frozen numbers")
 	}
 }

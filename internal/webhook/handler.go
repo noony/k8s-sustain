@@ -256,11 +256,16 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		staleness = DefaultCacheStaleness
 	}
 	cacheCtx, cacheCancel := context.WithTimeout(ctx, apiCallTimeout)
-	recs, departed, err := h.fetchRecommendations(cacheCtx, ownerKind, req.Namespace, ownerName, time.Now(), staleness)
+	recs, retained, err := h.fetchRecommendations(cacheCtx, ownerKind, req.Namespace, ownerName, policyName, time.Now(), staleness)
 	cacheCancel()
 	// RecommendationSourceTotal counts the read outcome, not whether a patch
 	// is eventually emitted.
 	if err != nil {
+		if errors.Is(err, ErrRecommendationOtherPolicy) {
+			RecommendationSourceTotal.WithLabelValues(RecSourceOtherPolicy).Inc()
+			logger.V(1).Info("WorkloadRecommendation belongs to another Policy; allowing pod with template resources")
+			return allowWithLabelPatch(labelPatch)
+		}
 		if errors.Is(err, ErrRecommendationStale) {
 			RecommendationSourceTotal.WithLabelValues(RecSourceStale).Inc()
 			logger.V(1).Info("WorkloadRecommendation is stale; allowing pod with template resources")
@@ -282,7 +287,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		logger.V(1).Info("no WorkloadRecommendation for workload; requested one, allowing pod with template resources")
 		return allowWithLabelPatch(labelPatch)
 	}
-	if departed {
+	if retained {
 		RecommendationSourceTotal.WithLabelValues(RecSourceRetained).Inc()
 	} else {
 		RecommendationSourceTotal.WithLabelValues(RecSourceHit).Inc()
