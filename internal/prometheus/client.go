@@ -31,10 +31,10 @@ func WorkloadSelector(namespace, ownerKind, ownerName string) string {
 	return fmt.Sprintf("{namespace=%q,owner_kind=%q,owner_name=%q}", namespace, ownerKind, ownerName)
 }
 
-// quantileOverTimeExpr reads the rule as a plain range vector, not a
-// `[window:1m]` subquery: the rules are already materialised at 1m, so a
-// subquery adds cost, not fidelity.
-func quantileOverTimeExpr(quantile float64, rule, selector, window string) string {
+// QuantileOverTime renders the quantile of rule over window for selector. It
+// reads the rule as a plain range vector, not a `[window:1m]` subquery: the
+// rules are already materialised at 1m, so a subquery adds cost, not fidelity.
+func QuantileOverTime(quantile float64, rule, selector, window string) string {
 	return fmt.Sprintf("quantile_over_time(%.2f, %s%s[%s])", quantile, rule, selector, window)
 }
 
@@ -299,7 +299,7 @@ func (c *Client) queryMaxByContainerForWorkload(ctx context.Context, ruleName, n
 // counterpart of QueryShardCPU: at each step, the per-container CPU quantile
 // (cores) of the busiest replica over the trailing recWindow.
 func (c *Client) QueryWorkloadCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodCPUCores, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
+	expr := QuantileOverTime(quantile, MetricWorkloadMaxPodCPUCores, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
@@ -307,7 +307,7 @@ func (c *Client) QueryWorkloadCPURecommendationRangeByContainer(ctx context.Cont
 // counterpart of QueryShardMemory: at each step, the per-container memory
 // quantile (bytes) of the busiest replica over the trailing recWindow.
 func (c *Client) QueryWorkloadMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodMemoryBytes, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
+	expr := QuantileOverTime(quantile, MetricWorkloadMaxPodMemoryBytes, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 

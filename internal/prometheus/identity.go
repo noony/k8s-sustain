@@ -27,6 +27,32 @@ func CompareIdentity(a, b WorkloadIdentity) int {
 	)
 }
 
+// shardSamples unpacks a shard query's vector. A shard spans many identities,
+// so a series missing any identity label, or the container label, is dropped
+// rather than attributed to a neighbouring identity, which would silently
+// corrupt that workload's recommendation.
+func shardSamples(vec model.Vector) []ShardSample {
+	out := make([]ShardSample, 0, len(vec))
+	for _, s := range vec {
+		id := WorkloadIdentity{
+			Namespace: string(s.Metric["namespace"]),
+			OwnerKind: string(s.Metric["owner_kind"]),
+			OwnerName: string(s.Metric["owner_name"]),
+		}
+		container := string(s.Metric["container"])
+		if id.Namespace == "" || id.OwnerKind == "" || id.OwnerName == "" || container == "" {
+			continue
+		}
+		out = append(out, ShardSample{
+			Identity:  id,
+			Container: container,
+			Metric:    string(s.Metric[model.MetricNameLabel]),
+			Value:     float64(s.Value),
+		})
+	}
+	return out
+}
+
 // IdentityValues maps a workload identity to its per-container values.
 type IdentityValues map[WorkloadIdentity]ContainerValues
 

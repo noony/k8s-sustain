@@ -192,6 +192,17 @@ func TestShardSelectorIsExactLiteralAlternation(t *testing.T) {
 	}
 }
 
+// Metric names are escaped like owner names, so a rule renamed to include an
+// RE2 metacharacter cannot widen what the selector matches.
+func TestShardMetricsSelectorEscapesMetricsAndNames(t *testing.T) {
+	s := Shard{Namespace: "prod", OwnerKind: "Deployment", Names: []string{"payments.worker", "api"}}
+	got := s.MetricsSelector("k8s_sustain:workload_oom_24h", "rule.v2")
+	want := `{__name__=~"k8s_sustain:workload_oom_24h|rule\\.v2",namespace="prod",owner_kind="Deployment",owner_name=~"payments\\.worker|api"}`
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}
+
 func TestWindowMinutesFloorsAtOne(t *testing.T) {
 	if got := WindowMinutes("7d"); got != 10080 {
 		t.Fatalf("7d: got %d want 10080", got)

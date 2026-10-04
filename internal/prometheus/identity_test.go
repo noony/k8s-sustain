@@ -53,6 +53,43 @@ func TestVectorToIdentityValuesDropsIncompleteSeries(t *testing.T) {
 	}
 }
 
+// One shard response carries many identities; each sample must keep its own,
+// even when only the namespace tells two apart, and keep its metric name.
+func TestShardSamplesKeepIdentityContainerAndMetric(t *testing.T) {
+	named := identitySample("prod", "Deployment", "api", "app", 2)
+	named.Metric[model.MetricNameLabel] = "k8s_sustain:workload_oom_24h"
+	vec := model.Vector{
+		named,
+		identitySample("staging", "Deployment", "api", "app", 0.1),
+	}
+
+	got := shardSamples(vec)
+
+	want := []ShardSample{
+		{Identity: WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "api"}, Container: "app", Metric: "k8s_sustain:workload_oom_24h", Value: 2},
+		{Identity: WorkloadIdentity{Namespace: "staging", OwnerKind: "Deployment", OwnerName: "api"}, Container: "app", Value: 0.1},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got  %+v\nwant %+v", got, want)
+	}
+}
+
+func TestShardSamplesDropIncompleteSeries(t *testing.T) {
+	vec := model.Vector{
+		identitySample("prod", "Deployment", "api", "", 1),
+		identitySample("", "Deployment", "api", "app", 1),
+		identitySample("prod", "", "api", "app", 1),
+		identitySample("prod", "Deployment", "", "app", 1),
+		identitySample("prod", "Deployment", "ok", "app", 7),
+	}
+
+	got := shardSamples(vec)
+
+	if len(got) != 1 || got[0].Identity.OwnerName != "ok" || got[0].Value != 7 {
+		t.Fatalf("got %+v, want only the complete prod/Deployment/ok series", got)
+	}
+}
+
 func identitySample(ns, kind, name, container string, v float64) *model.Sample {
 	m := model.Metric{}
 	if ns != "" {

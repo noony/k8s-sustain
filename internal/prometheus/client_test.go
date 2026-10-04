@@ -757,7 +757,7 @@ func TestPing_Error(t *testing.T) {
 }
 
 func TestQuantileOverTimeExprUsesRangeVectorNotSubquery(t *testing.T) {
-	got := quantileOverTimeExpr(0.95, "k8s_sustain:workload_max_pod_cpu:cores",
+	got := QuantileOverTime(0.95, "k8s_sustain:workload_max_pod_cpu:cores",
 		`{namespace="prod",owner_kind="Deployment",owner_name="api"}`, "7d")
 
 	want := `quantile_over_time(0.95, k8s_sustain:workload_max_pod_cpu:cores{namespace="prod",owner_kind="Deployment",owner_name="api"}[7d])`

@@ -9,6 +9,31 @@ import (
 	"github.com/prometheus/common/model"
 )
 
+// ShardSample is one series of a shard query's result.
+type ShardSample struct {
+	Identity  WorkloadIdentity
+	Container string
+	// Metric is the series' __name__, empty when a function in the query
+	// dropped it.
+	Metric string
+	Value  float64
+}
+
+// QueryShard runs one shard query at the current instant and returns its
+// samples. It goes through execInstant rather than c.api.Query, so shard
+// queries inherit the breaker, the in-flight semaphore and the query timeout.
+func (c *Client) QueryShard(ctx context.Context, expr string) ([]ShardSample, error) {
+	result, err := c.execInstant(ctx, expr, time.Now(), c.queryTimeout)
+	if err != nil {
+		return nil, wrapQueryErr("prometheus shard query", expr, err)
+	}
+	vector, ok := result.(model.Vector)
+	if !ok {
+		return nil, fmt.Errorf("unexpected prometheus result type %T for shard query", result)
+	}
+	return shardSamples(vector), nil
+}
+
 // queryShardIdentityValues is the shared tail of QueryShardCPU and
 // QueryShardMemory. It must go through execInstant rather than c.api.Query so
 // shard queries inherit the breaker, in-flight semaphore and timeout.
@@ -28,14 +53,14 @@ func (c *Client) queryShardIdentityValues(ctx context.Context, expr string) (Ide
 // CPU quantile (cores) of the busiest replica over window, from the
 // workload_max_pod_cpu rule, in one round trip.
 func (c *Client) QueryShardCPU(ctx context.Context, shard Shard, quantile float64, window string) (IdentityValues, error) {
-	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodCPUCores, shard.Selector(), window)
+	expr := QuantileOverTime(quantile, MetricWorkloadMaxPodCPUCores, shard.Selector(), window)
 	return c.queryShardIdentityValues(ctx, expr)
 }
 
 // QueryShardMemory is QueryShardCPU for memory (bytes), from the
 // workload_max_pod_memory rule.
 func (c *Client) QueryShardMemory(ctx context.Context, shard Shard, quantile float64, window string) (IdentityValues, error) {
-	expr := quantileOverTimeExpr(quantile, MetricWorkloadMaxPodMemoryBytes, shard.Selector(), window)
+	expr := QuantileOverTime(quantile, MetricWorkloadMaxPodMemoryBytes, shard.Selector(), window)
 	return c.queryShardIdentityValues(ctx, expr)
 }
 
@@ -44,11 +69,11 @@ func (c *Client) QueryShardMemory(ctx context.Context, shard Shard, quantile flo
 // oomMetricNames are joined unescaped because every rule name is RE2-literal
 // (asserted by TestOOMSignalSelectorUsesLiteralAlternation). Owner names are
 // not: they may contain '.', so they must go through
-// shard.escapedNameAlternation() — joining shard.Names directly silently
+// literalAlternation(shard.Names) — joining shard.Names directly silently
 // mismatches dotted names like "payments.worker".
 func oomShardSelector(shard Shard) string {
 	return fmt.Sprintf(`{__name__=~%q,namespace=%q,owner_kind=%q,owner_name=~%q}`,
-		strings.Join(oomMetricNames, "|"), shard.Namespace, shard.OwnerKind, shard.escapedNameAlternation())
+		strings.Join(oomMetricNames, "|"), shard.Namespace, shard.OwnerKind, literalAlternation(shard.Names))
 }
 
 // partitionOOMVectorByIdentity splits a shard's combined OOM vector into one
