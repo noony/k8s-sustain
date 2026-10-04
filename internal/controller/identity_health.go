@@ -56,27 +56,26 @@ func (h *healthTracker) forget(policy string) {
 }
 
 func (h *healthTracker) dropUnclaimedLocked(prev map[promclient.WorkloadIdentity][]string) {
+	claimedIDs := make(map[promclient.WorkloadIdentity]struct{})
+	claimedMembers := make(map[string]struct{})
+	for _, ids := range h.byPolicy {
+		for id, members := range ids {
+			claimedIDs[id] = struct{}{}
+			for _, m := range members {
+				claimedMembers[m] = struct{}{}
+			}
+		}
+	}
 	for id, members := range prev {
 		for _, m := range members {
-			if !h.memberClaimedLocked(m) {
+			if _, ok := claimedMembers[m]; !ok {
 				delete(h.pods, m)
 			}
 		}
-		if len(h.membersLocked(id)) == 0 {
+		if _, ok := claimedIDs[id]; !ok {
 			DeleteIdentityHealth(id)
 		}
 	}
-}
-
-func (h *healthTracker) memberClaimedLocked(member string) bool {
-	for _, ids := range h.byPolicy {
-		for _, members := range ids {
-			if slices.Contains(members, member) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // membersLocked returns every member any policy claims for id, sorted so the
