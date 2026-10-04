@@ -14,9 +14,9 @@ type identityHealth struct {
 	// for it.
 	Conflicted bool
 	OOM24h     int
-	Blocked   *blockedSignal
-	StalePods int
-	TotalPods int
+	Blocked    *blockedSignal
+	StalePods  int
+	TotalPods  int
 	// AutoscalerPresent and CoordinationFactors describe the autoscaler the
 	// identity's recommendation is shaped against; CoordinationFactors is nil
 	// without one.
