@@ -22,6 +22,7 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/httpx"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender"
 )
 
 // PromQuerier is the subset of the Prometheus client the dashboard uses;
@@ -32,12 +33,6 @@ type PromQuerier interface {
 	QueryInstant(ctx context.Context, expr string) (float64, error)
 	QueryRange(ctx context.Context, expr string, r promclient.TimeRange, step string) ([]promclient.TimeValue, error)
 	QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error)
-
-	// recommender.WorkloadQuerier: the recommendation inputs, shared with the
-	// controller so the dashboard computes what the controller applies.
-	QueryWorkloadCPUByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
-	QueryWorkloadMemoryByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, window string) (promclient.ContainerValues, error)
-	QueryWorkloadOOMSignal(ctx context.Context, namespace, ownerKind, ownerName string) (promclient.OOMSignal, error)
 
 	QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
 	QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
@@ -68,6 +63,9 @@ type Server struct {
 	// Health is where every view reads identity health from; production
 	// wires NewPrometheusHealthSignals.
 	Health HealthSignals
+	// Inputs fetches recommendation inputs through the same port the
+	// controller uses, so a Simulation computes from what the controller sees.
+	Inputs recommender.InputsFetcher
 	Logger logr.Logger
 	// CORSOrigins is the allowed origin allowlist: empty means same-origin
 	// only, ["*"] allows every origin.

@@ -8,9 +8,8 @@ import (
 	"testing"
 )
 
-// TestQueryShardCPUReturnsPerIdentityValues is the batched counterpart of
-// TestQueryWorkloadCPUByContainer: one round trip carries two distinct
-// workloads (same namespace/owner_kind, different owner_name — the only
+// TestQueryShardCPUReturnsPerIdentityValues: one round trip carries two
+// distinct workloads (same namespace/owner_kind, different owner_name — the only
 // dimension a Shard varies on), and the two must decode into separate
 // IdentityValues entries without bleeding into each other.
 func TestQueryShardCPUReturnsPerIdentityValues(t *testing.T) {
@@ -103,9 +102,8 @@ func TestQueryShardMemoryReturnsPerIdentityValues(t *testing.T) {
 	}
 }
 
-// TestQueryShardOOMSignalFoldsPerIdentityIndependently is the batched
-// counterpart of TestQueryWorkloadOOMSignalSingleQueryAggregatesDuplicates:
-// workload A gets duplicate OOM-count series (two kube-state-metrics replicas)
+// TestQueryShardOOMSignalFoldsPerIdentityIndependently: workload A gets
+// duplicate OOM-count series (two kube-state-metrics replicas)
 // that must SUM into one value, workload B gets only a peak-memory series, and
 // neither may inherit the other's data — proving the partition-then-fold in
 // QueryShardOOMSignal keys strictly on identity before calling foldOOMVector.

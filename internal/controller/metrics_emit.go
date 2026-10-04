@@ -115,8 +115,8 @@ func EmitPolicyRollup(policy string, identities, blocked int) {
 }
 
 // EmitPolicyBatchCoverage records how many workload identities a policy's
-// sharded Prometheus batch prefetch requested this cycle versus how many
-// resolved with at least one usable sample (recommender.BatchInputs).
+// batched Prometheus fetch requested this cycle versus how many resolved with
+// at least one usable sample.
 //
 // A capacity signal, not a failure signal: a workload with no history yet looks
 // the same here as one Prometheus never answered for -- see
@@ -128,9 +128,9 @@ func EmitPolicyBatchCoverage(policy string, requested, resolved int) {
 }
 
 // EmitPolicyBatchFailures adds to the cumulative count of workload identities
-// whose batch Prometheus fetch genuinely failed for a policy this cycle (see
-// recommender.BatchStats.Failures). Never merged with EmitPolicyBatchCoverage's
-// gauges, so "Prometheus is unwell" stays distinguishable from "no data yet".
+// whose inputs could not be fetched for a policy this cycle. Never merged with
+// EmitPolicyBatchCoverage's gauges, so "Prometheus is unwell" stays
+// distinguishable from "no data yet".
 // A no-op on failures<=0 so a healthy cycle never creates a zero-valued series.
 func EmitPolicyBatchFailures(policy string, failures int) {
 	if failures <= 0 {

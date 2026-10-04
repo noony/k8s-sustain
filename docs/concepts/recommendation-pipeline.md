@@ -17,15 +17,19 @@ requests apply on next pod creation via webhook injection.
 
 ## How the data is fetched
 
-Before running the stages below, the controller fetches every identity's Prometheus inputs for a policy in **one sharded batch call per policy**, not one query set per workload. A policy matching 2,000 workloads issues a handful of queries rather than several thousand.
+Before running the stages below, the controller fetches every identity's Prometheus inputs for a policy in **one batched call per policy**, not one query set per workload. A policy matching 2,000 workloads issues a handful of queries rather than several thousand.
 
 The batch covers the policy's whole work-list, including identities with no live workload object — see [Computation](architecture.md#computation).
 
-Shards are sized by a projected sample budget — containers × window-minutes, summed across the workloads packed into a shard — capped by `--query-shard-max-samples` (default `10,000,000`). The cap exists because Prometheus's own `--query.max-samples` (default `50,000,000`) *rejects* an over-budget query outright, which would fail every workload sharing that shard rather than just the excess ones; the default leaves a 5× margin. Independently, `--prometheus-max-inflight` (default 8) caps concurrent queries across the whole controller process so k8s-sustain cannot saturate a Prometheus shared with dashboards and alerting.
+The batch is split into shards, each read with one query per signal (CPU, memory, OOM). Shards are sized by a projected sample budget — containers × window-minutes, summed across the workloads packed into a shard — capped by `--query-shard-max-samples` (default `10,000,000`). The cap exists because Prometheus's own `--query.max-samples` (default `50,000,000`) *rejects* an over-budget query outright, which would fail every workload sharing that shard rather than just the excess ones; the default leaves a 5× margin. Independently, `--prometheus-max-inflight` (default 8) caps concurrent queries across the whole controller process so k8s-sustain cannot saturate a Prometheus shared with dashboards and alerting.
 
-Every kind batches identically, including `Job` and `Pod`. An identity with no observed-resources snapshot to size a shard with is fetched individually; a departed identity with no snapshot at all is skipped, since there is no container set to compute against.
+A shard query that fails is retried once. If it fails again, its identities are re-queried one shard each, with the same query narrowed to one name, so a shard Prometheus rejects as a whole does not cost its healthy members their inputs — a single identity is just a batch of one ([ADR 0001](../adr/0001-single-identity-is-a-batch-of-one.md)). An identity whose CPU or memory query still fails on its own has failed its fetch: each of its workloads is retried with backoff (see [Application](architecture.md#application)). The OOM signal is best-effort: when it cannot be read, the identity is computed without an OOM floor.
 
-Coverage and health are observed separately and must not be derived from one another — see [Batch prefetch coverage vs. failures](../reference/metrics.md#batch-prefetch-coverage-vs-failures).
+Every kind batches identically, including `Job` and `Pod`. An identity whose container count is unknown (no observed-resources snapshot to size it by) gets a shard of its own; a departed identity with no snapshot at all is skipped, since there is no container set to compute against. An identity whose every workload is in retry backoff is not fetched.
+
+The dashboard's simulations read their inputs the same way, one workload or a whole policy per call.
+
+Coverage and health are observed separately and must not be derived from one another — see [Batch fetch coverage vs. failures](../reference/metrics.md#batch-fetch-coverage-vs-failures).
 
 ## Stages
 

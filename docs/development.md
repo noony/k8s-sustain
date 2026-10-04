@@ -34,6 +34,27 @@ CI runs the race detector and goroutine-leak detection (via `go.uber.org/goleak`
 on the `dashboard`, `k8s`, `oomwatch`, `prometheus`, and `webhook` packages), so
 flakes or leaks introduced by new tests surface in the test job.
 
+### Recommendation inputs in tests
+
+The controller and the dashboard read Prometheus recommendation inputs only
+through the `recommender.InputsFetcher` port. Their tests inject
+`recommendertest.StaticInputs` instead of serving PromQL from an
+`httptest` server:
+
+```go
+inputs := recommendertest.NewStaticInputs().
+    Set(id, &recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 0.1}}).
+    Fail(otherID, errors.New("prometheus down"))
+```
+
+An identity with neither gets empty inputs, as Prometheus answers for one with
+no samples. `Calls()` and `Requested(id)` report what was fetched, so a test
+can assert that an identity was, or was not, part of the batch. Prefer driving
+`PolicyReconciler.Reconcile` end to end with the fake client and
+`StaticInputs`. The Prometheus adapter, `recommender.PromInputs`, is the only
+code tested against a fake PromQL server: sharding, retry, the one-identity
+fallback and the best-effort OOM signal.
+
 ## Lint
 
 ```bash
@@ -98,7 +119,8 @@ k8s-sustain/
 │   ├── oomwatch/          # Live OOMKilled detection, re-triggers reconciles
 │   ├── policymatch/       # Policy resolution (ResolvePolicy) and selector matching
 │   ├── prometheus/        # Prometheus HTTP API client + metric name constants
-│   ├── recommender/       # Resource recommendation logic (pure functions)
+│   ├── recommender/       # Recommendation algorithm (Compute) and the batch-inputs port with its Prometheus adapter
+│   │   └── recommendertest/  # In-memory inputs adapter for tests
 │   ├── version/           # Build version
 │   ├── webhook/           # Admission webhook HTTP handler
 │   ├── wlrcache/          # WorkloadRecommendation naming and upsert
@@ -477,7 +499,17 @@ The controller's reads go through a watch-populated informer cache, so a `Worklo
 
 #### Per-identity computation under owner-name grouping
 
-The computation unit is the identity, not the workload object: a group of workloads sharing an owner-name produces exactly one computation and one write, against the union of the members' containers. Computing per member would give the single shared `WorkloadRecommendation` several competing answers, with the survivor decided by whichever member's goroutine finished last. Retry backoff is also per member: an identity is withheld from the batch prefetch only when every member is backed off, so one failing member cannot deny its healthy siblings their inputs.
+The computation unit is the identity, not the workload object: a group of workloads sharing an owner-name produces exactly one computation and one write, against the union of the members' containers. Computing per member would give the single shared `WorkloadRecommendation` several competing answers, with the survivor decided by whichever member's goroutine finished last. Retry backoff is also per member: an identity is withheld from the fetch only when every member is backed off, so one failing member cannot deny its healthy siblings their inputs.
+
+#### Recommendation pass
+
+`Reconcile` runs collect → discover → recommendation pass → persist → apply → rollup. The pass (`internal/controller/recommendation_pass.go`) gives every identity on the work-list exactly one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff). It owns the three things that used to be spread across `Reconcile`:
+
+- **The backoff split, taken once.** Backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out. The pass records which members to apply and which it skipped, and the apply step uses that split.
+- **The fetch.** One `InputsFetcher` call per policy; the pass never sees shards, retries or the fallback ([ADR 0001](adr/0001-single-identity-is-a-batch-of-one.md)).
+- **The computation.** `recommender.Compute` decides everything about one identity from its inputs, its live OOM records and its age facts: the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply.
+
+The batch metrics are counted from the outcomes, not from the fetch's internals.
 
 #### Owner-name group: merge order and write cost
 

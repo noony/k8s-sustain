@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -65,39 +66,7 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 	}
 
 	workloads := s.collectPolicyWorkloads(ctx, policyName, policy)
-	// One snapshot per request: it lists each namespace's autoscalers once.
-	autoSnap := autoscaler.NewNamespacedSnapshot(s.K8sClient)
-
-	type recResult struct {
-		recs map[string]simulationContainerResult
-		err  error
-	}
-	results := make([]recResult, len(workloads))
-	sem := make(chan struct{}, 10)
-	var wg sync.WaitGroup
-
-	for i, wl := range workloads {
-		// Bound goroutine creation, not just in-flight queries: a disconnected
-		// client must not keep spawning queries as slots free up. Undispatched
-		// workloads record the cancellation error so the assembly loop emits an
-		// Error entry for them.
-		if ctx.Err() != nil {
-			results[i] = recResult{err: ctx.Err()}
-			continue
-		}
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			results[i] = recResult{err: ctx.Err()}
-			continue
-		}
-		wg.Go(func() {
-			defer func() { <-sem }()
-			recs, err := s.computeRecommendations(ctx, wl, policy, autoSnap)
-			results[i] = recResult{recs: recs, err: err}
-		})
-	}
-	wg.Wait()
+	results := s.computeRecommendations(ctx, policy, workloads)
 
 	resp := batchSimulateResponse{PolicyName: policyName}
 	var totalCPUCurr, totalCPURec, totalMemCurr, totalMemRec int64
@@ -180,16 +149,38 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// computeRecommendations runs the shared algorithm for one workload under the
-// policy's own configuration, exactly as the controller would.
-func (s *Server) computeRecommendations(ctx context.Context, wl automatedWorkload, policy *sustainv1alpha1.Policy, autoSnap *autoscaler.NamespacedSnapshot) (map[string]simulationContainerResult, error) {
-	spec := policySpec(policy, wl.Namespace, wl.Kind, wl.Name)
-	containers, _ := workload.MergeContainersForRecommendation(wl.Containers, wl.InitContainers, spec.excludeInit)
-	res, err := s.computeWorkloadRecs(ctx, spec, containers, time.Time{}, s.autoscalerInfo(ctx, autoSnap, spec))
-	if err != nil {
-		return nil, err
+type recResult struct {
+	recs map[string]simulationContainerResult
+	err  error
+}
+
+// computeRecommendations fetches every workload's inputs in one batch and
+// runs the shared algorithm on each under the policy's own configuration,
+// exactly as the controller would.
+func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1alpha1.Policy, workloads []automatedWorkload) []recResult {
+	specs := make([]simulationSpec, len(workloads))
+	containers := make([][]corev1.Container, len(workloads))
+	reqs := make([]recommender.InputsRequest, len(workloads))
+	for i, wl := range workloads {
+		specs[i] = policySpec(policy, wl.Namespace, wl.Kind, wl.Name)
+		containers[i], _ = workload.MergeContainersForRecommendation(wl.Containers, wl.InitContainers, specs[i].excludeInit)
+		reqs[i] = recommender.InputsRequest{Identity: specs[i].identity(), Containers: len(containers[i])}
 	}
-	return simulationContainers(res), nil
+	fetched := s.Inputs.FetchInputs(ctx, policy.Spec.RightSizing.ResourcesConfigs, reqs)
+
+	// One snapshot per request: it lists each namespace's autoscalers once.
+	autoSnap := autoscaler.NewNamespacedSnapshot(s.K8sClient)
+	out := make([]recResult, len(workloads))
+	for i, spec := range specs {
+		f := fetched[spec.identity()]
+		if f.Err != nil {
+			out[i].err = f.Err
+			continue
+		}
+		res := computeWorkloadRecs(spec, containers[i], time.Time{}, s.autoscalerInfo(ctx, autoSnap, spec), f.Inputs)
+		out[i].recs = simulationContainers(res, f.Inputs)
+	}
+	return out
 }
 
 func deltaPercent(current, recommended int64) float64 {

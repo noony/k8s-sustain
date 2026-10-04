@@ -106,71 +106,6 @@ func TestQueryRangeReturnsTimeValues(t *testing.T) {
 	}
 }
 
-func TestQueryWorkloadCPUByContainer(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			t.Fatalf("parse form: %v", err)
-		}
-		q := r.Form.Get("query")
-		if !strings.Contains(q, "workload_max_pod_cpu") {
-			t.Errorf("expected workload_max_pod_cpu in query, got %q", q)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"status":"success",
-			"data":{"resultType":"vector","result":[
-				{"metric":{"container":"app"},"value":[0,"0.5"]},
-				{"metric":{"container":"sidecar"},"value":[0,"0.1"]}
-			]}
-		}`))
-	}))
-	defer server.Close()
-
-	c, err := New(server.URL)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	got, err := c.QueryWorkloadCPUByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h")
-	if err != nil {
-		t.Fatalf("QueryWorkloadCPUByContainer: %v", err)
-	}
-	if got["app"] != 0.5 || got["sidecar"] != 0.1 {
-		t.Errorf("unexpected values: %v", got)
-	}
-}
-
-func TestQueryWorkloadMemoryByContainer(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			t.Fatalf("parse form: %v", err)
-		}
-		q := r.Form.Get("query")
-		if !strings.Contains(q, "workload_max_pod_memory") {
-			t.Errorf("expected workload_max_pod_memory in query, got %q", q)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"status":"success",
-			"data":{"resultType":"vector","result":[
-				{"metric":{"container":"app"},"value":[0,"104857600"]}
-			]}
-		}`))
-	}))
-	defer server.Close()
-
-	c, err := New(server.URL)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	got, err := c.QueryWorkloadMemoryByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h")
-	if err != nil {
-		t.Fatalf("QueryWorkloadMemoryByContainer: %v", err)
-	}
-	if got["app"] != 104857600 {
-		t.Errorf("expected 104857600 got %v", got["app"])
-	}
-}
-
 func TestQueryByLabels_JoinsMultipleLabelsWithPipe(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -537,83 +472,9 @@ func TestQueryOOMKillEvents_HistoricalOOMEmits(t *testing.T) {
 	}
 }
 
-// TestQueryWorkloadOOMSignal_ReturnsCountAndPeak covers the single-series
-// (no kube-state-metrics duplication) case: one query, one sample per metric
-// family, values pass through unchanged. The duplicate-series aggregation
-// path (sum for counts, max for peak/limit) is covered separately by
-// TestQueryWorkloadOOMSignalSingleQueryAggregatesDuplicates.
-func TestQueryWorkloadOOMSignal_ReturnsCountAndPeak(t *testing.T) {
-	var (
-		queriesMu sync.Mutex
-		queries   []string
-	)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		queriesMu.Lock()
-		queries = append(queries, q)
-		queriesMu.Unlock()
-		if !strings.Contains(q, `__name__=~"`) {
-			t.Errorf("expected a combined __name__ regex selector, got %q", q)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-			{"metric":{"__name__":"k8s_sustain:workload_oom_24h","container":"app"},"value":[0,"3"]},
-			{"metric":{"__name__":"k8s_sustain:workload_oom_24h","container":"sidecar"},"value":[0,"1"]},
-			{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","container":"app"},"value":[0,"209715200"]},
-			{"metric":{"__name__":"k8s_sustain:container_oom_limit_24h:bytes","container":"app"},"value":[0,"104857600"]}
-		]}}`))
-	}))
-	defer server.Close()
-
-	c, _ := New(server.URL)
-	sig, err := c.QueryWorkloadOOMSignal(context.Background(), "ns", "Deployment", "web")
-	if err != nil {
-		t.Fatalf("QueryWorkloadOOMSignal: %v", err)
-	}
-	if sig.OOMCounts["app"] != 3 || sig.OOMCounts["sidecar"] != 1 {
-		t.Errorf("OOMCounts: got %v want app=3 sidecar=1", sig.OOMCounts)
-	}
-	if sig.TotalOOMs() != 4 {
-		t.Errorf("TotalOOMs: got %v want 4", sig.TotalOOMs())
-	}
-	if sig.PeakMemoryBytes["app"] != 209715200 {
-		t.Errorf("peak[app]: got %v want 209715200", sig.PeakMemoryBytes["app"])
-	}
-	if sig.OOMLimitBytes["app"] != 104857600 {
-		t.Errorf("oom-limit[app]: got %v want 104857600", sig.OOMLimitBytes["app"])
-	}
-	queriesMu.Lock()
-	n := len(queries)
-	queriesMu.Unlock()
-	if n != 1 {
-		t.Errorf("expected exactly 1 query (all three metric families in one), got %d", n)
-	}
-}
-
-func TestQueryWorkloadOOMSignal_NoOOMReturnsZeroCount(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-	}))
-	defer server.Close()
-
-	c, _ := New(server.URL)
-	sig, err := c.QueryWorkloadOOMSignal(context.Background(), "ns", "Deployment", "web")
-	if err != nil {
-		t.Fatalf("QueryWorkloadOOMSignal: %v", err)
-	}
-	if sig.TotalOOMs() != 0 {
-		t.Errorf("expected 0 total OOM count, got %v", sig.TotalOOMs())
-	}
-	if len(sig.OOMCounts) != 0 {
-		t.Errorf("expected empty OOM count map, got %v", sig.OOMCounts)
-	}
-	if len(sig.PeakMemoryBytes) != 0 {
-		t.Errorf("expected empty peak map, got %v", sig.PeakMemoryBytes)
-	}
-}
+// webShard is a one-workload shard, the smallest query that runs through
+// execInstant with the client's query timeout.
+var webShard = Shard{Namespace: "ns", OwnerKind: "Deployment", Names: []string{"web"}}
 
 // breakerFailures reads the breaker's failure counter under its mutex.
 func breakerFailures(c *Client) int {
@@ -651,7 +512,7 @@ func TestExecInstant_GenuineErrorCountsOne(t *testing.T) {
 	c, _ := New(server.URL)
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryWorkloadCPUByContainer(context.Background(), "ns", "Deployment", "web", 0.9, "7d")
+	_, err := c.QueryShardCPU(context.Background(), webShard, 0.9, "7d")
 	if err == nil {
 		t.Fatal("expected an error from the failing query")
 	}
@@ -672,7 +533,7 @@ func TestExecInstant_PerCallTimeoutCountsOne(t *testing.T) {
 	c, _ := New(server.URL, WithQueryTimeout(50*time.Millisecond))
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryWorkloadCPUByContainer(context.Background(), "ns", "Deployment", "web", 0.9, "7d")
+	_, err := c.QueryShardCPU(context.Background(), webShard, 0.9, "7d")
 	if err == nil {
 		t.Fatal("expected an error from the per-call timeout")
 	}
@@ -717,7 +578,7 @@ func TestExecInstant_ParentCancelCountsOne(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "web", 0.9, "7d")
+	_, err := c.QueryShardCPU(ctx, webShard, 0.9, "7d")
 	if err == nil {
 		t.Fatal("expected an error from the parent-context cancellation")
 	}
@@ -727,8 +588,7 @@ func TestExecInstant_ParentCancelCountsOne(t *testing.T) {
 }
 
 // TestExecInstant_OuterSiblingCancelCountsZero asserts that when an errgroup
-// sibling fails (these queries run inside the FetchWorkloadInputs errgroup in
-// recommender/build.go), the collateral cancellation — whose cause is a
+// sibling fails, the collateral cancellation — whose cause is a
 // NON-context error propagated through the WithTimeout child — records ZERO
 // breaker failures on the execInstant path. The outage belongs to the sibling,
 // which already counted its own failure. Before the fix every error counted,
@@ -749,7 +609,7 @@ func TestExecInstant_OuterSiblingCancelCountsZero(t *testing.T) {
 	}()
 	defer cancelCause(nil)
 
-	_, err := c.QueryWorkloadCPUByContainer(ctx, "ns", "Deployment", "web", 0.9, "7d")
+	_, err := c.QueryShardCPU(ctx, webShard, 0.9, "7d")
 	if err == nil {
 		t.Fatal("expected an error from the sibling cancellation")
 	}
@@ -831,12 +691,11 @@ func TestRunRange_OuterSiblingCancelCountsZero(t *testing.T) {
 	}
 }
 
-// TestErrgroupSiblings_SingleOutageCountsOnce reproduces the FetchWorkloadInputs
-// shape (recommender/build.go): two queries share an errgroup, one genuinely
-// fails (500) and the sibling hangs until the group cancels it. The genuine
-// failure counts one breaker failure; the cancelled sibling counts zero —
-// before the fix the sibling's context.Canceled also counted, so one outage
-// recorded a failure per in-flight query.
+// TestErrgroupSiblings_SingleOutageCountsOnce: two queries share an errgroup,
+// one genuinely fails (500) and the sibling hangs until the group cancels it.
+// The genuine failure counts one breaker failure; the cancelled sibling counts
+// zero — before the fix the sibling's context.Canceled also counted, so one
+// outage recorded a failure per in-flight query.
 func TestErrgroupSiblings_SingleOutageCountsOnce(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
@@ -857,11 +716,11 @@ func TestErrgroupSiblings_SingleOutageCountsOnce(t *testing.T) {
 
 	g, gctx := errgroup.WithContext(context.Background())
 	g.Go(func() error {
-		_, err := c.QueryWorkloadCPUByContainer(gctx, "ns", "Deployment", "web", 0.9, "7d")
+		_, err := c.QueryShardCPU(gctx, webShard, 0.9, "7d")
 		return err
 	})
 	g.Go(func() error {
-		_, err := c.QueryWorkloadMemoryByContainer(gctx, "ns", "Deployment", "web", 0.9, "7d")
+		_, err := c.QueryShardMemory(gctx, webShard, 0.9, "7d")
 		return err
 	})
 	if err := g.Wait(); err == nil {
@@ -912,27 +771,17 @@ func TestQuantileOverTimeExprUsesRangeVectorNotSubquery(t *testing.T) {
 
 // Three metric families arrive in one vector, with DUPLICATE series per
 // container simulating two kube-state-metrics replicas. Counts must sum,
-// peaks and limits must take the max — matching the server-side aggregation
-// the three separate probes used to perform.
-func TestQueryWorkloadOOMSignalSingleQueryAggregatesDuplicates(t *testing.T) {
-	var queries []string
-	var mu sync.Mutex
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			t.Errorf("parse form: %v", err)
-			return
-		}
-		mu.Lock()
-		queries = append(queries, r.Form.Get("query"))
-		mu.Unlock()
+// peaks and limits must take the max.
+func TestQueryShardOOMSignalAggregatesDuplicates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[
-			{"metric":{"__name__":"k8s_sustain:workload_oom_24h","container":"app","instance":"ksm-a"},"value":[1700000000,"2"]},
-			{"metric":{"__name__":"k8s_sustain:workload_oom_24h","container":"app","instance":"ksm-b"},"value":[1700000000,"3"]},
-			{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","container":"app","instance":"ksm-a"},"value":[1700000000,"1000"]},
-			{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","container":"app","instance":"ksm-b"},"value":[1700000000,"2000"]},
-			{"metric":{"__name__":"k8s_sustain:container_oom_limit_24h:bytes","container":"app","instance":"ksm-a"},"value":[1700000000,"4096"]},
-			{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","container":"sidecar"},"value":[1700000000,"0"]}
+			{"metric":{"__name__":"k8s_sustain:workload_oom_24h","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"app","instance":"ksm-a"},"value":[1700000000,"2"]},
+			{"metric":{"__name__":"k8s_sustain:workload_oom_24h","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"app","instance":"ksm-b"},"value":[1700000000,"3"]},
+			{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"app","instance":"ksm-a"},"value":[1700000000,"1000"]},
+			{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"app","instance":"ksm-b"},"value":[1700000000,"2000"]},
+			{"metric":{"__name__":"k8s_sustain:container_oom_limit_24h:bytes","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"app","instance":"ksm-a"},"value":[1700000000,"4096"]},
+			{"metric":{"__name__":"k8s_sustain:container_peak_memory_24h:bytes","namespace":"prod","owner_kind":"Deployment","owner_name":"api","container":"sidecar"},"value":[1700000000,"0"]}
 		]}}`))
 	}))
 	defer server.Close()
@@ -941,17 +790,11 @@ func TestQueryWorkloadOOMSignalSingleQueryAggregatesDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sig, err := c.QueryWorkloadOOMSignal(context.Background(), "prod", "Deployment", "api")
+	got, err := c.QueryShardOOMSignal(context.Background(), Shard{Namespace: "prod", OwnerKind: "Deployment", Names: []string{"api"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	mu.Lock()
-	n := len(queries)
-	mu.Unlock()
-	if n != 1 {
-		t.Fatalf("expected exactly 1 query, got %d: %v", n, queries)
-	}
+	sig := got[WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "api"}]
 
 	if got := sig.OOMCounts["app"]; got != 5 {
 		t.Fatalf("OOMCounts[app]: got %v want 5 (sum of 2+3)", got)
@@ -1024,7 +867,7 @@ func TestAcquireAbortWrapsSentinelAndSkipsBreaker(t *testing.T) {
 	}
 }
 
-// oomSignalSelector interpolates metric names into an RE2 alternation without
+// oomShardSelector interpolates metric names into an RE2 alternation without
 // escaping them. That is only safe while every name is composed of RE2
 // literals. Renaming a recording rule to include a metacharacter would widen
 // what the selector matches — silently, since nothing else would fail. This
@@ -1033,15 +876,15 @@ func TestOOMSignalSelectorUsesLiteralAlternation(t *testing.T) {
 	for _, name := range oomMetricNames {
 		if got := regexp.QuoteMeta(name); got != name {
 			t.Errorf("metric name %q contains RE2 metacharacters (quoted form %q); "+
-				"oomSignalSelector interpolates it unescaped and would match more than intended",
+				"oomShardSelector interpolates it unescaped and would match more than intended",
 				name, got)
 		}
 	}
 
 	// The rendered selector must be an exact literal alternation of the three
 	// names, anchored inside the __name__ matcher.
-	got := oomSignalSelector("prod", "Deployment", "api")
-	want := `{__name__=~"` + strings.Join(oomMetricNames, "|") + `",namespace="prod",owner_kind="Deployment",owner_name="api"}`
+	got := oomShardSelector(Shard{Namespace: "prod", OwnerKind: "Deployment", Names: []string{"api"}})
+	want := `{__name__=~"` + strings.Join(oomMetricNames, "|") + `",namespace="prod",owner_kind="Deployment",owner_name=~"api"}`
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}

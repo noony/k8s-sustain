@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -15,16 +17,51 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
+// apply applies every identity's result to its live members not in backoff,
+// one task per member so a large owner-name group spreads across the slots. It
+// returns how many members it dispatched, how many of those failed, and how
+// many it skipped for backoff.
+func (r *PolicyReconciler) apply(
+	ctx context.Context,
+	policy *sustainv1alpha1.Policy,
+	results []identityResult,
+	autoSnap *autoscaler.NamespacedSnapshot,
+) (dispatched, failed, skipped int) {
+	logger := log.FromContext(ctx)
+	var failures atomic.Int32
+	var g errgroup.Group
+	g.SetLimit(r.WorkloadConcurrencyLimit)
+	for i := range results {
+		res := &results[i]
+		for _, t := range res.backedOff {
+			logger.V(1).Info("skipping workload in retry backoff", "target", t.key())
+			skipped++
+		}
+		for _, t := range res.apply {
+			dispatched++
+			g.Go(func() error {
+				if err := r.reconcileWorkload(ctx, policy, t, autoSnap, res.recs, res.err); err != nil {
+					failures.Add(1)
+				}
+				return nil
+			})
+		}
+	}
+	_ = g.Wait()
+	return dispatched, int(failures.Load()), skipped
+}
+
 // reconcileWorkload APPLIES an identity's recommendation to a single workload
 // target: recycles or resizes its pods, emits events, records its pod counts
 // for the identity's health series, and tracks retries. It does not compute
-// anything and does not write the WorkloadRecommendation — computeIdentity did
-// both, once for the identity, before any member reached this function.
+// anything and does not write the WorkloadRecommendation — the recommendation
+// pass and persist did both, once for the identity, before any member reached
+// this function.
 //
 // recs is that shared recommendation, covering the union of the identity's
 // members' containers; this function narrows it to the containers this member
-// actually runs. computeErr is computeIdentity's failure for the identity,
-// surfaced through handleStepError("prometheus", ...) so retry tracking, the
+// actually runs. computeErr is the identity's fetch failure, surfaced through
+// handleStepError("prometheus", ...) so retry tracking, the
 // ReconciliationRetryScheduled event and the PartialFailure condition stay
 // keyed per real workload object, which is what retry state is keyed on.
 func (r *PolicyReconciler) reconcileWorkload(

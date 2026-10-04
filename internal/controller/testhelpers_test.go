@@ -2,10 +2,7 @@ package controller
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strings"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +26,8 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -141,128 +140,80 @@ func annotatedRollout(ns, name, policy string) *rolloutsv1alpha1.Rollout {
 	}
 }
 
-// reconcilerForPolicy wires up a PolicyReconciler with the bits SetupWithManager
-// would normally inject (patcher, recorder, retries) plus a mock Prometheus.
-// Returns the reconciler and the Prometheus mock server (caller closes).
-func reconcilerForPolicy(t *testing.T, policy *sustainv1alpha1.Policy, extra ...runtime.Object) (*PolicyReconciler, *httptest.Server) {
+// testFullScheme registers every kind the reconciler lists or writes.
+func testFullScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
-	if err := appsv1.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme apps: %v", err)
-	}
-	if err := batchv1.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme batch: %v", err)
-	}
-	if err := rolloutsv1alpha1.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme rollouts: %v", err)
-	}
-	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme sustain: %v", err)
-	}
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme core: %v", err)
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		w.Header().Set("Content-Type", "application/json")
-		// Always return empty samples — exercises the "no recommendations yet" branch.
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-	}))
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		server.Close()
-		t.Fatalf("prometheus client: %v", err)
-	}
-
-	objs := []runtime.Object{policy}
-	objs = append(objs, extra...)
-
-	// WorkloadRecommendation needs its status subresource registered: the fake
-	// client rejects Status().Patch outright for types it was not told about,
-	// and the WLR-driven computation phase reads the observed-resources
-	// snapshot that discovery writes there.
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithStatusSubresource(&sustainv1alpha1.Policy{}, &sustainv1alpha1.WorkloadRecommendation{}).
-		WithRuntimeObjects(objs...).
-		Build()
-
-	r := &PolicyReconciler{
-		Client:                   c,
-		Scheme:                   scheme,
-		PrometheusClient:         pc,
-		ReconcileInterval:        time.Hour,
-		WorkloadConcurrencyLimit: 1,
-		QueryShardMaxSamples:     10_000_000,
-		recorder:                 events.NewFakeRecorder(100),
-		patcher:                  workload.New(c, false),
-		retries:                  newRetryTracker(),
-	}
-	return r, server
-}
-
-// promServerForReconcile creates a Prometheus mock that returns predictable per-container
-// CPU/memory totals and replica counts so reconcileWorkload computes a
-// recommendation deterministically.
-func promServerForReconcile(t *testing.T) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(q, "workload_oom_24h"):
-			// No recent OOMs in tests by default.
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			// Per-pod p95 of the busiest replica = 100m.
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"0.1"]}]}}`))
-		case strings.Contains(q, "workload_max_pod_memory"):
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"container":"app"},"value":[0,"67108864"]}]}}`))
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	for _, add := range []func(*runtime.Scheme) error{
+		appsv1.AddToScheme, autoscalingv2.AddToScheme, batchv1.AddToScheme, rolloutsv1alpha1.AddToScheme,
+		sustainv1alpha1.AddToScheme, corev1.AddToScheme,
+	} {
+		if err := add(scheme); err != nil {
+			t.Fatalf("scheme: %v", err)
 		}
-	}))
+	}
+	return scheme
 }
 
-// reconcilerWithProm wires up a fully-populated PolicyReconciler against a
-// mock Prometheus and a fake k8s cluster preloaded with extra. inPlace controls
-// the patcher mode.
-func reconcilerWithProm(t *testing.T, server *httptest.Server, inPlace bool, extra ...runtime.Object) *PolicyReconciler {
-	t.Helper()
-	scheme := runtime.NewScheme()
-	_ = appsv1.AddToScheme(scheme)
-	_ = autoscalingv2.AddToScheme(scheme)
-	_ = rolloutsv1alpha1.AddToScheme(scheme)
-	_ = sustainv1alpha1.AddToScheme(scheme)
-	_ = corev1.AddToScheme(scheme)
-
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-
-	// See reconcilerForPolicy: the WLR status subresource must be registered or
-	// the fake client refuses every discovery/computation status write.
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithStatusSubresource(&sustainv1alpha1.Policy{}, &sustainv1alpha1.WorkloadRecommendation{}).
-		WithRuntimeObjects(extra...).
-		Build()
-
+// reconcilerOn wires a PolicyReconciler around c with the bits
+// SetupWithManager would normally inject (patcher, recorder, retries) and the
+// given inputs fetcher.
+func reconcilerOn(c client.Client, scheme *runtime.Scheme, inputs recommender.InputsFetcher, inPlace bool) *PolicyReconciler {
 	return &PolicyReconciler{
 		Client:                   c,
 		Scheme:                   scheme,
-		PrometheusClient:         pc,
+		Inputs:                   inputs,
 		ReconcileInterval:        time.Hour,
 		WorkloadConcurrencyLimit: 1,
-		QueryShardMaxSamples:     10_000_000,
 		InPlaceUpdates:           inPlace,
 		recorder:                 events.NewFakeRecorder(100),
 		patcher:                  workload.New(c, inPlace),
 		retries:                  newRetryTracker(),
 	}
+}
+
+// fakeClientBuilder preloads objs. WorkloadRecommendation needs its status
+// subresource registered: the fake client rejects Status().Patch outright for
+// types it was not told about, and the computation phase reads the
+// observed-resources snapshot that discovery writes there.
+func fakeClientBuilder(scheme *runtime.Scheme, objs ...runtime.Object) *fake.ClientBuilder {
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&sustainv1alpha1.Policy{}, &sustainv1alpha1.WorkloadRecommendation{}).
+		WithRuntimeObjects(objs...)
+}
+
+// reconcilerForPolicy is a reconciler for policy against a Prometheus that
+// knows no identity, which exercises the "no recommendations yet" branch.
+func reconcilerForPolicy(t *testing.T, policy *sustainv1alpha1.Policy, extra ...runtime.Object) *PolicyReconciler {
+	t.Helper()
+	return reconcilerWithInputs(t, recommendertest.NewStaticInputs(), false, append([]runtime.Object{policy}, extra...)...)
+}
+
+// reconcilerWithInputs wires a fully-populated PolicyReconciler against inputs
+// and a fake cluster preloaded with objs. inPlace controls the patcher mode.
+func reconcilerWithInputs(t *testing.T, inputs recommender.InputsFetcher, inPlace bool, objs ...runtime.Object) *PolicyReconciler {
+	t.Helper()
+	scheme := testFullScheme(t)
+	return reconcilerOn(fakeClientBuilder(scheme, objs...).Build(), scheme, inputs, inPlace)
+}
+
+func identityOf(ns, kind, name string) promclient.WorkloadIdentity {
+	return promclient.WorkloadIdentity{Namespace: ns, OwnerKind: kind, OwnerName: name}
+}
+
+// appUsage is a per-pod p95 of 100m CPU and 64Mi memory for container "app".
+func appUsage() *recommender.WorkloadInputs {
+	return &recommender.WorkloadInputs{
+		CPUPerPod: promclient.ContainerValues{"app": 0.1},
+		MemPerPod: promclient.ContainerValues{"app": 64 << 20},
+	}
+}
+
+// usageFor serves appUsage for one identity, so the reconciler computes a
+// recommendation for it deterministically.
+func usageFor(ns, kind, name string) *recommendertest.StaticInputs {
+	return recommendertest.NewStaticInputs().Set(identityOf(ns, kind, name), appUsage())
 }
 
 func policyForReconcileWorkload(t *testing.T, name string) *sustainv1alpha1.Policy {
@@ -308,24 +259,11 @@ func deploymentTarget(ns, name string) *workloadTarget {
 // and every other kind, behaves normally. lists counts the intercepted calls so
 // a test can prove the interceptor actually fired.
 func reconcilerWithLaggingWLRList(
-	t *testing.T, server *httptest.Server, lists *atomic.Int32, objs ...runtime.Object,
+	t *testing.T, inputs recommender.InputsFetcher, lists *atomic.Int32, objs ...runtime.Object,
 ) *PolicyReconciler {
 	t.Helper()
-	scheme := runtime.NewScheme()
-	_ = appsv1.AddToScheme(scheme)
-	_ = batchv1.AddToScheme(scheme)
-	_ = sustainv1alpha1.AddToScheme(scheme)
-	_ = corev1.AddToScheme(scheme)
-
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithStatusSubresource(&sustainv1alpha1.Policy{}, &sustainv1alpha1.WorkloadRecommendation{}).
-		WithRuntimeObjects(objs...).
+	scheme := testFullScheme(t)
+	c := fakeClientBuilder(scheme, objs...).
 		WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 				if _, ok := list.(*sustainv1alpha1.WorkloadRecommendationList); ok && lists.Add(1) == 1 {
@@ -335,45 +273,20 @@ func reconcilerWithLaggingWLRList(
 			},
 		}).
 		Build()
-
-	return &PolicyReconciler{
-		Client:                   c,
-		Scheme:                   scheme,
-		PrometheusClient:         pc,
-		ReconcileInterval:        time.Hour,
-		WorkloadConcurrencyLimit: 1,
-		QueryShardMaxSamples:     10_000_000,
-		recorder:                 events.NewFakeRecorder(100),
-		patcher:                  workload.New(c, false),
-		retries:                  newRetryTracker(),
-	}
+	return reconcilerOn(c, scheme, inputs, false)
 }
 
-// reconcilerCountingWLRStatusWrites is reconcilerWithProm plus a counter of
+// reconcilerCountingWLRStatusWrites is reconcilerWithInputs plus a counter of
 // every WorkloadRecommendation status patch the reconcile issues. Status writes
 // are the unit the WLR write path is judged in: a stable workload must cost
 // none, so a test that cannot count them cannot tell a converged cache from one
 // being rewritten every cycle.
 func reconcilerCountingWLRStatusWrites(
-	t *testing.T, server *httptest.Server, writes *atomic.Int32, objs ...runtime.Object,
+	t *testing.T, inputs recommender.InputsFetcher, writes *atomic.Int32, objs ...runtime.Object,
 ) *PolicyReconciler {
 	t.Helper()
-	scheme := runtime.NewScheme()
-	_ = appsv1.AddToScheme(scheme)
-	_ = batchv1.AddToScheme(scheme)
-	_ = rolloutsv1alpha1.AddToScheme(scheme)
-	_ = sustainv1alpha1.AddToScheme(scheme)
-	_ = corev1.AddToScheme(scheme)
-
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithStatusSubresource(&sustainv1alpha1.Policy{}, &sustainv1alpha1.WorkloadRecommendation{}).
-		WithRuntimeObjects(objs...).
+	scheme := testFullScheme(t)
+	c := fakeClientBuilder(scheme, objs...).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
 				patch client.Patch, opts ...client.SubResourcePatchOption,
@@ -385,18 +298,9 @@ func reconcilerCountingWLRStatusWrites(
 			},
 		}).
 		Build()
-
-	return &PolicyReconciler{
-		Client:                   c,
-		Scheme:                   scheme,
-		PrometheusClient:         pc,
-		ReconcileInterval:        time.Hour,
-		WorkloadConcurrencyLimit: 4,
-		QueryShardMaxSamples:     10_000_000,
-		recorder:                 events.NewFakeRecorder(100),
-		patcher:                  workload.New(c, false),
-		retries:                  newRetryTracker(),
-	}
+	r := reconcilerOn(c, scheme, inputs, false)
+	r.WorkloadConcurrencyLimit = 4
+	return r
 }
 
 // itemForTarget builds the computeItem the reconciler's computation phase would
@@ -427,37 +331,20 @@ func itemForTargetWithWLR(t *workloadTarget, wlr *sustainv1alpha1.WorkloadRecomm
 }
 
 // runComputeAndApply drives the phases Reconcile runs for a single-member
-// identity: one computation for the identity (which also writes its
-// WorkloadRecommendation), the apply for its one member — including the
-// computation's error, exactly as Reconcile threads it through, so a Prometheus
-// failure still surfaces through handleStepError and the retry tracker — and
+// identity: the recommendation pass, the WorkloadRecommendation write, then the
+// apply for its member unless it is in backoff, threading a fetch failure
+// through handleStepError and the retry tracker exactly as Reconcile does, and
 // the identity's health emission.
 func runComputeAndApply(ctx context.Context, r *PolicyReconciler, policy *sustainv1alpha1.Policy, it computeItem) error {
 	r.health.observe(policy.Name, targetIndex{it.Identity: it.Targets})
 	snap := autoscaler.NewNamespacedSnapshot(r.Client)
-	recs, err := r.computeIdentity(ctx, policy, it, snap, nil, nil, false)
-	applyErr := r.reconcileWorkload(ctx, policy, it.Targets[0], snap, recs, err)
+	results := r.recommend(ctx, policy, []computeItem{it}, snap)
+	r.persist(ctx, policy.Name, results)
+	res := results[0]
+	var err error
+	for _, t := range res.apply {
+		err = errors.Join(err, r.reconcileWorkload(ctx, policy, t, snap, res.recs, res.err))
+	}
 	r.health.emit(policy.Name, r.retries)
-	return applyErr
-}
-
-// promServerFor is a Prometheus stub that serves one identity's CPU and
-// memory samples. The sharded batch attributes samples back to an identity via
-// the namespace/owner_kind/owner_name labels, so a bare {container} metric
-// would silently resolve to no inputs at all.
-func promServerFor(ns, ownerKind, ownerName string) *httptest.Server {
-	metric := fmt.Sprintf(`{"namespace":%q,"owner_kind":%q,"owner_name":%q,"container":"app"}`, ns, ownerKind, ownerName)
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		_ = req.ParseForm()
-		q := req.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(q, "workload_max_pod_cpu"):
-			_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":%s,"value":[0,"0.1"]}]}}`, metric)
-		case strings.Contains(q, "workload_max_pod_memory"):
-			_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":%s,"value":[0,"67108864"]}]}}`, metric)
-		default:
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-		}
-	}))
+	return err
 }

@@ -3,8 +3,6 @@ package controller
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -25,14 +23,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 func TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
@@ -47,7 +43,7 @@ func TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods(t *te
 		}}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
-	r := reconcilerWithProm(t, server, true /* in-place */, pod)
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true /* in-place */, pod)
 
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
@@ -66,9 +62,6 @@ func TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods(t *te
 // recommendation: the event must follow what happened to pods, or it fires on
 // every reconcile.
 func TestReconcileWorkload_ResourcesUpdatedEvent_OnlyWhenPodsChanged(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
@@ -83,7 +76,7 @@ func TestReconcileWorkload_ResourcesUpdatedEvent_OnlyWhenPodsChanged(t *testing.
 		}}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
-	r := reconcilerWithProm(t, server, true, pod)
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, pod)
 	rec := r.recorder.(*events.FakeRecorder)
 
 	tgt := deploymentTarget("default", "web")
@@ -112,9 +105,6 @@ func TestReconcileWorkload_ResourcesUpdatedEvent_OnlyWhenPodsChanged(t *testing.
 }
 
 func TestReconcileWorkload_RecommendOnly_DoesNotRecyclePods(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default", Name: "web-pod",
@@ -129,7 +119,7 @@ func TestReconcileWorkload_RecommendOnly_DoesNotRecyclePods(t *testing.T) {
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 
-	r := reconcilerWithProm(t, server, false, pod)
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), false, pod)
 	r.RecommendOnly = true
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
@@ -151,9 +141,6 @@ func TestReconcileWorkload_RecommendOnly_DoesNotRecyclePods(t *testing.T) {
 // The per-policy spec.rightSizing.recommendOnly field must short-circuit the
 // recycle path exactly like the global flag.
 func TestReconcileWorkload_PolicyRecommendOnly_DoesNotRecyclePods(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default", Name: "web-pod",
@@ -168,7 +155,7 @@ func TestReconcileWorkload_PolicyRecommendOnly_DoesNotRecyclePods(t *testing.T) 
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 
-	r := reconcilerWithProm(t, server, false, pod)
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), false, pod)
 	// Global flag stays false — only the policy opts into dry-run.
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
@@ -210,10 +197,7 @@ func TestReconcileWorkload_AgeGateUsesWLRCreationTimestamp(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			server := promServerForReconcile(t)
-			defer server.Close()
-
-			r := reconcilerWithProm(t, server, true /* in-place */)
+			r := reconcilerWithInputs(t, usageFor("default", "Job", "nightly-etl"), true /* in-place */)
 			policy := policyForReconcileWorkload(t, "p")
 			// Recommend-only isolates the gate: the recommendation is still
 			// computed and cached, but the apply path (which needs pods and a
@@ -260,12 +244,8 @@ func TestReconcileWorkload_AgeGateUsesWLRCreationTimestamp(t *testing.T) {
 }
 
 func TestReconcileWorkload_TransientPromError_RecordsRetry(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	r := reconcilerWithProm(t, server, false)
+	inputs := recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), errors.New("prometheus down"))
+	r := reconcilerWithInputs(t, inputs, false)
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
 
@@ -320,18 +300,13 @@ func TestHandleStepError_ContextCanceled_StaysSilent(t *testing.T) {
 // Empty Prometheus results are NOT a failure: retry state is cleared and no
 // patch is attempted.
 func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-	}))
-	defer server.Close()
-
-	r := reconcilerWithProm(t, server, false)
+	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), false)
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
 
-	// Prime the retry tracker so we can confirm it gets cleared on success.
-	r.retries.recordFailure(tgt.key(), "patch")
+	// Prime a past failure whose backoff has elapsed, so the member is
+	// processed and the success must clear it.
+	r.retries.states[tgt.key()] = &retryState{attempts: 1, nextRetry: time.Now().Add(-time.Second), phase: "patch"}
 
 	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
@@ -351,9 +326,6 @@ func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *test
 // bare-pod resize path resolves members from the grouping rule rather than the
 // selector.
 func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "airflow",
@@ -368,7 +340,7 @@ func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
 		}}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
-	r := reconcilerWithProm(t, server, true /* in-place */, pod)
+	r := reconcilerWithInputs(t, usageFor("airflow", "Pod", "etl-daily"), true /* in-place */, pod)
 
 	tgt := &workloadTarget{
 		Kind:         "Pod",
@@ -420,9 +392,6 @@ func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
 // The OnCreate gate: the recommendation is computed and persisted as a WLR (the
 // dashboard/webhook need it) but no pod is recycled or resized.
 func TestReconcileWorkload_OnCreateMode_CachesButNeverRecycles(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default", Name: "web-pod",
@@ -436,7 +405,7 @@ func TestReconcileWorkload_OnCreateMode_CachesButNeverRecycles(t *testing.T) {
 		}}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
-	r := reconcilerWithProm(t, server, true /* in-place */, pod)
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true /* in-place */, pod)
 	tgt := deploymentTarget("default", "web")
 	tgt.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
 	policy := policyForReconcileWorkload(t, "p")
@@ -474,9 +443,6 @@ func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
 		{name: "policy override evicts annotated pod", ignore: true, wantEvicted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := promServerForReconcile(t)
-			defer server.Close()
-
 			// Stale Running pod (999m vs the ~100m recommendation) owned by
 			// the reconciled Deployment and annotated safe-to-evict=false.
 			pod := &corev1.Pod{
@@ -499,7 +465,7 @@ func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
 				Status: corev1.PodStatus{Phase: corev1.PodRunning},
 			}
 
-			r := reconcilerWithProm(t, server, false /* eviction mode, not in-place */)
+			r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), false /* eviction mode, not in-place */)
 			var evicted bool
 			r.Client = fake.NewClientBuilder().
 				WithScheme(r.Scheme).
@@ -583,9 +549,7 @@ func webPod(cpu string) *corev1.Pod {
 }
 
 func TestReconcileWorkload_EmitsPodCountsAfterApply(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-	r := reconcilerWithProm(t, server, true, webPod("50m"))
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, webPod("50m"))
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
 	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
@@ -600,9 +564,7 @@ func TestReconcileWorkload_EmitsPodCountsAfterApply(t *testing.T) {
 }
 
 func TestReconcileWorkload_OnCreate_CountsStaleWithoutTouchingPods(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-	r := reconcilerWithProm(t, server, true, webPod("999m"))
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, webPod("999m"))
 	tgt := deploymentTarget("default", "web")
 	tgt.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
 	policy := policyForReconcileWorkload(t, "p")
@@ -622,10 +584,8 @@ func TestReconcileWorkload_OnCreate_CountsStaleWithoutTouchingPods(t *testing.T)
 }
 
 func TestReconcileWorkload_RecommendOnly_DeletesPodCounts(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
 	EmitWorkloadPods(testIdentity("default", "Deployment", "web"), workload.PodCounts{Total: 3, Stale: 3})
-	r := reconcilerWithProm(t, server, false, webPod("999m"))
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), false, webPod("999m"))
 	r.RecommendOnly = true
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
@@ -640,9 +600,7 @@ func TestReconcileWorkload_RecommendOnly_DeletesPodCounts(t *testing.T) {
 // A failed OnCreate dry run must not enter retry backoff: backoff skips the
 // compute phase and would freeze the WorkloadRecommendation the webhook reads.
 func TestReconcileWorkload_OnCreate_DryRunErrorIsNotAStepFailure(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-	r := reconcilerWithProm(t, server, true, webPod("999m"))
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, webPod("999m"))
 	wrapped := interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
 		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 			if _, ok := list.(*corev1.PodList); ok {

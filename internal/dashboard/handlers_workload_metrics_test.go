@@ -17,11 +17,13 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
 func TestHandleWorkloadRecommendations_WorkloadNotFound(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
-	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,
@@ -36,7 +38,7 @@ func TestHandleWorkloadRecommendations_WorkloadNotFound(t *testing.T) {
 func TestHandleWorkloadRecommendations_UnmanagedWorkload(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d).Build()
-	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,
@@ -62,7 +64,7 @@ func TestHandleWorkloadRecommendations_PolicyMissing(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
 	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "ghost"}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d).Build()
-	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,
@@ -84,7 +86,7 @@ func TestHandleWorkloadRecommendations_BadWindow(t *testing.T) {
 	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d, policy).Build()
-	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,
@@ -106,14 +108,16 @@ func TestHandleWorkloadRecommendations_AppliesOOMFloor(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d, policy).Build()
 
 	const mib = 1 << 20
-	prom := &fakePromClient{
-		memByContainer: promclient.ContainerValues{"app": 100 * mib},
-		oomSignal: promclient.OOMSignal{
-			OOMCounts:       promclient.ContainerValues{"app": 1},
-			PeakMemoryBytes: promclient.ContainerValues{"app": 200 * mib},
-		},
-	}
-	srv := &Server{K8sClient: c, PromClient: prom, Logger: testLogger(t)}
+	inputs := recommendertest.NewStaticInputs().Set(
+		promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "stress"},
+		&recommender.WorkloadInputs{
+			MemPerPod: promclient.ContainerValues{"app": 100 * mib},
+			OOM: promclient.OOMSignal{
+				OOMCounts:       promclient.ContainerValues{"app": 1},
+				PeakMemoryBytes: promclient.ContainerValues{"app": 200 * mib},
+			},
+		})
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: inputs, Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,
@@ -139,7 +143,7 @@ func TestHandleWorkloadRecommendations_HappyPath(t *testing.T) {
 	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d, policy).Build()
-	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,
@@ -171,7 +175,7 @@ func TestHandleWorkloadRecommendations_SelectorExcludesWorkload(t *testing.T) {
 	}}
 	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d, policy).Build()
-	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,
@@ -198,7 +202,7 @@ func TestHandleWorkloadRecommendations_DepartedWorkloadSkipsSelectorGate(t *test
 	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"team": "b"}}
 	wlr := retainedWLR("p", "airflow", "Pod", "etl")
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, wlr).Build()
-	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,
@@ -260,7 +264,7 @@ func TestHandleWorkloadRecommendations_GroupedIdentitySiblingOptsInAndMatches(t 
 		map[string]string{"track": "green"}, baseTime)
 
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(p, q, older, newer).Build()
-	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Health: memHealthSignals{}, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Health: memHealthSignals{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,
@@ -318,7 +322,7 @@ func TestHandleWorkloadRecommendations_PoliciesListFails(t *testing.T) {
 				return cl.List(ctx, list, opts...)
 			},
 		}).Build()
-	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,
@@ -412,6 +416,7 @@ func TestHandleWorkloadMetrics_BadWindow(t *testing.T) {
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
+		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
 	}
 
@@ -429,6 +434,7 @@ func TestHandleWorkloadMetrics_BadStep(t *testing.T) {
 	srv := &Server{
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
+		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
 	}
 
@@ -447,7 +453,7 @@ func TestHandleWorkloadMetrics_ReturnsAllKeys(t *testing.T) {
 	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
 	d.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "wait-db"}}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d).Build()
-	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadMetrics(rec,
@@ -476,7 +482,7 @@ func TestRecommendationsAbsoluteRange(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d, policy).Build()
 	prom := &fakePromClient{}
-	srv := &Server{K8sClient: c, PromClient: prom, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: prom, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadRecommendations(rec,
@@ -505,7 +511,7 @@ func TestWorkloadMetricsAbsoluteRange(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d).Build()
 	prom := &fakePromClient{}
-	srv := &Server{K8sClient: c, PromClient: prom, Logger: testLogger(t)}
+	srv := &Server{K8sClient: c, PromClient: prom, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	req := httptest.NewRequest(http.MethodGet,
 		"/api/workloads/default/Deployment/web/metrics?from=1718000000&to=1718003600&step=5m", nil)

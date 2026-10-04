@@ -22,6 +22,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/logging"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/version"
 )
 
@@ -121,10 +122,17 @@ func runStart(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Zero means the default budget here, not NewPromInputs' one identity per
+	// shard, which would multiply the query count by the identity count.
+	shardMaxSamples := cfg.QueryShardMaxSamples
+	if shardMaxSamples <= 0 {
+		shardMaxSamples = config.DefaultQueryShardMaxSamples
+	}
+
 	if err := (&controller.PolicyReconciler{
 		Client:                    mgr.GetClient(),
 		Scheme:                    mgr.GetScheme(),
-		PrometheusClient:          promClient,
+		Inputs:                    recommender.NewPromInputs(promClient, shardMaxSamples),
 		ReconcileInterval:         cfg.ReconcileInterval,
 		InPlaceUpdates:            inPlaceUpdates,
 		ExcludedNamespaces:        cfg.ExcludedNamespaces,
@@ -133,7 +141,6 @@ func runStart(_ *cobra.Command, _ []string) error {
 		PolicyConcurrencyLimit:    cfg.PolicyConcurrencyLimit,
 		RecycleReplacementTimeout: cfg.RecycleReplacementTimeout,
 		RecommendationRetention:   cfg.RecommendationRetention,
-		QueryShardMaxSamples:      cfg.QueryShardMaxSamples,
 		LiveOOM: controller.LiveOOMConfig{
 			Source:    oomCache,
 			TriggerCh: triggerCh,

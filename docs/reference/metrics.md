@@ -80,13 +80,13 @@ These four gauges are emitted per member object: `owner_kind` and `owner_name` a
 - `recycle_suppressed_total` — decreases held back by the policy's [`downsizeThreshold`](policy.md#cpudownsizethreshold-memorydownsizethreshold), once per resource per pod per reconcile, summed over the identity's members. Increases are never counted.
 - `group_autoscaler_mismatch_total` — once per reconcile for an [owner-name group](../guides/standalone-pods-and-grouping.md) whose members disagree on autoscaler presence or kind. The group's single recommendation follows the first sorted member's autoscaler, so any non-zero rate is a misconfiguration.
 
-#### Batch prefetch coverage vs. failures
+#### Batch fetch coverage vs. failures
 
-Each reconcile fetches Prometheus data for all of a policy's workloads in one sharded batch (see [Architecture](../concepts/architecture.md)):
+Each reconcile fetches Prometheus data for all of a policy's workloads in one batched call (see [How the data is fetched](../concepts/recommendation-pipeline.md#how-the-data-is-fetched)):
 
-- `policy_batch_requested_count` — identities in the batch this cycle.
+- `policy_batch_requested_count` — identities in the batch this cycle. An identity whose every workload is in retry backoff is not fetched.
 - `policy_batch_resolved_count` — identities that returned at least one CPU or memory sample.
-- `policy_batch_failures_total` — identities whose shard query and per-workload fallback both failed.
+- `policy_batch_failures_total` — identities whose CPU or memory could not be read, even when re-queried on their own.
 
 `resolved < requested` with flat `failures_total` is normal (young or quiet workloads). Alert on `failures_total`; treat a low resolved/requested ratio as a data-maturity signal.
 

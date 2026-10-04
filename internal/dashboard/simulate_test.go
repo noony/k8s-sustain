@@ -14,6 +14,8 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
 // newCoordinatedSimulateServer builds a Deployment managed by policy "p" with
@@ -46,8 +48,10 @@ func newCoordinatedSimulateServer(t *testing.T) *Server {
 	}
 	objs := []client.Object{policy, d, hpa}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
-	prom := &usageBatchPromClient{cpuByOwner: map[string]promclient.ContainerValues{"web": {"main": 1}}}
-	return &Server{K8sClient: c, PromClient: prom, Logger: testLogger(t)}
+	inputs := recommendertest.NewStaticInputs().Set(
+		promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
+		&recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"main": 1}})
+	return &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: inputs, Logger: testLogger(t)}
 }
 
 func TestRunSimulation_InheritsManagingPolicyCoordination(t *testing.T) {

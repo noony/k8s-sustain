@@ -2,48 +2,112 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
-	"github.com/noony/k8s-sustain/internal/workload"
+	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
-func TestReconcile_NilPrometheusClient_ReturnsError(t *testing.T) {
+func reconcileOnce(t *testing.T, r *PolicyReconciler, name string) {
+	t.Helper()
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+}
+
+func readyCondition(t *testing.T, r *PolicyReconciler, name string) *metav1.Condition {
+	t.Helper()
+	var got sustainv1alpha1.Policy
+	if err := r.Get(context.Background(), types.NamespacedName{Name: name}, &got); err != nil {
+		t.Fatalf("get policy: %v", err)
+	}
+	for i := range got.Status.Conditions {
+		if got.Status.Conditions[i].Type == "Ready" {
+			return &got.Status.Conditions[i]
+		}
+	}
+	t.Fatal("expected Ready condition")
+	return nil
+}
+
+func ongoingPolicy(name string, kinds sustainv1alpha1.UpdateTypes) *sustainv1alpha1.Policy {
+	return &sustainv1alpha1.Policy{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Finalizers: []string{"k8s.sustain.io/cleanup"}},
+		Spec: sustainv1alpha1.PolicySpec{
+			RightSizing: sustainv1alpha1.RightSizingSpec{
+				Update: sustainv1alpha1.UpdateSpec{Types: kinds},
+			},
+		},
+	}
+}
+
+func ongoingDeployments(name string) *sustainv1alpha1.Policy {
+	ongoing := sustainv1alpha1.UpdateModeOngoing
+	return ongoingPolicy(name, sustainv1alpha1.UpdateTypes{Deployment: &ongoing})
+}
+
+// establishedDeployment is an opted-in Deployment old enough to clear the age
+// gate, running container "app" at 10m CPU.
+func establishedDeployment(ns, name, policy string) *appsv1.Deployment {
+	d := annotatedDeployment(ns, name, policy)
+	d.CreationTimestamp = metav1.NewTime(time.Now().Add(-48 * time.Hour))
+	d.Spec.Template.Spec.Containers[0].Resources = corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")},
+	}
+	return d
+}
+
+// runningPod is a Running pod selected by establishedDeployment(ns, app),
+// with container "app" at 10m CPU.
+func runningPod(ns, name, app string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: map[string]string{"app": app}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name:      "app",
+			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")}},
+		}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+func podCPU(t *testing.T, r *PolicyReconciler, ns, name string) string {
+	t.Helper()
+	var pod corev1.Pod
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &pod); err != nil {
+		t.Fatalf("get pod %s: %v", name, err)
+	}
+	return pod.Spec.Containers[0].Resources.Requests.Cpu().String()
+}
+
+func TestReconcile_NoInputsFetcher_ReturnsError(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
-	r, server := reconcilerForPolicy(t, policy)
-	defer server.Close()
-	r.PrometheusClient = nil
+	r := reconcilerForPolicy(t, policy)
+	r.Inputs = nil
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
 	if err == nil {
-		t.Fatal("expected error when PrometheusClient is nil")
+		t.Fatal("expected error when no inputs fetcher is configured")
 	}
 }
 
 func TestReconcile_PolicyNotFound_NoError(t *testing.T) {
-	r, server := reconcilerForPolicy(t, &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "exists"}})
-	defer server.Close()
+	r := reconcilerForPolicy(t, &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "exists"}})
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "missing"}})
 	if err != nil {
@@ -56,8 +120,7 @@ func TestReconcile_PolicyNotFound_NoError(t *testing.T) {
 
 func TestReconcile_AddsFinalizerAndRequeues(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
-	r, server := reconcilerForPolicy(t, policy)
-	defer server.Close()
+	r := reconcilerForPolicy(t, policy)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
 	if err != nil {
@@ -77,41 +140,11 @@ func TestReconcile_AddsFinalizerAndRequeues(t *testing.T) {
 }
 
 func TestReconcile_EmptyTargets_SetsReadyCondition(t *testing.T) {
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p", Finalizers: []string{"k8s.sustain.io/cleanup"}},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				Update: sustainv1alpha1.UpdateSpec{
-					Types: sustainv1alpha1.UpdateTypes{Deployment: &ongoing},
-				},
-			},
-		},
-	}
-	r, server := reconcilerForPolicy(t, policy)
-	defer server.Close()
+	r := reconcilerForPolicy(t, ongoingDeployments("p"))
 
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileOnce(t, r, "p")
 
-	var got sustainv1alpha1.Policy
-	if err := r.Get(context.Background(), types.NamespacedName{Name: "p"}, &got); err != nil {
-		t.Fatalf("get policy: %v", err)
-	}
-	if len(got.Status.Conditions) == 0 {
-		t.Fatal("expected at least one status condition")
-	}
-	var ready *metav1.Condition
-	for i := range got.Status.Conditions {
-		if got.Status.Conditions[i].Type == "Ready" {
-			ready = &got.Status.Conditions[i]
-			break
-		}
-	}
-	if ready == nil {
-		t.Fatal("expected Ready condition")
-	}
+	ready := readyCondition(t, r, "p")
 	if ready.Status != metav1.ConditionTrue {
 		t.Errorf("Ready.Status = %v, want True", ready.Status)
 	}
@@ -129,12 +162,9 @@ func TestReconcile_DeletedPolicy_RemovesFinalizer(t *testing.T) {
 			DeletionTimestamp: &now,
 		},
 	}
-	r, server := reconcilerForPolicy(t, policy)
-	defer server.Close()
+	r := reconcilerForPolicy(t, policy)
 
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileOnce(t, r, "p")
 
 	var got sustainv1alpha1.Policy
 	err := r.Get(context.Background(), types.NamespacedName{Name: "p"}, &got)
@@ -146,59 +176,13 @@ func TestReconcile_DeletedPolicy_RemovesFinalizer(t *testing.T) {
 }
 
 // The failing target is a standalone Job, an arbitrary choice: every kind goes
-// through the same FetchWorkloadInputsBatch prefetch and an outage propagates
-// identically via BatchStats.Failures (see
-// TestReconcile_TotalOutage_DeploymentGetsPartialFailureAndRetry).
+// through the same fetch and a failure propagates identically.
 func TestReconcile_PartialFailure_SetsConditionAndRequeues(t *testing.T) {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p", Finalizers: []string{"k8s.sustain.io/cleanup"}},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				Update: sustainv1alpha1.UpdateSpec{
-					Types: sustainv1alpha1.UpdateTypes{Job: &ongoing},
-				},
-			},
-		},
-	}
+	policy := ongoingPolicy("p", sustainv1alpha1.UpdateTypes{Job: &ongoing})
 	job := annotatedJob("default", "app", "p")
-
-	scheme := runtime.NewScheme()
-	_ = appsv1.AddToScheme(scheme)
-	_ = batchv1.AddToScheme(scheme)
-	_ = rolloutsv1alpha1.AddToScheme(scheme)
-	_ = sustainv1alpha1.AddToScheme(scheme)
-	_ = corev1.AddToScheme(scheme)
-
-	// Prometheus mock that always returns 500 — drives reconcileWorkload to
-	// the transient-error retry path (which still surfaces an aggregate
-	// PartialFailure to the caller via failCount).
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
-	defer server.Close()
-	pc, err := promclient.New(server.URL)
-	if err != nil {
-		t.Fatalf("prometheus client: %v", err)
-	}
-
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithStatusSubresource(&sustainv1alpha1.Policy{}, &sustainv1alpha1.WorkloadRecommendation{}).
-		WithRuntimeObjects(policy, job).
-		Build()
-
-	r := &PolicyReconciler{
-		Client:                   c,
-		Scheme:                   scheme,
-		PrometheusClient:         pc,
-		ReconcileInterval:        time.Hour,
-		WorkloadConcurrencyLimit: 1,
-		QueryShardMaxSamples:     10_000_000,
-		recorder:                 events.NewFakeRecorder(100),
-		patcher:                  workload.New(c, false),
-		retries:                  newRetryTracker(),
-	}
+	inputs := recommendertest.NewStaticInputs().Fail(identityOf("default", "Job", "app"), errors.New("prometheus down"))
+	r := reconcilerWithInputs(t, inputs, false, policy, job)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
 	if err != nil {
@@ -208,20 +192,7 @@ func TestReconcile_PartialFailure_SetsConditionAndRequeues(t *testing.T) {
 		t.Errorf("RequeueAfter = %v, want 1h even on partial failure", res.RequeueAfter)
 	}
 
-	var got sustainv1alpha1.Policy
-	if err := r.Get(context.Background(), types.NamespacedName{Name: "p"}, &got); err != nil {
-		t.Fatalf("get policy: %v", err)
-	}
-	var ready *metav1.Condition
-	for i := range got.Status.Conditions {
-		if got.Status.Conditions[i].Type == "Ready" {
-			ready = &got.Status.Conditions[i]
-			break
-		}
-	}
-	if ready == nil {
-		t.Fatal("expected Ready condition")
-	}
+	ready := readyCondition(t, r, "p")
 	if ready.Status == metav1.ConditionTrue {
 		t.Error("Ready should NOT be True on partial failure")
 	}
@@ -230,28 +201,12 @@ func TestReconcile_PartialFailure_SetsConditionAndRequeues(t *testing.T) {
 	}
 }
 
-// Pins that Job and bare-Pod identities become shard candidates. It drives a
-// real Reconcile() with them as the ONLY targets (no Deployment, so nothing
-// else can inflate the count) and reads the candidate count the loop actually
-// built, via k8s_sustain_policy_batch_requested_count: 0 means both were
-// withheld by the old kind exclusion, 2 means both were batched.
-//
-// TestJobAndPodIdentitiesBecomeShardCandidates in computation_test.go cannot
-// substitute -- it re-implements only the empty-containers half of the filter
-// inline, so it passes whether or not the kind exclusion exists.
-func TestReconcileBatchesJobAndPodIdentities(t *testing.T) {
+// Job and bare-Pod identities are fetched like every other kind, and counted
+// by k8s_sustain_policy_batch_requested_count.
+func TestReconcileFetchesJobAndPodIdentities(t *testing.T) {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
 	const policyName = "batch-job-pod"
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: policyName, Finalizers: []string{"k8s.sustain.io/cleanup"}},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				Update: sustainv1alpha1.UpdateSpec{
-					Types: sustainv1alpha1.UpdateTypes{Job: &ongoing, Pod: &ongoing},
-				},
-			},
-		},
-	}
+	policy := ongoingPolicy(policyName, sustainv1alpha1.UpdateTypes{Job: &ongoing, Pod: &ongoing})
 	job := annotatedJob("default", "nightly", policyName)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -264,256 +219,152 @@ func TestReconcileBatchesJobAndPodIdentities(t *testing.T) {
 		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
 	}
+	inputs := recommendertest.NewStaticInputs()
+	r := reconcilerWithInputs(t, inputs, false, policy, job, pod)
 
-	r, server := reconcilerForPolicy(t, policy, job, pod)
-	defer server.Close()
+	reconcileOnce(t, r, policyName)
 
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
+	for _, id := range []promclient.WorkloadIdentity{identityOf("default", "Job", "nightly"), identityOf("default", "Pod", "dag-task")} {
+		if !inputs.Requested(id) {
+			t.Errorf("%v was not fetched", id)
+		}
 	}
-
-	requested := gaugeValue(t, "k8s_sustain_policy_batch_requested_count", map[string]string{"policy": policyName})
-	if requested != 2 {
-		t.Errorf("policy_batch_requested_count = %v, want 2: Job and Pod identities must be shard candidates now that HistoryStart is gone", requested)
+	if requested := gaugeValue(t, "k8s_sustain_policy_batch_requested_count", map[string]string{"policy": policyName}); requested != 2 {
+		t.Errorf("policy_batch_requested_count = %v, want 2", requested)
 	}
 }
 
-// Reconciling many workloads under one Policy must issue a roughly constant
-// number of Prometheus queries (one shard per resource, shared across a
-// namespace/owner_kind group), not a set PER WORKLOAD. No other test in this
-// file counts requests, so without this one the controller could silently fall
-// back to per-workload queries and the suite would stay green.
-//
-// All workloads are Deployments for setup convenience; every kind goes through
-// the same batch path.
-func TestReconcile_BatchesPrometheusQueriesAcrossWorkloads(t *testing.T) {
+// A Policy's identities are fetched in one call, not one per workload.
+func TestReconcile_FetchesEveryIdentityInOneCall(t *testing.T) {
 	const numWorkloads = 10
-
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p", Finalizers: []string{"k8s.sustain.io/cleanup"}},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				Update: sustainv1alpha1.UpdateSpec{
-					Types: sustainv1alpha1.UpdateTypes{Deployment: &ongoing},
-				},
-			},
-		},
-	}
-
-	extras := []runtime.Object{policy}
+	extras := []runtime.Object{ongoingDeployments("p")}
 	for i := range numWorkloads {
 		extras = append(extras, annotatedDeployment("default", fmt.Sprintf("web-%d", i), "p"))
 	}
+	inputs := recommendertest.NewStaticInputs()
+	r := reconcilerWithInputs(t, inputs, true, extras...)
 
-	var requestCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-	}))
-	defer server.Close()
+	reconcileOnce(t, r, "p")
 
-	r := reconcilerWithProm(t, server, true, extras...)
-
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
+	calls := inputs.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("got %d fetch calls, want 1 for the whole Policy", len(calls))
 	}
-
-	got := requestCount.Load()
-	// 10 Deployments sharing one (namespace, owner_kind) pair fit comfortably
-	// under QueryShardMaxSamples and collapse into exactly one CPU shard, one
-	// memory shard, and one OOM shard (OOM reuses the CPU shard partition,
-	// per FetchWorkloadInputsBatch's doc comment) = 3 requests total,
-	// independent of numWorkloads. Assert well under the pre-batching
-	// per-workload bound (3 queries/workload x 10 = 30) rather than pinning
-	// the exact count, so this doesn't become brittle to an unrelated shard
-	// implementation change while still failing loudly on a regression to
-	// per-workload fan-out.
-	if got >= numWorkloads {
-		t.Errorf("expected a batched (roughly constant) query count, got %d requests for %d workloads -- looks like per-workload fan-out, not batching", got, numWorkloads)
+	if len(calls[0]) != numWorkloads {
+		t.Errorf("the call requested %d identities, want %d", len(calls[0]), numWorkloads)
 	}
-	t.Logf("observed %d Prometheus requests for %d workloads", got, numWorkloads)
+	for _, req := range calls[0] {
+		if req.Containers != 1 {
+			t.Errorf("%v requested with size %d, want its 1 container", req.Identity, req.Containers)
+		}
+	}
 }
 
-// recommender.FetchWorkloadInputsBatch never returns an error by design -- one
-// sick shard must not deny healthy shard-mates a recommendation -- so a genuine
-// per-identity failure reaches PolicyReconciler only through
-// BatchStats.Failures. Without that wiring a total outage flows through as
-// empty-but-present inputs and records success, making a dead Prometheus
-// indistinguishable from "everything is already correctly sized".
-//
-// Driven through the real Reconcile path so it covers the batch wiring, not just
-// buildRecommendations' own fetchErr check.
-func TestReconcile_TotalOutage_DeploymentGetsPartialFailureAndRetry(t *testing.T) {
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p", Finalizers: []string{"k8s.sustain.io/cleanup"}},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				Update: sustainv1alpha1.UpdateSpec{
-					Types: sustainv1alpha1.UpdateTypes{Deployment: &ongoing},
-				},
-			},
-		},
+// The normal path: the identity's Recommendation is written to its
+// WorkloadRecommendation and applied to its running pod.
+func TestReconcile_RecommendsPersistsAndApplies(t *testing.T) {
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true,
+		ongoingDeployments("p"), establishedDeployment("default", "web", "p"), runningPod("default", "web-pod", "web"))
+
+	reconcileOnce(t, r, "p")
+
+	wlr := getWLRFor(t, r, "default", "Deployment", "web")
+	if got := wlr.Status.Containers["app"].CPURequest; got == nil || got.String() != "100m" {
+		t.Errorf("stored CPU recommendation = %v, want 100m", got)
 	}
-	dep := annotatedDeployment("default", "app", "p")
+	if cpu := podCPU(t, r, "default", "web-pod"); cpu != "100m" {
+		t.Errorf("pod CPU = %s, want the 100m recommendation applied in place", cpu)
+	}
+	if ready := readyCondition(t, r, "p"); ready.Status != metav1.ConditionTrue {
+		t.Errorf("Ready = %s, want True", ready.Status)
+	}
+}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	r := reconcilerWithProm(t, server, true, policy, dep)
-
-	// A delta, not an absolute value: k8s_sustain_policy_batch_failures_total is
-	// a Counter shared by policy label "p" across this file and persists across
-	// `go test -count>1` re-runs in the same process.
+// One identity whose inputs cannot be read fails alone: it enters retry
+// backoff and turns the Policy not-Ready, while its neighbour is still
+// recommended and applied. A total outage reaches the controller only this
+// way, so without it a dead Prometheus would look like "already right-sized".
+func TestReconcile_FetchFailureFailsOnlyThatIdentity(t *testing.T) {
+	inputs := usageFor("default", "Deployment", "healthy").
+		Fail(identityOf("default", "Deployment", "broken"), errors.New("prometheus down"))
+	r := reconcilerWithInputs(t, inputs, true, ongoingDeployments("p"),
+		establishedDeployment("default", "broken", "p"), runningPod("default", "broken-pod", "broken"),
+		establishedDeployment("default", "healthy", "p"), runningPod("default", "healthy-pod", "healthy"))
+	// A delta: the counter is shared by policy label "p" across this package.
 	before := testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues("p"))
 
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileOnce(t, r, "p")
 
-	// The failure half of the coverage/failure independence pin;
-	// TestReconcile_EmptySuccessfulResponse_DeploymentSucceedsWithNoRetry below
-	// is the other half.
 	if after := testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues("p")); after-before != 1 {
-		t.Errorf("policy_batch_failures_total delta = %v, want 1 (before=%v after=%v)", after-before, before, after)
+		t.Errorf("policy_batch_failures_total delta = %v, want 1", after-before)
 	}
-
-	var got sustainv1alpha1.Policy
-	if err := r.Get(context.Background(), types.NamespacedName{Name: "p"}, &got); err != nil {
-		t.Fatalf("get policy: %v", err)
+	ready := readyCondition(t, r, "p")
+	if ready.Status == metav1.ConditionTrue || !strings.Contains(ready.Message, "1 of 2 workloads failed") {
+		t.Errorf("Ready = %s %q, want False naming 1 of 2 workloads failed", ready.Status, ready.Message)
 	}
-	var ready *metav1.Condition
-	for i := range got.Status.Conditions {
-		if got.Status.Conditions[i].Type == "Ready" {
-			ready = &got.Status.Conditions[i]
-			break
-		}
+	if state := r.retries.getState("Deployment/default/broken"); state == nil || state.attempts < 1 {
+		t.Errorf("broken: retry state = %+v, want a recorded attempt", state)
 	}
-	if ready == nil {
-		t.Fatal("expected Ready condition")
+	if cpu := podCPU(t, r, "default", "broken-pod"); cpu != "10m" {
+		t.Errorf("broken pod CPU = %s, want it untouched at 10m", cpu)
 	}
-	if ready.Status == metav1.ConditionTrue {
-		t.Error("Ready should NOT be True during a total Prometheus outage")
+	if state := r.retries.getState("Deployment/default/healthy"); state != nil {
+		t.Errorf("healthy: retry state = %+v, want none", state)
 	}
-	if !strings.Contains(ready.Message, "failed") && !strings.Contains(ready.Reason, "Failure") {
-		t.Errorf("expected failure-flavoured Ready condition, got reason=%q msg=%q", ready.Reason, ready.Message)
-	}
-
-	state := r.retries.getState("Deployment/default/app")
-	if state == nil || state.attempts < 1 {
-		t.Errorf("expected retry state recorded for the deployment during a total outage, got %+v", state)
+	if cpu := podCPU(t, r, "default", "healthy-pod"); cpu != "100m" {
+		t.Errorf("healthy pod CPU = %s, want its 100m recommendation despite its neighbour failing", cpu)
 	}
 }
 
-// shouldSkip is purely time-based and the batch prefetch sits between the
-// candidate loop and the processing loop, taking seconds to minutes on a real
-// cluster. A workload whose backoff lapses inside that gap answered "skip" to
-// the first question and "process" to the second: left out of the batch, then
-// issued the very per-workload query the backoff existed to suppress. The
-// decision must therefore be taken once.
-//
-// "expiring" is in backoff that lapses mid-prefetch; "healthy" exists only to
-// make the prefetch take measurable time (with no candidates BuildShards issues
-// no queries at all and the gap would be zero).
-func TestReconcile_BackoffExpiringDuringPrefetch_StaysSkipped(t *testing.T) {
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p", Finalizers: []string{"k8s.sustain.io/cleanup"}},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				Update: sustainv1alpha1.UpdateSpec{
-					Types: sustainv1alpha1.UpdateTypes{Deployment: &ongoing},
-				},
-			},
-		},
-	}
-	expiring := annotatedDeployment("default", "expiring", "p")
-	healthy := annotatedDeployment("default", "healthy", "p")
+// slowInputs delays every fetch, standing in for a batch that takes minutes on
+// a real cluster.
+type slowInputs struct {
+	*recommendertest.StaticInputs
+	delay time.Duration
+}
 
-	// Records whether any exact-match (per-workload) query named "expiring".
-	// Shard queries use owner_name=~"a|b"; per-workload ones use owner_name="a".
-	var mu sync.Mutex
-	perWorkloadForExpiring := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		if strings.Contains(q, `owner_name="expiring"`) {
-			mu.Lock()
-			perWorkloadForExpiring++
-			mu.Unlock()
-		}
-		// Makes the prefetch straddle the backoff expiry below.
-		time.Sleep(120 * time.Millisecond)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-	}))
-	defer server.Close()
+func (s slowInputs) FetchInputs(
+	ctx context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []recommender.InputsRequest,
+) map[promclient.WorkloadIdentity]recommender.InputsResult {
+	time.Sleep(s.delay)
+	return s.StaticInputs.FetchInputs(ctx, cfg, reqs)
+}
 
-	r := reconcilerWithProm(t, server, true, policy, expiring, healthy)
-
-	// Backoff lapses well before the prefetch above can finish, so the two
-	// shouldSkip calls would disagree if both were still made.
+// An identity whose members are all in retry backoff is not fetched, and the
+// decision holds for the whole pass. Backoff is time-based and the fetch can
+// take minutes: "expiring" leaves backoff mid-fetch, and asking again at apply
+// time would process it with nothing fetched, recording a success that clears
+// its retry state.
+func TestReconcile_BackedOffIdentityIsNotFetched(t *testing.T) {
+	static := recommendertest.NewStaticInputs()
+	r := reconcilerWithInputs(t, slowInputs{StaticInputs: static, delay: 500 * time.Millisecond}, true,
+		ongoingDeployments("p"), annotatedDeployment("default", "expiring", "p"), annotatedDeployment("default", "healthy", "p"))
 	r.retries.mu.Lock()
-	r.retries.states["Deployment/default/expiring"] = &retryState{
-		attempts:  1,
-		nextRetry: time.Now().Add(20 * time.Millisecond),
-	}
+	r.retries.states["Deployment/default/expiring"] = &retryState{attempts: 1, nextRetry: time.Now().Add(250 * time.Millisecond)}
 	r.retries.mu.Unlock()
 
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileOnce(t, r, "p")
 
-	mu.Lock()
-	got := perWorkloadForExpiring
-	mu.Unlock()
-	if got != 0 {
-		t.Errorf("a workload left out of the batch for being in backoff was then processed anyway, "+
-			"issuing %d per-workload Prometheus queries: the backoff decision must be taken once, "+
-			"before the prefetch, and reused", got)
+	if static.Requested(identityOf("default", "Deployment", "expiring")) {
+		t.Error("an identity whose every member is in backoff was fetched")
+	}
+	if !static.Requested(identityOf("default", "Deployment", "healthy")) {
+		t.Error("the healthy identity was not fetched")
+	}
+	if state := r.retries.getState("Deployment/default/expiring"); state == nil || state.attempts != 1 {
+		t.Errorf("expiring: retry state = %+v, want it untouched: the member skipped at fetch time must be skipped at apply time", state)
 	}
 }
 
-// The other half of the distinction TestReconcile_TotalOutage_* pins: queries
-// that succeed but return no samples must NOT be a failure. Without it, a change
-// could "fix" the outage case by treating every empty BatchInputs entry as a
-// failure and retry-storm every workload that legitimately has nothing yet.
+// The other half of the outage distinction: queries that succeed with no
+// samples are not a failure. Treating them as one would retry-storm every
+// workload that legitimately has nothing yet.
 func TestReconcile_EmptySuccessfulResponse_DeploymentSucceedsWithNoRetry(t *testing.T) {
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p", Finalizers: []string{"k8s.sustain.io/cleanup"}},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				Update: sustainv1alpha1.UpdateSpec{
-					Types: sustainv1alpha1.UpdateTypes{Deployment: &ongoing},
-				},
-			},
-		},
-	}
-	dep := annotatedDeployment("default", "app", "p")
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
-	}))
-	defer server.Close()
-
-	r := reconcilerWithProm(t, server, true, policy, dep)
-
-	// See TestReconcile_TotalOutage_DeploymentGetsPartialFailureAndRetry for
-	// why this is a before/after delta rather than an absolute value.
+	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), true, ongoingDeployments("p"), annotatedDeployment("default", "app", "p"))
 	before := testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues("p"))
 
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileOnce(t, r, "p")
 
-	// The coverage half of the independence pin: one workload requested, none
-	// resolved, and critically the failures counter must NOT have moved.
 	if after := testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues("p")); after != before {
 		t.Errorf("policy_batch_failures_total moved for an empty-but-successful response: before=%v after=%v", before, after)
 	}
@@ -523,25 +374,10 @@ func TestReconcile_EmptySuccessfulResponse_DeploymentSucceedsWithNoRetry(t *test
 	if resolved := gaugeValue(t, "k8s_sustain_policy_batch_resolved_count", map[string]string{"policy": "p"}); resolved != 0 {
 		t.Errorf("policy_batch_resolved_count = %v, want 0 (empty-but-successful must not count as resolved)", resolved)
 	}
-
-	var got sustainv1alpha1.Policy
-	if err := r.Get(context.Background(), types.NamespacedName{Name: "p"}, &got); err != nil {
-		t.Fatalf("get policy: %v", err)
+	ready := readyCondition(t, r, "p")
+	if ready.Status != metav1.ConditionTrue || ready.Reason != "ReconciliationSucceeded" {
+		t.Errorf("Ready = %s/%s, want True/ReconciliationSucceeded", ready.Status, ready.Reason)
 	}
-	var ready *metav1.Condition
-	for i := range got.Status.Conditions {
-		if got.Status.Conditions[i].Type == "Ready" {
-			ready = &got.Status.Conditions[i]
-			break
-		}
-	}
-	if ready == nil || ready.Status != metav1.ConditionTrue {
-		t.Fatalf("expected Ready=True for a successful-but-empty response, got %+v", ready)
-	}
-	if ready.Reason != "ReconciliationSucceeded" {
-		t.Errorf("Ready.Reason = %q, want ReconciliationSucceeded", ready.Reason)
-	}
-
 	if state := r.retries.getState("Deployment/default/app"); state != nil && state.attempts != 0 {
 		t.Errorf("expected no retry state for a successful-but-empty response, got %+v", state)
 	}

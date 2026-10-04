@@ -235,9 +235,6 @@ func TestResizeJobPods_NoRunningPodsResizesNothing(t *testing.T) {
 }
 
 func TestReconcileWorkload_JobResizesRunningPod(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "batch-1", UID: "job-uid"},
 		Spec: batchv1.JobSpec{
@@ -268,7 +265,7 @@ func TestReconcileWorkload_JobResizesRunningPod(t *testing.T) {
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 
-	r := reconcilerWithProm(t, server, true /* in-place */, pod)
+	r := reconcilerWithInputs(t, usageFor("default", "Job", "batch-1"), true /* in-place */, pod)
 
 	var podResized, evicted bool
 	r.Client = fake.NewClientBuilder().
@@ -309,9 +306,6 @@ func TestReconcileWorkload_JobResizesRunningPod(t *testing.T) {
 }
 
 func TestReconcileWorkload_OnCreateJobCountsWithoutResizing(t *testing.T) {
-	server := promServerForReconcile(t)
-	defer server.Close()
-
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "oncreate-batch", UID: "oncreate-job-uid"},
 		Spec: batchv1.JobSpec{
@@ -342,7 +336,7 @@ func TestReconcileWorkload_OnCreateJobCountsWithoutResizing(t *testing.T) {
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 
-	r := reconcilerWithProm(t, server, true, pod)
+	r := reconcilerWithInputs(t, usageFor("default", "Job", "oncreate-batch"), true, pod)
 	var podResized, evicted bool
 	r.Client = fake.NewClientBuilder().
 		WithScheme(r.Scheme).

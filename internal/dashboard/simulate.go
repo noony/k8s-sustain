@@ -153,11 +153,13 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, spec simulationSpec
 	}
 
 	containers, _ := workload.MergeContainersForRecommendation(entry.Containers(), entry.InitContainers(), spec.excludeInit)
-	autoInfo := s.autoscalerInfo(ctx, autoscaler.NewNamespacedSnapshot(s.K8sClient), spec)
-	res, err := s.computeWorkloadRecs(ctx, spec, containers, entry.CreationTimestamp, autoInfo)
-	if err != nil {
-		return nil, err
+	id := spec.identity()
+	fetched := s.Inputs.FetchInputs(ctx, spec.resources, []recommender.InputsRequest{{Identity: id, Containers: len(containers)}})[id]
+	if fetched.Err != nil {
+		return nil, fetched.Err
 	}
+	autoInfo := s.autoscalerInfo(ctx, autoscaler.NewNamespacedSnapshot(s.K8sClient), spec)
+	res := computeWorkloadRecs(spec, containers, entry.CreationTimestamp, autoInfo, fetched.Inputs)
 
 	step := cmp.Or(spec.step, "5m")
 	ns, kind, name := spec.namespace, spec.kind, spec.name
@@ -178,28 +180,28 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, spec simulationSpec
 		recommender.PercentileQuantile(spec.resources.Memory.Requests.Percentile), recommender.ResourceWindow(spec.resources.Memory.Window), tr, step)
 
 	return &simulationResult{
-		Containers:         simulationContainers(res),
+		Containers:         simulationContainers(res, fetched.Inputs),
 		InitContainers:     initContainerNamesFromEntry(entry),
-		TooYoung:           res.TooYoung,
+		TooYoung:           res.Outcome == recommender.TooYoung,
 		CPUSeries:          cpuSeries,
 		MemSeries:          memSeries,
 		Resources:          containerResourcesFromEntry(entry),
 		CPURequests:        cpuRequests,
 		MemoryRequests:     memRequests,
-		CPURecommendations: recommendationSeries(cpuRecSeries, spec, autoInfo, res.Inputs.OOM, false),
-		MemRecommendations: recommendationSeries(memRecSeries, spec, autoInfo, res.Inputs.OOM, true),
+		CPURecommendations: recommendationSeries(cpuRecSeries, spec, autoInfo, fetched.Inputs.OOM, false),
+		MemRecommendations: recommendationSeries(memRecSeries, spec, autoInfo, fetched.Inputs.OOM, true),
 	}, nil
 }
 
 // computeWorkloadRecs runs the shared recommendation algorithm for one
-// workload under spec.
-func (s *Server) computeWorkloadRecs(ctx context.Context, spec simulationSpec, containers []corev1.Container, created time.Time, autoInfo autoscaler.Info) (recommender.Result, error) {
-	return recommender.Compute(ctx, s.PromClient, recommender.Request{
-		Identity:        spec.identity(),
+// workload under spec, on inputs already fetched.
+func computeWorkloadRecs(spec simulationSpec, containers []corev1.Container, created time.Time, autoInfo autoscaler.Info, inputs *recommender.WorkloadInputs) recommender.Result {
+	return recommender.Compute(recommender.Request{
 		Containers:      containers,
 		Resources:       spec.resources,
 		Coordination:    spec.coordination,
 		AutoInfo:        autoInfo,
+		Inputs:          inputs,
 		WorkloadCreated: created,
 	})
 }
@@ -219,12 +221,12 @@ func (s *Server) autoscalerInfo(ctx context.Context, snap *autoscaler.Namespaced
 
 // simulationContainers renders the computed recommendations next to the raw
 // usage they were derived from.
-func simulationContainers(res recommender.Result) map[string]simulationContainerResult {
+func simulationContainers(res recommender.Result, inputs *recommender.WorkloadInputs) map[string]simulationContainerResult {
 	out := make(map[string]simulationContainerResult, len(res.Recs))
 	for name, rec := range res.Recs {
 		cr := simulationContainerResult{
-			CPUUsageCores:      res.Inputs.CPUPerPod[name],
-			MemoryUsageBytes:   res.Inputs.MemPerPod[name],
+			CPUUsageCores:      inputs.CPUPerPod[name],
+			MemoryUsageBytes:   inputs.MemPerPod[name],
 			CPULimitRemoved:    rec.RemoveCPULimit,
 			MemoryLimitRemoved: rec.RemoveMemoryLimit,
 		}

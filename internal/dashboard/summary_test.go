@@ -33,9 +33,6 @@ type fakePromClient struct {
 	instantErr map[string]error
 	byLabelErr map[string]error
 
-	memByContainer promclient.ContainerValues
-	oomSignal      promclient.OOMSignal
-
 	// mu guards the captured* fields; handleSummary queries from several
 	// goroutines at once.
 	mu               sync.Mutex
@@ -69,17 +66,6 @@ func (f *fakePromClient) QueryRange(_ context.Context, _ string, tr promclient.T
 }
 
 func (f *fakePromClient) Ping(_ context.Context) error { return nil }
-
-func (f *fakePromClient) QueryWorkloadCPUByContainer(_ context.Context, _, _, _ string, _ float64, _ string) (promclient.ContainerValues, error) {
-	return promclient.ContainerValues{}, nil
-}
-
-func (f *fakePromClient) QueryWorkloadMemoryByContainer(_ context.Context, _, _, _ string, _ float64, _ string) (promclient.ContainerValues, error) {
-	if f.memByContainer != nil {
-		return f.memByContainer, nil
-	}
-	return promclient.ContainerValues{}, nil
-}
 
 func (f *fakePromClient) QueryCPURangeByContainer(_ context.Context, _, _, _ string, r promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
 	f.mu.Lock()
@@ -121,10 +107,6 @@ func (f *fakePromClient) QueryWorkloadMemoryRecommendationRangeByContainer(_ con
 
 func (f *fakePromClient) QueryOOMKillEvents(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) ([]promclient.OOMEvent, error) {
 	return nil, nil
-}
-
-func (f *fakePromClient) QueryWorkloadOOMSignal(_ context.Context, _, _, _ string) (promclient.OOMSignal, error) {
-	return f.oomSignal, nil
 }
 
 func TestHandleSummaryShape(t *testing.T) {
