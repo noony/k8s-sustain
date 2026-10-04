@@ -1935,6 +1935,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Conflicted identity freezes its recommendation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2186,21 +2214,26 @@ and <a href="../../concepts/in-place-updates/#bare-pods">Bare pods</a>.</p>
 task means losing in-flight work. The
 <a href="../../concepts/update-modes/#downsize-threshold">downsize threshold</a> bounds how
 often it fires. If your tasks cannot tolerate a restart, use <code>pod: OnCreate</code>.</p>
-<p><strong>Group membership.</strong> A pod belongs to the identity when it has no controller
-<code>ownerReference</code>, a valid <code>owner-name</code>, and a resolved policy (pod or Namespace
-annotation — see <a href="../../reference/annotation/#resolution-order">Resolution order</a>)
-matching the group's. A ReplicaSet-owned pod that merely carries the mirrored
-<code>owner-name</code> label is never touched by this path.</p>
-<p><strong>One owner-name, one policy.</strong> The group is claimed by the policy named on the
-first of its pods the controller sees. A pod sharing the
-<code>(namespace, owner-name)</code> but naming a <em>different</em> policy is excluded from the
-group: it never supplies containers and is never resized under the group's
-recommendation. The controller logs it on every reconcile:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>bare pods share an owner-name identity but name a different policy; they are
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>excluded from the group and will not be rightsized under it
+<p><strong>Group membership.</strong> A pod is a member of the identity when it has no
+controller <code>ownerReference</code> and a valid <code>owner-name</code>. It is governed by the
+policy it resolves to (pod or Namespace annotation — see
+<a href="../../reference/annotation/#resolution-order">Resolution order</a>) when that
+policy manages <code>pod</code> and selects it, and only governed pods supply containers
+and are resized. A ReplicaSet-owned pod that merely carries the mirrored
+<code>owner-name</code> label is never a member.</p>
+<p><strong>One owner-name, one policy.</strong> When the pods of one <code>(namespace, owner-name)</code>
+are governed by <em>different</em> policies, the identity is
+<a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted</a>: no
+policy governs it, nothing is recomputed or resized, and its recommendation is
+frozen, still injected only into pods of the policy that last governed it. The
+controller logs it on every reconcile of either policy:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>identity is Conflicted: its members opt into different Policies, so none
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>governs it and its recommendation stays frozen until they agree
 </code></pre></div>
 <p>Fix it by giving those pods their own <code>owner-name</code>, or by aligning their
-<code>k8s.sustain.io/policy</code> annotation with the rest of the group.</p>
+<code>k8s.sustain.io/policy</code> annotation with the rest of the group. A pod that opts
+out, or names a policy that does not exist or does not select it, is no party
+to a conflict.</p>
 <p><strong>Namespace scoping.</strong> The grouping key is <code>namespace + owner-name</code>. The same
 <code>owner-name</code> in two namespaces produces two separate identities; cross-namespace
 grouping is not supported.</p>
@@ -2232,7 +2265,13 @@ The recommendation covers the <strong>union</strong> of the members' containers,
 container only <code>app-green</code> declares is still sized. <strong>Applying stays per real
 Deployment</strong>: each Deployment's own pods are resized or evicted independently,
 against the shared recommendation narrowed to the containers that Deployment
-declares. Health is reported for the identity, not per Deployment: pod and
+declares. Where both declare a container, the newest Deployment's requests and
+limits are the ones recorded. The identity is as old as its oldest member (or
+its <code>WorkloadRecommendation</code>), so a fresh <code>app-green</code> does not reset the
+<a href="../../concepts/recommendation-pipeline/#stages">minimum age</a>. Members opting
+into different policies make the identity
+<a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted</a>.
+Health is reported for the identity, not per Deployment: pod and
 stale-pod counts are summed over the members and the identity is Blocked when
 any member is (see <a href="../../reference/metrics/#what-owner_kind-and-owner_name-name">Metrics</a>),
 so the dashboard row <code>Deployment/app</code> carries every member's state.</p>
@@ -2245,8 +2284,10 @@ the autoscaler on the other members.</p>
 <h2 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h2>
 <p><code>Pod</code> is a regular workload kind in the dashboard: it appears in the workload
 list and facet filters, and the simulator accepts <code>ownerKind: Pod</code>,
-<code>ownerName: &lt;owner-name value&gt;</code>. Live pods are grouped by
-<code>(namespace, owner-name)</code> the same way the controller groups them.</p>
+<code>ownerName: &lt;owner-name value&gt;</code>. The dashboard reads identities from the same
+inventory as the controller, so groups, their union containers, their age and
+a Conflicted state show exactly as the controller treats them, and a group's
+detail page lists the events of all its members.</p>
 
 
 

@@ -2088,6 +2088,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Conflicted identity freezes its recommendation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2637,7 +2665,7 @@
 <ul>
 <li><code>workload_retry_state</code> — <code>1</code> while any member of the identity is <strong>Blocked</strong>: its last reconcile step failed with a transient error and no step has succeeded since. <code>reason</code> is the failed step (<code>prometheus</code>, <code>patch</code> or <code>resize</code>) of the first blocked member in name order; the identity has at most one series, absent when nothing is blocked.</li>
 <li><code>workload_retry_attempts</code> — failed steps summed over the identity's members.</li>
-<li><code>policy_workload_count</code> — live identities the policy matches (an owner-name group counts once).</li>
+<li><code>policy_workload_count</code> — live identities the policy governs: an owner-name or bare-pod group counts once however many members it has, a Departed identity does not count, and a <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted</a> identity counts for no policy.</li>
 <li><code>policy_blocked_count</code> — those identities that are Blocked, i.e. have a <code>workload_retry_state</code> series.</li>
 <li><code>autoscaler_present</code>, <code>autoscaler_target_configured</code> — the autoscaler the identity's recommendation is shaped against: the first member, in name order, that an HPA or KEDA ScaledObject targets.</li>
 <li><code>recycle_suppressed_total</code> — decreases held back by the policy's <a href="../policy/#cpudownsizethreshold-memorydownsizethreshold"><code>downsizeThreshold</code></a>, once per resource per pod per reconcile, summed over the identity's members. Increases are never counted.</li>
@@ -2654,7 +2682,7 @@
 <h4 id="series-lifetime-when-a-policy-is-deleted">Series lifetime when a Policy is deleted<a class="headerlink" href="#series-lifetime-when-a-policy-is-deleted" title="Permanent link">&para;</a></h4>
 <p>Every series with a <code>policy</code> label is removed by the Policy's <code>k8s.sustain.io/cleanup</code> finalizer, together with its <code>WorkloadRecommendation</code>s. Recreating a Policy under the same name restarts its counters from zero.</p>
 <h4 id="series-lifetime-when-an-identity-departs">Series lifetime when an identity departs<a class="headerlink" href="#series-lifetime-when-an-identity-departs" title="Permanent link">&para;</a></h4>
-<p>When no Policy targets an identity any more (its last member was deleted, opted out or left the selector), its <code>workload_pods</code>, <code>workload_stale_pods</code>, <code>workload_retry_state</code>, <code>workload_retry_attempts</code>, <code>autoscaler_present</code>, <code>autoscaler_target_configured</code>, <code>coordination_factor</code> and <code>recycle_suppressed_total</code> series are deleted in the next reconcile, so a departed identity never reports a frozen state.</p>
+<p>When no Policy governs an identity any more (its last member was deleted, opted out or left the selector, or its members now opt into different Policies and it is Conflicted), its <code>workload_pods</code>, <code>workload_stale_pods</code>, <code>workload_retry_state</code>, <code>workload_retry_attempts</code>, <code>autoscaler_present</code>, <code>autoscaler_target_configured</code>, <code>coordination_factor</code> and <code>recycle_suppressed_total</code> series are deleted in the next reconcile, so a departed identity never reports a frozen state.</p>
 <h4 id="k8s_sustain_wlr_refresh_total"><code>k8s_sustain_wlr_refresh_total</code><a class="headerlink" href="#k8s_sustain_wlr_refresh_total" title="Permanent link">&para;</a></h4>
 <p>Refresh outcomes, once per reconcile, for <strong>departed</strong> identities only — a <code>WorkloadRecommendation</code> with no live workload object (a finished Job, a bare-pod group between runs). Live workloads are covered by the batch counters above.</p>
 <table>
@@ -2771,7 +2799,7 @@ replica-budget correction); <code>1.0</code> when nothing applied. See
 </tr>
 <tr>
 <td><code>retained</code></td>
-<td>Injected from a kept recommendation of a departed identity (finished Job, bare-pod group between runs). Its age is bounded by <code>--recommendation-retention</code> instead of the staleness budget — see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>. Steady <code>retained</code> is normal for recurring workloads; <code>retained</code> turning into <code>missing</code> means the gap between runs exceeds the retention window.</td>
+<td>Injected from a kept recommendation of a departed identity (finished Job, bare-pod group between runs), or the frozen one of a <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted</a> identity into a pod of the Policy it names. Its age is bounded by <code>--recommendation-retention</code> instead of the staleness budget — see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>. Steady <code>retained</code> is normal for recurring workloads; <code>retained</code> turning into <code>missing</code> means the gap between runs exceeds the retention window.</td>
 </tr>
 <tr>
 <td><code>stale</code></td>
@@ -2783,7 +2811,11 @@ replica-budget correction); <code>1.0</code> when nothing applied. See
 </tr>
 <tr>
 <td><code>nodata</code></td>
-<td>The recommendation exists and was evaluated but has no usable samples (too young, quiet, or unmatched by the recording rules). No stub is created. Takes precedence over <code>stale</code>.</td>
+<td>The recommendation exists and has an outcome but holds no values yet (too young, quiet, unmatched by the recording rules, or its fetch failed). No stub is created. Takes precedence over <code>stale</code>.</td>
+</tr>
+<tr>
+<td><code>other-policy</code></td>
+<td>The recommendation was produced under a Policy other than the one the pod opts into: the other side of a <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted</a> identity, or an identity moving between Policies until the new one adopts it. Admitted unchanged; no stub is created.</td>
 </tr>
 <tr>
 <td><code>error</code></td>

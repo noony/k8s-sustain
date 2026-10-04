@@ -1907,6 +1907,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Conflicted identity freezes its recommendation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2097,7 +2125,7 @@
 <ul>
 <li><strong><code>selfHeal: true</code> is safe.</strong> Argo CD never sees a diff caused by k8s-sustain, so it has nothing to revert.</li>
 <li><strong>Argo Rollouts.</strong> For <code>Rollout</code> objects, see the <a href="../argo-rollouts/">Argo Rollouts guide</a>.</li>
-<li><strong>Sync-wave hook Jobs.</strong> A <code>PreSync</code>/<code>PostSync</code> hook Job annotated with <code>k8s.sustain.io/policy</code> is a standalone Job to k8s-sustain. Its first run is admitted with template resources and leaves a cold-start stub; later runs of the same Job name get the recommendation once it is computed — see <a href="../../concepts/workload-recommendations/#cold-start-stub-recommendations">Cold start</a>. Once the Job is deleted, its entry stays as an inactive row for the retention window — see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</li>
+<li><strong>Sync-wave hook Jobs.</strong> A <code>PreSync</code>/<code>PostSync</code> hook Job annotated with <code>k8s.sustain.io/policy</code> is a standalone Job to k8s-sustain. Its first run is admitted with template resources and leaves a cold-start stub; later runs of the same Job name get the recommendation once it is computed — see <a href="../../concepts/workload-recommendations/#cold-start-stub-recommendations">Cold start</a>. Once the Job is deleted, its entry stays as a Departed row for the retention window — see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</li>
 </ul>
 
 

@@ -10,13 +10,11 @@
       
       
       
-        <link rel="canonical" href="https://noony.github.io/k8s-sustain/main/guides/deployments/">
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/main/adr/0002-conflicted-identity-freezes-its-recommendation/">
       
       
-        <link rel="prev" href="../../concepts/workload-recommendations/">
+        <link rel="prev" href="../0001-single-identity-is-a-batch-of-one/">
       
-      
-        <link rel="next" href="../jobs-and-cronjobs/">
       
       
         
@@ -27,7 +25,7 @@
     
     
       
-        <title>Deployments, StatefulSets & DaemonSets - k8s-sustain</title>
+        <title>A Conflicted identity freezes its recommendation - k8s-sustain</title>
       
     
     
@@ -74,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#deployments-statefulsets-daemonsets" class="md-skip">
+        <a href="#2-a-conflicted-identity-freezes-its-recommendation" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +111,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Deployments, StatefulSets & DaemonSets
+              A Conflicted identity freezes its recommendation
             
           </span>
         </div>
@@ -292,8 +290,6 @@
   
   
   
-    
-  
   
     
     
@@ -301,13 +297,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../guides/deployments/" class="md-tabs__link">
           
   
   
@@ -384,11 +378,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
           
   
   
@@ -879,31 +875,26 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   
@@ -921,7 +912,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -936,31 +927,26 @@
                 
   
   
-    
   
   
-  
     
     
     
     
       
       
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" >
         
           
-          
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" checked>
-        
-          
-          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
             
   
   
@@ -978,7 +964,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4_1">
             <span class="md-nav__icon md-icon"></span>
             
@@ -993,37 +979,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Deployments, StatefulSets & DaemonSets
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../guides/deployments/" class="md-nav__link">
         
   
   
@@ -1039,59 +998,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#opt-in" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Opt in
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-happens-on-each-reconcile" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What happens on each reconcile
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Notes
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1104,7 +1010,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../jobs-and-cronjobs/" class="md-nav__link">
+      <a href="../../guides/jobs-and-cronjobs/" class="md-nav__link">
         
   
   
@@ -1132,7 +1038,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../argo-rollouts/" class="md-nav__link">
+      <a href="../../guides/argo-rollouts/" class="md-nav__link">
         
   
   
@@ -1160,7 +1066,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../standalone-pods-and-grouping/" class="md-nav__link">
+      <a href="../../guides/standalone-pods-and-grouping/" class="md-nav__link">
         
   
   
@@ -1202,20 +1108,17 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_2" >
         
           
-          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
             
   
   
@@ -1251,7 +1154,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../argocd/" class="md-nav__link">
+      <a href="../../guides/argocd/" class="md-nav__link">
         
   
   
@@ -1279,7 +1182,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../keda/" class="md-nav__link">
+      <a href="../../guides/keda/" class="md-nav__link">
         
   
   
@@ -1307,7 +1210,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../cert-manager/" class="md-nav__link">
+      <a href="../../guides/cert-manager/" class="md-nav__link">
         
   
   
@@ -1349,20 +1252,17 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" >
         
           
-          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
             
   
   
@@ -1398,7 +1298,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../dashboard/" class="md-nav__link">
+      <a href="../../guides/dashboard/" class="md-nav__link">
         
   
   
@@ -1426,7 +1326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../authenticated-prometheus/" class="md-nav__link">
+      <a href="../../guides/authenticated-prometheus/" class="md-nav__link">
         
   
   
@@ -1454,7 +1354,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../local-testing/" class="md-nav__link">
+      <a href="../../guides/local-testing/" class="md-nav__link">
         
   
   
@@ -1482,7 +1382,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../managing-policies-with-helm/" class="md-nav__link">
+      <a href="../../guides/managing-policies-with-helm/" class="md-nav__link">
         
   
   
@@ -1803,26 +1703,31 @@
       
   
   
+    
   
   
+  
     
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
         
           
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
             
   
   
@@ -1840,7 +1745,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_8">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1858,7 +1763,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -1886,7 +1791,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
+      <a href="../0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
         
   
   
@@ -1911,10 +1816,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Conflicted identity freezes its recommendation
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1930,6 +1862,59 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#consequences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consequences
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1969,10 +1954,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#opt-in" class="md-nav__link">
+  <a href="#context" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Opt in
+        Context
       
     </span>
   </a>
@@ -1980,10 +1965,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-happens-on-each-reconcile" class="md-nav__link">
+  <a href="#decision" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What happens on each reconcile
+        Decision
       
     </span>
   </a>
@@ -1991,10 +1976,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
+  <a href="#consequences" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Notes
+        Consequences
       
     </span>
   </a>
@@ -2043,37 +2028,11 @@
   
     
     
-      
-  
-  
-    
-    
       <li class="md-path__item">
-        <a href="./" class="md-path__link">
+        <a href="../" class="md-path__link">
           
   <span class="md-ellipsis">
-    Guides
-  </span>
-
-        </a>
-      </li>
-    
-  
-
-    
-  
-
-      
-        
-  
-  
-    
-    
-      <li class="md-path__item">
-        <a href="./" class="md-path__link">
-          
-  <span class="md-ellipsis">
-    Workloads
+    Architecture Decisions
   </span>
 
         </a>
@@ -2095,84 +2054,33 @@
   
 
 
-<h1 id="deployments-statefulsets-daemonsets">Deployments, StatefulSets &amp; DaemonSets<a class="headerlink" href="#deployments-statefulsets-daemonsets" title="Permanent link">&para;</a></h1>
-<p>k8s-sustain right-sizes Deployments, StatefulSets and DaemonSets through the same code path: the webhook injects the recommendation into every new pod, and in <code>Ongoing</code> mode the controller also brings running pods up to date. The workload spec is never patched.</p>
-<h2 id="opt-in">Opt in<a class="headerlink" href="#opt-in" title="Permanent link">&para;</a></h2>
-<p>Annotate the workload as shown in the <a href="../../getting-started/quick-start/#3-opt-in-a-deployment">Quick Start</a>, then enable the kinds on a Policy:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Policy</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web-rightsizing</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">rightSizing</span><span class="p">:</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">update</span><span class="p">:</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">      </span><span class="nt">types</span><span class="p">:</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">        </span><span class="nt">deployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">        </span><span class="nt">statefulSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">        </span><span class="nt">daemonSet</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Ongoing</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nt">resourcesConfigs</span><span class="p">:</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">168h</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> percentile</span><span class="p">:</span><span class="w"> </span><span class="nv">95</span><span class="p p-Indicator">,</span><span class="nt"> headroom</span><span class="p">:</span><span class="w"> </span><span class="nv">10</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span><span class="w">   </span><span class="p p-Indicator">{</span><span class="nt"> keepLimitRequestRatio</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">        </span><span class="nt">window</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">168h</span>
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">        </span><span class="nt">requests</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> percentile</span><span class="p">:</span><span class="w"> </span><span class="nv">95</span><span class="p p-Indicator">,</span><span class="nt"> headroom</span><span class="p">:</span><span class="w"> </span><span class="nv">20</span><span class="w"> </span><span class="p p-Indicator">}</span>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">        </span><span class="nt">limits</span><span class="p">:</span><span class="w">   </span><span class="p p-Indicator">{</span><span class="nt"> keepLimitRequestRatio</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="w"> </span><span class="p p-Indicator">}</span>
-</code></pre></div>
-<p>Both the annotation and the Policy's selector must match the workload — see <a href="../../reference/annotation/#resolution-order">Resolution order</a>.</p>
-<h2 id="what-happens-on-each-reconcile">What happens on each reconcile<a class="headerlink" href="#what-happens-on-each-reconcile" title="Permanent link">&para;</a></h2>
-<p>Every <code>--reconcile-interval</code> (default <code>5m</code>) the controller recomputes the recommendation and, in <code>Ongoing</code> mode, updates the pods that are not yet running it:</p>
+<h1 id="2-a-conflicted-identity-freezes-its-recommendation">2. A Conflicted identity freezes its recommendation<a class="headerlink" href="#2-a-conflicted-identity-freezes-its-recommendation" title="Permanent link">&para;</a></h1>
 <ul>
-<li>Running pods are resized in place where the cluster supports it, otherwise evicted so the webhook sizes the replacement — see <a href="../../concepts/in-place-updates/#version-matrix">Version matrix</a> and <a href="../../concepts/in-place-updates/#eviction-fallback">Eviction fallback</a>.</li>
-<li>Evictions go one pod at a time and respect PDBs and the other <a href="../../concepts/update-modes/#eviction-safeguards">eviction safeguards</a>.</li>
-<li>Small request decreases are suppressed by the <a href="../../concepts/update-modes/#downsize-threshold">downsize threshold</a>; increases always apply.</li>
+<li><strong>Status:</strong> Accepted</li>
+<li><strong>Date:</strong> 2026-10-04</li>
 </ul>
-<p><code>OnCreate</code> skips the recycling step: running pods keep their resources until the next rollout. To check the result, see <a href="../../concepts/update-modes/#verifying-applied-resources">Verifying applied resources</a>.</p>
-<h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
+<h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
+<p>An identity can span several objects: owner-name groups (<code>api-blue</code> and <code>api-green</code> both reporting as <code>Deployment/api</code>) and bare-pod groups. Each object opts into a Policy on its own, so members of one identity can name different Policies. The identity still has one Prometheus series and one <code>WorkloadRecommendation</code>.</p>
+<p>Nothing modelled that case. Each Policy's reconcile treated the identity as its own: <code>wlrcache.EnsureExists</code> rewrote the object's <code>spec.policy</code> and policy label to whichever Policy ran last, so the object flipped between them every cycle and each recomputed it under its own configuration. The webhook never compared the object's Policy with the pod's, so every member received whichever Policy's numbers had won last. The dashboard listed the identity under both Policies, the controller counted it in both, and bare-pod grouping had a third rule that silently dropped the minority pods.</p>
+<p>Objects were also turned into identities twice, by the controller and by the dashboard, with different rules for containers, age, finished Jobs and governance.</p>
+<h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
+<p>Identities are built in one place, <code>internal/inventory</code>, and the controller's rules are canonical. A member is governed by the Policy it opts into when that Policy exists, manages its kind and selects it. An identity is governed by its members' Policy when they agree, and is <strong>Conflicted</strong> when they name different Policies. A member that opts out, or whose Policy does not accept it, is no party to a conflict.</p>
+<p><strong>No Policy governs a Conflicted identity.</strong></p>
 <ul>
-<li><strong>Keeping existing requests.</strong> There is no per-container pinning. <code>requests.keepRequest: true</code> on <code>cpu</code> or <code>memory</code> leaves that request untouched on every container the Policy manages; use a separate Policy for workloads that need it. See the <a href="../../reference/policy/">Policy reference</a>.</li>
-<li><strong>Combining with HPA.</strong> Recommendations are computed from the busiest replica's per-pod percentile (<code>max by</code> across pods), which is invariant to replica count, so HPA scale-out does not perturb the recommendation. To shape requests so the HPA's utilization target stays meaningful, enable <a href="../../concepts/autoscaler-coordination/">Autoscaler Coordination</a>. See also the <a href="../keda/">KEDA guide</a>.</li>
-<li><strong>DaemonSets and <code>updateStrategy: OnDelete</code>.</strong> Evicting a pod deletes it, so the DaemonSet controller recreates it with the webhook-injected resources, whichever update strategy is set.</li>
-<li><strong>Node agents.</strong> Log shippers, CNI plugins and node exporters run on every node and are disruptive to OOM-kill; use a higher percentile (p99) and generous memory headroom for them.</li>
-<li><strong>Headroom suggestions.</strong></li>
+<li>The controller does not recompute it, does not apply anything to its pods, and does not rewrite its <code>WorkloadRecommendation</code>'s <code>spec.policy</code> or label. Only the governing Policy calls <code>EnsureExists</code>, which ends the flip.</li>
+<li>Its stored Recommendation is frozen. Each Policy party to the conflict records <code>status.outcome: Conflicted</code>, and nothing else.</li>
+<li>The webhook injects only when the pod's resolved Policy equals the object's <code>spec.policy</code>. Members still opting into the last governing Policy keep the frozen numbers; members of the other Policy are admitted unmutated (<code>other-policy</code>), as the webhook always fails open.</li>
+<li>Like a departed one, a frozen recommendation is exempt from the staleness gate and bounded by <code>--recommendation-retention</code>.</li>
+<li>The identity counts for no Policy, has no controller health series, and is shown once by the dashboard, in the Conflicted Risk state, which outranks every other.</li>
 </ul>
-<table>
-<thead>
-<tr>
-<th>Workload type</th>
-<th>CPU headroom</th>
-<th>Memory headroom</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Web/API servers</td>
-<td>10–20%</td>
-<td>20–30%</td>
-</tr>
-<tr>
-<td>Batch workers</td>
-<td>5–10%</td>
-<td>10–15%</td>
-</tr>
-<tr>
-<td>Memory-intensive</td>
-<td>5%</td>
-<td>30–50%</td>
-</tr>
-<tr>
-<td>CPU-burst workloads</td>
-<td>20–30%</td>
-<td>10%</td>
-</tr>
-<tr>
-<td>Node agents (DaemonSets)</td>
-<td>15%</td>
-<td>25%+</td>
-</tr>
-</tbody>
-</table>
+<p><code>status.source</code> is replaced by <code>status.outcome</code> (<code>Computed</code>, <code>NoData</code>, <code>TooYoung</code>, <code>FetchFailed</code>, <code>Conflicted</code>). Every outcome but <code>Computed</code> keeps the last Recommendation.</p>
+<h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A configuration error stops changing pods instead of thrashing them between two Policies' numbers. The identity resumes under one Policy as soon as its members agree; that Policy's next reconcile adopts the object.</li>
+<li>Pods of the losing side start on their template resources until the conflict is fixed. Pods of the side the object names keep getting the last Recommendation, which ages: past the retention window they start on template resources too.</li>
+<li>The webhook now also withholds numbers from an identity moving between Policies until the new Policy's next reconcile adopts its object, since those numbers were computed under the old one.</li>
+<li>The Overview's KPIs and attention lists are built from Prometheus health signals alone and do not show Conflicted identities yet; the Workloads list and detail pages do.</li>
+</ul>
 
 
 
@@ -2210,7 +2118,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../../concepts/workload-recommendations/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Workload Recommendations">
+          <a href="../0001-single-identity-is-a-batch-of-one/" class="md-footer__link md-footer__link--prev" aria-label="Previous: A single identity is a batch of one">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -2220,27 +2128,11 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Workload Recommendations
+                A single identity is a batch of one
               </div>
             </div>
           </a>
         
-        
-          
-          <a href="../jobs-and-cronjobs/" class="md-footer__link md-footer__link--next" aria-label="Next: Jobs &amp; CronJobs">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                Jobs & CronJobs
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
-          </a>
         
       </nav>
     

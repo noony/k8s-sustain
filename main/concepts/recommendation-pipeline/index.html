@@ -1938,6 +1938,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Conflicted identity freezes its recommendation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2140,9 +2168,9 @@ requests apply on next pod creation via webhook injection.</p>
 <p>The recommender runs each container through the following stages, in order:</p>
 <ol>
 <li><strong>Workload-age gate.</strong> An identity younger than 10 minutes is skipped (<code>k8s_sustain_recommendation_skipped_total{reason="workload_too_young"}</code>, log <code>skipping recommendation: workload too young</code>), so a near-zero early percentile is never floored to the hard minimum (1m CPU / 1Mi memory) and injected.<ul>
-<li>Age is the <em>earliest</em> of the workload object's <code>creationTimestamp</code> and its <code>WorkloadRecommendation</code>'s, which records when k8s-sustain first saw the identity.</li>
-<li>The second signal is what lets ephemeral kinds pass: a standalone Job is re-created each run and a bare pod has no workload object, but their cache object persists across runs.</li>
-<li>All kinds are gated, bare pods included. When neither timestamp exists the gate is off.</li>
+<li>Age is the <em>earliest</em> of the identity's members' <code>creationTimestamp</code>s and its <code>WorkloadRecommendation</code>'s, which records when k8s-sustain first saw the identity. A new member of an owner-name group, or a new pod of a bare-pod group, does not reset it.</li>
+<li>The <code>WorkloadRecommendation</code> is what lets ephemeral kinds pass: a standalone Job is re-created each run and a bare pod lives for one run, but their cache object persists across runs.</li>
+<li>All kinds are gated, bare pods included. The controller and the dashboard's simulations date the identity the same way.</li>
 <li>A recent OOM in any container of the workload (Prometheus 24h signal or the live <a href="../architecture/#pod-oom-watcher">OOM watcher</a>) bypasses the gate so a crash-looping container still gets a memory recommendation.</li>
 <li>Losing Prometheus data (retention loss, reinstall) while the cache object survives lets an identity pass on only minutes of samples.</li>
 </ul>

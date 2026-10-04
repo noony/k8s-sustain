@@ -1938,6 +1938,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Conflicted identity freezes its recommendation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2186,7 +2214,7 @@
 <h2 id="4-wait-for-data">4. Wait for data<a class="headerlink" href="#4-wait-for-data" title="Permanent link">&para;</a></h2>
 <div class="admonition note">
 <p class="admonition-title">Cold start</p>
-<p>Recommendations need a workload that is at least 10 minutes old and a few hours of Prometheus history to be meaningful; until then its <code>WorkloadRecommendation</code> exists but its <code>status</code> stays empty or reads <code>source: nodata</code>. See <a href="../../concepts/workload-recommendations/#cold-start-stub-recommendations">Cold start</a>.</p>
+<p>Recommendations need a workload that is at least 10 minutes old and a few hours of Prometheus history to be meaningful; until then its <code>WorkloadRecommendation</code> exists but its <code>status</code> stays empty or reads <code>outcome: TooYoung</code> or <code>outcome: NoData</code>. See <a href="../../concepts/workload-recommendations/#cold-start-stub-recommendations">Cold start</a>.</p>
 </div>
 <h2 id="5-check-the-policy-status">5. Check the Policy status<a class="headerlink" href="#5-check-the-policy-status" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>policy<span class="w"> </span>staging-rightsizing<span class="w"> </span>-o<span class="w"> </span>yaml

@@ -2098,10 +2098,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#work-list-union-and-informer-lag" class="md-nav__link">
+  <a href="#identity-inventory" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Work-list union and informer lag
+        Identity inventory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#informer-lag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Informer lag
       
     </span>
   </a>
@@ -2142,10 +2153,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#bare-pod-grouping-implementation" class="md-nav__link">
+  <a href="#identity-health-series" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Bare-pod grouping implementation
+        Identity health series
       
     </span>
   </a>
@@ -2235,6 +2246,17 @@
     <span class="md-ellipsis">
       
         Stub writes: dedup, bounds and shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Policy check
       
     </span>
   </a>
@@ -2426,6 +2448,34 @@
     
   
     A single identity is a batch of one
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Conflicted identity freezes its recommendation
   
 
     
@@ -2830,10 +2880,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#work-list-union-and-informer-lag" class="md-nav__link">
+  <a href="#identity-inventory" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Work-list union and informer lag
+        Identity inventory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#informer-lag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Informer lag
       
     </span>
   </a>
@@ -2874,10 +2935,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#bare-pod-grouping-implementation" class="md-nav__link">
+  <a href="#identity-health-series" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Bare-pod grouping implementation
+        Identity health series
       
     </span>
   </a>
@@ -2967,6 +3028,17 @@
     <span class="md-ellipsis">
       
         Stub writes: dedup, bounds and shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#policy-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Policy check
       
     </span>
   </a>
@@ -3200,28 +3272,29 @@ runs. The full posture and the verification commands are documented in
 <a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>│   ├── controller/        # Policy reconciler
 <a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>│   ├── dashboard/         # Dashboard HTTP server + embedded Vue SPA (ui/)
 <a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>│   ├── httpx/             # Shared HTTP stack: envelope, middleware, hardened NewServer, shutdown
-<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>│   ├── k8s/               # client.New helper used by webhook + dashboard
-<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>│   ├── logging/           # Shared zap logger setup
-<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>│   ├── oomwatch/          # Live OOMKilled detection, re-triggers reconciles
-<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>│   ├── policymatch/       # Policy resolution (ResolvePolicy) and selector matching
-<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>│   ├── prometheus/        # Prometheus HTTP API client + metric name constants
-<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>│   ├── recommender/       # Recommendation algorithm (Compute) and the batch-inputs port with its Prometheus adapter
-<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>│   │   └── recommendertest/  # In-memory inputs adapter for tests
-<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>│   ├── version/           # Build version
-<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>│   ├── webhook/           # Admission webhook HTTP handler
-<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>│   ├── wlrcache/          # WorkloadRecommendation naming and upsert
-<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>│   └── workload/          # Pod recycler, template/owner-ref helpers
-<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>├── charts/
-<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>│   ├── k8s-sustain/          # Operator chart
-<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>│   └── k8s-sustain-policies/ # Policy objects chart
-<a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>├── hack/
-<a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a>│   ├── docscheck/         # Docs drift guards (run by go test)
-<a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>│   └── scenarios/         # kind end-to-end scenarios
-<a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a>├── docs/                  # This documentation
-<a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>├── Dockerfile
-<a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>├── Makefile
-<a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>├── Makefile.scenarios     # kind end-to-end harness
-<a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>└── main.go
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>│   ├── inventory/         # Workload objects → identities (members, containers, age, Departed, governing Policy or Conflicted)
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>│   ├── k8s/               # client.New helper used by webhook + dashboard
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>│   ├── logging/           # Shared zap logger setup
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>│   ├── oomwatch/          # Live OOMKilled detection, re-triggers reconciles
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>│   ├── policymatch/       # Policy resolution (ResolvePolicy) and selector matching
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>│   ├── prometheus/        # Prometheus HTTP API client + metric name constants
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>│   ├── recommender/       # Recommendation algorithm (Compute) and the batch-inputs port with its Prometheus adapter
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>│   │   └── recommendertest/  # In-memory inputs adapter for tests
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>│   ├── version/           # Build version
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>│   ├── webhook/           # Admission webhook HTTP handler
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>│   ├── wlrcache/          # WorkloadRecommendation naming and upsert
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>│   └── workload/          # Pod recycler, template/owner-ref helpers
+<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>├── charts/
+<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>│   ├── k8s-sustain/          # Operator chart
+<a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>│   └── k8s-sustain-policies/ # Policy objects chart
+<a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a>├── hack/
+<a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>│   ├── docscheck/         # Docs drift guards (run by go test)
+<a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a>│   └── scenarios/         # kind end-to-end scenarios
+<a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>├── docs/                  # This documentation
+<a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>├── Dockerfile
+<a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>├── Makefile
+<a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>├── Makefile.scenarios     # kind end-to-end harness
+<a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a>└── main.go
 </code></pre></div>
 <h2 id="running-locally-against-a-cluster">Running locally against a cluster<a class="headerlink" href="#running-locally-against-a-cluster" title="Permanent link">&para;</a></h2>
 <h3 id="start-the-controller">Start the controller<a class="headerlink" href="#start-the-controller" title="Permanent link">&para;</a></h3>
@@ -3366,7 +3439,7 @@ join window, since that is exactly what a syntax check misses.</p>
 kind (say <code>Rollout</code> from Argo) is mostly a matter of registering it there:</p>
 <ol>
 <li>Add <code>&lt;Kind&gt; *UpdateMode</code> to <code>UpdateTypes</code> in <code>api/v1alpha1/policy_types.go</code>, add the case to <code>UpdateTypes.ModeForKind</code>, then run <code>make generate</code> and <code>make manifests</code></li>
-<li>Add the kind to the <code>ownerKinds</code> table in <code>internal/workload/kindobjects.go</code> (object and list constructors plus its <code>GroupResource</code>) and, if the controller and dashboard should list it, to <code>workload.SupportedKinds</code>. This single table drives the controller's target listing, the dashboard's listing and NotFound errors, the workload-level annotation reads in the webhook and the OOM watcher, and the retention sweep's existence check. A kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)</li>
+<li>Add the kind to the <code>ownerKinds</code> table in <code>internal/workload/kindobjects.go</code> (object and list constructors plus its <code>GroupResource</code>) and, if the controller and dashboard should list it, to <code>workload.SupportedKinds</code>. This single table drives the inventory's listing (<code>internal/inventory</code>, which both the controller and the dashboard read identities from), the dashboard's NotFound errors, and the workload-level annotation reads in the webhook and the OOM watcher. A kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)</li>
 <li>Add the kind's pod template and selector to <code>workload.PodTemplateOf</code> in <code>internal/workload/templates.go</code>. Return a nil selector for kinds whose pods must never be recycled (see Job and CronJob)</li>
 <li>Add the same kind to <code>k8s.OwnerChainDisableFor()</code> in <code>internal/k8s/client.go</code>. Every kind in <code>ownerKinds</code> must appear here too, or its first Get on the admission hot path stands up a cluster-wide informer over every object of that kind instead of costing one Get. <code>TestDisableForCoversOwnerAnnotationKinds</code> (<code>internal/webhook/optin_test.go</code>) cross-checks the two lists and fails if one is missing from the other</li>
 <li>If the kind is a CRD, register its scheme in <code>internal/config/config.go</code> and <code>internal/dashboard/server.go</code></li>
@@ -3380,7 +3453,16 @@ and total pods, the autoscaler and its coordination factors — through one port
 Prometheus adapter (<code>health_prometheus.go</code>) holds the only health PromQL;
 tests use the in-memory <code>memHealthSignals</code> instead of faking query text. The
 Risk state is classified in exactly one place, <code>riskStateOf</code>, and returned in
-every payload (<code>riskState</code>); the SPA renders it and never derives its own.</p>
+every payload (<code>riskState</code>); the SPA renders it and never derives its own.
+Conflicted, the top of the precedence, is the one input that does not come
+from the port: views set <code>identityHealth.Conflicted</code> from the inventory before
+classifying.</p>
+<p>Every list and detail endpoint builds its identities from <code>internal/inventory</code>
+(<code>Server.identities</code> / <code>Server.identity</code>), so a row, a detail page and the
+controller agree on members, containers, age, Departed and the governing
+Policy. The detail page shows the Recommendation stored in the identity's
+<code>WorkloadRecommendation</code> and its <code>status.outcome</code>; only the Simulator
+recomputes.</p>
 <p>The port works because the controller emits every health metric under the
 identity's labels: <code>internal/controller/identity_health.go</code> aggregates the
 apply outcomes of an identity's members (pod counts summed, Blocked if any
@@ -3536,23 +3618,29 @@ transport-related ones:</p>
   <code>charts/k8s-sustain/tests/prometheus-auth_test.yaml</code>.</li>
 </ul>
 <h3 id="controller">Controller<a class="headerlink" href="#controller" title="Permanent link">&para;</a></h3>
-<h4 id="work-list-union-and-informer-lag">Work-list union and informer lag<a class="headerlink" href="#work-list-union-and-informer-lag" title="Permanent link">&para;</a></h4>
-<p>The controller's reads go through a watch-populated informer cache, so a <code>WorkloadRecommendation</code> that discovery created moments earlier in the same reconcile is often not yet visible to a list, and nothing watches <code>WorkloadRecommendation</code> to re-trigger a reconcile when it becomes visible. The computation work-list is therefore the union of the listed cache objects and the identities discovery just ensured. Without the union a freshly matched workload would wait a full <code>--reconcile-interval</code> before being computed. Discovery already holds the container set for those identities, so the union costs no extra API calls.</p>
+<h4 id="identity-inventory">Identity inventory<a class="headerlink" href="#identity-inventory" title="Permanent link">&para;</a></h4>
+<p><code>internal/inventory</code> is the one place workload objects become identities. Its interface is one call, <code>inventory.Take(ctx, reader, Options)</code>, returning a <code>Snapshot</code> of <code>Identity</code> values (key, live members each with the Policy governing it, union containers, <code>Since</code>, governing Policy or <code>Conflicted</code>, stored <code>WorkloadRecommendation</code>). Behind it: listing every kind in scope (a kind the cluster does not serve, such as Argo Rollouts without its CRD, has no identities rather than failing the snapshot), skipping CronJob-owned Jobs and finished standalone Jobs, owner-name and bare-pod grouping, the three-level opt-in walk (<code>policymatch.ResolvePolicy</code>, reading a Namespace only when an object's own annotations leave it undecided), each Policy's consent (<code>policymatch.Matches</code> plus the kind), the Conflicted rule, and attaching each stored <code>WorkloadRecommendation</code> (which is what makes a Departed identity).</p>
+<p>The controller takes one snapshot per reconcile through its informer cache, narrowed to the Policy's namespaces and managed kinds, and works on <code>Snapshot.GovernedBy(policy)</code>. Every member of an identity shares its namespace and kind, so the narrowing never splits one. The dashboard takes snapshots through its uncached client, narrowed to what each view shows: one namespace and kind for a detail page, the Policy's scope for its list, everything for <code>/api/workloads</code>.</p>
+<p>A new identity rule goes in the inventory and its contract tests (<code>internal/inventory/inventory_test.go</code>), never in a caller.</p>
+<h4 id="informer-lag">Informer lag<a class="headerlink" href="#informer-lag" title="Permanent link">&para;</a></h4>
+<p>The controller's reads go through a watch-populated informer cache, so a <code>WorkloadRecommendation</code> that discovery created moments earlier in the same reconcile is often not yet visible, and nothing watches <code>WorkloadRecommendation</code> to re-trigger a reconcile when it becomes visible. The work-list is built from the snapshot's identities, not from the listed objects: a live identity whose object the cache cannot see yet is computed from its members' containers and dated by its earliest member, and its write lands through <code>wlrcache</code>'s read-after-write-safe path. Without that a freshly matched workload would wait a full <code>--reconcile-interval</code> before being computed.</p>
 <h4 id="per-identity-computation-under-owner-name-grouping">Per-identity computation under owner-name grouping<a class="headerlink" href="#per-identity-computation-under-owner-name-grouping" title="Permanent link">&para;</a></h4>
 <p>The computation unit is the identity, not the workload object: a group of workloads sharing an owner-name produces exactly one computation and one write, against the union of the members' containers. Computing per member would give the single shared <code>WorkloadRecommendation</code> several competing answers, with the survivor decided by whichever member's goroutine finished last. Retry backoff is also per member: an identity is withheld from the fetch only when every member is backed off, so one failing member cannot deny its healthy siblings their inputs.</p>
 <h4 id="recommendation-pass">Recommendation pass<a class="headerlink" href="#recommendation-pass" title="Permanent link">&para;</a></h4>
-<p><code>Reconcile</code> runs collect → discover → recommendation pass → persist → apply → rollup. The pass (<code>internal/controller/recommendation_pass.go</code>) gives every identity on the work-list exactly one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff). It owns the three things that used to be spread across <code>Reconcile</code>:</p>
+<p><code>Reconcile</code> runs inventory → discover → recommendation pass → persist → apply → rollup → sweep. The pass (<code>internal/controller/recommendation_pass.go</code>) gives every identity on the work-list exactly one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff). It owns the three things that used to be spread across <code>Reconcile</code>:</p>
 <ul>
 <li><strong>The backoff split, taken once.</strong> Backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out. The pass records which members to apply and which it skipped, and the apply step uses that split.</li>
 <li><strong>The fetch.</strong> One <code>InputsFetcher</code> call per policy; the pass never sees shards, retries or the fallback (<a href="../adr/0001-single-identity-is-a-batch-of-one/">ADR 0001</a>).</li>
-<li><strong>The computation.</strong> <code>recommender.Compute</code> decides everything about one identity from its inputs, its live OOM records and its age facts: the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply.</li>
+<li><strong>The computation.</strong> <code>recommender.Compute</code> decides everything about one identity from its inputs, its live OOM records and its age (the inventory's <code>Since</code>): the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply.</li>
 </ul>
-<p>The batch metrics are counted from the outcomes, not from the fetch's internals.</p>
+<p>The batch metrics are counted from the outcomes, not from the fetch's internals. <code>persist</code> records every outcome but "not fetched" in the <code>WorkloadRecommendation</code>'s <code>status.outcome</code> (<code>wlrcache.Upsert</code> for <code>Computed</code>, <code>wlrcache.RecordOutcome</code> for the rest), keeping the last Recommendation.</p>
+<p>A Conflicted identity never enters the pass (<a href="../adr/0002-conflicted-identity-freezes-its-recommendation/">ADR 0002</a>). Each Policy party to the conflict records <code>status.outcome: Conflicted</code> (<code>recordConflicted</code>) and nothing else; <code>EnsureExists</code>, which rewrites <code>spec.policy</code>, is only ever called by the governing Policy, which is what stops two Policies flipping one object between them.</p>
 <h4 id="owner-name-group-merge-order-and-write-cost">Owner-name group: merge order and write cost<a class="headerlink" href="#owner-name-group-merge-order-and-write-cost" title="Permanent link">&para;</a></h4>
-<p>For an owner-name group, the union snapshot in <code>status.observedResources</code> is built from the members' containers. Where two members declare the same container name with different requests/limits, the entry from the member whose <code>kind/namespace/name</code> sorts first is kept whole, rather than mixing one member's request with another's limit. The recommendation is computed against that union, using the autoscaler of the first member (same sort order) that has one, and treating the identity as being as old as its oldest member.</p>
-<p>Every choice is decided by the members' names or by an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. Discovery (<code>EnsureExists</code>) and the computation phase (<code>wlrcache.Upsert</code>) both write <code>status.observedResources</code>, but always the same merged value computed once per identity, so the two writers never disagree, and a group whose members and metrics are unchanged costs no status write on subsequent reconciles rather than one write per member per cycle.</p>
-<h4 id="bare-pod-grouping-implementation">Bare-pod grouping implementation<a class="headerlink" href="#bare-pod-grouping-implementation" title="Permanent link">&para;</a></h4>
-<p>Bare-pod groups are built by <code>workload.GroupBarePods</code>, used by both the controller and the dashboard. It resolves each pod's policy across the pod's own annotations and the namespace annotation map it is passed, so Namespace-level opt-in works for bare pods. The dashboard displays the containers and annotations of the most recently created pod in the group.</p>
+<p>For an owner-name group, the union snapshot in <code>status.observedResources</code> is built from the governed members' containers. Where several members declare the same container name with different requests/limits, the newest member's entry is kept whole (ties broken by name), rather than mixing one member's request with another's limit: an older member's spec may predate a change the newer ones already run. The recommendation is computed against that union, using the autoscaler of the first member in <code>kind/namespace/name</code> order that has one, and treating the identity as being as old as its oldest member or its <code>WorkloadRecommendation</code>, whichever is older.</p>
+<p>Every choice is decided by the members' names, creation times or an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. Discovery (<code>EnsureExists</code>) and the computation phase (<code>wlrcache.Upsert</code>) both write <code>status.observedResources</code>, but always the same union computed once per identity by the inventory, so the two writers never disagree, and a group whose members and metrics are unchanged costs no status write on subsequent reconciles.</p>
+<p>A bare-pod identity's governed pods form one apply target (<code>targetsOf</code>), attributed to the newest pod for events; its pods are resized together and never evicted.</p>
+<h4 id="identity-health-series">Identity health series<a class="headerlink" href="#identity-health-series" title="Permanent link">&para;</a></h4>
+<p>The health series (<code>k8s_sustain_workload_pods</code>, <code>…_stale_pods</code>, <code>…_retry_state</code>, <code>…_retry_attempts</code>) are per identity, aggregated over its members by <code>healthTracker</code>. A Conflicted identity is governed by no Policy, so no Policy observes it and its series are deleted on the next reconcile of the Policy that last governed it; the dashboard shows its Conflicted state from the inventory instead.</p>
 <h3 id="oom-watcher">OOM watcher<a class="headerlink" href="#oom-watcher" title="Permanent link">&para;</a></h3>
 <h4 id="cache-per-field-merge">Cache: per-field merge<a class="headerlink" href="#cache-per-field-merge" title="Permanent link">&para;</a></h4>
 <p>The OOM cache is keyed by <code>(namespace, ownerKind, ownerName, container)</code>, so every pod of a workload writes to the same slot, and pods are reconciled in parallel. The slot is a per-field merge rather than last-write-wins:</p>
@@ -3578,8 +3666,10 @@ transport-related ones:</p>
 <h4 id="stub-writes-dedup-bounds-and-shutdown">Stub writes: dedup, bounds and shutdown<a class="headerlink" href="#stub-writes-dedup-bounds-and-shutdown" title="Permanent link">&para;</a></h4>
 <p>A stub becomes visible to the webhook's informer only after the create and watch propagation, so inside that window every pod of a scaling workload reads <code>missing</code> and would fire its own create (a 500-replica scale-out means 500 creates of one name, 499 rejected). Stub requests are therefore deduplicated per identity for 30s and bounded to 16 concurrent writes. Over-capacity requests queue rather than drop: a run-once Job has no later admission to retry on.</p>
 <p>Stub goroutines outlive the admission that started them (up to 30s queued plus 5s for the write), so on shutdown SIGTERM cancels in-flight stub writes and the process waits, bounded, for them to unwind before stopping the informer cache they read through. An abandoned request is re-issued by the next admission for the same identity.</p>
-<p>The status snapshot (<code>status.observedResources</code>) is also written on the <code>AlreadyExists</code> path, so an object lacking one can be filled in by a later admission; a snapshot discovery already wrote from the pod template wins. Only the missing case creates a stub: on a stale object a create is a guaranteed no-op.</p>
+<p>The status snapshot (<code>status.observedResources</code>) is also written on the <code>AlreadyExists</code> path, so an object lacking one can be filled in by a later admission; a snapshot discovery already wrote from the members' containers wins. Only the missing case creates a stub: on a stale object a create is a guaranteed no-op.</p>
 <p>The <code>k8s.sustain.io/stub</code> label is provenance, not control flow. The controller's own write path must <code>Create</code> before it can patch status (the status subresource discards status supplied at create), so every controller-written recommendation is transiently empty-status too.</p>
+<h4 id="policy-check">Policy check<a class="headerlink" href="#policy-check" title="Permanent link">&para;</a></h4>
+<p>The webhook injects only when the <code>WorkloadRecommendation</code>'s <code>spec.policy</code> is the Policy the pod resolves to (<code>ErrRecommendationOtherPolicy</code>, counted as <code>other-policy</code>). That is what keeps a Conflicted identity's frozen numbers out of the other Policy's pods, and it also keeps an identity moving between Policies from receiving numbers computed under the old one until the new one adopts it. A Conflicted object is exempt from the staleness gate like a departed one, bounded by the same retention window.</p>
 <h4 id="cache-staleness-constant">Cache staleness constant<a class="headerlink" href="#cache-staleness-constant" title="Permanent link">&para;</a></h4>
 <p>The staleness window is <code>webhook.Handler.CacheStaleness</code> (default <code>DefaultCacheStaleness = 30m</code>, <code>internal/webhook/recommendations.go</code>). It is not exposed as a flag or Helm value.</p>
 <h4 id="startup-probe-budget">Startup probe budget<a class="headerlink" href="#startup-probe-budget" title="Permanent link">&para;</a></h4>
@@ -3621,9 +3711,10 @@ while the <code>values.yaml</code> side still passes.</p>
 <li><strong>Orphan reaper</strong> keeps the strict <code>uid</code> + <code>resourceVersion</code> preconditions: its rule reads <code>spec.policy</code>, which is rewritten in place when a re-annotated workload's WLR is re-pointed at its new policy, so a stale copy can call a just-adopted object an orphan. It guarantees nothing, so it can afford the conflict.</li>
 </ul>
 <h4 id="freshness-grace">Freshness grace<a class="headerlink" href="#freshness-grace" title="Permanent link">&para;</a></h4>
-<p>Independently of retention, a <code>WorkloadRecommendation</code> created within the last 10 minutes is never swept, nor is one whose workload object was created in that window; it protects an identity first written just after a reconcile built its target list. The grace keys off creation timestamps, not <code>status.observedAt</code>: the computation phase refreshes <code>observedAt</code> for every object in its list each cycle, departed identities included, so an <code>observedAt</code>-based guard would be self-satisfying and an opted-out workload would keep its recommendation (and its share of Prometheus load) indefinitely.</p>
+<p>The sweep judges each of the Policy's <code>WorkloadRecommendation</code>s against the reconcile's inventory snapshot: one whose identity is Departed is retained, one whose identity is Conflicted or governed by another Policy is kept, one whose identity is live but governed by no Policy, or is outside the snapshot (namespace or kind no longer in the Policy's scope), is deleted.</p>
+<p>Independently of retention, a <code>WorkloadRecommendation</code> created within the last 10 minutes is never swept; it protects an identity first written just after a reconcile took its snapshot. The grace keys off the creation timestamp, not <code>status.observedAt</code>: the computation phase refreshes <code>observedAt</code> for every identity it computes each cycle, departed identities included, so an <code>observedAt</code>-based guard would be self-satisfying and an opted-out workload would keep its recommendation (and its share of Prometheus load) indefinitely.</p>
 <h4 id="departed-waiver-bound">Departed waiver bound<a class="headerlink" href="#departed-waiver-bound" title="Permanent link">&para;</a></h4>
-<p>The webhook bounds the <code>departed</code> staleness waiver with its own <code>--recommendation-retention</code> (rendered from the same <code>controller.recommendationRetention</code> Helm value as the controller's). Relying on the sweep to delete a lapsed object would leave the waiver unbounded whenever the controller stops sweeping: both the sweep and the clearing of <code>departed</code> live inside the reconcile, which returns early when a workload listing fails (RBAC revoked on one kind, an unreachable API group, a removed CRD). <code>departed</code> is only set on a positively confirmed absence, never when the existence check errors.</p>
+<p>The webhook bounds the <code>departed</code> (and Conflicted) staleness waiver with its own <code>--recommendation-retention</code> (rendered from the same <code>controller.recommendationRetention</code> Helm value as the controller's). Relying on the sweep to delete a lapsed object would leave the waiver unbounded whenever the controller stops sweeping: both the sweep and the clearing of <code>departed</code> live inside the reconcile, which returns early when the inventory cannot be read (RBAC revoked on one kind, an unreachable API group). <code>departed</code> is only set from a snapshot that read successfully, never on a failed read.</p>
 
 
 
