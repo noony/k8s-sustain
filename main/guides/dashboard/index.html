@@ -1420,6 +1420,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#risk-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risk state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#time-range-and-auto-refresh" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2101,6 +2112,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#risk-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risk state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#time-range-and-auto-refresh" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2480,6 +2502,15 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 </div>
 <h2 id="using-the-dashboard">Using the Dashboard<a class="headerlink" href="#using-the-dashboard" title="Permanent link">&para;</a></h2>
 <p>Every navigation target — table rows, names, policy links, breadcrumbs, the Overview KPI cards and attention queue, <strong>Open in Simulator</strong> — behaves like a regular link: <strong>Cmd/Ctrl-click</strong> or <strong>middle-click</strong> opens it in a new tab, and right-clicking a name offers "Open in new tab".</p>
+<h3 id="risk-state">Risk state<a class="headerlink" href="#risk-state" title="Permanent link">&para;</a></h3>
+<p>Every row, badge, KPI and attention list shows one <strong>Risk state</strong> per workload identity (an owner-name group or bare-pod group is one identity), classified once by the backend in this precedence:</p>
+<ol>
+<li><strong>Blocked</strong> — the controller keeps failing to apply the identity's recommendation and is backing off (any member in retry backoff).</li>
+<li><strong>At risk</strong> — an OOM kill in the last 24 hours.</li>
+<li><strong>Drift</strong> — pods whose running resources still differ from the recommendation beyond the policy's <code>downsizeThreshold</code>; a decrease the policy suppresses is not drift.</li>
+<li><strong>Safe</strong> — none of the above.</li>
+</ol>
+<p>An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. The signals come from the controller's identity-keyed metrics and the <code>k8s_sustain:workload_oom_24h</code> rule (see <a href="../../reference/metrics/#what-owner_kind-and-owner_name-name">Metrics</a>), so an owner-name group shows its members' combined state under the group's name.</p>
 <h3 id="time-range-and-auto-refresh">Time range and auto-refresh<a class="headerlink" href="#time-range-and-auto-refresh" title="Permanent link">&para;</a></h3>
 <p>Overview, Workload Detail, Policy Detail and Simulator share one <strong>time range picker</strong>.</p>
 <ul>
@@ -2493,10 +2524,9 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <h3 id="overview-page">Overview Page<a class="headerlink" href="#overview-page" title="Permanent link">&para;</a></h3>
 <p>The overview is a vertical flow of six bands:</p>
 <ol>
-<li><strong>KPI strip</strong> — five cards:<ul>
+<li><strong>KPI strip</strong> — six cards:<ul>
 <li><strong>CPU saved</strong> and <strong>Memory saved</strong> — absolute saving, share of cluster requests, and a 7-day sparkline.</li>
-<li><strong>At risk</strong> — workloads the controller holds in retry backoff, summed across policies. Click to open the filtered Workloads list.</li>
-<li><strong>Drifted</strong> — workloads with at least one pod not yet running the recommendation. Click to open the filtered Workloads list.</li>
+<li><strong>Blocked</strong>, <strong>At risk</strong> and <strong>Drifted</strong> — how many identities are in each <a href="#risk-state">Risk state</a>; each identity counts once, under its state. Click one to open the Workloads list filtered to that state.</li>
 <li><strong>Coordinated</strong> — workloads whose recommendation is adjusted for an HPA or KEDA ScaledObject (see <a href="../../concepts/autoscaler-coordination/">Autoscaler coordination</a>).</li>
 </ul>
 </li>
@@ -2509,8 +2539,8 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 </ul>
 <p>All three are scoped to managed workloads (usage and current-request queries are joined <code>and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*</code>). The gap between <em>original</em> and <em>current request</em> is the realised saving; the gap between <em>current request</em> and <em>usage</em> is the remaining headroom.
 3. <strong>Cluster headroom</strong> — a stacked bar for CPU and memory split into <code>used</code>, <code>idle</code> and <code>free</code>, from the <code>k8s_sustain:cluster_cpu_headroom_breakdown</code> and <code>..._memory_headroom_breakdown</code> recording rules.
-4. <strong>Needs attention</strong> — three lists: <strong>At risk</strong> (an OOM kill in the last 24h), <strong>Drifted</strong> (sorted by stale pod count), and <strong>Blocked</strong> (in retry backoff). Each row links to the workload detail page.
-5. <strong>Policy effectiveness</strong> — per-policy workload count, CPU/memory saved, and the number of blocked workloads.
+4. <strong>Needs attention</strong> — three lists, one per non-Safe <a href="#risk-state">Risk state</a>, each identity in exactly one: <strong>Risk</strong> (At risk, most OOM kills first), <strong>Drift</strong> (most stale pods first) and <strong>Blocked</strong> (most retry attempts first), ten rows each. Each row links to the identity's detail page.
+5. <strong>Policy effectiveness</strong> — per-policy identity count, CPU/memory saved, and the number of Blocked identities.
 6. <strong>Recent activity</strong> — the latest reconcile and pod-recycle events from the controller.</p>
 </li>
 </ol>
@@ -2520,15 +2550,15 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <li><strong>Stat strip</strong> — Total, Automated (managed by a policy) and Manual counts.</li>
 <li><strong>Filters</strong> — namespace, kind, status (Automated / Manual), lifecycle (Active / Inactive, default any), risk (Safe / Drifted / At risk / Blocked), autoscaler (Has / No autoscaler), and a name search. <strong>Reset filters</strong> clears them all and returns to page 1, keeping the sort order. Filters, sort order and page are kept in the URL query string (e.g. <code>/workloads?namespace=prod&amp;risk=at-risk&amp;sort=-stalePods</code>), so browser Back from a workload restores the list and a filtered view can be bookmarked or shared.</li>
 <li><strong>Columns</strong> — Namespace, Kind, Name, <strong>Risk</strong>, <strong>Drift</strong> (stale/total pods, e.g. <code>2/5</code>), <strong>Policy</strong> (links to the policy) and container count. Sorted by name by default; click Namespace, Kind, Name, Drift or Policy to sort across all pages, click again to reverse.</li>
-<li><strong>Risk</strong> — <code>At risk</code> (OOM kill in the last 24h) takes precedence over <code>Blocked</code> (retry backoff), then <code>Drift</code> (stale pods), otherwise <code>Safe</code>.</li>
+<li><strong>Risk</strong> — the identity's <a href="#risk-state">Risk state</a>: <code>Blocked</code>, then <code>At risk</code>, then <code>Drift</code>, otherwise <code>Safe</code>.</li>
 <li><strong>Name badges</strong> — <strong>Autoscaler</strong> when an HPA or KEDA ScaledObject targets the workload; <strong>Coordinated</strong> when autoscaler coordination adjusts its recommendation, followed by the non-trivial factors (<code>×1.15 CPU</code>, <code>×1.10 mem</code> overhead, <code>· replica ×0.80</code>); <strong>Inactive · last seen X ago</strong> for a workload with no live object.</li>
 </ul>
 <p>Inactive rows come from a retained <code>WorkloadRecommendation</code> whose object is gone (a completed bare pod, a deleted or terminal Job). They stay listed for the retention window (<code>--recommendation-retention</code>, default <code>168h</code>); see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</p>
 <h3 id="workload-detail">Workload Detail<a class="headerlink" href="#workload-detail" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>Header</strong> — kind, namespace, container count, <strong>Automated</strong> + policy link or <strong>Manual</strong>, the <strong>Risk</strong> badge, and the <strong>Coordinated</strong> badge with its factors when autoscaler coordination applies.</li>
+<li><strong>Header</strong> — kind, namespace, container count, <strong>Automated</strong> + policy link or <strong>Manual</strong>, the <a href="#risk-state">Risk state</a> badge, and the <strong>Coordinated</strong> badge with its factors when autoscaler coordination applies.</li>
 <li><strong>Status</strong> — three cards: <strong>Mode</strong> (<code>OnCreate</code> / <code>Ongoing</code>), <strong>Drift</strong> (stale/total pods), <strong>OOM 24h</strong>.</li>
-<li><strong>Currently blocked</strong> — shown only while the controller holds a retry record: reason, attempt count and last error.</li>
+<li><strong>Currently blocked</strong> — shown only while a member of the identity is in retry backoff: the failed step (<code>prometheus</code>, <code>patch</code> or <code>resize</code>) and the attempt count across members.</li>
 <li><strong>Recommendations</strong> — for automated workloads, current vs. recommended CPU and memory request per container (init containers flagged).</li>
 <li><strong>Charts</strong> — per container, CPU and memory usage with the workload's <strong>historical request</strong> (amber dashed, stepped) and <strong>limit</strong> (amber dotted), plus the <strong>sliding-window recommendation</strong> (green long-dashed) for automated workloads, computed at each point with the policy's window and parameters. Without historical request data in Prometheus, the request line falls back to the current spec. Lines break across gaps longer than ~1.5× the query step (between CronJob runs, scaled to zero). Memory charts show <strong>OOM kills</strong> as red markers with a count, from kube-state-metrics; without kube-state-metrics the markers are omitted.</li>
 <li><strong>Open in Simulator</strong> — jumps to the simulator with the workload pre-filled.</li>
@@ -2536,7 +2566,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <p>When a container OOM'd in the last 24h, its displayed memory recommendation is floored at <code>max(kernel high-water peak, OOM-time cgroup limit × 1.20)</code>, exactly as the controller applies it (see <a href="../../concepts/recommendation-pipeline/">Recommendation pipeline</a>). Sibling containers that did not OOM keep their plain percentile.</p>
 <p>An <strong>inactive</strong> workload's detail page resolves from the retained <code>WorkloadRecommendation</code>, so the recommendation and the usage history for the time it ran remain visible.</p>
 <h3 id="policies-page">Policies Page<a class="headerlink" href="#policies-page" title="Permanent link">&para;</a></h3>
-<p>A stat strip shows <strong>Total policies</strong>, <strong>Workloads covered</strong>, <strong>Cluster CPU saved</strong> and <strong>Cluster Mem saved</strong>. The table lists each policy's Name, <strong>Status</strong> (Ready condition), <strong>Mode</strong> (per-kind update modes), <strong>Workloads</strong>, <strong>CPU saved</strong>, <strong>Mem saved</strong>, <strong>At risk</strong> (blocked workloads) and <strong>Last applied</strong>. Click a row for the policy detail page.</p>
+<p>A stat strip shows <strong>Total policies</strong>, <strong>Workloads covered</strong>, <strong>Cluster CPU saved</strong> and <strong>Cluster Mem saved</strong>. The table lists each policy's Name, <strong>Status</strong> (Ready condition), <strong>Mode</strong> (per-kind update modes), <strong>Workloads</strong>, <strong>CPU saved</strong>, <strong>Mem saved</strong>, <strong>Blocked</strong> (identities in retry backoff) and <strong>Last applied</strong>. Click a row for the policy detail page.</p>
 <h3 id="policy-detail">Policy Detail<a class="headerlink" href="#policy-detail" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Stat strip</strong> — Status, Matched Workloads (every workload the policy manages, unaffected by the table filters), CPU saved, Memory saved.</li>
@@ -2590,7 +2620,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <tr>
 <td><code>GET</code></td>
 <td><code>/api/policies</code></td>
-<td>Policies with per-policy rollups (workloads, savings, at-risk)</td>
+<td>Policies with per-policy rollups (<code>workloadCount</code>, savings, <code>blockedCount</code>)</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
@@ -2615,7 +2645,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <tr>
 <td><code>GET</code></td>
 <td><code>/api/workloads/{namespace}/{kind}/{name}</code></td>
-<td>Status snapshot (mode, drift, OOM 24h, blocked, coordination)</td>
+<td>Status snapshot (mode, <code>riskState</code>, drift, OOM 24h, blocked, coordination)</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
@@ -2635,7 +2665,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <tr>
 <td><code>GET</code></td>
 <td><code>/api/summary</code></td>
-<td>Overview snapshot (KPIs, headroom, attention, policy rollups)</td>
+<td>Overview snapshot (savings and Risk-state KPIs, headroom, attention, policy rollups)</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
@@ -2693,7 +2723,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <p><code>/api/summary</code> is the one cached endpoint: its cluster-wide snapshot is held in an in-memory LRU with a 60s TTL, and a successful response carries <code>Cache-Control: public, max-age=60</code>. Error responses drop that header so a single failed recompute is never re-served from a browser or proxy cache. Everything else is computed per request.</p>
 <p>Three behaviours matter when the cache misses:</p>
 <ul>
-<li><strong>One recompute at a time.</strong> The snapshot costs ~16 Prometheus queries, so concurrent misses (a dashboard open in several tabs, or a TTL that just lapsed under load) are collapsed onto a single shared computation instead of each firing its own fan-out. Each request still honours its own context deadline: a caller that gives up does not abort the shared work for the others, and a slow computation cannot make a fast one wait indefinitely.</li>
+<li><strong>One recompute at a time.</strong> The snapshot costs ~19 Prometheus queries, so concurrent misses (a dashboard open in several tabs, or a TTL that just lapsed under load) are collapsed onto a single shared computation instead of each firing its own fan-out. Each request still honours its own context deadline: a caller that gives up does not abort the shared work for the others, and a slow computation cannot make a fast one wait indefinitely.</li>
 <li><strong>A partial Prometheus failure never poisons the cache.</strong> Only a fully successful recompute is stored. When some queries fail, the dashboard prefers the most recent complete snapshot for up to 10 minutes (10x the TTL) so a brief blip is invisible; past that it serves the fresh-but-partial result rather than pretending an arbitrarily old snapshot is current.</li>
 <li><strong>A cancelled request</strong> that was waiting on a recompute falls back to that same recent snapshot when one exists, and otherwise returns <code>503 Service Unavailable</code> instead of an all-zeroes <code>200</code>.</li>
 </ul>

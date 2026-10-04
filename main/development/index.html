@@ -1946,6 +1946,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#dashboard-health-signals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard health signals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#dashboard-frontend" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2517,6 +2528,17 @@
     <span class="md-ellipsis">
       
         Adding a new workload kind
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dashboard-health-signals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard health signals
       
     </span>
   </a>
@@ -3141,6 +3163,20 @@ kind (say <code>Rollout</code> from Argo) is mostly a matter of registering it t
 <li>If the kind's pods cannot be evicted (job-like workloads), add an in-place-only branch in <code>reconcileWorkload</code> (<code>internal/controller/workload_reconcile.go</code>) alongside the Job, CronJob and bare-pod ones; selector-based kinds need nothing more</li>
 <li>Add RBAC markers (<code>+kubebuilder:rbac:...</code>) to the controller and the Helm RBAC rule in <code>charts/k8s-sustain/templates/rbac.yaml</code></li>
 </ol>
+<h2 id="dashboard-health-signals">Dashboard health signals<a class="headerlink" href="#dashboard-health-signals" title="Permanent link">&para;</a></h2>
+<p>Every dashboard view reads workload health — OOM kills in 24h, Blocked, stale
+and total pods, the autoscaler and its coordination factors — through one port,
+<code>HealthSignals</code> (<code>internal/dashboard/health.go</code>), keyed by identity. Its
+Prometheus adapter (<code>health_prometheus.go</code>) holds the only health PromQL;
+tests use the in-memory <code>memHealthSignals</code> instead of faking query text. The
+Risk state is classified in exactly one place, <code>riskStateOf</code>, and returned in
+every payload (<code>riskState</code>); the SPA renders it and never derives its own.</p>
+<p>The port works because the controller emits every health metric under the
+identity's labels: <code>internal/controller/identity_health.go</code> aggregates the
+apply outcomes of an identity's members (pod counts summed, Blocked if any
+member is) and deletes the series of identities no policy targets any more.
+A new health signal therefore needs both halves: an identity-keyed metric in
+the controller and a field on <code>identityHealth</code> filled by the adapter.</p>
 <h2 id="dashboard-frontend">Dashboard frontend<a class="headerlink" href="#dashboard-frontend" title="Permanent link">&para;</a></h2>
 <p>The dashboard frontend is a Vue 3 + TypeScript SPA built with Vite in
 <code>internal/dashboard/ui/frontend/</code>. <code>make build-ui</code> (part of <code>make build</code>) runs

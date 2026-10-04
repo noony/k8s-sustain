@@ -2097,7 +2097,10 @@ The recommendation covers the <strong>union</strong> of the members' containers,
 container only <code>app-green</code> declares is still sized. <strong>Applying stays per real
 Deployment</strong>: each Deployment's own pods are resized or evicted independently,
 against the shared recommendation narrowed to the containers that Deployment
-declares.</p>
+declares. Health is reported for the identity, not per Deployment: pod and
+stale-pod counts are summed over the members and the identity is Blocked when
+any member is (see <a href="../../reference/metrics/#what-owner_kind-and-owner_name-name">Metrics</a>),
+so the dashboard row <code>Deployment/app</code> carries every member's state.</p>
 <p><strong>Keep the members' autoscaler state consistent.</strong> If one member has an
 HPA/ScaledObject and another has none (or a different kind), a single member's
 autoscaler shapes the shared recommendation for all of them, which can over- or
