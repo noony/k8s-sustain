@@ -322,7 +322,7 @@ kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 ## Dashboard health signals
 
 Every dashboard view reads workload health — OOM kills in 24h, Blocked, stale
-and total pods, the autoscaler and its coordination factors — through one port,
+and total pods, whether an autoscaler is present — through one port,
 `HealthSignals` (`internal/dashboard/health.go`), keyed by identity. Its
 Prometheus adapter (`health_prometheus.go`) holds the only health PromQL;
 tests use the in-memory `memHealthSignals` instead of faking query text. The
@@ -336,8 +336,9 @@ Every list and detail endpoint builds its identities from `internal/inventory`
 (`Server.identities` / `Server.identity`), so a row, a detail page and the
 controller agree on members, containers, age, Departed and the governing
 Policy. The detail page shows the Recommendation stored in the identity's
-`WorkloadRecommendation` and its `status.outcome`; only the Simulator
-recomputes.
+`WorkloadRecommendation`, its `status.outcome` and its `status.trace`; only the
+Simulator recomputes. Coordination factors are not a health signal: list rows
+and the detail page read them from the stored trace (`coordinationFactorsOf`).
 
 The port works because the controller emits every health metric under the
 identity's labels: `internal/controller/identity_health.go` aggregates the
@@ -526,7 +527,7 @@ The computation unit is the identity, not the workload object: a group of worklo
 
 - **The backoff split, taken once.** Backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out. The pass records which members to apply and which it skipped, and the apply step uses that split.
 - **The fetch.** One `InputsFetcher` call per policy; the pass never sees shards, retries or the fallback ([ADR 0001](adr/0001-single-identity-is-a-batch-of-one.md)).
-- **The computation.** `recommender.Compute` decides everything about one identity from its inputs, its live OOM records and its age (the inventory's `Since`): the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply.
+- **The computation.** `recommender.Compute` decides everything about one identity from its inputs, its live OOM records and its age (the inventory's `Since`): the age gate, the live-OOM bypass of that gate, and the live-OOM memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the value after every stage that ran; `persist` stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read it. Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new trace field.
 
 The batch metrics are counted from the outcomes, not from the fetch's internals. `persist` records every outcome but "not fetched" in the `WorkloadRecommendation`'s `status.outcome` (`wlrcache.Upsert` for `Computed`, `wlrcache.RecordOutcome` for the rest), keeping the last Recommendation.
 
