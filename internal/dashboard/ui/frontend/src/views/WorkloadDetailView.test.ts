@@ -87,6 +87,51 @@ describe('WorkloadDetailView', () => {
     expect(paths.some((p: string) => p.includes('/recommendations'))).toBe(false)
   })
 
+  it('shows how each container was computed from the stored trace', async () => {
+    serve({
+      automated: true,
+      policyName: 'p',
+      riskState: 'safe',
+      oom24h: 0,
+      stalePods: 0,
+      totalPods: 1,
+      recommendation: {
+        outcome: 'Computed',
+        containers: { app: { cpuRequest: '414m', memoryRequest: '256Mi' } },
+        trace: {
+          app: {
+            cpu: {
+              percentile: '123400u',
+              withHeadroom: '136m',
+              clamped: '150m',
+              coordination: {
+                overheadFactor: 1.375,
+                replicaFactor: 2,
+                scaled: '414m',
+                value: '414m',
+              },
+            },
+            memory: {
+              percentile: '100Mi',
+              oomFloor: { value: '240Mi', determined: true },
+              withHeadroom: '240Mi',
+              clamped: '240Mi',
+              coordination: { overheadFactor: 1.375, scaled: '330Mi', value: '256Mi' },
+            },
+          },
+        },
+      },
+    })
+    const w = mountDetail()
+    await flushPromises()
+    const trace = w.find('[data-test="trace"]')
+    expect(trace.exists()).toBe(true)
+    expect(trace.text()).toContain('123.4m')
+    expect(trace.text()).toContain('×2 replica')
+    expect(trace.text()).toContain('240Mi · set the request')
+    expect(trace.text()).toContain('clamped to 256Mi')
+  })
+
   it('names the Policies of a Conflicted identity', async () => {
     serve({
       conflictingPolicies: ['p', 'q'],

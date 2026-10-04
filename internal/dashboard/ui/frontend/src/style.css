@@ -1506,6 +1506,36 @@ a.kpi-card {
   color: var(--green);
 }
 
+/* Recommendation trace */
+.trace {
+  margin-top: 10px;
+  font-size: 12px;
+}
+.trace summary {
+  cursor: pointer;
+  color: var(--text-dim);
+}
+.trace-table {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.trace-table thead th {
+  position: static;
+  padding: 4px 6px;
+}
+.trace-table tbody td {
+  padding: 4px 6px;
+}
+.trace-table tbody td:not(:first-child) {
+  font-family: var(--font-mono);
+}
+.trace-table tbody tr {
+  cursor: default;
+}
+.trace-table tbody tr:hover {
+  background: none;
+}
+
 /* Resource diff */
 .resource-diff {
   display: inline-flex;
