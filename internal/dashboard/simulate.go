@@ -109,7 +109,6 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	id, err := s.identity(ctx, promclient.WorkloadIdentity{Namespace: req.Namespace, OwnerKind: req.OwnerKind, OwnerName: req.OwnerName})
 	if err != nil {
 		s.Logger.Error(err, "failed to read the workload identity", "namespace", req.Namespace, "kind", req.OwnerKind, "name", req.OwnerName)
-		id = nil
 	}
 	var coordination sustainv1alpha1.AutoscalerCoordination
 	switch {

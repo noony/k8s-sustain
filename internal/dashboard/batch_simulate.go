@@ -70,7 +70,7 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("listing workloads: %v", err))
 		return
 	}
-	workloads := governed[:0:0]
+	var workloads []*inventory.Identity
 	for _, id := range governed {
 		if !id.Departed() {
 			workloads = append(workloads, id)
