@@ -37,6 +37,10 @@ _Avoid_: cache entry, wlrec (outside kubectl)
 The requests and limits an identity's pods should run, as held in its WorkloadRecommendation. Applying it (resizing, evicting, injecting) is a separate step that recommend-only, OnCreate or a suppressed decrease can withhold.
 _Avoid_: applied recommendation, current recommendation
 
+**Signal**:
+An observed input that contributes one stage to a Recommendation: the CPU and memory usage of the busiest replica, which set the requests, and recent OOM kills, which can only raise the memory request. An identity whose usage cannot be read gets no Recommendation; one whose OOM kills cannot be read is recommended without them.
+_Avoid_: metric, input (when one source is meant)
+
 **Trace**:
 The record of how a Recommendation was derived: for each container and resource, the value after every stage of the computation that ran (usage percentile, OOM floor, headroom, min/max clamp, autoscaler coordination and its factors, limit). Stored in the WorkloadRecommendation with the Recommendation it explains, never on its own.
 _Avoid_: breakdown, explanation, debug info

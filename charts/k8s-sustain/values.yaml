@@ -188,9 +188,10 @@ controller:
   # cannot starve the dashboards and alerting sharing that server. Lower this
   # first if the controller is the reason your Prometheus is struggling.
   prometheusMaxInflight: 8
-  # Projected sample budget (containers x window-minutes, summed across a
-  # shard's workloads) one batched CPU/memory/OOM query may reach before a new
-  # shard is started. Must stay under Prometheus's --query.max-samples
+  # Projected sample budget (containers x samples per container, summed across
+  # a shard's workloads: window-minutes for the CPU and memory queries, one per
+  # rule for the OOM query) one batched query may reach before a new shard is
+  # started. Must stay under Prometheus's --query.max-samples
   # (default 50,000,000): that limit REJECTS an over-budget query outright,
   # failing every workload in the shard rather than just the excess. The
   # default leaves a 5x margin.
