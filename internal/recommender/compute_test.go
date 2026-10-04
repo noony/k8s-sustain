@@ -36,7 +36,7 @@ func TestCompute_RecommendsEveryObservedContainerWhenNoneDeclared(t *testing.T) 
 				PeakMemoryBytes: promclient.ContainerValues{"crashy": 300 * mib},
 			},
 		},
-		WorkloadCreated: old(),
+		Since: old(),
 	})
 
 	if res.Outcome != Recommended {
@@ -70,34 +70,26 @@ func TestCompute_DeclaredContainersBoundTheResult(t *testing.T) {
 	}
 }
 
-// The age gate trusts the earliest of the object's age and how long the
-// identity has been known, and any recent OOM, from Prometheus or the live
-// watcher, excuses it so a crash-looping workload is not locked out.
+// The age gate holds an identity first seen less than MinWorkloadAge ago, and
+// any recent OOM, from Prometheus or the live watcher, excuses it so a
+// crash-looping workload is not locked out.
 func TestCompute_AgeGate(t *testing.T) {
 	now := time.Now()
 	long := now.Add(-2 * MinWorkloadAge)
 	young := now.Add(-time.Minute)
 
 	cases := []struct {
-		name              string
-		created           time.Time
-		identityFirstSeen time.Time
-		promOOM           bool
-		liveOOM           bool
-		wantTooYoung      bool
+		name         string
+		since        time.Time
+		promOOM      bool
+		liveOOM      bool
+		wantTooYoung bool
 	}{
-		{"young object, unknown identity", young, time.Time{}, false, false, true},
-		{"young object, long-known identity", young, long, false, false, false},
-		{"young object, newly-known identity", young, now.Add(-2 * time.Minute), false, false, true},
-		{"old object, unknown identity", long, time.Time{}, false, false, false},
-		{"old object, newly-known identity stays old", long, young, false, false, false},
-		{"young object, Prometheus OOM bypasses", young, time.Time{}, true, false, false},
-		{"young object, live OOM bypasses", young, time.Time{}, false, true, false},
-		// Bare pods have no object age, so how long the identity has been known
-		// is the only signal.
-		{"zero created, newly-known identity", time.Time{}, young, false, false, true},
-		{"zero created, long-known identity", time.Time{}, long, false, false, false},
-		{"zero created, unknown identity", time.Time{}, time.Time{}, false, false, false},
+		{"young identity", young, false, false, true},
+		{"old identity", long, false, false, false},
+		{"young identity, Prometheus OOM bypasses", young, true, false, false},
+		{"young identity, live OOM bypasses", young, false, true, false},
+		{"undated identity", time.Time{}, false, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -105,7 +97,7 @@ func TestCompute_AgeGate(t *testing.T) {
 			if tc.promOOM {
 				in.OOM.OOMCounts = promclient.ContainerValues{"side": 1}
 			}
-			req := Request{Containers: containers("app"), Inputs: in, WorkloadCreated: tc.created, IdentityFirstSeen: tc.identityFirstSeen}
+			req := Request{Containers: containers("app"), Inputs: in, Since: tc.since}
 			if tc.liveOOM {
 				req.LiveOOMs = map[string]*oomwatch.OOMRecord{"side": {Container: "side", TerminatedAt: now}}
 			}
@@ -132,7 +124,7 @@ func TestCompute_YoungWorkloadWithOOMIsRecommended(t *testing.T) {
 			OOMCounts:       promclient.ContainerValues{"app": 1},
 			PeakMemoryBytes: promclient.ContainerValues{"app": 80 * mib},
 		}},
-		WorkloadCreated: time.Now().Add(-time.Minute),
+		Since: time.Now().Add(-time.Minute),
 	})
 
 	if res.Outcome != Recommended {
@@ -148,9 +140,9 @@ func TestCompute_YoungWorkloadWithOOMIsRecommended(t *testing.T) {
 
 func TestCompute_NoDataWhenNothingToRecommendFrom(t *testing.T) {
 	res := Compute(Request{
-		Containers:      containers("app"),
-		Inputs:          &WorkloadInputs{CPUPerPod: promclient.ContainerValues{}, MemPerPod: promclient.ContainerValues{}},
-		WorkloadCreated: old(),
+		Containers: containers("app"),
+		Inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{}, MemPerPod: promclient.ContainerValues{}},
+		Since:      old(),
 	})
 
 	if res.Outcome != NoData {
@@ -175,7 +167,7 @@ func TestCompute_LiveOOMRaisesTheMemoryFloor(t *testing.T) {
 		LiveOOMs: map[string]*oomwatch.OOMRecord{
 			"app": {Container: "app", TerminatedAt: killedAt, OOMLimitBytes: 200 << 20},
 		},
-		WorkloadCreated: old(),
+		Since: old(),
 	})
 
 	if got := res.Recs["app"].MemoryRequest; got == nil || got.String() != "240Mi" {
@@ -213,7 +205,7 @@ func TestCompute_OOMAnchorTakesTheHigherOfPrometheusAndLive(t *testing.T) {
 		LiveOOMs: map[string]*oomwatch.OOMRecord{
 			"app": {Container: "app", TerminatedAt: time.Now(), OOMLimitBytes: 184 << 20},
 		},
-		WorkloadCreated: old(),
+		Since: old(),
 	})
 
 	if got := res.Recs["app"].MemoryRequest; got == nil || got.Value() <= 184<<20 {

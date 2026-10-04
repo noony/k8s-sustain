@@ -10,31 +10,36 @@ const router = createRouter({
   routes: [{ path: '/', component: WorkloadDetailView }],
 })
 
+function serve(snapshot: object) {
+  ;(api.api as any).mockImplementation((path: string) => {
+    if (path.endsWith('/metrics?window=1w&step=20m'))
+      return Promise.resolve({ cpu: {}, memory: {}, initContainers: ['migrate'] })
+    if (path.match(/\/api\/workloads\/[^/]+\/[^/]+\/[^/]+$/))
+      return Promise.resolve({ automated: false, departed: false, recentEvents: [], ...snapshot })
+    return Promise.reject(new Error('unexpected ' + path))
+  })
+}
+
+function mountDetail() {
+  return mount(WorkloadDetailView, {
+    props: { namespace: 'a', kind: 'Deployment', name: 'web' },
+    global: {
+      plugins: [router],
+      stubs: ['TimeRangePicker', 'TrendChart'],
+    },
+  })
+}
+
 describe('WorkloadDetailView', () => {
   it('renders status snapshot', async () => {
-    ;(api.api as any).mockImplementation((path: string) => {
-      if (path.endsWith('/metrics?window=1w&step=20m'))
-        return Promise.resolve({ cpu: {}, memory: {} })
-      if (path.endsWith('/recommendations?window=1w&step=20m'))
-        return Promise.resolve({ automated: false })
-      if (path.match(/\/api\/workloads\/[^/]+\/[^/]+\/[^/]+$/))
-        return Promise.resolve({
-          updateMode: 'Ongoing',
-          riskState: 'at-risk',
-          oom24h: 2,
-          stalePods: 1,
-          totalPods: 4,
-          recentEvents: [],
-        })
-      return Promise.resolve({})
+    serve({
+      updateMode: 'Ongoing',
+      riskState: 'at-risk',
+      oom24h: 2,
+      stalePods: 1,
+      totalPods: 4,
     })
-    const w = mount(WorkloadDetailView, {
-      props: { namespace: 'a', kind: 'Deployment', name: 'web' },
-      global: {
-        plugins: [router],
-        stubs: ['TimeRangePicker', 'TrendChart'],
-      },
-    })
+    const w = mountDetail()
     await flushPromises()
     expect(w.text()).toContain('Ongoing')
     expect(w.text()).toContain('OOM')
@@ -43,30 +48,56 @@ describe('WorkloadDetailView', () => {
   })
 
   it('renders the risk state the backend classified, not one derived from the signals', async () => {
-    ;(api.api as any).mockImplementation((path: string) => {
-      if (path.endsWith('/metrics?window=1w&step=20m'))
-        return Promise.resolve({ cpu: {}, memory: {} })
-      if (path.endsWith('/recommendations?window=1w&step=20m'))
-        return Promise.resolve({ automated: false })
-      if (path.match(/\/api\/workloads\/[^/]+\/[^/]+\/[^/]+$/))
-        return Promise.resolve({
-          riskState: 'blocked',
-          oom24h: 3,
-          stalePods: 0,
-          totalPods: 2,
-          blocked: { reason: 'patch', attempts: 2 },
-          recentEvents: [],
-        })
-      return Promise.resolve({})
+    serve({
+      riskState: 'blocked',
+      oom24h: 3,
+      stalePods: 0,
+      totalPods: 2,
+      blocked: { reason: 'patch', attempts: 2 },
     })
-    const w = mount(WorkloadDetailView, {
-      props: { namespace: 'a', kind: 'Deployment', name: 'web' },
-      global: {
-        plugins: [router],
-        stubs: ['TimeRangePicker', 'TrendChart'],
-      },
-    })
+    const w = mountDetail()
     await flushPromises()
     expect(w.findComponent({ name: 'RiskBadge' }).text()).toBe('Blocked')
+  })
+
+  it('shows the stored Recommendation and its outcome without recomputing it', async () => {
+    serve({
+      automated: true,
+      policyName: 'p',
+      riskState: 'safe',
+      oom24h: 0,
+      stalePods: 0,
+      totalPods: 1,
+      recommendation: {
+        outcome: 'NoData',
+        observedAt: new Date(Date.now() - 3600 * 1000).toISOString(),
+        containers: {
+          app: { cpuRequest: '250m', memoryRequest: '128Mi' },
+          migrate: { cpuRequest: '50m' },
+        },
+      },
+    })
+    const w = mountDetail()
+    await flushPromises()
+    expect(w.find('[data-test="outcome"]').text()).toBe('No data')
+    expect(w.text()).toContain('250m')
+    expect(w.text()).toContain('128Mi')
+    expect(w.text()).toContain('computed')
+    const paths = (api.api as any).mock.calls.map((c: unknown[]) => c[0] as string)
+    expect(paths.some((p: string) => p.includes('/recommendations'))).toBe(false)
+  })
+
+  it('names the Policies of a Conflicted identity', async () => {
+    serve({
+      conflictingPolicies: ['p', 'q'],
+      riskState: 'conflicted',
+      oom24h: 0,
+      stalePods: 0,
+      totalPods: 0,
+    })
+    const w = mountDetail()
+    await flushPromises()
+    expect(w.text()).toContain('Conflicted: p / q')
+    expect(w.findComponent({ name: 'RiskBadge' }).text()).toBe('Conflicted')
   })
 })

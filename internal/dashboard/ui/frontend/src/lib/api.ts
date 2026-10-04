@@ -203,7 +203,7 @@ export interface WorkloadListData {
   pageSize: number
   namespaces?: string[]
   kinds?: string[]
-  counts: { total: number; automated: number; manual: number }
+  counts: { total: number; automated: number; manual: number; conflicted?: number }
 }
 
 export interface PolicyWorkloadsData {
@@ -253,15 +253,15 @@ export interface RecommendationContainer {
   memoryLimitRemoved?: boolean
 }
 
-export interface RecommendationsData {
-  automated: boolean
-  policyName?: string
+/** What the controller last decided for an identity, as its WorkloadRecommendation records it. */
+export type RecommendationOutcome =
+  'Computed' | 'NoData' | 'TooYoung' | 'FetchFailed' | 'Conflicted'
+
+/** The Recommendation an identity's WorkloadRecommendation stores; never recomputed by the dashboard. */
+export interface StoredRecommendation {
+  outcome?: RecommendationOutcome
+  observedAt?: string
   containers?: Record<string, RecommendationContainer>
-  initContainers?: string[]
-  /** The controller would still skip this workload as too young to have stable samples. */
-  tooYoung?: boolean
-  cpuRecommendations?: Record<string, TimeValue[]>
-  memoryRecommendations?: Record<string, TimeValue[]>
 }
 
 export interface SimulateRequest {
@@ -408,9 +408,14 @@ export interface CoordinationFactors {
   cpuReplica?: number
 }
 
-export type RiskState = 'safe' | 'drifted' | 'at-risk' | 'blocked'
+export type RiskState = 'safe' | 'drifted' | 'at-risk' | 'blocked' | 'conflicted'
 
 export interface WorkloadDetailSnapshot {
+  automated: boolean
+  policyName?: string
+  /** The Policies a Conflicted identity's members opt into; no Policy governs it. */
+  conflictingPolicies?: string[]
+  departed: boolean
   updateMode?: string
   riskState: RiskState
   stalePods: number
@@ -419,6 +424,7 @@ export interface WorkloadDetailSnapshot {
   blocked?: { reason: string; attempts: number; nextRetryAt?: string; lastError?: string }
   recentEvents: ActivityItem[]
   coordinationFactors?: CoordinationFactors
+  recommendation?: StoredRecommendation
 }
 
 export interface WorkloadItemV2 extends WorkloadItem {
@@ -427,6 +433,7 @@ export interface WorkloadItemV2 extends WorkloadItem {
   totalPods: number
   autoscalerPresent: boolean
   coordinationFactors?: CoordinationFactors
-  active: boolean
+  departed: boolean
   lastSeenAt?: string
+  conflictingPolicies?: string[]
 }

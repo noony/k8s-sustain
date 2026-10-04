@@ -7,6 +7,7 @@ const labels: Record<string, { text: string; cls: string }> = {
   drifted: { text: 'Drift', cls: 'risk-drift' },
   'at-risk': { text: 'At risk', cls: 'risk-risk' },
   blocked: { text: 'Blocked', cls: 'risk-blocked' },
+  conflicted: { text: 'Conflicted', cls: 'risk-conflicted' },
 }
 const fallback = { text: '-', cls: 'risk-unknown' }
 </script>

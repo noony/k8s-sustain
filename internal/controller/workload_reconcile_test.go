@@ -9,7 +9,6 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -184,60 +183,44 @@ func TestReconcileWorkload_PolicyRecommendOnly_DoesNotRecyclePods(t *testing.T) 
 // A standalone Job is re-created on every run, so its object is always seconds
 // old however long the identity has been producing samples; its
 // WorkloadRecommendation is what records when k8s-sustain first saw it. The two
-// cases are identical seconds-old Jobs differing only in WLR age, so feeding the
-// gate anything but the WLR timestamp collapses them onto one outcome.
-func TestReconcileWorkload_AgeGateUsesWLRCreationTimestamp(t *testing.T) {
+// cases are identical seconds-old Jobs differing only in WLR age, so dating the
+// identity by anything but the older of the two collapses them onto one outcome.
+func TestReconcile_AgeGateDatesTheIdentityByItsWorkloadRecommendation(t *testing.T) {
 	cases := []struct {
-		name       string
-		wlrCreated time.Time
-		wantCached bool
+		name        string
+		wlrCreated  time.Time
+		wantOutcome sustainv1alpha1.RecommendationOutcome
 	}{
-		{"identity known for 3h clears the gate", time.Now().Add(-3 * time.Hour), true},
-		{"identity first seen 30s ago stays gated", time.Now().Add(-30 * time.Second), false},
+		{"identity known for 3h clears the gate", time.Now().Add(-3 * time.Hour), sustainv1alpha1.OutcomeComputed},
+		{"identity first seen 30s ago stays gated", time.Now().Add(-30 * time.Second), sustainv1alpha1.OutcomeTooYoung},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := reconcilerWithInputs(t, usageFor("default", "Job", "nightly-etl"), true /* in-place */)
+			ongoing := sustainv1alpha1.UpdateModeOngoing
 			policy := policyForReconcileWorkload(t, "p")
-			// Recommend-only isolates the gate: the recommendation is still
-			// computed and cached, but the apply path (which needs pods and a
-			// Job in the scheme) is skipped.
-			policy.Spec.RightSizing.RecommendOnly = true
-
-			tgt := &workloadTarget{
-				Kind: "Job", Name: "nightly-etl", Namespace: "default",
-				IdentityKind: "Job", IdentityName: "nightly-etl",
-				Selector:   &metav1.LabelSelector{MatchLabels: map[string]string{"job-name": "nightly-etl"}},
-				Containers: []corev1.Container{{Name: "app"}},
-				Object: &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
-					Namespace: "default", Name: "nightly-etl",
-					// This run's object: seconds old, every run.
-					CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Second)),
-				}},
-			}
+			policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
+			policy.Spec.RightSizing.Update.Types.Job = &ongoing
+			job := annotatedJob("default", "nightly-etl", "p")
+			// This run's object: seconds old, every run.
+			job.CreationTimestamp = metav1.NewTime(time.Now().Add(-5 * time.Second))
 			wlr := &sustainv1alpha1.WorkloadRecommendation{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "default", Name: wlrcache.Name("Job", "nightly-etl"),
+					Labels:            map[string]string{wlrPolicyLabel: "p"},
 					CreationTimestamp: metav1.NewTime(tc.wlrCreated),
 				},
+				Spec: sustainv1alpha1.WorkloadRecommendationSpec{
+					WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Job", Namespace: "default", Name: "nightly-etl"},
+					Policy:      "p",
+				},
 			}
+			r := reconcilerWithInputs(t, usageFor("default", "Job", "nightly-etl"), true, policy, job, wlr)
 
-			if err := runComputeAndApply(context.Background(), r, policy, itemForTargetWithWLR(tgt, wlr)); err != nil {
-				t.Fatalf("reconcileWorkload: %v", err)
-			}
+			reconcileOnce(t, r, "p")
 
-			var got sustainv1alpha1.WorkloadRecommendation
-			key := types.NamespacedName{Namespace: "default", Name: wlrcache.Name("Job", "nightly-etl")}
-			err := r.Get(context.Background(), key, &got)
-			switch {
-			case tc.wantCached && err != nil:
-				t.Fatalf("expected a recommendation for an identity known for 3h, got %v", err)
-			case tc.wantCached && len(got.Status.Containers) == 0:
-				t.Error("recommendation was written with no containers")
-			case !tc.wantCached && err == nil:
-				t.Error("expected the gate to skip an identity first seen 30s ago, but a recommendation was written")
-			case !tc.wantCached && !apierrors.IsNotFound(err):
-				t.Fatalf("expected NotFound, got %v", err)
+			got := getWLRFor(t, r, "default", "Job", "nightly-etl")
+			if got.Status.Outcome != tc.wantOutcome {
+				t.Errorf("outcome = %q, want %q", got.Status.Outcome, tc.wantOutcome)
 			}
 		})
 	}
@@ -319,12 +302,11 @@ func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *test
 // A Kind == "Pod" target must never reach the selector-driven recycle path —
 // no controller could recreate the pod after an eviction.
 //
-// The target's Selector is deliberately populated (production
-// listBarePodTargets never sets it) and matches a running pod that carries
-// neither the policy nor the owner-name annotation, so it belongs to no bare-pod
-// group either. It stays at 999m only if the Kind == "Pod" branch holds AND the
-// bare-pod resize path resolves members from the grouping rule rather than the
-// selector.
+// The target's Selector is deliberately populated (production targetsOf never
+// sets it) and matches a running pod that carries neither the policy nor the
+// owner-name annotation, so it belongs to no bare-pod identity either. It stays
+// at 999m only if the Kind == "Pod" branch holds AND the bare-pod resize path
+// takes members from the target rather than the selector.
 func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -355,7 +337,6 @@ func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
 				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
 			},
 		}},
-		PolicyName: "p",
 	}
 	policy := policyForReconcileWorkload(t, "p")
 

@@ -14,9 +14,9 @@ import (
 // member would be last-writer-wins; the tracker keeps each member's last pod
 // counts and emits the identity's aggregate once its policy's pass ends.
 //
-// Members are unioned across policies, so an identity whose members are split
-// between two policies still gets one aggregate, and its series are deleted
-// only once no policy claims it.
+// An identity is governed by at most one Policy at a time; members are still
+// unioned across policies so that an identity moving between two keeps one
+// aggregate, and its series are deleted only once no policy claims it.
 type healthTracker struct {
 	mu       sync.Mutex
 	byPolicy map[string]map[promclient.WorkloadIdentity][]string
@@ -27,15 +27,20 @@ type healthTracker struct {
 
 // observe records policy's live identities and their members, deleting the
 // series of identities, and the counts of members, that no policy has any
-// more. It must run before the policy emits for this cycle.
-func (h *healthTracker) observe(policy string, idx targetIndex) {
-	next := make(map[promclient.WorkloadIdentity][]string, len(idx))
-	for id, targets := range idx {
-		keys := make([]string, 0, len(targets))
-		for _, t := range targets {
+// more. It must run before the policy emits for this cycle. A Conflicted
+// identity is governed by no Policy, so it loses its series here: nothing
+// applies to it.
+func (h *healthTracker) observe(policy string, items []computeItem) {
+	next := make(map[promclient.WorkloadIdentity][]string, len(items))
+	for _, it := range items {
+		if len(it.Targets) == 0 {
+			continue
+		}
+		keys := make([]string, 0, len(it.Targets))
+		for _, t := range it.Targets {
 			keys = append(keys, t.key())
 		}
-		next[id] = keys
+		next[it.Identity] = keys
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()

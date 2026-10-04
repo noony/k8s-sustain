@@ -8,15 +8,16 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/policymatch"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// workloadRow is what every list endpoint returns per workload; endpoints
+// workloadRow is what every list endpoint returns per identity; endpoints
 // that need more embed it.
 type workloadRow struct {
 	Namespace           string               `json:"namespace"`
@@ -28,17 +29,18 @@ type workloadRow struct {
 	TotalPods           int                  `json:"totalPods"`
 	AutoscalerPresent   bool                 `json:"autoscalerPresent"`
 	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
-	Active              bool                 `json:"active"`
+	Departed            bool                 `json:"departed"`
 	LastSeenAt          string               `json:"lastSeenAt,omitempty"`
-}
 
-func (r *workloadRow) key() string { return workloadKey(r.Namespace, r.Kind, r.Name) }
+	conflicted bool
+}
 
 func (r *workloadRow) identity() promclient.WorkloadIdentity {
 	return promclient.WorkloadIdentity{Namespace: r.Namespace, OwnerKind: r.Kind, OwnerName: r.Name}
 }
 
 func (r *workloadRow) setHealth(h identityHealth) {
+	h.Conflicted = r.conflicted
 	r.RiskState = riskStateOf(h)
 	r.StalePods = h.StalePods
 	r.TotalPods = h.TotalPods
@@ -46,20 +48,29 @@ func (r *workloadRow) setHealth(h identityHealth) {
 	r.CoordinationFactors = h.CoordinationFactors
 }
 
-func liveRow(kind string, e workloadEntry) workloadRow {
-	return workloadRow{
-		Namespace:  e.Namespace,
-		Kind:       kind,
-		Name:       e.Name,
-		Containers: containerStatuses(e.Containers(), e.InitContainers()),
-		Active:     true,
+// rowFor renders one identity. A Departed identity shows the containers of
+// its stored snapshot and when its Recommendation was last refreshed.
+func rowFor(id *inventory.Identity) workloadRow {
+	row := workloadRow{
+		Namespace:  id.Key.Namespace,
+		Kind:       id.Key.OwnerKind,
+		Name:       id.Key.OwnerName,
+		Containers: containerStatuses(id.Containers, id.InitContainers),
+		Departed:   id.Departed(),
+		conflicted: id.Conflicted,
 	}
+	if id.Departed() {
+		if seen := id.Recommendation.Status.ObservedAt; !seen.IsZero() {
+			row.LastSeenAt = seen.UTC().Format(time.RFC3339)
+		}
+	}
+	return row
 }
 
 type paginatedWorkloads struct {
 	Items []workloadRow `json:"items"`
 	Total int           `json:"total"`
-	// Matched counts every workload the policy manages, before namespace and
+	// Matched counts every identity the policy governs, before namespace and
 	// search filters; Total is after them.
 	Matched    int      `json:"matched"`
 	Page       int      `json:"page"`
@@ -90,7 +101,15 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 
-	workloads := s.listPolicyWorkloadRows(ctx, policy, policyName)
+	governed, err := s.governedBy(ctx, policy)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("listing workloads: %v", err))
+		return
+	}
+	workloads := make([]workloadRow, 0, len(governed))
+	for _, id := range governed {
+		workloads = append(workloads, rowFor(id))
+	}
 
 	matched := len(workloads)
 	namespaces := uniqueValues(workloads, func(w workloadRow) string { return w.Namespace })
@@ -119,55 +138,18 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 	})
 }
 
-// listPolicyWorkloadRows gathers a row for every live workload the policy
-// manages, then the retained WorkloadRecommendations that are not live.
-func (s *Server) listPolicyWorkloadRows(ctx context.Context, policy *sustainv1alpha1.Policy, policyName string) []workloadRow {
-	out := []workloadRow{}
-	s.forEachPolicyEntry(ctx, policy, policyName, func(kind string, e workloadEntry) {
-		out = append(out, liveRow(kind, e))
-	})
-
-	inactive, err := s.collectInactiveWorkloads(ctx, liveKeys(out, identityRow),
-		client.MatchingLabels{sustainv1alpha1.WLRPolicyLabel: policyName})
+// governedBy returns the identities policy governs, Departed ones included,
+// reading only the namespaces and kinds it can govern.
+func (s *Server) governedBy(ctx context.Context, policy *sustainv1alpha1.Policy) ([]*inventory.Identity, error) {
+	kinds := managedKinds(policy)
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	snap, err := s.identities(ctx, inventory.Options{Namespaces: policy.Spec.Selector.Namespaces, Kinds: kinds})
 	if err != nil {
-		s.Logger.Error(err, "failed to list retained WorkloadRecommendations", "policy", policyName)
-		return out
+		return nil, err
 	}
-	for _, iw := range inactive {
-		if iw.PolicyName != policyName { // defensive vs label drift
-			continue
-		}
-		out = append(out, iw.workloadRow)
-	}
-	return out
-}
-
-// forEachPolicyEntry visits every live workload entry the policy manages, in
-// supportedWorkloadKinds order. Per-kind list errors are logged and skipped.
-// Namespace annotations are fetched once, before the per-kind loop;
-// entryMatchesPolicy is the sole gate, since opting in is necessary but not
-// sufficient.
-func (s *Server) forEachPolicyEntry(ctx context.Context, policy *sustainv1alpha1.Policy, policyName string, visit func(kind string, e workloadEntry)) {
-	nsAnnotations, err := s.namespaceAnnotations(ctx)
-	if err != nil {
-		s.Logger.Error(err, "failed to list namespaces; namespace-level policy opt-in will not be resolved", "policy", policyName)
-		nsAnnotations = nil
-	}
-	for _, kind := range supportedWorkloadKinds {
-		if !kindEnabledInPolicy(policy, kind) {
-			continue
-		}
-		entries, err := s.listWorkloadsOfKind(ctx, kind, nsAnnotations)
-		if err != nil {
-			s.Logger.Error(err, "failed to list workloads", "kind", kind, "policy", policyName)
-			continue
-		}
-		for _, e := range entries {
-			if entryMatchesPolicy(policy, e, s.ExcludedNamespaces) {
-				visit(kind, e)
-			}
-		}
-	}
+	return snap.GovernedBy(policy.Name), nil
 }
 
 // uniqueValues collects the distinct, unordered values of valueOf over rows.
@@ -194,15 +176,6 @@ func filterInPlace[T any](rows []T, keep func(T) bool) []T {
 	return out
 }
 
-// liveKeys returns the workloadKey set of rows, for collectInactiveWorkloads.
-func liveKeys[T any](rows []T, rowOf func(*T) *workloadRow) map[string]struct{} {
-	live := make(map[string]struct{}, len(rows))
-	for i := range rows {
-		live[rowOf(&rows[i]).key()] = struct{}{}
-	}
-	return live
-}
-
 // applyHealth reads every row's identity health in one batch and overlays it,
 // with its Risk state, onto each row in place. A failed read degrades to the
 // signals that could be read.
@@ -224,6 +197,9 @@ type allWorkloadSummary struct {
 	workloadRow
 	Automated  bool   `json:"automated"`
 	PolicyName string `json:"policyName,omitempty"`
+	// ConflictingPolicies names the Policies a Conflicted identity's members
+	// opt into; no Policy governs it.
+	ConflictingPolicies []string `json:"conflictingPolicies,omitempty"`
 }
 
 func allRowOf(w *allWorkloadSummary) *workloadRow { return &w.workloadRow }
@@ -238,10 +214,13 @@ type paginatedAllWorkloads struct {
 	Counts     workloadCounts       `json:"counts"`
 }
 
+// workloadCounts splits identities three ways: governed by a Policy
+// (Automated), Conflicted, and governed by none (Manual).
 type workloadCounts struct {
-	Total     int `json:"total"`
-	Automated int `json:"automated"`
-	Manual    int `json:"manual"`
+	Total      int `json:"total"`
+	Automated  int `json:"automated"`
+	Manual     int `json:"manual"`
+	Conflicted int `json:"conflicted"`
 }
 
 type allWorkloadFilters struct {
@@ -249,7 +228,7 @@ type allWorkloadFilters struct {
 	kind       string
 	search     string
 	automated  *bool
-	active     *bool
+	departed   *bool
 	risk       string
 	autoscaler string
 	sortKey    string
@@ -275,7 +254,7 @@ func parseAllWorkloadFilters(q url.Values) (allWorkloadFilters, *paramError) {
 	if f.automated, perr = parseBoolParam(q, "automated"); perr != nil {
 		return f, perr
 	}
-	if f.active, perr = parseBoolParam(q, "active"); perr != nil {
+	if f.departed, perr = parseBoolParam(q, "departed"); perr != nil {
 		return f, perr
 	}
 	if f.risk, perr = parseEnumParam(q, "risk", riskStates); perr != nil {
@@ -306,7 +285,21 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workloads := s.collectAllWorkloads(ctx)
+	snap, err := s.identities(ctx, inventory.Options{})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("listing workloads: %v", err))
+		return
+	}
+	workloads := make([]allWorkloadSummary, 0, len(snap.Identities))
+	for i := range snap.Identities {
+		id := &snap.Identities[i]
+		workloads = append(workloads, allWorkloadSummary{
+			workloadRow:         rowFor(id),
+			Automated:           id.Policy != "",
+			PolicyName:          id.Policy,
+			ConflictingPolicies: conflictingPolicies(id),
+		})
+	}
 
 	// Facets come from the full, unfiltered list.
 	namespaces := uniqueValues(workloads, func(w allWorkloadSummary) string { return w.Namespace })
@@ -335,93 +328,6 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// collectAllWorkloads lists workloads of every supported kind, cluster-wide.
-// Namespace/kind narrowing happens in the handler after the facets are
-// derived. Namespace annotations are fetched once, before the per-kind loop.
-func (s *Server) collectAllWorkloads(ctx context.Context) []allWorkloadSummary {
-	nsAnnotations, err := s.namespaceAnnotations(ctx)
-	if err != nil {
-		s.Logger.Error(err, "failed to list namespaces; namespace-level policy opt-in will not be resolved")
-		nsAnnotations = nil
-	}
-	// A Policies List failure degrades to nil (a successful empty List is a
-	// non-nil map) and falls back to each workload's own opt-in, rather than
-	// marking every workload unmanaged over a transient error.
-	policies, err := s.policiesByName(ctx)
-	if err != nil {
-		s.Logger.Error(err, "failed to list policies; Policy selector consent will not be checked, falling back to each workload's own opt-in")
-		policies = nil
-	}
-	out := []allWorkloadSummary{}
-	for _, kind := range supportedWorkloadKinds {
-		entries, err := s.listWorkloadsOfKind(ctx, kind, nsAnnotations)
-		if err != nil {
-			s.Logger.Error(err, "failed to list workloads", "kind", kind)
-			continue
-		}
-		for _, e := range entries {
-			var policyName string
-			var automated bool
-			if policies != nil {
-				policyName, automated = resolveManagingPolicy(e, policies, s.ExcludedNamespaces)
-			} else {
-				policyName = e.ResolvedPolicy()
-				automated = policyName != ""
-			}
-			out = append(out, allWorkloadSummary{
-				workloadRow: liveRow(kind, e),
-				Automated:   automated,
-				PolicyName:  policyName,
-			})
-		}
-	}
-
-	inactive, err := s.collectInactiveWorkloads(ctx, liveKeys(out, allRowOf))
-	if err != nil {
-		s.Logger.Error(err, "failed to list retained WorkloadRecommendations")
-		return out
-	}
-	for _, iw := range inactive {
-		out = append(out, allWorkloadSummary{
-			workloadRow: iw.workloadRow,
-			Automated:   true,
-			PolicyName:  iw.PolicyName,
-		})
-	}
-	return out
-}
-
-// resolveManagingPolicy returns the first member of e whose resolved policy
-// also matches that same member, looked up in policies. Returns ("", false)
-// when no member's opt-in survives its own Policy's selector.
-func resolveManagingPolicy(e workloadEntry, policies map[string]*sustainv1alpha1.Policy, excludedNamespaces []string) (string, bool) {
-	if len(e.Members) == 0 {
-		name := e.ResolvedPolicy()
-		if name == "" {
-			return "", false
-		}
-		p, ok := policies[name]
-		if !ok || !entryMatchesPolicy(p, e, excludedNamespaces) {
-			return "", false
-		}
-		return name, true
-	}
-	for _, m := range e.Members {
-		name, _ := policymatch.ResolvePolicy(m.TemplateAnnotations, m.ObjectAnnotations, e.NamespaceAnnotations)
-		if name == "" {
-			continue
-		}
-		p, ok := policies[name]
-		if !ok {
-			continue
-		}
-		if policymatch.Matches(p, e.Namespace, m.Labels, excludedNamespaces) {
-			return name, true
-		}
-	}
-	return "", false
-}
-
 // filterByNamespaceAndKind applies the identity filters that do not depend on
 // health decoration, so the health read sees already-narrowed rows.
 func filterByNamespaceAndKind(workloads []allWorkloadSummary, f allWorkloadFilters) []allWorkloadSummary {
@@ -439,9 +345,9 @@ func applyAllWorkloadFilters(workloads []allWorkloadSummary, f allWorkloadFilter
 		want := *f.automated
 		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.Automated == want })
 	}
-	if f.active != nil {
-		want := *f.active
-		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.Active == want })
+	if f.departed != nil {
+		want := *f.departed
+		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.Departed == want })
 	}
 	if f.search != "" {
 		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool {
@@ -509,9 +415,12 @@ func sortWorkloads[T any](items []T, rowOf func(*T) *workloadRow, primary func(a
 func countAllWorkloads(workloads []allWorkloadSummary) workloadCounts {
 	c := workloadCounts{Total: len(workloads)}
 	for _, w := range workloads {
-		if w.Automated {
+		switch {
+		case w.Automated:
 			c.Automated++
-		} else {
+		case w.conflicted:
+			c.Conflicted++
+		default:
 			c.Manual++
 		}
 	}

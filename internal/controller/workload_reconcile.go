@@ -173,8 +173,8 @@ func (r *PolicyReconciler) reconcileWorkload(
 	// Standalone Job: never mutate the Job spec and never evict job pods
 	// (killing them discards in-flight work). A standalone Job has no next
 	// run, so resizing the running pod in place is the only way to correct it
-	// after creation. CronJob-owned Jobs never reach here — the listing path
-	// excludes them and the CronJob branch above handles them.
+	// after creation. CronJob-owned Jobs never reach here — the inventory
+	// never makes them members and the CronJob branch above handles them.
 	if t.Kind == "Job" {
 		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, &counts, func() (int, error) {
 			return r.resizeJobPods(ctx, t, recs, tol, suppressionObserver, applyOpts...)

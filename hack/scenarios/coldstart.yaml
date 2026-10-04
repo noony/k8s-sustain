@@ -44,18 +44,10 @@
 #      recommend from yet, and the state is NOT terminal -- the identity is
 #      recomputed on every reconcile cycle.
 #
-#      Do NOT expect status.source=nodata here, and do not assert on it. Which
-#      value you get depends on whether the reconcile catches the Job ALIVE,
-#      and with the harness default of RECONCILE=30s it usually does (see the
-#      IMPORTANT note above):
-#
-#        * caught alive -> the live path returns early on zero recommendations
-#          and writes nothing at all, so status.source stays "" (empty).
-#        * never caught alive -> the identity is departed, the departed-refresh
-#          path runs MarkNoData, and status.source becomes "nodata".
-#
-#      "nodata" is therefore the RECONCILE=5m observation, not the default one.
-#      Either way the field to watch is status.containers:
+#      status.outcome reads TooYoung while the identity is younger than
+#      MinWorkloadAge, then NoData until Prometheus has history, whether or
+#      not a reconcile catches the Job alive. Neither is terminal. The field
+#      to watch is status.containers:
 #
 #        kubectl get wlrec -n scenario-coldstart \
 #          -o jsonpath='{.items[0].status.containers}{"\n"}'

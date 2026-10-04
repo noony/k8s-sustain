@@ -33,6 +33,21 @@ const (
 	outcomeNotFetched
 )
 
+// stored is the WorkloadRecommendation outcome an outcome with no new
+// Recommendation records; false for the outcomes that record nothing.
+func (o outcome) stored() (sustainv1alpha1.RecommendationOutcome, bool) {
+	switch o {
+	case outcomeTooYoung:
+		return sustainv1alpha1.OutcomeTooYoung, true
+	case outcomeNoData:
+		return sustainv1alpha1.OutcomeNoData, true
+	case outcomeFetchFailed:
+		return sustainv1alpha1.OutcomeFetchFailed, true
+	default:
+		return "", false
+	}
+}
+
 // identityResult is the recommendation pass's verdict on one identity.
 type identityResult struct {
 	item    computeItem
@@ -134,18 +149,14 @@ func (r *PolicyReconciler) computeIdentity(
 	if r.LiveOOM.Enabled() {
 		liveOOMs = r.LiveOOM.Source.RecentByWorkload(id.Namespace, id.OwnerKind, id.OwnerName, r.LiveOOM.EffectiveMaxAge())
 	}
-	created := earliestTargetCreation(it.Targets)
-	firstSeen := it.WLR.CreationTimestamp.Time
-
 	out := recommender.Compute(recommender.Request{
-		Containers:        containersFromObserved(it.Observed, rs.ExcludeInitContainers),
-		Resources:         rs.ResourcesConfigs,
-		Coordination:      rs.AutoscalerCoordination,
-		AutoInfo:          autoInfo,
-		Inputs:            res.inputs,
-		LiveOOMs:          liveOOMs,
-		WorkloadCreated:   created,
-		IdentityFirstSeen: firstSeen,
+		Containers:   containersFromObserved(it.Observed, rs.ExcludeInitContainers),
+		Resources:    rs.ResourcesConfigs,
+		Coordination: rs.AutoscalerCoordination,
+		AutoInfo:     autoInfo,
+		Inputs:       res.inputs,
+		LiveOOMs:     liveOOMs,
+		Since:        it.Since,
 	})
 	switch out.Outcome {
 	case recommender.TooYoung:
@@ -153,8 +164,7 @@ func (r *PolicyReconciler) computeIdentity(
 		recommendationSkipped.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, "workload_too_young").Inc()
 		log.FromContext(ctx).Info("skipping recommendation: workload too young",
 			"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
-			"age", recommender.AgeForLog(created), "identityAge", recommender.AgeForLog(firstSeen),
-			"minAge", recommender.MinWorkloadAge)
+			"age", recommender.AgeForLog(it.Since), "minAge", recommender.MinWorkloadAge)
 	case recommender.NoData:
 		res.outcome = outcomeNoData
 	default:

@@ -1,155 +1,79 @@
 package controller
 
 import (
-	"cmp"
 	"context"
-	"fmt"
-	"slices"
-	"strings"
 	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// computeItem is one unit of computation: a WorkloadRecommendation and every
-// live workload object reporting into its identity. Targets is empty for a
-// departed identity and holds several entries under owner-name grouping.
+// computeItem is one identity the Policy governs, as the recommendation pass
+// sees it. Targets is empty for a departed identity and holds several entries
+// under owner-name grouping.
 type computeItem struct {
-	WLR      *sustainv1alpha1.WorkloadRecommendation
-	Targets  []*workloadTarget
 	Identity promclient.WorkloadIdentity
-	// Observed is the single snapshot this cycle computes against: the merge
-	// across live members, or the stored snapshot when there are none.
+	// WLR is the identity's stored WorkloadRecommendation; nil until the
+	// informer cache sees the one discovery created.
+	WLR     *sustainv1alpha1.WorkloadRecommendation
+	Targets []*workloadTarget
+	// Observed is the snapshot this cycle computes against: the union of the
+	// governed members' containers, or the stored snapshot when none is live.
 	Observed map[string]sustainv1alpha1.ObservedContainerResources
+	// Since dates the identity for the age gate.
+	Since time.Time
 }
 
-// collectComputeItems builds the per-policy work-list from the
-// WorkloadRecommendation list, reconciled against the discovery index so an
-// identity discover() created moments ago is computed this cycle even when
-// the informer has not caught up. Scoped per policy because one fetch serves
-// one ResourcesConfigs.
-//
-// A departed identity with no observed-resources snapshot is left out: there
-// is no container set to compute against and nothing here can provide one.
-func (r *PolicyReconciler) collectComputeItems(
-	ctx context.Context,
-	policy *sustainv1alpha1.Policy,
-	idx targetIndex,
-) ([]computeItem, error) {
-	var list sustainv1alpha1.WorkloadRecommendationList
-	if err := r.List(ctx, &list, client.MatchingLabels{wlrPolicyLabel: policy.Name}); err != nil {
-		return nil, fmt.Errorf("listing WorkloadRecommendations for policy %s: %w", policy.Name, err)
+func (it computeItem) ref() sustainv1alpha1.WorkloadReference {
+	return sustainv1alpha1.WorkloadReference{
+		Kind:      it.Identity.OwnerKind,
+		Namespace: it.Identity.Namespace,
+		Name:      it.Identity.OwnerName,
 	}
+}
 
+// computeItems turns the identities policy governs into the pass's work-list,
+// in identity order. A departed identity with no observed-resources snapshot
+// is left out: there is no container set to compute against.
+func computeItems(ctx context.Context, policy *sustainv1alpha1.Policy, governed []*inventory.Identity) []computeItem {
 	logger := log.FromContext(ctx)
-	items := make([]computeItem, 0, len(list.Items))
-	listed := make(map[promclient.WorkloadIdentity]bool, len(list.Items))
-	for i := range list.Items {
-		wlr := &list.Items[i]
-		// A stale label must not pull another policy's object into this fetch.
-		if wlr.Spec.Policy != policy.Name {
-			continue
-		}
-		id := promclient.WorkloadIdentity{
-			Namespace: wlr.Spec.WorkloadRef.Namespace,
-			OwnerKind: wlr.Spec.WorkloadRef.Kind,
-			OwnerName: wlr.Spec.WorkloadRef.Name,
-		}
-		listed[id] = true
-		it := computeItem{
-			WLR:      wlr,
-			Targets:  idx[id],
-			Identity: id,
-			Observed: identityObserved(wlr, idx[id]),
-		}
-		if len(it.Targets) == 0 && len(containersFromObserved(it.Observed, policy.Spec.RightSizing.ExcludeInitContainers)) == 0 {
-			// Never silent: this state once hid a read-after-write bug that
-			// stranded every new identity.
-			EmitWLRRefresh(id.Namespace, id.OwnerKind, WLRRefreshNoSnapshot)
-			logger.V(1).Info("departed identity has no observed-resources snapshot; skipping computation",
-				"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace, "wlr", wlr.Name)
-			continue
+	excludeInit := policy.Spec.RightSizing.ExcludeInitContainers
+	items := make([]computeItem, 0, len(governed))
+	for _, id := range governed {
+		it := computeItem{Identity: id.Key, WLR: id.Recommendation, Since: id.Since}
+		if id.Departed() {
+			it.Observed = id.Recommendation.Status.ObservedResources
+			if len(containersFromObserved(it.Observed, excludeInit)) == 0 {
+				// Never silent: this state once hid a read-after-write bug that
+				// stranded every new identity.
+				EmitWLRRefresh(id.Key.Namespace, id.Key.OwnerKind, WLRRefreshNoSnapshot)
+				logger.V(1).Info("departed identity has no observed-resources snapshot; skipping computation",
+					"kind", id.Key.OwnerKind, "name", id.Key.OwnerName, "namespace", id.Key.Namespace)
+				continue
+			}
+		} else {
+			// The snapshot read its own copy of the Policy; one edited since
+			// may no longer manage the kind.
+			mode := policy.Spec.RightSizing.Update.Types.ModeForKind(id.Key.OwnerKind)
+			if mode == nil {
+				continue
+			}
+			it.Targets = targetsOf(id, policy.Name, *mode)
+			it.Observed = wlrcache.BuildObservedResources(id.Containers, id.InitContainers)
 		}
 		items = append(items, it)
 	}
-
-	// Identities discovery ensured that this List cannot see yet.
-	for id, targets := range idx {
-		if listed[id] || len(targets) == 0 {
-			continue
-		}
-		logger.V(1).Info("WorkloadRecommendation not visible in the cached list yet; "+
-			"computing from the discovered target instead of waiting a full reconcile interval",
-			"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace)
-		items = append(items, synthesizeComputeItem(policy.Name, id, targets, metav1.Now()))
-	}
-
-	slices.SortFunc(items, func(a, b computeItem) int {
-		return cmp.Or(
-			strings.Compare(a.WLR.Namespace, b.WLR.Namespace),
-			strings.Compare(a.WLR.Name, b.WLR.Name),
-		)
-	})
-	return items, nil
-}
-
-// synthesizeComputeItem builds an in-memory stand-in for a
-// WorkloadRecommendation that discover() ensured but the cached List has not
-// caught up on. It is never written; it only carries the snapshot and the
-// CreationTimestamp the computation phase reads.
-func synthesizeComputeItem(
-	policyName string,
-	id promclient.WorkloadIdentity,
-	targets []*workloadTarget,
-	now metav1.Time,
-) computeItem {
-	ref := sustainv1alpha1.WorkloadReference{
-		Kind:      id.OwnerKind,
-		Namespace: id.Namespace,
-		Name:      id.OwnerName,
-	}
-	observed := mergedObservedResources(targets)
-	return computeItem{
-		WLR: &sustainv1alpha1.WorkloadRecommendation{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace:         id.Namespace,
-				Name:              wlrcache.Name(id.OwnerKind, id.OwnerName),
-				Labels:            map[string]string{wlrPolicyLabel: policyName},
-				CreationTimestamp: now,
-			},
-			Spec: sustainv1alpha1.WorkloadRecommendationSpec{WorkloadRef: ref, Policy: policyName},
-			Status: sustainv1alpha1.WorkloadRecommendationStatus{
-				ObservedResources: observed,
-			},
-		},
-		Targets:  targets,
-		Identity: id,
-		Observed: observed,
-	}
-}
-
-// identityObserved returns the snapshot an identity is computed against: the
-// merge across live members (what discovery just wrote), or the stored
-// snapshot for a departed identity.
-func identityObserved(
-	wlr *sustainv1alpha1.WorkloadRecommendation,
-	targets []*workloadTarget,
-) map[string]sustainv1alpha1.ObservedContainerResources {
-	if len(targets) > 0 {
-		return mergedObservedResources(targets)
-	}
-	return wlr.Status.ObservedResources
+	return items
 }
 
 // containersFromObserved rebuilds the container list from the WLR's
@@ -197,14 +121,15 @@ func (r *PolicyReconciler) persist(ctx context.Context, policyName string, resul
 }
 
 func (r *PolicyReconciler) persistLive(ctx context.Context, policyName string, res *identityResult) {
-	switch res.outcome {
-	case outcomeRecommended:
+	if res.outcome == outcomeRecommended {
 		_ = r.upsertWorkloadRecommendation(ctx, res.item, policyName, res.recs, metav1.Now())
-	case outcomeTooYoung, outcomeNoData:
-		// Record the absence: a zero ObservedAt reads as "missing" to the webhook
-		// and costs a stub Create/Get per admission. MarkNoData no-ops once
-		// Containers is populated, so last-known-good survives an empty query.
-		_ = wlrcache.MarkNoData(ctx, r.Client, res.item.WLR.Spec.WorkloadRef, metav1.Now())
+		return
+	}
+	// Recorded so the webhook reads "nothing to inject" instead of "missing",
+	// which would cost a stub Create per admission. The last Recommendation
+	// survives.
+	if stored, ok := res.outcome.stored(); ok {
+		_ = wlrcache.RecordOutcome(ctx, r.Client, res.item.ref(), stored)
 	}
 }
 
@@ -225,7 +150,7 @@ func (r *PolicyReconciler) persistDeparted(ctx context.Context, policyName strin
 		return nil
 	case outcomeTooYoung, outcomeNoData:
 		// A cold start and a recommendation whose samples aged out share this branch;
-		// only the second is worth an alert. MarkNoData no-ops once Containers is set.
+		// only the second is worth an alert. RecordOutcome keeps the containers.
 		refresh := WLRRefreshNoData
 		if len(it.WLR.Status.Containers) > 0 {
 			refresh = WLRRefreshRetainedEmpty
@@ -233,9 +158,11 @@ func (r *PolicyReconciler) persistDeparted(ctx context.Context, policyName strin
 				"kind", it.Identity.OwnerKind, "name", it.Identity.OwnerName, "namespace", ns)
 		}
 		EmitWLRRefresh(ns, kind, refresh)
-		return wlrcache.MarkNoData(ctx, r.Client, it.WLR.Spec.WorkloadRef, metav1.Now())
+		stored, _ := res.outcome.stored()
+		return wlrcache.RecordOutcome(ctx, r.Client, it.ref(), stored)
 	case outcomeFetchFailed:
 		EmitWLRRefresh(ns, kind, WLRRefreshError)
+		_ = wlrcache.RecordOutcome(ctx, r.Client, it.ref(), sustainv1alpha1.OutcomeFetchFailed)
 		return res.err
 	default:
 		return nil
@@ -286,25 +213,6 @@ func (r *PolicyReconciler) groupAutoscalerInfo(
 	}
 
 	return winner
-}
-
-// earliestTargetCreation returns the oldest creation timestamp among live
-// members, which is how far back the identity's Prometheus history reaches.
-func earliestTargetCreation(targets []*workloadTarget) time.Time {
-	var earliest time.Time
-	for _, t := range targets {
-		if t.Object == nil {
-			continue
-		}
-		created := t.Object.GetCreationTimestamp().Time
-		if created.IsZero() {
-			continue
-		}
-		if earliest.IsZero() || created.Before(earliest) {
-			earliest = created
-		}
-	}
-	return earliest
 }
 
 // recsForTarget narrows an identity's recommendation to the containers a

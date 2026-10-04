@@ -5,3 +5,4 @@ Decisions that shape how the code is structured, recorded when they were made. A
 | ADR | Decision | Status |
 |-----|----------|--------|
 | [0001](0001-single-identity-is-a-batch-of-one.md) | A single identity is a batch of one | Accepted |
+| [0002](0002-conflicted-identity-freezes-its-recommendation.md) | A Conflicted identity freezes its recommendation | Accepted |

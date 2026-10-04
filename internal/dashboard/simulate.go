@@ -11,6 +11,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -58,7 +59,7 @@ func (s simulationSpec) identity() promclient.WorkloadIdentity {
 	return promclient.WorkloadIdentity{Namespace: s.namespace, OwnerKind: s.kind, OwnerName: s.name}
 }
 
-// policySpec is the configuration the controller applies for this workload.
+// policySpec is the configuration the controller applies for this identity.
 func policySpec(policy *sustainv1alpha1.Policy, namespace, kind, name string) simulationSpec {
 	return simulationSpec{
 		namespace:    namespace,
@@ -98,49 +99,31 @@ func (req simulateRequest) spec(coordination sustainv1alpha1.AutoscalerCoordinat
 	}
 }
 
-// runSimulation resolves the workload and the coordination baseline, then
-// runs the spec. Coordination defaults to the managing Policy's setting so an
-// untouched simulation matches the recommendations endpoint; the request can
+// runSimulation resolves the identity and the coordination baseline, then
+// runs the spec. Coordination defaults to the governing Policy's setting so an
+// untouched simulation matches what the controller does; the request can
 // override it.
 func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simulationResult, error) {
-	// A failed Get is tolerated: the zero entry yields nil resources and init
-	// containers rather than failing the whole simulation.
-	entry, err := s.getWorkloadEntry(ctx, req.Namespace, req.OwnerKind, req.OwnerName)
+	// A failed read is tolerated: an unknown identity simulates with nil
+	// resources and init containers rather than failing.
+	id, err := s.identity(ctx, promclient.WorkloadIdentity{Namespace: req.Namespace, OwnerKind: req.OwnerKind, OwnerName: req.OwnerName})
 	if err != nil {
-		s.Logger.Error(err, "failed to get workload entry", "namespace", req.Namespace, "kind", req.OwnerKind, "name", req.OwnerName)
-		entry = workloadEntry{}
+		s.Logger.Error(err, "failed to read the workload identity", "namespace", req.Namespace, "kind", req.OwnerKind, "name", req.OwnerName)
 	}
 	var coordination sustainv1alpha1.AutoscalerCoordination
 	switch {
 	case req.AutoscalerCoordination != nil:
 		coordination = *req.AutoscalerCoordination
 	default:
-		if policy := s.managingPolicy(ctx, entry); policy != nil {
+		if policy := s.governingPolicy(ctx, id); policy != nil {
 			coordination = policy.Spec.RightSizing.AutoscalerCoordination
 		}
 	}
-	return s.runSimulationWithEntry(ctx, req.spec(coordination), entry)
+	return s.simulate(ctx, req.spec(coordination), id)
 }
 
-// managingPolicy returns the Policy that manages entry, or nil when it is
-// unmanaged or the Policies could not be listed.
-func (s *Server) managingPolicy(ctx context.Context, entry workloadEntry) *sustainv1alpha1.Policy {
-	policies, err := s.policiesByName(ctx)
-	if err != nil {
-		s.Logger.Error(err, "failed to list policies; simulating without the managing policy's autoscaler coordination")
-		return nil
-	}
-	name, ok := resolveManagingPolicy(entry, policies, s.ExcludedNamespaces)
-	if !ok {
-		return nil
-	}
-	return policies[name]
-}
-
-// runSimulationWithEntry runs the spec against an already-fetched workload
-// entry, avoiding a redundant API-server Get when the caller (e.g. the
-// recommendations handler) has already resolved the workload.
-func (s *Server) runSimulationWithEntry(ctx context.Context, spec simulationSpec, entry workloadEntry) (*simulationResult, error) {
+// simulate runs the spec against an identity already read; id may be nil.
+func (s *Server) simulate(ctx context.Context, spec simulationSpec, id *inventory.Identity) (*simulationResult, error) {
 	var tr promclient.TimeRange
 	var err error
 	if spec.fromTs > 0 && spec.toTs > 0 {
@@ -152,14 +135,19 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, spec simulationSpec
 		}
 	}
 
-	containers, _ := workload.MergeContainersForRecommendation(entry.Containers(), entry.InitContainers(), spec.excludeInit)
-	id := spec.identity()
-	fetched := s.Inputs.FetchInputs(ctx, spec.resources, []recommender.InputsRequest{{Identity: id, Containers: len(containers)}})[id]
+	var containers []corev1.Container
+	var since time.Time
+	if id != nil {
+		containers, _ = workload.MergeContainersForRecommendation(id.Containers, id.InitContainers, spec.excludeInit)
+		since = id.Since
+	}
+	key := spec.identity()
+	fetched := s.Inputs.FetchInputs(ctx, spec.resources, []recommender.InputsRequest{{Identity: key, Containers: len(containers)}})[key]
 	if fetched.Err != nil {
 		return nil, fetched.Err
 	}
 	autoInfo := s.autoscalerInfo(ctx, autoscaler.NewNamespacedSnapshot(s.K8sClient), spec)
-	res := computeWorkloadRecs(spec, containers, entry.CreationTimestamp, autoInfo, fetched.Inputs)
+	res := computeWorkloadRecs(spec, containers, since, autoInfo, fetched.Inputs)
 
 	step := cmp.Or(spec.step, "5m")
 	ns, kind, name := spec.namespace, spec.kind, spec.name
@@ -181,11 +169,11 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, spec simulationSpec
 
 	return &simulationResult{
 		Containers:         simulationContainers(res, fetched.Inputs),
-		InitContainers:     initContainerNamesFromEntry(entry),
+		InitContainers:     initContainerNamesOf(id),
 		TooYoung:           res.Outcome == recommender.TooYoung,
 		CPUSeries:          cpuSeries,
 		MemSeries:          memSeries,
-		Resources:          containerResourcesFromEntry(entry),
+		Resources:          containerResourcesOf(id),
 		CPURequests:        cpuRequests,
 		MemoryRequests:     memRequests,
 		CPURecommendations: recommendationSeries(cpuRecSeries, spec, autoInfo, fetched.Inputs.OOM, false),
@@ -194,15 +182,15 @@ func (s *Server) runSimulationWithEntry(ctx context.Context, spec simulationSpec
 }
 
 // computeWorkloadRecs runs the shared recommendation algorithm for one
-// workload under spec, on inputs already fetched.
-func computeWorkloadRecs(spec simulationSpec, containers []corev1.Container, created time.Time, autoInfo autoscaler.Info, inputs *recommender.WorkloadInputs) recommender.Result {
+// identity under spec, on inputs already fetched.
+func computeWorkloadRecs(spec simulationSpec, containers []corev1.Container, since time.Time, autoInfo autoscaler.Info, inputs *recommender.WorkloadInputs) recommender.Result {
 	return recommender.Compute(recommender.Request{
-		Containers:      containers,
-		Resources:       spec.resources,
-		Coordination:    spec.coordination,
-		AutoInfo:        autoInfo,
-		Inputs:          inputs,
-		WorkloadCreated: created,
+		Containers:   containers,
+		Resources:    spec.resources,
+		Coordination: spec.coordination,
+		AutoInfo:     autoInfo,
+		Inputs:       inputs,
+		Since:        since,
 	})
 }
 

@@ -18,68 +18,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-func TestListJobTargets_SkipsCronJobOwnedAndTerminal(t *testing.T) {
-	standalone := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "standalone", UID: "s-uid"},
-	}
-	cronOwned := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:       "default",
-			Name:            "cron-owned",
-			OwnerReferences: []metav1.OwnerReference{{Controller: ptr.To(true), Kind: "CronJob", Name: "nightly"}},
-		},
-	}
-	terminal := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "done", UID: "d-uid"},
-		Status:     batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}},
-	}
-	r := makeReconciler(t, standalone, cronOwned, terminal)
-
-	got, err := r.listTargetsOfKind(context.Background(), "Job", nil)
-	if err != nil {
-		t.Fatalf("listJobTargets: %v", err)
-	}
-	if len(got) != 1 || got[0].Name != "standalone" {
-		names := make([]string, len(got))
-		for i, x := range got {
-			names[i] = x.Name
-		}
-		t.Errorf("expected only [standalone], got %v", names)
-	}
-}
-
-func TestJobToTarget_FromPodTemplate(t *testing.T) {
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "batch-1", UID: "job-uid"},
-		Spec: batchv1.JobSpec{
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
-				},
-				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "worker"}}},
-			},
-		},
-	}
-	got := targetFromObject(job, "Job")
-	if got.Kind != "Job" {
-		t.Errorf("Kind = %q, want Job", got.Kind)
-	}
-	if got.Name != "batch-1" || got.Namespace != "default" {
-		t.Errorf("Name/Namespace = %q/%q, want batch-1/default", got.Name, got.Namespace)
-	}
-	// PolicyName is resolved by collectTargets, which also consults the
-	// workload/namespace levels; the template annotation is only carried here.
-	if got.TemplateAnnotations[sustainv1alpha1.PolicyAnnotation] != "p" {
-		t.Errorf("TemplateAnnotations[PolicyAnnotation] = %q, want p", got.TemplateAnnotations[sustainv1alpha1.PolicyAnnotation])
-	}
-	if len(got.Containers) != 1 || got.Containers[0].Name != "worker" {
-		t.Errorf("Containers = %v, want [worker]", got.Containers)
-	}
-	if got.Selector != nil {
-		t.Errorf("Selector = %v, want nil (job path enumerates by job-name label)", got.Selector)
-	}
-}
-
 func standaloneJobWithPod() (*batchv1.Job, *corev1.Pod) {
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "batch-1", UID: "job-uid"},

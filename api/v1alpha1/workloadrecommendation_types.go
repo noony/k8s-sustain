@@ -11,7 +11,7 @@ type WorkloadRecommendationSpec struct {
 	// WorkloadRef identifies the workload these recommendations describe.
 	WorkloadRef WorkloadReference `json:"workloadRef"`
 
-	// Policy is the name of the Policy that produced this recommendation; empty means no Policy matches the workload anymore and the object will be garbage-collected.
+	// Policy is the Policy that last governed the identity and produced this recommendation. A Conflicted identity keeps it, and the webhook injects only into pods that opt into this Policy.
 	// +optional
 	Policy string `json:"policy,omitempty"`
 }
@@ -27,27 +27,39 @@ type WorkloadReference struct {
 	Name string `json:"name"`
 }
 
-// Values for WorkloadRecommendationStatus.Source.
-const (
-	// RecommendationSourcePrometheus marks a status computed from live
-	// Prometheus data.
-	RecommendationSourcePrometheus = "prometheus"
+// RecommendationOutcome is what the controller last decided for an identity.
+// +kubebuilder:validation:Enum=Computed;NoData;TooYoung;FetchFailed;Conflicted
+type RecommendationOutcome string
 
-	// RecommendationSourceNoData means nothing recommendable was found yet.
-	// It is not terminal: the identity is recomputed every reconcile cycle.
-	RecommendationSourceNoData = "nodata"
+const (
+	// OutcomeComputed: containers holds a Recommendation computed this pass.
+	OutcomeComputed RecommendationOutcome = "Computed"
+
+	// OutcomeNoData: Prometheus answered with nothing recommendable. Not
+	// terminal: the identity is recomputed every reconcile cycle.
+	OutcomeNoData RecommendationOutcome = "NoData"
+
+	// OutcomeTooYoung: the identity is younger than the minimum age.
+	OutcomeTooYoung RecommendationOutcome = "TooYoung"
+
+	// OutcomeFetchFailed: the identity's inputs could not be read.
+	OutcomeFetchFailed RecommendationOutcome = "FetchFailed"
+
+	// OutcomeConflicted: members opt into different Policies, so no Policy
+	// governs the identity and its Recommendation is frozen.
+	OutcomeConflicted RecommendationOutcome = "Conflicted"
 )
 
 // WorkloadRecommendationStatus is the observed recommendation, written by the
 // controller and read by the webhook as its only recommendation source.
 type WorkloadRecommendationStatus struct {
-	// ObservedAt is when the recommendation was last refreshed from Prometheus.
+	// ObservedAt is when containers was last computed from Prometheus.
 	// +optional
 	ObservedAt metav1.Time `json:"observedAt,omitempty"`
 
-	// Source describes where the recommendation came from: "prometheus" or "nodata".
+	// Outcome is what the controller's last pass decided for the identity: Computed, NoData, TooYoung, FetchFailed or Conflicted. Every outcome but Computed keeps the containers of the last Recommendation.
 	// +optional
-	Source string `json:"source,omitempty"`
+	Outcome RecommendationOutcome `json:"outcome,omitempty"`
 
 	// Departed marks a recommendation retained for a workload identity that no longer exists (a TTL-deleted Job, a bare-pod group between runs), whose ObservedAt is therefore frozen.
 	// +optional
@@ -102,6 +114,7 @@ type ObservedContainerResources struct {
 // +kubebuilder:printcolumn:name="Workload",type="string",JSONPath=".spec.workloadRef.kind"
 // +kubebuilder:printcolumn:name="Name",type="string",JSONPath=".spec.workloadRef.name"
 // +kubebuilder:printcolumn:name="Policy",type="string",JSONPath=".spec.policy"
+// +kubebuilder:printcolumn:name="Outcome",type="string",JSONPath=".status.outcome"
 // +kubebuilder:printcolumn:name="ObservedAt",type="date",JSONPath=".status.observedAt"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 

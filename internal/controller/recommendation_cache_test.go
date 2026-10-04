@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -24,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -99,12 +101,41 @@ func reconcilerForCache(t *testing.T, objs ...runtime.Object) *PolicyReconciler 
 	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme: %v", err)
 	}
+	if err := rolloutsv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
 		WithRuntimeObjects(objs...).
 		Build()
 	return &PolicyReconciler{Client: c, Scheme: scheme}
+}
+
+// snapshotAll takes the inventory of everything r's cluster holds, which is
+// what the sweep judges the WorkloadRecommendations against.
+func snapshotAll(t *testing.T, r *PolicyReconciler) *inventory.Snapshot {
+	t.Helper()
+	snap, err := inventory.Take(context.Background(), r.Client, inventory.Options{})
+	if err != nil {
+		t.Fatalf("inventory: %v", err)
+	}
+	return snap
+}
+
+// sweep runs policyName's sweep against a fresh snapshot of r's cluster.
+func sweep(t *testing.T, r *PolicyReconciler, policyName string) {
+	t.Helper()
+	r.sweepWorkloadRecommendations(context.Background(), policyName, snapshotAll(t, r))
+}
+
+// governingPolicy manages every kind, so whatever opts into it is governed.
+func governingPolicy(name string) *sustainv1alpha1.Policy {
+	ongoing := sustainv1alpha1.UpdateModeOngoing
+	return ongoingPolicy(name, sustainv1alpha1.UpdateTypes{
+		Deployment: &ongoing, StatefulSet: &ongoing, DaemonSet: &ongoing, ArgoRollout: &ongoing,
+		CronJob: &ongoing, Job: &ongoing, Pod: &ongoing,
+	})
 }
 
 // wlrFor builds a WorkloadRecommendation labeled for policyName whose target
@@ -138,22 +169,6 @@ func getWLRFor(t *testing.T, r *PolicyReconciler, ns, kind, name string) *sustai
 		t.Fatalf("get WLR %s/%s: %v", ns, wlrcache.Name(kind, name), err)
 	}
 	return &wlr
-}
-
-// failingWorkloadGetClient fails Get for workload objects while leaving
-// WorkloadRecommendation reads working, so retainDepartedWLR's existence check
-// takes its error (fail-open) branch while the sweep otherwise runs normally.
-type failingWorkloadGetClient struct {
-	client.Client
-}
-
-func (c failingWorkloadGetClient) Get(
-	ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
-) error {
-	if _, ok := obj.(*sustainv1alpha1.WorkloadRecommendation); ok {
-		return c.Client.Get(ctx, key, obj, opts...)
-	}
-	return errors.New("simulated apiserver failure on workload existence check")
 }
 
 // wlrExists reports whether the WLR named for (kind, name) in ns survives.
@@ -195,8 +210,8 @@ func TestUpsertWorkloadRecommendation_CreatesObjectOnFirstCall(t *testing.T) {
 	if got.Status.ObservedAt.IsZero() {
 		t.Error("ObservedAt not stamped")
 	}
-	if got.Status.Source != "prometheus" {
-		t.Errorf("source = %q, want prometheus", got.Status.Source)
+	if got.Status.Outcome != sustainv1alpha1.OutcomeComputed {
+		t.Errorf("outcome = %q, want Computed", got.Status.Outcome)
 	}
 	if c := got.Status.Containers["app"]; c.CPURequest == nil || c.CPURequest.Cmp(cpu) != 0 {
 		t.Errorf("container cpu mismatch: %v", c.CPURequest)
@@ -343,10 +358,9 @@ func TestSweepWorkloadRecommendations_RemovesOrphans(t *testing.T) {
 			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: "default", Name: "foreign"},
 		},
 	}
-	r := reconcilerForCache(t, live, orphan, otherPolicy)
+	r := reconcilerForCache(t, governingPolicy("p"), annotatedDeployment("default", "live", "p"), live, orphan, otherPolicy)
 
-	targets := []workloadTarget{{Kind: "Deployment", Namespace: "default", Name: "live", IdentityKind: "Deployment", IdentityName: "live"}}
-	r.sweepWorkloadRecommendations(context.Background(), "p", targets)
+	sweep(t, r, "p")
 
 	// live: present
 	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-live"}, &sustainv1alpha1.WorkloadRecommendation{}); err != nil {
@@ -363,20 +377,18 @@ func TestSweepWorkloadRecommendations_RemovesOrphans(t *testing.T) {
 	}
 }
 
-// Sweep's "wanted" set must be keyed by the override identity, not each target's
-// real identity, or a WLR two members share is deleted out from under them.
+// The sweep judges a WorkloadRecommendation by its identity, not by any one
+// object's name, or a WLR two members share is deleted out from under them.
 func TestSweepWorkloadRecommendations_KeepsOverriddenIdentitySharedByTwoTargets(t *testing.T) {
-	r := reconcilerForCache(t)
-	targets := []workloadTarget{
-		{Kind: "Deployment", Name: "app-blue", Namespace: "prod", IdentityKind: "Deployment", IdentityName: "app", PolicyName: "my-policy"},
-		{Kind: "Deployment", Name: "app-green", Namespace: "prod", IdentityKind: "Deployment", IdentityName: "app", PolicyName: "my-policy"},
+	member := func(name string) *appsv1.Deployment {
+		d := annotatedDeployment("prod", name, "my-policy")
+		d.Spec.Template.Annotations[sustainv1alpha1.OwnerNameAnnotation] = "app"
+		return d
 	}
-	recs := map[string]workload.ContainerRecommendation{"app": {CPURequest: qtyp("100m")}}
-	for i := range targets {
-		_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(&targets[i]), "my-policy", recs, metav1.Now())
-	}
+	stored := wlrFor("my-policy", "prod", "Deployment", "app", time.Now().Add(-time.Hour))
+	r := reconcilerForCache(t, governingPolicy("my-policy"), member("app-blue"), member("app-green"), stored)
 
-	r.sweepWorkloadRecommendations(context.Background(), "my-policy", targets)
+	sweep(t, r, "my-policy")
 
 	var wlr sustainv1alpha1.WorkloadRecommendation
 	key := types.NamespacedName{Namespace: "prod", Name: "deployment-app"}
@@ -494,7 +506,7 @@ func noDataStub(ns, name, policy string, observed metav1.Time) *sustainv1alpha1.
 		},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{Policy: policy},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
-			Source:     sustainv1alpha1.RecommendationSourceNoData,
+			Outcome:    sustainv1alpha1.OutcomeNoData,
 			ObservedAt: observed,
 		},
 	}
@@ -636,7 +648,7 @@ func TestUpsertWorkloadRecommendation_RewritesWhenObservedResourcesChange(t *tes
 func TestSweep_RetainsDepartedWorkloadWithinRetention(t *testing.T) {
 	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "argocd-hook", time.Now().Add(-1*time.Hour)))
 	r.RecommendationRetention = 72 * time.Hour
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	sweep(t, r, "p")
 	if !wlrExists(t, r, "ci", "Job", "argocd-hook") {
 		t.Error("WLR for departed workload deleted within retention window")
 	}
@@ -650,7 +662,7 @@ func TestSweep_RetainsDepartedWorkloadWithinRetention(t *testing.T) {
 func TestSweep_MarksRetainedDepartedWorkload(t *testing.T) {
 	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "nightly", time.Now().Add(-1*time.Hour)))
 	r.RecommendationRetention = 72 * time.Hour
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	sweep(t, r, "p")
 
 	wlr := getWLRFor(t, r, "ci", "Job", "nightly")
 	if !wlr.Status.Departed {
@@ -659,52 +671,33 @@ func TestSweep_MarksRetainedDepartedWorkload(t *testing.T) {
 	}
 }
 
-// The mark waives the webhook's freshness gate, so it must never be applied on
-// a guess. retainDepartedWLR keeps the object when the existence check ERRORS
-// too — that is a fail-open, not a confirmed departure, and marking there would
-// let a workload that is very much alive be served arbitrarily old data the
-// moment an apiserver call flakes.
-func TestSweep_DoesNotMarkDepartedWhenExistenceCheckFails(t *testing.T) {
-	r := reconcilerForCache(t, wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour)))
-	r.RecommendationRetention = 72 * time.Hour
-	base := r.Client
-	r.Client = failingWorkloadGetClient{Client: base}
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
-	r.Client = base
-
-	if wlr := getWLRFor(t, r, "prod", "Deployment", "web"); wlr.Status.Departed {
-		t.Error("an inconclusive existence check must not mark the WLR departed: that would waive " +
-			"the staleness gate for a workload that may still be running")
-	}
-}
-
 // TestSweep_DeletesDepartedWorkloadPastRetention: recommendation older than
 // the retention window — swept.
 func TestSweep_DeletesDepartedWorkloadPastRetention(t *testing.T) {
 	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "argocd-hook", time.Now().Add(-80*time.Hour)))
 	r.RecommendationRetention = 72 * time.Hour
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	sweep(t, r, "p")
 	if wlrExists(t, r, "ci", "Job", "argocd-hook") {
 		t.Error("WLR past retention window survived the sweep")
 	}
 }
 
 // TestSweep_DeletesOptedOutWorkloadAfterGrace: the Deployment still exists
-// but left the target set (annotation removed / policy unmatched) — retention
-// must NOT apply once past the fresh-write grace.
+// but no Policy governs it any more (annotation removed / policy unmatched) —
+// retention must NOT apply once past the fresh-write grace.
 func TestSweep_DeletesOptedOutWorkloadAfterGrace(t *testing.T) {
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web"}}
 	r := reconcilerForCache(t, wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour)), dep)
 	r.RecommendationRetention = 72 * time.Hour
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	sweep(t, r, "p")
 	if wlrExists(t, r, "prod", "Deployment", "web") {
 		t.Error("WLR for opted-out (still existing) workload must be deleted")
 	}
 }
 
-// TestSweep_TerminalJobCountsAsGone: a Complete Job leaves the target set
-// while its object lingers until TTL/hook deletion. It did not opt out, so
-// its WLR must be retained.
+// TestSweep_TerminalJobCountsAsGone: a Complete Job is no live member while
+// its object lingers until TTL/hook deletion. It did not opt out, so its WLR
+// must be retained.
 func TestSweep_TerminalJobCountsAsGone(t *testing.T) {
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ci", Name: "argocd-hook"},
@@ -714,19 +707,18 @@ func TestSweep_TerminalJobCountsAsGone(t *testing.T) {
 	}
 	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "argocd-hook", time.Now().Add(-1*time.Hour)), job)
 	r.RecommendationRetention = 72 * time.Hour
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	sweep(t, r, "p")
 	if !wlrExists(t, r, "ci", "Job", "argocd-hook") {
 		t.Error("WLR for terminal-but-present Job must be retained")
 	}
 }
 
-// TestSweep_BarePodIdentityAlwaysRetainedUntilExpiry: bare-pod refs carry the
-// owner-name value, not a real object name, so existence can't be checked —
-// they ride out the retention window unconditionally.
+// TestSweep_BarePodIdentityAlwaysRetainedUntilExpiry: a bare-pod identity
+// between runs has no pod left, so it rides out the retention window.
 func TestSweep_BarePodIdentityAlwaysRetainedUntilExpiry(t *testing.T) {
 	r := reconcilerForCache(t, wlrFor("p", "airflow", "Pod", "etl", time.Now().Add(-1*time.Hour)))
 	r.RecommendationRetention = 72 * time.Hour
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	sweep(t, r, "p")
 	if !wlrExists(t, r, "airflow", "Pod", "etl") {
 		t.Error("bare-pod WLR deleted within retention window")
 	}
@@ -738,20 +730,19 @@ func TestSweep_BarePodIdentityAlwaysRetainedUntilExpiry(t *testing.T) {
 func TestSweep_ZeroRetentionSweepsDepartedAfterGrace(t *testing.T) {
 	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "argocd-hook", time.Now().Add(-1*time.Hour)))
 	r.RecommendationRetention = 0
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	sweep(t, r, "p")
 	if wlrExists(t, r, "ci", "Job", "argocd-hook") {
 		t.Error("retention=0 must sweep departed WLRs")
 	}
 }
 
 // A WLR created moments ago (e.g. by the webhook for a pod created after this
-// cycle's target listing) must never be swept — even with retention disabled and
-// even when its workload exists but is missing from the stale target list.
+// cycle's snapshot) must never be swept — even with retention disabled and
+// even when its workload is not governed in the snapshot.
 //
-// Freshness is expressed as a fresh CreationTimestamp, not a fresh ObservedAt:
-// ObservedAt is rewritten by the computation phase for identities NOT in the
-// target set, so it cannot tell a fresh write from this pass's own refresh. See
-// sweepGracePeriod.
+// Freshness is expressed as a fresh CreationTimestamp, not a fresh ObservedAt,
+// which the computation phase rewrites, so it cannot tell a fresh write from
+// this pass's own refresh. See sweepGracePeriod.
 func TestSweep_GracePeriodProtectsFreshWrites(t *testing.T) {
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
 		Namespace: "ci", Name: "argocd-hook",
@@ -761,7 +752,7 @@ func TestSweep_GracePeriodProtectsFreshWrites(t *testing.T) {
 	wlr.CreationTimestamp = metav1.Now()
 	r := reconcilerForCache(t, wlr, job)
 	r.RecommendationRetention = 0
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	sweep(t, r, "p")
 	if !wlrExists(t, r, "ci", "Job", "argocd-hook") {
 		t.Error("fresh WLR swept within grace period")
 	}
@@ -779,21 +770,9 @@ func TestSweep_GraceCoversFreshlyCreatedStatuslessWLR(t *testing.T) {
 	wlr.CreationTimestamp = metav1.Now()
 	r := reconcilerForCache(t, wlr)
 	r.RecommendationRetention = 72 * time.Hour
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	sweep(t, r, "p")
 	if !wlrExists(t, r, "airflow", "Pod", "etl") {
 		t.Error("status-less freshly created WLR swept mid-write; grace must cover the Create→status-Patch window")
-	}
-}
-
-// TestSweep_KeepsWLROnExistenceCheckError: a transient GET error (here: a
-// kind whose scheme/CRD isn't registered, e.g. Argo Rollouts not installed)
-// must fail open — keep the WLR and let a later sweep decide.
-func TestSweep_KeepsWLROnExistenceCheckError(t *testing.T) {
-	r := reconcilerForCache(t, wlrFor("p", "prod", "Rollout", "canary", time.Now().Add(-1*time.Hour)))
-	r.RecommendationRetention = 72 * time.Hour
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
-	if !wlrExists(t, r, "prod", "Rollout", "canary") {
-		t.Error("WLR deleted despite existence-check error; must fail open")
 	}
 }
 
@@ -861,28 +840,6 @@ func TestSweep_DeletesWLRForOptedOutWorkloadStillRunning(t *testing.T) {
 	}
 }
 
-// TestSweep_KeepsWLRForWorkloadYoungerThanGrace: a workload created after the
-// cycle's target listing was built is absent from that listing through no
-// fault of its own. Its WLR (already created, e.g. by the webhook admitting
-// its first pod) must survive until the next listing picks the workload up.
-func TestSweep_KeepsWLRForWorkloadYoungerThanGrace(t *testing.T) {
-	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-		Namespace: "prod", Name: "fresh",
-		CreationTimestamp: metav1.NewTime(time.Now().Add(-30 * time.Second)),
-	}}
-	wlr := wlrFor("p", "prod", "Deployment", "fresh", time.Now().Add(-1*time.Hour))
-	wlr.CreationTimestamp = metav1.NewTime(time.Now().Add(-1 * time.Hour))
-
-	r := reconcilerForCache(t, dep, wlr)
-	r.RecommendationRetention = 0 // must not matter for a live workload
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
-
-	if !wlrExists(t, r, "prod", "Deployment", "fresh") {
-		t.Error("WLR deleted for a workload younger than the grace period; " +
-			"it postdates the target listing rather than having opted out")
-	}
-}
-
 // rewriteOnListClient simulates the window the sweep reads through: every
 // WorkloadRecommendation List is answered from the store and then each listed
 // object is rewritten (bumping its resourceVersion) before the caller gets a
@@ -923,16 +880,17 @@ func (c *rewriteOnListClient) List(ctx context.Context, list client.ObjectList, 
 // resourceVersion that was observed, so a stale decision fails as a conflict
 // instead.
 func TestSweep_DoesNotDeleteWLRRewrittenSinceItWasListed(t *testing.T) {
-	// Still running, well past the grace period, absent from the target set:
-	// the "opted out" branch, which deletes unconditionally today.
+	// Still running, well past the grace period, governed by no Policy: the
+	// "opted out" branch, which deletes.
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web"}}
 	r := reconcilerForCache(t, wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour)), dep)
 	r.RecommendationRetention = 72 * time.Hour
 
+	snap := snapshotAll(t, r)
 	base := r.Client
 	racy := &rewriteOnListClient{Client: base}
 	r.Client = racy
-	r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+	r.sweepWorkloadRecommendations(context.Background(), "p", snap)
 	r.Client = base
 
 	if racy.rewrites == 0 {
@@ -1114,10 +1072,10 @@ func TestDeleteWLRsWhere_PreconditionsPerPath(t *testing.T) {
 	}{
 		{
 			name: "sweep",
-			run: func(_ *testing.T, r *PolicyReconciler) {
-				// Still running, past the grace period, absent from the target
-				// set: the opted-out branch, which deletes.
-				r.sweepWorkloadRecommendations(context.Background(), "p", nil)
+			run: func(t *testing.T, r *PolicyReconciler) {
+				// Still running, past the grace period, governed by no Policy:
+				// the opted-out branch, which deletes.
+				r.sweepWorkloadRecommendations(context.Background(), "p", snapshotAll(t, r))
 			},
 			wantResourceVer: true,
 		},

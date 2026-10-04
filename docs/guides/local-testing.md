@@ -390,7 +390,7 @@ Deployment's own name is never used for Prometheus queries or the
 
   ```bash
   kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090 &
-  curl -s localhost:8090/api/workloads/scenario-custom-name/Deployment/renamed-app/recommendations
+  curl -s localhost:8090/api/workloads/scenario-custom-name/Deployment/renamed-app
   ```
 
 ### `bare-pod`

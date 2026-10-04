@@ -33,26 +33,34 @@ const DefaultRecommendationRetention = 168 * time.Hour
 // reconciled — and the recommendation-source metric must tell them apart.
 var ErrRecommendationStale = errors.New("workloadrecommendation is stale")
 
-// ErrRecommendationNoData reports that a WorkloadRecommendation exists but the
-// identity produced nothing recommendable — the "nodata" state
-// wlrcache.MarkNoData writes. Kept distinct from the plain (nil, nil) result
+// ErrRecommendationNoData reports that a WorkloadRecommendation exists and the
+// controller recorded an outcome for it, but it holds no Recommendation (too
+// young, no data, fetch failed, Conflicted). Kept distinct from the plain (nil, nil) result
 // because that result drives stub creation, and a nodata object already
 // exists: collapsing them would fire a doomed Create per pod for exactly the
 // high-churn identities that stay nodata longest.
 var ErrRecommendationNoData = errors.New("workloadrecommendation has no recommendable data")
 
+// ErrRecommendationOtherPolicy reports that the WorkloadRecommendation was
+// produced under a Policy other than the one the pod opts into: a Conflicted
+// identity's frozen numbers, or an identity moving between Policies before the
+// new one adopts it. Its numbers were never computed for this pod's Policy.
+var ErrRecommendationOtherPolicy = errors.New("workloadrecommendation belongs to another policy")
+
 // fetchRecommendations reads the WorkloadRecommendation the controller wrote
-// for (kind, namespace, name) and returns its container map when it exists and
-// was observed within staleness. This is the webhook's only recommendation
-// source — it never queries Prometheus itself. A missing or unpopulated object
-// yields (nil, nil); the two error cases are ErrRecommendationStale and
-// ErrRecommendationNoData.
+// for (kind, namespace, name) and returns its container map when it exists, was
+// produced under policy, and was observed within staleness. This is the
+// webhook's only recommendation source — it never queries Prometheus itself. A
+// missing or unpopulated object yields (nil, nil); the error cases are
+// ErrRecommendationOtherPolicy, ErrRecommendationStale and
+// ErrRecommendationNoData. retained reports a recommendation the controller
+// keeps frozen (Departed or Conflicted) rather than refreshes.
 func (h *Handler) fetchRecommendations(
 	ctx context.Context,
-	kind, namespace, name string,
+	kind, namespace, name, policy string,
 	now time.Time,
 	staleness time.Duration,
-) (recs map[string]workload.ContainerRecommendation, departed bool, err error) {
+) (recs map[string]workload.ContainerRecommendation, retained bool, err error) {
 	objName := wlrcache.Name(kind, name)
 	var wlr sustainv1alpha1.WorkloadRecommendation
 	err = h.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: objName}, &wlr)
@@ -62,28 +70,32 @@ func (h *Handler) fetchRecommendations(
 	if err != nil {
 		return nil, false, fmt.Errorf("reading WorkloadRecommendation %s/%s: %w", namespace, objName, err)
 	}
-	if wlr.Status.ObservedAt.IsZero() {
-		return nil, false, nil
+	if wlr.Spec.Policy != policy {
+		return nil, false, ErrRecommendationOtherPolicy
 	}
-	// Nodata is checked BEFORE staleness, and the order is load-bearing:
-	// MarkNoData stamps ObservedAt once and never refreshes it, so checked the
-	// other way round every such admission would report source="stale" and
-	// swamp the signal operators alert on.
-	if len(wlr.Status.Containers) == 0 && wlr.Status.Source == sustainv1alpha1.RecommendationSourceNoData {
+	// An object the controller has not decided anything for yet reads as
+	// missing; one it has, but which holds no Recommendation, as nodata. Both
+	// are checked before staleness: an empty object has no ObservedAt to age.
+	if len(wlr.Status.Containers) == 0 {
+		if wlr.Status.Outcome == "" {
+			return nil, false, nil
+		}
 		return nil, false, ErrRecommendationNoData
 	}
-	// A recommendation retained for a departed identity is exempt from the
-	// freshness gate: its ObservedAt is deliberately frozen at the last
-	// successful write, so gating on it would put a daily Job back on template
-	// resources on every run but its first.
+	// A recommendation retained for a departed identity, or frozen for a
+	// Conflicted one (ADR 0002), is exempt from the freshness gate: its
+	// ObservedAt is deliberately frozen at the last successful write, so gating
+	// on it would put a daily Job back on template resources on every run but
+	// its first.
 	//
 	// The waiver is bounded here rather than left to the controller's sweep,
-	// because that sweep lives inside Reconcile and is skipped whenever
-	// collectTargets fails — a wedged controller would otherwise disable the
-	// staleness gate outright for these objects. Past the window this reports
-	// plain staleness, which carries the same operator-facing meaning.
+	// because that sweep lives inside Reconcile and is skipped whenever the
+	// inventory cannot be read — a wedged controller would otherwise disable
+	// the staleness gate outright for these objects. Past the window this
+	// reports plain staleness, which carries the same operator-facing meaning.
+	retained = wlr.Status.Departed || wlr.Status.Outcome == sustainv1alpha1.OutcomeConflicted
 	age := now.Sub(wlr.Status.ObservedAt.Time)
-	if wlr.Status.Departed {
+	if retained {
 		if age > h.effectiveRetention() {
 			return nil, false, ErrRecommendationStale
 		}
@@ -94,10 +106,10 @@ func (h *Handler) fetchRecommendations(
 	if recs == nil {
 		return nil, false, nil
 	}
-	return recs, wlr.Status.Departed, nil
+	return recs, retained, nil
 }
 
-// effectiveRetention is the bound applied to the departed path, falling back
+// effectiveRetention is the bound applied to the retained path, falling back
 // to DefaultRecommendationRetention when the handler was built without one.
 func (h *Handler) effectiveRetention() time.Duration {
 	if h.RecommendationRetention <= 0 {

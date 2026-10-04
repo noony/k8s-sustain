@@ -15,7 +15,7 @@ import (
 // The Job spec is never mutated and pods are never evicted — a standalone Job
 // has no "next run", so the running pod is the only thing worth correcting,
 // and killing it would discard in-flight work. CronJob-owned Jobs are handled
-// by resizeCronJobPods; the listing path already excludes them here.
+// by resizeCronJobPods; the inventory never makes them members.
 //
 // Returns the number of pods the API server actually resized, so the caller can
 // suppress the ResourcesUpdated event when nothing was touched.
@@ -26,7 +26,7 @@ func (r *PolicyReconciler) resizeJobPods(ctx context.Context, t *workloadTarget,
 	if !ok {
 		return 0, fmt.Errorf("job target carries unexpected object type %T", t.Object)
 	}
-	if jobIsTerminal(job) {
+	if workload.JobFinished(job) {
 		logger.V(1).Info("job is terminal; nothing to resize")
 		workload.ApplyCounts(opts, workload.PodCounts{})
 		return 0, nil

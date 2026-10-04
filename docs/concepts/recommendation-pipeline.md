@@ -36,9 +36,9 @@ Coverage and health are observed separately and must not be derived from one ano
 The recommender runs each container through the following stages, in order:
 
 1. **Workload-age gate.** An identity younger than 10 minutes is skipped (`k8s_sustain_recommendation_skipped_total{reason="workload_too_young"}`, log `skipping recommendation: workload too young`), so a near-zero early percentile is never floored to the hard minimum (1m CPU / 1Mi memory) and injected.
-    - Age is the *earliest* of the workload object's `creationTimestamp` and its `WorkloadRecommendation`'s, which records when k8s-sustain first saw the identity.
-    - The second signal is what lets ephemeral kinds pass: a standalone Job is re-created each run and a bare pod has no workload object, but their cache object persists across runs.
-    - All kinds are gated, bare pods included. When neither timestamp exists the gate is off.
+    - Age is the *earliest* of the identity's members' `creationTimestamp`s and its `WorkloadRecommendation`'s, which records when k8s-sustain first saw the identity. A new member of an owner-name group, or a new pod of a bare-pod group, does not reset it.
+    - The `WorkloadRecommendation` is what lets ephemeral kinds pass: a standalone Job is re-created each run and a bare pod lives for one run, but their cache object persists across runs.
+    - All kinds are gated, bare pods included. The controller and the dashboard's simulations date the identity the same way.
     - A recent OOM in any container of the workload (Prometheus 24h signal or the live [OOM watcher](architecture.md#pod-oom-watcher)) bypasses the gate so a crash-looping container still gets a memory recommendation.
     - Losing Prometheus data (retention loss, reinstall) while the cache object survives lets an identity pass on only minutes of samples.
 2. **Keep request.** When `requests.keepRequest: true` is set for a resource, its request and limit are left unchanged and the remaining stages are skipped for that resource.

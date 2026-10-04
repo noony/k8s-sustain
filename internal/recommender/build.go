@@ -25,11 +25,11 @@ const MinWorkloadAge = 10 * time.Minute
 // shouldSkipYoungWorkload reports whether a workload is too young to have
 // produced stable rate samples and has no recent OOM to bypass the gate.
 //
-// Birth is the earliest of the workload object's creation time and
-// identityFirstSeen (the WorkloadRecommendation's CreationTimestamp). The
-// split matters for ephemeral identities: a standalone Job's object is always
-// seconds old and a bare pod has no object at all, so how long the identity
-// has been known is the only usable age.
+// since is when the identity was first seen: its earliest member's creation
+// or its WorkloadRecommendation's, whichever is older (inventory.Identity).
+// The WorkloadRecommendation matters for ephemeral identities: a standalone
+// Job's object is always seconds old, so how long the identity has been known
+// is the only usable age.
 //
 // Wall-clock age is a PROXY for sample stability, and the two come apart for
 // duty-cycled workloads: a bare pod running ~35s every 2 minutes clears the
@@ -39,26 +39,17 @@ const MinWorkloadAge = 10 * time.Minute
 // sharded, which is exactly what was removed to cut query load. The mitigation
 // is the configured window; see docs/guides/standalone-pods-and-grouping.md.
 //
-// Usually the two ages diverge with the WLR younger (fresh install, new
-// Policy, WLR recreated), which errs toward waiting a cycle — the safe
-// direction. The narrow hole runs the other way: losing Prometheus data resets
-// first observation while the WLR keeps its old age, so the gate can pass an
-// identity whose samples are minutes old.
+// The narrow hole: losing Prometheus data resets first observation while the
+// WLR keeps its old age, so the gate can pass an identity whose samples are
+// minutes old.
 //
-// With neither signal the gate is disabled: there is nothing to recommend
-// from anyway, so skipping would only mask the no-data outcome.
-func shouldSkipYoungWorkload(workloadCreated, identityFirstSeen time.Time, recentOOM bool) bool {
-	if recentOOM {
+// A zero since disables the gate: there is nothing to date the identity by,
+// and skipping would only mask the no-data outcome.
+func shouldSkipYoungWorkload(since time.Time, recentOOM bool) bool {
+	if recentOOM || since.IsZero() {
 		return false
 	}
-	start := workloadCreated
-	if start.IsZero() || (!identityFirstSeen.IsZero() && identityFirstSeen.Before(start)) {
-		start = identityFirstSeen
-	}
-	if start.IsZero() {
-		return false
-	}
-	return time.Since(start) < MinWorkloadAge
+	return time.Since(since) < MinWorkloadAge
 }
 
 // AgeForLog renders an age for the too-young skip logs. Returns "none" for
@@ -192,10 +183,9 @@ type Request struct {
 	// LiveOOMs are the kills the OOM Pod watcher saw, by container. Each counts
 	// as a recent OOM before the recording rules surface it.
 	LiveOOMs map[string]*oomwatch.OOMRecord
-	// WorkloadCreated and IdentityFirstSeen date the identity for the age
-	// gate; see shouldSkipYoungWorkload. Both zero disables the gate.
-	WorkloadCreated   time.Time
-	IdentityFirstSeen time.Time
+	// Since dates the identity for the age gate; see shouldSkipYoungWorkload.
+	// Zero disables the gate.
+	Since time.Time
 }
 
 // Result is Compute's answer for one identity.
@@ -236,7 +226,7 @@ func Compute(req Request) Result {
 	// container.
 	recentOOM := req.Inputs.HasRecentOOM() || len(req.LiveOOMs) > 0
 	switch {
-	case shouldSkipYoungWorkload(req.WorkloadCreated, req.IdentityFirstSeen, recentOOM):
+	case shouldSkipYoungWorkload(req.Since, recentOOM):
 		res.Outcome = TooYoung
 	case len(res.Recs) == 0:
 		res.Outcome = NoData

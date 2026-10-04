@@ -60,14 +60,14 @@ func TestFetchRecommendations_FreshHit(t *testing.T) {
 		},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			ObservedAt: metav1.NewTime(now.Add(-5 * time.Minute)),
-			Source:     "prometheus",
+			Outcome:    sustainv1alpha1.OutcomeComputed,
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
 				"app": {CPURequest: cachedQty("200m"), MemoryRequest: cachedQty("256Mi")},
 			},
 		},
 	}
 	h := newRecommendationsTestHandler(t, wlr)
-	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", now, 30*time.Minute)
+	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", "p", now, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -86,6 +86,7 @@ func TestFetchRecommendations_StaleEntryReturnsErrRecommendationStale(t *testing
 	now := time.Now()
 	wlr := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-web"},
+		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			// 2h old — beyond the 30m staleness window.
 			ObservedAt: metav1.NewTime(now.Add(-2 * time.Hour)),
@@ -95,7 +96,7 @@ func TestFetchRecommendations_StaleEntryReturnsErrRecommendationStale(t *testing
 		},
 	}
 	h := newRecommendationsTestHandler(t, wlr)
-	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", now, 30*time.Minute)
+	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", "p", now, 30*time.Minute)
 	if !errors.Is(err, ErrRecommendationStale) {
 		t.Fatalf("fetch: expected ErrRecommendationStale, got %v", err)
 	}
@@ -104,23 +105,24 @@ func TestFetchRecommendations_StaleEntryReturnsErrRecommendationStale(t *testing
 	}
 }
 
-// MarkNoData stamps ObservedAt once and never refreshes it, so a nodata object
-// is older than any staleness window within minutes. It must still report as
-// nodata: on a cluster with recurring short Jobs this healthy traffic would
-// otherwise dominate the stale signal operators are told to alert on.
+// A nodata object is never refreshed, so it is older than any staleness window
+// within minutes. It must still report as nodata: on a cluster with recurring
+// short Jobs this healthy traffic would otherwise dominate the stale signal
+// operators are told to alert on.
 func TestFetchRecommendations_NoDataOutlivesStalenessAndStaysNoData(t *testing.T) {
 	now := time.Now()
 	wlr := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-web"},
+		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			// 2h old — far beyond the 30m staleness window, and nothing reaps
 			// the object, so this is where it spends most of its life.
 			ObservedAt: metav1.NewTime(now.Add(-2 * time.Hour)),
-			Source:     sustainv1alpha1.RecommendationSourceNoData,
+			Outcome:    sustainv1alpha1.OutcomeNoData,
 		},
 	}
 	h := newRecommendationsTestHandler(t, wlr)
-	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", now, 30*time.Minute)
+	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", "p", now, 30*time.Minute)
 	if errors.Is(err, ErrRecommendationStale) {
 		t.Fatal("a nodata WLR must not report as stale: its mark is stamped once and never " +
 			"refreshed, so it would report stale for as long as the identity has no history " +
@@ -142,11 +144,12 @@ func TestFetchRecommendations_DepartedIdentityIsServedDespiteAge(t *testing.T) {
 	now := time.Now()
 	wlr := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "job-nightly"},
+		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			// A day old: the gap between two runs of a nightly Job, and far
 			// beyond any staleness budget.
 			ObservedAt: metav1.NewTime(now.Add(-24 * time.Hour)),
-			Source:     sustainv1alpha1.RecommendationSourcePrometheus,
+			Outcome:    sustainv1alpha1.OutcomeComputed,
 			Departed:   true,
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
 				"app": {CPURequest: cachedQty("200m")},
@@ -154,7 +157,7 @@ func TestFetchRecommendations_DepartedIdentityIsServedDespiteAge(t *testing.T) {
 		},
 	}
 	h := newRecommendationsTestHandler(t, wlr)
-	got, departed, err := h.fetchRecommendations(context.Background(), "Job", "default", "nightly", now, 30*time.Minute)
+	got, departed, err := h.fetchRecommendations(context.Background(), "Job", "default", "nightly", "p", now, 30*time.Minute)
 	if errors.Is(err, ErrRecommendationStale) {
 		t.Fatal("a retained recommendation for a departed identity must not report as stale: " +
 			"its ObservedAt is deliberately frozen once its samples age out, so every run after " +
@@ -174,19 +177,49 @@ func TestFetchRecommendations_DepartedIdentityIsServedDespiteAge(t *testing.T) {
 	}
 }
 
+// A Conflicted identity's recommendation is frozen like a departed one's
+// (ADR 0002): no Policy recomputes it, so its ObservedAt stops advancing, and
+// the members still opting into its Policy keep receiving it.
+func TestFetchRecommendations_ConflictedIdentityIsServedFrozen(t *testing.T) {
+	now := time.Now()
+	wlr := &sustainv1alpha1.WorkloadRecommendation{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-web"},
+		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
+		Status: sustainv1alpha1.WorkloadRecommendationStatus{
+			ObservedAt: metav1.NewTime(now.Add(-24 * time.Hour)),
+			Outcome:    sustainv1alpha1.OutcomeConflicted,
+			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
+				"app": {CPURequest: cachedQty("200m")},
+			},
+		},
+	}
+	h := newRecommendationsTestHandler(t, wlr)
+
+	got, retained, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", "p", now, 30*time.Minute)
+	if err != nil || got == nil || !retained {
+		t.Fatalf("got %v, retained=%v, err=%v: want the frozen recommendation served as retained", got, retained, err)
+	}
+
+	if _, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", "q", now, 30*time.Minute); !errors.Is(err, ErrRecommendationOtherPolicy) {
+		t.Errorf("a pod of the other Policy: err = %v, want ErrRecommendationOtherPolicy", err)
+	}
+}
+
 // The retained path is bounded by the controller's retention window rather than
 // by "whenever the sweep gets round to it": both the sweep and the clearing of
-// Departed live inside Reconcile, which returns early whenever collectTargets
-// fails, so a wedged controller would otherwise leave the waiver unbounded.
+// Departed live inside Reconcile, which returns early whenever the inventory
+// cannot be read, so a wedged controller would otherwise leave the waiver
+// unbounded.
 func TestFetchRecommendations_DepartedIdentityIsRejectedPastRetention(t *testing.T) {
 	now := time.Now()
 	wlr := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "job-nightly"},
+		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			// Older than the 168h default retention: a sweep that ran at all
 			// would have deleted this object rather than left it servable.
 			ObservedAt: metav1.NewTime(now.Add(-200 * time.Hour)),
-			Source:     sustainv1alpha1.RecommendationSourcePrometheus,
+			Outcome:    sustainv1alpha1.OutcomeComputed,
 			Departed:   true,
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
 				"app": {CPURequest: cachedQty("200m")},
@@ -194,7 +227,7 @@ func TestFetchRecommendations_DepartedIdentityIsRejectedPastRetention(t *testing
 		},
 	}
 	h := newRecommendationsTestHandler(t, wlr)
-	got, _, err := h.fetchRecommendations(context.Background(), "Job", "default", "nightly", now, 30*time.Minute)
+	got, _, err := h.fetchRecommendations(context.Background(), "Job", "default", "nightly", "p", now, 30*time.Minute)
 	if !errors.Is(err, ErrRecommendationStale) {
 		t.Fatalf("a departed recommendation past the retention window must be rejected, got err=%v: "+
 			"the waiver relies on a sweep that a wedged controller never runs, so it needs a bound "+
@@ -212,9 +245,10 @@ func TestFetchRecommendations_UndepartedIdentityStillTripsStaleness(t *testing.T
 	now := time.Now()
 	wlr := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-web"},
+		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			ObservedAt: metav1.NewTime(now.Add(-24 * time.Hour)),
-			Source:     sustainv1alpha1.RecommendationSourcePrometheus,
+			Outcome:    sustainv1alpha1.OutcomeComputed,
 			Departed:   false,
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
 				"app": {CPURequest: cachedQty("200m")},
@@ -222,7 +256,7 @@ func TestFetchRecommendations_UndepartedIdentityStillTripsStaleness(t *testing.T
 		},
 	}
 	h := newRecommendationsTestHandler(t, wlr)
-	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", now, 30*time.Minute)
+	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", "p", now, 30*time.Minute)
 	if !errors.Is(err, ErrRecommendationStale) {
 		t.Fatalf("an unmarked stale WLR must still report stale, got %v", err)
 	}
@@ -234,7 +268,7 @@ func TestFetchRecommendations_UndepartedIdentityStillTripsStaleness(t *testing.T
 // Absence is not an error: "no WLR yet" means admit unmutated, never deny.
 func TestFetchRecommendations_MissingReturnsNilNoError(t *testing.T) {
 	h := newRecommendationsTestHandler(t)
-	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", time.Now(), 30*time.Minute)
+	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", "p", time.Now(), 30*time.Minute)
 	if err != nil {
 		t.Errorf("missing WLR should not error, got %v", err)
 	}
@@ -249,6 +283,7 @@ func TestFetchRecommendations_PropagatesRemoveFlags(t *testing.T) {
 	now := time.Now()
 	wlr := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-web"},
+		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			ObservedAt: metav1.NewTime(now),
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
@@ -262,7 +297,7 @@ func TestFetchRecommendations_PropagatesRemoveFlags(t *testing.T) {
 		},
 	}
 	h := newRecommendationsTestHandler(t, wlr)
-	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", now, 30*time.Minute)
+	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", "p", now, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -283,13 +318,14 @@ func TestFetchRecommendations_EmptyContainersReturnsNil(t *testing.T) {
 	now := time.Now()
 	wlr := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "deployment-web"},
+		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			ObservedAt: metav1.NewTime(now),
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{},
 		},
 	}
 	h := newRecommendationsTestHandler(t, wlr)
-	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", now, 30*time.Minute)
+	got, _, err := h.fetchRecommendations(context.Background(), "Deployment", "default", "web", "p", now, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
