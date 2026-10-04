@@ -125,6 +125,9 @@ nav:
       - Recording Rules: reference/recording-rules.md
   - Security: security.md
   - Development: development.md
+  - Architecture Decisions:
+      - adr/index.md
+      - A single identity is a batch of one: adr/0001-single-identity-is-a-batch-of-one.md
 
 extra:
   version:
