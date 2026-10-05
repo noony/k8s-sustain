@@ -144,18 +144,6 @@ func (m *NamespacedSnapshot) ForIdentity(ctx context.Context, namespace, kind st
 	return g, nil
 }
 
-// Lookup returns the autoscaler Info for (kind, name) in namespace, building the
-// namespace's snapshot on first use and caching it on success. A build error
-// caches nothing and returns Info{Kind: KindNone} plus the error; the next
-// Lookup retries the build.
-func (m *NamespacedSnapshot) Lookup(ctx context.Context, namespace, workloadKind, workloadName string) (Info, error) {
-	snap, err := m.namespace(ctx, namespace)
-	if err != nil {
-		return Info{Kind: KindNone}, err
-	}
-	return snap.lookup(workloadKind, workloadName), nil
-}
-
 // namespace returns the namespace's snapshot, building it on first use.
 func (m *NamespacedSnapshot) namespace(ctx context.Context, namespace string) (*snapshot, error) {
 	m.mu.Lock()

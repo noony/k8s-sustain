@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -14,7 +13,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 type simulationResult struct {
@@ -41,49 +39,12 @@ type simulationContainerResult struct {
 	MemoryUsageBytes   float64 `json:"memoryUsageBytes,omitempty"`
 }
 
-// simulationSpec is the resolved configuration one simulation runs with: the
-// same shape a Policy provides, so the simulator and the controller feed the
-// recommender identical inputs.
-type simulationSpec struct {
-	namespace, kind, name string
-	// window and step shape the chart series only; the recommendation windows
-	// live in resources.
-	window, step string
-	fromTs, toTs int64
-	resources    sustainv1alpha1.ResourcesConfigs
-	coordination sustainv1alpha1.AutoscalerCoordination
-	excludeInit  bool
-}
-
-func (s simulationSpec) identity() promclient.WorkloadIdentity {
-	return promclient.WorkloadIdentity{Namespace: s.namespace, OwnerKind: s.kind, OwnerName: s.name}
-}
-
-// policySpec is the configuration the controller applies for this identity.
-func policySpec(policy *sustainv1alpha1.Policy, namespace, kind, name string) simulationSpec {
-	return simulationSpec{
-		namespace:    namespace,
-		kind:         kind,
-		name:         name,
-		resources:    policy.Spec.RightSizing.ResourcesConfigs,
-		coordination: policy.Spec.RightSizing.AutoscalerCoordination,
-		excludeInit:  policy.Spec.RightSizing.ExcludeInitContainers,
-	}
-}
-
-// spec maps a user-supplied request onto the Policy shape. A resource's window
-// falls back to the chart window; recommender.ResourceWindow supplies the
+// rightSizing maps a user-supplied request onto the Policy shape. A
+// resource's window falls back to the chart window; the assembly supplies the
 // final default.
-func (req simulateRequest) spec(coordination sustainv1alpha1.AutoscalerCoordination) simulationSpec {
-	return simulationSpec{
-		namespace: req.Namespace,
-		kind:      req.OwnerKind,
-		name:      req.OwnerName,
-		window:    req.Window,
-		step:      req.Step,
-		fromTs:    req.FromTs,
-		toTs:      req.ToTs,
-		resources: sustainv1alpha1.ResourcesConfigs{
+func (req simulateRequest) rightSizing(coordination sustainv1alpha1.AutoscalerCoordination) sustainv1alpha1.RightSizingSpec {
+	return sustainv1alpha1.RightSizingSpec{
+		ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
 			CPU: sustainv1alpha1.ResourceConfig{
 				Window:   cmp.Or(req.CPU.Window, req.Window),
 				Requests: buildRequestsConfig(req.CPU),
@@ -95,20 +56,22 @@ func (req simulateRequest) spec(coordination sustainv1alpha1.AutoscalerCoordinat
 				Limits:   buildLimitsConfig(req.Memory.Limits),
 			},
 		},
-		coordination: coordination,
+		AutoscalerCoordination: coordination,
 	}
 }
 
 // runSimulation resolves the identity and the coordination baseline, then
-// runs the spec. Coordination defaults to the governing Policy's setting so an
-// untouched simulation matches what the controller does; the request can
-// override it.
+// simulates the request. Coordination defaults to the governing Policy's
+// setting so an untouched simulation matches what the controller does; the
+// request can override it.
 func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simulationResult, error) {
-	// A failed read is tolerated: an unknown identity simulates with nil
-	// resources and init containers rather than failing.
-	id, err := s.identity(ctx, promclient.WorkloadIdentity{Namespace: req.Namespace, OwnerKind: req.OwnerKind, OwnerName: req.OwnerName})
+	key := promclient.WorkloadIdentity{Namespace: req.Namespace, OwnerKind: req.OwnerKind, OwnerName: req.OwnerName}
+	// A failed read is tolerated: an unknown identity simulates with no
+	// resources or init containers rather than failing.
+	id, err := s.identity(ctx, key)
 	if err != nil {
 		s.Logger.Error(err, "failed to read the workload identity", "namespace", req.Namespace, "kind", req.OwnerKind, "name", req.OwnerName)
+		id = &inventory.Identity{Key: key}
 	}
 	var coordination sustainv1alpha1.AutoscalerCoordination
 	switch {
@@ -119,38 +82,26 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 			coordination = policy.Spec.RightSizing.AutoscalerCoordination
 		}
 	}
-	return s.simulate(ctx, req.spec(coordination), id)
-}
 
-// simulate runs the spec against an identity already read; id may be nil.
-func (s *Server) simulate(ctx context.Context, spec simulationSpec, id *inventory.Identity) (*simulationResult, error) {
 	var tr promclient.TimeRange
-	var err error
-	if spec.fromTs > 0 && spec.toTs > 0 {
-		tr = promclient.TimeRange{Start: time.Unix(spec.fromTs, 0), End: time.Unix(spec.toTs, 0)}
+	if req.FromTs > 0 && req.ToTs > 0 {
+		tr = promclient.TimeRange{Start: time.Unix(req.FromTs, 0), End: time.Unix(req.ToTs, 0)}
 	} else {
-		tr, err = promclient.TimeRangeFromWindow(recommender.ResourceWindow(spec.window), time.Now())
+		tr, err = promclient.TimeRangeFromWindow(recommender.ResourceWindow(req.Window), time.Now())
 		if err != nil {
 			return nil, fmt.Errorf("resolve chart window: %w", err)
 		}
 	}
 
-	var containers []corev1.Container
-	var since time.Time
-	if id != nil {
-		containers, _ = workload.MergeContainersForRecommendation(id.Containers, id.InitContainers, spec.excludeInit)
-		since = id.Since
+	a := recommender.Assemble(ctx, s.Inputs, autoscaler.NewNamespacedSnapshot(s.K8sClient), req.rightSizing(coordination), []*inventory.Identity{id})[0]
+	if a.Err != nil {
+		return nil, a.Err
 	}
-	key := spec.identity()
-	fetched := s.Inputs.FetchInputs(ctx, spec.resources, []recommender.InputsRequest{{Identity: key, Containers: len(containers)}})[key]
-	if fetched.Err != nil {
-		return nil, fetched.Err
-	}
-	autoInfo := s.autoscalerInfo(ctx, autoscaler.NewNamespacedSnapshot(s.K8sClient), spec)
-	res := computeWorkloadRecs(spec, containers, since, autoInfo, fetched.Inputs)
+	res := recommender.Compute(a.Request)
+	inputs := a.Request.Inputs
 
-	step := cmp.Or(spec.step, "5m")
-	ns, kind, name := spec.namespace, spec.kind, spec.name
+	step := cmp.Or(req.Step, "5m")
+	ns, kind, name := key.Namespace, key.OwnerKind, key.OwnerName
 	cpuSeries, err := s.PromClient.QueryCPURangeByContainer(ctx, ns, kind, name, tr, step)
 	if err != nil {
 		return nil, fmt.Errorf("cpu range query: %w", err)
@@ -162,13 +113,14 @@ func (s *Server) simulate(ctx context.Context, spec simulationSpec, id *inventor
 	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(ctx, ns, kind, name, tr, step)
 	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(ctx, ns, kind, name, tr, step)
 
+	resources := a.Request.Resources
 	cpuRecSeries, _ := s.PromClient.QueryWorkloadCPURecommendationRangeByContainer(ctx, ns, kind, name,
-		recommender.PercentileQuantile(spec.resources.CPU.Requests.Percentile), recommender.ResourceWindow(spec.resources.CPU.Window), tr, step)
+		recommender.PercentileQuantile(resources.CPU.Requests.Percentile), resources.CPU.Window, tr, step)
 	memRecSeries, _ := s.PromClient.QueryWorkloadMemoryRecommendationRangeByContainer(ctx, ns, kind, name,
-		recommender.PercentileQuantile(spec.resources.Memory.Requests.Percentile), recommender.ResourceWindow(spec.resources.Memory.Window), tr, step)
+		recommender.PercentileQuantile(resources.Memory.Requests.Percentile), resources.Memory.Window, tr, step)
 
 	return &simulationResult{
-		Containers:         simulationContainers(res, fetched.Inputs),
+		Containers:         simulationContainers(res, inputs),
 		InitContainers:     initContainerNamesOf(id),
 		TooYoung:           res.Outcome == recommender.TooYoung,
 		CPUSeries:          cpuSeries,
@@ -176,36 +128,9 @@ func (s *Server) simulate(ctx context.Context, spec simulationSpec, id *inventor
 		Resources:          containerResourcesOf(id),
 		CPURequests:        cpuRequests,
 		MemoryRequests:     memRequests,
-		CPURecommendations: recommendationSeries(cpuRecSeries, spec, autoInfo, fetched.Inputs, false),
-		MemRecommendations: recommendationSeries(memRecSeries, spec, autoInfo, fetched.Inputs, true),
+		CPURecommendations: recommendationSeries(cpuRecSeries, a.Request, false),
+		MemRecommendations: recommendationSeries(memRecSeries, a.Request, true),
 	}, nil
-}
-
-// computeWorkloadRecs runs the shared recommendation algorithm for one
-// identity under spec, on inputs already fetched.
-func computeWorkloadRecs(spec simulationSpec, containers []corev1.Container, since time.Time, autoInfo autoscaler.Info, inputs *recommender.WorkloadInputs) recommender.Result {
-	return recommender.Compute(recommender.Request{
-		Containers:   containers,
-		Resources:    spec.resources,
-		Coordination: spec.coordination,
-		AutoInfo:     autoInfo,
-		Inputs:       inputs,
-		Since:        since,
-		Now:          time.Now(),
-	})
-}
-
-// autoscalerInfo detects the HPA or KEDA ScaledObject targeting the workload,
-// the same lookup the controller's coordination uses. Detection failures
-// degrade to "no autoscaler" so a missing RBAC rule cannot break the page.
-func (s *Server) autoscalerInfo(ctx context.Context, snap *autoscaler.NamespacedSnapshot, spec simulationSpec) autoscaler.Info {
-	info, err := snap.Lookup(ctx, spec.namespace, spec.kind, spec.name)
-	if err != nil {
-		s.Logger.V(1).Info("autoscaler detection failed; simulating without coordination",
-			"namespace", spec.namespace, "kind", spec.kind, "name", spec.name, "err", err)
-		return autoscaler.Info{Kind: autoscaler.KindNone}
-	}
-	return info
 }
 
 // simulationContainers renders the computed recommendations next to the raw
@@ -236,10 +161,11 @@ func simulationContainers(res recommender.Result, inputs *recommender.WorkloadIn
 	return out
 }
 
-// recommendationSeries computes each raw percentile point as the point value
-// is computed, with the identity's OOM kills, so the chart shows exactly what
-// would be applied at each step.
-func recommendationSeries(series promclient.ContainerTimeSeries, spec simulationSpec, autoInfo autoscaler.Info, inputs *recommender.WorkloadInputs, memory bool) promclient.ContainerTimeSeries {
+// recommendationSeries computes, at each raw percentile point, the request the
+// identity's Request would have computed had the point been its percentile,
+// with the container's OOM kills, so the chart shows exactly what would be
+// applied at each step.
+func recommendationSeries(series promclient.ContainerTimeSeries, req recommender.Request, memory bool) promclient.ContainerTimeSeries {
 	if series == nil {
 		return nil
 	}
@@ -247,19 +173,18 @@ func recommendationSeries(series promclient.ContainerTimeSeries, spec simulation
 	for name, points := range series {
 		clamped := make([]promclient.TimeValue, len(points))
 		for i, p := range points {
-			point := recommender.WorkloadInputs{OOM: inputs.OOM}
+			point := recommender.WorkloadInputs{OOM: map[string]recommender.OOM{}}
+			if oom, ok := req.Inputs.OOM[name]; ok {
+				point.OOM[name] = oom
+			}
 			if memory {
 				point.MemPerPod = promclient.ContainerValues{name: p.Value}
 			} else {
 				point.CPUPerPod = promclient.ContainerValues{name: p.Value}
 			}
-			rec := recommender.Compute(recommender.Request{
-				Containers:   []corev1.Container{{Name: name}},
-				Resources:    spec.resources,
-				Coordination: spec.coordination,
-				AutoInfo:     autoInfo,
-				Inputs:       &point,
-			}).Recs[name]
+			at := req
+			at.Inputs = &point
+			rec := recommender.Compute(at).Recs[name]
 			var v float64
 			switch {
 			case memory && rec.MemoryRequest != nil:

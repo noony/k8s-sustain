@@ -2,6 +2,8 @@ package dashboard
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -15,14 +17,17 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
-// newCoordinatedSimulateServer builds a Deployment managed by policy "p" with
-// autoscaler coordination enabled, targeted by an HPA at 50% CPU, reporting
-// one core of usage. Coordinated, that is 1 * 110/50 = 2.2 cores.
+// newCoordinatedSimulateServer builds the owner-name identity Deployment/web
+// of members web-blue and web-green, governed by policy "p" with autoscaler
+// coordination enabled, reporting one core of usage. An HPA at 50% CPU
+// targets web-green, never the identity's own name, the way the controller
+// reads it. Coordinated, that is 1 * 110/50 = 2.2 cores.
 func newCoordinatedSimulateServer(t *testing.T) *Server {
 	t.Helper()
 	mode := sustainv1alpha1.UpdateModeOngoing
@@ -30,14 +35,21 @@ func newCoordinatedSimulateServer(t *testing.T) *Server {
 	policy.Spec.RightSizing.Update.Types.Deployment = &mode
 	policy.Spec.RightSizing.AutoscalerCoordination.Enabled = true
 
-	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
-	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
-	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "main"}}
+	objs := []client.Object{policy}
+	for _, name := range []string{"web-blue", "web-green"} {
+		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: name}}
+		d.Spec.Template.Annotations = map[string]string{
+			sustainv1alpha1.PolicyAnnotation:    "p",
+			sustainv1alpha1.OwnerNameAnnotation: "web",
+		}
+		d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "main"}}
+		objs = append(objs, d)
+	}
 
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web-green"},
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
-			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web"},
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web-green"},
 			MaxReplicas:    5,
 			Metrics: []autoscalingv2.MetricSpec{{
 				Type: autoscalingv2.ResourceMetricSourceType,
@@ -48,22 +60,37 @@ func newCoordinatedSimulateServer(t *testing.T) *Server {
 			}},
 		},
 	}
-	objs := []client.Object{policy, d, hpa}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
+	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(append(objs, hpa)...).Build()
 	inputs := recommendertest.NewStaticInputs().Set(
 		promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
 		&recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"main": 1}})
 	return &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: inputs, Logger: testLogger(t)}
 }
 
-func TestRunSimulation_InheritsManagingPolicyCoordination(t *testing.T) {
+// A Simulation coordinates against the autoscaler of the member it targets,
+// with the governing Policy's coordination, as the controller does.
+func TestRunSimulation_CoordinatesAgainstItsMembersAutoscaler(t *testing.T) {
 	srv := newCoordinatedSimulateServer(t)
 	res, err := srv.runSimulation(context.Background(), simulateRequest{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"})
 	if err != nil {
 		t.Fatalf("runSimulation: %v", err)
 	}
 	if got := res.Containers["main"].CPURequest; got != "2200m" {
-		t.Errorf("cpu = %q, want 2200m (managing policy's coordination applied by default)", got)
+		t.Errorf("cpu = %q, want 2200m: web-green's HPA under the governing Policy's coordination", got)
+	}
+}
+
+// Batch simulate coordinates each identity as its Simulation does.
+func TestBatchSimulate_CoordinatesAgainstItsMembersAutoscaler(t *testing.T) {
+	srv := newCoordinatedSimulateServer(t)
+
+	rec := httptest.NewRecorder()
+	srv.handlePolicyBatchSimulate(rec, httptest.NewRequest(http.MethodGet, "/api/policies/p/batch-simulate", nil), "p")
+
+	var resp batchSimulateResponse
+	decodeEnvelopeData(t, rec.Body, &resp)
+	if len(resp.Workloads) != 1 || resp.Workloads[0].Containers["main"].RecommendedCPU != "2200m" {
+		t.Errorf("workloads = %+v, want web recommended 2200m: web-green's HPA", resp.Workloads)
 	}
 }
 
@@ -71,17 +98,20 @@ func TestRunSimulation_InheritsManagingPolicyCoordination(t *testing.T) {
 // the OOM floor of the container that was killed only.
 func TestRecommendationSeries_ComputesEachPointWithTheIdentitysOOMs(t *testing.T) {
 	const mib = 1 << 20
-	spec := simulationSpec{resources: sustainv1alpha1.ResourcesConfigs{
+	key := promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"}
+	spec := sustainv1alpha1.RightSizingSpec{ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
 		CPU: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)}},
 	}}
-	inputs := &recommender.WorkloadInputs{OOM: map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}}}
+	inputs := recommendertest.NewStaticInputs().Set(key, &recommender.WorkloadInputs{
+		OOM: map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}},
+	})
+	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
+	req := recommender.Assemble(context.Background(), inputs, autoscaler.NewNamespacedSnapshot(c), spec, []*inventory.Identity{{Key: key}})[0].Request
 	at := time.Unix(1_700_000_000, 0)
 	points := func(v float64) []promclient.TimeValue { return []promclient.TimeValue{{Timestamp: at, Value: v}} }
 
-	mem := recommendationSeries(promclient.ContainerTimeSeries{"app": points(100 * mib), "side": points(100 * mib)},
-		spec, autoscaler.Info{Kind: autoscaler.KindNone}, inputs, true)
-	cpu := recommendationSeries(promclient.ContainerTimeSeries{"app": points(0.1)},
-		spec, autoscaler.Info{Kind: autoscaler.KindNone}, inputs, false)
+	mem := recommendationSeries(promclient.ContainerTimeSeries{"app": points(100 * mib), "side": points(100 * mib)}, req, true)
+	cpu := recommendationSeries(promclient.ContainerTimeSeries{"app": points(0.1)}, req, false)
 
 	if got := mem["app"][0].Value; got != 200*mib {
 		t.Errorf("app memory = %v, want the 200Mi OOM floor", got)

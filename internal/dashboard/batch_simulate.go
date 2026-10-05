@@ -6,7 +6,6 @@ import (
 	"math"
 	"net/http"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	"github.com/noony/k8s-sustain/internal/recommender"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 type batchSimulateResponse struct {
@@ -164,31 +162,18 @@ type recResult struct {
 	err  error
 }
 
-// computeRecommendations fetches every identity's inputs in one batch and
-// runs the shared algorithm on each under the policy's own configuration,
-// exactly as the controller would.
+// computeRecommendations assembles every identity under the policy's own
+// right-sizing spec and computes each, exactly as the controller would.
 func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1alpha1.Policy, workloads []*inventory.Identity) []recResult {
-	specs := make([]simulationSpec, len(workloads))
-	containers := make([][]corev1.Container, len(workloads))
-	reqs := make([]recommender.InputsRequest, len(workloads))
-	for i, wl := range workloads {
-		specs[i] = policySpec(policy, wl.Key.Namespace, wl.Key.OwnerKind, wl.Key.OwnerName)
-		containers[i], _ = workload.MergeContainersForRecommendation(wl.Containers, wl.InitContainers, specs[i].excludeInit)
-		reqs[i] = recommender.InputsRequest{Identity: specs[i].identity(), Containers: len(containers[i])}
-	}
-	fetched := s.Inputs.FetchInputs(ctx, policy.Spec.RightSizing.ResourcesConfigs, reqs)
-
 	// One snapshot per request: it lists each namespace's autoscalers once.
-	autoSnap := autoscaler.NewNamespacedSnapshot(s.K8sClient)
+	assembled := recommender.Assemble(ctx, s.Inputs, autoscaler.NewNamespacedSnapshot(s.K8sClient), policy.Spec.RightSizing, workloads)
 	out := make([]recResult, len(workloads))
-	for i, spec := range specs {
-		f := fetched[spec.identity()]
-		if f.Err != nil {
-			out[i].err = f.Err
+	for i, a := range assembled {
+		if a.Err != nil {
+			out[i].err = a.Err
 			continue
 		}
-		res := computeWorkloadRecs(spec, containers[i], workloads[i].Since, s.autoscalerInfo(ctx, autoSnap, spec), f.Inputs)
-		out[i].recs = simulationContainers(res, f.Inputs)
+		out[i].recs = simulationContainers(recommender.Compute(a.Request), a.Request.Inputs)
 	}
 	return out
 }
