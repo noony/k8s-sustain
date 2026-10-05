@@ -1,0 +1,127 @@
+package recommender
+
+import (
+	"context"
+	"slices"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/inventory"
+)
+
+// Autoscalers reads which autoscaler targets each member of an identity.
+// autoscaler.NamespacedSnapshot reads them from the cluster.
+type Autoscalers interface {
+	ForIdentity(ctx context.Context, namespace, kind string, members []string) (autoscaler.Group, error)
+}
+
+// Assembled is one identity's Request, or why its inputs could not be read.
+type Assembled struct {
+	// Request is what Compute takes. Unset when Err is.
+	Request Request
+	// Autoscaler is what targets each of the identity's members. The Request
+	// is shaped against its Info.
+	Autoscaler autoscaler.Group
+	// Err is why the identity's inputs could not be read.
+	Err error
+}
+
+// Assemble turns each identity into the Request spec makes of it, in order:
+// the controller and the dashboard's Simulations both go through here, so they
+// hand Compute the same Request. It reads the autoscaler of every member whose
+// containers make the identity's (a departed identity has none), fetches every
+// identity's inputs in one batch under spec's resources, defaults made
+// explicit (WithDefaults), and leaves init containers out when spec excludes
+// them.
+func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers, spec sustainv1alpha1.RightSizingSpec, ids []*inventory.Identity) []Assembled {
+	resources := WithDefaults(spec.ResourcesConfigs)
+	out := make([]Assembled, len(ids))
+	reqs := make([]InputsRequest, len(ids))
+	for i, id := range ids {
+		containers := ContainersOf(spec, id)
+		group := autoscalerOf(ctx, autoscalers, id)
+		out[i] = Assembled{
+			Request: Request{
+				Containers:   containers,
+				Resources:    resources,
+				Coordination: spec.AutoscalerCoordination,
+				AutoInfo:     group.Info,
+				Since:        id.Since,
+			},
+			Autoscaler: group,
+		}
+		reqs[i] = InputsRequest{Identity: id.Key, Containers: len(containers)}
+	}
+
+	fetched := inputs.FetchInputs(ctx, resources, reqs)
+	// Taken after the fetch, which can take minutes: kills it merged in must
+	// not postdate the instant they are computed as of.
+	now := time.Now()
+	for i, id := range ids {
+		f := fetched[id.Key]
+		if f.Err != nil {
+			out[i] = Assembled{Autoscaler: out[i].Autoscaler, Err: f.Err}
+			continue
+		}
+		out[i].Request.Inputs = f.Inputs
+		out[i].Request.Now = now
+	}
+	return out
+}
+
+// ContainersOf is the containers spec recommends of id: its containers, and
+// its init containers unless spec excludes them. Assemble recommends these;
+// the Policy's excludeInitContainers is applied here and nowhere else.
+func ContainersOf(spec sustainv1alpha1.RightSizingSpec, id *inventory.Identity) []corev1.Container {
+	if spec.ExcludeInitContainers {
+		return id.Containers
+	}
+	return slices.Concat(id.Containers, id.InitContainers)
+}
+
+// autoscalerOf reads the autoscaler of each member the identity's containers
+// come from. A departed identity has none, and a failed read leaves the
+// identity uncoordinated.
+func autoscalerOf(ctx context.Context, autoscalers Autoscalers, id *inventory.Identity) autoscaler.Group {
+	members := id.Contributors()
+	if len(members) == 0 {
+		return autoscaler.Group{Info: autoscaler.Info{Kind: autoscaler.KindNone}}
+	}
+	names := make([]string, len(members))
+	for i, m := range members {
+		names[i] = m.Object.GetName()
+	}
+	g, err := autoscalers.ForIdentity(ctx, id.Key.Namespace, id.Key.OwnerKind, names)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "autoscaler detection failed, proceeding without it",
+			"kind", id.Key.OwnerKind, "name", id.Key.OwnerName, "namespace", id.Key.Namespace)
+	}
+	return g
+}
+
+// WithDefaults returns cfg with every setting the recommender defaults made
+// explicit: each resource's window, its percentile and headroom unless its
+// request is kept, and its limit strategy, keepLimit, when none is set.
+func WithDefaults(cfg sustainv1alpha1.ResourcesConfigs) sustainv1alpha1.ResourcesConfigs {
+	out := *cfg.DeepCopy()
+	for _, rc := range []*sustainv1alpha1.ResourceConfig{&out.CPU, &out.Memory} {
+		rc.Window = ResourceWindow(rc.Window)
+		if !rc.Requests.KeepRequest {
+			if rc.Requests.Percentile == nil {
+				rc.Requests.Percentile = ptr.To[int32](defaultPercentile)
+			}
+			if rc.Requests.Headroom == nil {
+				rc.Requests.Headroom = ptr.To[int32](0)
+			}
+		}
+		if l := rc.Limits; !l.EqualsToRequest && !l.KeepLimit && !l.KeepLimitRequestRatio && !l.NoLimit && l.RequestsLimitsRatio == nil {
+			rc.Limits.KeepLimit = true
+		}
+	}
+	return out
+}

@@ -1,15 +1,19 @@
 package controller
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/ptr"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
@@ -68,6 +72,52 @@ func TestReconcile_LiveOOMRaisesTheFloorAndIsCounted(t *testing.T) {
 	}
 	if after := histogramCount(t, oomReactionLatencySeconds, ns, "Deployment", "web"); after-latencyBefore != 1 {
 		t.Errorf("oom_reaction_latency observations delta = %d, want 1 for a floor driven by a live kill", after-latencyBefore)
+	}
+}
+
+// cpuHPA scales Deployment ns/target on CPU utilization at pct.
+func cpuHPA(ns, target string, pct int32) *autoscalingv2.HorizontalPodAutoscaler {
+	return &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: target + "-hpa"},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: target},
+			MaxReplicas:    4,
+			Metrics: []autoscalingv2.MetricSpec{{
+				Type: autoscalingv2.ResourceMetricSourceType,
+				Resource: &autoscalingv2.ResourceMetricSource{
+					Name:   corev1.ResourceCPU,
+					Target: autoscalingv2.MetricTarget{Type: autoscalingv2.UtilizationMetricType, AverageUtilization: ptr.To(pct)},
+				},
+			}},
+		},
+	}
+}
+
+// An owner-name group is coordinated against the autoscaler of the member it
+// targets, never looked up under the identity's own name: the stored trace
+// records the coordination, and only that member reports the autoscaler.
+func TestReconcile_OwnerNameGroupIsCoordinatedByItsMembersAutoscaler(t *testing.T) {
+	const ns = "coordinated"
+	policy := ongoingDeployments("p")
+	policy.Spec.RightSizing.AutoscalerCoordination.Enabled = true
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "api"), true, policy,
+		groupedDeployment(ns, "api-blue", "api", "p"), groupedDeployment(ns, "api-green", "api", "p"),
+		cpuHPA(ns, "api-green", 50))
+
+	reconcileOnce(t, r, "p")
+
+	tr := getWLRFor(t, r, ns, "Deployment", "api").Status.Trace["app"]
+	if c, ok := recommender.TracedCoordination(tr.CPU); !ok || c.Overhead != 2.2 {
+		t.Errorf("coordination = %+v (traced %v), want the 110/50 overhead of api-green's HPA", c, ok)
+	}
+	var detected []string
+	for _, e := range drainEvents(r.recorder.(*events.FakeRecorder)) {
+		if strings.Contains(e, "AutoscalerDetected") {
+			detected = append(detected, e)
+		}
+	}
+	if len(detected) != 1 || !strings.Contains(detected[0], "Deployment/api-green") {
+		t.Errorf("AutoscalerDetected events = %v, want one, for api-green", detected)
 	}
 }
 

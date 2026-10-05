@@ -1,0 +1,323 @@
+package recommender
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"slices"
+	"testing"
+	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
+
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/inventory"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+)
+
+// recordedInputs serves canned inputs by identity, fails those in failed,
+// gives every other identity empty inputs, and records each call.
+type recordedInputs struct {
+	inputs map[promclient.WorkloadIdentity]*WorkloadInputs
+	failed map[promclient.WorkloadIdentity]error
+	cfgs   []sustainv1alpha1.ResourcesConfigs
+	calls  [][]InputsRequest
+	// returned is when the last call returned.
+	returned time.Time
+}
+
+func (f *recordedInputs) FetchInputs(_ context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
+	f.cfgs = append(f.cfgs, cfg)
+	f.calls = append(f.calls, slices.Clone(reqs))
+	out := make(map[promclient.WorkloadIdentity]InputsResult, len(reqs))
+	for _, r := range reqs {
+		if err := f.failed[r.Identity]; err != nil {
+			out[r.Identity] = InputsResult{Err: err}
+			continue
+		}
+		in := f.inputs[r.Identity]
+		if in == nil {
+			in = &WorkloadInputs{}
+		}
+		out[r.Identity] = InputsResult{Inputs: in}
+	}
+	f.returned = time.Now()
+	return out
+}
+
+// memberAutoscalers answers every identity of a namespace with its group, and
+// records the members each read named.
+type memberAutoscalers struct {
+	groups map[string]autoscaler.Group
+	err    error
+	asked  map[string][]string
+}
+
+func (f *memberAutoscalers) ForIdentity(_ context.Context, namespace, _ string, members []string) (autoscaler.Group, error) {
+	if f.asked == nil {
+		f.asked = map[string][]string{}
+	}
+	f.asked[namespace] = members
+	if f.err != nil {
+		return autoscaler.Group{Info: autoscaler.Info{Kind: autoscaler.KindNone}}, f.err
+	}
+	if g, ok := f.groups[namespace]; ok {
+		return g, nil
+	}
+	return autoscaler.Group{Info: autoscaler.Info{Kind: autoscaler.KindNone}}, nil
+}
+
+func member(name, policy string) inventory.Member {
+	return inventory.Member{Object: &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name}}, Policy: policy}
+}
+
+// governed is a live identity of Deployment ns/name governed by p, with
+// container app and init container migrate.
+func governed(ns, name string, members ...inventory.Member) *inventory.Identity {
+	if len(members) == 0 {
+		members = []inventory.Member{member(name, "p")}
+	}
+	return &inventory.Identity{
+		Key:            promclient.WorkloadIdentity{Namespace: ns, OwnerKind: "Deployment", OwnerName: name},
+		Members:        members,
+		Policy:         "p",
+		Containers:     containers("app"),
+		InitContainers: containers("migrate"),
+		Since:          old,
+	}
+}
+
+func names(cs []corev1.Container) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Name
+	}
+	return out
+}
+
+var hpa = autoscaler.Info{Kind: autoscaler.KindHPA, Name: "api-green", ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 50}}
+
+// What the assembly makes of one identity: the containers it is recommended
+// for and the fetch is sized by, the autoscaler of the members its Policy
+// governs, its age, and why it has no Request.
+func TestAssemble(t *testing.T) {
+	cases := []struct {
+		name        string
+		spec        sustainv1alpha1.RightSizingSpec
+		id          *inventory.Identity
+		inputs      *recordedInputs
+		autoscalers *memberAutoscalers
+		// wantContainers are the Request's containers and the fetch's size
+		// hint their count.
+		wantContainers []string
+		wantAsked      []string
+		wantAuto       autoscaler.Kind
+		wantErr        bool
+	}{
+		{
+			name:           "init containers are recommended",
+			id:             governed("prod", "api"),
+			wantContainers: []string{"app", "migrate"},
+			wantAsked:      []string{"api"},
+			wantAuto:       autoscaler.KindNone,
+		},
+		{
+			name:           "init containers are left out when the Policy excludes them",
+			spec:           sustainv1alpha1.RightSizingSpec{ExcludeInitContainers: true},
+			id:             governed("prod", "api"),
+			wantContainers: []string{"app"},
+			wantAsked:      []string{"api"},
+			wantAuto:       autoscaler.KindNone,
+		},
+		{
+			name: "the autoscaler is read for every member the Policy governs, not under the identity's name",
+			id: governed("prod", "api",
+				member("api-blue", "p"), member("api-green", "p"), member("api-legacy", "")),
+			autoscalers:    &memberAutoscalers{groups: map[string]autoscaler.Group{"prod": {Info: hpa}}},
+			wantContainers: []string{"app", "migrate"},
+			wantAsked:      []string{"api-blue", "api-green"},
+			wantAuto:       autoscaler.KindHPA,
+		},
+		{
+			name: "a departed identity has no member to read an autoscaler for",
+			id: &inventory.Identity{
+				Key:        promclient.WorkloadIdentity{Namespace: "batch", OwnerKind: "Job", OwnerName: "nightly"},
+				Policy:     "p",
+				Containers: containers("main"),
+			},
+			autoscalers:    &memberAutoscalers{groups: map[string]autoscaler.Group{"batch": {Info: hpa}}},
+			wantContainers: []string{"main"},
+			wantAsked:      nil,
+			wantAuto:       autoscaler.KindNone,
+		},
+		{
+			name:           "a failed autoscaler read leaves the identity uncoordinated",
+			id:             governed("prod", "api"),
+			autoscalers:    &memberAutoscalers{err: errors.New("forbidden")},
+			wantContainers: []string{"app", "migrate"},
+			wantAsked:      []string{"api"},
+			wantAuto:       autoscaler.KindNone,
+		},
+		{
+			name: "an identity whose inputs cannot be read has no Request but keeps its autoscaler",
+			id:   governed("prod", "api"),
+			inputs: &recordedInputs{failed: map[promclient.WorkloadIdentity]error{
+				{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "api"}: errors.New("prometheus down"),
+			}},
+			autoscalers:    &memberAutoscalers{groups: map[string]autoscaler.Group{"prod": {Info: hpa}}},
+			wantContainers: []string{"app", "migrate"},
+			wantAsked:      []string{"api"},
+			wantAuto:       autoscaler.KindHPA,
+			wantErr:        true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.inputs == nil {
+				tc.inputs = &recordedInputs{}
+			}
+			if tc.autoscalers == nil {
+				tc.autoscalers = &memberAutoscalers{}
+			}
+
+			got := Assemble(context.Background(), tc.inputs, tc.autoscalers, tc.spec, []*inventory.Identity{tc.id})[0]
+
+			if call := tc.inputs.calls; len(call) != 1 || len(call[0]) != 1 ||
+				call[0][0] != (InputsRequest{Identity: tc.id.Key, Containers: len(tc.wantContainers)}) {
+				t.Errorf("fetch = %+v, want one request for %v sized %d", call, tc.id.Key, len(tc.wantContainers))
+			}
+			if asked := tc.autoscalers.asked[tc.id.Key.Namespace]; !slices.Equal(asked, tc.wantAsked) {
+				t.Errorf("autoscaler read for %v, want %v", asked, tc.wantAsked)
+			}
+			if got.Autoscaler.Info.Kind != tc.wantAuto {
+				t.Errorf("autoscaler = %s, want %s", got.Autoscaler.Info.Kind, tc.wantAuto)
+			}
+			if tc.wantErr {
+				if got.Err == nil || !reflect.DeepEqual(got.Request, Request{}) {
+					t.Errorf("Err = %v with Request %+v, want the fetch error and no Request", got.Err, got.Request)
+				}
+				return
+			}
+			if got.Err != nil {
+				t.Fatalf("Err = %v", got.Err)
+			}
+			req := got.Request
+			if !slices.Equal(names(req.Containers), tc.wantContainers) {
+				t.Errorf("containers = %v, want %v", names(req.Containers), tc.wantContainers)
+			}
+			if req.AutoInfo.Kind != tc.wantAuto || !req.Since.Equal(tc.id.Since) || req.Inputs == nil {
+				t.Errorf("request = %+v, want the %s autoscaler, the identity's age and its inputs", req, tc.wantAuto)
+			}
+			if req.Now.Before(tc.inputs.returned) {
+				t.Errorf("Now = %v, before the fetch returned at %v", req.Now, tc.inputs.returned)
+			}
+		})
+	}
+}
+
+// Every identity is fetched in one batch, under the Policy's resources with
+// the recommender's defaults made explicit, which is also what each Request
+// computes with.
+func TestAssemble_OneBatchUnderThePolicysResources(t *testing.T) {
+	inputs := &recordedInputs{}
+	spec := sustainv1alpha1.RightSizingSpec{
+		ResourcesConfigs:       sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Window: "24h"}},
+		AutoscalerCoordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true},
+	}
+
+	got := Assemble(context.Background(), inputs, &memberAutoscalers{}, spec,
+		[]*inventory.Identity{governed("prod", "api"), governed("prod", "web"), governed("staging", "db")})
+
+	if len(inputs.calls) != 1 || len(inputs.calls[0]) != 3 {
+		t.Fatalf("fetch calls = %+v, want one batch of three", inputs.calls)
+	}
+	want := WithDefaults(spec.ResourcesConfigs)
+	if !reflect.DeepEqual(inputs.cfgs[0], want) {
+		t.Errorf("fetched under %+v, want %+v", inputs.cfgs[0], want)
+	}
+	for i, a := range got {
+		if !reflect.DeepEqual(a.Request.Resources, want) || !a.Request.Coordination.Enabled {
+			t.Errorf("identity %d computes with %+v, want the fetch's resources and the Policy's coordination", i, a.Request)
+		}
+	}
+	if !got[0].Request.Now.Equal(got[2].Request.Now) {
+		t.Error("one batch must be computed as of one instant")
+	}
+}
+
+// A kept request stays the container's own: the Recommendation has no request
+// for that resource.
+func TestAssemble_KeptRequestIsNotRecommended(t *testing.T) {
+	id := governed("prod", "api")
+	inputs := &recordedInputs{inputs: map[promclient.WorkloadIdentity]*WorkloadInputs{id.Key: {
+		CPUPerPod: promclient.ContainerValues{"app": 0.2},
+		MemPerPod: promclient.ContainerValues{"app": 64 * mib},
+	}}}
+	spec := sustainv1alpha1.RightSizingSpec{ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
+		Memory: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true}},
+	}}
+
+	res := Compute(Assemble(context.Background(), inputs, &memberAutoscalers{}, spec, []*inventory.Identity{id})[0].Request)
+
+	if rec := res.Recs["app"]; rec.CPURequest == nil || rec.MemoryRequest != nil {
+		t.Errorf("app = %+v, want a CPU request and the memory request kept", rec)
+	}
+}
+
+func TestWithDefaults(t *testing.T) {
+	ratio := 1.5
+	cases := []struct {
+		name string
+		in   sustainv1alpha1.ResourceConfig
+		want sustainv1alpha1.ResourceConfig
+	}{
+		{
+			name: "unset",
+			want: sustainv1alpha1.ResourceConfig{
+				Window:   "168h",
+				Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: ptr.To[int32](95), Headroom: ptr.To[int32](0)},
+				Limits:   sustainv1alpha1.ResourceLimitsConfig{KeepLimit: true},
+			},
+		},
+		{
+			name: "set values and a limit strategy are kept",
+			in: sustainv1alpha1.ResourceConfig{
+				Window:   "24h",
+				Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: ptr.To[int32](99), Headroom: ptr.To[int32](10)},
+				Limits:   sustainv1alpha1.ResourceLimitsConfig{RequestsLimitsRatio: &ratio},
+			},
+			want: sustainv1alpha1.ResourceConfig{
+				Window:   "24h",
+				Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: ptr.To[int32](99), Headroom: ptr.To[int32](10)},
+				Limits:   sustainv1alpha1.ResourceLimitsConfig{RequestsLimitsRatio: &ratio},
+			},
+		},
+		{
+			name: "a kept request has no percentile or headroom",
+			in:   sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true}},
+			want: sustainv1alpha1.ResourceConfig{
+				Window:   "168h",
+				Requests: sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true},
+				Limits:   sustainv1alpha1.ResourceLimitsConfig{KeepLimit: true},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := sustainv1alpha1.ResourcesConfigs{CPU: tc.in, Memory: *tc.in.DeepCopy()}
+
+			got := WithDefaults(in)
+
+			if !reflect.DeepEqual(got.CPU, tc.want) || !reflect.DeepEqual(got.Memory, tc.want) {
+				t.Errorf("WithDefaults = %+v, want %+v for both resources", got, tc.want)
+			}
+			if !reflect.DeepEqual(in.CPU, tc.in) {
+				t.Errorf("the input was changed to %+v", in.CPU)
+			}
+		})
+	}
+}

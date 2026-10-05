@@ -209,7 +209,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	live := report.liveMembers()
 	health := r.health.aggregate(policy.Name, live, r.ledger)
 	blocked := health.blocked()
-	r.series.publish(policy.Name, report.publication(health, attempts, policy.Spec.RightSizing.ExcludeInitContainers))
+	r.series.publish(policy.Name, report.publication(health, attempts))
 
 	r.sweepWorkloadRecommendations(ctx, policy.Name, snap)
 

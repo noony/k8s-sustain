@@ -109,6 +109,19 @@ func (id *Identity) MemberPolicies() []string {
 	return out
 }
 
+// Contributors are the members the identity's containers and age come from:
+// those its Policy governs, those any Policy governs when it is Conflicted,
+// every member when none is governed.
+func (id *Identity) Contributors() []Member {
+	switch {
+	case id.Policy != "":
+		return membersWhere(id.Members, func(m Member) bool { return m.Policy == id.Policy })
+	case id.Conflicted:
+		return membersWhere(id.Members, func(m Member) bool { return m.Policy != "" })
+	}
+	return id.Members
+}
+
 // Member is one live object of an identity: a workload object, or a Pod for a
 // bare-pod identity. A finished standalone Job and a CronJob's Jobs are never
 // members.
@@ -390,17 +403,14 @@ func (b *builder) settle(id *Identity) {
 		return
 	}
 
-	policies := id.MemberPolicies()
-	contributors := id.Members
-	switch len(policies) {
+	switch policies := id.MemberPolicies(); len(policies) {
 	case 0:
 	case 1:
 		id.Policy = policies[0]
-		contributors = membersWhere(id.Members, func(m Member) bool { return m.Policy == id.Policy })
 	default:
 		id.Conflicted = true
-		contributors = membersWhere(id.Members, func(m Member) bool { return m.Policy != "" })
 	}
+	contributors := id.Contributors()
 	id.Containers, id.InitContainers = unionContainers(contributors)
 	if id.Recommendation != nil {
 		id.Since = id.Recommendation.CreationTimestamp.Time

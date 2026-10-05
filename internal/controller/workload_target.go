@@ -54,14 +54,6 @@ func (w *workloadTarget) identity() promclient.WorkloadIdentity {
 	return promclient.WorkloadIdentity{Namespace: w.Namespace, OwnerKind: w.IdentityKind, OwnerName: w.IdentityName}
 }
 
-// recommendableContainers returns the containers to feed into the recommendation
-// pipeline plus a set of container names that originate from InitContainers.
-// When excludeInit is true (or the workload has no init containers), the init
-// list is dropped and the returned set is empty.
-func (w *workloadTarget) recommendableContainers(excludeInit bool) ([]corev1.Container, map[string]struct{}) {
-	return workload.MergeContainersForRecommendation(w.Containers, w.InitContainers, excludeInit)
-}
-
 // targetsOf returns the apply targets of an identity policy governs: one per
 // governed member, or one for all governed pods of a bare-pod identity, whose
 // pods are resized together and attributed to the newest.

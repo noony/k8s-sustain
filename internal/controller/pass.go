@@ -14,6 +14,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -45,9 +46,6 @@ type identityReport struct {
 // passIdentity is one identity on the pass's work-list.
 type passIdentity struct {
 	id *inventory.Identity
-	// containers are what the identity is recommended for: its containers,
-	// and its init containers unless the Policy excludes them.
-	containers []corev1.Container
 	// run are the live members to apply to and backedOff those in retry
 	// backoff. The split is taken once, before the fetch: backoff is
 	// time-based and the fetch can take minutes, so asking again at apply
@@ -76,11 +74,9 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 	r.recordConflicted(ctx, policy.Name, snap)
 	work := r.workList(ctx, policy, snap.GovernedBy(policy.Name))
 	claims := r.claim(ctx, policy.Name, work)
-	// One autoscaler snapshot per pass; it lists each namespace once, lazily.
-	autoSnap := autoscaler.NewNamespacedSnapshot(r.Client)
-	recs := r.recommend(ctx, policy, work, autoSnap)
+	recs := r.recommend(ctx, policy, work)
 	stored := r.record(ctx, work, claims, recs)
-	applied := r.apply(ctx, policy, work, recs, stored, autoSnap)
+	applied := r.apply(ctx, policy, work, recs, stored)
 
 	report := make(passReport, len(work))
 	for i, w := range work {
@@ -96,7 +92,7 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 		case recs[i].outcome == outcomeRecommended && stored[i] == nil:
 			rep.held = recs[i].recs
 		default:
-			rep.held = wlrcache.Held(w.id.Recommendation, policy.Name)
+			rep.held = recommendedOf(wlrcache.Held(w.id.Recommendation, policy.Name), recommender.ContainersOf(policy.Spec.RightSizing, w.id))
 		}
 		report[i] = rep
 	}
@@ -107,13 +103,11 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 // taking the backoff split of every live member.
 func (r *PolicyReconciler) workList(ctx context.Context, policy *sustainv1alpha1.Policy, governed []*inventory.Identity) []passIdentity {
 	logger := log.FromContext(ctx)
-	excludeInit := policy.Spec.RightSizing.ExcludeInitContainers
 	work := make([]passIdentity, 0, len(governed))
 	for _, id := range governed {
 		w := passIdentity{id: id}
-		w.containers, _ = workload.MergeContainersForRecommendation(id.Containers, id.InitContainers, excludeInit)
 		if id.Departed() {
-			if len(w.containers) == 0 {
+			if len(id.Containers) == 0 && len(id.InitContainers) == 0 {
 				// Never silent: this state once hid a read-after-write bug that
 				// stranded every new identity.
 				EmitWLRRefresh(id.Key.Namespace, id.Key.OwnerKind, WLRRefreshNoSnapshot)
@@ -273,7 +267,7 @@ func (p passReport) coverage() (requested, resolved, failed int) {
 
 // publication is the series the pass desires, from its report, the health
 // of its live identities and the members the ledger counted as failed.
-func (p passReport) publication(health healthReport, attempts map[promclient.WorkloadIdentity]int, excludeInit bool) publication {
+func (p passReport) publication(health healthReport, attempts map[promclient.WorkloadIdentity]int) publication {
 	pub := publication{blocked: health.blocked(), identities: make([]identitySeries, len(p))}
 	pub.requested, pub.resolved, pub.fetchFailed = p.coverage()
 	for i, rep := range p {
@@ -292,7 +286,7 @@ func (p passReport) publication(health healthReport, attempts map[promclient.Wor
 			pub.live++
 		}
 		for _, res := range rep.members {
-			s.members = append(s.members, memberSeriesOf(res, rep.held, excludeInit))
+			s.members = append(s.members, memberSeriesOf(res, rep.held))
 		}
 		pub.identities[i] = s
 	}
@@ -301,20 +295,32 @@ func (p passReport) publication(health healthReport, attempts map[promclient.Wor
 
 // memberSeriesOf is the Recommendation the member of res holds: held,
 // narrowed to the containers it declares.
-func memberSeriesOf(res applyResult, held map[string]workload.ContainerRecommendation, excludeInit bool) memberSeries {
+func memberSeriesOf(res applyResult, held map[string]workload.ContainerRecommendation) memberSeries {
 	t := res.member
 	m := memberSeries{kind: t.Kind, name: t.Name, suppressed: res.suppressed}
-	containers, initNames := t.recommendableContainers(excludeInit)
-	for _, c := range containers {
+	for i, c := range slices.Concat(t.Containers, t.InitContainers) {
 		rec, ok := held[c.Name]
 		if !ok {
 			continue
 		}
 		kind := containerKindRegular
-		if _, init := initNames[c.Name]; init {
+		if i >= len(t.Containers) {
 			kind = containerKindInit
 		}
 		m.containers = append(m.containers, containerSeries{name: c.Name, kind: kind, rec: rec, template: c.Resources.Requests})
 	}
 	return m
+}
+
+// recommendedOf is held narrowed to the containers the identity is
+// recommended for: a Recommendation kept from before its Policy excluded init
+// containers still names them.
+func recommendedOf(held map[string]workload.ContainerRecommendation, containers []corev1.Container) map[string]workload.ContainerRecommendation {
+	out := make(map[string]workload.ContainerRecommendation, len(held))
+	for _, c := range containers {
+		if rec, ok := held[c.Name]; ok {
+			out[c.Name] = rec
+		}
+	}
+	return out
 }

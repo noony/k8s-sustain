@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"slices"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -10,7 +9,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -42,6 +41,9 @@ type recommendation struct {
 	traces map[string]sustainv1alpha1.ContainerTrace
 	// inputs is what the identity was computed from, nil unless fetched.
 	inputs *recommender.WorkloadInputs
+	// autoscalers is what targets each of the identity's members, read for
+	// every identity the pass fetched.
+	autoscalers autoscaler.Group
 	// err is why the inputs are unavailable, set only for outcomeFetchFailed.
 	err error
 	computed
@@ -90,45 +92,35 @@ func (rec recommendation) decision(departed bool) (wlrcache.Decision, bool) {
 
 // recommend is the recommendation pass: one verdict per identity on the
 // work-list, in its order. An identity whose live members are all in retry
-// backoff is not fetched; every other identity is fetched in one batch call
-// and then computed, in parallel, before anything is written or applied.
-func (r *PolicyReconciler) recommend(
-	ctx context.Context,
-	policy *sustainv1alpha1.Policy,
-	work []passIdentity,
-	autoSnap *autoscaler.NamespacedSnapshot,
-) []recommendation {
+// backoff is not fetched; every other identity is assembled in one batch
+// (recommender.Assemble) and then computed, in parallel, before anything is
+// written or applied.
+func (r *PolicyReconciler) recommend(ctx context.Context, policy *sustainv1alpha1.Policy, work []passIdentity) []recommendation {
 	out := make([]recommendation, len(work))
-	reqs := make([]recommender.InputsRequest, 0, len(work))
+	var ids []*inventory.Identity
+	var at []int
 	for i, w := range work {
 		if !w.fetched() {
 			out[i].outcome = outcomeNotFetched
 			continue
 		}
-		reqs = append(reqs, recommender.InputsRequest{
-			Identity:   w.id.Key,
-			Containers: len(w.containers),
-		})
+		ids = append(ids, w.id)
+		at = append(at, i)
 	}
 
-	fetched := r.Inputs.FetchInputs(ctx, policy.Spec.RightSizing.ResourcesConfigs, reqs)
-	// Taken after the fetch, which can take minutes: kills it merged in must
-	// not postdate the instant they are computed as of.
-	now := time.Now()
+	// One autoscaler snapshot per pass; it lists each namespace once, lazily.
+	assembled := recommender.Assemble(ctx, r.Inputs, autoscaler.NewNamespacedSnapshot(r.Client), policy.Spec.RightSizing, ids)
 
 	var g errgroup.Group
 	g.SetLimit(r.WorkloadConcurrencyLimit)
-	for i, w := range work {
-		if !w.fetched() {
-			continue
-		}
-		f := fetched[w.id.Key]
-		if f.Err != nil {
-			out[i] = recommendation{outcome: outcomeFetchFailed, err: f.Err}
+	for k, a := range assembled {
+		i := at[k]
+		if a.Err != nil {
+			out[i] = recommendation{outcome: outcomeFetchFailed, autoscalers: a.Autoscaler, err: a.Err}
 			continue
 		}
 		g.Go(func() error {
-			out[i] = r.computeIdentity(ctx, policy, w, f.Inputs, autoSnap, now)
+			out[i] = computeIdentity(ctx, ids[k], a)
 			return nil
 		})
 	}
@@ -136,82 +128,43 @@ func (r *PolicyReconciler) recommend(
 	return out
 }
 
-// computeIdentity computes one fetched identity's verdict as of now. It runs
-// once per identity, never per member: members share one Prometheus series
-// and one WorkloadRecommendation, so per-member computation produced
-// competing answers.
-func (r *PolicyReconciler) computeIdentity(
-	ctx context.Context,
-	policy *sustainv1alpha1.Policy,
-	w passIdentity,
-	inputs *recommender.WorkloadInputs,
-	autoSnap *autoscaler.NamespacedSnapshot,
-	now time.Time,
-) recommendation {
-	id := w.id.Key
-	rs := policy.Spec.RightSizing
-
-	// A departed identity has nothing for an autoscaler to scale.
-	autoInfo := autoscaler.Info{Kind: autoscaler.KindNone}
-	mismatch := false
-	if !w.id.Departed() {
-		autoInfo, mismatch = r.groupAutoscalerInfo(ctx, id, slices.Concat(w.run, w.backedOff), autoSnap)
+// computeIdentity computes one assembled identity's verdict. It runs once per
+// identity, never per member: members share one Prometheus series and one
+// WorkloadRecommendation, so per-member computation produced competing
+// answers.
+func computeIdentity(ctx context.Context, id *inventory.Identity, a recommender.Assembled) recommendation {
+	key := id.Key
+	// A departed identity's Group holds no autoscaler: no member is left to scale.
+	info := a.Autoscaler.Info
+	res := recommendation{
+		inputs:      a.Request.Inputs,
+		autoscalers: a.Autoscaler,
+		computed:    computed{autoscaler: &info, mismatch: len(a.Autoscaler.Disagreeing) > 0},
 	}
-	out := recommender.Compute(recommender.Request{
-		Containers:   w.containers,
-		Resources:    rs.ResourcesConfigs,
-		Coordination: rs.AutoscalerCoordination,
-		AutoInfo:     autoInfo,
-		Inputs:       inputs,
-		Since:        w.id.Since,
-		Now:          now,
-	})
-	res := recommendation{inputs: inputs, computed: computed{autoscaler: &autoInfo, mismatch: mismatch}}
+	if res.mismatch {
+		log.FromContext(ctx).V(1).Info("owner-name group members disagree on autoscaler state; "+
+			"the shared recommendation is shaped by the first member by name that HAS an autoscaler",
+			"namespace", key.Namespace, "ownerKind", key.OwnerKind, "ownerName", key.OwnerName,
+			"governingAutoscaler", info.Kind, "disagreeing", a.Autoscaler.Disagreeing)
+	}
+	out := recommender.Compute(a.Request)
 	switch out.Outcome {
 	case recommender.TooYoung:
 		res.outcome = outcomeTooYoung
 		log.FromContext(ctx).Info("skipping recommendation: workload too young",
-			"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
-			"age", recommender.AgeForLog(w.id.Since, now), "minAge", recommender.MinWorkloadAge)
+			"kind", key.OwnerKind, "name", key.OwnerName, "namespace", key.Namespace,
+			"age", recommender.AgeForLog(id.Since, a.Request.Now), "minAge", recommender.MinWorkloadAge)
 	case recommender.NoData:
 		res.outcome = outcomeNoData
 	default:
 		res.outcome = outcomeRecommended
 		res.recs = out.Recs
 		res.traces = out.Traces
-		res.oomFloors = oomFloorsOf(out.Traces, now)
+		res.oomFloors = oomFloorsOf(out.Traces, a.Request.Now)
 	}
 	return res
 }
 
-// groupAutoscalerInfo resolves the autoscaler an identity's recommendation is
-// shaped against from its members' (autoscaler.Group), and reports a
-// mixed-autoscaler group, since the one shared recommendation is injected into
-// every member's pods.
-func (r *PolicyReconciler) groupAutoscalerInfo(
-	ctx context.Context,
-	identity promclient.WorkloadIdentity,
-	targets []*workloadTarget,
-	autoSnap *autoscaler.NamespacedSnapshot,
-) (autoscaler.Info, bool) {
-	logger := log.FromContext(ctx)
-	names := make([]string, len(targets))
-	for i, t := range targets {
-		names[i] = t.Name
-	}
-	g, err := autoSnap.ForIdentity(ctx, identity.Namespace, identity.OwnerKind, names)
-	if err != nil {
-		logger.Error(err, "autoscaler detection failed, proceeding without it",
-			"kind", identity.OwnerKind, "name", identity.OwnerName, "namespace", identity.Namespace)
-	}
-	if len(g.Disagreeing) > 0 {
-		logger.V(1).Info("owner-name group members disagree on autoscaler state; "+
-			"the shared recommendation is shaped by the first member by name that HAS an autoscaler",
-			"namespace", identity.Namespace, "ownerKind", identity.OwnerKind, "ownerName", identity.OwnerName,
-			"governingAutoscaler", g.Info.Kind, "disagreeing", g.Disagreeing)
-	}
-	return g.Info, len(g.Disagreeing) > 0
-}
 
 // oomFloorsOf reads, from the OOM floor stage of each container's trace,
 // the containers whose memory request the floor determined as of now.

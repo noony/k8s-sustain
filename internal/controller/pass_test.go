@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -96,45 +95,6 @@ func TestReconcile_AdoptedRecommendationIsComputedByTheAdoptingPolicy(t *testing
 	}
 	if cpu := got.Status.Containers["app"].CPURequest; cpu == nil || cpu.String() != "100m" {
 		t.Errorf("stored CPU = %v, want the adopting Policy's 100m", cpu)
-	}
-}
-
-// A Policy excluding init containers recommends, and sizes the fetch for, its
-// regular containers only.
-func TestReconcile_ExcludedInitContainersAreNotRecommended(t *testing.T) {
-	for _, tc := range []struct {
-		exclude bool
-		want    []string
-	}{
-		{true, []string{"app"}},
-		{false, []string{"app", "migrate"}},
-	} {
-		t.Run(map[bool]string{true: "excluded", false: "included"}[tc.exclude], func(t *testing.T) {
-			const ns = "init-containers"
-			policy := ongoingDeployments("p")
-			policy.Spec.RightSizing.ExcludeInitContainers = tc.exclude
-			dep := establishedDeployment(ns, "web", "p")
-			dep.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "migrate"}}
-			inputs := recommendertest.NewStaticInputs().Set(identityOf(ns, "Deployment", "web"), &recommender.WorkloadInputs{
-				CPUPerPod: promclient.ContainerValues{"app": 0.1, "migrate": 0.2},
-				MemPerPod: promclient.ContainerValues{"app": 64 << 20, "migrate": 64 << 20},
-			})
-			r := reconcilerWithInputs(t, inputs, true, policy, dep)
-
-			reconcileOnce(t, r, "p")
-
-			if calls := inputs.Calls(); len(calls) != 1 || len(calls[0]) != 1 || calls[0][0].Containers != len(tc.want) {
-				t.Errorf("fetch calls = %v, want one request sized %d", calls, len(tc.want))
-			}
-			var got []string
-			for name := range getWLRFor(t, r, ns, "Deployment", "web").Status.Containers {
-				got = append(got, name)
-			}
-			slices.Sort(got)
-			if !slices.Equal(got, tc.want) {
-				t.Errorf("recommended containers = %v, want %v", got, tc.want)
-			}
-		})
 	}
 }
 

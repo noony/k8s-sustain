@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
@@ -29,7 +30,6 @@ func (r *PolicyReconciler) apply(
 	work []passIdentity,
 	recs []recommendation,
 	stored []error,
-	autoSnap *autoscaler.NamespacedSnapshot,
 ) [][]applyResult {
 	logger := log.FromContext(ctx)
 	out := make([][]applyResult, len(work))
@@ -54,7 +54,7 @@ func (r *PolicyReconciler) apply(
 		}
 		for j, t := range w.run {
 			g.Go(func() error {
-				run[j] = r.reconcileWorkload(ctx, policy, t, autoSnap, recs[i].recs, recs[i].err)
+				run[j] = r.reconcileWorkload(ctx, policy, t, recs[i])
 				return nil
 			})
 		}
@@ -69,57 +69,42 @@ func (r *PolicyReconciler) apply(
 // recommendation pass and its record did both, once for the identity, before any
 // member reached this function.
 //
-// recs is that shared recommendation, covering the union of the identity's
-// members' containers; this function narrows it to the containers this member
-// actually runs. computeErr is the identity's fetch failure, reported as each
+// rec is the identity's verdict: its Recommendation covers the union of the
+// identity's members' containers, and this function narrows it to the
+// containers this member actually runs. Its fetch failure is reported as each
 // member's failed prometheus step, because retry state is kept per real
 // workload object.
 func (r *PolicyReconciler) reconcileWorkload(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
 	t *workloadTarget,
-	autoSnap *autoscaler.NamespacedSnapshot,
-	recs map[string]workload.ContainerRecommendation,
-	computeErr error,
+	rec recommendation,
 ) applyResult {
 	// Early bail-out if the parent reconcile context has already been cancelled
 	// (typically a manager shutdown mid-batch). Without this, queued workers
-	// still kick off autoscaler detection + Prometheus queries that will
-	// each fail through their own timeout path, slowing graceful shutdown.
+	// still start pod reads and writes that will each fail through their own
+	// timeout path, slowing graceful shutdown.
 	if ctx.Err() != nil {
 		return applyResult{member: t, kind: applySkipped}
 	}
 
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
-	excludeInit := policy.Spec.RightSizing.ExcludeInitContainers
 	tol := buildTolerance(policy.Spec.RightSizing.ResourcesConfigs)
-	containers, _ := t.recommendableContainers(excludeInit)
-	logger.V(1).Info("reconciling workload",
-		"containers", len(t.Containers),
-		"initContainers", len(t.InitContainers),
-		"excludeInitContainers", excludeInit,
-		"recommending", len(containers))
+	logger.V(1).Info("reconciling workload", "containers", len(t.Containers), "initContainers", len(t.InitContainers))
 
-	// Only for the member's event: the identity's autoscaler series follow the
-	// autoscaler computeIdentity shaped the recommendation with.
-	autoInfo, autoErr := autoSnap.Lookup(ctx, t.Namespace, t.Kind, t.Name)
-	if autoErr != nil {
-		logger.Error(autoErr, "autoscaler detection failed, proceeding without it")
-		autoInfo = autoscaler.Info{Kind: autoscaler.KindNone}
-	}
-	if autoInfo.Kind != autoscaler.KindNone {
+	if info, ok := rec.autoscalers.Members[t.Name]; ok && info.Kind != autoscaler.KindNone {
 		r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "AutoscalerDetected", "AutoscalerDetected",
 			"%s %s detected targeting %s/%s (replicas %d–%d)",
-			autoInfo.Kind, autoInfo.Name, t.Kind, t.Name, autoInfo.MinReplicas, autoInfo.MaxReplicas)
+			info.Kind, info.Name, t.Kind, t.Name, info.MinReplicas, info.MaxReplicas)
 	}
 
-	if computeErr != nil {
-		return applyResult{member: t, kind: applyFailed, phase: phasePrometheus, err: computeErr}
+	if rec.err != nil {
+		return applyResult{member: t, kind: applyFailed, phase: phasePrometheus, err: rec.err}
 	}
 
-	// The identity's recommendation covers the union of its members'
-	// containers; this member applies only the subset it declares.
-	recs = workload.Inject(t.Containers, t.InitContainers, excludeInit, recs).Recs
+	// The Policy's excludeInitContainers was applied to the identity: rec
+	// never names an init container it excludes.
+	recs := workload.Inject(t.Containers, t.InitContainers, false, rec.recs).Recs
 	if len(recs) == 0 {
 		logger.V(1).Info("no recommendations available yet (no Prometheus data)")
 		return applyResult{member: t, kind: applyIdle}
@@ -165,7 +150,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 		logger.V(1).Info("no pod resized or evicted, no event emitted")
 		return done
 	}
-	changed := changedContainers(containers, recs, tol)
+	changed := changedContainers(slices.Concat(t.Containers, t.InitContainers), recs, tol)
 	if len(changed) == 0 {
 		return done
 	}
