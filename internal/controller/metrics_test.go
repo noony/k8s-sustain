@@ -101,8 +101,8 @@ func seedMetricsForRegistrationCheck() {
 		name   = "metrics-registration-probe-workload"
 		policy = "metrics-registration-probe-policy"
 	)
-	recommendedCPUCores.WithLabelValues(ns, "Deployment", name, "c", ContainerKindRegular, policy).Set(0)
-	recommendedMemoryBytes.WithLabelValues(ns, "Deployment", name, "c", ContainerKindRegular, policy).Set(0)
+	recommendedCPUCores.WithLabelValues(ns, "Deployment", name, "c", containerKindRegular, policy).Set(0)
+	recommendedMemoryBytes.WithLabelValues(ns, "Deployment", name, "c", containerKindRegular, policy).Set(0)
 	workloadPods.WithLabelValues(ns, "Deployment", name).Set(0)
 	workloadStalePods.WithLabelValues(ns, "Deployment", name).Set(0)
 	workloadRetryState.WithLabelValues(ns, "Deployment", name, "test").Set(0)

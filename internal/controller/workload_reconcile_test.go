@@ -60,12 +60,15 @@ func TestReconcile_RecommendOnlyStoresButTouchesNoPod(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const ns = "recommend-only"
-			EmitWorkloadPods(testIdentity(ns, "Deployment", "web"), workload.PodCounts{Total: 3, Stale: 3})
 			policy := ongoingDeployments("p")
 			policy.Spec.RightSizing.RecommendOnly = tc.field
 			r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
 				policy, establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web"))
 			r.RecommendOnly = tc.flag
+			r.series.publish("p", publication{identities: []identitySeries{{
+				key:    identityOf(ns, "Deployment", "web"),
+				health: healthState{pods: workload.PodCounts{Total: 3, Stale: 3}, measured: true},
+			}}})
 
 			reconcileOnce(t, r, "p")
 
@@ -75,7 +78,7 @@ func TestReconcile_RecommendOnlyStoresButTouchesNoPod(t *testing.T) {
 			if cpu := getWLRFor(t, r, ns, "Deployment", "web").Status.Containers["app"].CPURequest; cpu == nil || cpu.String() != "100m" {
 				t.Errorf("stored CPU = %v, want the 100m Recommendation", cpu)
 			}
-			if workloadStalePods.DeleteLabelValues(ns, "Deployment", "web") {
+			if got := len(seriesForWorkload(t, "k8s_sustain_workload_stale_pods", ns, "Deployment", "web")); got != 0 {
 				t.Error("recommend-only must delete the stale-pods series")
 			}
 		})

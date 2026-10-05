@@ -105,8 +105,31 @@ func runStart(_ *cobra.Command, _ []string) error {
 		log.Error(err, "Unable to start OOM cache sweeper")
 		return err
 	}
+
+	// Zero means the default budget here, not NewPromInputs' one identity per
+	// shard, which would multiply the query count by the identity count.
+	shardMaxSamples := cfg.QueryShardMaxSamples
+	if shardMaxSamples <= 0 {
+		shardMaxSamples = config.DefaultQueryShardMaxSamples
+	}
+
+	reconciler := &controller.PolicyReconciler{
+		Client:                    mgr.GetClient(),
+		Scheme:                    mgr.GetScheme(),
+		Inputs:                    recommender.WithLiveOOMs(recommender.NewPromInputs(promClient, shardMaxSamples), oomCache, time.Now),
+		ReconcileInterval:         cfg.ReconcileInterval,
+		InPlaceUpdates:            inPlaceUpdates,
+		ExcludedNamespaces:        cfg.ExcludedNamespaces,
+		RecommendOnly:             cfg.RecommendOnly,
+		WorkloadConcurrencyLimit:  cfg.WorkloadConcurrencyLimit,
+		PolicyConcurrencyLimit:    cfg.PolicyConcurrencyLimit,
+		RecycleReplacementTimeout: cfg.RecycleReplacementTimeout,
+		RecommendationRetention:   cfg.RecommendationRetention,
+		OOMTriggers:               triggerCh,
+	}
 	oomHandler := oomwatch.EventHandlerFunc(func(ctx context.Context, key oomwatch.Key, rec oomwatch.OOMRecord) {
-		controller.EmitOOMObserved(key.Namespace, key.OwnerKind, key.OwnerName, key.Container)
+		reconciler.ObserveOOM(rec.PolicyName,
+			promclient.WorkloadIdentity{Namespace: key.Namespace, OwnerKind: key.OwnerKind, OwnerName: key.OwnerName}, key.Container)
 		select {
 		case triggerCh <- event.GenericEvent{Object: &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: rec.PolicyName}}}:
 		default:
@@ -122,28 +145,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		log.Error(err, "Unable to create OOM watcher")
 		return err
 	}
-
-	// Zero means the default budget here, not NewPromInputs' one identity per
-	// shard, which would multiply the query count by the identity count.
-	shardMaxSamples := cfg.QueryShardMaxSamples
-	if shardMaxSamples <= 0 {
-		shardMaxSamples = config.DefaultQueryShardMaxSamples
-	}
-
-	if err := (&controller.PolicyReconciler{
-		Client:                    mgr.GetClient(),
-		Scheme:                    mgr.GetScheme(),
-		Inputs:                    recommender.WithLiveOOMs(recommender.NewPromInputs(promClient, shardMaxSamples), oomCache, time.Now),
-		ReconcileInterval:         cfg.ReconcileInterval,
-		InPlaceUpdates:            inPlaceUpdates,
-		ExcludedNamespaces:        cfg.ExcludedNamespaces,
-		RecommendOnly:             cfg.RecommendOnly,
-		WorkloadConcurrencyLimit:  cfg.WorkloadConcurrencyLimit,
-		PolicyConcurrencyLimit:    cfg.PolicyConcurrencyLimit,
-		RecycleReplacementTimeout: cfg.RecycleReplacementTimeout,
-		RecommendationRetention:   cfg.RecommendationRetention,
-		OOMTriggers:               triggerCh,
-	}).SetupWithManager(mgr); err != nil {
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "Unable to create Policy controller")
 		return err
 	}

@@ -93,7 +93,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 	excludeInit := policy.Spec.RightSizing.ExcludeInitContainers
 	tol := buildTolerance(policy.Spec.RightSizing.ResourcesConfigs)
-	containers, initNames := t.recommendableContainers(excludeInit)
+	containers, _ := t.recommendableContainers(excludeInit)
 	logger.V(1).Info("reconciling workload",
 		"containers", len(t.Containers),
 		"initContainers", len(t.InitContainers),
@@ -128,8 +128,6 @@ func (r *PolicyReconciler) reconcileWorkload(
 	logger.Info("computed recommendations", "containers", len(recs))
 	logger.V(1).Info("recommendation details", "recommendations", recs)
 
-	emitWorkloadFromRecs(t, policy.Name, recs, initNames)
-
 	if policy.EffectiveRecommendOnly(r.RecommendOnly) {
 		source := "policy"
 		if r.RecommendOnly {
@@ -146,21 +144,18 @@ func (r *PolicyReconciler) reconcileWorkload(
 		Tolerance:         tol,
 		IgnoreSafeToEvict: policy.Spec.RightSizing.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations,
 	})
-	for resource, n := range out.Suppressed {
-		EmitRecycleSuppressed(t.identity(), resource, n)
-	}
 	if err != nil {
 		switch {
 		case t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate:
 			logger.Info("OnCreate stale-pod count failed, pod counts left unchanged", "error", err.Error())
-			return applyResult{member: t, kind: applyUncounted}
+			return applyResult{member: t, kind: applyUncounted, suppressed: out.Suppressed}
 		case out.InPlaceOnly:
-			return applyResult{member: t, kind: applyFailed, phase: phaseResize, err: err}
+			return applyResult{member: t, kind: applyFailed, phase: phaseResize, err: err, suppressed: out.Suppressed}
 		default:
-			return applyResult{member: t, kind: applyFailed, phase: phasePatch, err: err}
+			return applyResult{member: t, kind: applyFailed, phase: phasePatch, err: err, suppressed: out.Suppressed}
 		}
 	}
-	done := applyResult{member: t, kind: applyDone, pods: out.Pods}
+	done := applyResult{member: t, kind: applyDone, pods: out.Pods, suppressed: out.Suppressed}
 
 	// The pod template is never patched, so it differs from the recommendation
 	// on every reconcile: only the patcher's count says whether anything

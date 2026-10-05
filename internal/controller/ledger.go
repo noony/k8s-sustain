@@ -67,6 +67,9 @@ type applyResult struct {
 	// phase and err are the step that failed and why, set for applyFailed.
 	phase string
 	err   error
+	// suppressed counts, per resource, the member's pods on which the
+	// downsize threshold held back a decrease.
+	suppressed map[string]int
 }
 
 // ledgerEvent is the Warning a recorded failure calls for on the member.
@@ -75,15 +78,14 @@ type ledgerEvent struct {
 	message string
 }
 
-// memberHealth is what the ledger holds on one member for its identity's
-// health series.
-type memberHealth struct {
-	// pods is the member's counts from its last measured pass; measured is
-	// false when there are none.
+// healthState is what the ledger holds on one member for its identity's
+// health series, or an identity's, aggregated over its members.
+type healthState struct {
+	// pods is the counts from the last measured pass; measured is false when
+	// there are none.
 	pods     workload.PodCounts
 	measured bool
-	// blockedOn is the step the member keeps failing on, empty unless it is
-	// Blocked.
+	// blockedOn is the step it keeps failing on, empty unless it is Blocked.
 	blockedOn string
 }
 
@@ -203,14 +205,14 @@ func (l *ledger) failLocked(key string, res applyResult) *ledgerEvent {
 }
 
 // health is what the ledger holds on member for its identity's series.
-func (l *ledger) health(member string) memberHealth {
+func (l *ledger) health(member string) healthState {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e := l.members[member]
 	if e == nil {
-		return memberHealth{}
+		return healthState{}
 	}
-	h := memberHealth{pods: e.pods, measured: e.measured}
+	h := healthState{pods: e.pods, measured: e.measured}
 	if e.failure != nil {
 		h.blockedOn = e.failure.phase
 	}

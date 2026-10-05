@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -90,6 +88,13 @@ type PolicyReconciler struct {
 	ledger   *ledger
 
 	health healthTracker
+	series publisher
+}
+
+// ObserveOOM counts an OOM kill of container in a pod of id that policy
+// governs, among the identity's other series.
+func (r *PolicyReconciler) ObserveOOM(policy string, id promclient.WorkloadIdentity, container string) {
+	r.series.observedOOM(policy, id, container)
 }
 
 // SetupWithManager registers the PolicyReconciler with the given manager.
@@ -169,7 +174,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				return ctrl.Result{}, err
 			}
 			// Ordered after cleanup so a retried deletion re-emits nothing.
-			DeletePolicyMetrics(policy.Name)
+			r.series.forget(policy.Name)
 			r.health.forget(policy.Name, r.ledger)
 			r.recorder.Eventf(policy, nil, corev1.EventTypeNormal, "Cleanup", "Cleanup", "Policy deleted, removing finalizer.")
 			controllerutil.RemoveFinalizer(policy, finalizerName)
@@ -187,9 +192,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	timer := prometheus.NewTimer(reconcileDuration.WithLabelValues(policy.Name))
-	defer timer.ObserveDuration()
-
+	start := time.Now()
 	logger.Info("starting reconcile cycle")
 
 	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, r.ExcludedNamespaces)
@@ -197,18 +200,16 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		logger.Error(listErr, "failed to list workloads")
 		_ = r.failCondition(ctx, policy, "ListFailed", listErr)
 		r.recorder.Eventf(policy, nil, corev1.EventTypeWarning, "ListFailed", "ListFailed", "%s", listErr.Error())
-		reconcileTotal.WithLabelValues(policy.Name, "error").Inc()
+		r.series.reconciled(policy.Name, "error", time.Since(start))
 		return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
 	}
 
 	report := r.runPass(ctx, policy, snap)
-	failed := r.settle(ctx, report)
+	failed, attempts := r.settle(ctx, report)
 	live := report.liveMembers()
-	blocked := r.health.emit(policy.Name, live, r.ledger)
-	EmitPolicyRollup(policy.Name, len(live), blocked)
-	requested, resolved, fetchFailures := report.coverage()
-	EmitPolicyBatchCoverage(policy.Name, requested, resolved)
-	EmitPolicyBatchFailures(policy.Name, fetchFailures)
+	health := r.health.aggregate(policy.Name, live, r.ledger)
+	blocked := health.blocked()
+	r.series.publish(policy.Name, report.publication(health, attempts, policy.Spec.RightSizing.ExcludeInitContainers))
 
 	r.sweepWorkloadRecommendations(ctx, policy.Name, snap)
 
@@ -228,17 +229,19 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		eventType, result = corev1.EventTypeWarning, "error"
 	}
 	r.recorder.Eventf(policy, nil, eventType, cond.Reason, cond.Reason, "%s", cond.Message)
-	reconcileTotal.WithLabelValues(policy.Name, result).Inc()
+	r.series.reconciled(policy.Name, result, time.Since(start))
 
 	return ctrl.Result{RequeueAfter: r.requeueAfter(live)}, nil
 }
 
-// settle hands every member's result in report to the ledger, emits the
-// events and retry attempts it calls for, and returns how many identities
-// failed this pass: a departed one whose decision could not be made or
-// stored, or a live one with a member the ledger counts as failed.
-func (r *PolicyReconciler) settle(ctx context.Context, report passReport) (failed int) {
+// settle hands every member's result in report to the ledger and emits the
+// events it calls for. It returns how many identities failed this pass: a
+// departed one whose decision could not be made or stored, or a live one with
+// a member the ledger counts as failed; and, per identity, how many of its
+// members the ledger counts as failed.
+func (r *PolicyReconciler) settle(ctx context.Context, report passReport) (failed int, attempts map[promclient.WorkloadIdentity]int) {
 	logger := log.FromContext(ctx)
+	attempts = make(map[promclient.WorkloadIdentity]int)
 	for _, rep := range report {
 		identityFailed := rep.err != nil
 		for _, res := range rep.members {
@@ -247,8 +250,8 @@ func (r *PolicyReconciler) settle(ctx context.Context, report passReport) (faile
 				continue
 			}
 			identityFailed = true
+			attempts[rep.key]++
 			t := res.member
-			IncrementRetryAttempt(t.identity())
 			logger.Error(res.err, "applying the recommendation failed",
 				"kind", t.Kind, "name", t.Name, "namespace", t.Namespace, "phase", res.phase)
 			if ev != nil {
@@ -259,7 +262,7 @@ func (r *PolicyReconciler) settle(ctx context.Context, report passReport) (faile
 			failed++
 		}
 	}
-	return failed
+	return failed, attempts
 }
 
 // passCondition is the Ready condition a pass leaves: True only when no

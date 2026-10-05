@@ -35,6 +35,11 @@ type identityReport struct {
 	err error
 	// members is one result per live member, backed-off ones included.
 	members []applyResult
+	// held is the Recommendation a live identity holds for the Policy after
+	// the pass: the one it recorded, or else the one its
+	// WorkloadRecommendation kept from the Policy's last computation.
+	held map[string]workload.ContainerRecommendation
+	computed
 }
 
 // passIdentity is one identity on the pass's work-list.
@@ -79,12 +84,19 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 
 	report := make(passReport, len(work))
 	for i, w := range work {
-		rep := identityReport{key: w.id.Key, departed: w.id.Departed(), outcome: recs[i].outcome, members: applied[i]}
+		rep := identityReport{
+			key: w.id.Key, departed: w.id.Departed(), outcome: recs[i].outcome, members: applied[i], computed: recs[i].computed,
+		}
 		if in := recs[i].inputs; in != nil {
 			rep.resolved = len(in.CPUPerPod) > 0 || len(in.MemPerPod) > 0
 		}
-		if rep.departed {
+		switch {
+		case rep.departed:
 			rep.err = errors.Join(recs[i].err, stored[i])
+		case recs[i].outcome == outcomeRecommended && stored[i] == nil:
+			rep.held = recs[i].recs
+		default:
+			rep.held = wlrcache.Held(w.id.Recommendation, policy.Name)
 		}
 		report[i] = rep
 	}
@@ -257,4 +269,52 @@ func (p passReport) coverage() (requested, resolved, failed int) {
 		requested++
 	}
 	return requested, resolved, failed
+}
+
+// publication is the series the pass desires, from its report, the health
+// of its live identities and the members the ledger counted as failed.
+func (p passReport) publication(health healthReport, attempts map[promclient.WorkloadIdentity]int, excludeInit bool) publication {
+	pub := publication{blocked: health.blocked(), identities: make([]identitySeries, len(p))}
+	pub.requested, pub.resolved, pub.fetchFailed = p.coverage()
+	for i, rep := range p {
+		s := identitySeries{
+			key:      rep.key,
+			health:   health[rep.key],
+			computed: rep.computed,
+			attempts: attempts[rep.key],
+			tooYoung: rep.outcome == outcomeTooYoung,
+		}
+		if rep.departed {
+			// Even when its fetch failed: no member is left for an
+			// autoscaler to scale.
+			s.autoscaler = &autoscaler.Info{Kind: autoscaler.KindNone}
+		} else {
+			pub.live++
+		}
+		for _, res := range rep.members {
+			s.members = append(s.members, memberSeriesOf(res, rep.held, excludeInit))
+		}
+		pub.identities[i] = s
+	}
+	return pub
+}
+
+// memberSeriesOf is the Recommendation the member of res holds: held,
+// narrowed to the containers it declares.
+func memberSeriesOf(res applyResult, held map[string]workload.ContainerRecommendation, excludeInit bool) memberSeries {
+	t := res.member
+	m := memberSeries{kind: t.Kind, name: t.Name, suppressed: res.suppressed}
+	containers, initNames := t.recommendableContainers(excludeInit)
+	for _, c := range containers {
+		rec, ok := held[c.Name]
+		if !ok {
+			continue
+		}
+		kind := containerKindRegular
+		if _, init := initNames[c.Name]; init {
+			kind = containerKindInit
+		}
+		m.containers = append(m.containers, containerSeries{name: c.Name, kind: kind, rec: rec, template: c.Resources.Requests})
+	}
+	return m
 }

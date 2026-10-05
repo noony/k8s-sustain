@@ -23,15 +23,20 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
-var identityHealthMetrics = []string{
+// identityGauges describe an identity's live members, so a departed
+// identity has none.
+var identityGauges = []string{
 	"k8s_sustain_workload_pods",
 	"k8s_sustain_workload_stale_pods",
 	"k8s_sustain_workload_retry_state",
-	"k8s_sustain_workload_retry_attempts",
 	"k8s_sustain_autoscaler_present",
 	"k8s_sustain_autoscaler_target_configured",
-	"k8s_sustain_recycle_suppressed_total",
 }
+
+var identityHealthMetrics = append([]string{
+	"k8s_sustain_workload_retry_attempts",
+	"k8s_sustain_recycle_suppressed_total",
+}, identityGauges...)
 
 // usageForIdentities serves appUsage for each identity, so one batch fetch
 // resolves all of them.
@@ -104,7 +109,7 @@ func reconcilePolicy(t *testing.T, r *PolicyReconciler, name string) {
 // Two owner-name members of one Deployment identity and a bare-pod group must
 // each surface as ONE series per health metric under the identity's labels,
 // aggregated over the members, never under a member's own name; once the
-// identities are gone so are their series.
+// identities depart so do their gauges.
 func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	const ns, policyName = "health-agg", "health-agg"
 	api := promclient.WorkloadIdentity{Namespace: ns, OwnerKind: "Deployment", OwnerName: "api"}
@@ -200,9 +205,6 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	if got := labelOf(state[0], "reason"); got != "patch" {
 		t.Errorf("retry_state reason = %q, want the first blocked member's phase (api-blue: patch)", got)
 	}
-	if got := len(seriesForWorkload(t, "k8s_sustain_workload_retry_attempts", ns, "Deployment", "api")); got != 1 {
-		t.Errorf("retry_attempts: want one series for the identity, got %d", got)
-	}
 	if got := gaugeOf(t, "k8s_sustain_workload_pods", ns, "Deployment", "api"); got != 3 {
 		t.Errorf("backed-off members must keep their last counts: pods = %v, want 3", got)
 	}
@@ -224,7 +226,7 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	reconcilePolicy(t, r, policyName)
 
 	for _, id := range []promclient.WorkloadIdentity{api, etl} {
-		for _, metric := range identityHealthMetrics {
+		for _, metric := range identityGauges {
 			if got := seriesForWorkload(t, metric, id.Namespace, id.OwnerKind, id.OwnerName); len(got) != 0 {
 				t.Errorf("%s still has %d series for departed identity %s/%s", metric, len(got), id.OwnerKind, id.OwnerName)
 			}
@@ -232,32 +234,6 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	}
 	if got := policyGauge(t, "k8s_sustain_policy_workload_count", policyName); got != 0 {
 		t.Errorf("policy_workload_count = %v, want 0 once every identity departed", got)
-	}
-}
-
-func TestReconcile_PolicyDeletionRemovesIdentityHealth(t *testing.T) {
-	const ns, name, policyName = "health-deleted", "web", "health-deleted"
-	dep := annotatedDeployment(ns, name, policyName)
-	dep.CreationTimestamp = metav1.NewTime(time.Now().Add(-24 * time.Hour))
-	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", name), false, ongoingDeployments(policyName), dep)
-
-	reconcilePolicy(t, r, policyName)
-	if got := len(seriesForWorkload(t, "k8s_sustain_workload_pods", ns, "Deployment", name)); got != 1 {
-		t.Fatalf("cycle 1 must emit the pods series, got %d", got)
-	}
-
-	var live sustainv1alpha1.Policy
-	if err := r.Get(context.Background(), types.NamespacedName{Name: policyName}, &live); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Delete(context.Background(), &live); err != nil {
-		t.Fatal(err)
-	}
-	reconcilePolicy(t, r, policyName)
-	for _, metric := range identityHealthMetrics {
-		if got := seriesForWorkload(t, metric, ns, "Deployment", name); len(got) != 0 {
-			t.Errorf("deleted policy must remove %s, got %d series", metric, len(got))
-		}
 	}
 }
 

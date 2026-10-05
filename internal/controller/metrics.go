@@ -3,8 +3,6 @@ package controller
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
-
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 var (
@@ -190,26 +188,9 @@ func init() {
 	)
 }
 
-// EmitOOMObserved increments the observed-OOM counter for a workload container.
-func EmitOOMObserved(namespace, ownerKind, ownerName, container string) {
-	oomObservedTotal.WithLabelValues(namespace, ownerKind, ownerName, container).Inc()
-}
-
-// EmitOOMReactionLatency records the elapsed time between the cache record's
-// TerminatedAt and the floor-driven memory recommendation that responds to it.
-func EmitOOMReactionLatency(namespace, ownerKind, ownerName string, seconds float64) {
-	oomReactionLatencySeconds.WithLabelValues(namespace, ownerKind, ownerName).Observe(seconds)
-}
-
 // SetOOMCacheEntries sets the current cache size gauge.
 func SetOOMCacheEntries(n int) {
 	oomCacheEntries.Set(float64(n))
-}
-
-// EmitRecycleSuppressed counts pods of the identity on which the downsize
-// threshold held back a decrease of resource.
-func EmitRecycleSuppressed(id promclient.WorkloadIdentity, resource string, pods int) {
-	recycleSuppressedTotal.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, resource).Add(float64(pods))
 }
 
 // WorkloadRecommendation refresh outcomes for EmitWLRRefresh.
@@ -240,10 +221,4 @@ const (
 // EmitWLRRefresh records the outcome of one WorkloadRecommendation refresh.
 func EmitWLRRefresh(namespace, ownerKind, outcome string) {
 	wlrRefreshTotal.WithLabelValues(namespace, ownerKind, outcome).Inc()
-}
-
-// EmitGroupAutoscalerMismatch increments the counter for an owner-name group
-// whose members disagree on autoscaler presence or kind this reconcile.
-func EmitGroupAutoscalerMismatch(namespace, ownerKind, ownerName string) {
-	groupAutoscalerMismatchTotal.WithLabelValues(namespace, ownerKind, ownerName).Inc()
 }

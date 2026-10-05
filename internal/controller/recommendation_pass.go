@@ -44,6 +44,28 @@ type recommendation struct {
 	inputs *recommender.WorkloadInputs
 	// err is why the inputs are unavailable, set only for outcomeFetchFailed.
 	err error
+	computed
+}
+
+// computed is what computing an identity found besides its Recommendation.
+type computed struct {
+	// autoscaler is the one the Recommendation was shaped against, nil
+	// unless the identity was computed; mismatch is whether its members
+	// disagree on theirs.
+	autoscaler *autoscaler.Info
+	mismatch   bool
+	// oomFloors are the containers whose memory request the OOM floor
+	// determined.
+	oomFloors []oomFloor
+}
+
+// oomFloor is a container whose memory request the OOM floor determined.
+type oomFloor struct {
+	container string
+	// reaction is how long after the live kill that drove the floor it
+	// responded; live is false when no live kill did.
+	reaction time.Duration
+	live     bool
 }
 
 // decision is what the verdict records in the identity's
@@ -131,10 +153,9 @@ func (r *PolicyReconciler) computeIdentity(
 
 	// A departed identity has nothing for an autoscaler to scale.
 	autoInfo := autoscaler.Info{Kind: autoscaler.KindNone}
+	mismatch := false
 	if !w.id.Departed() {
-		autoInfo = r.groupAutoscalerInfo(ctx, id, slices.Concat(w.run, w.backedOff), autoSnap)
-		EmitAutoscalerPresent(id, string(autoInfo.Kind))
-		EmitAutoscalerTargetsConfigured(id, string(autoInfo.Kind), autoInfo.ConfiguredTargets)
+		autoInfo, mismatch = r.groupAutoscalerInfo(ctx, id, slices.Concat(w.run, w.backedOff), autoSnap)
 	}
 	out := recommender.Compute(recommender.Request{
 		Containers:   w.containers,
@@ -145,11 +166,10 @@ func (r *PolicyReconciler) computeIdentity(
 		Since:        w.id.Since,
 		Now:          now,
 	})
-	res := recommendation{inputs: inputs}
+	res := recommendation{inputs: inputs, computed: computed{autoscaler: &autoInfo, mismatch: mismatch}}
 	switch out.Outcome {
 	case recommender.TooYoung:
 		res.outcome = outcomeTooYoung
-		recommendationSkipped.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, "workload_too_young").Inc()
 		log.FromContext(ctx).Info("skipping recommendation: workload too young",
 			"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
 			"age", recommender.AgeForLog(w.id.Since, now), "minAge", recommender.MinWorkloadAge)
@@ -159,21 +179,21 @@ func (r *PolicyReconciler) computeIdentity(
 		res.outcome = outcomeRecommended
 		res.recs = out.Recs
 		res.traces = out.Traces
-		emitContainerComputation(id, out.Traces, now)
+		res.oomFloors = oomFloorsOf(out.Traces, now)
 	}
 	return res
 }
 
 // groupAutoscalerInfo resolves the autoscaler an identity's recommendation is
 // shaped against: the first member in sorted key() order that has one, or
-// KindNone. It also flags a mixed-autoscaler group, since the one shared
+// KindNone. It also reports a mixed-autoscaler group, since the one shared
 // recommendation is injected into every member's pods.
 func (r *PolicyReconciler) groupAutoscalerInfo(
 	ctx context.Context,
 	identity promclient.WorkloadIdentity,
 	targets []*workloadTarget,
 	autoSnap *autoscaler.NamespacedSnapshot,
-) autoscaler.Info {
+) (autoscaler.Info, bool) {
 	logger := log.FromContext(ctx)
 	winner := autoscaler.Info{Kind: autoscaler.KindNone}
 	haveWinner := false
@@ -204,25 +224,25 @@ func (r *PolicyReconciler) groupAutoscalerInfo(
 			"(see governingAutoscaler), not by the first sorted member",
 			"namespace", identity.Namespace, "ownerKind", identity.OwnerKind, "ownerName", identity.OwnerName,
 			"governingAutoscaler", winner.Kind, "baseline", baseline, "disagreeing", disagreeing)
-		EmitGroupAutoscalerMismatch(identity.Namespace, identity.OwnerKind, identity.OwnerName)
 	}
 
-	return winner
+	return winner, len(disagreeing) > 0
 }
 
-// emitContainerComputation counts the containers whose memory request the OOM
-// floor determined, and how long after a live kill each responded, from the
-// OOM floor stage of their traces.
-func emitContainerComputation(id promclient.WorkloadIdentity, traces map[string]sustainv1alpha1.ContainerTrace, now time.Time) {
-	ns, kind, name := id.Namespace, id.OwnerKind, id.OwnerName
+// oomFloorsOf reads, from the OOM floor stage of each container's trace,
+// the containers whose memory request the floor determined as of now.
+func oomFloorsOf(traces map[string]sustainv1alpha1.ContainerTrace, now time.Time) []oomFloor {
+	var out []oomFloor
 	for container, tr := range traces {
 		floor, ok := recommender.TracedOOMFloor(tr)
 		if !ok || !floor.Determined {
 			continue
 		}
-		oomFloorApplied.WithLabelValues(ns, kind, name, container).Inc()
+		f := oomFloor{container: container}
 		if !floor.LiveKillAt.IsZero() {
-			EmitOOMReactionLatency(ns, kind, name, now.Sub(floor.LiveKillAt).Seconds())
+			f.reaction, f.live = now.Sub(floor.LiveKillAt), true
 		}
+		out = append(out, f)
 	}
+	return out
 }
