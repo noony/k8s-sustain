@@ -66,20 +66,28 @@ func (s *Server) handleWorkloadDetail(w http.ResponseWriter, r *http.Request, na
 		return
 	}
 
+	statuses, _ := s.board(ctx, []*inventory.Identity{id})
+	st := statuses[0]
 	resp := workloadDetailResponse{
 		Automated:           id.Policy != "",
 		PolicyName:          id.Policy,
 		ConflictingPolicies: conflictingPolicies(id),
 		Departed:            id.Departed(),
-		CoordinationFactors: coordinationFactorsOf(id.Recommendation),
+		RiskState:           st.risk,
+		StalePods:           st.health.StalePods,
+		TotalPods:           st.health.TotalPods,
+		OOM24h:              st.health.OOM24h,
+		CoordinationFactors: st.coordination,
 		Recommendation:      storedRecommendationOf(id.Recommendation),
+	}
+	if b := st.health.Blocked; b != nil {
+		resp.Blocked = &workloadDetailBlocked{Reason: b.Reason, Attempts: b.Attempts}
 	}
 	if policy := s.governingPolicy(ctx, id); policy != nil {
 		if mode := policy.Spec.RightSizing.Update.Types.ModeForKind(kind); mode != nil {
 			resp.UpdateMode = string(*mode)
 		}
 	}
-	s.fillDetailHealth(ctx, &resp, id)
 	resp.RecentEvents = s.recentSustainEvents(ctx, id, 10)
 
 	w.Header().Set("Cache-Control", "public, max-age=30")
@@ -114,24 +122,6 @@ func storedRecommendationOf(wlr *sustainv1alpha1.WorkloadRecommendation) *stored
 		out.Containers[name] = c
 	}
 	return out
-}
-
-// fillDetailHealth overlays the identity's health and Risk state; a failed
-// read degrades to the signals that could be read.
-func (s *Server) fillDetailHealth(ctx context.Context, resp *workloadDetailResponse, id *inventory.Identity) {
-	health, err := s.Health.forIdentities(ctx, []promclient.WorkloadIdentity{id.Key})
-	if err != nil {
-		s.Logger.V(1).Info("reading identity health failed; detail shows what could be read", "error", err.Error())
-	}
-	h := health[id.Key]
-	h.Conflicted = id.Conflicted
-	resp.RiskState = riskStateOf(h)
-	resp.OOM24h = h.OOM24h
-	resp.StalePods = h.StalePods
-	resp.TotalPods = h.TotalPods
-	if h.Blocked != nil {
-		resp.Blocked = &workloadDetailBlocked{Reason: h.Blocked.Reason, Attempts: h.Blocked.Attempts}
-	}
 }
 
 // recentSustainEvents returns up to limit k8s-sustain events about any member

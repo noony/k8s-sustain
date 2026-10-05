@@ -152,7 +152,6 @@ func TestHandleSummaryHeadroomAndPolicies(t *testing.T) {
 			"k8s_sustain_policy_workload_count":             {"prod-policy": 7},
 			"k8s_sustain:policy_cpu_savings_cores":          {"prod-policy": 1.5},
 			"k8s_sustain:policy_memory_savings_bytes":       {"prod-policy": 2048},
-			"k8s_sustain_policy_blocked_count":              {"prod-policy": 2},
 		},
 	}
 	srv := &Server{
@@ -193,9 +192,6 @@ func TestHandleSummaryHeadroomAndPolicies(t *testing.T) {
 	}
 	if pol.MemSavingsBytes != 2048 {
 		t.Errorf("policies[0].MemSavingsBytes = %v, want 2048", pol.MemSavingsBytes)
-	}
-	if pol.BlockedCount != 2 {
-		t.Errorf("policies[0].BlockedCount = %d, want 2", pol.BlockedCount)
 	}
 }
 

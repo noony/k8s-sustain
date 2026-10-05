@@ -8,46 +8,61 @@ vi.mock('../lib/api', async (orig) => ({
   api: vi.fn(),
 }))
 
+const emptyGroup = { total: 0, rows: [] }
+
+function summary(kpi: Partial<api.SummaryV2['kpi']> = {}, policies: api.PolicyRollup[] = []) {
+  return {
+    kpi: {
+      cpuSavedCores: 0,
+      cpuSavedRatio: 0,
+      cpuSpark7d: [],
+      memSavedBytes: 0,
+      memSavedRatio: 0,
+      memSpark7d: [],
+      conflictedCount: 0,
+      blockedCount: 0,
+      atRiskCount: 0,
+      driftedCount: 0,
+      coordinatedCount: 0,
+      ...kpi,
+    },
+    headroom: {
+      cpu: { used: 0.4, idle: 0.3, free: 0.3 },
+      memory: { used: 0.5, idle: 0.2, free: 0.3 },
+    },
+    attention: {
+      conflicted: emptyGroup,
+      blocked: emptyGroup,
+      'at-risk': emptyGroup,
+      drifted: emptyGroup,
+    },
+    policies,
+  }
+}
+
+function serve(payload: ReturnType<typeof summary>) {
+  const apiMock = api.api as unknown as ReturnType<typeof vi.fn>
+  apiMock.mockReset()
+  apiMock.mockImplementation((path: string) => {
+    if (path === '/api/summary') return Promise.resolve(payload)
+    if (path.startsWith('/api/summary/trend'))
+      return Promise.resolve({
+        cpu: { usage: [], request: [], originalRequest: [] },
+        memory: { usage: [], request: [], originalRequest: [] },
+      })
+    if (path.startsWith('/api/summary/activity')) return Promise.resolve({ items: [] })
+    return Promise.reject(new Error(`unexpected request ${path}`))
+  })
+  return apiMock
+}
+
 describe('OverviewView', () => {
   it('renders KPI strip, headroom, attention queue, policies', async () => {
-    const apiMock = api.api as unknown as ReturnType<typeof vi.fn>
-    apiMock.mockImplementation((path: string) => {
-      if (path === '/api/summary')
-        return Promise.resolve({
-          kpi: {
-            cpuSavedCores: 3.2,
-            cpuSavedRatio: 0.18,
-            cpuSpark7d: [1, 2, 3],
-            memSavedBytes: 1,
-            memSavedRatio: 0.1,
-            memSpark7d: [1],
-            atRiskCount: 1,
-            blockedCount: 4,
-            driftedCount: 2,
-          },
-          headroom: {
-            cpu: { used: 0.4, idle: 0.3, free: 0.3 },
-            memory: { used: 0.5, idle: 0.2, free: 0.3 },
-          },
-          attention: { risk: [], drift: [], blocked: [] },
-          policies: [
-            {
-              name: 'p',
-              workloadCount: 1,
-              cpuSavingsCores: 0.5,
-              memSavingsBytes: 1,
-              blockedCount: 0,
-            },
-          ],
-        })
-      if (path.startsWith('/api/summary/trend'))
-        return Promise.resolve({
-          cpu: { usage: [], request: [], originalRequest: [] },
-          memory: { usage: [], request: [], originalRequest: [] },
-        })
-      if (path.startsWith('/api/summary/activity')) return Promise.resolve({ items: [] })
-      return Promise.resolve({})
-    })
+    serve(
+      summary({ cpuSavedCores: 3.2, cpuSavedRatio: 0.18, cpuSpark7d: [1, 2, 3] }, [
+        { name: 'p', workloadCount: 1, cpuSavingsCores: 0.5, memSavingsBytes: 1, blockedCount: 0 },
+      ]),
+    )
     const w = mount(OverviewView, { global: { stubs: ['router-link', 'TrendChart'] } })
     await flushPromises()
     expect(w.text()).toContain('CPU saved')
@@ -61,44 +76,31 @@ describe('OverviewView', () => {
     expect(w.text()).toContain('Memory')
   })
 
-  it('shows Blocked and At risk as separate identity counts', async () => {
-    const apiMock = api.api as unknown as ReturnType<typeof vi.fn>
-    apiMock.mockImplementation((path: string) => {
-      if (path === '/api/summary')
-        return Promise.resolve({
-          kpi: {
-            cpuSavedCores: 0,
-            cpuSavedRatio: 0,
-            cpuSpark7d: [],
-            memSavedBytes: 0,
-            memSavedRatio: 0,
-            memSpark7d: [],
-            atRiskCount: 1,
-            blockedCount: 4,
-            driftedCount: 2,
-          },
-          headroom: {
-            cpu: { used: 0, idle: 0, free: 0 },
-            memory: { used: 0, idle: 0, free: 0 },
-          },
-          attention: { risk: [], drift: [], blocked: [] },
-          policies: [],
-        })
-      if (path.startsWith('/api/summary/trend'))
-        return Promise.resolve({
-          cpu: { usage: [], request: [], originalRequest: [] },
-          memory: { usage: [], request: [], originalRequest: [] },
-        })
-      if (path.startsWith('/api/summary/activity')) return Promise.resolve({ items: [] })
-      return Promise.resolve({})
-    })
+  it('renders every Risk-state and Coordinated count from the backend', async () => {
+    const apiMock = serve(
+      summary({
+        conflictedCount: 3,
+        blockedCount: 4,
+        atRiskCount: 1,
+        driftedCount: 2,
+        coordinatedCount: 7,
+      }),
+    )
     const w = mount(OverviewView, { global: { stubs: ['router-link', 'TrendChart'] } })
     await flushPromises()
     const cards = w.findAllComponents({ name: 'KpiCard' })
     const byLabel = (label: string) => cards.find((c) => c.props('label') === label)
-    expect(byLabel('At risk')?.props('value')).toBe('1')
-    expect(byLabel('At risk')?.props('to')).toBe('/workloads?risk=at-risk')
-    expect(byLabel('Blocked')?.props('value')).toBe('4')
-    expect(byLabel('Blocked')?.props('to')).toBe('/workloads?risk=blocked')
+    for (const [label, value, to] of [
+      ['Conflicted', '3', '/workloads?risk=conflicted'],
+      ['Blocked', '4', '/workloads?risk=blocked'],
+      ['At risk', '1', '/workloads?risk=at-risk'],
+      ['Drifted', '2', '/workloads?risk=drifted'],
+    ]) {
+      expect(byLabel(label)?.props('value')).toBe(value)
+      expect(byLabel(label)?.props('to')).toBe(to)
+    }
+    expect(byLabel('Coordinated')?.props('value')).toBe('7')
+    const paths = apiMock.mock.calls.map(([path]) => path as string)
+    expect(paths.some((p) => p.startsWith('/api/workloads'))).toBe(false)
   })
 })

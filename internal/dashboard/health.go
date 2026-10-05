@@ -9,9 +9,9 @@ import (
 // identityHealth is one identity's health signals. The zero value is an
 // identity with no signal at all.
 type identityHealth struct {
-	// Conflicted comes from the inventory, never from HealthSignals: no
-	// Policy governs a Conflicted identity, so no controller series exists
-	// for it.
+	// Conflicted comes from the inventory (set by board), never from
+	// HealthSignals: no Policy governs a Conflicted identity, so no controller
+	// series exists for it.
 	Conflicted bool
 	OOM24h     int
 	Blocked    *blockedSignal
@@ -29,15 +29,13 @@ type blockedSignal struct {
 	Attempts int
 }
 
-// HealthSignals is the port every view reads identity health through, so the
-// views share one source and one classification (riskStateOf).
+// HealthSignals is the port the board reads identity health through, so every
+// view shares one source and one classification (riskStateOf).
 type HealthSignals interface {
 	// forIdentities returns the health of each of ids that has any signal; an
 	// identity missing from the result has none. A non-nil error comes with
 	// whatever could still be read.
 	forIdentities(ctx context.Context, ids []promclient.WorkloadIdentity) (map[promclient.WorkloadIdentity]identityHealth, error)
-	// unhealthy returns every identity whose Risk state is not Safe.
-	unhealthy(ctx context.Context) (map[promclient.WorkloadIdentity]identityHealth, error)
 }
 
 // riskState is an identity's Risk state, the single most actionable

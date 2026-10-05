@@ -374,17 +374,24 @@ export interface SummaryV2 {
     memSavedBytes: number
     memSavedRatio: number
     memSpark7d: number[]
-    atRiskCount: number
+    conflictedCount: number
     blockedCount: number
+    atRiskCount: number
     driftedCount: number
+    coordinatedCount: number
   }
   headroom: { cpu: HeadroomBreakdown; memory: HeadroomBreakdown }
-  attention: {
-    risk: AttentionRow[]
-    drift: AttentionRow[]
-    blocked: AttentionRow[]
-  }
+  attention: Record<AttentionState, AttentionGroup>
   policies: PolicyRollup[]
+}
+
+/** The non-Safe Risk states, each with its own attention list. */
+export type AttentionState = Exclude<RiskState, 'safe'>
+
+/** The worst identities of one Risk state; total counts every identity in it. */
+export interface AttentionGroup {
+  total: number
+  rows: AttentionRow[]
 }
 
 export interface HeadroomBreakdown {

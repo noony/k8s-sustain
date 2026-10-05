@@ -1,14 +1,7 @@
 <script setup lang="ts">
 import { onMounted, computed, watch } from 'vue'
 import { useRowLink } from '../composables/useRowLink'
-import {
-  api,
-  type SummaryV2,
-  type TrendData,
-  type ActivityItem,
-  type WorkloadListData,
-  type WorkloadItemV2,
-} from '../lib/api'
+import { api, type SummaryV2, type TrendData, type ActivityItem } from '../lib/api'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useApi } from '../composables/useApi'
 import { useTimeRange } from '../composables/useTimeRange'
@@ -42,18 +35,10 @@ const trendWindow = computed(() => {
 const activity = useApi<{ items: ActivityItem[] }>(() =>
   api<{ items: ActivityItem[] }>('/api/summary/activity?limit=20'),
 )
-const workloads = useApi<WorkloadListData>(() =>
-  api<WorkloadListData>('/api/workloads?pageSize=200'),
-)
 
 async function loadAll() {
-  await Promise.all([summary.run(), trend.run(), activity.run(), workloads.run()])
+  await Promise.all([summary.run(), trend.run(), activity.run()])
 }
-
-const coordinatedCount = computed(() => {
-  const items = (workloads.data.value?.items ?? []) as WorkloadItemV2[]
-  return items.filter((w) => w.coordinationFactors?.enabled).length
-})
 
 useAutoRefresh(() => {
   // relative ranges re-anchor to now on each tick; absolute ranges are fixed
@@ -116,6 +101,13 @@ function memTrendSeries() {
         spark-color="#3fb950"
       />
       <KpiCard
+        label="Conflicted"
+        :value="String(summary.data.value.kpi.conflictedCount)"
+        :tone="summary.data.value.kpi.conflictedCount > 0 ? 'danger' : 'neutral'"
+        detail="policies disagree"
+        to="/workloads?risk=conflicted"
+      />
+      <KpiCard
         label="Blocked"
         :value="String(summary.data.value.kpi.blockedCount)"
         :tone="summary.data.value.kpi.blockedCount > 0 ? 'danger' : 'neutral'"
@@ -138,7 +130,7 @@ function memTrendSeries() {
       />
       <KpiCard
         label="Coordinated"
-        :value="String(coordinatedCount)"
+        :value="String(summary.data.value.kpi.coordinatedCount)"
         tone="neutral"
         detail="Autoscaler-aware"
       />

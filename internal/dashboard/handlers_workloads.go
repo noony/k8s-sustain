@@ -14,7 +14,6 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/inventory"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 // workloadRow is what every list endpoint returns per identity; endpoints
@@ -31,33 +30,24 @@ type workloadRow struct {
 	CoordinationFactors *coordinationFactors `json:"coordinationFactors,omitempty"`
 	Departed            bool                 `json:"departed"`
 	LastSeenAt          string               `json:"lastSeenAt,omitempty"`
-
-	conflicted bool
 }
 
-func (r *workloadRow) identity() promclient.WorkloadIdentity {
-	return promclient.WorkloadIdentity{Namespace: r.Namespace, OwnerKind: r.Kind, OwnerName: r.Name}
-}
-
-func (r *workloadRow) setHealth(h identityHealth) {
-	h.Conflicted = r.conflicted
-	r.RiskState = riskStateOf(h)
-	r.StalePods = h.StalePods
-	r.TotalPods = h.TotalPods
-	r.AutoscalerPresent = h.AutoscalerPresent
-}
-
-// rowFor renders one identity. A Departed identity shows the containers of
-// its stored snapshot and when its Recommendation was last refreshed.
-func rowFor(id *inventory.Identity) workloadRow {
+// rowFor renders one identity's status. A Departed identity shows the
+// containers of its stored snapshot and when its Recommendation was last
+// refreshed.
+func rowFor(st identityStatus) workloadRow {
+	id := st.id
 	row := workloadRow{
 		Namespace:           id.Key.Namespace,
 		Kind:                id.Key.OwnerKind,
 		Name:                id.Key.OwnerName,
 		Containers:          containerStatuses(id.Containers, id.InitContainers),
-		CoordinationFactors: coordinationFactorsOf(id.Recommendation),
+		RiskState:           st.risk,
+		StalePods:           st.health.StalePods,
+		TotalPods:           st.health.TotalPods,
+		AutoscalerPresent:   st.health.AutoscalerPresent,
+		CoordinationFactors: st.coordination,
 		Departed:            id.Departed(),
-		conflicted:          id.Conflicted,
 	}
 	if id.Departed() {
 		if seen := id.Recommendation.Status.ObservedAt; !seen.IsZero() {
@@ -106,22 +96,21 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("listing workloads: %v", err))
 		return
 	}
-	workloads := make([]workloadRow, 0, len(governed))
-	for _, id := range governed {
-		workloads = append(workloads, rowFor(id))
+	statuses, _ := s.board(ctx, governed)
+	workloads := make([]workloadRow, 0, len(statuses))
+	for _, st := range statuses {
+		workloads = append(workloads, rowFor(st))
 	}
 
 	matched := len(workloads)
 	namespaces := uniqueValues(workloads, func(w workloadRow) string { return w.Namespace })
 
-	// Narrow before the health decoration so it only covers returned rows.
 	if nsFilter != "" {
 		workloads = filterInPlace(workloads, func(w workloadRow) bool { return w.Namespace == nsFilter })
 	}
 	if search != "" {
 		workloads = filterInPlace(workloads, func(w workloadRow) bool { return nameMatches(&w, search) })
 	}
-	applyHealth(ctx, s, workloads, identityRow)
 	sortWorkloads(workloads, identityRow, rowOrder(sortKey), sortDesc)
 
 	total := len(workloads)
@@ -174,23 +163,6 @@ func filterInPlace[T any](rows []T, keep func(T) bool) []T {
 		}
 	}
 	return out
-}
-
-// applyHealth reads every row's identity health in one batch and overlays it,
-// with its Risk state, onto each row in place. A failed read degrades to the
-// signals that could be read.
-func applyHealth[T any](ctx context.Context, s *Server, rows []T, rowOf func(*T) *workloadRow) {
-	ids := make([]promclient.WorkloadIdentity, len(rows))
-	for i := range rows {
-		ids[i] = rowOf(&rows[i]).identity()
-	}
-	health, err := s.Health.forIdentities(ctx, ids)
-	if err != nil {
-		s.Logger.V(1).Info("reading identity health failed; rows show what could be read", "error", err.Error())
-	}
-	for i := range rows {
-		rowOf(&rows[i]).setHealth(health[ids[i]])
-	}
 }
 
 type allWorkloadSummary struct {
@@ -285,29 +257,25 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snap, err := s.identities(ctx, inventory.Options{})
+	ids, err := s.clusterIdentities(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("listing workloads: %v", err))
 		return
 	}
-	workloads := make([]allWorkloadSummary, 0, len(snap.Identities))
-	for i := range snap.Identities {
-		id := &snap.Identities[i]
+	statuses, _ := s.board(ctx, ids)
+	workloads := make([]allWorkloadSummary, 0, len(statuses))
+	for _, st := range statuses {
 		workloads = append(workloads, allWorkloadSummary{
-			workloadRow:         rowFor(id),
-			Automated:           id.Policy != "",
-			PolicyName:          id.Policy,
-			ConflictingPolicies: conflictingPolicies(id),
+			workloadRow:         rowFor(st),
+			Automated:           st.id.Policy != "",
+			PolicyName:          st.id.Policy,
+			ConflictingPolicies: conflictingPolicies(st.id),
 		})
 	}
 
 	// Facets come from the full, unfiltered list.
 	namespaces := uniqueValues(workloads, func(w allWorkloadSummary) string { return w.Namespace })
 	kinds := uniqueValues(workloads, func(w allWorkloadSummary) string { return w.Kind })
-
-	// Narrow before the health decoration so it only covers returned rows.
-	workloads = filterByNamespaceAndKind(workloads, filters)
-	applyHealth(ctx, s, workloads, allRowOf)
 
 	workloads = applyAllWorkloadFilters(workloads, filters)
 	sortWorkloads(workloads, allRowOf, allWorkloadOrder(filters.sortKey), filters.sortDesc)
@@ -328,19 +296,13 @@ func (s *Server) handleAllWorkloads(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// filterByNamespaceAndKind applies the identity filters that do not depend on
-// health decoration, so the health read sees already-narrowed rows.
-func filterByNamespaceAndKind(workloads []allWorkloadSummary, f allWorkloadFilters) []allWorkloadSummary {
+func applyAllWorkloadFilters(workloads []allWorkloadSummary, f allWorkloadFilters) []allWorkloadSummary {
 	if f.namespace != "" {
 		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.Namespace == f.namespace })
 	}
 	if f.kind != "" {
 		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.Kind == f.kind })
 	}
-	return workloads
-}
-
-func applyAllWorkloadFilters(workloads []allWorkloadSummary, f allWorkloadFilters) []allWorkloadSummary {
 	if f.automated != nil {
 		want := *f.automated
 		workloads = filterInPlace(workloads, func(w allWorkloadSummary) bool { return w.Automated == want })
@@ -418,7 +380,7 @@ func countAllWorkloads(workloads []allWorkloadSummary) workloadCounts {
 		switch {
 		case w.Automated:
 			c.Automated++
-		case w.conflicted:
+		case w.RiskState == riskConflicted:
 			c.Conflicted++
 		default:
 			c.Manual++

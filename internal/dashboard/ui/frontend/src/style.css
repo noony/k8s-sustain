@@ -1963,6 +1963,11 @@ a.kpi-card {
   color: var(--text);
   border-left-color: var(--accent);
 }
+.aq-header.risk-conflicted {
+  background: transparent;
+  color: var(--text);
+  border-left-color: var(--red);
+}
 .aq-caret {
   color: var(--text-dim);
   display: inline-flex;
@@ -2022,6 +2027,12 @@ a.kpi-card {
   padding: 12px 14px;
   color: var(--text-dim);
   font-size: 13px;
+  border-top: 1px solid var(--border);
+}
+.aq-more {
+  padding: 10px 14px;
+  color: var(--accent-light);
+  font-size: 12px;
   border-top: 1px solid var(--border);
 }
 .trend-chart {
