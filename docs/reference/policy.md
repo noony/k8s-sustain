@@ -238,11 +238,11 @@ status:
       lastTransitionTime: "2024-01-01T00:00:00Z"
 ```
 
-The count covers every workload object the policy processed, plus each
-retained recommendation whose workload object no longer exists. Workloads
-grouped under a shared `k8s.sustain.io/owner-name` are counted individually,
-because each one's pods are applied to separately even though they share a
-single recommendation.
+Every count in the message is a count of workload identities: workloads
+grouped under a shared `k8s.sustain.io/owner-name` count once, together, and
+so does each departed identity whose retained recommendation the cycle
+recomputed. An identity counts as processed when the cycle worked on at
+least one of its workloads, and as failed when at least one of them failed.
 
 These three reasons are the complete set the controller writes to
 `Policy.status.conditions`:

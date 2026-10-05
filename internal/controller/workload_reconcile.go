@@ -10,6 +10,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -69,19 +70,21 @@ func (r *PolicyReconciler) apply(
 }
 
 // settle records every member's result in the ledger and emits the events the
-// ledger calls for. It returns how many members failed this pass and how many
-// were skipped.
-func (r *PolicyReconciler) settle(ctx context.Context, results []applyResult) (failed, skipped int) {
+// ledger calls for. It returns how many identities had a member fail this
+// pass, and how many had one not skipped.
+func (r *PolicyReconciler) settle(ctx context.Context, results []applyResult) (failed, dispatched int) {
 	logger := log.FromContext(ctx)
+	failedIDs := map[promclient.WorkloadIdentity]struct{}{}
+	dispatchedIDs := map[promclient.WorkloadIdentity]struct{}{}
 	for _, res := range results {
-		if res.kind == applySkipped {
-			skipped++
+		if res.kind != applySkipped {
+			dispatchedIDs[res.member.identity()] = struct{}{}
 		}
 		ev, isFailure := r.ledger.record(ctx, res)
 		if !isFailure {
 			continue
 		}
-		failed++
+		failedIDs[res.member.identity()] = struct{}{}
 		t := res.member
 		IncrementRetryAttempt(t.identity())
 		logger.Error(res.err, "applying the recommendation failed",
@@ -90,7 +93,7 @@ func (r *PolicyReconciler) settle(ctx context.Context, results []applyResult) (f
 			r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, ev.reason, ev.reason, "%s", ev.message)
 		}
 	}
-	return failed, skipped
+	return len(failedIDs), len(dispatchedIDs)
 }
 
 // reconcileWorkload APPLIES an identity's recommendation to a single workload

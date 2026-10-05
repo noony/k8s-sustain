@@ -238,16 +238,13 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	results := r.recommend(ctx, policy, items, autoSnap)
 	departed, departedFailed := r.persist(ctx, results)
 	applied := r.apply(ctx, policy, results, autoSnap)
-	failed, skipped := r.settle(ctx, applied)
-	// units counts dispatched work: one per member not skipped plus one per
-	// departed identity.
-	units := len(applied) - skipped + departed
+	failed, units := r.settle(ctx, applied)
+	units += departed
 	failed += departedFailed
 
 	logger.Info("reconcile cycle complete",
 		"identities", len(items),
 		"dispatched", units,
-		"skipped", skipped,
 		"failed", failed,
 		"concurrency", r.WorkloadConcurrencyLimit)
 
@@ -260,9 +257,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	r.sweepWorkloadRecommendations(ctx, policy.Name, snap)
 
-	// failed is per dispatched unit, so units is the denominator. blocked
-	// also covers the members this pass skipped in backoff. A failed Ensure
-	// counts once, as its withheld members' failure.
+	// failed and units count identities, as every count of workloads does.
+	// blocked also covers the members this pass skipped in backoff. A failed
+	// Ensure counts once, as its withheld members' failure.
 	if failed > 0 || blocked > 0 {
 		var parts []string
 		if failed > 0 {

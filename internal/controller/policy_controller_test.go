@@ -213,6 +213,32 @@ func TestReconcile_PartialFailure_SetsConditionAndRequeues(t *testing.T) {
 	}
 }
 
+// Every count of workloads is a count of identities: an owner-name group is
+// one workload in the Ready message, whether its two members fail or succeed.
+func TestReconcile_ReadyCountsIdentities(t *testing.T) {
+	const ns = "counted"
+	api := identityOf(ns, "Deployment", "api")
+	for _, tc := range []struct {
+		name   string
+		inputs *recommendertest.StaticInputs
+		want   string
+	}{
+		{"failing", recommendertest.NewStaticInputs().Fail(api, errors.New("prometheus down")), "1 of 1 workloads failed; Blocked workload identities: 1"},
+		{"succeeding", usageFor(ns, "Deployment", "api"), "All 1 workloads have been processed."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := reconcilerWithInputs(t, tc.inputs, true, ongoingDeployments("p"),
+				groupedDeployment(ns, "api-blue", "api", "p"), groupedDeployment(ns, "api-green", "api", "p"))
+
+			reconcileOnce(t, r, "p")
+
+			if got := readyCondition(t, r, "p").Message; got != tc.want {
+				t.Errorf("Ready message = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // Job and bare-Pod identities are fetched like every other kind, and counted
 // by k8s_sustain_policy_batch_requested_count.
 func TestReconcileFetchesJobAndPodIdentities(t *testing.T) {
