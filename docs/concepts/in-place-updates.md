@@ -27,7 +27,7 @@ INFO  InPlacePodVerticalScaling support  enabled=false  server=v1.30.5
 
 In both modes only pods owned by the target workload are touched — see [Eviction safeguards](update-modes.md#eviction-safeguards).
 
-`Pod`-kind targets have no ownerRef or selector; their membership comes from the grouping rule instead — see [Bare pods](#bare-pods).
+A bare-pod identity has no owner object or selector: its pods are the members the inventory found — see [Bare pods](#bare-pods).
 
 When `Ongoing` mode is active and `inPlace=true`, the patcher walks each running pod and:
 
@@ -64,7 +64,7 @@ The controller never mutates the CronJob or Job spec and never evicts a job pod 
 
 Bare pods opted in via `k8s.sustain.io/owner-name` (kind `Pod`) are the third member of that family, and the strongest case of it: no controller exists that could recreate an evicted bare pod, so eviction would not disrupt the workload — it would delete it. Under `pod: Ongoing` their running pods **are** resized in place, through the same `pods/resize` machinery; an in-place resize needs no controller behind it, and without it a long-running Airflow task would keep whatever it was admitted with for its entire life. Under `pod: OnCreate`, nothing is applied to a running pod at all and the recommendation reaches the identity's next pod through the webhook.
 
-Membership is decided by the grouping rule rather than a label selector: a pod with no controller `ownerReference`, a valid `k8s.sustain.io/owner-name`, and a `k8s.sustain.io/policy` annotation matching the policy that claimed the group. A ReplicaSet-owned pod that carries the mirrored `owner-name` label is therefore never a member, and a pod opted into a different policy is logged and skipped.
+Membership is decided when the identity is built rather than by a label selector: a pod with no controller `ownerReference` and a valid `k8s.sustain.io/owner-name` is a member, and only the members the policy governs are resized. A ReplicaSet-owned pod that carries the mirrored `owner-name` label is therefore never a member. A pod of the group opted into another policy that accepts it makes the identity [Conflicted](workload-recommendations.md#conflicted-identities), and then no pod of it is resized; one whose policy does not exist or does not select it is simply left alone — see [Group membership](../guides/standalone-pods-and-grouping.md).
 
 A container with `resizePolicy: RestartContainer` for memory restarts on a memory resize, which for a task means losing in-flight work (see [Caveats](#caveats)). Use `pod: OnCreate` if that is not acceptable. See [Standalone Pods & Identity Grouping](../guides/standalone-pods-and-grouping.md).
 
