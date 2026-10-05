@@ -11,7 +11,7 @@ type WorkloadRecommendationSpec struct {
 	// WorkloadRef identifies the workload these recommendations describe.
 	WorkloadRef WorkloadReference `json:"workloadRef"`
 
-	// Policy is the Policy that last governed the identity and produced this recommendation. A Conflicted identity keeps it, and the webhook injects only into pods that opt into this Policy.
+	// Policy is the Policy that last governed the identity, which records its decisions here. A Conflicted identity keeps it, and the webhook injects only into pods that opt into this Policy.
 	// +optional
 	Policy string `json:"policy,omitempty"`
 }
@@ -60,6 +60,10 @@ type WorkloadRecommendationStatus struct {
 	// Outcome is what the controller's last pass decided for the identity: Computed, NoData, TooYoung, FetchFailed or Conflicted. Every outcome but Computed keeps the containers of the last Recommendation.
 	// +optional
 	Outcome RecommendationOutcome `json:"outcome,omitempty"`
+
+	// ComputedBy is the Policy that computed containers. The webhook injects them only into pods of that Policy, so after another Policy adopts the identity they are withheld until it computes its own.
+	// +optional
+	ComputedBy string `json:"computedBy,omitempty"`
 
 	// Departed marks a recommendation retained for a workload identity that no longer exists (a TTL-deleted Job, a bare-pod group between runs), whose ObservedAt is therefore frozen.
 	// +optional

@@ -8,7 +8,8 @@
 //   - Ensure is the governing Policy's claim on a live identity, each cycle: it
 //     creates or adopts the object, refreshes the snapshot and clears departed.
 //   - Record stores one pass's decision for the identity, departed included.
-//     It alone writes the Recommendation, its trace, observedAt and outcome.
+//     It alone writes the Recommendation, its trace, observedAt, the outcome
+//     and computedBy, the Policy the Recommendation is served to (ADR 0003).
 //   - Read is what a stored object means to a pod being admitted, and Expired
 //     whether a sweep deletes it.
 //
@@ -162,7 +163,8 @@ func observedEqual(a, b map[string]sustainv1alpha1.ObservedContainerResources) b
 // trace moves with every sample (a percentile that rounds to the same request)
 // and is only worth a write together with the values it explains.
 func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
-	if a.Outcome != b.Outcome || a.Departed != b.Departed || len(a.Containers) != len(b.Containers) {
+	if a.Outcome != b.Outcome || a.ComputedBy != b.ComputedBy || a.Departed != b.Departed ||
+		len(a.Containers) != len(b.Containers) {
 		return false
 	}
 	for name, av := range a.Containers {

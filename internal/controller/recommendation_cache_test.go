@@ -748,14 +748,12 @@ func TestReconcile_PolicyDeletion_ConflictKeepsFinalizer(t *testing.T) {
 	}
 }
 
-// TestDeleteAllRecommendationsForPolicy_DeletesWLRRewrittenSinceItWasListed is
-// the mirror image of TestSweep_DoesNotDeleteWLRRewrittenSinceItWasListed, and
-// the two are meant to diverge. The finalizer path's predicate is
-// "spec.policy == the policy being deleted", which no rewrite can invalidate,
-// so it conditions on the UID alone: a WLR rewritten inside the informer
-// cache's propagation window is still deleted rather than being left behind by
-// a conflict on a path that promises cleanup.
-func TestDeleteAllRecommendationsForPolicy_DeletesWLRRewrittenSinceItWasListed(t *testing.T) {
+// A Policy renamed through GitOps: the new one adopts the identity's object
+// (Ensure rewrites spec.policy and the label) while the old one's finalizer
+// still holds the copy it listed. Deleting that copy on its UID alone destroyed
+// the adopted object; the delete is conditioned on the revision judged, and the
+// conflict holds the finalizer for a retry that no longer lists the object.
+func TestDeleteAllRecommendationsForPolicy_KeepsWLRAdoptedSinceItWasListed(t *testing.T) {
 	r := reconcilerForCache(t, wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour)))
 
 	base := r.Client
@@ -764,15 +762,48 @@ func TestDeleteAllRecommendationsForPolicy_DeletesWLRRewrittenSinceItWasListed(t
 	err := r.deleteAllRecommendationsForPolicy(context.Background(), "p")
 	r.Client = base
 
-	if err != nil {
-		t.Fatalf("delete: %v", err)
-	}
 	if racy.rewrites == 0 {
 		t.Fatal("test setup: the delete path never listed the WorkloadRecommendation")
 	}
-	if wlrExists(t, r, "prod", "Deployment", "web") {
-		t.Error("a WorkloadRecommendation rewritten since it was listed survived the policy-deletion " +
-			"cleanup; that path must not carry a resourceVersion precondition")
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("err = %v, want the conflict, so the finalizer is held for a fresh judgement", err)
+	}
+	if err := r.deleteAllRecommendationsForPolicy(context.Background(), "p"); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got := getWLRFor(t, r, "prod", "Deployment", "web"); got.Spec.Policy != "p2" {
+		t.Errorf("spec.policy = %q, want the adopting p2", got.Spec.Policy)
+	}
+}
+
+// The same rename seen through Reconcile: the deleted Policy's cleanup leaves
+// the object the new Policy adopted, and goes once its retry finds nothing of
+// its own left.
+func TestReconcile_PolicyRenameKeepsTheAdoptedRecommendation(t *testing.T) {
+	now := metav1.Now()
+	old := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{
+		Name: "p", Finalizers: []string{"k8s.sustain.io/cleanup"}, DeletionTimestamp: &now,
+	}}
+	r := reconcilerForPolicy(t, old, governingPolicy("p2"), annotatedDeployment("prod", "web", "p2"),
+		wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour)))
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}
+
+	base := r.Client
+	r.Client = &rewriteOnListClient{Client: base}
+	if _, err := r.Reconcile(context.Background(), req); err == nil {
+		t.Fatal("Reconcile returned nil while the object it judged was adopted under it")
+	}
+	r.Client = base
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("retried Reconcile: %v", err)
+	}
+
+	if got := getWLRFor(t, r, "prod", "Deployment", "web"); got.Spec.Policy != "p2" {
+		t.Errorf("spec.policy = %q, want the adopting p2", got.Spec.Policy)
+	}
+	var gone sustainv1alpha1.Policy
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "p"}, &gone); !apierrors.IsNotFound(err) {
+		t.Errorf("get deleted Policy: %v, want it gone once its cleanup finished", err)
 	}
 }
 
@@ -792,45 +823,36 @@ func (c *recordingDeleteClient) Delete(ctx context.Context, obj client.Object, o
 	return c.Client.Delete(ctx, obj, opts...)
 }
 
-// TestDeleteWLRsWhere_PreconditionsPerPath pins the difference directly: the
-// sweep, whose decision depends on the revision it read, sends UID +
-// resourceVersion; the policy-deletion path, whose decision does not, sends the
-// UID alone — enough to refuse a name that has been reused by a different
-// object, without the rewrite-induced conflict.
-func TestDeleteWLRsWhere_PreconditionsPerPath(t *testing.T) {
+// Every cleanup path decides on a copy from the informer cache, so every one
+// deletes only the revision it judged: the UID refuses a name reused by a
+// different object, the resourceVersion one rewritten (adopted) since.
+func TestDeleteWLRsWhere_EveryPathDeletesOnlyTheRevisionItJudged(t *testing.T) {
 	const uid = "wlr-uid"
-	newWLR := func() *sustainv1alpha1.WorkloadRecommendation {
-		wlr := wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour))
-		wlr.UID = uid
-		return wlr
-	}
-
 	for _, tc := range []struct {
-		name            string
-		run             func(*testing.T, *PolicyReconciler)
-		wantResourceVer bool
+		name string
+		run  func(*testing.T, *PolicyReconciler)
 	}{
-		{
-			name: "sweep",
-			run: func(t *testing.T, r *PolicyReconciler) {
-				// Still running, past the grace period, governed by no Policy:
-				// the opted-out branch, which deletes.
-				r.sweepWorkloadRecommendations(context.Background(), "p", snapshotAll(t, r))
-			},
-			wantResourceVer: true,
-		},
-		{
-			name: "policy deletion",
-			run: func(t *testing.T, r *PolicyReconciler) {
-				if err := r.deleteAllRecommendationsForPolicy(context.Background(), "p"); err != nil {
-					t.Errorf("delete: %v", err)
-				}
-			},
-		},
+		{"sweep", func(t *testing.T, r *PolicyReconciler) {
+			// Still running, past the grace period, governed by no Policy: the
+			// opted-out branch, which deletes.
+			r.sweepWorkloadRecommendations(context.Background(), "p", snapshotAll(t, r))
+		}},
+		{"policy deletion", func(t *testing.T, r *PolicyReconciler) {
+			if err := r.deleteAllRecommendationsForPolicy(context.Background(), "p"); err != nil {
+				t.Errorf("delete: %v", err)
+			}
+		}},
+		{"orphan reaper", func(t *testing.T, r *PolicyReconciler) {
+			if err := r.reapOrphanedRecommendations(context.Background()); err != nil {
+				t.Errorf("reap: %v", err)
+			}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			wlr := wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour))
+			wlr.UID = uid
 			dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web"}}
-			r := reconcilerForCache(t, newWLR(), dep)
+			r := reconcilerForCache(t, wlr, dep)
 			rec := &recordingDeleteClient{Client: r.Client}
 			r.Client = rec
 
@@ -841,10 +863,10 @@ func TestDeleteWLRsWhere_PreconditionsPerPath(t *testing.T) {
 			}
 			p := rec.preconditions[0]
 			if p.UID == nil || *p.UID != uid {
-				t.Errorf("uid precondition = %v, want %q: a reused name must never be deleted blindly", p.UID, uid)
+				t.Errorf("uid precondition = %v, want %q", p.UID, uid)
 			}
-			if gotRV := p.ResourceVersion != nil; gotRV != tc.wantResourceVer {
-				t.Errorf("resourceVersion precondition present = %v, want %v", gotRV, tc.wantResourceVer)
+			if p.ResourceVersion == nil || *p.ResourceVersion == "" {
+				t.Errorf("resourceVersion precondition = %v, want the listed revision", p.ResourceVersion)
 			}
 		})
 	}
@@ -857,7 +879,7 @@ func TestDeleteWLRsWhere_DeletesUnchangedAndToleratesAlreadyGone(t *testing.T) {
 	present := wlrFor("p", "prod", "Deployment", "web", time.Now().Add(-1*time.Hour))
 	r := reconcilerForCache(t, present)
 
-	deleted, listErr, deleteErr := r.deleteWLRsWhere(context.Background(), logr.Discard(), deleteIfUnchanged, nil,
+	deleted, listErr, deleteErr := r.deleteWLRsWhere(context.Background(), logr.Discard(), judgeNextPass, nil,
 		func(*sustainv1alpha1.WorkloadRecommendation) bool { return false })
 	if listErr != nil || deleteErr != nil {
 		t.Fatalf("list err %v, delete err %v", listErr, deleteErr)

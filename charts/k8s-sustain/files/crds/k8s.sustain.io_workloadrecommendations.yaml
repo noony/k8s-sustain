@@ -65,8 +65,8 @@ spec:
               applies to, and the Policy that produced it.
             properties:
               policy:
-                description: Policy is the Policy that last governed the identity
-                  and produced this recommendation. A Conflicted identity keeps it,
+                description: Policy is the Policy that last governed the identity,
+                  which records its decisions here. A Conflicted identity keeps it,
                   and the webhook injects only into pods that opt into this Policy.
                 type: string
               workloadRef:
@@ -102,6 +102,12 @@ spec:
               WorkloadRecommendationStatus is the observed recommendation, written by the
               controller and read by the webhook as its only recommendation source.
             properties:
+              computedBy:
+                description: ComputedBy is the Policy that computed containers. The
+                  webhook injects them only into pods of that Policy, so after another
+                  Policy adopts the identity they are withheld until it computes its
+                  own.
+                type: string
               containers:
                 additionalProperties:
                   description: |-

@@ -20,7 +20,8 @@ const (
 	Undecided
 	// NoData: a pass recorded an outcome, but no Recommendation exists yet.
 	NoData
-	// Withheld: the stored numbers belong to a Policy other than the pod's.
+	// Withheld: the object, or the Recommendation it holds, belongs to a
+	// Policy other than the pod's.
 	Withheld
 	// Stale: the Recommendation is older than the staleness budget or, when
 	// it is retained, than the retention window.
@@ -88,7 +89,10 @@ type Reading struct {
 }
 
 // Read decides what known, the identity's stored WorkloadRecommendation (nil
-// when it has none), means at now to a pod opting into policy.
+// when it has none), means at now to a pod opting into policy. A
+// Recommendation is served only to pods of the Policy that computed it
+// (ADR 0003): one the object holds from before another Policy adopted it is
+// withheld until that Policy records its own, whatever it records meanwhile.
 func Read(known *sustainv1alpha1.WorkloadRecommendation, policy string, now time.Time, f Freshness) Reading {
 	if known == nil {
 		return Reading{Verdict: Absent}
@@ -103,6 +107,9 @@ func Read(known *sustainv1alpha1.WorkloadRecommendation, policy string, now time
 			return Reading{Verdict: Undecided}
 		}
 		return Reading{Verdict: NoData}
+	}
+	if known.Status.ComputedBy != policy {
+		return Reading{Verdict: Withheld}
 	}
 	// A retained Recommendation is exempt from the staleness budget: its
 	// ObservedAt is deliberately frozen at the last Computed pass, so gating on

@@ -21,30 +21,28 @@ import (
 // wlrPolicyLabel labels each WorkloadRecommendation with its Policy.
 const wlrPolicyLabel = sustainv1alpha1.WLRPolicyLabel
 
-// wlrDeleteGuard says how strongly a cleanup path conditions its deletes, and
-// what a conflict means on that path.
-type wlrDeleteGuard int
+// onConflict says what a conflicting delete means on a cleanup path.
+type onConflict int
 
 const (
-	// deleteIfUnchanged conditions on UID and ResourceVersion, for decisions
-	// that depend on mutable contents. A conflict is benign: the object is
-	// re-judged next pass.
-	deleteIfUnchanged wlrDeleteGuard = iota
+	// judgeNextPass: the object is re-judged on the path's next pass.
+	judgeNextPass onConflict = iota
 
-	// deleteIfSameObject conditions on the UID alone, for decisions that do not
-	// depend on the revision at all — "this object belongs to the policy being
-	// deleted" stays true however often it is rewritten. A conflict is
-	// unexpected and returned.
-	deleteIfSameObject
+	// failCleanup: the conflict is returned, so a path that promises cleanup
+	// retries instead of reporting it finished.
+	failCleanup
 )
 
 // deleteWLRsWhere lists WorkloadRecommendations and deletes those keep
-// rejects. NotFound counts as deleted; Conflict is benign only under
-// deleteIfUnchanged. A list failure returns a zero count.
+// rejects. Every delete is conditioned on the UID and resourceVersion keep
+// judged: each path decides on a copy from the informer cache, and an object
+// rewritten since may have been adopted by another Policy, which a conflict
+// hands back to a fresh judgement instead of deleting it. NotFound counts as
+// deleted. A list failure returns a zero count.
 func (r *PolicyReconciler) deleteWLRsWhere(
 	ctx context.Context,
 	logger logr.Logger,
-	guard wlrDeleteGuard,
+	conflict onConflict,
 	listOpts []client.ListOption,
 	keep func(*sustainv1alpha1.WorkloadRecommendation) bool,
 ) (deleted int, listErr error, deleteErr error) {
@@ -58,19 +56,12 @@ func (r *PolicyReconciler) deleteWLRsWhere(
 		if keep(wlr) {
 			continue
 		}
-		// Preconditions must describe the object keep() judged.
-		uid := wlr.UID
-		preconditions := client.Preconditions{UID: &uid}
-		if guard == deleteIfUnchanged {
-			resourceVersion := wlr.ResourceVersion
-			preconditions.ResourceVersion = &resourceVersion
-		}
-		err := r.Delete(ctx, wlr, preconditions)
+		err := r.Delete(ctx, wlr, client.Preconditions{UID: &wlr.UID, ResourceVersion: &wlr.ResourceVersion})
 		switch {
 		case err == nil || apierrors.IsNotFound(err):
 			deleted++
-		case apierrors.IsConflict(err) && guard == deleteIfUnchanged:
-			logger.V(1).Info("WorkloadRecommendation changed since it was listed; leaving it to the next sweep",
+		case apierrors.IsConflict(err) && conflict == judgeNextPass:
+			logger.V(1).Info("WorkloadRecommendation changed since it was listed; leaving it to the next pass",
 				"name", wlr.Name, "namespace", wlr.Namespace, "policy", wlr.Spec.Policy)
 		default:
 			logger.V(1).Info("failed to delete WorkloadRecommendation",
@@ -93,7 +84,7 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 	logger := log.FromContext(ctx).WithValues("policy", policyName)
 
 	now := time.Now()
-	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, deleteIfUnchanged,
+	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, judgeNextPass,
 		[]client.ListOption{client.MatchingLabels{wlrPolicyLabel: policyName}},
 		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
 			return !wlrcache.Expired(wlr, policyName, standing(snap, wlr), now, r.RecommendationRetention)
@@ -155,12 +146,15 @@ func (r *PolicyReconciler) recordConflicted(ctx context.Context, policyName stri
 }
 
 // deleteAllRecommendationsForPolicy removes every WorkloadRecommendation for
-// the policy before the finalizer is dropped. Uses deleteIfSameObject and
-// returns conflicts so the finalizer only goes once cleanup finished.
+// the policy before the finalizer is dropped, and only those still naming it
+// when they are deleted: another Policy may have adopted one since it was
+// listed (a GitOps rename creates the new Policy before deleting the old), and
+// the adopted object is the new Policy's to keep. A conflict is returned, so
+// the finalizer only goes once a retry has re-listed and judged afresh.
 func (r *PolicyReconciler) deleteAllRecommendationsForPolicy(ctx context.Context, policyName string) error {
 	logger := log.FromContext(ctx).WithValues("policy", policyName)
 
-	deleted, listErr, deleteErr := r.deleteWLRsWhere(ctx, logger, deleteIfSameObject,
+	deleted, listErr, deleteErr := r.deleteWLRsWhere(ctx, logger, failCleanup,
 		[]client.ListOption{client.MatchingLabels{wlrPolicyLabel: policyName}},
 		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
 			return wlr.Spec.Policy != policyName
@@ -176,8 +170,8 @@ func (r *PolicyReconciler) deleteAllRecommendationsForPolicy(ctx context.Context
 
 // reapOrphanedRecommendations deletes every WorkloadRecommendation whose
 // spec.policy names no existing Policy, catching force deletes and crashes
-// mid-delete. Runs on a tick with the deleteIfUnchanged guard, since a stale
-// copy can call a just-adopted object an orphan.
+// mid-delete. Runs on a tick; a stale copy can call a just-adopted object an
+// orphan, and the conflict leaves it to the next tick.
 func (r *PolicyReconciler) reapOrphanedRecommendations(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("orphan-reaper")
 
@@ -190,7 +184,7 @@ func (r *PolicyReconciler) reapOrphanedRecommendations(ctx context.Context) erro
 		known[policies.Items[i].Name] = struct{}{}
 	}
 
-	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, deleteIfUnchanged, nil,
+	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, judgeNextPass, nil,
 		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
 			if wlr.Spec.Policy == "" {
 				// Untracked entry; some other writer may own it.

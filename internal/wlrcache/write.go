@@ -93,7 +93,9 @@ func writeSnapshot(
 // It creates the object, or adopts it (spec.policy and the policy label become
 // policy), replaces the observed snapshot when it differs (nil leaves it), and
 // clears departed: an identity with a live member is by definition not
-// departed. It never touches the Recommendation or the outcome.
+// departed. It never touches the Recommendation, the outcome or computedBy:
+// an adopted object keeps the previous Policy's numbers, which Read withholds
+// until policy records its own.
 //
 // It returns the object as written, for Record to record into: nothing later
 // re-reads it from a cache that may not have seen the write yet.
@@ -212,10 +214,11 @@ type Decision struct {
 // It is the one status write per identity per cycle and the only writer of
 // departed.
 //
-// Every outcome but Computed keeps the last Recommendation, its trace and
-// observedAt: a departed identity is recomputed until its samples age out of
-// the query window, and clearing the Recommendation then would strip exactly
-// what retention exists to preserve.
+// A Computed decision is attributed to the Policy the object names
+// (status.computedBy). Every other outcome keeps the last Recommendation, its
+// trace, observedAt and computedBy: a departed identity is recomputed until its
+// samples age out of the query window, and clearing the Recommendation then
+// would strip exactly what retention exists to preserve.
 //
 // An unchanged decision costs no write, except that a Computed one rewrites
 // observedAt once it is RefreshInterval old, so a stable Recommendation never
@@ -230,6 +233,9 @@ func Record(ctx context.Context, c client.Client, known *sustainv1alpha1.Workloa
 	desired.Departed = d.Departed
 	computed := d.Outcome == sustainv1alpha1.OutcomeComputed
 	if computed {
+		// Only the governing Policy records, and Ensure or the departed rule
+		// made it the one the object names.
+		desired.ComputedBy = known.Spec.Policy
 		desired.ObservedAt = metav1.NewTime(now)
 		desired.Trace = d.Traces
 		desired.Containers = make(map[string]sustainv1alpha1.ContainerRecommendation, len(d.Recs))

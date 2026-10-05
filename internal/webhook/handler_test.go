@@ -410,6 +410,8 @@ func freshWLR(kind, ns, name string, containers map[string]sustainv1alpha1.Conta
 		},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			ObservedAt: metav1.Now(),
+			Outcome:    sustainv1alpha1.OutcomeComputed,
+			ComputedBy: "p",
 			Containers: containers,
 		},
 	}
@@ -671,6 +673,54 @@ func TestAdmit_BarePodWithOwnerName_InjectsAsPodKind(t *testing.T) {
 	}
 	if !strings.Contains(patchStr, `"/spec/containers/0/resources"`) {
 		t.Errorf("expected a resource injection patch in %s", patchStr)
+	}
+}
+
+// The identity moved to p from another Policy, whose numbers its object still
+// holds: they were never computed for p's pods (ADR 0003). The pod is admitted
+// without them, counted as other-policy, and keeps its owner-name label.
+func TestAdmit_RecommendationOfAnotherPolicyIsWithheldButTheLabelMirrored(t *testing.T) {
+	mode := sustainv1alpha1.UpdateModeOnCreate
+	policy := &sustainv1alpha1.Policy{
+		ObjectMeta: metav1.ObjectMeta{Name: "p"},
+		Spec: sustainv1alpha1.PolicySpec{RightSizing: sustainv1alpha1.RightSizingSpec{
+			Update: sustainv1alpha1.UpdateSpec{Types: sustainv1alpha1.UpdateTypes{Pod: &mode}},
+		}},
+	}
+	adopted := freshWLR("Pod", "default", "etl-daily", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
+	adopted.Status.ComputedBy = "previous"
+	adopted.Status.Outcome = sustainv1alpha1.OutcomeNoData
+	env := newAdmitEnv(t, policy, adopted)
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "etl-daily-run-2",
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "p",
+				sustainv1alpha1.OwnerNameAnnotation: "etl-daily",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	var resp *admissionv1.AdmissionResponse
+	delta := recSourceDelta(t, RecSourceOtherPolicy, func() {
+		resp = env.handler.admit(context.Background(), admissionRequestFor(t, pod))
+	})
+	if delta != 1 {
+		t.Errorf("other-policy delta = %v, want 1", delta)
+	}
+	if !resp.Allowed {
+		t.Fatal("expected allow")
+	}
+	patchStr := string(resp.Patch)
+	if !strings.Contains(patchStr, `"/metadata/labels"`) {
+		t.Errorf("expected the label-mirror patch, got %s", patchStr)
+	}
+	if strings.Contains(patchStr, "resources") {
+		t.Errorf("injected another Policy's Recommendation: %s", patchStr)
 	}
 }
 

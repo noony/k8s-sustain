@@ -29,6 +29,7 @@ func computed(age time.Duration, now time.Time) *sustainv1alpha1.WorkloadRecomme
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			ObservedAt: metav1.NewTime(now.Add(-age)),
 			Outcome:    sustainv1alpha1.OutcomeComputed,
+			ComputedBy: "p",
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
 				"app": {CPURequest: qty("200m"), MemoryRequest: qty("256Mi")},
 			},
@@ -94,6 +95,16 @@ func TestReadVerdictPerState(t *testing.T) {
 			w := computed(0, now)
 			w.Spec.Policy = "q"
 			w.Status = sustainv1alpha1.WorkloadRecommendationStatus{}
+			return w
+		}, wlrcache.Withheld},
+		{"another Policy's Recommendation on an adopted object", func() *sustainv1alpha1.WorkloadRecommendation {
+			w := computed(time.Minute, now)
+			w.Status.ComputedBy = "q"
+			return w
+		}, wlrcache.Withheld},
+		{"a Recommendation no Policy is recorded to have computed", func() *sustainv1alpha1.WorkloadRecommendation {
+			w := computed(time.Minute, now)
+			w.Status.ComputedBy = ""
 			return w
 		}, wlrcache.Withheld},
 		{"computed five minutes ago", func() *sustainv1alpha1.WorkloadRecommendation { return computed(5*time.Minute, now) }, wlrcache.Fresh},
@@ -464,23 +475,79 @@ func TestEnsureClearsDepartedAndKeepsTheDecision(t *testing.T) {
 }
 
 // Another Policy now governs the identity: the claim adopts the object and
-// keeps the numbers the previous Policy computed.
-func TestEnsureAdoptsAnotherPolicysObject(t *testing.T) {
+// keeps the numbers the previous Policy computed, but they are served to
+// neither Policy's pods (ADR 0003). The new Policy's first passes may record
+// anything but a Recommendation — fetch failed, no data, too young — and the
+// old numbers were served to its pods as fresh, for up to the staleness budget.
+// Only its own Recommendation is.
+func TestAnAdoptedRecommendationIsWithheldUntilTheAdoptingPolicyComputesItsOwn(t *testing.T) {
 	now := time.Now()
 	stored := computed(5*time.Minute, now)
 	stored.Labels = map[string]string{sustainv1alpha1.WLRPolicyLabel: "p"}
 	c := newCluster(t, stored)
+	verdicts := func(step string, wantP, wantQ wlrcache.Verdict) {
+		t.Helper()
+		got := c.mustStored(t, web)
+		if v := wlrcache.Read(got, "p", now, wlrcache.Freshness{}).Verdict; v != wantP {
+			t.Errorf("%s: verdict for a pod of p = %s, want %s", step, v, wantP)
+		}
+		if v := wlrcache.Read(got, "q", now, wlrcache.Freshness{}).Verdict; v != wantQ {
+			t.Errorf("%s: verdict for a pod of q = %s, want %s", step, v, wantQ)
+		}
+	}
 
 	if _, err := wlrcache.Ensure(context.Background(), c, web, "q", nil); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-
 	got := c.mustStored(t, web)
 	if got.Spec.Policy != "q" || got.Labels[sustainv1alpha1.WLRPolicyLabel] != "q" {
 		t.Errorf("spec.policy/label = %q/%q, want q", got.Spec.Policy, got.Labels[sustainv1alpha1.WLRPolicyLabel])
 	}
-	if cpuOf(t, got, "app") != "200m" || got.Status.Outcome != sustainv1alpha1.OutcomeComputed {
-		t.Errorf("status = %+v, want p's Recommendation kept", got.Status)
+	if cpuOf(t, got, "app") != "200m" || got.Status.ComputedBy != "p" {
+		t.Errorf("status = %+v, want p's Recommendation kept and attributed to p", got.Status)
+	}
+	verdicts("adopted", wlrcache.Withheld, wlrcache.Withheld)
+
+	for _, outcome := range []sustainv1alpha1.RecommendationOutcome{
+		sustainv1alpha1.OutcomeFetchFailed, sustainv1alpha1.OutcomeNoData, sustainv1alpha1.OutcomeTooYoung,
+	} {
+		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), wlrcache.Decision{Outcome: outcome}, now); err != nil {
+			t.Fatalf("Record %s: %v", outcome, err)
+		}
+		verdicts("q recorded "+string(outcome), wlrcache.Withheld, wlrcache.Withheld)
+	}
+
+	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), computedDecision("300m"), now); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if got := c.mustStored(t, web); got.Status.ComputedBy != "q" || cpuOf(t, got, "app") != "300m" {
+		t.Errorf("status = %+v, want q's Recommendation attributed to q", got.Status)
+	}
+	verdicts("q computed", wlrcache.Withheld, wlrcache.Fresh)
+}
+
+// The same holds when a conflict resolves to the Policy whose pods were not
+// receiving the frozen numbers: they were computed under the other one.
+func TestAConflictResolvedToTheOtherPolicyWithholdsTheFrozenRecommendation(t *testing.T) {
+	now := time.Now()
+	frozen := computed(time.Hour, now)
+	frozen.Labels = map[string]string{sustainv1alpha1.WLRPolicyLabel: "p"}
+	frozen.Status.Outcome = sustainv1alpha1.OutcomeConflicted
+	c := newCluster(t, frozen)
+	if v := wlrcache.Read(c.mustStored(t, web), "p", now, wlrcache.Freshness{}).Verdict; v != wlrcache.Retained {
+		t.Fatalf("while Conflicted: verdict for p = %s, want retained", v)
+	}
+
+	known, err := wlrcache.Ensure(context.Background(), c, web, "q", nil)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if err := wlrcache.Record(context.Background(), c, known, wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeFetchFailed}, now); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	if v := wlrcache.Read(c.mustStored(t, web), "q", now, wlrcache.Freshness{}).Verdict; v != wlrcache.Withheld {
+		t.Errorf("after the conflict resolved to q: verdict for q = %s, want withheld", v)
 	}
 }
 
