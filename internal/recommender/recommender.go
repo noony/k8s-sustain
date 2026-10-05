@@ -118,7 +118,9 @@ func ComputeLimit(request *resource.Quantity, currentRequest, currentLimit *reso
 	if cfg.RequestsLimitsRatio != nil {
 		return LimitResult{Quantity: scaleByRatio(request, *cfg.RequestsLimitsRatio)}
 	}
-	if cfg.KeepLimitRequestRatio && currentRequest != nil && currentLimit != nil && !currentRequest.IsZero() {
+	// ResourceList.Cpu() and Memory() return zero for an absent value: a
+	// container without a limit has no ratio to keep, not a ratio of 0.
+	if cfg.KeepLimitRequestRatio && currentRequest != nil && currentLimit != nil && !currentRequest.IsZero() && !currentLimit.IsZero() {
 		ratio := float64(currentLimit.MilliValue()) / float64(currentRequest.MilliValue())
 		return LimitResult{Quantity: scaleByRatio(request, ratio)}
 	}

@@ -251,6 +251,25 @@ func TestCompute_TracesTheLimit(t *testing.T) {
 	}
 }
 
+// A container without a limit has no limit-to-request ratio to keep: it keeps
+// having none rather than getting a limit of 0, which the apiserver rejects
+// below any request.
+func TestCompute_KeepLimitRequestRatioWithoutALimitKeepsNone(t *testing.T) {
+	res := Compute(Request{
+		Containers: []corev1.Container{{Name: "app", Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: qty("100m")},
+		}}},
+		Inputs: &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 0.2}},
+		Resources: sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{
+			Limits: sustainv1alpha1.ResourceLimitsConfig{KeepLimitRequestRatio: true},
+		}},
+	})
+
+	if rec := res.Recs["app"]; rec.CPULimit != nil || rec.RemoveCPULimit {
+		t.Errorf("cpu limit = %v remove %v, want the container to keep having none", rec.CPULimit, rec.RemoveCPULimit)
+	}
+}
+
 func assertQty(t *testing.T, stage string, got *resource.Quantity, want string) {
 	t.Helper()
 	if got == nil {
