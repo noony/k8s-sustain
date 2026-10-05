@@ -168,9 +168,9 @@ func TestAdmitDoesNotRequestRecommendationWhenUndecided(t *testing.T) {
 
 // A departed identity's snapshot is the controller's only container list for
 // it, and the webhook the only component that sees its next run: an admission
-// whose pod no longer matches the snapshot replaces it, and still gets the
+// whose pod runs a container the snapshot lacks adds it, and still gets the
 // retained Recommendation.
-func TestAdmitRefreshesTheSnapshotOfADepartedIdentity(t *testing.T) {
+func TestAdmitAddsNewContainersToTheSnapshotOfADepartedIdentity(t *testing.T) {
 	departed := freshWLR("Deployment", "prod", "api", map[string]sustainv1alpha1.ContainerRecommendation{
 		"app": wlrRec("100m", "128Mi"),
 	})
@@ -199,8 +199,8 @@ func TestAdmitRefreshesTheSnapshotOfADepartedIdentity(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, ok := got.Status.ObservedResources["app"]; !ok || len(got.Status.ObservedResources) != 1 {
-		t.Fatalf("snapshot = %v, want it replaced by the admitted pod's", got.Status.ObservedResources)
+	if _, ok := got.Status.ObservedResources["app"]; !ok || len(got.Status.ObservedResources) != 2 {
+		t.Fatalf("snapshot = %v, want the admitted pod's container added to the retired one", got.Status.ObservedResources)
 	}
 }
 

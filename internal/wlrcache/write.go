@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,11 +20,12 @@ var errNotEnsured = errors.New("no WorkloadRecommendation to record into: it was
 
 // ShouldRequest reports whether Request has anything to write for a pod opting
 // into policy and running observed, given the identity's object known (nil
-// when absent). Besides an absent object, that is a snapshot the pod no longer
-// matches on an object of policy the controller keeps no live view of —
-// departed, or never given a snapshot. A live identity's snapshot is the
-// governing Policy's union of all its members; one pod's view would only flip
-// it back and forth.
+// when absent). Besides an absent object, that is a container the pod runs and
+// the snapshot lacks, on an object of policy the controller keeps no live view
+// of — departed, or never given a snapshot. Only new names count: pods of one
+// group may run different container sets, and rewriting the snapshot to each
+// pod's view would flip it on every admission. A live identity's snapshot is
+// the governing Policy's union of all its members, pruned by Ensure.
 func ShouldRequest(known *sustainv1alpha1.WorkloadRecommendation, policy string, observed map[string]sustainv1alpha1.ObservedContainerResources) bool {
 	if known == nil {
 		return true
@@ -34,7 +36,12 @@ func ShouldRequest(known *sustainv1alpha1.WorkloadRecommendation, policy string,
 	if !known.Status.Departed && len(known.Status.ObservedResources) > 0 {
 		return false
 	}
-	return !observedEqual(known.Status.ObservedResources, observed)
+	for name := range observed {
+		if _, ok := known.Status.ObservedResources[name]; !ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Request asks for a Recommendation for an identity the webhook admits a pod
@@ -57,7 +64,10 @@ func Request(
 		if !ShouldRequest(known, policy, observed) {
 			return nil
 		}
-		return writeSnapshot(ctx, c, known, observed)
+		merged := make(map[string]sustainv1alpha1.ObservedContainerResources, len(known.Status.ObservedResources)+len(observed))
+		maps.Copy(merged, observed)
+		maps.Copy(merged, known.Status.ObservedResources)
+		return writeSnapshot(ctx, c, known, merged)
 	}
 	obj := newObject(ref, policy)
 	obj.Labels[sustainv1alpha1.WLRStubLabel] = "true"

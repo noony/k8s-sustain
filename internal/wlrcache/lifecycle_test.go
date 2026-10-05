@@ -306,10 +306,10 @@ func TestRequestLosingTheCreateRaceLeavesTheWinnersObject(t *testing.T) {
 }
 
 // A short-lived identity the controller never catches alive is computed from
-// the snapshot the webhook took of its first pod. A later run with other
-// containers must replace it — or the identity is computed for containers it
-// no longer runs, and the new ones get nothing, for as long as it lives.
-func TestRequestRefreshesTheSnapshotOfADepartedIdentity(t *testing.T) {
+// the snapshot the webhook took of its first pod. A later run with a new
+// container must add it — or the new container gets nothing, for as long as
+// the identity lives. Containers the snapshot already holds keep their entry.
+func TestRequestAddsNewContainersToTheSnapshotOfADepartedIdentity(t *testing.T) {
 	now := time.Now()
 	departed := computed(time.Hour, now)
 	departed.Status.ObservedAt = metav1.NewTime(departed.Status.ObservedAt.Truncate(time.Second))
@@ -320,19 +320,45 @@ func TestRequestRefreshesTheSnapshotOfADepartedIdentity(t *testing.T) {
 
 	newRun := snapshotOf("200m", "app", "sidecar")
 	if !wlrcache.ShouldRequest(known, "p", newRun) {
-		t.Fatal("ShouldRequest = false for a departed identity whose snapshot the admitted pod no longer matches")
+		t.Fatal("ShouldRequest = false for a departed identity whose snapshot lacks a container the admitted pod runs")
 	}
 	if err := wlrcache.Request(context.Background(), c, known, web, "p", newRun); err != nil {
 		t.Fatalf("Request: %v", err)
 	}
 
 	got := c.mustStored(t, web)
-	if len(got.Status.ObservedResources) != 2 || got.Status.ObservedResources["app"].CPURequest.String() != "200m" {
-		t.Errorf("snapshot = %v, want it replaced by the new run's", got.Status.ObservedResources)
+	if len(got.Status.ObservedResources) != 2 || got.Status.ObservedResources["app"].CPURequest.String() != "100m" {
+		t.Errorf("snapshot = %v, want sidecar added and app's entry kept", got.Status.ObservedResources)
 	}
 	if cpuOf(t, got, "app") != "200m" || got.Status.Outcome != sustainv1alpha1.OutcomeComputed ||
 		!got.Status.Departed || !got.Status.ObservedAt.Equal(&departed.Status.ObservedAt) {
 		t.Errorf("status = %+v, want the Recommendation, outcome, departed and observedAt untouched", got.Status)
+	}
+}
+
+// Pods of one departed group may run different container sets. Once every
+// name is in the snapshot, admissions alternating between the sets write
+// nothing more.
+func TestRequestDoesNotChurnOnAlternatingContainerSets(t *testing.T) {
+	now := time.Now()
+	departed := computed(time.Hour, now)
+	departed.Status.Departed = true
+	departed.Status.ObservedResources = snapshotOf("100m", "app")
+	c := newCluster(t, departed)
+
+	runs := []map[string]sustainv1alpha1.ObservedContainerResources{
+		snapshotOf("100m", "app", "sidecar"),
+		snapshotOf("300m", "app"),
+		snapshotOf("100m", "app", "sidecar"),
+		snapshotOf("300m", "app"),
+	}
+	for _, run := range runs {
+		if err := wlrcache.Request(context.Background(), c, c.mustStored(t, web), web, "p", run); err != nil {
+			t.Fatalf("Request: %v", err)
+		}
+	}
+	if _, patches := c.writes(); patches != 1 {
+		t.Errorf("status patches = %d, want 1: only the first admission brought a new container", patches)
 	}
 }
 
@@ -355,7 +381,9 @@ func TestShouldRequest(t *testing.T) {
 		{"live identity, another snapshot", withSnapshot(false, "p", snapshotOf("100m", "app", "sidecar")), false},
 		{"live identity, no snapshot", withSnapshot(false, "p", nil), true},
 		{"departed, same snapshot", withSnapshot(true, "p", snapshotOf("100m", "app")), false},
-		{"departed, another snapshot", withSnapshot(true, "p", snapshotOf("50m", "app")), true},
+		{"departed, same containers at other values", withSnapshot(true, "p", snapshotOf("50m", "app")), false},
+		{"departed, snapshot lacks the pod's container", withSnapshot(true, "p", snapshotOf("50m", "sidecar")), true},
+		{"departed, snapshot holds more containers", withSnapshot(true, "p", snapshotOf("50m", "app", "sidecar")), false},
 		{"another Policy's departed object", withSnapshot(true, "q", snapshotOf("50m", "app")), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
