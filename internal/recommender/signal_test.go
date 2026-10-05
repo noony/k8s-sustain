@@ -3,9 +3,12 @@ package recommender
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -13,15 +16,15 @@ import (
 
 const listedSignalRule = "k8s_sustain:listed_signal"
 
-// listedSignal is a signal that exists only in this file: a required CPU
-// adjuster costing ten samples per container, raising every container's CPU
-// request to floor. It records what PromInputs and Compute hand it.
+// listedSignal is a signal that exists only in this file: a required memory
+// limit adjuster costing ten samples per container, raising a container's
+// memory limit to factor times the limit it was last killed at, read from
+// that identity's inputs. It keeps the samples PromInputs hands it.
 type listedSignal struct {
-	floor float64
+	factor float64
 
 	mu        sync.Mutex
 	collected []promclient.ShardSample
-	recorded  []bool
 }
 
 func (*listedSignal) name() string   { return "listed" }
@@ -40,15 +43,24 @@ func (l *listedSignal) collect(_ *WorkloadInputs, samples []promclient.ShardSamp
 }
 
 func (*listedSignal) observed(*WorkloadInputs) []string { return nil }
+func (*listedSignal) excusesAge(*WorkloadInputs) bool   { return false }
 
-func (*listedSignal) slot() slot { return slot{role: adjuster, resource: cpuResource} }
+func (*listedSignal) slot() slot { return slot{role: limitAdjuster, resource: memoryResource} }
 
-func (l *listedSignal) contribute(*WorkloadInputs, string) (contribution, bool) {
-	return contribution{value: l.floor, anchors: true}, true
+func (l *listedSignal) contribute(in *WorkloadInputs, container string) (contribution, bool) {
+	o, ok := in.OOM[container]
+	if !ok || o.LimitBytes == 0 {
+		return contribution{}, false
+	}
+	return contribution{value: o.LimitBytes * l.factor}, true
 }
 
-func (l *listedSignal) record(_ *sustainv1alpha1.ResourceTrace, _ float64, determined bool) {
-	l.recorded = append(l.recorded, determined)
+func (l *listedSignal) stage(_ *WorkloadInputs, _ string, value float64, determined bool) sustainv1alpha1.TraceStage {
+	return sustainv1alpha1.TraceStage{
+		Stage: "listed",
+		Value: memoryResource.quantity(value),
+		Facts: map[string]string{"factor": strconv.FormatFloat(l.factor, 'g', -1, 64), "determined": strconv.FormatBool(determined)},
+	}
 }
 
 // listSignal adds s to signals for the duration of the test, the one change a
@@ -97,23 +109,39 @@ func TestSignals_PromInputsFetchesAListedSignal(t *testing.T) {
 }
 
 // Listing a signal is enough for Compute to run its stage in its slot and
-// record its trace entry: as a CPU adjuster it raises the usage percentile,
-// determines the request, and alone justifies one for a container without
-// usage.
-func TestSignals_ComputeRunsAListedSignalsStage(t *testing.T) {
-	listed := &listedSignal{floor: 0.5}
-	listSignal(t, listed)
-
-	res := Compute(Request{
-		Containers: containers("app", "idle"),
-		Inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 0.1}},
-	})
-
-	for _, name := range []string{"app", "idle"} {
-		assertQty(t, name+" cpu", res.Recs[name].CPURequest, "500m")
+// record its own trace entry, with no CRD change: as a memory limit adjuster
+// it raises the limit the strategy set from each container's own inputs and
+// determines it, never raises a limit already above, and never adds one to a
+// container without.
+func TestSignals_ComputeRunsAListedLimitSignalsStage(t *testing.T) {
+	listSignal(t, &listedSignal{factor: 2})
+	equal := sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{
+		Limits: sustainv1alpha1.ResourceLimitsConfig{EqualsToRequest: true},
+	}}
+	in := &WorkloadInputs{
+		MemPerPod: promclient.ContainerValues{"app": 100 * mib, "big": 400 * mib, "quiet": 100 * mib},
+		OOM:       map[string]OOM{"app": {LimitBytes: 128 * mib}, "big": {LimitBytes: 128 * mib}},
 	}
-	assertQty(t, "app percentile", res.Containers["app"].Trace.CPU.Percentile, "100m")
-	if !slices.Equal(listed.recorded, []bool{true, true}) {
-		t.Errorf("recorded = %v, want the stage to have determined both requests", listed.recorded)
+
+	res := Compute(Request{Containers: containers("app", "big", "quiet"), Inputs: in, Resources: equal, Now: now})
+
+	assertQty(t, "app limit", res.Recs["app"].MemoryLimit, "256Mi")
+	app := res.Traces["app"].Memory
+	assertStages(t, "app limit", app.Limit, "equalsToRequest", "listed")
+	assertQty(t, "app listed", app.Limit[1].Value, "256Mi")
+	assertFacts(t, app.Limit[1], map[string]string{"factor": "2", "determined": "true"})
+
+	assertQty(t, "big limit", res.Recs["big"].MemoryLimit, "400Mi")
+	assertFacts(t, res.Traces["big"].Memory.Limit[1], map[string]string{"factor": "2", "determined": "false"})
+
+	assertStages(t, "quiet limit", res.Traces["quiet"].Memory.Limit, "equalsToRequest")
+
+	unlimited := Compute(Request{
+		Containers: []corev1.Container{{Name: "app"}},
+		Inputs:     in,
+		Now:        now,
+	})
+	if rec := unlimited.Recs["app"]; rec.MemoryLimit != nil || rec.RemoveMemoryLimit {
+		t.Errorf("app without a limit = %+v, want it to keep having none", rec)
 	}
 }

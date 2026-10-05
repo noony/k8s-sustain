@@ -19,6 +19,8 @@ type usage struct {
 	rule string
 }
 
+const stagePercentile = "percentile"
+
 var (
 	cpuUsage    = usage{resource: cpuResource, rule: promclient.MetricWorkloadMaxPodCPUCores}
 	memoryUsage = usage{resource: memoryResource, rule: promclient.MetricWorkloadMaxPodMemoryBytes}
@@ -61,6 +63,8 @@ func (u usage) observed(in *WorkloadInputs) []string {
 	return slices.Collect(maps.Keys(*u.values(in)))
 }
 
+func (u usage) excusesAge(*WorkloadInputs) bool { return false }
+
 func (u usage) slot() slot { return slot{role: base, resource: u.resource} }
 
 func (u usage) contribute(in *WorkloadInputs, container string) (contribution, bool) {
@@ -68,8 +72,9 @@ func (u usage) contribute(in *WorkloadInputs, container string) (contribution, b
 	return contribution{value: v, anchors: true}, ok
 }
 
-func (u usage) record(t *sustainv1alpha1.ResourceTrace, value float64, _ bool) {
-	t.Percentile = u.resource.quantity(value)
+// stage records the percentile at full precision: nanocores or bytes.
+func (u usage) stage(_ *WorkloadInputs, _ string, value float64, _ bool) sustainv1alpha1.TraceStage {
+	return sustainv1alpha1.TraceStage{Stage: stagePercentile, Value: u.resource.quantity(value)}
 }
 
 func (u usage) values(in *WorkloadInputs) *promclient.ContainerValues {

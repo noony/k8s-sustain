@@ -14,9 +14,10 @@ import (
 // Recommendation. It owns everything about that input: the Policy settings it
 // reads, the PromQL that reads it for a shard of identities and what that
 // costs, how samples become per-container values, whether an identity can be
-// recommended without them, and its stage and trace entry. PromInputs fetches
-// every signal in signals and Compute runs their stages, so adding a signal
-// is adding its module and listing it.
+// recommended without them, whether they excuse an identity's age, and its
+// stage and trace entry. PromInputs fetches every signal in signals and
+// Compute runs their stages, so adding a signal is adding its module and
+// listing it.
 type signal interface {
 	// name labels the signal in errors and logs.
 	name() string
@@ -33,22 +34,27 @@ type signal interface {
 	collect(in *WorkloadInputs, samples []promclient.ShardSample)
 	// observed lists the containers in holds values of the signal for.
 	observed(in *WorkloadInputs) []string
+	// excusesAge reports whether the signal's values let a Too young identity
+	// through the age gate.
+	excusesAge(in *WorkloadInputs) bool
 	// slot is where the signal's stage runs.
 	slot() slot
 	// contribute is the signal's value for one container's request before
-	// headroom, and false when it has none for that container.
+	// headroom, or for its limit, and false when it has none for that
+	// container.
 	contribute(in *WorkloadInputs, container string) (contribution, bool)
-	// record writes the signal's trace entry for the value it contributed.
-	// determined says that value reached the final request: no other signal
-	// beat it and no operator bound replaced it.
-	record(t *sustainv1alpha1.ResourceTrace, value float64, determined bool)
+	// stage is the signal's trace entry for the value it contributed to
+	// container. determined says that value reached the final request or
+	// limit: no other signal beat it and no operator bound or guard replaced
+	// it.
+	stage(in *WorkloadInputs, container string, value float64, determined bool) sustainv1alpha1.TraceStage
 }
 
 // signals is every signal, in the order their stages run within a role.
 var signals = []signal{cpuUsage, memoryUsage, oomFloor{}}
 
 // role orders the stages of a resource: every base signal before every
-// adjuster.
+// adjuster on the request side, then every limit adjuster on the limit side.
 type role int
 
 const (
@@ -56,20 +62,33 @@ const (
 	base role = iota
 	// adjusters raise the value the base signals set, never lower it.
 	adjuster
+	// limitAdjusters raise the limit the Policy's limit strategy set, never
+	// lower it, remove it or add one to a container without.
+	limitAdjuster
 )
 
-// slot places a signal's stage: its role, and the resource whose request it
-// shapes.
+// slot places a signal's stage: its role, and the resource it shapes.
 type slot struct {
 	role     role
 	resource resourceKind
 }
 
-// contribution is a signal's value for one container's request.
+// inSlot lists the signals whose stage runs in sl, in their listed order.
+func inSlot(sl slot) []signal {
+	var out []signal
+	for _, s := range signals {
+		if s.slot() == sl {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// contribution is a signal's value for one container's request or limit.
 type contribution struct {
 	value float64
 	// anchors says the value justifies a request even with no usage behind
-	// it.
+	// it. A limit adjuster's never does.
 	anchors bool
 }
 

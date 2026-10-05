@@ -191,6 +191,7 @@ func computeWorkloadRecs(spec simulationSpec, containers []corev1.Container, sin
 		AutoInfo:     autoInfo,
 		Inputs:       inputs,
 		Since:        since,
+		Now:          time.Now(),
 	})
 }
 

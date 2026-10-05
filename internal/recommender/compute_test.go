@@ -1,7 +1,7 @@
 package recommender
 
 import (
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
@@ -11,11 +11,17 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
-	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 const mib = float64(mebibyte)
+
+// now is the instant every test computes as of.
+var now = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+
+// old dates an identity well past the age gate.
+var old = now.Add(-time.Hour)
 
 func containers(names ...string) []corev1.Container {
 	out := make([]corev1.Container, 0, len(names))
@@ -25,8 +31,11 @@ func containers(names ...string) []corev1.Container {
 	return out
 }
 
-// old dates an identity well past the age gate.
-func old() time.Time { return time.Now().Add(-time.Hour) }
+// limited is a container named app running with the given requests and
+// limits.
+func limited(requests, limits corev1.ResourceList) corev1.Container {
+	return corev1.Container{Name: "app", Resources: corev1.ResourceRequirements{Requests: requests, Limits: limits}}
+}
 
 func TestCompute_RecommendsEveryObservedContainerWhenNoneDeclared(t *testing.T) {
 	res := Compute(Request{
@@ -35,7 +44,8 @@ func TestCompute_RecommendsEveryObservedContainerWhenNoneDeclared(t *testing.T) 
 			MemPerPod: promclient.ContainerValues{"app": 100 * mib},
 			OOM:       map[string]OOM{"crashy": {Kills: 1, PeakBytes: 300 * mib, HasPeak: true}},
 		},
-		Since: old(),
+		Since: old,
+		Now:   now,
 	})
 
 	if res.Outcome != Recommended {
@@ -59,49 +69,43 @@ func TestCompute_DeclaredContainersBoundTheResult(t *testing.T) {
 			CPUPerPod: promclient.ContainerValues{"app": 1, "renamed-away": 1},
 			MemPerPod: promclient.ContainerValues{"app": 64 * mib},
 		},
+		Now: now,
 	})
 
-	if len(res.Recs) != 1 || len(res.Containers) != 1 {
-		t.Fatalf("recs = %v, details = %v, want app only", res.Recs, res.Containers)
+	if len(res.Recs) != 1 || len(res.Traces) != 1 {
+		t.Fatalf("recs = %v, traces = %v, want app only", res.Recs, res.Traces)
 	}
 	if rec := res.Recs["app"]; rec.CPURequest == nil || rec.MemoryRequest == nil {
 		t.Errorf("app = %+v, want CPU and memory requests", rec)
 	}
 }
 
-// The age gate holds an identity first seen less than MinWorkloadAge ago, and
-// any recent OOM, from Prometheus or the live watcher, excuses it so a
-// crash-looping workload is not locked out.
+// The age gate holds an identity first seen less than MinWorkloadAge before
+// the instant computed as of, and any recent OOM, from Prometheus or the live
+// watcher, excuses it so a crash-looping workload is not locked out.
 func TestCompute_AgeGate(t *testing.T) {
-	now := time.Now()
-	long := now.Add(-2 * MinWorkloadAge)
-	young := now.Add(-time.Minute)
-
 	cases := []struct {
 		name         string
 		since        time.Time
-		promOOM      bool
-		liveOOM      bool
+		oom          *OOM
 		wantTooYoung bool
 	}{
-		{"young identity", young, false, false, true},
-		{"old identity", long, false, false, false},
-		{"young identity, Prometheus OOM bypasses", young, true, false, false},
-		{"young identity, live OOM bypasses", young, false, true, false},
-		{"undated identity", time.Time{}, false, false, false},
+		{"young identity", now.Add(-time.Minute), nil, true},
+		{"just old enough", now.Add(-MinWorkloadAge), nil, false},
+		{"old identity", now.Add(-2 * MinWorkloadAge), nil, false},
+		{"young identity, Prometheus OOM excuses", now.Add(-time.Minute), &OOM{Kills: 1}, false},
+		{"young identity, live OOM excuses", now.Add(-time.Minute), &OOM{LiveAt: now}, false},
+		{"young identity, OOM long ago does not", now.Add(-time.Minute), &OOM{PeakBytes: 1, HasPeak: true}, true},
+		{"undated identity", time.Time{}, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			in := &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 1}}
-			if tc.promOOM {
-				in.OOM = map[string]OOM{"side": {Kills: 1}}
-			}
-			req := Request{Containers: containers("app"), Inputs: in, Since: tc.since}
-			if tc.liveOOM {
-				req.LiveOOMs = map[string]*oomwatch.OOMRecord{"side": liveKill("side", 0, 0)}
+			if tc.oom != nil {
+				in.OOM = map[string]OOM{"side": *tc.oom}
 			}
 
-			res := Compute(req)
+			res := Compute(Request{Containers: containers("app"), Inputs: in, Since: tc.since, Now: now})
 
 			if got := res.Outcome == TooYoung; got != tc.wantTooYoung {
 				t.Errorf("TooYoung = %v, want %v (outcome %v)", got, tc.wantTooYoung, res.Outcome)
@@ -115,15 +119,17 @@ func TestCompute_AgeGate(t *testing.T) {
 }
 
 // computeApp computes the one container "app" from in under rs.
-func computeApp(in *WorkloadInputs, rs sustainv1alpha1.ResourcesConfigs) ContainerRecResult {
-	return Compute(Request{Containers: containers("app"), Inputs: in, Resources: rs}).Containers["app"]
+func computeApp(in *WorkloadInputs, rs sustainv1alpha1.ResourcesConfigs) (workload.ContainerRecommendation, sustainv1alpha1.ContainerTrace) {
+	res := Compute(Request{Containers: containers("app"), Inputs: in, Resources: rs, Now: now})
+	return res.Recs["app"], res.Traces["app"]
 }
 
 func TestCompute_NoDataWhenNothingToRecommendFrom(t *testing.T) {
 	res := Compute(Request{
 		Containers: containers("app"),
 		Inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{}, MemPerPod: promclient.ContainerValues{}},
-		Since:      old(),
+		Since:      old,
+		Now:        now,
 	})
 
 	if res.Outcome != NoData {
@@ -134,9 +140,9 @@ func TestCompute_NoDataWhenNothingToRecommendFrom(t *testing.T) {
 	}
 }
 
-// The CPU trace records the value after every stage that ran: the percentile
-// at full precision, headroom rounded up, a minAllowed clamp moving it, both
-// coordination factors, and the limit derived from the final request.
+// The CPU trace lists every stage that ran, in order, with the value after
+// it: the percentile at full precision, headroom rounded up, a minAllowed
+// clamp moving it, coordination with both factors, then the limit strategy.
 func TestCompute_TracesCPUStages(t *testing.T) {
 	anchor := 0.0
 	res := Compute(Request{
@@ -154,35 +160,29 @@ func TestCompute_TracesCPUStages(t *testing.T) {
 			CurrentReplicas:   8, // 4x the anchor target, factor clamps to 2.0
 			ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 80},
 		},
-		Since: old(),
+		Now: now,
 	})
 
-	cpu := res.Containers["app"].Trace.CPU
+	cpu := res.Traces["app"].CPU
 	if cpu == nil {
 		t.Fatal("no CPU trace")
 	}
-	assertQty(t, "percentile", cpu.Percentile, "123400u")
-	assertQty(t, "withHeadroom", &cpu.WithHeadroom, "136m") // ceil(123.4m x 1.1)
-	assertQty(t, "clamped", &cpu.Clamped, "150m")           // raised to minAllowed
-	c := cpu.Coordination
-	if c == nil {
-		t.Fatal("no coordination stage")
-	}
-	if c.OverheadFactor != 1.375 || c.ReplicaFactor == nil || *c.ReplicaFactor != 2 {
-		t.Errorf("factors = overhead %v, replica %v, want 1.375 and 2", c.OverheadFactor, c.ReplicaFactor)
-	}
-	assertQty(t, "scaled", &c.Scaled, "414m") // ceil(150m x 110/80) = 207m, x 2
-	assertQty(t, "coordinated", &c.Value, "414m")
-	assertQty(t, "limit", cpu.Limit, "414m")
+	assertStages(t, "request", cpu.Request, "percentile", "headroom", "clamp", "coordination")
+	assertQty(t, "percentile", cpu.Request[0].Value, "123400u")
+	assertQty(t, "headroom", cpu.Request[1].Value, "136m")     // ceil(123.4m x 1.1)
+	assertQty(t, "clamp", cpu.Request[2].Value, "150m")        // raised to minAllowed
+	assertQty(t, "coordination", cpu.Request[3].Value, "414m") // ceil(150m x 110/80) = 207m, x 2
+	assertFacts(t, cpu.Request[3], map[string]string{"overheadFactor": "1.375", "replicaFactor": "2"})
+	assertStages(t, "limit", cpu.Limit, "equalsToRequest")
+	assertQty(t, "limit", cpu.Limit[0].Value, "414m")
 	assertQty(t, "request", res.Recs["app"].CPURequest, "414m")
-	if cpu.OOMFloor != nil {
-		t.Errorf("CPU has no OOM floor stage, got %+v", cpu.OOMFloor)
-	}
+	assertQty(t, "recommended limit", res.Recs["app"].CPULimit, "414m")
 }
 
 // Coordination runs only when enabled and an autoscaler targets the
-// workload. A resource the autoscaler has no target for gets overhead 1, and
-// a kept request has no trace at all.
+// workload. A resource the autoscaler has no target for gets overhead 1, a
+// clamp after coordination keeps what the factors produced as a fact, and a
+// kept request has no trace at all.
 func TestCompute_TracesCoordinationOnlyWhenItRan(t *testing.T) {
 	hpa := autoscaler.Info{Kind: autoscaler.KindHPA, ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 50}}
 	inputs := &WorkloadInputs{
@@ -196,26 +196,31 @@ func TestCompute_TracesCoordinationOnlyWhenItRan(t *testing.T) {
 			Resources:    res,
 			Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: enabled},
 			AutoInfo:     info,
-		}).Containers["app"].Trace
+			Now:          now,
+		}).Traces["app"]
 	}
 
-	if tr := compute(false, hpa, sustainv1alpha1.ResourcesConfigs{}); tr.CPU.Coordination != nil || tr.Memory.Coordination != nil {
-		t.Errorf("coordination disabled, got %+v / %+v", tr.CPU.Coordination, tr.Memory.Coordination)
-	}
-	if tr := compute(true, autoscaler.Info{Kind: autoscaler.KindNone}, sustainv1alpha1.ResourcesConfigs{}); tr.CPU.Coordination != nil {
-		t.Errorf("no autoscaler, got %+v", tr.CPU.Coordination)
+	for name, tr := range map[string]sustainv1alpha1.ContainerTrace{
+		"disabled":      compute(false, hpa, sustainv1alpha1.ResourcesConfigs{}),
+		"no autoscaler": compute(true, autoscaler.Info{Kind: autoscaler.KindNone}, sustainv1alpha1.ResourcesConfigs{}),
+	} {
+		if c, ok := TracedCoordination(tr.CPU); ok {
+			t.Errorf("%s: coordination = %+v, want none", name, c)
+		}
+		assertStages(t, name, tr.CPU.Request, "percentile", "headroom", "clamp")
 	}
 
-	tr := compute(true, hpa, sustainv1alpha1.ResourcesConfigs{})
-	if c := tr.CPU.Coordination; c == nil || c.OverheadFactor != 2.2 || c.ReplicaFactor != nil {
+	tr := compute(true, hpa, sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{
+		Requests: sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("2")},
+	}})
+	if c, ok := TracedCoordination(tr.CPU); !ok || c != (Coordination{Overhead: 2.2}) {
 		t.Errorf("cpu coordination = %+v, want overhead 2.2 and no replica correction", c)
-	} else {
-		assertQty(t, "cpu", &c.Value, "2200m")
 	}
-	if c := tr.Memory.Coordination; c == nil || c.OverheadFactor != 1 {
+	coordination := tr.CPU.Request[len(tr.CPU.Request)-1]
+	assertQty(t, "cpu", coordination.Value, "2")
+	assertFacts(t, coordination, map[string]string{"overheadFactor": "2.2", "scaled": "2200m"})
+	if c, ok := TracedCoordination(tr.Memory); !ok || c != (Coordination{Overhead: 1}) {
 		t.Errorf("memory coordination = %+v, want overhead 1 without a memory target", c)
-	} else {
-		assertQty(t, "memory", &c.Value, "128Mi")
 	}
 
 	kept := compute(true, hpa, sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{
@@ -226,47 +231,54 @@ func TestCompute_TracesCoordinationOnlyWhenItRan(t *testing.T) {
 	}
 }
 
-// The limit stage records what was derived from the final request: a value,
-// a removal, or nothing when the container keeps its own limit.
-func TestCompute_TracesTheLimit(t *testing.T) {
-	res := Compute(Request{
-		Containers: containers("app"),
-		Inputs: &WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"app": 0.2},
-			MemPerPod: promclient.ContainerValues{"app": 64 * mib},
-		},
-		Resources: sustainv1alpha1.ResourcesConfigs{
-			CPU:    sustainv1alpha1.ResourceConfig{Limits: sustainv1alpha1.ResourceLimitsConfig{NoLimit: true}},
-			Memory: sustainv1alpha1.ResourceConfig{Limits: sustainv1alpha1.ResourceLimitsConfig{RequestsLimitsRatio: ptr.To(2.0)}},
-		},
-	})
-
-	tr := res.Containers["app"].Trace
-	if !tr.CPU.RemoveLimit || tr.CPU.Limit != nil {
-		t.Errorf("cpu limit = %v remove %v, want removed", tr.CPU.Limit, tr.CPU.RemoveLimit)
+func TestAgeForLog(t *testing.T) {
+	if got := AgeForLog(time.Time{}, now); got != "none" {
+		t.Errorf("AgeForLog(zero) = %q, want %q", got, "none")
 	}
-	assertQty(t, "memory limit", tr.Memory.Limit, "128Mi")
-	if rec := res.Recs["app"]; !rec.RemoveCPULimit || rec.MemoryLimit == nil || rec.MemoryLimit.Cmp(*tr.Memory.Limit) != 0 {
-		t.Errorf("rec = %+v, want the limits the trace records", rec)
+	if got := AgeForLog(now.Add(-30*time.Minute), now); got != "30m0s" {
+		t.Errorf("AgeForLog(30m ago) = %q, want 30m0s", got)
 	}
 }
 
-// A container without a limit has no limit-to-request ratio to keep: it keeps
-// having none rather than getting a limit of 0, which the apiserver rejects
-// below any request.
-func TestCompute_KeepLimitRequestRatioWithoutALimitKeepsNone(t *testing.T) {
+// computeLimited computes the CPU of c from a usage of cores under the limit
+// strategy cfg.
+func computeLimited(t *testing.T, c corev1.Container, cores float64, cfg sustainv1alpha1.ResourceLimitsConfig) (workload.ContainerRecommendation, *sustainv1alpha1.ResourceTrace) {
+	t.Helper()
 	res := Compute(Request{
-		Containers: []corev1.Container{{Name: "app", Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: qty("100m")},
-		}}},
-		Inputs: &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 0.2}},
-		Resources: sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{
-			Limits: sustainv1alpha1.ResourceLimitsConfig{KeepLimitRequestRatio: true},
-		}},
+		Containers: []corev1.Container{c},
+		Inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{c.Name: cores}},
+		Resources:  sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Limits: cfg}},
+		Now:        now,
 	})
+	tr := res.Traces[c.Name].CPU
+	if tr == nil {
+		t.Fatalf("no CPU trace for %s", c.Name)
+	}
+	return res.Recs[c.Name], tr
+}
 
-	if rec := res.Recs["app"]; rec.CPULimit != nil || rec.RemoveCPULimit {
-		t.Errorf("cpu limit = %v remove %v, want the container to keep having none", rec.CPULimit, rec.RemoveCPULimit)
+func assertStages(t *testing.T, what string, stages []sustainv1alpha1.TraceStage, want ...string) {
+	t.Helper()
+	got := make([]string, len(stages))
+	for i, st := range stages {
+		got[i] = st.Stage
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s stages = %v, want %v", what, got, want)
+	}
+}
+
+func assertFacts(t *testing.T, st sustainv1alpha1.TraceStage, want map[string]string) {
+	t.Helper()
+	if len(st.Facts) != len(want) {
+		t.Errorf("%s facts = %v, want %v", st.Stage, st.Facts, want)
+		return
+	}
+	for k, v := range want {
+		if st.Facts[k] != v {
+			t.Errorf("%s facts = %v, want %v", st.Stage, st.Facts, want)
+			return
+		}
 	}
 }
 
@@ -278,15 +290,5 @@ func assertQty(t *testing.T, stage string, got *resource.Quantity, want string) 
 	}
 	if w := resource.MustParse(want); got.Cmp(w) != 0 {
 		t.Errorf("%s = %s, want %s", stage, got, want)
-	}
-}
-
-func TestAgeForLog(t *testing.T) {
-	if got := AgeForLog(time.Time{}); got != "none" {
-		t.Errorf("AgeForLog(zero) = %q, want %q", got, "none")
-	}
-	got := AgeForLog(time.Now().Add(-30 * time.Minute))
-	if !strings.HasPrefix(got, "30m") {
-		t.Errorf("AgeForLog(30m ago) = %q, want ~30m duration string", got)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -620,7 +621,8 @@ func TestRecordComputedStoresTheWholeRecommendation(t *testing.T) {
 			"app": {CPURequest: &req, MemoryRequest: qty("128Mi"), RemoveCPULimit: true, RemoveMemoryLimit: true},
 		},
 		Traces: map[string]sustainv1alpha1.ContainerTrace{"app": {CPU: &sustainv1alpha1.ResourceTrace{
-			Percentile: qty("299500u"), WithHeadroom: req, Clamped: req,
+			Request: []sustainv1alpha1.TraceStage{{Stage: "percentile", Value: qty("299500u")}, {Stage: "clamp", Value: &req}},
+			Limit:   []sustainv1alpha1.TraceStage{{Stage: "noLimit", Removed: true}},
 		}}},
 	}
 	if err := wlrcache.Record(context.Background(), c, known, d, now); err != nil {
@@ -632,7 +634,7 @@ func TestRecordComputedStoresTheWholeRecommendation(t *testing.T) {
 	if app.CPURequest.String() != "300m" || app.MemoryRequest.String() != "128Mi" || !app.RemoveCPULimit || !app.RemoveMemoryLimit {
 		t.Errorf("containers[app] = %+v, want 300m/128Mi with both limits removed", app)
 	}
-	if got.Status.Trace["app"].CPU == nil || got.Status.Trace["app"].CPU.Percentile.String() != "299500u" {
+	if tr := got.Status.Trace["app"].CPU; tr == nil || !equality.Semantic.DeepEqual(*tr, *d.Traces["app"].CPU) {
 		t.Errorf("trace = %+v, want it stored with the values", got.Status.Trace)
 	}
 	if got.Status.Outcome != sustainv1alpha1.OutcomeComputed || got.Status.ObservedAt.Time.Before(now.Add(-time.Second)) {
@@ -696,7 +698,7 @@ func TestRecordWritesTheTraceOnlyWithTheValues(t *testing.T) {
 		req := resource.MustParse(request)
 		d := computedDecision(request)
 		d.Traces = map[string]sustainv1alpha1.ContainerTrace{"app": {CPU: &sustainv1alpha1.ResourceTrace{
-			Percentile: qty(percentile), WithHeadroom: req, Clamped: req,
+			Request: []sustainv1alpha1.TraceStage{{Stage: "percentile", Value: qty(percentile)}, {Stage: "clamp", Value: &req}},
 		}}}
 		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), d, now); err != nil {
 			t.Fatalf("Record: %v", err)
@@ -704,7 +706,7 @@ func TestRecordWritesTheTraceOnlyWithTheValues(t *testing.T) {
 		return c.mustStored(t, web)
 	}
 	percentileOf := func(w *sustainv1alpha1.WorkloadRecommendation) string {
-		return w.Status.Trace["app"].CPU.Percentile.String()
+		return w.Status.Trace["app"].CPU.Request[0].Value.String()
 	}
 
 	first := record("250m", "249500u")

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ContainerTrace, ResourceTrace } from '../lib/api'
+import type { ContainerTrace, TraceStage } from '../lib/api'
 import { parseCPUQuantity, parseMemoryQuantity } from '../lib/format'
 
 const props = defineProps<{ trace: ContainerTrace }>()
@@ -16,51 +16,71 @@ function round(v: number, digits: number): number {
 const cpu: Format = (q) => `${round(parseCPUQuantity(q) * 1000, 2)}m`
 const mem: Format = (q) => `${round(parseMemoryQuantity(q) / 2 ** 20, 1)}Mi`
 
-function value(t: ResourceTrace | undefined, q: string | undefined, fmt: Format) {
-  return t && q ? fmt(q) : undefined
+// A stage missing here is shown under its own name: a new stage needs no
+// change to render.
+const stageNames: Record<string, string> = {
+  percentile: 'Usage percentile',
+  oomFloor: 'OOM floor',
+  headroom: 'With headroom',
+  clamp: 'Min/max clamp',
+  coordination: 'Autoscaler coordination',
+  keepLimit: 'Limit kept',
+  noLimit: 'Limit removed',
+  equalsToRequest: 'Limit equal to request',
+  requestsLimitsRatio: 'Limit at a ratio of the request',
+  keepLimitRequestRatio: 'Limit at the kept ratio',
+  guard: 'Limit raised to the request',
 }
 
-function oomFloor(t: ResourceTrace | undefined, fmt: Format) {
-  const f = t?.oomFloor
-  if (!f) return undefined
-  return fmt(f.value) + (f.determined ? ' · set the request' : '')
+function cell(st: TraceStage | undefined, fmt: Format): string | undefined {
+  if (!st) return undefined
+  const value = st.removed ? 'removed' : st.value ? fmt(st.value) : 'none'
+  const facts = Object.entries(st.facts ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}: ${v}`)
+  return [value, ...facts].join(' · ')
 }
 
-function coordination(t: ResourceTrace | undefined, fmt: Format) {
-  const c = t?.coordination
-  if (!c) return undefined
-  let s = `×${round(c.overheadFactor, 2)} overhead`
-  if (c.replicaFactor !== undefined) s += `, ×${round(c.replicaFactor, 2)} replica`
-  s += ` → ${fmt(c.scaled)}`
-  if (fmt(c.value) !== fmt(c.scaled)) s += `, clamped to ${fmt(c.value)}`
-  return s
+// The stage names of every list, each list's in its own order; a name only
+// one list has goes right after the name it follows there, or last.
+function mergeOrder(...lists: string[][]): string[] {
+  const out: string[] = []
+  for (const list of lists) {
+    let at = out.length
+    for (const name of list) {
+      const i = out.indexOf(name)
+      if (i >= 0) {
+        at = i + 1
+        continue
+      }
+      out.splice(at, 0, name)
+      at++
+    }
+  }
+  return out
 }
 
-function limit(t: ResourceTrace | undefined, fmt: Format) {
-  if (!t) return undefined
-  if (t.removeLimit) return 'removed'
-  return t.limit ? fmt(t.limit) : 'kept'
+function side(key: 'request' | 'limit') {
+  const c = props.trace.cpu?.[key] ?? []
+  const m = props.trace.memory?.[key] ?? []
+  return mergeOrder(
+    c.map((s) => s.stage),
+    m.map((s) => s.stage),
+  ).map((name) => ({
+    key: `${key}:${name}`,
+    stage: stageNames[name] ?? name,
+    cpu: cell(
+      c.find((s) => s.stage === name),
+      cpu,
+    ),
+    memory: cell(
+      m.find((s) => s.stage === name),
+      mem,
+    ),
+  }))
 }
 
-const rows = computed(() => {
-  const { cpu: c, memory: m } = props.trace
-  return [
-    {
-      stage: 'Usage percentile',
-      cpu: value(c, c?.percentile, cpu),
-      memory: value(m, m?.percentile, mem),
-    },
-    { stage: 'OOM floor', cpu: oomFloor(c, cpu), memory: oomFloor(m, mem) },
-    {
-      stage: 'With headroom',
-      cpu: value(c, c?.withHeadroom, cpu),
-      memory: value(m, m?.withHeadroom, mem),
-    },
-    { stage: 'Min/max clamp', cpu: value(c, c?.clamped, cpu), memory: value(m, m?.clamped, mem) },
-    { stage: 'Autoscaler coordination', cpu: coordination(c, cpu), memory: coordination(m, mem) },
-    { stage: 'Limit', cpu: limit(c, cpu), memory: limit(m, mem) },
-  ].filter((r) => r.cpu !== undefined || r.memory !== undefined)
-})
+const rows = computed(() => [...side('request'), ...side('limit')])
 </script>
 
 <template>
@@ -75,7 +95,7 @@ const rows = computed(() => {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="r in rows" :key="r.stage" :data-stage="r.stage">
+        <tr v-for="r in rows" :key="r.key" :data-stage="r.key">
           <td>{{ r.stage }}</td>
           <td>{{ r.cpu ?? '–' }}</td>
           <td>{{ r.memory ?? '–' }}</td>

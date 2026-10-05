@@ -1,6 +1,8 @@
 package recommender
 
 import (
+	"context"
+	"errors"
 	"maps"
 	"math"
 	"slices"
@@ -17,8 +19,85 @@ import (
 
 // liveKill is a kill the OOM Pod watcher saw ago, at limitBytes.
 func liveKill(container string, ago time.Duration, limitBytes int64) *oomwatch.OOMRecord {
-	at := time.Now().Add(-ago)
+	at := now.Add(-ago)
 	return &oomwatch.OOMRecord{Container: container, ObservedAt: at, TerminatedAt: at, OOMLimitBytes: limitBytes}
+}
+
+// oomSource is an oomwatch.Source holding one identity's records.
+type oomSource map[string]*oomwatch.OOMRecord
+
+func (s oomSource) ByWorkload(_, _, _ string) map[string]*oomwatch.OOMRecord { return s }
+
+// fixedInputs is an InputsFetcher serving the same inputs to every identity,
+// and failing those in failed.
+type fixedInputs struct {
+	in     *WorkloadInputs
+	failed promclient.WorkloadIdentity
+}
+
+func (f fixedInputs) FetchInputs(_ context.Context, _ sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
+	out := make(map[promclient.WorkloadIdentity]InputsResult, len(reqs))
+	for _, r := range reqs {
+		if r.Identity == f.failed {
+			out[r.Identity] = InputsResult{Err: errors.New("unreadable")}
+			continue
+		}
+		out[r.Identity] = InputsResult{Inputs: f.in}
+	}
+	return out
+}
+
+var liveID = promclient.WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "api"}
+
+// fetchLive reads in through the live-OOM decorator holding live, at now.
+func fetchLive(t *testing.T, in *WorkloadInputs, live oomSource) *WorkloadInputs {
+	t.Helper()
+	got := WithLiveOOMs(fixedInputs{in: in}, live, func() time.Time { return now }).
+		FetchInputs(context.Background(), sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}})[liveID]
+	if got.Err != nil {
+		t.Fatalf("fetch: %v", got.Err)
+	}
+	return got.Inputs
+}
+
+// The decorator merges a kill the watcher saw within LiveOOMWindow of its
+// clock into the fetched OOMs, anchoring on the higher of the two limits, and
+// ignores an older one. The decorated fetcher's inputs are left as they were,
+// and an identity whose inputs could not be read stays failed.
+func TestWithLiveOOMs_MergesKillsSeenWithinTheWindow(t *testing.T) {
+	prom := &WorkloadInputs{OOM: map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}}}
+	live := oomSource{
+		"app":   liveKill("app", 10*time.Second, 184<<20),
+		"side":  liveKill("side", LiveOOMWindow, 50<<20),
+		"stale": liveKill("stale", LiveOOMWindow+time.Second, 50<<20),
+	}
+	failed := promclient.WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "down"}
+
+	got := WithLiveOOMs(fixedInputs{in: prom, failed: failed}, live, func() time.Time { return now }).
+		FetchInputs(context.Background(), sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}, {Identity: failed}})
+
+	want := map[string]OOM{
+		"app":  {Kills: 1, LimitBytes: 184 << 20, LiveAt: now.Add(-10 * time.Second)},
+		"side": {LimitBytes: 50 << 20, LiveAt: now.Add(-LiveOOMWindow)},
+	}
+	if in := got[liveID].Inputs; in == nil || !maps.Equal(in.OOM, want) {
+		t.Errorf("OOM = %+v, want %+v", got[liveID].Inputs, want)
+	}
+	if !maps.Equal(prom.OOM, map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}}) {
+		t.Errorf("decorated inputs = %+v, want them untouched", prom.OOM)
+	}
+	if r := got[failed]; r.Err == nil || r.Inputs != nil {
+		t.Errorf("failed identity = %+v, want its error", r)
+	}
+}
+
+// A kill the kubelet left undated is dated when the watcher saw it.
+func TestWithLiveOOMs_UndatedKillIsDatedWhenSeen(t *testing.T) {
+	in := fetchLive(t, &WorkloadInputs{}, oomSource{"app": {Container: "app", ObservedAt: now.Add(-time.Minute), OOMLimitBytes: 1}})
+
+	if got := in.OOM["app"].LiveAt; !got.Equal(now.Add(-time.Minute)) {
+		t.Errorf("LiveAt = %v, want when the watcher saw it", got)
+	}
 }
 
 // The floor reads its three 24h rules in one query, selecting them and the
@@ -103,7 +182,7 @@ func TestOOMFloor_Stage(t *testing.T) {
 		{"peak", OOM{Kills: 1, PeakBytes: 200 * mib, HasPeak: true}, true, 200 * mib, true},
 		{"bumped limit beats an unreliable peak", OOM{Kills: 1, PeakBytes: 36 * mib, HasPeak: true, LimitBytes: 100 * mib}, true, 120 * mib, true},
 		{"peak beats the bumped limit", OOM{Kills: 1, PeakBytes: 300 * mib, HasPeak: true, LimitBytes: 96 * mib}, true, 300 * mib, true},
-		{"live kill at a limit", OOM{LiveAt: time.Now(), LimitBytes: 100 * mib}, true, 120 * mib, true},
+		{"live kill at a limit", OOM{LiveAt: now, LimitBytes: 100 * mib}, true, 120 * mib, true},
 		{"zero peak", OOM{Kills: 1, HasPeak: true}, true, 0, true},
 		{"no anchor", OOM{Kills: 1}, true, 0, false},
 	}
@@ -121,15 +200,30 @@ func TestOOMFloor_Stage(t *testing.T) {
 	}
 }
 
-func TestOOMFloor_RecordsTheFloorAndWhetherItDetermined(t *testing.T) {
-	var tr sustainv1alpha1.ResourceTrace
+// The floor's stage records its value, whether it set the request, the anchor
+// it rests on, the limit at the kill and when a live kill happened; the
+// reader the controller's metrics use reads them back.
+func TestOOMFloor_StageRecordsItsFactsAndReadsBack(t *testing.T) {
+	killedAt := now.Add(-10 * time.Second)
+	in := &WorkloadInputs{OOM: map[string]OOM{"app": {Kills: 1, LimitBytes: 200 * mib, LiveAt: killedAt}}}
 
-	oomFloor{}.record(&tr, 200*mib, true)
+	st := oomFloor{}.stage(in, "app", 240*mib, true)
 
-	if tr.OOMFloor == nil || !tr.OOMFloor.Determined {
-		t.Fatalf("oomFloor = %+v, want a determining floor", tr.OOMFloor)
+	if st.Stage != "oomFloor" {
+		t.Fatalf("stage = %q, want oomFloor", st.Stage)
 	}
-	assertQty(t, "oomFloor", &tr.OOMFloor.Value, "200Mi")
+	assertQty(t, "oomFloor", st.Value, "240Mi")
+	assertFacts(t, st, map[string]string{
+		"determined": "true", "anchor": "killedAtLimit", "killedAtLimit": "200Mi", "liveKillAt": "2026-10-05T11:59:50Z",
+	})
+
+	tr := sustainv1alpha1.ContainerTrace{Memory: &sustainv1alpha1.ResourceTrace{Request: []sustainv1alpha1.TraceStage{st}}}
+	if got, ok := TracedOOMFloor(tr); !ok || !got.Determined || !got.LiveKillAt.Equal(killedAt) {
+		t.Errorf("traced = %+v, %v, want determined by the kill at %v", got, ok, killedAt)
+	}
+	if _, ok := TracedOOMFloor(sustainv1alpha1.ContainerTrace{}); ok {
+		t.Error("a trace without a floor read as one")
+	}
 }
 
 // A kill the watcher saw within LiveOOMWindow counts before the recording
@@ -137,17 +231,12 @@ func TestOOMFloor_RecordsTheFloorAndWhetherItDetermined(t *testing.T) {
 // floors the killed container above its limit at the kill. Only that
 // container is floored.
 func TestOOMFloor_LiveKillWithinTheWindow(t *testing.T) {
-	kill := liveKill("app", 10*time.Second, 200<<20)
+	in := fetchLive(t, &WorkloadInputs{
+		CPUPerPod: promclient.ContainerValues{"app": 0.1, "side": 0.05},
+		MemPerPod: promclient.ContainerValues{"app": 100 * mib, "side": 100 * mib},
+	}, oomSource{"app": liveKill("app", 10*time.Second, 200<<20)})
 
-	res := Compute(Request{
-		Containers: containers("app", "side"),
-		Inputs: &WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"app": 0.1, "side": 0.05},
-			MemPerPod: promclient.ContainerValues{"app": 100 * mib, "side": 100 * mib},
-		},
-		LiveOOMs: map[string]*oomwatch.OOMRecord{"app": kill},
-		Since:    time.Now().Add(-time.Minute),
-	})
+	res := Compute(Request{Containers: containers("app", "side"), Inputs: in, Since: now.Add(-time.Minute), Now: now})
 
 	if res.Outcome != Recommended {
 		t.Fatalf("outcome = %v, want Recommended: a live kill bypasses the age gate", res.Outcome)
@@ -155,43 +244,35 @@ func TestOOMFloor_LiveKillWithinTheWindow(t *testing.T) {
 	if got := res.Recs["app"].MemoryRequest; got == nil || got.String() != "240Mi" {
 		t.Errorf("app memory = %v, want 240Mi (200Mi limit at the kill x 1.2)", got)
 	}
-	app := res.Containers["app"]
-	if floor := app.Trace.Memory.OOMFloor; floor == nil || !floor.Determined {
-		t.Errorf("app: oomFloor = %+v, want it to have determined the request", floor)
-	}
-	if !app.OOM.LiveAt.Equal(kill.TerminatedAt) {
-		t.Errorf("app: OOM.LiveAt = %v, want the kill time %v", app.OOM.LiveAt, kill.TerminatedAt)
+	if floor, ok := TracedOOMFloor(res.Traces["app"]); !ok || !floor.Determined || !floor.LiveKillAt.Equal(now.Add(-10*time.Second)) {
+		t.Errorf("app: floor = %+v, %v, want it to have determined the request after the live kill", floor, ok)
 	}
 	if got := res.Recs["side"].MemoryRequest; got == nil || got.String() != "100Mi" {
 		t.Errorf("side memory = %v, want its 100Mi percentile: a sibling's kill must not floor it", got)
 	}
-	if floor := res.Containers["side"].Trace.Memory.OOMFloor; floor != nil {
-		t.Errorf("side: oomFloor = %+v for a container that was not killed", floor)
+	if floor, ok := TracedOOMFloor(res.Traces["side"]); ok {
+		t.Errorf("side: floor = %+v for a container that was not killed", floor)
 	}
 }
 
 // A kill the watcher saw longer than LiveOOMWindow ago is no longer recent:
 // it neither excuses the age gate nor floors the container.
 func TestOOMFloor_StaleLiveKillIsIgnored(t *testing.T) {
-	res := Compute(Request{
-		Containers: containers("app"),
-		Inputs: &WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"app": 0.1},
-			MemPerPod: promclient.ContainerValues{"app": 100 * mib},
-		},
-		LiveOOMs: map[string]*oomwatch.OOMRecord{"app": liveKill("app", LiveOOMWindow+time.Minute, 200<<20)},
-		Since:    time.Now().Add(-time.Minute),
-	})
+	in := fetchLive(t, &WorkloadInputs{
+		CPUPerPod: promclient.ContainerValues{"app": 0.1},
+		MemPerPod: promclient.ContainerValues{"app": 100 * mib},
+	}, oomSource{"app": liveKill("app", LiveOOMWindow+time.Minute, 200<<20)})
+
+	res := Compute(Request{Containers: containers("app"), Inputs: in, Since: now.Add(-time.Minute), Now: now})
 
 	if res.Outcome != TooYoung {
 		t.Errorf("outcome = %v, want TooYoung: a stale kill must not bypass the age gate", res.Outcome)
 	}
-	app := res.Containers["app"]
 	if got := res.Recs["app"].MemoryRequest; got == nil || got.String() != "100Mi" {
 		t.Errorf("app memory = %v, want its 100Mi percentile", got)
 	}
-	if app.Trace.Memory.OOMFloor != nil || !app.OOM.LiveAt.IsZero() {
-		t.Errorf("app: oomFloor = %+v, LiveAt = %v, want no trace of the stale kill", app.Trace.Memory.OOMFloor, app.OOM.LiveAt)
+	if floor, ok := TracedOOMFloor(res.Traces["app"]); ok {
+		t.Errorf("app: floor = %+v, want no trace of the stale kill", floor)
 	}
 }
 
@@ -202,7 +283,8 @@ func TestOOMFloor_PrometheusKills(t *testing.T) {
 	res := Compute(Request{
 		Containers: containers("app", "side"),
 		Inputs:     &WorkloadInputs{OOM: map[string]OOM{"app": {Kills: 1, PeakBytes: 80 * mib, HasPeak: true}}},
-		Since:      time.Now().Add(-time.Minute),
+		Since:      now.Add(-time.Minute),
+		Now:        now,
 	})
 
 	if res.Outcome != Recommended {
@@ -220,18 +302,15 @@ func TestOOMFloor_PrometheusKills(t *testing.T) {
 // before a resize; the live record has the limit applied at the kill. The
 // higher one is the limit the container died at.
 func TestOOMFloor_AnchorsOnTheHigherOfPrometheusAndLiveLimits(t *testing.T) {
-	res := Compute(Request{
-		Containers: containers("app"),
-		Inputs: &WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"app": 0.1},
-			MemPerPod: promclient.ContainerValues{"app": 50 * mib},
-			OOM:       map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}},
-		},
-		LiveOOMs: map[string]*oomwatch.OOMRecord{"app": liveKill("app", 0, 184<<20)},
-		Since:    old(),
-	})
+	in := fetchLive(t, &WorkloadInputs{
+		CPUPerPod: promclient.ContainerValues{"app": 0.1},
+		MemPerPod: promclient.ContainerValues{"app": 50 * mib},
+		OOM:       map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}},
+	}, oomSource{"app": liveKill("app", 0, 184<<20)})
 
-	if got := res.Recs["app"].MemoryRequest; got == nil || got.Value() <= 184<<20 {
+	rec, _ := computeApp(in, sustainv1alpha1.ResourcesConfigs{})
+
+	if got := rec.MemoryRequest; got == nil || got.Value() <= 184<<20 {
 		t.Errorf("app memory = %v, want a bump above the live 184Mi, not the stale 96Mi", got)
 	}
 }
@@ -250,19 +329,20 @@ func TestOOMFloor_SiblingKillDoesNotFloorInnocentContainer(t *testing.T) {
 				"nodata": {PeakBytes: 150 * mib, HasPeak: true},
 			},
 		},
+		Now: now,
 	})
 
 	if got := res.Recs["app"].MemoryRequest; got == nil || got.String() != "200Mi" {
 		t.Errorf("app memory = %v, want 200Mi (peak floor)", got)
 	}
-	if floor := res.Containers["app"].Trace.Memory.OOMFloor; floor == nil || !floor.Determined {
-		t.Errorf("app: oomFloor = %+v, want it to have determined the request", floor)
+	if floor, ok := TracedOOMFloor(res.Traces["app"]); !ok || !floor.Determined {
+		t.Errorf("app: floor = %+v, %v, want it to have determined the request", floor, ok)
 	}
 	if got := res.Recs["side"].MemoryRequest; got == nil || got.String() != "50Mi" {
 		t.Errorf("side memory = %v, want its 50Mi percentile", got)
 	}
-	if floor := res.Containers["side"].Trace.Memory.OOMFloor; floor != nil {
-		t.Errorf("side: oomFloor = %+v, the floor must not apply to a container that did not OOM", floor)
+	if floor, ok := TracedOOMFloor(res.Traces["side"]); ok {
+		t.Errorf("side: floor = %+v, the floor must not apply to a container that did not OOM", floor)
 	}
 	if _, ok := res.Recs["nodata"]; ok {
 		t.Errorf("nodata: no OOM and no usage must yield nothing, got %+v", res.Recs["nodata"])
@@ -275,21 +355,13 @@ func TestOOMFloor_SiblingKillDoesNotFloorInnocentContainer(t *testing.T) {
 func TestOOMFloor_LiveKillNeedsAnAnchor(t *testing.T) {
 	empty := &WorkloadInputs{CPUPerPod: promclient.ContainerValues{}, MemPerPod: promclient.ContainerValues{}}
 
-	none := Compute(Request{
-		Containers: containers("app"),
-		Inputs:     empty,
-		LiveOOMs:   map[string]*oomwatch.OOMRecord{"app": liveKill("app", 0, 0)},
-	})
-	if _, ok := none.Recs["app"]; ok {
-		t.Errorf("live OOM with no anchor must not emit a recommendation, got %v", none.Recs)
+	none, _ := computeApp(fetchLive(t, empty, oomSource{"app": liveKill("app", 0, 0)}), sustainv1alpha1.ResourcesConfigs{})
+	if none.MemoryRequest != nil {
+		t.Errorf("live OOM with no anchor must not emit a recommendation, got %v", none.MemoryRequest)
 	}
 
-	limit := Compute(Request{
-		Containers: containers("app"),
-		Inputs:     empty,
-		LiveOOMs:   map[string]*oomwatch.OOMRecord{"app": liveKill("app", 0, 100<<20)},
-	})
-	if got := limit.Recs["app"].MemoryRequest; got == nil || got.String() != "120Mi" {
+	limit, _ := computeApp(fetchLive(t, empty, oomSource{"app": liveKill("app", 0, 100<<20)}), sustainv1alpha1.ResourcesConfigs{})
+	if got := limit.MemoryRequest; got == nil || got.String() != "120Mi" {
 		t.Errorf("app memory = %v, want 120Mi (100Mi limit x 1.2)", got)
 	}
 }
@@ -315,18 +387,18 @@ func TestOOMFloor_FloorsTheMemoryRequest(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := computeApp(&WorkloadInputs{
+			rec, _ := computeApp(&WorkloadInputs{
 				MemPerPod: promclient.ContainerValues{"app": tc.rawBytes},
 				OOM:       map[string]OOM{"app": tc.oom},
-			}, sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.cfg}}).Rec.MemoryRequest
+			}, sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.cfg}})
 
 			if tc.wantNil {
-				if got != nil {
-					t.Errorf("memory = %s, want none", got)
+				if rec.MemoryRequest != nil {
+					t.Errorf("memory = %s, want none", rec.MemoryRequest)
 				}
 				return
 			}
-			assertQty(t, "memory", got, tc.want)
+			assertQty(t, "memory", rec.MemoryRequest, tc.want)
 		})
 	}
 }
@@ -353,15 +425,16 @@ func TestOOMFloor_TracesWhetherItDetermined(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			floor := computeApp(&WorkloadInputs{
+			_, tr := computeApp(&WorkloadInputs{
 				MemPerPod: promclient.ContainerValues{"app": tc.rawBytes},
 				OOM:       map[string]OOM{"app": tc.oom},
-			}, sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.cfg}}).Trace.Memory.OOMFloor
+			}, sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.cfg}})
 
-			if (floor != nil) != tc.wantFloor {
-				t.Fatalf("oomFloor = %+v, want present %v", floor, tc.wantFloor)
+			floor, ok := TracedOOMFloor(tr)
+			if ok != tc.wantFloor {
+				t.Fatalf("floor = %+v, %v, want present %v", floor, ok, tc.wantFloor)
 			}
-			if floor != nil && floor.Determined != tc.want {
+			if floor.Determined != tc.want {
 				t.Errorf("determined = %v, want %v", floor.Determined, tc.want)
 			}
 		})
@@ -376,13 +449,12 @@ func TestOOMFloor_TracesThroughCoordination(t *testing.T) {
 		name           string
 		requests       sustainv1alpha1.ResourceRequestsConfig
 		wantClamped    string
-		wantScaled     string
 		wantRequest    string
 		wantDetermined bool
 	}{
-		{"overhead only scales the floor", sustainv1alpha1.ResourceRequestsConfig{}, "200Mi", "275Mi", "275Mi", true},
-		{"maxAllowed re-clamps after coordination", sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("256Mi")}, "200Mi", "275Mi", "256Mi", false},
-		{"minAllowed clamps before coordination", sustainv1alpha1.ResourceRequestsConfig{MinAllowed: qtyp("240Mi")}, "240Mi", "330Mi", "330Mi", false},
+		{"overhead only scales the floor", sustainv1alpha1.ResourceRequestsConfig{}, "200Mi", "275Mi", true},
+		{"maxAllowed re-clamps after coordination", sustainv1alpha1.ResourceRequestsConfig{MaxAllowed: qtyp("256Mi")}, "200Mi", "256Mi", false},
+		{"minAllowed clamps before coordination", sustainv1alpha1.ResourceRequestsConfig{MinAllowed: qtyp("240Mi")}, "240Mi", "330Mi", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -395,24 +467,26 @@ func TestOOMFloor_TracesThroughCoordination(t *testing.T) {
 				Resources:    sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.requests}},
 				Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true},
 				AutoInfo:     autoscaler.Info{Kind: autoscaler.KindKEDA, ConfiguredTargets: map[string]int32{autoscaler.ResourceMemory: 80}},
-				Since:        old(),
+				Since:        old,
+				Now:          now,
 			})
 
-			mem := res.Containers["app"].Trace.Memory
-			if mem == nil || mem.OOMFloor == nil || mem.Coordination == nil {
-				t.Fatalf("memory trace = %+v, want percentile, OOM floor and coordination stages", mem)
+			mem := res.Traces["app"].Memory
+			if mem == nil {
+				t.Fatal("no memory trace")
 			}
-			assertQty(t, "percentile", mem.Percentile, "100Mi")
-			assertQty(t, "oomFloor", &mem.OOMFloor.Value, "200Mi")
-			assertQty(t, "withHeadroom", &mem.WithHeadroom, "200Mi")
-			assertQty(t, "clamped", &mem.Clamped, tc.wantClamped)
-			assertQty(t, "scaled", &mem.Coordination.Scaled, tc.wantScaled)
+			assertStages(t, "request", mem.Request, "percentile", "oomFloor", "headroom", "clamp", "coordination")
+			assertQty(t, "percentile", mem.Request[0].Value, "100Mi")
+			assertQty(t, "oomFloor", mem.Request[1].Value, "200Mi")
+			assertQty(t, "headroom", mem.Request[2].Value, "200Mi")
+			assertQty(t, "clamp", mem.Request[3].Value, tc.wantClamped)
+			assertQty(t, "coordination", mem.Request[4].Value, tc.wantRequest)
 			assertQty(t, "request", res.Recs["app"].MemoryRequest, tc.wantRequest)
-			if mem.Coordination.ReplicaFactor != nil {
-				t.Errorf("memory has no replica correction, got %v", *mem.Coordination.ReplicaFactor)
+			if c, ok := TracedCoordination(mem); !ok || c.Replica != 0 {
+				t.Errorf("coordination = %+v, %v, want it with no replica correction on memory", c, ok)
 			}
-			if mem.OOMFloor.Determined != tc.wantDetermined {
-				t.Errorf("determined = %v, want %v", mem.OOMFloor.Determined, tc.wantDetermined)
+			if floor, _ := TracedOOMFloor(res.Traces["app"]); floor.Determined != tc.wantDetermined {
+				t.Errorf("determined = %v, want %v", floor.Determined, tc.wantDetermined)
 			}
 		})
 	}

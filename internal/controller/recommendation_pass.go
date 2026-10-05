@@ -9,7 +9,6 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
-	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
@@ -110,6 +109,9 @@ func (r *PolicyReconciler) recommend(
 	}
 
 	fetched := r.Inputs.FetchInputs(ctx, policy.Spec.RightSizing.ResourcesConfigs, reqs)
+	// Taken after the fetch, which can take minutes: kills it merged in must
+	// not postdate the instant they are computed as of.
+	now := time.Now()
 
 	var g errgroup.Group
 	g.SetLimit(r.WorkloadConcurrencyLimit)
@@ -126,7 +128,7 @@ func (r *PolicyReconciler) recommend(
 		}
 		res.inputs = f.Inputs
 		g.Go(func() error {
-			r.computeIdentity(ctx, policy, res, autoSnap)
+			r.computeIdentity(ctx, policy, res, autoSnap, now)
 			return nil
 		})
 	}
@@ -134,15 +136,16 @@ func (r *PolicyReconciler) recommend(
 	return results
 }
 
-// computeIdentity computes one fetched identity's outcome. It runs once per
-// identity, never per member: members share one Prometheus series and one
-// WorkloadRecommendation, so per-member computation produced competing
-// answers.
+// computeIdentity computes one fetched identity's outcome as of now. It runs
+// once per identity, never per member: members share one Prometheus series
+// and one WorkloadRecommendation, so per-member computation produced
+// competing answers.
 func (r *PolicyReconciler) computeIdentity(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
 	res *identityResult,
 	autoSnap *autoscaler.NamespacedSnapshot,
+	now time.Time,
 ) {
 	it := res.item
 	id := it.Identity
@@ -155,18 +158,14 @@ func (r *PolicyReconciler) computeIdentity(
 		EmitAutoscalerPresent(id, string(autoInfo.Kind))
 		EmitAutoscalerTargetsConfigured(id, string(autoInfo.Kind), autoInfo.ConfiguredTargets)
 	}
-	var liveOOMs map[string]*oomwatch.OOMRecord
-	if r.LiveOOM.Enabled() {
-		liveOOMs = r.LiveOOM.Source.ByWorkload(id.Namespace, id.OwnerKind, id.OwnerName)
-	}
 	out := recommender.Compute(recommender.Request{
 		Containers:   containersFromObserved(it.Observed, rs.ExcludeInitContainers),
 		Resources:    rs.ResourcesConfigs,
 		Coordination: rs.AutoscalerCoordination,
 		AutoInfo:     autoInfo,
 		Inputs:       res.inputs,
-		LiveOOMs:     liveOOMs,
 		Since:        it.Since,
+		Now:          now,
 	})
 	switch out.Outcome {
 	case recommender.TooYoung:
@@ -174,28 +173,30 @@ func (r *PolicyReconciler) computeIdentity(
 		recommendationSkipped.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, "workload_too_young").Inc()
 		log.FromContext(ctx).Info("skipping recommendation: workload too young",
 			"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
-			"age", recommender.AgeForLog(it.Since), "minAge", recommender.MinWorkloadAge)
+			"age", recommender.AgeForLog(it.Since, now), "minAge", recommender.MinWorkloadAge)
 	case recommender.NoData:
 		res.outcome = outcomeNoData
 	default:
 		res.outcome = outcomeRecommended
 		res.recs = out.Recs
-		res.traces = out.Traces()
-		emitContainerComputation(id, out.Containers)
+		res.traces = out.Traces
+		emitContainerComputation(id, out.Traces, now)
 	}
 }
 
 // emitContainerComputation counts the containers whose memory request the OOM
-// floor determined, and how long after a live kill each responded.
-func emitContainerComputation(id promclient.WorkloadIdentity, containers map[string]recommender.ContainerRecResult) {
+// floor determined, and how long after a live kill each responded, from the
+// OOM floor stage of their traces.
+func emitContainerComputation(id promclient.WorkloadIdentity, traces map[string]sustainv1alpha1.ContainerTrace, now time.Time) {
 	ns, kind, name := id.Namespace, id.OwnerKind, id.OwnerName
-	for container, res := range containers {
-		if mem := res.Trace.Memory; mem == nil || mem.OOMFloor == nil || !mem.OOMFloor.Determined {
+	for container, tr := range traces {
+		floor, ok := recommender.TracedOOMFloor(tr)
+		if !ok || !floor.Determined {
 			continue
 		}
 		oomFloorApplied.WithLabelValues(ns, kind, name, container).Inc()
-		if !res.OOM.LiveAt.IsZero() {
-			EmitOOMReactionLatency(ns, kind, name, time.Since(res.OOM.LiveAt).Seconds())
+		if !floor.LiveKillAt.IsZero() {
+			EmitOOMReactionLatency(ns, kind, name, now.Sub(floor.LiveKillAt).Seconds())
 		}
 	}
 }

@@ -279,7 +279,7 @@ func TestReconcile_RecommendsPersistsAndApplies(t *testing.T) {
 	if got := wlr.Status.Containers["app"].CPURequest; got == nil || got.String() != "100m" {
 		t.Errorf("stored CPU recommendation = %v, want 100m", got)
 	}
-	if tr := wlr.Status.Trace["app"].CPU; tr == nil || tr.Percentile == nil || tr.Clamped.String() != "100m" {
+	if tr := wlr.Status.Trace["app"].CPU; tr == nil || len(tr.Request) < 2 || tr.Request[len(tr.Request)-1].Value.String() != "100m" {
 		t.Errorf("stored CPU trace = %+v, want the stages that arrived at 100m", tr)
 	}
 	if cpu := podCPU(t, r, "default", "web-pod"); cpu != "100m" {

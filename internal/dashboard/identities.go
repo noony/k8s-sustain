@@ -14,6 +14,7 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -168,34 +169,24 @@ func coordinationFactorsOf(wlr *sustainv1alpha1.WorkloadRecommendation) *coordin
 	var out *coordinationFactors
 	for _, name := range slices.Sorted(maps.Keys(wlr.Status.Trace)) {
 		tr := wlr.Status.Trace[name]
-		if c := coordinationOf(tr.CPU); c != nil {
+		if c, ok := recommender.TracedCoordination(tr.CPU); ok {
 			if out == nil {
 				out = &coordinationFactors{Enabled: true}
 			}
 			if out.CPUOverhead == 0 {
-				out.CPUOverhead = c.OverheadFactor
-				if c.ReplicaFactor != nil {
-					out.CPUReplica = *c.ReplicaFactor
-				}
+				out.CPUOverhead, out.CPUReplica = c.Overhead, c.Replica
 			}
 		}
-		if c := coordinationOf(tr.Memory); c != nil {
+		if c, ok := recommender.TracedCoordination(tr.Memory); ok {
 			if out == nil {
 				out = &coordinationFactors{Enabled: true}
 			}
 			if out.MemoryOverhead == 0 {
-				out.MemoryOverhead = c.OverheadFactor
+				out.MemoryOverhead = c.Overhead
 			}
 		}
 	}
 	return out
-}
-
-func coordinationOf(t *sustainv1alpha1.ResourceTrace) *sustainv1alpha1.CoordinationTrace {
-	if t == nil {
-		return nil
-	}
-	return t.Coordination
 }
 
 // writeIdentityError answers a failed identity read: 404 for an unknown

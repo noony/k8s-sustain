@@ -257,28 +257,21 @@ export interface RecommendationContainer {
 export type RecommendationOutcome =
   'Computed' | 'NoData' | 'TooYoung' | 'FetchFailed' | 'Conflicted'
 
-export interface OOMFloorTrace {
-  value: string
-  /** The floor, not the percentile or a min/max clamp, set the final request. */
-  determined?: boolean
+/** One stage of a resource's computation. */
+export interface TraceStage {
+  stage: string
+  /** What a signal contributed, or the request or limit after the stage, as a Kubernetes quantity. */
+  value?: string
+  /** The stage strips the limit. */
+  removed?: boolean
+  /** The stage's own details, shown as they are. */
+  facts?: Record<string, string>
 }
 
-export interface CoordinationTrace {
-  overheadFactor: number
-  replicaFactor?: number
-  scaled: string
-  value: string
-}
-
-/** One resource's request after each stage that ran, as Kubernetes quantities. */
+/** One resource's stages in the order they ran: the request's, then the limit's. */
 export interface ResourceTrace {
-  percentile?: string
-  oomFloor?: OOMFloorTrace
-  withHeadroom: string
-  clamped: string
-  coordination?: CoordinationTrace
-  limit?: string
-  removeLimit?: boolean
+  request?: TraceStage[]
+  limit?: TraceStage[]
 }
 
 export interface ContainerTrace {

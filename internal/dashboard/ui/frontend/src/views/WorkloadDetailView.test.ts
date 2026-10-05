@@ -101,22 +101,28 @@ describe('WorkloadDetailView', () => {
         trace: {
           app: {
             cpu: {
-              percentile: '123400u',
-              withHeadroom: '136m',
-              clamped: '150m',
-              coordination: {
-                overheadFactor: 1.375,
-                replicaFactor: 2,
-                scaled: '414m',
-                value: '414m',
-              },
+              request: [
+                { stage: 'percentile', value: '123400u' },
+                { stage: 'headroom', value: '136m' },
+                { stage: 'clamp', value: '150m' },
+                {
+                  stage: 'coordination',
+                  value: '414m',
+                  facts: { overheadFactor: '1.375', replicaFactor: '2' },
+                },
+              ],
             },
             memory: {
-              percentile: '100Mi',
-              oomFloor: { value: '240Mi', determined: true },
-              withHeadroom: '240Mi',
-              clamped: '240Mi',
-              coordination: { overheadFactor: 1.375, scaled: '330Mi', value: '256Mi' },
+              request: [
+                { stage: 'percentile', value: '100Mi' },
+                { stage: 'oomFloor', value: '240Mi', facts: { determined: 'true' } },
+                { stage: 'headroom', value: '240Mi' },
+                { stage: 'clamp', value: '240Mi' },
+              ],
+              limit: [
+                { stage: 'keepLimit', value: '200Mi' },
+                { stage: 'guard', value: '240Mi' },
+              ],
             },
           },
         },
@@ -127,9 +133,9 @@ describe('WorkloadDetailView', () => {
     const trace = w.find('[data-test="trace"]')
     expect(trace.exists()).toBe(true)
     expect(trace.text()).toContain('123.4m')
-    expect(trace.text()).toContain('×2 replica')
-    expect(trace.text()).toContain('240Mi · set the request')
-    expect(trace.text()).toContain('clamped to 256Mi')
+    expect(trace.text()).toContain('replicaFactor: 2')
+    expect(trace.text()).toContain('240Mi · determined: true')
+    expect(trace.text()).toContain('Limit raised to the request')
   })
 
   it('names the Policies of a Conflicted identity', async () => {

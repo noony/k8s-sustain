@@ -1,6 +1,7 @@
 package recommender
 
 import (
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -8,7 +9,6 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
-	"github.com/noony/k8s-sustain/internal/oomwatch"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -19,12 +19,13 @@ import (
 // reconcile. 10 minutes leaves headroom past the longest fallback window
 // (5m) used by k8s_sustain:container_cpu_usage:rate1m.
 //
-// A recent OOM event bypasses the gate so crash-looping workloads can still
-// receive a memory recommendation anchored on the OOM peak.
+// A signal can excuse an identity's age: a recent OOM kill does, so a
+// crash-looping workload still receives a memory recommendation anchored on
+// the kill.
 const MinWorkloadAge = 10 * time.Minute
 
-// shouldSkipYoungWorkload reports whether a workload is too young to have
-// produced stable rate samples and has no recent OOM to bypass the gate.
+// tooYoung reports whether an identity first seen at since is younger than
+// MinWorkloadAge at now, with no signal's values excusing it.
 //
 // since is when the identity was first seen: its earliest member's creation
 // or its WorkloadRecommendation's, whichever is older (inventory.Identity).
@@ -46,29 +47,27 @@ const MinWorkloadAge = 10 * time.Minute
 //
 // A zero since disables the gate: there is nothing to date the identity by,
 // and skipping would only mask the no-data outcome.
-func shouldSkipYoungWorkload(since time.Time, recentOOM bool) bool {
-	if recentOOM || since.IsZero() {
+func tooYoung(since, now time.Time, in *WorkloadInputs) bool {
+	if since.IsZero() || now.Sub(since) >= MinWorkloadAge {
 		return false
 	}
-	return time.Since(since) < MinWorkloadAge
+	for _, s := range signals {
+		if s.excusesAge(in) {
+			return false
+		}
+	}
+	return true
 }
 
-// AgeForLog renders an age for the too-young skip logs. Returns "none" for
-// the zero time — logging it directly would render as a meaningless epoch
-// offset (object age) or a near-MaxInt64 duration (identity age).
-func AgeForLog(start time.Time) string {
+// AgeForLog renders the age at now of something started at start, for the
+// too-young skip logs. Returns "none" for the zero time — logging it directly
+// would render as a meaningless epoch offset (object age) or a near-MaxInt64
+// duration (identity age).
+func AgeForLog(start, now time.Time) string {
 	if start.IsZero() {
 		return "none"
 	}
-	return time.Since(start).String()
-}
-
-// ContainerRecResult is one container's recommendation, the trace of how it
-// was derived, and the OOM kills its memory request was floored against.
-type ContainerRecResult struct {
-	Rec   workload.ContainerRecommendation
-	Trace sustainv1alpha1.ContainerTrace
-	OOM   OOM
+	return now.Sub(start).String()
 }
 
 // Outcome says whether a Result is a Recommendation, and why not.
@@ -78,7 +77,7 @@ const (
 	// Recommended means Result.Recs is the identity's Recommendation.
 	Recommended Outcome = iota
 	// TooYoung means the identity is younger than MinWorkloadAge with no
-	// recent OOM to excuse it, so its samples are not trusted yet.
+	// signal excusing it, so its samples are not trusted yet.
 	TooYoung
 	// NoData means no container had a sample or an OOM anchor to recommend
 	// from.
@@ -91,7 +90,7 @@ const (
 // substitutes the configuration under test.
 type Request struct {
 	// Containers is the set to recommend for, carrying each container's current
-	// requests and limits (limit derivation reads them). Empty means "every
+	// requests and limits (the limit stages read them). Empty means "every
 	// container the inputs report", which is all a departed or unknown
 	// workload has left.
 	Containers   []corev1.Container
@@ -99,13 +98,12 @@ type Request struct {
 	Coordination sustainv1alpha1.AutoscalerCoordination
 	AutoInfo     autoscaler.Info
 	Inputs       *WorkloadInputs
-	// LiveOOMs are the kills the OOM Pod watcher saw, by container. One seen
-	// within LiveOOMWindow counts as a recent OOM before the recording rules
-	// surface it.
-	LiveOOMs map[string]*oomwatch.OOMRecord
-	// Since dates the identity for the age gate; see shouldSkipYoungWorkload.
-	// Zero disables the gate.
+	// Since dates the identity for the age gate; see tooYoung. Zero disables
+	// the gate.
 	Since time.Time
+	// Now is the instant the computation runs as of: the age gate measures
+	// Since against it.
+	Now time.Time
 }
 
 // Result is Compute's answer for one identity.
@@ -115,21 +113,12 @@ type Result struct {
 	// Simulation can show what a Too young identity would get. Only a
 	// Recommended result is a Recommendation.
 	Recs map[string]workload.ContainerRecommendation
-	// Containers details how each container in Recs was computed.
-	Containers map[string]ContainerRecResult
-}
-
-// Traces returns the trace of each container in Recs.
-func (r Result) Traces() map[string]sustainv1alpha1.ContainerTrace {
-	out := make(map[string]sustainv1alpha1.ContainerTrace, len(r.Containers))
-	for name, c := range r.Containers {
-		out[name] = c.Trace
-	}
-	return out
+	// Traces records how each container in Recs was computed.
+	Traces map[string]sustainv1alpha1.ContainerTrace
 }
 
 // Compute is the recommendation algorithm: the age gate, then each
-// container's resources through the stages of every signal. Every reader of a
+// container's resources through their chain of stages. Every reader of a
 // recommendation goes through here so the number the dashboard shows is the
 // number the controller applies.
 func Compute(req Request) Result {
@@ -137,22 +126,21 @@ func Compute(req Request) Result {
 	if len(containers) == 0 {
 		containers = observedContainers(req.Inputs)
 	}
-	in := withLiveOOMs(req.Inputs, req.LiveOOMs)
 	res := Result{
-		Recs:       make(map[string]workload.ContainerRecommendation, len(containers)),
-		Containers: make(map[string]ContainerRecResult, len(containers)),
+		Recs:   make(map[string]workload.ContainerRecommendation, len(containers)),
+		Traces: make(map[string]sustainv1alpha1.ContainerTrace, len(containers)),
 	}
 	for _, c := range containers {
-		cr, ok := computeContainer(c, in, req)
+		rec, tr, ok := computeContainer(c, req)
 		if !ok {
 			continue
 		}
-		res.Recs[c.Name] = cr.Rec
-		res.Containers[c.Name] = cr
+		res.Recs[c.Name] = rec
+		res.Traces[c.Name] = tr
 	}
 
 	switch {
-	case shouldSkipYoungWorkload(req.Since, oomExcusesAge(in)):
+	case tooYoung(req.Since, req.Now, req.Inputs):
 		res.Outcome = TooYoung
 	case len(res.Recs) == 0:
 		res.Outcome = NoData
@@ -162,94 +150,108 @@ func Compute(req Request) Result {
 	return res
 }
 
-// computeContainer runs one container's CPU and memory requests through their
-// stages and derives the limits. False when no signal justified a request for
-// either resource: the container is skipped rather than recommended at the
-// hard floor.
-func computeContainer(c corev1.Container, in *WorkloadInputs, req Request) (ContainerRecResult, bool) {
-	cpu, cpuOK := requestTrace(cpuResource, c.Name, in, req)
-	mem, memOK := requestTrace(memoryResource, c.Name, in, req)
+// computeContainer sizes one container's CPU and memory. False when no
+// signal justified a request for either resource: the container is skipped
+// rather than recommended at the hard floor.
+func computeContainer(c corev1.Container, req Request) (workload.ContainerRecommendation, sustainv1alpha1.ContainerTrace, bool) {
+	cpu, cpuOK := size(cpuResource, c, req)
+	mem, memOK := size(memoryResource, c, req)
 	if !cpuOK && !memOK {
-		return ContainerRecResult{}, false
+		return workload.ContainerRecommendation{}, sustainv1alpha1.ContainerTrace{}, false
 	}
 
-	res := ContainerRecResult{Trace: sustainv1alpha1.ContainerTrace{CPU: cpu, Memory: mem}, OOM: in.OOM[c.Name]}
-	resources := c.Resources
+	var rec workload.ContainerRecommendation
+	var tr sustainv1alpha1.ContainerTrace
 	if cpu != nil {
-		var lr LimitResult
-		res.Rec.CPURequest, lr = finish(cpu, resources.Requests.Cpu(), resources.Limits.Cpu(), req.Resources.CPU.Limits)
-		res.Rec.CPULimit, res.Rec.RemoveCPULimit = lr.Quantity, lr.Remove
+		rec.CPURequest = &cpu.request
+		rec.CPULimit, rec.RemoveCPULimit = cpu.limit.recommendation()
+		tr.CPU = &cpu.trace
 	}
 	if mem != nil {
-		var lr LimitResult
-		res.Rec.MemoryRequest, lr = finish(mem, resources.Requests.Memory(), resources.Limits.Memory(), req.Resources.Memory.Limits)
-		res.Rec.MemoryLimit, res.Rec.RemoveMemoryLimit = lr.Quantity, lr.Remove
+		rec.MemoryRequest = &mem.request
+		rec.MemoryLimit, rec.RemoveMemoryLimit = mem.limit.recommendation()
+		tr.Memory = &mem.trace
 	}
-	return res, true
+	return rec, tr, true
 }
 
-// stageValue is what one signal contributed to a request.
-type stageValue struct {
+// sizing is one resource of a container as its chain left it.
+type sizing struct {
+	request resource.Quantity
+	limit   limit
+	trace   sustainv1alpha1.ResourceTrace
+}
+
+// contributed is what one signal contributed to a container's resource.
+type contributed struct {
 	signal signal
 	value  float64
 }
 
-// requestTrace runs one container's request for a resource through its stages
-// in their fixed order: the base signals, the adjusters, headroom and the
-// min/max clamp, then autoscaler coordination. justified is false when no
-// signal justified a request; the trace is nil then, and when the Policy keeps
-// the request.
-func requestTrace(res resourceKind, container string, in *WorkloadInputs, req Request) (t *sustainv1alpha1.ResourceTrace, justified bool) {
-	var stages []stageValue
+// Stage names of the request side that are not a signal's.
+const (
+	stageHeadroom = "headroom"
+	stageClamp    = "clamp"
+)
+
+// size runs one container's resource through its chain: the request's stages
+// in their fixed order — the base signals, the adjusters, headroom and the
+// min/max clamp, then autoscaler coordination — then the limit's (limitChain).
+// justified is false when no signal justified a request; the sizing is nil
+// then, and when the Policy keeps the request.
+func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justified bool) {
+	var stages []contributed
 	var value float64
 	winner := -1
 	for _, r := range []role{base, adjuster} {
-		for _, s := range signals {
-			if s.slot() != (slot{role: r, resource: res}) {
-				continue
-			}
-			c, ok := s.contribute(in, container)
+		for _, s := range inSlot(slot{role: r, resource: res}) {
+			ct, ok := s.contribute(req.Inputs, c.Name)
 			if !ok {
 				continue
 			}
-			justified = justified || c.anchors
-			if r == base || c.value > value {
-				value, winner = c.value, len(stages)
+			justified = justified || ct.anchors
+			if r == base || ct.value > value {
+				value, winner = ct.value, len(stages)
 			}
-			stages = append(stages, stageValue{signal: s, value: c.value})
+			stages = append(stages, contributed{signal: s, value: ct.value})
 		}
 	}
-	cfg := res.config(req.Resources).Requests
-	if !justified || cfg.KeepRequest {
+	cfg := res.config(req.Resources)
+	if !justified || cfg.Requests.KeepRequest {
 		return nil, justified
 	}
 
-	t = &sustainv1alpha1.ResourceTrace{WithHeadroom: res.withHeadroom(value, cfg.Headroom)}
-	t.Clamped = clamp(t.WithHeadroom, cfg.MinAllowed, cfg.MaxAllowed)
-	t.Coordination = coordinate(t.Clamped, res, req.Coordination, req.AutoInfo, cfg)
+	headroom := res.withHeadroom(value, cfg.Requests.Headroom)
+	clamped := clamp(headroom, cfg.Requests.MinAllowed, cfg.Requests.MaxAllowed)
+	co := coordinate(clamped, res, req.Coordination, req.AutoInfo, cfg.Requests)
 	// Judged on the final request: a clamp on either side of coordination
 	// means an operator bound, not the winning signal, set it.
-	unbounded := t.Clamped.Cmp(t.WithHeadroom) == 0 &&
-		(t.Coordination == nil || t.Coordination.Value.Cmp(t.Coordination.Scaled) == 0)
+	unbounded := clamped.Cmp(headroom) == 0 && (co == nil || co.value.Cmp(co.scaled) == 0)
+
+	out := &sizing{request: clamped}
 	for i, st := range stages {
-		st.signal.record(t, st.value, unbounded && i == winner)
+		out.trace.Request = append(out.trace.Request, st.signal.stage(req.Inputs, c.Name, st.value, unbounded && i == winner))
 	}
-	return t, true
+	out.trace.Request = append(out.trace.Request, quantityStage(stageHeadroom, headroom), quantityStage(stageClamp, clamped))
+	if co != nil {
+		out.request = co.value
+		out.trace.Request = append(out.trace.Request, co.stage())
+	}
+	out.limit, out.trace.Limit = limitChain(res, out.request, c, req.Inputs, cfg.Limits)
+	return out, true
 }
 
-// finish derives the request a trace arrives at and the limit from it, and
-// records the limit in the trace.
-func finish(t *sustainv1alpha1.ResourceTrace, currentRequest, currentLimit *resource.Quantity, cfg sustainv1alpha1.ResourceLimitsConfig) (*resource.Quantity, LimitResult) {
-	final := t.Clamped
-	if t.Coordination != nil {
-		final = t.Coordination.Value
+// quantityStage is a stage holding q and nothing else.
+func quantityStage(name string, q resource.Quantity) sustainv1alpha1.TraceStage {
+	v := q.DeepCopy()
+	return sustainv1alpha1.TraceStage{Stage: name, Value: &v}
+}
+
+// stageNamed finds the stage named name in stages.
+func stageNamed(stages []sustainv1alpha1.TraceStage, name string) (sustainv1alpha1.TraceStage, bool) {
+	i := slices.IndexFunc(stages, func(s sustainv1alpha1.TraceStage) bool { return s.Stage == name })
+	if i < 0 {
+		return sustainv1alpha1.TraceStage{}, false
 	}
-	request := final.DeepCopy()
-	lr := ComputeLimit(&request, currentRequest, currentLimit, cfg)
-	if lr.Quantity != nil {
-		limit := lr.Quantity.DeepCopy()
-		t.Limit = &limit
-	}
-	t.RemoveLimit = lr.Remove
-	return &request, lr
+	return stages[i], true
 }

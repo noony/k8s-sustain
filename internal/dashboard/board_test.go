@@ -28,8 +28,10 @@ func coordinatedWLR(ns, name string) *sustainv1alpha1.WorkloadRecommendation {
 			Outcome:    sustainv1alpha1.OutcomeComputed,
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{name: {CPURequest: &cpu}},
 			Trace: map[string]sustainv1alpha1.ContainerTrace{name: {
-				CPU: &sustainv1alpha1.ResourceTrace{WithHeadroom: cpu, Clamped: cpu, Coordination: &sustainv1alpha1.CoordinationTrace{
-					OverheadFactor: 1.2, Scaled: cpu, Value: cpu,
+				CPU: &sustainv1alpha1.ResourceTrace{Request: []sustainv1alpha1.TraceStage{
+					{Stage: "headroom", Value: &cpu},
+					{Stage: "clamp", Value: &cpu},
+					{Stage: "coordination", Value: &cpu, Facts: map[string]string{"overheadFactor": "1.2"}},
 				}},
 			}},
 		},

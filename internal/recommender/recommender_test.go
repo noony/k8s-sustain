@@ -10,19 +10,19 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// helpers
-
 func qty(s string) resource.Quantity   { return resource.MustParse(s) }
 func qtyp(s string) *resource.Quantity { q := qty(s); return &q }
 
 func cpuRequestOf(rawCores float64, cfg sustainv1alpha1.ResourceRequestsConfig) *resource.Quantity {
-	return computeApp(&WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": rawCores}},
-		sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Requests: cfg}}).Rec.CPURequest
+	rec, _ := computeApp(&WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": rawCores}},
+		sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Requests: cfg}})
+	return rec.CPURequest
 }
 
 func memoryRequestOf(rawBytes float64, cfg sustainv1alpha1.ResourceRequestsConfig) *resource.Quantity {
-	return computeApp(&WorkloadInputs{MemPerPod: promclient.ContainerValues{"app": rawBytes}},
-		sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: cfg}}).Rec.MemoryRequest
+	rec, _ := computeApp(&WorkloadInputs{MemPerPod: promclient.ContainerValues{"app": rawBytes}},
+		sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: cfg}})
+	return rec.MemoryRequest
 }
 
 func TestCPURequest(t *testing.T) {
@@ -164,115 +164,6 @@ func TestMemoryRequest(t *testing.T) {
 		})
 	}
 }
-
-// --- ComputeLimit ---
-
-func TestComputeLimit(t *testing.T) {
-	request := qtyp("200m")
-	currentReq := qtyp("100m")
-	currentLim := qtyp("300m") // ratio 3×
-
-	tests := []struct {
-		name       string
-		cfg        sustainv1alpha1.ResourceLimitsConfig
-		wantRemove bool
-		wantNil    bool
-		wantQty    string
-	}{
-		{
-			name:    "keep limit returns nil",
-			cfg:     sustainv1alpha1.ResourceLimitsConfig{KeepLimit: true},
-			wantNil: true,
-		},
-		{
-			name:       "no limit",
-			cfg:        sustainv1alpha1.ResourceLimitsConfig{NoLimit: true},
-			wantRemove: true,
-		},
-		{
-			name:    "equals to request",
-			cfg:     sustainv1alpha1.ResourceLimitsConfig{EqualsToRequest: true},
-			wantQty: "200m",
-		},
-		{
-			name:    "fixed ratio 2×",
-			cfg:     sustainv1alpha1.ResourceLimitsConfig{RequestsLimitsRatio: ptr.To(2.0)},
-			wantQty: "400m",
-		},
-		{
-			name:    "keep limit-to-request ratio (3×)",
-			cfg:     sustainv1alpha1.ResourceLimitsConfig{KeepLimitRequestRatio: true},
-			wantQty: "600m", // 200m * (300m/100m) = 600m
-		},
-		{
-			name:    "no strategy — keep existing (nil)",
-			cfg:     sustainv1alpha1.ResourceLimitsConfig{},
-			wantNil: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := ComputeLimit(request, currentReq, currentLim, tc.cfg)
-			if tc.wantRemove {
-				if !got.Remove {
-					t.Error("expected Remove=true")
-				}
-				return
-			}
-			if tc.wantNil {
-				if got.Quantity != nil || got.Remove {
-					t.Errorf("expected empty LimitResult, got %+v", got)
-				}
-				return
-			}
-			if got.Quantity == nil {
-				t.Fatal("expected non-nil Quantity")
-			}
-			want := qty(tc.wantQty)
-			if got.Quantity.Cmp(want) != 0 {
-				t.Errorf("got %s, want %s", got.Quantity, &want)
-			}
-		})
-	}
-}
-
-// Memory ratio limits must be whole bytes: milli math on 100Mi × 1.1 carries
-// float64 representation error into a fractional-byte limit (115343360001m)
-// that Kubernetes warns about. The byte path rounds up to whole bytes.
-func TestComputeLimit_MemoryRatioWholeBytes(t *testing.T) {
-	request := qtyp("100Mi")
-
-	t.Run("fixed ratio 1.1", func(t *testing.T) {
-		got := ComputeLimit(request, nil, nil, sustainv1alpha1.ResourceLimitsConfig{RequestsLimitsRatio: ptr.To(1.1)})
-		if got.Quantity == nil {
-			t.Fatal("expected non-nil Quantity")
-		}
-		if got.Quantity.MilliValue()%1000 != 0 {
-			t.Errorf("expected whole-byte limit, got %s", got.Quantity)
-		}
-		// ceil(104857600 * 1.1) = 115343361 bytes (1 byte over 110Mi from
-		// float64 rounding — whole bytes, never fractional).
-		if v, want := got.Quantity.Value(), int64(115343361); v != want {
-			t.Errorf("got %d bytes, want %d", v, want)
-		}
-	})
-
-	t.Run("keep limit-to-request ratio 1.1", func(t *testing.T) {
-		got := ComputeLimit(request, qtyp("100Mi"), qtyp("110Mi"), sustainv1alpha1.ResourceLimitsConfig{KeepLimitRequestRatio: true})
-		if got.Quantity == nil {
-			t.Fatal("expected non-nil Quantity")
-		}
-		if got.Quantity.MilliValue()%1000 != 0 {
-			t.Errorf("expected whole-byte limit, got %s", got.Quantity)
-		}
-		if v, want := got.Quantity.Value(), int64(115343361); v != want {
-			t.Errorf("got %d bytes, want %d", v, want)
-		}
-	})
-}
-
-// --- helpers ---
 
 func TestPercentileQuantile(t *testing.T) {
 	if q := PercentileQuantile(nil); q != 0.95 {

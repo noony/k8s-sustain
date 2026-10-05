@@ -11,7 +11,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
@@ -44,21 +43,19 @@ func histogramCount(t *testing.T, vec *prom.HistogramVec, labels ...string) uint
 	return m.GetHistogram().GetSampleCount()
 }
 
-// A kill the live watcher saw reaches the computation: the killed container's
-// memory is floored above its limit at the kill, the floor is counted, and so
-// is how long after the kill the recommendation responded.
+// A kill the live watcher saw reaches the computation through the decorated
+// inputs: the killed container's memory is floored above its limit at the
+// kill, the floor is counted from its trace stage, and so is how long after
+// the kill the recommendation responded.
 func TestRecommend_LiveOOMRaisesTheFloorAndIsCounted(t *testing.T) {
 	const ns = "liveoom"
-	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs().Set(identityOf(ns, "Deployment", "web"), &recommender.WorkloadInputs{
+	static := recommendertest.NewStaticInputs().Set(identityOf(ns, "Deployment", "web"), &recommender.WorkloadInputs{
 		CPUPerPod: promclient.ContainerValues{"app": 0.1, "side": 0.05},
 		MemPerPod: promclient.ContainerValues{"app": 100 << 20, "side": 100 << 20},
-	}), true)
-	r.LiveOOM = LiveOOMConfig{
-		Source: &fakeOOMSource{records: map[string]*oomwatch.OOMRecord{
-			"app": {Container: "app", ObservedAt: time.Now(), TerminatedAt: time.Now().Add(-10 * time.Second), OOMLimitBytes: 200 << 20},
-		}},
-		TriggerCh: make(chan event.GenericEvent),
-	}
+	})
+	r := reconcilerWithInputs(t, recommender.WithLiveOOMs(static, &fakeOOMSource{records: map[string]*oomwatch.OOMRecord{
+		"app": {Container: "app", ObservedAt: time.Now(), TerminatedAt: time.Now().Add(-10 * time.Second), OOMLimitBytes: 200 << 20},
+	}}, time.Now), true)
 	tgt := deploymentTarget(ns, "web")
 	tgt.Containers = []corev1.Container{{Name: "app"}, {Name: "side"}}
 	floorBefore := testutilCounterValue(t, oomFloorApplied, ns, "Deployment", "web", "app")

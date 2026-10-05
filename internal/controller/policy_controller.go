@@ -27,7 +27,6 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/inventory"
-	"github.com/noony/k8s-sustain/internal/oomwatch"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -62,7 +61,8 @@ type PolicyReconciler struct {
 	// PolicyConcurrencyLimit caps how many Policy objects reconcile in parallel.
 	PolicyConcurrencyLimit int
 
-	// Inputs fetches the recommendation inputs of a Policy's identities.
+	// Inputs fetches the recommendation inputs of a Policy's identities,
+	// live OOM kills included when it is decorated by recommender.WithLiveOOMs.
 	Inputs recommender.InputsFetcher
 
 	// RecycleReplacementTimeout caps how long the patcher waits for a replacement
@@ -78,25 +78,16 @@ type PolicyReconciler struct {
 	// reaped. Zero falls back to 10 minutes.
 	OrphanReapInterval time.Duration
 
-	// LiveOOM wires the OOM Pod-watcher path; a zero value disables it.
-	LiveOOM LiveOOMConfig
+	// OOMTriggers carries a Policy as soon as the OOM Pod watcher sees one of
+	// its pods killed, so it reconciles without waiting for the interval. Nil
+	// disables it.
+	OOMTriggers <-chan event.GenericEvent
 
 	recorder events.EventRecorder
 	patcher  *workload.Patcher
 	retries  *retryTracker
 
 	health healthTracker
-}
-
-// LiveOOMConfig groups the inputs from the OOM Pod watcher.
-type LiveOOMConfig struct {
-	Source    oomwatch.Source
-	TriggerCh <-chan event.GenericEvent
-}
-
-// Enabled reports whether both halves of the live-OOM path are wired.
-func (c LiveOOMConfig) Enabled() bool {
-	return c.Source != nil && c.TriggerCh != nil
 }
 
 // SetupWithManager registers the PolicyReconciler with the given manager.
@@ -115,11 +106,11 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&sustainv1alpha1.Policy{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.PolicyConcurrencyLimit})
-	if r.LiveOOM.Enabled() {
+	if r.OOMTriggers != nil {
 		// An OOM event named after its policy enqueues that Policy immediately.
 		b = b.WatchesRawSource(
 			source.Channel(
-				r.LiveOOM.TriggerCh,
+				r.OOMTriggers,
 				handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
 					if obj == nil || obj.GetName() == "" {
 						return nil

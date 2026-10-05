@@ -11,12 +11,14 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/autoscaler"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
@@ -244,7 +246,10 @@ func TestWorkloadDetailShowsStoredRecommendation(t *testing.T) {
 				"web": {CPURequest: &cpu, MemoryRequest: &mem, RemoveCPULimit: true},
 			},
 			Trace: map[string]sustainv1alpha1.ContainerTrace{
-				"web": {CPU: &sustainv1alpha1.ResourceTrace{Percentile: &percentile, WithHeadroom: cpu, Clamped: cpu, RemoveLimit: true}},
+				"web": {CPU: &sustainv1alpha1.ResourceTrace{
+					Request: []sustainv1alpha1.TraceStage{{Stage: "percentile", Value: &percentile}, {Stage: "clamp", Value: &cpu}},
+					Limit:   []sustainv1alpha1.TraceStage{{Stage: "noLimit", Removed: true}},
+				}},
 			},
 		},
 	}
@@ -266,16 +271,28 @@ func TestWorkloadDetailShowsStoredRecommendation(t *testing.T) {
 	if c := rec.Containers["web"]; c.CPURequest != "250m" || c.MemoryRequest != "128Mi" || !c.CPULimitRemoved {
 		t.Errorf("web = %+v, want the stored 250m/128Mi with the CPU limit removed", c)
 	}
-	if tr := rec.Trace["web"].CPU; tr == nil || tr.Percentile.Cmp(percentile) != 0 || tr.Clamped.Cmp(cpu) != 0 || !tr.RemoveLimit {
-		t.Errorf("web cpu trace = %+v, want the stored one", tr)
+	if tr := rec.Trace["web"]; !equality.Semantic.DeepEqual(tr, stored.Status.Trace["web"]) {
+		t.Errorf("web trace = %+v, want the stored one", tr)
 	}
 }
 
-// Coordination factors are read from the trace of the stored Recommendation,
-// on list rows and the detail page alike; no Prometheus series carries them.
+// Coordination factors are read from the coordination stage of the stored
+// Recommendation's trace, on list rows and the detail page alike; no
+// Prometheus series carries them.
 func TestCoordinationFactorsComeFromTheStoredTrace(t *testing.T) {
-	cpu, mem := resource.MustParse("300m"), resource.MustParse("176Mi")
-	replica := 0.9
+	anchor := 1.0
+	computed := recommender.Compute(recommender.Request{
+		Containers: []corev1.Container{{Name: "api"}},
+		Inputs: &recommender.WorkloadInputs{
+			CPUPerPod: promclient.ContainerValues{"api": 0.2},
+			MemPerPod: promclient.ContainerValues{"api": 128 << 20},
+		},
+		Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true, ReplicaBudgetAnchor: &anchor},
+		AutoInfo: autoscaler.Info{
+			Kind: autoscaler.KindHPA, MinReplicas: 1, MaxReplicas: 10, CurrentReplicas: 1,
+			ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 80, autoscaler.ResourceMemory: 55},
+		},
+	})
 	stored := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: wlrcache.Name("Deployment", "api")},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
@@ -284,21 +301,15 @@ func TestCoordinationFactorsComeFromTheStoredTrace(t *testing.T) {
 		},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
 			Outcome:    sustainv1alpha1.OutcomeComputed,
-			Containers: map[string]sustainv1alpha1.ContainerRecommendation{"api": {CPURequest: &cpu, MemoryRequest: &mem}},
-			Trace: map[string]sustainv1alpha1.ContainerTrace{"api": {
-				CPU: &sustainv1alpha1.ResourceTrace{WithHeadroom: cpu, Clamped: cpu, Coordination: &sustainv1alpha1.CoordinationTrace{
-					OverheadFactor: 1.2, ReplicaFactor: &replica, Scaled: cpu, Value: cpu,
-				}},
-				Memory: &sustainv1alpha1.ResourceTrace{WithHeadroom: mem, Clamped: mem, Coordination: &sustainv1alpha1.CoordinationTrace{
-					OverheadFactor: 1.1, Scaled: mem, Value: mem,
-				}},
-			}},
+			Containers: map[string]sustainv1alpha1.ContainerRecommendation{"api": sustainv1alpha1.ContainerRecommendation(computed.Recs["api"])},
+			Trace:      computed.Traces,
 		},
 	}
 	srv := identityServer(t, memHealthSignals{identity("prod", "Deployment", "api"): {AutoscalerPresent: true}},
 		deploymentPolicy("p"), deploymentOptingInto("p", "prod", "api", "", time.Now()),
 		deploymentOptingInto("p", "prod", "web", "", time.Now()), stored)
-	want := coordinationFactors{Enabled: true, CPUOverhead: 1.2, MemoryOverhead: 1.1, CPUReplica: 0.9}
+	// 110/80 and 110/55; one replica against a target of ten clamps to 0.5.
+	want := coordinationFactors{Enabled: true, CPUOverhead: 1.375, MemoryOverhead: 2, CPUReplica: 0.5}
 
 	rec := httptest.NewRecorder()
 	srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads", nil))

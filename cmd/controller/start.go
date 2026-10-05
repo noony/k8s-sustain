@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
@@ -134,7 +135,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 	if err := (&controller.PolicyReconciler{
 		Client:                    mgr.GetClient(),
 		Scheme:                    mgr.GetScheme(),
-		Inputs:                    recommender.NewPromInputs(promClient, shardMaxSamples),
+		Inputs:                    recommender.WithLiveOOMs(recommender.NewPromInputs(promClient, shardMaxSamples), oomCache, time.Now),
 		ReconcileInterval:         cfg.ReconcileInterval,
 		InPlaceUpdates:            inPlaceUpdates,
 		ExcludedNamespaces:        cfg.ExcludedNamespaces,
@@ -143,10 +144,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		PolicyConcurrencyLimit:    cfg.PolicyConcurrencyLimit,
 		RecycleReplacementTimeout: cfg.RecycleReplacementTimeout,
 		RecommendationRetention:   cfg.RecommendationRetention,
-		LiveOOM: controller.LiveOOMConfig{
-			Source:    oomCache,
-			TriggerCh: triggerCh,
-		},
+		OOMTriggers:               triggerCh,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "Unable to create Policy controller")
 		return err
