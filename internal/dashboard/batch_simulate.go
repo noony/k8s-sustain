@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -13,6 +14,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 type batchSimulateResponse struct {
@@ -77,7 +79,7 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 	results := s.computeRecommendations(ctx, policy, workloads)
 
 	resp := batchSimulateResponse{PolicyName: policyName}
-	var totalCPUCurr, totalCPURec, totalMemCurr, totalMemRec int64
+	var cpu, mem savings
 
 	for i, r := range results {
 		wl := workloads[i]
@@ -94,60 +96,22 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 
-		for _, c := range wl.Containers {
-			bcr := batchContainerResult{}
-			var cpuCurr, memCurr int64
-
-			if rec, ok := r.recs[c.Name]; ok {
-				// Use actual Prometheus usage for "current" instead of k8s resource requests
-				if rec.CPUUsageCores > 0 {
-					cpuCurr = int64(rec.CPUUsageCores * 1000)
-					cpuQty := resource.NewMilliQuantity(cpuCurr, resource.DecimalSI)
-					bcr.CurrentCPU = cpuQty.String()
-				}
-				if rec.MemoryUsageBytes > 0 {
-					memCurr = int64(rec.MemoryUsageBytes) * 1000
-					memQty := resource.NewQuantity(int64(rec.MemoryUsageBytes), resource.BinarySI)
-					bcr.CurrentMemory = memQty.String()
-				}
-
-				bcr.RecommendedCPU = rec.CPURequest
-				bcr.RecommendedMemory = rec.MemoryRequest
-
-				// Only fold a recommendation into the aggregate when its
-				// current usage was counted too — otherwise the totals compare
-				// different container sets and the savings percent is deflated
-				// (or flips negative).
-				if rec.CPURequest != "" {
-					if q, err := resource.ParseQuantity(rec.CPURequest); err == nil {
-						cpuRec := q.MilliValue()
-						if cpuCurr > 0 {
-							totalCPURec += cpuRec
-							bcr.CPUDeltaPercent = deltaPercent(cpuCurr, cpuRec)
-						}
-					}
-				}
-				if rec.MemoryRequest != "" {
-					if q, err := resource.ParseQuantity(rec.MemoryRequest); err == nil {
-						memRec := q.MilliValue()
-						if memCurr > 0 {
-							totalMemRec += memRec
-							bcr.MemDeltaPercent = deltaPercent(memCurr, memRec)
-						}
-					}
-				}
+		for j, c := range slices.Concat(wl.Containers, wl.InitContainers) {
+			rec, ok := r.recs[c.Name]
+			if !ok && j >= len(wl.Containers) {
+				continue
 			}
-
-			totalCPUCurr += cpuCurr
-			totalMemCurr += memCurr
+			var bcr batchContainerResult
+			bcr.CurrentCPU, bcr.RecommendedCPU, bcr.CPUDeltaPercent = cpu.add(c.Resources.Requests.Cpu(), rec.CPURequest)
+			bcr.CurrentMemory, bcr.RecommendedMemory, bcr.MemDeltaPercent = mem.add(c.Resources.Requests.Memory(), rec.MemoryRequest)
 			wbr.Containers[c.Name] = bcr
 		}
 
 		resp.Workloads = append(resp.Workloads, wbr)
 	}
 
-	resp.CPU = buildSavingsAggregate(totalCPUCurr, totalCPURec, "cpu")
-	resp.Memory = buildSavingsAggregate(totalMemCurr, totalMemRec, "memory")
+	resp.CPU = buildSavingsAggregate(cpu.current, cpu.recommended, "cpu")
+	resp.Memory = buildSavingsAggregate(mem.current, mem.recommended, "memory")
 
 	if resp.Workloads == nil {
 		resp.Workloads = []workloadBatchResult{}
@@ -157,8 +121,33 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// savings totals one resource's requests, in millivalues, as containers run
+// with them and as recommended.
+type savings struct {
+	current, recommended int64
+}
+
+// add renders a container's current and recommended request and the change
+// between them. Only a container with both counts toward the totals:
+// otherwise they compare different container sets, and the savings percent
+// is deflated or flips negative.
+func (s *savings) add(current, recommended *resource.Quantity) (cur, rec string, delta float64) {
+	if !current.IsZero() {
+		cur = current.String()
+	}
+	if recommended != nil {
+		rec = recommended.String()
+	}
+	if cur == "" || rec == "" {
+		return cur, rec, 0
+	}
+	s.current += current.MilliValue()
+	s.recommended += recommended.MilliValue()
+	return cur, rec, deltaPercent(current.MilliValue(), recommended.MilliValue())
+}
+
 type recResult struct {
-	recs map[string]simulationContainerResult
+	recs map[string]workload.ContainerRecommendation
 	err  error
 }
 
@@ -173,7 +162,7 @@ func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1al
 			out[i].err = a.Err
 			continue
 		}
-		out[i].recs = simulationContainers(recommender.Compute(a.Request), a.Request.Inputs())
+		out[i].recs = recommender.Compute(a.Request).Recs
 	}
 	return out
 }

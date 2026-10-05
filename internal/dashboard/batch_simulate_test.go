@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -20,10 +21,11 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
-// newBatchSimulateServer builds a server with `count` Deployments, all annotated
-// for policy "p", which opts the Deployment kind in. Each Deployment has one
-// container named "main".
-func newBatchSimulateServer(t *testing.T, inputs recommender.InputsFetcher, count int) *Server {
+// newBatchSimulateServer builds a server with `count` Deployments, wl-a,
+// wl-b, …, all annotated for policy "p", which opts the Deployment kind in.
+// Each Deployment has one container named "main", running with the requests
+// given at its index, none past them. Each is two days old.
+func newBatchSimulateServer(t *testing.T, inputs recommender.InputsFetcher, count int, requests ...corev1.ResourceList) *Server {
 	t.Helper()
 	mode := sustainv1alpha1.UpdateModeOnCreate
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
@@ -31,12 +33,15 @@ func newBatchSimulateServer(t *testing.T, inputs recommender.InputsFetcher, coun
 
 	objs := []client.Object{policy}
 	for i := range count {
-		name := "wl-" + string(rune('a'+i))
-		d := &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: name},
-		}
+		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default", Name: "wl-" + string(rune('a'+i)),
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour)),
+		}}
 		d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
 		d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "main"}}
+		if i < len(requests) {
+			d.Spec.Template.Spec.Containers[0].Resources.Requests = requests[i]
+		}
 		objs = append(objs, d)
 	}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
@@ -111,58 +116,53 @@ func TestBatchSimulateReportsFetchFailurePerWorkload(t *testing.T) {
 	}
 }
 
-// TestBatchSimulateAggregateSkipsRecsWithoutCurrentUsage pins the savings
-// aggregate fix: a recommendation whose current usage was excluded (usage <= 0,
-// e.g. an OOM-peak-only container) must not be added to the recommended total,
-// otherwise SavingsPercent is deflated or flips negative.
-func TestBatchSimulateAggregateSkipsRecsWithoutCurrentUsage(t *testing.T) {
-	const mib = 1 << 20
-	// wl-a has real usage; wl-b only has an OOM peak, so it gets a memory
-	// recommendation but contributes nothing to the current total.
+// Savings compare the recommended requests with the requests the containers
+// run with, not with their usage, which the recommendation is derived from. A
+// container without a request has nothing to save on: it shows its
+// recommendation but stays out of the totals.
+func TestBatchSimulateSavingsAreAgainstTheCurrentRequests(t *testing.T) {
 	inputs := recommendertest.NewStaticInputs().
 		Set(batchID("wl-a"), &recommender.WorkloadInputs{
 			CPUPerPod: promclient.ContainerValues{"main": 0.2},
-			MemPerPod: promclient.ContainerValues{"main": 200 * mib},
+			MemPerPod: promclient.ContainerValues{"main": 64 << 20},
 		}).
-		Set(batchID("wl-b"), &recommender.WorkloadInputs{
-			OOM: map[string]recommender.OOM{"main": {Kills: 1, PeakBytes: 300 * mib, HasPeak: true}},
-		})
-	srv := newBatchSimulateServer(t, inputs, 2)
+		Set(batchID("wl-b"), &recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"main": 0.3}})
+	srv := newBatchSimulateServer(t, inputs, 2, corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("500m"),
+		corev1.ResourceMemory: resource.MustParse("256Mi"),
+	})
 
+	rows, resp := batchSimulate(t, srv)
+
+	want := batchContainerResult{
+		CurrentCPU: "500m", RecommendedCPU: "200m", CPUDeltaPercent: -60,
+		CurrentMemory: "256Mi", RecommendedMemory: "64Mi", MemDeltaPercent: -75,
+	}
+	if rows["wl-a"].Containers["main"] != want {
+		t.Errorf("wl-a = %+v, want %+v", rows["wl-a"].Containers["main"], want)
+	}
+	if b := rows["wl-b"].Containers["main"]; b.CurrentCPU != "" || b.RecommendedCPU != "300m" {
+		t.Errorf("wl-b = %+v, want its 300m recommendation and no current request", b)
+	}
+	if resp.CPU.CurrentMillis != 500 || resp.CPU.RecommendedMillis != 200 || resp.CPU.SavingsMillis != 300 {
+		t.Errorf("cpu = %+v, want 500m → 200m: wl-a's request and recommendation only", resp.CPU)
+	}
+	if resp.Memory.SavingsPercent != 75 {
+		t.Errorf("memory savings = %v%%, want 75%% (256Mi → 64Mi)", resp.Memory.SavingsPercent)
+	}
+}
+
+// batchSimulate runs the policy p's batch simulation on srv and returns its
+// rows by name.
+func batchSimulate(t *testing.T, srv *Server) (map[string]workloadBatchResult, batchSimulateResponse) {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	srv.handlePolicyBatchSimulate(rec, httptest.NewRequest(http.MethodGet, "/api/policies/p/batch-simulate", nil), "p")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status %d, body=%s", rec.Code, rec.Body.String())
-	}
-
 	var resp batchSimulateResponse
 	decodeEnvelopeData(t, rec.Body, &resp)
-
-	// Recompute the expected aggregate from the per-container rows: only
-	// recommendations whose current value was counted may contribute.
-	var wantMemRec int64
-	var sawExcludedRec bool
-	for _, wl := range resp.Workloads {
-		for _, c := range wl.Containers {
-			if c.RecommendedMemory == "" {
-				continue
-			}
-			if c.CurrentMemory == "" {
-				sawExcludedRec = true
-				continue
-			}
-			q, err := resource.ParseQuantity(c.RecommendedMemory)
-			if err != nil {
-				t.Fatalf("parse recommended memory %q: %v", c.RecommendedMemory, err)
-			}
-			wantMemRec += q.MilliValue()
-		}
+	rows := map[string]workloadBatchResult{}
+	for _, w := range resp.Workloads {
+		rows[w.Name] = w
 	}
-	if !sawExcludedRec {
-		t.Fatal("fixture broken: expected a recommendation without current usage (wl-b)")
-	}
-	if resp.Memory.RecommendedMillis != wantMemRec {
-		t.Errorf("memory.recommendedMillis = %d, want %d (recs without counted usage must be excluded)",
-			resp.Memory.RecommendedMillis, wantMemRec)
-	}
+	return rows, resp
 }
