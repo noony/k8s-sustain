@@ -23,6 +23,24 @@ Computing percentiles over multi-day windows from raw `container_cpu_usage_secon
 | `workload_oom_24h`, `workload_drifted` | Risk signals: the OOM count feeds the recommender's OOM floor and the dashboard's At risk state; `workload_drifted` is for your own alerts and dashboards |
 | `workload_*_usage:*` | Per-workload usage totals (dashboard trend) |
 
+## Signal contracts
+
+Each [recommendation signal](../concepts/recommendation-pipeline.md#signals) declares what it needs from Prometheus next to its query, as a `PromContract` (`internal/recommender`): the rules it reads, the labels they aggregate by, the evaluation interval its query cost assumes, and the raw series those rules compute from, through every rule they read in turn.
+
+| Signal | Rules it reads | Aggregated by | Interval | cAdvisor series | kube-state-metrics series |
+|---|---|---|---|---|---|
+| CPU usage | `workload_max_pod_cpu:cores` | `namespace`, `owner_kind`, `owner_name`, `container` | 1m | `container_cpu_usage_seconds_total` | `kube_pod_owner`, `kube_job_owner`, `kube_replicaset_owner`, `kube_pod_labels` |
+| Memory usage | `workload_max_pod_memory:bytes` | the same | 1m | `container_memory_working_set_bytes` | the same four |
+| OOM floor | `workload_oom_24h`, `container_peak_memory_24h:bytes`, `container_oom_limit_24h:bytes` | the same | none assumed | `container_memory_max_usage_bytes`, `container_memory_peak_working_set_bytes`, `container_memory_working_set_bytes`, `container_spec_memory_limit_bytes` | `kube_pod_container_status_restarts_total`, `kube_pod_container_status_last_terminated_reason` and the same four |
+
+- **Labels.** A query reads a whole shard of identities at once and attributes each series by these four labels. A series missing one is dropped; a rule keeping one more, such as `pod`, would hand a container several series, and the usage signals keep only one of them.
+- **Interval.** The usage signals read their rule as a plain range vector, so its 1m interval is the percentile's sample resolution and what the shard sample budget counts. The OOM floor reads its rules as an instant vector, one sample per rule, whatever their interval.
+- **Series.** The four kube-state-metrics series shared by every signal are what `pod_workload` maps a pod to its identity from.
+
+`go test ./hack/signalcontract`, part of `make test`, checks the chart against every contract. Each rule a signal reads must be recorded in `prometheusRule.groups`, be one aggregation `by` exactly the declared labels over its whole expression, evaluate at the declared interval, and be evaluated with expected samples by a promtool fixture in `charts/k8s-sustain/tests/promtool/` (run by `make helm-promtool`). Following the rules they read down to raw series, those series must be exactly the declared ones, and each must be kept by its exporter's keep-list in the bundled Prometheus: the `metric_relabel_configs` of `prometheus.scrapeConfigs.kubernetes-nodes-cadvisor`, or of the `kube-state-metrics` job in `prometheus.extraScrapeConfigs`. A signal that needs a series the chart does not keep yet, such as cAdvisor's CFS throttling counters, fails the test until the keep-list keeps it. Expressions are read textually, without the PromQL parser, so a rule a signal reads has to stay a single `<aggregation> by (…) (…)`.
+
+If you bring your own Prometheus, it must scrape every series in the table.
+
 ## Rules
 
 ### `k8s_sustain:pod_workload`
@@ -440,7 +458,7 @@ Busiest-replica CPU rate, per container, per workload: at each instant this is t
 
 Collapsing across pods **here** (in the recording rule) rather than at query time is deliberate: it keeps the recommender's `quantile_over_time(p, …[window])` range-vector scan cheap (one series per workload×container instead of one per historical pod) and immune to pod-name churn — a pod that briefly ran hot then died is the `max` for only those instants and drops out afterward, so its partial-lifetime samples can't distort the percentile.
 
-This rule (and `workload_max_pod_memory:bytes` below) lives in the `k8s_sustain.workload_max_pod` group, which evaluates at `interval: 1m`. The recommender reads it as a plain range vector rather than a `[window:1m]` subquery, so that `interval` **is** the percentile's effective sample resolution — there is no subquery step left to resample it. Raising the group's interval to cut Prometheus load would silently coarsen every recommendation percentile in the product; it is not a free knob.
+This rule (and `workload_max_pod_memory:bytes` below) lives in the `k8s_sustain.workload_max_pod` group, which evaluates at `interval: 1m`. The recommender reads it as a plain range vector rather than a `[window:1m]` subquery, so that `interval` **is** the percentile's effective sample resolution — there is no subquery step left to resample it. Raising the group's interval to cut Prometheus load would coarsen every recommendation percentile in the product; it is not a free knob, and the usage signals' [contract](#signal-contracts) fails the build when it changes.
 
 ### `k8s_sustain:workload_max_pod_memory:bytes`
 
@@ -454,7 +472,7 @@ Busiest-replica memory working set, per container, per workload. Same rationale 
 
 ## Customising
 
-The chart exposes the rules via `prometheusRule.groups` in `values.yaml`. Override individual rules to adapt to your environment, but keep names stable — the recommender queries by name.
+The chart exposes the rules via `prometheusRule.groups` in `values.yaml`. Override individual rules to adapt to your environment, but keep names stable — the recommender queries by name — and keep each rule a signal reads to its [contract](#signal-contracts): the same labels, interval and source series.
 
 ## See also
 

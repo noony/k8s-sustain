@@ -20,7 +20,7 @@ helm version
 
 k8s-sustain queries Prometheus for historical usage data. The chart bundles a [Prometheus](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) instance by default, or you can point it at an existing Prometheus.
 
-If you bring your own Prometheus, make sure **kube-state-metrics** and **cAdvisor** metrics are scraped. The bundled Prometheus subchart restricts both jobs to an allowlist via `metric_relabel_configs` to keep TSDB cardinality low; bring-your-own deployments can do the same.
+If you bring your own Prometheus, make sure **kube-state-metrics** and **cAdvisor** metrics are scraped. The bundled Prometheus subchart restricts both jobs to an allowlist via `metric_relabel_configs` to keep TSDB cardinality low; bring-your-own deployments can do the same. [Signal contracts](../reference/recording-rules.md#signal-contracts) lists the series each recommendation signal computes from; the others below feed the dashboard.
 
 From **kube-state-metrics**:
 

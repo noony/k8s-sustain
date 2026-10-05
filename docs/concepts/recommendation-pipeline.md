@@ -33,7 +33,7 @@ Coverage and health are observed separately and must not be derived from one ano
 
 ## Signals
 
-A signal is an observed input that contributes one stage to a recommendation. Each one is a module of `internal/recommender` that owns everything about its input — the Policy settings it reads, its query, how it is parsed, what a shard of it costs, whether an identity can be recommended without it, whether it excuses an identity's age, its stage and its trace stage:
+A signal is an observed input that contributes one stage to a recommendation. Each one is a module of `internal/recommender` that owns everything about its input — the Policy settings it reads, its query and what that query needs from Prometheus (its [contract](../reference/recording-rules.md#signal-contracts)), how it is parsed, what a shard of it costs, whether an identity can be recommended without it, whether it excuses an identity's age, its stage and its trace stage:
 
 | Signal | Role | Resource | If it cannot be read | Trace stage |
 |--------|------|----------|----------------------|-------------|

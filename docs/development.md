@@ -300,15 +300,18 @@ Run a single suite with the plugin's `-f` flag (paths are relative to the chart 
 helm unittest charts/k8s-sustain -f 'tests/deployment_test.yaml'
 ```
 
-CI runs the full suite in the `helm` job alongside `helm lint` and `helm template`.
-`make helm-promtool` additionally validates the rendered PrometheusRule
-recording rules with `promtool` (requires `promtool` and `yq`): it checks that
-the rules parse, that the dashboard-required ones are present, and it runs the
+CI runs the full suite in the `helm` job alongside `helm lint`, `helm template`
+and `make helm-promtool`. `make helm-promtool` validates the rendered
+PrometheusRule recording rules with `promtool` (requires `promtool` and `yq`;
+CI installs pinned, checksum-verified releases of both): it checks that the
+rules parse, that the dashboard-required ones are present, and it runs the
 `promtool test rules` fixtures in `charts/k8s-sustain/tests/promtool/` against
 the rendered output. Those fixtures test rule *semantics* — feed a rule its
 input series and assert the recorded value — which `promtool check rules`
 cannot do. Add one whenever a rule's correctness depends on timing or on a
-join window, since that is exactly what a syntax check misses.
+join window, since that is exactly what a syntax check misses. Every rule a
+recommendation signal reads must have one: `hack/signalcontract` fails
+otherwise (see [Signal contracts](reference/recording-rules.md#signal-contracts)).
 
 ## Adding a new workload kind
 
@@ -328,8 +331,9 @@ kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 A [signal](concepts/recommendation-pipeline.md#signals) is one module of
 `internal/recommender` (`signal_usage.go` holds the CPU and memory usage
 signals, `signal_oom.go` the OOM floor) implementing the `signal` interface in
-`signal.go`: its query and shard cost, how it collects samples into
-per-container values, its failure policy, whether its values excuse a Too
+`signal.go`: its query and shard cost, its Prometheus contract (`contract`),
+how it collects samples into per-container values, its failure policy, whether
+its values excuse a Too
 young identity from the age gate (`excusesAge`), where its stage runs (`slot`:
 base, adjuster or limit adjuster, CPU or memory), its contribution to a
 container's request or limit, and its trace stage. `PromInputs` fetches every
@@ -360,17 +364,32 @@ inputs port (`WithLiveOOMs`), not through `Compute`. To add one:
    the controller reads the OOM floor's with `TracedOOMFloor`. If it reads new
    Policy settings, add the fields to `api/v1alpha1` (`ResourcesConfigs`),
    then run `make generate manifests`
-4. If it reads a new recording rule, add the name to
-   `internal/prometheus/metricnames.go` and the rule to
-   `charts/k8s-sustain/values.yaml` under `prometheusRule.groups`, and document
-   it in [Recording Rules](reference/recording-rules.md)
+4. Declare its Prometheus contract next to its query, in its `contract`
+   method: the recording rules the query reads, the labels each aggregates by
+   (`shardLabels`, the identity and the container), the evaluation interval
+   its shard cost assumes (zero if none), and the cAdvisor and
+   kube-state-metrics series those rules compute from, through every rule
+   they read in turn. Then run `go test ./hack/signalcontract`: it names each
+   rule missing from `prometheusRule.groups` in `charts/k8s-sustain/values.yaml`,
+   aggregating by other labels or evaluated at another interval, each rule no
+   promtool fixture evaluates, and each series the contract leaves out or the
+   bundled scrape keep-lists drop. Fix them in turn: the rule name in
+   `internal/prometheus/metricnames.go`, the rule in `prometheusRule.groups`, a
+   fixture in `charts/k8s-sustain/tests/promtool/` (run `make helm-promtool`),
+   the series in the cAdvisor or kube-state-metrics keep-list of the bundled
+   Prometheus (`prometheus.scrapeConfigs.kubernetes-nodes-cadvisor` or the
+   `kube-state-metrics` job in `prometheus.extraScrapeConfigs`). Document the
+   rule and the contract in [Recording Rules](reference/recording-rules.md#signal-contracts),
+   and the series in [Prerequisites](getting-started/prerequisites.md#prometheus)
+   for users who bring their own Prometheus
 5. Test it at its own interface, next to `signal_usage_test.go` and
    `signal_oom_test.go`: the query built from settings, the values collected
    from `ShardSample`s, its failure policy, its contribution and trace stage.
    Test what it does to a whole recommendation through `Compute`, at a fixed
    `Request.Now`. `signal_test.go` shows that a signal defined only in a test
    is fetched, and computed on the limit side with its own trace stage, from
-   its list entry alone
+   its list entry alone, and checks that every listed signal's contract
+   declares exactly the rules its query reads
 6. Add it to the signals table in
    [Recommendation Pipeline](concepts/recommendation-pipeline.md#signals) and
    describe its stage there
