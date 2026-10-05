@@ -14,6 +14,10 @@ _Avoid_: target, entry, workload (when the unit is meant)
 One live object (a Deployment, Job, bare Pod, …) that belongs to an identity. A member is governed by the Policy it opts into when that Policy exists, manages its kind and selects it. An identity's containers are the union of its governed members' containers, the newest member's winning for a container several declare, and its age runs from its earliest governed member or from when it was first seen, whichever is older. A finished standalone Job and a CronJob's Jobs are never members.
 _Avoid_: representative
 
+**In-place-only kind**:
+A kind whose pods are never evicted, only resized in place where the cluster supports it: CronJob, Job and bare Pod. Evicting one of their pods would destroy work nothing redoes. Every other kind's stale pods are evicted when they cannot be resized.
+_Avoid_: job-like, never-recycled
+
 **Departed**:
 An identity with no live members, whose WorkloadRecommendation is kept for the retention window and still recomputed by the Policy it names. A standalone Job that has finished is departed.
 _Avoid_: inactive, gone
