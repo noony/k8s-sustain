@@ -92,7 +92,7 @@ func (r *PolicyReconciler) recommend(
 		res := &results[i]
 		res.item = it
 		for _, t := range it.Targets {
-			if r.retries.shouldSkip(t.key()) {
+			if !r.ledger.mayRun(t.key()) {
 				res.backedOff = append(res.backedOff, t)
 			} else {
 				res.apply = append(res.apply, t)

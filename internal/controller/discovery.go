@@ -20,8 +20,8 @@ import (
 // rejecting admission webhook, a namespace quota) would otherwise leave the
 // policy reporting success forever while doing nothing. The identity is still
 // computed, from its members' own container sets, but has no object to record
-// its decision into, so it is not applied this cycle; the retry lands on the
-// next reconcile's Ensure.
+// its decision into, so it is not applied this cycle: its members fail on the
+// store step with the Ensure error, and are Blocked until an Ensure succeeds.
 func (r *PolicyReconciler) discover(ctx context.Context, policyName string, items []computeItem) int {
 	logger := log.FromContext(ctx)
 	failures := 0
@@ -31,7 +31,7 @@ func (r *PolicyReconciler) discover(ctx context.Context, policyName string, item
 			continue
 		}
 		known, err := wlrcache.Ensure(ctx, r.Client, it.ref(), policyName, it.Observed)
-		it.WLR = known
+		it.WLR, it.EnsureErr = known, err
 		if err != nil {
 			failures++
 			logger.Error(err, "failed to ensure the WorkloadRecommendation is current; "+

@@ -188,8 +188,10 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	ctx := context.Background()
 	blueTarget, greenTarget := targetFromObject(blue, "Deployment"), targetFromObject(green, "Deployment")
 	transient := apierrors.NewServiceUnavailable("apiserver unavailable")
-	_ = r.handleStepError(ctx, &greenTarget, "prometheus", "Prometheus query failed", transient)
-	_ = r.handleStepError(ctx, &blueTarget, "patch", "Pod recycle failed", transient)
+	r.settle(ctx, []applyResult{
+		failedStep(&greenTarget, phasePrometheus, transient),
+		failedStep(&blueTarget, phasePatch, transient),
+	})
 
 	reconcilePolicy(t, r, policyName)
 

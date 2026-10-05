@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -14,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -22,7 +20,6 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 func testScheme(t *testing.T) *runtime.Scheme {
@@ -72,16 +69,7 @@ func TestReconcileSurfacesDiscoveryFailures(t *testing.T) {
 		}).
 		Build()
 
-	r := &PolicyReconciler{
-		Client:                   c,
-		Scheme:                   scheme,
-		Inputs:                   recommendertest.NewStaticInputs(),
-		ReconcileInterval:        time.Hour,
-		WorkloadConcurrencyLimit: 1,
-		recorder:                 events.NewFakeRecorder(100),
-		patcher:                  workload.New(c, true),
-		retries:                  newRetryTracker(),
-	}
+	r := reconcilerOn(c, scheme, recommendertest.NewStaticInputs(), true)
 
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -105,5 +93,8 @@ func TestReconcileSurfacesDiscoveryFailures(t *testing.T) {
 	}
 	if !strings.Contains(ready.Message, "could not be registered") {
 		t.Errorf("message = %q, want it to name the registration failure", ready.Message)
+	}
+	if got := r.ledger.health("Deployment/default/web").blockedOn; got != phaseStore {
+		t.Errorf("member blocked on %q, want %q: a member withheld for a failed Ensure is Blocked", got, phaseStore)
 	}
 }

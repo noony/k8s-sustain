@@ -24,8 +24,11 @@ type computeItem struct {
 	// WLR is the identity's WorkloadRecommendation, the one persist records
 	// into: as discovery's Ensure wrote it for a live identity (nil when that
 	// failed), as the inventory read it for a departed one.
-	WLR     *sustainv1alpha1.WorkloadRecommendation
-	Targets []*workloadTarget
+	WLR *sustainv1alpha1.WorkloadRecommendation
+	// EnsureErr is why discovery could not claim a live identity's WLR; its
+	// members fail on the store step with it.
+	EnsureErr error
+	Targets   []*workloadTarget
 	// Observed is the snapshot this cycle computes against: the union of the
 	// governed members' containers, or the stored snapshot when none is live.
 	Observed map[string]sustainv1alpha1.ObservedContainerResources
@@ -123,7 +126,12 @@ func (r *PolicyReconciler) persist(ctx context.Context, results []identityResult
 // not only a Recommendation, so the webhook reads "nothing to inject" instead
 // of "undecided".
 func (r *PolicyReconciler) persistLive(ctx context.Context, res *identityResult) {
-	if d, ok := res.decision(false); ok {
+	d, ok := res.decision(false)
+	switch {
+	case !ok:
+	case res.item.EnsureErr != nil:
+		res.recordErr = res.item.EnsureErr
+	default:
 		res.recordErr = wlrcache.Record(ctx, r.Client, res.item.WLR, d, time.Now())
 	}
 }

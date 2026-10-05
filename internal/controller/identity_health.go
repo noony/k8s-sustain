@@ -8,29 +8,27 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// healthTracker turns per-member apply outcomes into one set of health series
-// per identity, the key the dashboard and the recording rules join on.
-// Members are applied concurrently and independently, so emitting from each
-// member would be last-writer-wins; the tracker keeps each member's last pod
-// counts and emits the identity's aggregate once its policy's pass ends.
+// healthTracker turns the ledger's per-member state into one set of health
+// series per identity, the key the dashboard and the recording rules join
+// on. Members are applied concurrently and independently, so emitting from
+// each member would be last-writer-wins; the tracker emits the identity's
+// aggregate once its policy's pass ends.
 //
 // An identity is governed by at most one Policy at a time; members are still
 // unioned across policies so that an identity moving between two keeps one
-// aggregate, and its series are deleted only once no policy claims it.
+// aggregate, and its series are deleted, and its members forgotten by the
+// ledger, only once no policy claims them.
 type healthTracker struct {
 	mu       sync.Mutex
 	byPolicy map[string]map[promclient.WorkloadIdentity][]string
-	// pods holds each member's counts from its last measured apply pass; a
-	// member without an entry was never measured or was cleared.
-	pods map[string]workload.PodCounts
 }
 
 // observe records policy's live identities and their members, deleting the
-// series of identities, and the counts of members, that no policy has any
-// more. It must run before the policy emits for this cycle. A Conflicted
+// series of identities, and the ledger state of members, that no policy has
+// any more. It must run before the policy emits for this cycle. A Conflicted
 // identity is governed by no Policy, so it loses its series here: nothing
 // applies to it.
-func (h *healthTracker) observe(policy string, items []computeItem) {
+func (h *healthTracker) observe(policy string, items []computeItem, l *ledger) {
 	next := make(map[promclient.WorkloadIdentity][]string, len(items))
 	for _, it := range items {
 		if len(it.Targets) == 0 {
@@ -49,18 +47,18 @@ func (h *healthTracker) observe(policy string, items []computeItem) {
 	}
 	prev := h.byPolicy[policy]
 	h.byPolicy[policy] = next
-	h.dropUnclaimedLocked(prev)
+	h.dropUnclaimedLocked(prev, l)
 }
 
-func (h *healthTracker) forget(policy string) {
+func (h *healthTracker) forget(policy string, l *ledger) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	prev := h.byPolicy[policy]
 	delete(h.byPolicy, policy)
-	h.dropUnclaimedLocked(prev)
+	h.dropUnclaimedLocked(prev, l)
 }
 
-func (h *healthTracker) dropUnclaimedLocked(prev map[promclient.WorkloadIdentity][]string) {
+func (h *healthTracker) dropUnclaimedLocked(prev map[promclient.WorkloadIdentity][]string, l *ledger) {
 	claimedIDs := make(map[promclient.WorkloadIdentity]struct{})
 	claimedMembers := make(map[string]struct{})
 	for _, ids := range h.byPolicy {
@@ -74,7 +72,7 @@ func (h *healthTracker) dropUnclaimedLocked(prev map[promclient.WorkloadIdentity
 	for id, members := range prev {
 		for _, m := range members {
 			if _, ok := claimedMembers[m]; !ok {
-				delete(h.pods, m)
+				l.forget(m)
 			}
 		}
 		if _, ok := claimedIDs[id]; !ok {
@@ -98,45 +96,31 @@ func (h *healthTracker) membersLocked(id promclient.WorkloadIdentity) []string {
 	return out
 }
 
-func (h *healthTracker) setPods(member string, c workload.PodCounts) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.pods == nil {
-		h.pods = make(map[string]workload.PodCounts)
-	}
-	h.pods[member] = c
-}
-
-func (h *healthTracker) clearPods(member string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	delete(h.pods, member)
-}
-
 // emit writes the pod and retry-state series of every identity policy
 // observed, each aggregated over all of the identity's members, and returns
 // how many of those identities are Blocked.
 //
 // Pod counts are summed over the members that have been measured, so a
-// member skipped this cycle (backoff, failed pass) contributes its last
+// member skipped this cycle (backoff, a failed pass) contributes its last
 // counts. An identity is Blocked when any member is; the reason is the failed
-// phase of the first blocked member in sorted order.
-func (h *healthTracker) emit(policy string, retries *retryTracker) int {
+// step of the first blocked member in sorted order.
+func (h *healthTracker) emit(policy string, l *ledger) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	blocked := 0
 	for id := range h.byPolicy[policy] {
 		var sum workload.PodCounts
 		measured := false
-		reason, isBlocked := "", false
+		reason := ""
 		for _, m := range h.membersLocked(id) {
-			if c, ok := h.pods[m]; ok {
-				sum.Total += c.Total
-				sum.Stale += c.Stale
+			mh := l.health(m)
+			if mh.measured {
+				sum.Total += mh.pods.Total
+				sum.Stale += mh.pods.Stale
 				measured = true
 			}
-			if !isBlocked {
-				reason, isBlocked = retries.blockedPhase(m)
+			if reason == "" {
+				reason = mh.blockedOn
 			}
 		}
 		if measured {
@@ -144,8 +128,8 @@ func (h *healthTracker) emit(policy string, retries *retryTracker) int {
 		} else {
 			DeleteWorkloadPods(id)
 		}
-		EmitRetryState(id, reason, isBlocked)
-		if isBlocked {
+		EmitRetryState(id, reason, reason != "")
+		if reason != "" {
 			blocked++
 		}
 	}

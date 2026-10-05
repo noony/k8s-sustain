@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -13,9 +12,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -51,9 +50,8 @@ func TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods(t *te
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
 
-	// Retry tracker should record success (no entry, or attempts=0).
-	if state := r.retries.getState(tgt.key()); state != nil && state.attempts != 0 {
-		t.Errorf("expected attempts=0 on success, got %d", state.attempts)
+	if got := r.ledger.health(tgt.key()); got.blockedOn != "" || !got.measured {
+		t.Errorf("member health = %+v, want measured and not Blocked", got)
 	}
 }
 
@@ -240,67 +238,30 @@ func TestReconcileWorkload_TransientPromError_RecordsRetry(t *testing.T) {
 		t.Fatal("expected transient error to bubble up")
 	}
 
-	state := r.retries.getState(tgt.key())
-	if state.attempts < 1 {
-		t.Errorf("expected retry tracker to record at least 1 attempt, got %d", state.attempts)
+	if got := r.ledger.health(tgt.key()).blockedOn; got != phasePrometheus {
+		t.Errorf("blocked on %q, want %q", got, phasePrometheus)
 	}
 }
 
-// A permanent error (e.g. 403 from missing RBAC) must be surfaced via a Warning
-// event rather than swallowed, while still returning nil.
-func TestHandleStepError_NonTransient_EmitsWarningEventAndReturnsNil(t *testing.T) {
-	rec := events.NewFakeRecorder(10)
-	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
-	tgt := deploymentTarget("default", "web")
-
-	permErr := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "web-pod", errors.New("rbac missing"))
-	if err := r.handleStepError(context.Background(), tgt, "patch", "Pod recycle failed", permErr); err != nil {
-		t.Fatalf("non-transient error must return nil (no retry), got %v", err)
-	}
-
-	select {
-	case e := <-rec.Events:
-		if !strings.Contains(e, "Warning") || !strings.Contains(e, "ReconciliationFailed") {
-			t.Errorf("expected Warning ReconciliationFailed event, got %q", e)
-		}
-	default:
-		t.Error("expected a Warning event for non-transient error, got none")
-	}
-}
-
-func TestHandleStepError_ContextCanceled_StaysSilent(t *testing.T) {
-	rec := events.NewFakeRecorder(10)
-	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
-	tgt := deploymentTarget("default", "web")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	if err := r.handleStepError(ctx, tgt, "patch", "Pod recycle failed", context.Canceled); err != nil {
-		t.Fatalf("context cancellation must return nil, got %v", err)
-	}
-	select {
-	case e := <-rec.Events:
-		t.Errorf("expected no event for context cancellation, got %q", e)
-	default:
-	}
-}
-
-// Empty Prometheus results are NOT a failure: retry state is cleared and no
+// Empty Prometheus results are NOT a failure: a past failure is cleared and no
 // patch is attempted.
 func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *testing.T) {
 	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), false)
+	clk := clocktesting.NewFakePassiveClock(time.Now())
+	r.ledger = newLedger(clk)
 	tgt := deploymentTarget("default", "web")
 	policy := policyForReconcileWorkload(t, "p")
 
-	// Prime a past failure whose backoff has elapsed, so the member is
-	// processed and the success must clear it.
-	r.retries.states[tgt.key()] = &retryState{attempts: 1, nextRetry: time.Now().Add(-time.Second), phase: "patch"}
+	// A past failure whose backoff has elapsed, so the member is processed and
+	// the success must clear it.
+	r.settle(context.Background(), []applyResult{failedStep(tgt, phasePatch, errors.New("apiserver unavailable"))})
+	clk.SetTime(clk.Now().Add(baseRetryDelay))
 
 	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
 		t.Fatalf("reconcileWorkload: %v", err)
 	}
-	if state := r.retries.getState(tgt.key()); state != nil && state.attempts != 0 {
-		t.Errorf("expected retry attempts cleared on success, got %d", state.attempts)
+	if got := r.ledger.health(tgt.key()).blockedOn; got != "" {
+		t.Errorf("blocked on %q, want the failure cleared by the success", got)
 	}
 }
 
@@ -361,9 +322,8 @@ func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
 		t.Errorf("pod CPU request changed to %s — recycle/resize path was reached for a Pod-kind target", cpu)
 	}
 
-	// recordStepSuccess must still run on the skip path.
-	if state := r.retries.getState(tgt.key()); state != nil && state.attempts != 0 {
-		t.Errorf("expected attempts=0 on success, got %d", state.attempts)
+	if got := r.ledger.health(tgt.key()).blockedOn; got != "" {
+		t.Errorf("blocked on %q, want a member with no pods to apply to counted a success", got)
 	}
 }
 
@@ -478,35 +438,6 @@ func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
 	}
 }
 
-// Reproduces the crash that killed the operator process: the same target in two
-// errgroup goroutines (a namespace repeated in spec.selector.namespaces made
-// that possible), one on the transient-error path while the other clears retry
-// state. handleStepError used to read the state back in a second, unsynchronised
-// call, so the intervening recordSuccess made it nil and the deref panicked
-// inside an errgroup closure, which does not recover.
-func TestHandleStepError_ConcurrentSuccess_NoPanic(t *testing.T) {
-	rec := events.NewFakeRecorder(1024)
-	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
-	tgt := deploymentTarget("default", "web")
-	transient := apierrors.NewServiceUnavailable("prometheus down")
-
-	var wg sync.WaitGroup
-	for range 50 {
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			if err := r.handleStepError(context.Background(), tgt, "prometheus", "Prometheus query failed", transient); err == nil {
-				t.Error("transient error must be returned for requeue")
-			}
-		}()
-		go func() {
-			defer wg.Done()
-			r.recordStepSuccess(tgt)
-		}()
-	}
-	wg.Wait()
-}
-
 func stalePodsLabels(ns, name string) map[string]string {
 	return map[string]string{"namespace": ns, "owner_kind": "Deployment", "owner_name": name}
 }
@@ -595,8 +526,8 @@ func TestReconcileWorkload_OnCreate_DryRunErrorIsNotAStepFailure(t *testing.T) {
 	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
 		t.Fatalf("OnCreate dry-run failure must not fail the step, got %v", err)
 	}
-	if state := r.retries.getState(tgt.key()); state != nil && state.attempts != 0 {
-		t.Errorf("OnCreate dry-run failure must not enter retry backoff, attempts = %d", state.attempts)
+	if !r.ledger.mayRun(tgt.key()) || r.ledger.health(tgt.key()).blockedOn != "" {
+		t.Error("OnCreate dry-run failure must not block the member or back it off")
 	}
 	rec := r.recorder.(*events.FakeRecorder)
 	for {
@@ -786,8 +717,8 @@ func TestReconcileWorkload_FailedApplyRecordsItsFamilyPhase(t *testing.T) {
 			if err := runComputeAndApply(context.Background(), r, policyForReconcileWorkload(t, "p"), itemForTarget(tc.target)); err == nil {
 				t.Fatal("expected the transient apply failure to surface")
 			}
-			if phase, blocked := r.retries.blockedPhase(tc.target.key()); !blocked || phase != tc.wantPhase {
-				t.Errorf("blocked = %v, phase = %q, want %q", blocked, phase, tc.wantPhase)
+			if got := r.ledger.health(tc.target.key()).blockedOn; got != tc.wantPhase {
+				t.Errorf("blocked on %q, want %q", got, tc.wantPhase)
 			}
 		})
 	}

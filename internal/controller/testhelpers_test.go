@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	clocktesting "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -164,8 +165,9 @@ func testFullScheme(t *testing.T) *runtime.Scheme {
 }
 
 // reconcilerOn wires a PolicyReconciler around c with the bits
-// SetupWithManager would normally inject (patcher, recorder, retries) and the
-// given inputs fetcher.
+// SetupWithManager would normally inject (patcher, recorder, ledger) and the
+// given inputs fetcher. The ledger's clock stands still: a test that needs
+// backoff to elapse gives the reconciler a ledger on a clock it controls.
 func reconcilerOn(c client.Client, scheme *runtime.Scheme, inputs recommender.InputsFetcher, inPlace bool) *PolicyReconciler {
 	return &PolicyReconciler{
 		Client:                   c,
@@ -176,7 +178,7 @@ func reconcilerOn(c client.Client, scheme *runtime.Scheme, inputs recommender.In
 		InPlaceUpdates:           inPlace,
 		recorder:                 events.NewFakeRecorder(100),
 		patcher:                  workload.New(c, inPlace),
-		retries:                  newRetryTracker(),
+		ledger:                   newLedger(clocktesting.NewFakePassiveClock(time.Now())),
 	}
 }
 
@@ -363,26 +365,30 @@ func itemForTargetWithWLR(t *workloadTarget, wlr *sustainv1alpha1.WorkloadRecomm
 
 // runComputeAndApply drives the phases Reconcile runs for a single-member
 // identity: discovery, the recommendation pass, the WorkloadRecommendation
-// record, then — when the record landed — the apply for its member unless it
-// is in backoff, threading a fetch failure through handleStepError and the
-// retry tracker exactly as Reconcile does, and the identity's health emission.
+// record, the apply of its member, the ledger's record of the result and the
+// identity's health emission. It returns the errors of the steps that failed.
 func runComputeAndApply(ctx context.Context, r *PolicyReconciler, policy *sustainv1alpha1.Policy, it computeItem) error {
 	items := []computeItem{it}
 	r.discover(ctx, policy.Name, items)
-	r.health.observe(policy.Name, items)
+	r.health.observe(policy.Name, items, r.ledger)
 	snap := autoscaler.NewNamespacedSnapshot(r.Client)
 	results := r.recommend(ctx, policy, items, snap)
 	r.persist(ctx, results)
-	res := results[0]
-	if res.recordErr != nil {
-		return res.recordErr
-	}
+	applied := r.apply(ctx, policy, results, snap)
+	r.settle(ctx, applied)
+	r.health.emit(policy.Name, r.ledger)
 	var err error
-	for _, t := range res.apply {
-		err = errors.Join(err, r.reconcileWorkload(ctx, policy, t, snap, res.recs, res.err))
+	for _, res := range applied {
+		if res.kind == applyFailed {
+			err = errors.Join(err, res.err)
+		}
 	}
-	r.health.emit(policy.Name, r.retries)
 	return err
+}
+
+// failedStep is the result of a member whose step failed with err.
+func failedStep(t *workloadTarget, phase string, err error) applyResult {
+	return applyResult{member: t, kind: applyFailed, phase: phase, err: err}
 }
 
 // barePod builds a running bare pod opted into policy "p" under the

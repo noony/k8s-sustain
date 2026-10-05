@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -85,7 +86,7 @@ type PolicyReconciler struct {
 
 	recorder events.EventRecorder
 	patcher  *workload.Patcher
-	retries  *retryTracker
+	ledger   *ledger
 
 	health healthTracker
 }
@@ -98,7 +99,7 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	r.patcher = workload.New(r.Client, r.InPlaceUpdates, patcherOpts...)
 	r.recorder = mgr.GetEventRecorder("k8s-sustain")
-	r.retries = newRetryTracker()
+	r.ledger = newLedger(clock.RealClock{})
 	r.applyTuningDefaults()
 	if err := mgr.Add(&orphanReaper{reconciler: r, interval: r.OrphanReapInterval}); err != nil {
 		return err
@@ -181,7 +182,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 			// Ordered after cleanup so a retried deletion re-emits nothing.
 			DeletePolicyMetrics(policy.Name)
-			r.health.forget(policy.Name)
+			r.health.forget(policy.Name, r.ledger)
 			r.recorder.Eventf(policy, nil, corev1.EventTypeNormal, "Cleanup", "Cleanup", "Policy deleted, removing finalizer.")
 			controllerutil.RemoveFinalizer(policy, finalizerName)
 			if err := r.Update(ctx, policy); err != nil {
@@ -216,7 +217,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	items := computeItems(ctx, policy, governed)
 	discoveryFailures := r.discover(ctx, policy.Name, items)
-	r.health.observe(policy.Name, items)
+	r.health.observe(policy.Name, items, r.ledger)
 	r.recordConflicted(ctx, policy.Name, snap)
 
 	// One autoscaler snapshot per pass; it lists each namespace once, lazily.
@@ -226,10 +227,11 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// webhook serves the new value before replacement pods are admitted.
 	results := r.recommend(ctx, policy, items, autoSnap)
 	departed, departedFailed := r.persist(ctx, results)
-	dispatched, failed, skipped := r.apply(ctx, policy, results, autoSnap)
-	// units counts dispatched work: one per applied member plus one per
+	applied := r.apply(ctx, policy, results, autoSnap)
+	failed, skipped := r.settle(ctx, applied)
+	// units counts dispatched work: one per member not skipped plus one per
 	// departed identity.
-	units := dispatched + departed
+	units := len(applied) - skipped + departed
 	failed += departedFailed
 
 	logger.Info("reconcile cycle complete",
@@ -240,7 +242,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		"failed", failed,
 		"concurrency", r.WorkloadConcurrencyLimit)
 
-	blocked := r.health.emit(policy.Name, r.retries)
+	blocked := r.health.emit(policy.Name, r.ledger)
 	EmitPolicyRollup(policy.Name, liveIdentities(governed), blocked)
 
 	requested, resolved, fetchFailures := passCoverage(results)
@@ -249,13 +251,16 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	r.sweepWorkloadRecommendations(ctx, policy.Name, snap)
 
-	// failed is per dispatched unit, so units is the denominator.
-	// discoveryFailures is reported separately so a persistent Ensure
-	// failure cannot report Ready.
-	if failed > 0 || discoveryFailures > 0 {
+	// failed is per dispatched unit, so units is the denominator. blocked
+	// also covers the members this pass skipped in backoff. A failed Ensure
+	// always surfaces as one of the two; discoveryFailures only names it.
+	if failed > 0 || blocked > 0 {
 		var parts []string
 		if failed > 0 {
 			parts = append(parts, fmt.Sprintf("%d of %d workloads failed", failed, units))
+		}
+		if blocked > 0 {
+			parts = append(parts, fmt.Sprintf("Blocked workload identities: %d", blocked))
 		}
 		if discoveryFailures > 0 {
 			parts = append(parts, fmt.Sprintf("%d workload identities could not be registered for computation", discoveryFailures))
@@ -278,7 +283,23 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		reconcileTotal.WithLabelValues(policy.Name, "success").Inc()
 	}
 
-	return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
+	return ctrl.Result{RequeueAfter: r.requeueAfter(applied)}, nil
+}
+
+// requeueAfter schedules the Policy's next pass at the reconcile interval, or
+// earlier when one of its members' retries falls due first, so the time a
+// retry event names is a time a pass runs.
+func (r *PolicyReconciler) requeueAfter(applied []applyResult) time.Duration {
+	members := make([]string, len(applied))
+	for i, res := range applied {
+		members[i] = res.member.key()
+	}
+	due, ok := r.ledger.nextRetry(members)
+	if !ok {
+		return r.ReconcileInterval
+	}
+	// A zero RequeueAfter means no requeue at all.
+	return min(r.ReconcileInterval, max(due, time.Second))
 }
 
 // liveIdentities counts the governed identities with a live member, which is

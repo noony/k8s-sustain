@@ -51,12 +51,12 @@ var (
 
 	workloadRetryState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_retry_state",
-		Help: "1 while any member of the workload identity is in retry backoff, with the failed phase of the first such member as reason; absent otherwise.",
+		Help: "1 while any member of the workload identity is Blocked (its last apply failed, transiently or permanently), with the failed step of the first such member as reason; absent otherwise.",
 	}, []string{"namespace", "owner_kind", "owner_name", "reason"})
 
 	workloadRetryAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_workload_retry_attempts",
-		Help: "Total failed reconcile steps across the workload identity's members.",
+		Help: "Total failed apply attempts across the workload identity's members, transient or permanent.",
 	}, []string{"namespace", "owner_kind", "owner_name"})
 
 	policyWorkloadCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -66,7 +66,7 @@ var (
 
 	policyBlockedCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_policy_blocked_count",
-		Help: "Number of a policy's live workload identities with a member in retry backoff.",
+		Help: "Number of a policy's live workload identities with a Blocked member.",
 	}, []string{"policy"})
 
 	autoscalerPresent = prometheus.NewGaugeVec(
