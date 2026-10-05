@@ -128,7 +128,7 @@ func TestSignals_ComputeRunsAListedLimitSignalsStage(t *testing.T) {
 		OOM:       map[string]OOM{"app": {LimitBytes: 128 * mib}, "big": {LimitBytes: 128 * mib}},
 	}
 
-	res := Compute(Request{Containers: containers("app", "big", "quiet"), Inputs: in, Resources: equal, Now: now})
+	res := Compute(Request{containers: containers("app", "big", "quiet"), inputs: in, resources: equal, now: now})
 
 	assertQty(t, "app limit", res.Recs["app"].MemoryLimit, "256Mi")
 	app := res.Traces["app"].Memory
@@ -142,9 +142,9 @@ func TestSignals_ComputeRunsAListedLimitSignalsStage(t *testing.T) {
 	assertStages(t, "quiet limit", res.Traces["quiet"].Memory.Limit, "equalsToRequest")
 
 	unlimited := Compute(Request{
-		Containers: []corev1.Container{{Name: "app"}},
-		Inputs:     in,
-		Now:        now,
+		containers: []corev1.Container{{Name: "app"}},
+		inputs:     in,
+		now:        now,
 	})
 	if rec := unlimited.Recs["app"]; rec.MemoryLimit != nil || rec.RemoveMemoryLimit {
 		t.Errorf("app without a limit = %+v, want it to keep having none", rec)

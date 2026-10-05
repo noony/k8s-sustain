@@ -137,7 +137,7 @@ func computeIdentity(ctx context.Context, id *inventory.Identity, a recommender.
 	// A departed identity's Group holds no autoscaler: no member is left to scale.
 	info := a.Autoscaler.Info
 	res := recommendation{
-		inputs:      a.Request.Inputs,
+		inputs:      a.Request.Inputs(),
 		autoscalers: a.Autoscaler,
 		computed:    computed{autoscaler: &info, mismatch: len(a.Autoscaler.Disagreeing) > 0},
 	}
@@ -153,14 +153,14 @@ func computeIdentity(ctx context.Context, id *inventory.Identity, a recommender.
 		res.outcome = outcomeTooYoung
 		log.FromContext(ctx).Info("skipping recommendation: workload too young",
 			"kind", key.OwnerKind, "name", key.OwnerName, "namespace", key.Namespace,
-			"age", recommender.AgeForLog(id.Since, a.Request.Now), "minAge", recommender.MinWorkloadAge)
+			"age", recommender.AgeForLog(id.Since, a.Request.Now()), "minAge", recommender.MinWorkloadAge)
 	case recommender.NoData:
 		res.outcome = outcomeNoData
 	default:
 		res.outcome = outcomeRecommended
 		res.recs = out.Recs
 		res.traces = out.Traces
-		res.oomFloors = oomFloorsOf(out.Traces, a.Request.Now)
+		res.oomFloors = oomFloorsOf(out.Traces, a.Request.Now())
 	}
 	return res
 }

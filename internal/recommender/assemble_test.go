@@ -206,14 +206,14 @@ func TestAssemble(t *testing.T) {
 				t.Fatalf("Err = %v", got.Err)
 			}
 			req := got.Request
-			if !slices.Equal(names(req.Containers), tc.wantContainers) {
-				t.Errorf("containers = %v, want %v", names(req.Containers), tc.wantContainers)
+			if !slices.Equal(names(req.containers), tc.wantContainers) {
+				t.Errorf("containers = %v, want %v", names(req.containers), tc.wantContainers)
 			}
-			if req.AutoInfo.Kind != tc.wantAuto || !req.Since.Equal(tc.id.Since) || req.Inputs == nil {
+			if req.autoInfo.Kind != tc.wantAuto || !req.since.Equal(tc.id.Since) || req.inputs == nil {
 				t.Errorf("request = %+v, want the %s autoscaler, the identity's age and its inputs", req, tc.wantAuto)
 			}
-			if req.Now.Before(tc.inputs.returned) {
-				t.Errorf("Now = %v, before the fetch returned at %v", req.Now, tc.inputs.returned)
+			if req.now.Before(tc.inputs.returned) {
+				t.Errorf("Now = %v, before the fetch returned at %v", req.now, tc.inputs.returned)
 			}
 		})
 	}
@@ -240,12 +240,48 @@ func TestAssemble_OneBatchUnderThePolicysResources(t *testing.T) {
 		t.Errorf("fetched under %+v, want %+v", inputs.cfgs[0], want)
 	}
 	for i, a := range got {
-		if !reflect.DeepEqual(a.Request.Resources, want) || !a.Request.Coordination.Enabled {
+		if !reflect.DeepEqual(a.Request.resources, want) || !a.Request.coordination.Enabled {
 			t.Errorf("identity %d computes with %+v, want the fetch's resources and the Policy's coordination", i, a.Request)
 		}
 	}
-	if !got[0].Request.Now.Equal(got[2].Request.Now) {
+	if !got[0].Request.now.Equal(got[2].Request.now) {
 		t.Error("one batch must be computed as of one instant")
+	}
+}
+
+// An identity the inventory has not seen has no containers: it is
+// recommended for every container its inputs report, an OOM-killed one
+// without usage included. One whose containers are all excluded has nothing
+// to recommend.
+func TestAssemble_ContainersOfAnUnseenIdentityComeFromItsInputs(t *testing.T) {
+	key := promclient.WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "gone"}
+	inputs := &recordedInputs{inputs: map[promclient.WorkloadIdentity]*WorkloadInputs{key: {
+		CPUPerPod: promclient.ContainerValues{"app": 0.5},
+		MemPerPod: promclient.ContainerValues{"app": 100 * mib},
+		OOM:       map[string]OOM{"crashy": {Kills: 1, PeakBytes: 300 * mib, HasPeak: true}},
+	}}}
+
+	unseen := Assemble(context.Background(), inputs, &memberAutoscalers{}, sustainv1alpha1.RightSizingSpec{},
+		[]*inventory.Identity{{Key: key}})[0]
+	excluded := Assemble(context.Background(), inputs, &memberAutoscalers{},
+		sustainv1alpha1.RightSizingSpec{ExcludeInitContainers: true},
+		[]*inventory.Identity{{Key: key, InitContainers: containers("app")}})[0]
+
+	if got := names(unseen.Request.containers); !slices.Equal(got, []string{"app", "crashy"}) {
+		t.Errorf("containers = %v, want every container the inputs report", got)
+	}
+	if size := inputs.calls[0][0].Containers; size != 0 {
+		t.Errorf("fetch size hint = %d, want 0: the size is unknown", size)
+	}
+	res := Compute(unseen.Request)
+	if got := res.Recs["app"].CPURequest; got == nil || got.String() != "500m" {
+		t.Errorf("app cpu = %v, want 500m", got)
+	}
+	if got := res.Recs["crashy"].MemoryRequest; got == nil || got.String() != "300Mi" {
+		t.Errorf("crashy memory = %v, want 300Mi from the OOM peak with no usage samples", got)
+	}
+	if res := Compute(excluded.Request); res.Outcome != NoData {
+		t.Errorf("outcome with every container excluded = %v, want NoData", res.Outcome)
 	}
 }
 

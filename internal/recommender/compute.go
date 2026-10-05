@@ -85,25 +85,40 @@ const (
 )
 
 // Request is one identity's recommendation computation, the unit the
-// controller, the dashboard's recommendation endpoint and its simulator all
-// share. Resources and Coordination usually come from a Policy; the simulator
-// substitutes the configuration under test.
+// controller and the dashboard's Simulations share. Only Assemble builds one,
+// so every Request carries the instant it computes as of: a zero instant would
+// make every dated identity Too young.
 type Request struct {
-	// Containers is the set to recommend for, carrying each container's current
-	// requests and limits (the limit stages read them). Empty means "every
-	// container the inputs report", which is all a departed or unknown
-	// workload has left.
-	Containers   []corev1.Container
-	Resources    sustainv1alpha1.ResourcesConfigs
-	Coordination sustainv1alpha1.AutoscalerCoordination
-	AutoInfo     autoscaler.Info
-	Inputs       *WorkloadInputs
-	// Since dates the identity for the age gate; see tooYoung. Zero disables
+	// containers is the set to recommend for, carrying each container's
+	// current requests and limits (the limit stages read them).
+	containers   []corev1.Container
+	resources    sustainv1alpha1.ResourcesConfigs
+	coordination sustainv1alpha1.AutoscalerCoordination
+	autoInfo     autoscaler.Info
+	inputs       *WorkloadInputs
+	// since dates the identity for the age gate; see tooYoung. Zero disables
 	// the gate.
-	Since time.Time
-	// Now is the instant the computation runs as of: the age gate measures
-	// Since against it.
-	Now time.Time
+	since time.Time
+	// now is the instant the computation runs as of: the age gate measures
+	// since against it.
+	now time.Time
+}
+
+// Now is the instant the Request computes as of.
+func (r Request) Now() time.Time { return r.now }
+
+// Inputs are what the Request computes from.
+func (r Request) Inputs() *WorkloadInputs { return r.inputs }
+
+// Resources are the Policy's resources the Request computes with, every
+// default explicit (WithDefaults).
+func (r Request) Resources() sustainv1alpha1.ResourcesConfigs { return r.resources }
+
+// WithInputs is the Request computing from in instead: what the identity
+// would be recommended had it observed in, such as one past percentile.
+func (r Request) WithInputs(in *WorkloadInputs) Request {
+	r.inputs = in
+	return r
 }
 
 // Result is Compute's answer for one identity.
@@ -122,15 +137,11 @@ type Result struct {
 // recommendation goes through here so the number the dashboard shows is the
 // number the controller applies.
 func Compute(req Request) Result {
-	containers := req.Containers
-	if len(containers) == 0 {
-		containers = observedContainers(req.Inputs)
-	}
 	res := Result{
-		Recs:   make(map[string]workload.ContainerRecommendation, len(containers)),
-		Traces: make(map[string]sustainv1alpha1.ContainerTrace, len(containers)),
+		Recs:   make(map[string]workload.ContainerRecommendation, len(req.containers)),
+		Traces: make(map[string]sustainv1alpha1.ContainerTrace, len(req.containers)),
 	}
-	for _, c := range containers {
+	for _, c := range req.containers {
 		rec, tr, ok := computeContainer(c, req)
 		if !ok {
 			continue
@@ -140,7 +151,7 @@ func Compute(req Request) Result {
 	}
 
 	switch {
-	case tooYoung(req.Since, req.Now, req.Inputs):
+	case tooYoung(req.since, req.now, req.inputs):
 		res.Outcome = TooYoung
 	case len(res.Recs) == 0:
 		res.Outcome = NoData
@@ -205,7 +216,7 @@ func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justifi
 	winner := -1
 	for _, r := range []role{base, adjuster} {
 		for _, s := range inSlot(slot{role: r, resource: res}) {
-			ct, ok := s.contribute(req.Inputs, c.Name)
+			ct, ok := s.contribute(req.inputs, c.Name)
 			if !ok {
 				continue
 			}
@@ -216,28 +227,28 @@ func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justifi
 			stages = append(stages, contributed{signal: s, value: ct.value})
 		}
 	}
-	cfg := res.config(req.Resources)
+	cfg := res.config(req.resources)
 	if !justified || cfg.Requests.KeepRequest {
 		return nil, justified
 	}
 
 	headroom := res.withHeadroom(value, cfg.Requests.Headroom)
 	clamped := clamp(headroom, cfg.Requests.MinAllowed, cfg.Requests.MaxAllowed)
-	co := coordinate(clamped, res, req.Coordination, req.AutoInfo, cfg.Requests)
+	co := coordinate(clamped, res, req.coordination, req.autoInfo, cfg.Requests)
 	// Judged on the final request: a clamp on either side of coordination
 	// means an operator bound, not the winning signal, set it.
 	unbounded := clamped.Cmp(headroom) == 0 && (co == nil || co.value.Cmp(co.scaled) == 0)
 
 	out := &sizing{request: clamped}
 	for i, st := range stages {
-		out.trace.Request = append(out.trace.Request, st.signal.stage(req.Inputs, c.Name, st.value, unbounded && i == winner))
+		out.trace.Request = append(out.trace.Request, st.signal.stage(req.inputs, c.Name, st.value, unbounded && i == winner))
 	}
 	out.trace.Request = append(out.trace.Request, quantityStage(stageHeadroom, headroom), quantityStage(stageClamp, clamped))
 	if co != nil {
 		out.request = co.value
 		out.trace.Request = append(out.trace.Request, co.stage())
 	}
-	out.limit, out.trace.Limit = limitChain(res, out.request, c, req.Inputs, cfg.Limits)
+	out.limit, out.trace.Limit = limitChain(res, out.request, c, req.inputs, cfg.Limits)
 	return out, true
 }
 

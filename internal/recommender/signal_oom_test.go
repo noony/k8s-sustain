@@ -236,7 +236,7 @@ func TestOOMFloor_LiveKillWithinTheWindow(t *testing.T) {
 		MemPerPod: promclient.ContainerValues{"app": 100 * mib, "side": 100 * mib},
 	}, oomSource{"app": liveKill("app", 10*time.Second, 200<<20)})
 
-	res := Compute(Request{Containers: containers("app", "side"), Inputs: in, Since: now.Add(-time.Minute), Now: now})
+	res := Compute(Request{containers: containers("app", "side"), inputs: in, since: now.Add(-time.Minute), now: now})
 
 	if res.Outcome != Recommended {
 		t.Fatalf("outcome = %v, want Recommended: a live kill bypasses the age gate", res.Outcome)
@@ -263,7 +263,7 @@ func TestOOMFloor_StaleLiveKillIsIgnored(t *testing.T) {
 		MemPerPod: promclient.ContainerValues{"app": 100 * mib},
 	}, oomSource{"app": liveKill("app", LiveOOMWindow+time.Minute, 200<<20)})
 
-	res := Compute(Request{Containers: containers("app"), Inputs: in, Since: now.Add(-time.Minute), Now: now})
+	res := Compute(Request{containers: containers("app"), inputs: in, since: now.Add(-time.Minute), now: now})
 
 	if res.Outcome != TooYoung {
 		t.Errorf("outcome = %v, want TooYoung: a stale kill must not bypass the age gate", res.Outcome)
@@ -281,10 +281,10 @@ func TestOOMFloor_StaleLiveKillIsIgnored(t *testing.T) {
 // the floor per container.
 func TestOOMFloor_PrometheusKills(t *testing.T) {
 	res := Compute(Request{
-		Containers: containers("app", "side"),
-		Inputs:     &WorkloadInputs{OOM: map[string]OOM{"app": {Kills: 1, PeakBytes: 80 * mib, HasPeak: true}}},
-		Since:      now.Add(-time.Minute),
-		Now:        now,
+		containers: containers("app", "side"),
+		inputs:     &WorkloadInputs{OOM: map[string]OOM{"app": {Kills: 1, PeakBytes: 80 * mib, HasPeak: true}}},
+		since:      now.Add(-time.Minute),
+		now:        now,
 	})
 
 	if res.Outcome != Recommended {
@@ -320,8 +320,8 @@ func TestOOMFloor_AnchorsOnTheHigherOfPrometheusAndLiveLimits(t *testing.T) {
 // percentile and one with no usage gets nothing.
 func TestOOMFloor_SiblingKillDoesNotFloorInnocentContainer(t *testing.T) {
 	res := Compute(Request{
-		Containers: containers("app", "side", "nodata"),
-		Inputs: &WorkloadInputs{
+		containers: containers("app", "side", "nodata"),
+		inputs: &WorkloadInputs{
 			MemPerPod: promclient.ContainerValues{"app": 64 * mib, "side": 50 * mib},
 			OOM: map[string]OOM{
 				"app":    {Kills: 2, PeakBytes: 200 * mib, HasPeak: true},
@@ -329,7 +329,7 @@ func TestOOMFloor_SiblingKillDoesNotFloorInnocentContainer(t *testing.T) {
 				"nodata": {PeakBytes: 150 * mib, HasPeak: true},
 			},
 		},
-		Now: now,
+		now: now,
 	})
 
 	if got := res.Recs["app"].MemoryRequest; got == nil || got.String() != "200Mi" {
@@ -459,16 +459,16 @@ func TestOOMFloor_TracesThroughCoordination(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			res := Compute(Request{
-				Containers: containers("app"),
-				Inputs: &WorkloadInputs{
+				containers: containers("app"),
+				inputs: &WorkloadInputs{
 					MemPerPod: promclient.ContainerValues{"app": 100 * mib},
 					OOM:       map[string]OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}},
 				},
-				Resources:    sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.requests}},
-				Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true},
-				AutoInfo:     autoscaler.Info{Kind: autoscaler.KindKEDA, ConfiguredTargets: map[string]int32{autoscaler.ResourceMemory: 80}},
-				Since:        old,
-				Now:          now,
+				resources:    sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.requests}},
+				coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true},
+				autoInfo:     autoscaler.Info{Kind: autoscaler.KindKEDA, ConfiguredTargets: map[string]int32{autoscaler.ResourceMemory: 80}},
+				since:        old,
+				now:          now,
 			})
 
 			mem := res.Traces["app"].Memory

@@ -37,7 +37,8 @@ type Assembled struct {
 // containers make the identity's (a departed identity has none), fetches every
 // identity's inputs in one batch under spec's resources, defaults made
 // explicit (WithDefaults), and leaves init containers out when spec excludes
-// them.
+// them. An identity with no containers at all, one the inventory has not seen,
+// is recommended for every container its inputs report.
 func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers, spec sustainv1alpha1.RightSizingSpec, ids []*inventory.Identity) []Assembled {
 	resources := WithDefaults(spec.ResourcesConfigs)
 	out := make([]Assembled, len(ids))
@@ -47,11 +48,11 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 		group := autoscalerOf(ctx, autoscalers, id)
 		out[i] = Assembled{
 			Request: Request{
-				Containers:   containers,
-				Resources:    resources,
-				Coordination: spec.AutoscalerCoordination,
-				AutoInfo:     group.Info,
-				Since:        id.Since,
+				containers:   containers,
+				resources:    resources,
+				coordination: spec.AutoscalerCoordination,
+				autoInfo:     group.Info,
+				since:        id.Since,
 			},
 			Autoscaler: group,
 		}
@@ -68,8 +69,11 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 			out[i] = Assembled{Autoscaler: out[i].Autoscaler, Err: f.Err}
 			continue
 		}
-		out[i].Request.Inputs = f.Inputs
-		out[i].Request.Now = now
+		req := &out[i].Request
+		req.inputs, req.now = f.Inputs, now
+		if len(id.Containers) == 0 && len(id.InitContainers) == 0 {
+			req.containers = observedContainers(f.Inputs)
+		}
 	}
 	return out
 }

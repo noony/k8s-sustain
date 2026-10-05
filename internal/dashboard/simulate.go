@@ -98,7 +98,7 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		return nil, a.Err
 	}
 	res := recommender.Compute(a.Request)
-	inputs := a.Request.Inputs
+	inputs := a.Request.Inputs()
 
 	step := cmp.Or(req.Step, "5m")
 	ns, kind, name := key.Namespace, key.OwnerKind, key.OwnerName
@@ -113,7 +113,7 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(ctx, ns, kind, name, tr, step)
 	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(ctx, ns, kind, name, tr, step)
 
-	resources := a.Request.Resources
+	resources := a.Request.Resources()
 	cpuRecSeries, _ := s.PromClient.QueryWorkloadCPURecommendationRangeByContainer(ctx, ns, kind, name,
 		recommender.PercentileQuantile(resources.CPU.Requests.Percentile), resources.CPU.Window, tr, step)
 	memRecSeries, _ := s.PromClient.QueryWorkloadMemoryRecommendationRangeByContainer(ctx, ns, kind, name,
@@ -174,7 +174,7 @@ func recommendationSeries(series promclient.ContainerTimeSeries, req recommender
 		clamped := make([]promclient.TimeValue, len(points))
 		for i, p := range points {
 			point := recommender.WorkloadInputs{OOM: map[string]recommender.OOM{}}
-			if oom, ok := req.Inputs.OOM[name]; ok {
+			if oom, ok := req.Inputs().OOM[name]; ok {
 				point.OOM[name] = oom
 			}
 			if memory {
@@ -182,9 +182,7 @@ func recommendationSeries(series promclient.ContainerTimeSeries, req recommender
 			} else {
 				point.CPUPerPod = promclient.ContainerValues{name: p.Value}
 			}
-			at := req
-			at.Inputs = &point
-			rec := recommender.Compute(at).Recs[name]
+			rec := recommender.Compute(req.WithInputs(&point)).Recs[name]
 			var v float64
 			switch {
 			case memory && rec.MemoryRequest != nil:

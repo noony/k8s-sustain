@@ -142,7 +142,7 @@ type contribution struct {
 }
 
 // observedContainers lists, sorted, every container any signal holds values
-// for: all a departed or unknown identity has left to recommend for.
+// for: all an identity with no known containers has to recommend for.
 func observedContainers(in *WorkloadInputs) []corev1.Container {
 	names := make(map[string]struct{})
 	for _, s := range signals {

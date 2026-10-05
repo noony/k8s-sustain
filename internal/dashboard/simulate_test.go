@@ -103,7 +103,9 @@ func TestRecommendationSeries_ComputesEachPointWithTheIdentitysOOMs(t *testing.T
 		CPU: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)}},
 	}}
 	inputs := recommendertest.NewStaticInputs().Set(key, &recommender.WorkloadInputs{
-		OOM: map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}},
+		CPUPerPod: promclient.ContainerValues{"app": 0.2, "side": 0.2},
+		MemPerPod: promclient.ContainerValues{"app": 150 * mib, "side": 150 * mib},
+		OOM:       map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}},
 	})
 	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
 	req := recommender.Assemble(context.Background(), inputs, autoscaler.NewNamespacedSnapshot(c), spec, []*inventory.Identity{{Key: key}})[0].Request

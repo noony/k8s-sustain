@@ -84,19 +84,19 @@ func TestLimit_NeverBelowTheRequest(t *testing.T) {
 		req  Request
 	}{
 		// 128Mi x 1.2, rounded up to a whole MiB.
-		{"OOM floor above the limit", Request{Inputs: &WorkloadInputs{MemPerPod: usage, OOM: map[string]OOM{"app": {Kills: 1, LimitBytes: 128 * mib}}}}},
+		{"OOM floor above the limit", Request{inputs: &WorkloadInputs{MemPerPod: usage, OOM: map[string]OOM{"app": {Kills: 1, LimitBytes: 128 * mib}}}}},
 		{"headroom", Request{
-			Inputs:    &WorkloadInputs{MemPerPod: usage},
-			Resources: sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)}}},
+			inputs:    &WorkloadInputs{MemPerPod: usage},
+			resources: sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)}}},
 		}},
 		{"minAllowed", Request{
-			Inputs:    &WorkloadInputs{MemPerPod: usage},
-			Resources: sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{MinAllowed: qtyp("200Mi")}}},
+			inputs:    &WorkloadInputs{MemPerPod: usage},
+			resources: sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{MinAllowed: qtyp("200Mi")}}},
 		}},
 		{"coordination", Request{
-			Inputs:       &WorkloadInputs{MemPerPod: usage},
-			Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true},
-			AutoInfo:     autoscaler.Info{Kind: autoscaler.KindKEDA, ConfiguredTargets: map[string]int32{autoscaler.ResourceMemory: 50}},
+			inputs:       &WorkloadInputs{MemPerPod: usage},
+			coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true},
+			autoInfo:     autoscaler.Info{Kind: autoscaler.KindKEDA, ConfiguredTargets: map[string]int32{autoscaler.ResourceMemory: 50}},
 		}},
 	}
 	app := limited(corev1.ResourceList{corev1.ResourceMemory: qty("100Mi")}, corev1.ResourceList{corev1.ResourceMemory: qty("128Mi")})
@@ -105,8 +105,8 @@ func TestLimit_NeverBelowTheRequest(t *testing.T) {
 		for _, s := range strategies {
 			t.Run(p.name+"/"+s.name, func(t *testing.T) {
 				req := p.req
-				req.Containers, req.Now = []corev1.Container{app}, now
-				req.Resources.Memory.Limits = s.cfg
+				req.containers, req.now = []corev1.Container{app}, now
+				req.resources.Memory.Limits = s.cfg
 
 				res := Compute(req)
 
@@ -183,10 +183,10 @@ func TestLimit_MemoryRatiosAreWholeBytes(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			res := Compute(Request{
-				Containers: []corev1.Container{app},
-				Inputs:     &WorkloadInputs{MemPerPod: promclient.ContainerValues{"app": 100 * mib}},
-				Resources:  sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Limits: cfg}},
-				Now:        now,
+				containers: []corev1.Container{app},
+				inputs:     &WorkloadInputs{MemPerPod: promclient.ContainerValues{"app": 100 * mib}},
+				resources:  sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Limits: cfg}},
+				now:        now,
 			})
 
 			got := res.Recs["app"].MemoryLimit

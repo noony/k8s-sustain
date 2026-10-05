@@ -19,6 +19,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
@@ -26,6 +27,18 @@ import (
 )
 
 func ptrMode(m sustainv1alpha1.UpdateMode) *sustainv1alpha1.UpdateMode { return &m }
+
+// everyMemberScaledBy is a recommender.Autoscalers under which info targets
+// every member.
+type everyMemberScaledBy autoscaler.Info
+
+func (e everyMemberScaledBy) ForIdentity(_ context.Context, _, _ string, members []string) (autoscaler.Group, error) {
+	g := autoscaler.Group{Info: autoscaler.Info(e), Members: map[string]autoscaler.Info{}}
+	for _, m := range members {
+		g.Members[m] = autoscaler.Info(e)
+	}
+	return g, nil
+}
 
 // deploymentWithOwnerName opts into policy "p" and, when ownerName is set,
 // joins that owner-name identity. Its one container is named after it.
@@ -281,18 +294,24 @@ func TestWorkloadDetailShowsStoredRecommendation(t *testing.T) {
 // Prometheus series carries them.
 func TestCoordinationFactorsComeFromTheStoredTrace(t *testing.T) {
 	anchor := 1.0
-	computed := recommender.Compute(recommender.Request{
-		Containers: []corev1.Container{{Name: "api"}},
-		Inputs: &recommender.WorkloadInputs{
+	api := identity("prod", "Deployment", "api")
+	assembled := recommender.Assemble(context.Background(),
+		recommendertest.NewStaticInputs().Set(api, &recommender.WorkloadInputs{
 			CPUPerPod: promclient.ContainerValues{"api": 0.2},
 			MemPerPod: promclient.ContainerValues{"api": 128 << 20},
-		},
-		Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true, ReplicaBudgetAnchor: &anchor},
-		AutoInfo: autoscaler.Info{
+		}),
+		everyMemberScaledBy(autoscaler.Info{
 			Kind: autoscaler.KindHPA, MinReplicas: 1, MaxReplicas: 10, CurrentReplicas: 1,
 			ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 80, autoscaler.ResourceMemory: 55},
-		},
-	})
+		}),
+		sustainv1alpha1.RightSizingSpec{AutoscalerCoordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true, ReplicaBudgetAnchor: &anchor}},
+		[]*inventory.Identity{{
+			Key:        api,
+			Members:    []inventory.Member{{Object: deploymentOptingInto("p", "prod", "api", "", time.Now()), Policy: "p"}},
+			Policy:     "p",
+			Containers: []corev1.Container{{Name: "api"}},
+		}})
+	computed := recommender.Compute(assembled[0].Request)
 	stored := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: wlrcache.Name("Deployment", "api")},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{

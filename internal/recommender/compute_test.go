@@ -37,39 +37,17 @@ func limited(requests, limits corev1.ResourceList) corev1.Container {
 	return corev1.Container{Name: "app", Resources: corev1.ResourceRequirements{Requests: requests, Limits: limits}}
 }
 
-func TestCompute_RecommendsEveryObservedContainerWhenNoneDeclared(t *testing.T) {
-	res := Compute(Request{
-		Inputs: &WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"app": 0.5},
-			MemPerPod: promclient.ContainerValues{"app": 100 * mib},
-			OOM:       map[string]OOM{"crashy": {Kills: 1, PeakBytes: 300 * mib, HasPeak: true}},
-		},
-		Since: old,
-		Now:   now,
-	})
-
-	if res.Outcome != Recommended {
-		t.Fatalf("outcome = %v, want Recommended", res.Outcome)
-	}
-	if got := res.Recs["app"].CPURequest; got == nil || got.String() != "500m" {
-		t.Errorf("app cpu = %v, want 500m", got)
-	}
-	if got := res.Recs["crashy"].MemoryRequest; got == nil || got.String() != "300Mi" {
-		t.Errorf("crashy memory = %v, want 300Mi from the OOM peak with no usage samples", got)
-	}
-}
-
 // Declared containers bound the result: one Prometheus still reports but the
 // workload no longer runs gets nothing, and one with no signal is skipped
 // rather than recommended at the hard floor.
 func TestCompute_DeclaredContainersBoundTheResult(t *testing.T) {
 	res := Compute(Request{
-		Containers: containers("app", "nodata"),
-		Inputs: &WorkloadInputs{
+		containers: containers("app", "nodata"),
+		inputs: &WorkloadInputs{
 			CPUPerPod: promclient.ContainerValues{"app": 1, "renamed-away": 1},
 			MemPerPod: promclient.ContainerValues{"app": 64 * mib},
 		},
-		Now: now,
+		now: now,
 	})
 
 	if len(res.Recs) != 1 || len(res.Traces) != 1 {
@@ -105,7 +83,7 @@ func TestCompute_AgeGate(t *testing.T) {
 				in.OOM = map[string]OOM{"side": *tc.oom}
 			}
 
-			res := Compute(Request{Containers: containers("app"), Inputs: in, Since: tc.since, Now: now})
+			res := Compute(Request{containers: containers("app"), inputs: in, since: tc.since, now: now})
 
 			if got := res.Outcome == TooYoung; got != tc.wantTooYoung {
 				t.Errorf("TooYoung = %v, want %v (outcome %v)", got, tc.wantTooYoung, res.Outcome)
@@ -120,16 +98,16 @@ func TestCompute_AgeGate(t *testing.T) {
 
 // computeApp computes the one container "app" from in under rs.
 func computeApp(in *WorkloadInputs, rs sustainv1alpha1.ResourcesConfigs) (workload.ContainerRecommendation, sustainv1alpha1.ContainerTrace) {
-	res := Compute(Request{Containers: containers("app"), Inputs: in, Resources: rs, Now: now})
+	res := Compute(Request{containers: containers("app"), inputs: in, resources: rs, now: now})
 	return res.Recs["app"], res.Traces["app"]
 }
 
 func TestCompute_NoDataWhenNothingToRecommendFrom(t *testing.T) {
 	res := Compute(Request{
-		Containers: containers("app"),
-		Inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{}, MemPerPod: promclient.ContainerValues{}},
-		Since:      old,
-		Now:        now,
+		containers: containers("app"),
+		inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{}, MemPerPod: promclient.ContainerValues{}},
+		since:      old,
+		now:        now,
 	})
 
 	if res.Outcome != NoData {
@@ -146,21 +124,21 @@ func TestCompute_NoDataWhenNothingToRecommendFrom(t *testing.T) {
 func TestCompute_TracesCPUStages(t *testing.T) {
 	anchor := 0.0
 	res := Compute(Request{
-		Containers: containers("app"),
-		Inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 0.1234}},
-		Resources: sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{
+		containers: containers("app"),
+		inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 0.1234}},
+		resources: sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{
 			Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](10), MinAllowed: qtyp("150m")},
 			Limits:   sustainv1alpha1.ResourceLimitsConfig{EqualsToRequest: true},
 		}},
-		Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true, ReplicaBudgetAnchor: &anchor},
-		AutoInfo: autoscaler.Info{
+		coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true, ReplicaBudgetAnchor: &anchor},
+		autoInfo: autoscaler.Info{
 			Kind:              autoscaler.KindHPA,
 			MinReplicas:       2,
 			MaxReplicas:       10,
 			CurrentReplicas:   8, // 4x the anchor target, factor clamps to 2.0
 			ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 80},
 		},
-		Now: now,
+		now: now,
 	})
 
 	cpu := res.Traces["app"].CPU
@@ -191,12 +169,12 @@ func TestCompute_TracesCoordinationOnlyWhenItRan(t *testing.T) {
 	}
 	compute := func(enabled bool, info autoscaler.Info, res sustainv1alpha1.ResourcesConfigs) sustainv1alpha1.ContainerTrace {
 		return Compute(Request{
-			Containers:   containers("app"),
-			Inputs:       inputs,
-			Resources:    res,
-			Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: enabled},
-			AutoInfo:     info,
-			Now:          now,
+			containers:   containers("app"),
+			inputs:       inputs,
+			resources:    res,
+			coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: enabled},
+			autoInfo:     info,
+			now:          now,
 		}).Traces["app"]
 	}
 
@@ -245,10 +223,10 @@ func TestAgeForLog(t *testing.T) {
 func computeLimited(t *testing.T, c corev1.Container, cores float64, cfg sustainv1alpha1.ResourceLimitsConfig) (workload.ContainerRecommendation, *sustainv1alpha1.ResourceTrace) {
 	t.Helper()
 	res := Compute(Request{
-		Containers: []corev1.Container{c},
-		Inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{c.Name: cores}},
-		Resources:  sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Limits: cfg}},
-		Now:        now,
+		containers: []corev1.Container{c},
+		inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{c.Name: cores}},
+		resources:  sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Limits: cfg}},
+		now:        now,
 	})
 	tr := res.Traces[c.Name].CPU
 	if tr == nil {

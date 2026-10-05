@@ -173,7 +173,7 @@ func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1al
 			out[i].err = a.Err
 			continue
 		}
-		out[i].recs = simulationContainers(recommender.Compute(a.Request), a.Request.Inputs)
+		out[i].recs = simulationContainers(recommender.Compute(a.Request), a.Request.Inputs())
 	}
 	return out
 }
