@@ -10,7 +10,7 @@
 # Every scenario in Makefile.scenarios must be listed in SCENARIOS below.
 set -euo pipefail
 
-SCENARIOS=(steady overprovisioned underprovisioned stepped hpa hpa-coordinated hpa-replica-anchor init-containers oom-kill qos-change cronjob cronjob-long-running cronjob-overprovisioned job statefulset custom-name bare-pod recommend-only coldstart recurring namespace-optin)
+SCENARIOS=(steady overprovisioned underprovisioned stepped hpa hpa-coordinated hpa-replica-anchor init-containers oom-kill oom-kill-keep-limit qos-change cronjob cronjob-long-running cronjob-overprovisioned job statefulset custom-name bare-pod recommend-only coldstart recurring namespace-optin)
 DASHBOARD_SVC=k8s-sustain-dashboard
 DASHBOARD_NS=k8s-sustain
 DASHBOARD_PORT=8090
