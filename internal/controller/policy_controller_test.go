@@ -23,6 +23,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -452,6 +453,35 @@ func TestReconcile_PassSkippingABackedOffMemberIsNotReady(t *testing.T) {
 	}
 	if strings.Contains(ready.Message, "workloads failed") {
 		t.Errorf("message = %q: the backed-off member was skipped, not failed again", ready.Message)
+	}
+}
+
+// The controller's own status write must not trigger the next pass: that pass
+// would find the member that had just failed in backoff, and do nothing.
+func TestPolicyEvents_OnlyGenerationChangesTriggerAPass(t *testing.T) {
+	old := ongoingDeployments("p")
+	old.Generation = 1
+	statusOnly := old.DeepCopy()
+	statusOnly.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "PartialFailure"}}
+	finalizerOnly := old.DeepCopy()
+	finalizerOnly.Finalizers = nil
+	specChange := old.DeepCopy()
+	specChange.Generation = 2
+	for _, tc := range []struct {
+		name string
+		next *sustainv1alpha1.Policy
+		want bool
+	}{
+		{"status write", statusOnly, false},
+		{"finalizer write", finalizerOnly, false},
+		{"spec change", specChange, true},
+	} {
+		if got := policyEvents.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: tc.next}); got != tc.want {
+			t.Errorf("%s: triggers a pass = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if !policyEvents.Create(event.CreateEvent{Object: old}) || !policyEvents.Delete(event.DeleteEvent{Object: old}) {
+		t.Error("creating or deleting a Policy must trigger a pass")
 	}
 }
 

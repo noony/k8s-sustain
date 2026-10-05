@@ -16,12 +16,14 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
@@ -105,7 +107,7 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
-		For(&sustainv1alpha1.Policy{}).
+		For(&sustainv1alpha1.Policy{}, builder.WithPredicates(policyEvents)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.PolicyConcurrencyLimit})
 	if r.OOMTriggers != nil {
 		// An OOM event named after its policy enqueues that Policy immediately.
@@ -123,6 +125,14 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return b.Complete(r)
 }
+
+// policyEvents passes the Policy events that call for a pass: creation,
+// deletion and a new generation. The controller's own status and finalizer
+// writes keep the generation and start none, so its status write cannot
+// re-run a pass at once over the members it just backed off. Setting the
+// deletion timestamp of an object holding finalizers bumps its generation,
+// so cleanup still runs at once.
+var policyEvents predicate.Predicate = predicate.GenerationChangedPredicate{}
 
 // applyTuningDefaults fills in zero tuning knobs. The literals duplicate the
 // CLI defaults rather than importing the config layer;
