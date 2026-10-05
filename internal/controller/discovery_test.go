@@ -34,7 +34,7 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// When EnsureExists fails the identity is still computed and applied, but its
+// When Ensure fails the identity is still computed, but its
 // recommendation has nowhere to be cached. A persistent cause (missing RBAC, a
 // rejecting admission webhook, a quota) must not leave the Policy reporting
 // Ready while the cache silently goes stale.

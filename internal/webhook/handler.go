@@ -265,8 +265,10 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	// RecommendationSourceTotal counts the read outcome, not whether a patch
 	// is eventually emitted.
 	RecommendationSourceTotal.WithLabelValues(recommendationSource(reading.Verdict)).Inc()
-	if reading.Verdict == wlrcache.Absent {
-		h.requestRecommendation(logger, req.Namespace, ownerKind, ownerName, policyName, pod.Spec.Containers, pod.Spec.InitContainers)
+	observed := wlrcache.BuildObservedResources(pod.Spec.Containers, pod.Spec.InitContainers)
+	if wlrcache.ShouldRequest(known, policyName, observed) {
+		ref := sustainv1alpha1.WorkloadReference{Kind: ownerKind, Namespace: req.Namespace, Name: ownerName}
+		h.requestRecommendation(logger, known, ref, policyName, observed)
 	}
 	if !reading.Verdict.Injects() {
 		logger.V(1).Info("WorkloadRecommendation has nothing to inject; allowing pod with template resources",

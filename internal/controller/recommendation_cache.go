@@ -9,7 +9,6 @@ import (
 	"github.com/go-logr/logr"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -17,47 +16,10 @@ import (
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
-
-// sweepGracePeriod protects freshly created WorkloadRecommendations from the
-// sweep: an identity first written after this cycle's snapshot was taken
-// would otherwise be deleted by the same pass. Anchored on
-// CreationTimestamp, not ObservedAt, which the computation phase rewrites
-// every cycle and would make the guard self-satisfying.
-const sweepGracePeriod = 10 * time.Minute
-
-// wlrLastSeen returns the retention anchor: ObservedAt, or CreationTimestamp
-// when the status patch has not landed yet.
-func wlrLastSeen(wlr *sustainv1alpha1.WorkloadRecommendation) time.Time {
-	seen := wlr.Status.ObservedAt.Time
-	if wlr.CreationTimestamp.After(wlr.Status.ObservedAt.Time) {
-		seen = wlr.CreationTimestamp.Time
-	}
-	return seen
-}
-
-// wlrRefreshInterval bounds how long an unchanged status keeps its old
-// ObservedAt. Must stay well under the webhook's DefaultCacheStaleness or
-// stable workloads are rejected as stale.
-const wlrRefreshInterval = wlrcache.RefreshInterval
 
 // wlrPolicyLabel labels each WorkloadRecommendation with its Policy.
 const wlrPolicyLabel = sustainv1alpha1.WLRPolicyLabel
-
-// upsertWorkloadRecommendation persists an identity's recommendation and its
-// trace. Called once per computeItem; it writes the identity's own snapshot so
-// the two writers of status.observedResources agree.
-func (r *PolicyReconciler) upsertWorkloadRecommendation(
-	ctx context.Context,
-	it computeItem,
-	policyName string,
-	recs map[string]workload.ContainerRecommendation,
-	traces map[string]sustainv1alpha1.ContainerTrace,
-	now metav1.Time,
-) error {
-	return wlrcache.Upsert(ctx, r.Client, it.ref(), policyName, recs, traces, it.Observed, now)
-}
 
 // wlrDeleteGuard says how strongly a cleanup path conditions its deletes, and
 // what a conflict means on that path.
@@ -121,12 +83,12 @@ func (r *PolicyReconciler) deleteWLRsWhere(
 	return deleted, nil, deleteErr
 }
 
-// sweepWorkloadRecommendations deletes this policy's WorkloadRecommendations
-// whose identity it no longer governs, judged against snap: one whose members
-// opted out, or that fell out of the Policy's namespaces or kinds. A Departed
-// identity's is kept for the retention window, a Conflicted one's is kept
-// frozen, and one now governed by another Policy is left for that Policy to
-// adopt. Best-effort.
+// sweepWorkloadRecommendations deletes the policy's WorkloadRecommendations
+// wlrcache.Expired judges expired against snap: one whose identity the policy
+// no longer governs (its members opted out, or it fell out of the Policy's
+// namespaces or kinds), or a Departed or Conflicted identity's past the
+// retention window. One now governed by another Policy is left for that
+// Policy to adopt. Best-effort.
 func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, policyName string, snap *inventory.Snapshot) {
 	logger := log.FromContext(ctx).WithValues("policy", policyName)
 
@@ -134,24 +96,7 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, deleteIfUnchanged,
 		[]client.ListOption{client.MatchingLabels{wlrPolicyLabel: policyName}},
 		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
-			// Guard against a label stale relative to spec.policy.
-			if wlr.Spec.Policy != policyName {
-				return true
-			}
-			// Also covers an object written after snap was taken.
-			if now.Sub(wlr.CreationTimestamp.Time) < sweepGracePeriod {
-				return true
-			}
-			ref := wlr.Spec.WorkloadRef
-			id, ok := snap.Lookup(promclient.WorkloadIdentity{Namespace: ref.Namespace, OwnerKind: ref.Kind, OwnerName: ref.Name})
-			switch {
-			case !ok:
-				return false
-			case id.Departed():
-				return r.retainDepartedWLR(ctx, logger, wlr, now)
-			default:
-				return id.Conflicted || id.Policy != ""
-			}
+			return !wlrcache.Expired(wlr, policyName, standing(snap, wlr), now, r.RecommendationRetention)
 		})
 	if listErr != nil {
 		logger.V(1).Info("failed to list WorkloadRecommendations for sweep", "err", listErr)
@@ -162,41 +107,30 @@ func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, pol
 	}
 }
 
-// retainDepartedWLR keeps a Departed identity's WorkloadRecommendation for the
-// retention window, marking it departed so the webhook keeps serving it.
-func (r *PolicyReconciler) retainDepartedWLR(ctx context.Context, logger logr.Logger, wlr *sustainv1alpha1.WorkloadRecommendation, now time.Time) bool {
-	if r.RecommendationRetention <= 0 {
-		return false
+// standing is where wlr's identity stands in snap.
+func standing(snap *inventory.Snapshot, wlr *sustainv1alpha1.WorkloadRecommendation) wlrcache.Standing {
+	ref := wlr.Spec.WorkloadRef
+	id, ok := snap.Lookup(promclient.WorkloadIdentity{Namespace: ref.Namespace, OwnerKind: ref.Kind, OwnerName: ref.Name})
+	switch {
+	case !ok:
+		return wlrcache.Ungoverned
+	case id.Departed():
+		return wlrcache.Departed
+	case id.Conflicted:
+		return wlrcache.Conflicted
+	case id.Policy != "":
+		return wlrcache.Governed
+	default:
+		return wlrcache.Ungoverned
 	}
-	if now.Sub(wlrLastSeen(wlr)) > r.RecommendationRetention {
-		return false
-	}
-	r.markDeparted(ctx, logger, wlr)
-	return true
-}
-
-// markDeparted flags a retained recommendation as departed so the webhook
-// serves it instead of rejecting it as stale. Patched only on the
-// transition; best-effort.
-func (r *PolicyReconciler) markDeparted(ctx context.Context, logger logr.Logger, wlr *sustainv1alpha1.WorkloadRecommendation) {
-	if wlr.Status.Departed {
-		return
-	}
-	patched := wlr.DeepCopy()
-	patched.Status.Departed = true
-	if err := r.Status().Patch(ctx, patched, client.MergeFrom(wlr)); err != nil {
-		logger.V(1).Info("failed to mark WorkloadRecommendation departed; will retry next sweep",
-			"name", wlr.Name, "namespace", wlr.Namespace, "err", err)
-		return
-	}
-	logger.V(1).Info("retaining recommendation for departed workload",
-		"name", wlr.Name, "namespace", wlr.Namespace)
 }
 
 // recordConflicted records the Conflicted outcome on the stored
 // WorkloadRecommendation of every Conflicted identity policyName is party to,
 // and nothing else: its spec.policy and Recommendation stay frozen as the
-// last governing Policy left them (ADR 0002). Best-effort.
+// last governing Policy left them (ADR 0002). A Conflicted identity has live
+// members, so the record also clears a departed mark left from before they
+// came back. Best-effort.
 func (r *PolicyReconciler) recordConflicted(ctx context.Context, policyName string, snap *inventory.Snapshot) {
 	logger := log.FromContext(ctx)
 	for i := range snap.Identities {
@@ -212,7 +146,8 @@ func (r *PolicyReconciler) recordConflicted(ctx context.Context, policyName stri
 		if id.Recommendation == nil {
 			continue
 		}
-		if err := wlrcache.RecordOutcome(ctx, r.Client, id.Recommendation.Spec.WorkloadRef, sustainv1alpha1.OutcomeConflicted); err != nil {
+		decision := wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeConflicted}
+		if err := wlrcache.Record(ctx, r.Client, id.Recommendation, decision, time.Now()); err != nil {
 			logger.V(1).Info("failed to record the Conflicted outcome", "name", id.Recommendation.Name,
 				"namespace", id.Recommendation.Namespace, "err", err)
 		}

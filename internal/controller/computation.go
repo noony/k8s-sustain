@@ -7,7 +7,6 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -23,8 +22,9 @@ import (
 // under owner-name grouping.
 type computeItem struct {
 	Identity promclient.WorkloadIdentity
-	// WLR is the identity's stored WorkloadRecommendation; nil until the
-	// informer cache sees the one discovery created.
+	// WLR is the identity's WorkloadRecommendation, the one persist records
+	// into: as discovery's Ensure wrote it for a live identity (nil when that
+	// failed), as the inventory read it for a departed one.
 	WLR     *sustainv1alpha1.WorkloadRecommendation
 	Targets []*workloadTarget
 	// Observed is the snapshot this cycle computes against: the union of the
@@ -89,13 +89,13 @@ func containersFromObserved(
 	return append(containers, initContainers...)
 }
 
-// persist writes every identity's outcome to its WorkloadRecommendation
+// persist records every identity's decision in its WorkloadRecommendation
 // before anything is applied, so the webhook serves the new value by the time
 // replacement pods are admitted. Departed identities are never applied, so
 // persist accounts for them: it returns how many there were and how many
 // failed. A live identity's write is best-effort; its apply step reports for
 // it.
-func (r *PolicyReconciler) persist(ctx context.Context, policyName string, results []identityResult) (departed, failed int) {
+func (r *PolicyReconciler) persist(ctx context.Context, results []identityResult) (departed, failed int) {
 	var failures atomic.Int32
 	var g errgroup.Group
 	g.SetLimit(r.WorkloadConcurrencyLimit)
@@ -103,14 +103,14 @@ func (r *PolicyReconciler) persist(ctx context.Context, policyName string, resul
 		res := &results[i]
 		if len(res.item.Targets) > 0 {
 			g.Go(func() error {
-				r.persistLive(ctx, policyName, res)
+				r.persistLive(ctx, res)
 				return nil
 			})
 			continue
 		}
 		departed++
 		g.Go(func() error {
-			if err := r.persistDeparted(ctx, policyName, res); err != nil {
+			if err := r.persistDeparted(ctx, res); err != nil {
 				failures.Add(1)
 			}
 			return nil
@@ -120,37 +120,41 @@ func (r *PolicyReconciler) persist(ctx context.Context, policyName string, resul
 	return departed, int(failures.Load())
 }
 
-func (r *PolicyReconciler) persistLive(ctx context.Context, policyName string, res *identityResult) {
-	if res.outcome == outcomeRecommended {
-		_ = r.upsertWorkloadRecommendation(ctx, res.item, policyName, res.recs, res.traces, metav1.Now())
-		return
-	}
-	// Recorded so the webhook reads "nothing to inject" instead of "missing",
-	// which would cost a stub Create per admission. The last Recommendation
-	// survives.
-	if stored, ok := res.outcome.stored(); ok {
-		_ = wlrcache.RecordOutcome(ctx, r.Client, res.item.ref(), stored)
+// persistLive records a live identity's decision. Every outcome is recorded,
+// not only a Recommendation, so the webhook reads "nothing to inject" instead
+// of "undecided".
+func (r *PolicyReconciler) persistLive(ctx context.Context, res *identityResult) {
+	if d, ok := res.decision(false); ok {
+		_ = wlrcache.Record(ctx, r.Client, res.item.WLR, d, time.Now())
 	}
 }
 
-// persistDeparted refreshes an identity with no live workload object, such as
-// a completed Job or a bare-pod group between runs. Departed stays set on the
-// empty-result path so the webhook keeps serving the retained recommendation;
-// Upsert clears it once fresh samples appear.
-func (r *PolicyReconciler) persistDeparted(ctx context.Context, policyName string, res *identityResult) error {
+// persistDeparted records the decision for an identity with no live workload
+// object, such as a completed Job or a bare-pod group between runs, marking it
+// departed so the webhook keeps serving its retained recommendation.
+func (r *PolicyReconciler) persistDeparted(ctx context.Context, res *identityResult) error {
 	it := res.item
 	ns, kind := it.Identity.Namespace, it.Identity.OwnerKind
+	d, ok := res.decision(true)
+	if !ok {
+		return nil
+	}
+	err := wlrcache.Record(ctx, r.Client, it.WLR, d, time.Now())
 	switch res.outcome {
 	case outcomeRecommended:
-		if err := r.upsertWorkloadRecommendation(ctx, it, policyName, res.recs, res.traces, metav1.Now()); err != nil {
+		if err != nil {
 			EmitWLRRefresh(ns, kind, WLRRefreshError)
 			return err
 		}
 		EmitWLRRefresh(ns, kind, WLRRefreshComputed)
 		return nil
-	case outcomeTooYoung, outcomeNoData:
-		// A cold start and a recommendation whose samples aged out share this branch;
-		// only the second is worth an alert. RecordOutcome keeps the containers.
+	case outcomeFetchFailed:
+		EmitWLRRefresh(ns, kind, WLRRefreshError)
+		return res.err
+	default:
+		// A cold start and a recommendation whose samples aged out share this
+		// branch; only the second is worth an alert. Record keeps the
+		// containers.
 		refresh := WLRRefreshNoData
 		if len(it.WLR.Status.Containers) > 0 {
 			refresh = WLRRefreshRetainedEmpty
@@ -158,14 +162,7 @@ func (r *PolicyReconciler) persistDeparted(ctx context.Context, policyName strin
 				"kind", it.Identity.OwnerKind, "name", it.Identity.OwnerName, "namespace", ns)
 		}
 		EmitWLRRefresh(ns, kind, refresh)
-		stored, _ := res.outcome.stored()
-		return wlrcache.RecordOutcome(ctx, r.Client, it.ref(), stored)
-	case outcomeFetchFailed:
-		EmitWLRRefresh(ns, kind, WLRRefreshError)
-		_ = wlrcache.RecordOutcome(ctx, r.Client, it.ref(), sustainv1alpha1.OutcomeFetchFailed)
-		return res.err
-	default:
-		return nil
+		return err
 	}
 }
 

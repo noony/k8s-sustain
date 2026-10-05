@@ -10,80 +10,15 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	admissionv1 "k8s.io/api/admission/v1"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
-
-func TestCreateStubWritesEmptyStatusObject(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
-	h := &Handler{Client: c}
-
-	if err := h.createStub(context.Background(), "prod", "Job", "etl", "p1", nil, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	var wlr sustainv1alpha1.WorkloadRecommendation
-	key := types.NamespacedName{Namespace: "prod", Name: wlrcache.Name("Job", "etl")}
-	if err := c.Get(context.Background(), key, &wlr); err != nil {
-		t.Fatalf("stub not created: %v", err)
-	}
-	if wlr.Spec.WorkloadRef.Kind != "Job" || wlr.Spec.WorkloadRef.Name != "etl" {
-		t.Fatalf("bad workloadRef: %+v", wlr.Spec.WorkloadRef)
-	}
-	if wlr.Spec.WorkloadRef.Namespace != "prod" {
-		t.Fatalf("bad workloadRef namespace: %+v", wlr.Spec.WorkloadRef)
-	}
-	if wlr.Spec.Policy != "p1" {
-		t.Fatalf("bad policy: %q", wlr.Spec.Policy)
-	}
-	if len(wlr.Status.Containers) != 0 {
-		t.Fatalf("stub must have empty status, got %+v", wlr.Status)
-	}
-	if wlr.Labels[sustainv1alpha1.WLRPolicyLabel] != "p1" {
-		t.Fatalf("stub must carry the policy label for reaping: %+v", wlr.Labels)
-	}
-	// Provenance marker: "empty status" cannot say on its own that the webhook
-	// created this object, since a controller-created WLR is transiently
-	// empty-status too. Nothing branches on it, so this pins the write only.
-	if wlr.Labels[sustainv1alpha1.WLRStubLabel] != "true" {
-		t.Fatalf("stub must carry the webhook-provenance marker: %+v", wlr.Labels)
-	}
-}
-
-// A burst of pods for one workload issues many creates of the same object.
-// All but the first must be absorbed silently — this is what makes the
-// mechanism self-debouncing and is why no rate limiter is needed.
-func TestCreateStubIsIdempotent(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
-	h := &Handler{Client: c}
-
-	for i := range 50 {
-		if err := h.createStub(context.Background(), "prod", "Job", "etl", "p1", nil, nil); err != nil {
-			t.Fatalf("iteration %d: %v", i, err)
-		}
-	}
-
-	var list sustainv1alpha1.WorkloadRecommendationList
-	if err := c.List(context.Background(), &list); err != nil {
-		t.Fatal(err)
-	}
-	if len(list.Items) != 1 {
-		t.Fatalf("got %d stubs want 1", len(list.Items))
-	}
-}
 
 // The missing-WLR admission path must request a recommendation, otherwise a
 // workload the controller never catches alive (a short-lived Job, a bare-pod
@@ -231,32 +166,47 @@ func TestAdmitDoesNotRequestRecommendationWhenUndecided(t *testing.T) {
 	}
 }
 
-// A stub must never clobber a populated WLR — that would erase a live
-// recommendation and cause the next admission to inject nothing.
-func TestCreateStubDoesNotOverwritePopulatedWLR(t *testing.T) {
-	existing := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: wlrcache.Name("Job", "etl")},
-		Status: sustainv1alpha1.WorkloadRecommendationStatus{
-			ObservedAt: metav1.Now(),
-			Containers: map[string]sustainv1alpha1.ContainerRecommendation{"app": {}},
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
-		WithObjects(existing).WithStatusSubresource(existing).Build()
-	h := &Handler{Client: c}
+// A departed identity's snapshot is the controller's only container list for
+// it, and the webhook the only component that sees its next run: an admission
+// whose pod no longer matches the snapshot replaces it, and still gets the
+// retained Recommendation.
+func TestAdmitRefreshesTheSnapshotOfADepartedIdentity(t *testing.T) {
+	departed := freshWLR("Deployment", "prod", "api", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "128Mi"),
+	})
+	departed.Status.Departed = true
+	departed.Status.ObservedResources = map[string]sustainv1alpha1.ObservedContainerResources{"retired": {}}
+	env := newAdmitEnv(t,
+		basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate),
+		deploymentReplicaSet("prod", "api-rs", "api"),
+		departed,
+	)
 
-	if err := h.createStub(context.Background(), "prod", "Job", "etl", "p1", nil, nil); err != nil {
-		t.Fatal(err)
+	resp := env.handler.admit(context.Background(), admissionRequestFor(t, podWithRSOwner("prod", "api-rs-abc", "api-rs", "p")))
+	if len(resp.Patch) == 0 {
+		t.Error("the retained Recommendation must still be injected")
 	}
 
+	key := types.NamespacedName{Namespace: "prod", Name: wlrcache.Name("Deployment", "api")}
+	deadline := time.Now().Add(5 * time.Second)
 	var got sustainv1alpha1.WorkloadRecommendation
-	key := types.NamespacedName{Namespace: "prod", Name: wlrcache.Name("Job", "etl")}
-	if err := c.Get(context.Background(), key, &got); err != nil {
-		t.Fatal(err)
+	for time.Now().Before(deadline) {
+		if err := env.handler.Client.Get(context.Background(), key, &got); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := got.Status.ObservedResources["app"]; ok {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if len(got.Status.Containers) != 1 {
-		t.Fatalf("existing status was clobbered: %+v", got.Status)
+	if _, ok := got.Status.ObservedResources["app"]; !ok || len(got.Status.ObservedResources) != 1 {
+		t.Fatalf("snapshot = %v, want it replaced by the admitted pod's", got.Status.ObservedResources)
 	}
+}
+
+// jobRef is the identity of the standalone Job name in namespace prod.
+func jobRef(name string) sustainv1alpha1.WorkloadReference {
+	return sustainv1alpha1.WorkloadReference{Kind: "Job", Namespace: "prod", Name: name}
 }
 
 // countingCreateClient counts Create calls so a test can assert on apiserver
@@ -299,7 +249,7 @@ func TestRequestRecommendation_DeduplicatesBurstForSameIdentity(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h.requestRecommendation(logr.Discard(), "prod", "Job", "etl", "p1", nil, nil)
+			h.requestRecommendation(logr.Discard(), nil, jobRef("etl"), "p1", nil)
 		}()
 	}
 	wg.Wait()
@@ -337,7 +287,7 @@ func TestRequestRecommendation_DoesNotDropDistinctIdentities(t *testing.T) {
 
 	const identities = 50
 	for i := range identities {
-		h.requestRecommendation(logr.Discard(), "prod", "Job", fmt.Sprintf("etl-%03d", i), "p1", nil, nil)
+		h.requestRecommendation(logr.Discard(), nil, jobRef(fmt.Sprintf("etl-%03d", i)), "p1", nil)
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -350,213 +300,6 @@ func TestRequestRecommendation_DoesNotDropDistinctIdentities(t *testing.T) {
 	if got := counter.count(); got != identities {
 		t.Errorf("created %d stubs for %d distinct identities: dedup and the in-flight bound must "+
 			"delay or collapse repeats, never drop a new identity", got, identities)
-	}
-}
-
-// The stub must record the admitted pod's container set: it is the only
-// component that reliably sees an ephemeral identity's containers, and
-// computation reads status.observedResources rather than re-resolving the
-// workload.
-func TestCreateStubRecordsObservedResources(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
-	h := &Handler{Client: c}
-
-	containers := []corev1.Container{{
-		Name: "worker",
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
-		},
-	}}
-	initContainers := []corev1.Container{{Name: "prep"}}
-
-	if err := h.createStub(context.Background(), "ns", "Pod", "dag-task", "pol",
-		containers, initContainers); err != nil {
-		t.Fatalf("createStub: %v", err)
-	}
-
-	var got sustainv1alpha1.WorkloadRecommendation
-	key := types.NamespacedName{Namespace: "ns", Name: wlrcache.Name("Pod", "dag-task")}
-	if err := c.Get(context.Background(), key, &got); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	worker, ok := got.Status.ObservedResources["worker"]
-	if !ok {
-		t.Fatal("worker container missing from observedResources: computation cannot run without it")
-	}
-	if worker.Init {
-		t.Error("worker marked Init")
-	}
-	if worker.CPURequest == nil || worker.CPURequest.String() != "100m" {
-		t.Errorf("worker CPURequest = %v, want 100m", worker.CPURequest)
-	}
-	prep, ok := got.Status.ObservedResources["prep"]
-	if !ok {
-		t.Fatal("prep init container missing from observedResources")
-	}
-	if !prep.Init {
-		t.Error("prep not marked Init: ExcludeInitContainers cannot be honoured without this")
-	}
-	// The stub must still carry no recommendation.
-	if len(got.Status.Containers) != 0 {
-		t.Errorf("containers = %d, want 0", len(got.Status.Containers))
-	}
-}
-
-func TestCreateStubFillsSnapshotOnAlreadyExistsForPreExistingEmptyStub(t *testing.T) {
-	// Reachable state only: an object that already exists with an empty status
-	// and no Outcome — an older webhook binary's stub, or one whose snapshot
-	// patch failed after its Create succeeded. A later admission's Create
-	// returns AlreadyExists, and this is its only remaining chance to fill it.
-	//
-	// A NoData WLR is deliberately not modelled: that outcome is only recorded
-	// after computation found a non-empty snapshot, so that state is
-	// unreachable here.
-	existing := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "ns",
-			Name:      wlrcache.Name("Pod", "dag-task"),
-			Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: "pol"},
-		},
-		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
-			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Pod", Namespace: "ns", Name: "dag-task"},
-			Policy:      "pol",
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
-		WithObjects(existing).Build()
-	h := &Handler{Client: c}
-
-	if err := h.createStub(context.Background(), "ns", "Pod", "dag-task", "pol",
-		[]corev1.Container{{Name: "worker"}}, nil); err != nil {
-		t.Fatalf("createStub: %v", err)
-	}
-
-	var got sustainv1alpha1.WorkloadRecommendation
-	key := types.NamespacedName{Namespace: "ns", Name: wlrcache.Name("Pod", "dag-task")}
-	if err := c.Get(context.Background(), key, &got); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if _, ok := got.Status.ObservedResources["worker"]; !ok {
-		t.Fatal("AlreadyExists path left the snapshot empty: the identity can never be computed")
-	}
-}
-
-func TestCreateStubNeverOverwritesPopulatedSnapshot(t *testing.T) {
-	// Discovery's snapshot comes from the workload's pod template and is
-	// authoritative. The webhook sees one pod.
-	q := resource.MustParse("500m")
-	existing := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "ns",
-			Name:      wlrcache.Name("Deployment", "api"),
-			Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: "pol"},
-		},
-		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
-			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: "ns", Name: "api"},
-			Policy:      "pol",
-		},
-		Status: sustainv1alpha1.WorkloadRecommendationStatus{
-			ObservedResources: map[string]sustainv1alpha1.ObservedContainerResources{
-				"main": {CPURequest: &q},
-			},
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
-		WithObjects(existing).Build()
-	h := &Handler{Client: c}
-
-	if err := h.createStub(context.Background(), "ns", "Deployment", "api", "pol",
-		[]corev1.Container{{Name: "sidecar-only"}}, nil); err != nil {
-		t.Fatalf("createStub: %v", err)
-	}
-
-	var got sustainv1alpha1.WorkloadRecommendation
-	key := types.NamespacedName{Namespace: "ns", Name: wlrcache.Name("Deployment", "api")}
-	if err := c.Get(context.Background(), key, &got); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if len(got.Status.ObservedResources) != 1 {
-		t.Fatalf("observedResources has %d entries, want 1: the template snapshot must win",
-			len(got.Status.ObservedResources))
-	}
-	if _, ok := got.Status.ObservedResources["main"]; !ok {
-		t.Error("template snapshot was overwritten by the webhook's single-pod view")
-	}
-}
-
-// laggingCacheReader models the one property fake.NewClientBuilder lacks: the
-// webhook's client is informer-backed for WorkloadRecommendation and so is NOT
-// read-your-writes — a Get right after a Create races the watch event and
-// returns NotFound. warm() models the watch event landing.
-type laggingCacheReader struct {
-	mu   sync.Mutex
-	cold map[string]struct{}
-}
-
-func newLaggingCacheReader() *laggingCacheReader {
-	return &laggingCacheReader{cold: map[string]struct{}{}}
-}
-
-func (l *laggingCacheReader) funcs() interceptor.Funcs {
-	return interceptor.Funcs{
-		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-			if err := cl.Create(ctx, obj, opts...); err != nil {
-				return err
-			}
-			l.mu.Lock()
-			l.cold[obj.GetNamespace()+"/"+obj.GetName()] = struct{}{}
-			l.mu.Unlock()
-			return nil
-		},
-		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			l.mu.Lock()
-			_, cold := l.cold[key.String()]
-			l.mu.Unlock()
-			if cold {
-				return apierrors.NewNotFound(
-					schema.GroupResource{Group: sustainv1alpha1.GroupVersion.Group, Resource: "workloadrecommendations"},
-					key.Name)
-			}
-			return cl.Get(ctx, key, obj, opts...)
-		},
-	}
-}
-
-func (l *laggingCacheReader) warm() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.cold = map[string]struct{}{}
-}
-
-// The production failure this pins: createStub re-read the object it had just
-// created, the cache had not seen the watch event, and the Get 404'd — leaving
-// an empty status.observedResources, which computation skips, so the identity
-// stayed inert until some later admission hit AlreadyExists. Every other
-// TestCreateStub* case uses a read-your-writes fake client and cannot express
-// this.
-func TestCreateStubWritesSnapshotWhenTheCacheLagsBehindTheCreate(t *testing.T) {
-	lag := newLaggingCacheReader()
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
-		WithInterceptorFuncs(lag.funcs()).Build()
-	h := &Handler{Client: c}
-
-	if err := h.createStub(context.Background(), "ns", "Pod", "dag-task", "pol",
-		[]corev1.Container{{Name: "worker"}}, nil); err != nil {
-		t.Fatalf("createStub must not depend on reading back its own create: %v", err)
-	}
-
-	lag.warm()
-	var got sustainv1alpha1.WorkloadRecommendation
-	key := types.NamespacedName{Namespace: "ns", Name: wlrcache.Name("Pod", "dag-task")}
-	if err := c.Get(context.Background(), key, &got); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if _, ok := got.Status.ObservedResources["worker"]; !ok {
-		t.Fatalf("observedResources empty after create: the identity can never be computed, got %+v", got.Status)
 	}
 }
 
@@ -640,7 +383,7 @@ func TestHandlerShutdownWaitsForAnInFlightStubWrite(t *testing.T) {
 	release := func() { releaseOnce.Do(func() { close(blocking.release) }) }
 	defer release() // never leave the goroutine parked, whatever the test does.
 
-	h.requestRecommendation(logr.Discard(), "prod", "Job", "etl", "p1", nil, nil)
+	h.requestRecommendation(logr.Discard(), nil, jobRef("etl"), "p1", nil)
 	select {
 	case <-blocking.entered:
 	case <-time.After(5 * time.Second):
@@ -693,7 +436,7 @@ func TestHandlerShutdownReleasesAStubRequestParkedOnAWriteSlot(t *testing.T) {
 		releases = append(releases, rel)
 	}
 
-	h.requestRecommendation(logr.Discard(), "prod", "Job", "etl", "p1", nil, nil)
+	h.requestRecommendation(logr.Discard(), nil, jobRef("etl"), "p1", nil)
 
 	start := time.Now()
 	if err := h.Shutdown(context.Background()); err != nil {
@@ -721,7 +464,7 @@ func TestRequestRecommendationIsRefusedAfterShutdown(t *testing.T) {
 	if err := h.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown on an idle handler: %v", err)
 	}
-	h.requestRecommendation(logr.Discard(), "prod", "Job", "etl", "p1", nil, nil)
+	h.requestRecommendation(logr.Discard(), nil, jobRef("etl"), "p1", nil)
 
 	// beginStubRequest refuses under stubMu, so "no claim recorded" is a
 	// synchronous fact, not a race with a goroutine that may or may not exist.

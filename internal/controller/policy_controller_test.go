@@ -418,6 +418,7 @@ func TestReconcile_ConflictedIdentityFreezesItsRecommendation(t *testing.T) {
 		ongoingDeployments("p"), ongoingDeployments("q"), blue, green, frozen,
 		runningPod(ns, "blue-pod", "api-blue"), runningPod(ns, "green-pod", "api-green"),
 		establishedDeployment(ns, "solo", "p"), runningPod(ns, "solo-pod", "solo"))
+	r.RecommendationRetention = wlrcache.DefaultRetention
 
 	reconcileOnce(t, r, "p")
 	reconcileOnce(t, r, "q")

@@ -351,15 +351,17 @@ func itemForTargetWithWLR(t *workloadTarget, wlr *sustainv1alpha1.WorkloadRecomm
 }
 
 // runComputeAndApply drives the phases Reconcile runs for a single-member
-// identity: the recommendation pass, the WorkloadRecommendation write, then the
-// apply for its member unless it is in backoff, threading a fetch failure
-// through handleStepError and the retry tracker exactly as Reconcile does, and
-// the identity's health emission.
+// identity: discovery, the recommendation pass, the WorkloadRecommendation
+// record, then the apply for its member unless it is in backoff, threading a
+// fetch failure through handleStepError and the retry tracker exactly as
+// Reconcile does, and the identity's health emission.
 func runComputeAndApply(ctx context.Context, r *PolicyReconciler, policy *sustainv1alpha1.Policy, it computeItem) error {
-	r.health.observe(policy.Name, []computeItem{it})
+	items := []computeItem{it}
+	r.discover(ctx, policy.Name, items)
+	r.health.observe(policy.Name, items)
 	snap := autoscaler.NewNamespacedSnapshot(r.Client)
-	results := r.recommend(ctx, policy, []computeItem{it}, snap)
-	r.persist(ctx, policy.Name, results)
+	results := r.recommend(ctx, policy, items, snap)
+	r.persist(ctx, results)
 	res := results[0]
 	var err error
 	for _, t := range res.apply {

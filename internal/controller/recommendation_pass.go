@@ -12,6 +12,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -32,21 +33,6 @@ const (
 	outcomeNotFetched
 )
 
-// stored is the WorkloadRecommendation outcome an outcome with no new
-// Recommendation records; false for the outcomes that record nothing.
-func (o outcome) stored() (sustainv1alpha1.RecommendationOutcome, bool) {
-	switch o {
-	case outcomeTooYoung:
-		return sustainv1alpha1.OutcomeTooYoung, true
-	case outcomeNoData:
-		return sustainv1alpha1.OutcomeNoData, true
-	case outcomeFetchFailed:
-		return sustainv1alpha1.OutcomeFetchFailed, true
-	default:
-		return "", false
-	}
-}
-
 // identityResult is the recommendation pass's verdict on one identity.
 type identityResult struct {
 	item    computeItem
@@ -65,6 +51,26 @@ type identityResult struct {
 	// would act on members the fetch left out.
 	apply     []*workloadTarget
 	backedOff []*workloadTarget
+}
+
+// decision is what the result records in the identity's
+// WorkloadRecommendation; false for an identity that was not fetched, which
+// records nothing.
+func (res *identityResult) decision(departed bool) (wlrcache.Decision, bool) {
+	d := wlrcache.Decision{Departed: departed}
+	switch res.outcome {
+	case outcomeRecommended:
+		d.Outcome, d.Recs, d.Traces = sustainv1alpha1.OutcomeComputed, res.recs, res.traces
+	case outcomeTooYoung:
+		d.Outcome = sustainv1alpha1.OutcomeTooYoung
+	case outcomeNoData:
+		d.Outcome = sustainv1alpha1.OutcomeNoData
+	case outcomeFetchFailed:
+		d.Outcome = sustainv1alpha1.OutcomeFetchFailed
+	default:
+		return d, false
+	}
+	return d, true
 }
 
 // recommend is the recommendation pass: one result per identity, in item

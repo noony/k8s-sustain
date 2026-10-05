@@ -17,10 +17,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	whhandler "github.com/noony/k8s-sustain/internal/webhook"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -28,10 +30,10 @@ import (
 // between the controller (WLR writer) and the webhook (WLR reader) — the
 // only two components in the recommendation pipeline now that the webhook
 // never queries Prometheus itself. It catches drift in:
-//   - WLR object name format (wlrName)
+//   - WLR object name format (wlrcache.Name)
 //   - sweep label key (wlrPolicyLabel)
-//   - status shape (Containers map, ObservedAt, Source)
-//   - staleness threshold (DefaultCacheStaleness)
+//   - status shape (Containers map, ObservedAt, Outcome)
+//   - staleness threshold (wlrcache.DefaultStaleness)
 //
 // The webhook reads via its real ServeHTTP entry point — the WLR is its only
 // recommendation source, so this is the primary path, not a fallback.
@@ -69,19 +71,11 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 		WithObjects(policy, rs).
 		Build()
 
-	// Mirrors what reconcileWorkload does after a successful pass.
-	r := &PolicyReconciler{Client: c, Scheme: scheme}
 	wantCPU := resource.MustParse("250m")
 	wantMem := resource.MustParse("128Mi")
-	_ = r.upsertWorkloadRecommendation(context.Background(),
-		itemForTarget(&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}),
-		policy.Name,
-		map[string]workload.ContainerRecommendation{
-			"app": {CPURequest: &wantCPU, MemoryRequest: &wantMem},
-		},
-		nil,
-		metav1.Now(),
-	)
+	controllerStores(t, c, policy.Name, map[string]workload.ContainerRecommendation{
+		"app": {CPURequest: &wantCPU, MemoryRequest: &wantMem},
+	}, time.Now())
 
 	// Sanity: the WLR landed where the webhook will look for it, and carries
 	// the new sweep label so list-by-policy calls find it server-side.
@@ -164,18 +158,10 @@ func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 		Build()
 
 	// Backdate ObservedAt past the webhook's default staleness window.
-	r := &PolicyReconciler{Client: c, Scheme: scheme}
 	wantCPU := resource.MustParse("250m")
-	stale := metav1.NewTime(time.Now().Add(-2 * 24 * time.Hour))
-	_ = r.upsertWorkloadRecommendation(context.Background(),
-		itemForTarget(&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}),
-		policy.Name,
-		map[string]workload.ContainerRecommendation{
-			"app": {CPURequest: &wantCPU},
-		},
-		nil,
-		stale,
-	)
+	controllerStores(t, c, policy.Name, map[string]workload.ContainerRecommendation{
+		"app": {CPURequest: &wantCPU},
+	}, time.Now().Add(-2*24*time.Hour))
 
 	h := &whhandler.Handler{Client: c}
 
@@ -197,6 +183,22 @@ func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 	}
 	if len(resp.Patch) != 0 {
 		t.Errorf("expected no patch on stale cache; got: %s", string(resp.Patch))
+	}
+}
+
+// controllerStores stores recs for Deployment default/web under policy the way
+// a reconcile does: discovery's claim on the identity, then the pass's record,
+// computed at.
+func controllerStores(t *testing.T, c client.Client, policy string, recs map[string]workload.ContainerRecommendation, at time.Time) {
+	t.Helper()
+	ref := sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: "default", Name: "web"}
+	known, err := wlrcache.Ensure(context.Background(), c, ref, policy, nil)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	decision := wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeComputed, Recs: recs}
+	if err := wlrcache.Record(context.Background(), c, known, decision, at); err != nil {
+		t.Fatalf("Record: %v", err)
 	}
 }
 

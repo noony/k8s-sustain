@@ -26,38 +26,7 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
-
-// When the owner-name override makes IdentityKind/IdentityName differ from the
-// real Kind/Name, the WLR must be named and spec'd from the override.
-func TestUpsertWorkloadRecommendation_UsesIdentityOverride(t *testing.T) {
-	r := reconcilerForCache(t)
-	target := &workloadTarget{
-		Kind: "Deployment", Name: "app-blue", Namespace: "prod",
-		IdentityKind: "Deployment", IdentityName: "app",
-	}
-	recs := map[string]workload.ContainerRecommendation{
-		"app": {CPURequest: qtyp("100m"), MemoryRequest: qtyp("64Mi")},
-	}
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(target), "my-policy", recs, nil, metav1.Now())
-
-	var wlr sustainv1alpha1.WorkloadRecommendation
-	key := types.NamespacedName{Namespace: "prod", Name: "deployment-app"}
-	if err := r.Get(context.Background(), key, &wlr); err != nil {
-		t.Fatalf("expected WorkloadRecommendation %v to exist, got: %v", key, err)
-	}
-	if wlr.Spec.WorkloadRef.Kind != "Deployment" || wlr.Spec.WorkloadRef.Name != "app" {
-		t.Errorf("WorkloadRef = %s/%s, want Deployment/app (overridden identity)",
-			wlr.Spec.WorkloadRef.Kind, wlr.Spec.WorkloadRef.Name)
-	}
-
-	var notWanted sustainv1alpha1.WorkloadRecommendation
-	notWantedKey := types.NamespacedName{Namespace: "prod", Name: "deployment-app-blue"}
-	if err := r.Get(context.Background(), notWantedKey, &notWanted); err == nil {
-		t.Errorf("did not expect a WorkloadRecommendation keyed by the real name %v", notWantedKey)
-	}
-}
 
 // qtyp parses a resource.Quantity string and returns a pointer to it, for
 // building ContainerRecommendation literals in tests.
@@ -155,153 +124,6 @@ func wlrExists(t *testing.T, r *PolicyReconciler, ns, kind, name string) bool {
 		t.Fatalf("get WLR: %v", err)
 	}
 	return err == nil
-}
-
-func TestUpsertWorkloadRecommendation_CreatesObjectOnFirstCall(t *testing.T) {
-	r := reconcilerForCache(t)
-	cpu := resource.MustParse("250m")
-	mem := resource.MustParse("128Mi")
-	now := metav1.Now()
-
-	_ = r.upsertWorkloadRecommendation(context.Background(),
-		itemForTarget(&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}),
-		"p",
-		map[string]workload.ContainerRecommendation{
-			"app": {CPURequest: &cpu, MemoryRequest: &mem},
-		},
-		nil,
-		now,
-	)
-
-	var got sustainv1alpha1.WorkloadRecommendation
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &got); err != nil {
-		t.Fatalf("expected WLR to exist after upsert: %v", err)
-	}
-	if got.Spec.WorkloadRef.Kind != "Deployment" || got.Spec.WorkloadRef.Name != "web" {
-		t.Errorf("workload ref wrong: %+v", got.Spec.WorkloadRef)
-	}
-	if got.Spec.Policy != "p" {
-		t.Errorf("policy = %q, want p", got.Spec.Policy)
-	}
-	if got.Status.ObservedAt.IsZero() {
-		t.Error("ObservedAt not stamped")
-	}
-	if got.Status.Outcome != sustainv1alpha1.OutcomeComputed {
-		t.Errorf("outcome = %q, want Computed", got.Status.Outcome)
-	}
-	if c := got.Status.Containers["app"]; c.CPURequest == nil || c.CPURequest.Cmp(cpu) != 0 {
-		t.Errorf("container cpu mismatch: %v", c.CPURequest)
-	}
-}
-
-// The NoLimit intent (RemoveCPULimit / RemoveMemoryLimit) must persist on the
-// status: the webhook reads it on Prometheus outage, and losing it silently
-// reverts NoLimit policies to "leave template alone".
-func TestUpsertWorkloadRecommendation_PersistsRemoveFlags(t *testing.T) {
-	r := reconcilerForCache(t)
-	cpu := resource.MustParse("250m")
-	mem := resource.MustParse("128Mi")
-
-	_ = r.upsertWorkloadRecommendation(context.Background(),
-		itemForTarget(&workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}),
-		"p",
-		map[string]workload.ContainerRecommendation{
-			"app": {
-				CPURequest:        &cpu,
-				MemoryRequest:     &mem,
-				RemoveCPULimit:    true,
-				RemoveMemoryLimit: true,
-			},
-		},
-		nil,
-		metav1.Now(),
-	)
-
-	var got sustainv1alpha1.WorkloadRecommendation
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &got); err != nil {
-		t.Fatalf("expected WLR to exist after upsert: %v", err)
-	}
-	c := got.Status.Containers["app"]
-	if !c.RemoveCPULimit {
-		t.Error("RemoveCPULimit not persisted on WorkloadRecommendation status")
-	}
-	if !c.RemoveMemoryLimit {
-		t.Error("RemoveMemoryLimit not persisted on WorkloadRecommendation status")
-	}
-}
-
-// The compare-before-write guard must skip the etcd round-trip: a second upsert
-// of the same recommendation may not bump the resourceVersion.
-func TestUpsertWorkloadRecommendation_NoOpWhenUnchanged(t *testing.T) {
-	r := reconcilerForCache(t)
-	cpu := resource.MustParse("250m")
-	mem := resource.MustParse("128Mi")
-	tgt := &workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}
-	recs := map[string]workload.ContainerRecommendation{
-		"app": {CPURequest: &cpu, MemoryRequest: &mem},
-	}
-
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, nil, metav1.Now())
-	var first sustainv1alpha1.WorkloadRecommendation
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &first); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	rvBefore := first.ResourceVersion
-
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, nil, metav1.Now())
-	var second sustainv1alpha1.WorkloadRecommendation
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &second); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if second.ResourceVersion != rvBefore {
-		t.Errorf("expected no etcd write on identical recommendation, resourceVersion bumped from %s to %s", rvBefore, second.ResourceVersion)
-	}
-}
-
-// An equivalent recommendation still triggers a status write once ObservedAt is
-// older than wlrRefreshInterval: otherwise stable workloads freeze ObservedAt
-// and the webhook rejects the cache as stale exactly when the Prometheus-outage
-// fallback is needed.
-func TestUpsertWorkloadRecommendation_RefreshesStaleObservedAt(t *testing.T) {
-	r := reconcilerForCache(t)
-	cpu := resource.MustParse("250m")
-	tgt := &workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}
-	recs := map[string]workload.ContainerRecommendation{"app": {CPURequest: &cpu}}
-
-	past := metav1.NewTime(time.Now().Add(-2 * wlrRefreshInterval))
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, nil, past)
-
-	now := metav1.Now()
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p", recs, nil, now)
-
-	var got sustainv1alpha1.WorkloadRecommendation
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &got); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if !got.Status.ObservedAt.After(past.Time) {
-		t.Errorf("expected ObservedAt refreshed past %v, got %v", past, got.Status.ObservedAt)
-	}
-}
-
-func TestUpsertWorkloadRecommendation_UpdatesOnChange(t *testing.T) {
-	r := reconcilerForCache(t)
-	cpu1 := resource.MustParse("250m")
-	cpu2 := resource.MustParse("500m")
-	tgt := &workloadTarget{Kind: "Deployment", Namespace: "default", Name: "web", IdentityKind: "Deployment", IdentityName: "web"}
-
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p",
-		map[string]workload.ContainerRecommendation{"app": {CPURequest: &cpu1}}, nil, metav1.Now())
-
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(tgt), "p",
-		map[string]workload.ContainerRecommendation{"app": {CPURequest: &cpu2}}, nil, metav1.Now())
-
-	var got sustainv1alpha1.WorkloadRecommendation
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &got); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if got.Status.Containers["app"].CPURequest.Cmp(cpu2) != 0 {
-		t.Errorf("expected updated cpu=500m, got %v", got.Status.Containers["app"].CPURequest)
-	}
 }
 
 func TestSweepWorkloadRecommendations_RemovesOrphans(t *testing.T) {
@@ -543,82 +365,6 @@ func TestReconcile_PolicyDeletion_RemovesItsRecommendations(t *testing.T) {
 	}
 }
 
-// The upsert records what the containers actually ran with, including the init
-// marker, so inactive dashboard rows can still show current-vs-recommended after
-// the workload object is gone.
-func TestUpsertWorkloadRecommendation_SnapshotsObservedResources(t *testing.T) {
-	r := reconcilerForCache(t)
-	target := &workloadTarget{
-		Kind: "Pod", Name: "etl", Namespace: "airflow",
-		IdentityKind: "Pod", IdentityName: "etl",
-		Containers: []corev1.Container{{
-			Name: "main",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
-				Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
-			},
-		}},
-		InitContainers: []corev1.Container{{Name: "init-db"}},
-	}
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(target), "p",
-		map[string]workload.ContainerRecommendation{"main": {CPURequest: qtyp("250m")}}, nil, metav1.Now())
-
-	var wlr sustainv1alpha1.WorkloadRecommendation
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "airflow", Name: "pod-etl"}, &wlr); err != nil {
-		t.Fatalf("expected WLR to exist: %v", err)
-	}
-	obs := wlr.Status.ObservedResources
-	if len(obs) != 2 {
-		t.Fatalf("observedResources has %d entries, want 2 (main, init-db): %v", len(obs), obs)
-	}
-	main := obs["main"]
-	if main.Init {
-		t.Error("main wrongly marked Init")
-	}
-	if main.CPURequest == nil || main.CPURequest.String() != "500m" {
-		t.Errorf("main.CPURequest = %v, want 500m", main.CPURequest)
-	}
-	if main.MemoryLimit == nil || main.MemoryLimit.String() != "1Gi" {
-		t.Errorf("main.MemoryLimit = %v, want 1Gi", main.MemoryLimit)
-	}
-	if main.MemoryRequest != nil || main.CPULimit != nil {
-		t.Errorf("unset fields must stay nil: %+v", main)
-	}
-	if !obs["init-db"].Init {
-		t.Error("init-db must be marked Init")
-	}
-}
-
-// A change in the container's actual resources alone must still trigger a status
-// write: the equivalence check has to compare the snapshot, or inactive rows
-// show stale "current" values.
-func TestUpsertWorkloadRecommendation_RewritesWhenObservedResourcesChange(t *testing.T) {
-	r := reconcilerForCache(t)
-	recs := map[string]workload.ContainerRecommendation{"main": {CPURequest: qtyp("250m")}}
-	target := &workloadTarget{
-		Kind: "Deployment", Name: "web", Namespace: "default",
-		IdentityKind: "Deployment", IdentityName: "web",
-		Containers: []corev1.Container{{
-			Name: "main",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
-			},
-		}},
-	}
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(target), "p", recs, nil, metav1.Now())
-
-	target.Containers[0].Resources.Requests[corev1.ResourceCPU] = resource.MustParse("750m")
-	_ = r.upsertWorkloadRecommendation(context.Background(), itemForTarget(target), "p", recs, nil, metav1.Now())
-
-	var wlr sustainv1alpha1.WorkloadRecommendation
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &wlr); err != nil {
-		t.Fatalf("expected WLR: %v", err)
-	}
-	if got := wlr.Status.ObservedResources["main"].CPURequest; got == nil || got.String() != "750m" {
-		t.Errorf("snapshot not refreshed: CPURequest = %v, want 750m", got)
-	}
-}
-
 // TestSweep_RetainsDepartedWorkloadWithinRetention: the workload object is
 // gone and the recommendation is within retention — the WLR must survive so
 // the dashboard keeps showing the ephemeral workload.
@@ -631,20 +377,37 @@ func TestSweep_RetainsDepartedWorkloadWithinRetention(t *testing.T) {
 	}
 }
 
-// Retaining the object is only half of what a departed identity needs: its
-// ObservedAt stops advancing once the recompute finds no data, so the webhook
-// would read it as stale and admit every subsequent run on template resources
-// for the whole retention window. The sweep therefore records the departure it
-// just confirmed.
-func TestSweep_MarksRetainedDepartedWorkload(t *testing.T) {
-	r := reconcilerForCache(t, wlrFor("p", "ci", "Job", "nightly", time.Now().Add(-1*time.Hour)))
+// conflictedAPI is the cluster of a Conflicted identity, Deployment prod/api,
+// whose two members opt into p and q.
+func conflictedAPI() []runtime.Object {
+	member := func(name, policy string) *appsv1.Deployment {
+		d := annotatedDeployment("prod", name, policy)
+		d.Spec.Template.Annotations[sustainv1alpha1.OwnerNameAnnotation] = "api"
+		return d
+	}
+	return []runtime.Object{governingPolicy("p"), governingPolicy("q"), member("api-blue", "p"), member("api-green", "q")}
+}
+
+// A Conflicted identity's frozen Recommendation is kept like a departed one's,
+// for the retention window: the members still opting into its Policy keep
+// receiving it.
+func TestSweep_KeepsConflictedWithinRetention(t *testing.T) {
+	r := reconcilerForCache(t, append(conflictedAPI(), wlrFor("p", "prod", "Deployment", "api", time.Now().Add(-time.Hour)))...)
 	r.RecommendationRetention = 72 * time.Hour
 	sweep(t, r, "p")
+	if !wlrExists(t, r, "prod", "Deployment", "api") {
+		t.Error("a Conflicted identity's WLR was deleted within the retention window")
+	}
+}
 
-	wlr := getWLRFor(t, r, "ci", "Job", "nightly")
-	if !wlr.Status.Departed {
-		t.Error("a retained departed WLR must be marked Departed, or the webhook reads it as " +
-			"stale and every run after the first starts on template resources")
+// And no longer: nothing recomputes it while its members disagree, and with
+// only the webhook's read-time bound to expire it, the object stayed forever.
+func TestSweep_DeletesConflictedPastRetention(t *testing.T) {
+	r := reconcilerForCache(t, append(conflictedAPI(), wlrFor("p", "prod", "Deployment", "api", time.Now().Add(-80*time.Hour)))...)
+	r.RecommendationRetention = 72 * time.Hour
+	sweep(t, r, "p")
+	if wlrExists(t, r, "prod", "Deployment", "api") {
+		t.Error("a Conflicted identity's WLR survived past the retention window")
 	}
 }
 
@@ -719,7 +482,7 @@ func TestSweep_ZeroRetentionSweepsDepartedAfterGrace(t *testing.T) {
 //
 // Freshness is expressed as a fresh CreationTimestamp, not a fresh ObservedAt,
 // which the computation phase rewrites, so it cannot tell a fresh write from
-// this pass's own refresh. See sweepGracePeriod.
+// this pass's own refresh. See wlrcache.Expired.
 func TestSweep_GracePeriodProtectsFreshWrites(t *testing.T) {
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
 		Namespace: "ci", Name: "argocd-hook",
