@@ -2153,6 +2153,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#applying-to-a-member" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Applying to a member
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#owner-name-group-merge-order-and-write-cost" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2985,6 +2996,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#applying-to-a-member" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Applying to a member
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#owner-name-group-merge-order-and-write-cost" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3359,7 +3381,7 @@ runs. The full posture and the verification commands are documented in
 <a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>│   ├── version/           # Build version
 <a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>│   ├── webhook/           # Admission webhook HTTP handler
 <a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>│   ├── wlrcache/          # WorkloadRecommendation lifecycle: every write (Request, Ensure, Record) and verdict (Read, Expired)
-<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>│   └── workload/          # Pod recycler, template/owner-ref helpers
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>│   └── workload/          # Applying a Recommendation to a member's pods (one rule per kind), template/owner-ref helpers
 <a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>├── charts/
 <a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>│   ├── k8s-sustain/          # Operator chart
 <a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a>│   └── k8s-sustain-policies/ # Policy objects chart
@@ -3516,10 +3538,10 @@ kind (say <code>Rollout</code> from Argo) is mostly a matter of registering it t
 <ol>
 <li>Add <code>&lt;Kind&gt; *UpdateMode</code> to <code>UpdateTypes</code> in <code>api/v1alpha1/policy_types.go</code>, add the case to <code>UpdateTypes.ModeForKind</code>, then run <code>make generate</code> and <code>make manifests</code></li>
 <li>Add the kind to the <code>ownerKinds</code> table in <code>internal/workload/kindobjects.go</code> (object and list constructors plus its <code>GroupResource</code>) and, if the controller and dashboard should list it, to <code>workload.SupportedKinds</code>. This single table drives the inventory's listing (<code>internal/inventory</code>, which both the controller and the dashboard read identities from), the dashboard's NotFound errors, and the workload-level annotation reads in the webhook and the OOM watcher. A kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)</li>
-<li>Add the kind's pod template and selector to <code>workload.PodTemplateOf</code> in <code>internal/workload/templates.go</code>. Return a nil selector for kinds whose pods must never be recycled (see Job and CronJob)</li>
+<li>Add the kind's pod template to <code>workload.PodTemplateOf</code> in <code>internal/workload/templates.go</code></li>
 <li>Add the same kind to <code>k8s.OwnerChainDisableFor()</code> in <code>internal/k8s/client.go</code>. Every kind in <code>ownerKinds</code> must appear here too, or its first Get on the admission hot path stands up a cluster-wide informer over every object of that kind instead of costing one Get. <code>TestDisableForCoversOwnerAnnotationKinds</code> (<code>internal/webhook/optin_test.go</code>) cross-checks the two lists and fails if one is missing from the other</li>
 <li>If the kind is a CRD, register its scheme in <code>internal/config/config.go</code> and <code>internal/dashboard/server.go</code></li>
-<li>If the kind's pods cannot be evicted (job-like workloads), add an in-place-only branch in <code>reconcileWorkload</code> (<code>internal/controller/workload_reconcile.go</code>) alongside the Job, CronJob and bare-pod ones; selector-based kinds need nothing more</li>
+<li>Give the kind its apply rule in <code>applyRules</code> (<code>internal/workload/apply.go</code>): where a member's pods come from (<code>selectedPods</code> with the kind's selector for a workload whose pods it owns through a selector, a function of its own otherwise) and whether the kind is <code>inPlaceOnly</code>, its pods never evicted (like Job, CronJob and bare <code>Pod</code>). <code>TestApply_EveryKindHasAnApplyRule</code> fails for a kind of <code>SupportedKinds</code> without a rule, and <code>TestApply_EveryKindUnderEveryMode</code> (<code>internal/workload/apply_test.go</code>) needs a fixture for it</li>
 <li>Add RBAC markers (<code>+kubebuilder:rbac:...</code>) to the controller and the Helm RBAC rule in <code>charts/k8s-sustain/templates/rbac.yaml</code></li>
 </ol>
 <h2 id="adding-a-recommendation-signal">Adding a recommendation signal<a class="headerlink" href="#adding-a-recommendation-signal" title="Permanent link">&para;</a></h2>
@@ -3749,6 +3771,10 @@ transport-related ones:</p>
 </ul>
 <p>The batch metrics are counted from the outcomes, not from the fetch's internals. <code>persist</code> records every outcome but "not fetched" with <code>wlrcache.Record</code>, departed or not, keeping the last Recommendation for every outcome but <code>Computed</code>. A live identity whose record failed — its object could not be ensured, or the write was rejected — keeps the error on its result (<code>identityResult.recordErr</code>), and <code>apply</code> skips its members that cycle, counting them as failed: the replacement pods of an eviction would read the old value. Departed identities have nothing to apply, so <code>persist</code> counts their failures itself.</p>
 <p>A Conflicted identity never enters the pass (<a href="../adr/0002-conflicted-identity-freezes-its-recommendation/">ADR 0002</a>). Each Policy party to the conflict records <code>status.outcome: Conflicted</code> (<code>recordConflicted</code>) and nothing else; <code>wlrcache.Ensure</code>, which rewrites <code>spec.policy</code>, is only ever called by the governing Policy, which is what stops two Policies flipping one object between them.</p>
+<h4 id="applying-to-a-member">Applying to a member<a class="headerlink" href="#applying-to-a-member" title="Permanent link">&para;</a></h4>
+<p>The apply step is one call per member: <code>Patcher.Apply(ctx, member, recs, settings)</code> in <code>internal/workload/apply.go</code>. In: the member (its kind and object, or for a bare-pod identity the governed pods the inventory holds, each its own member object), the Recommendation narrowed to the containers the member declares, and the Policy's settings (a dry run for <code>OnCreate</code>, the downsize tolerance, the <code>safe-to-evict</code> override). Out: an <code>Outcome</code> with the pods changed, the pod counts (set whenever the pass succeeds), the decreases the tolerance withheld per resource, and whether the kind is in-place-only.</p>
+<p>Behind it, one rule per kind (<code>applyRules</code>) says where a member's pods come from and whether they may be evicted: the selector plus the ownerRef UID for Deployment, StatefulSet, DaemonSet and Rollout; the active Jobs, then each Job's <code>batch.kubernetes.io/job-name</code> label plus its UID for a CronJob; the label plus the UID for a Job; the inventory's pods for a bare-pod identity. CronJob, Job and bare <code>Pod</code> are in-place-only. Everything else is the patcher's: the ownership check, StatefulSet ordering, the choice between an in-place resize and an eviction, the replacement wait and the crash-loop halt, the in-place → eviction fallback, the dry run and the counts. A member without a UID, a workload without a selector or a kind without a rule is refused with an error, never applied to every labelled pod or, silently, to none.</p>
+<p>The controller keeps what is policy rather than mechanism: the gates (shutdown, fetch failure, nothing to apply, recommend-only), retry and backoff (a failed <code>OnCreate</code> dry run counts as success), events, health counts and metrics. The <code>Outcome</code>'s kind family picks the failed step a Blocked identity reports (<code>patch</code> for kinds that evict, <code>resize</code> for in-place-only ones) and the <code>ResourcesUpdated</code> event's text.</p>
 <h4 id="owner-name-group-merge-order-and-write-cost">Owner-name group: merge order and write cost<a class="headerlink" href="#owner-name-group-merge-order-and-write-cost" title="Permanent link">&para;</a></h4>
 <p>For an owner-name group, the union snapshot in <code>status.observedResources</code> is built from the governed members' containers. Where several members declare the same container name with different requests/limits, the newest member's entry is kept whole (ties broken by name), rather than mixing one member's request with another's limit: an older member's spec may predate a change the newer ones already run. The recommendation is computed against that union, using the autoscaler of the first member in <code>kind/namespace/name</code> order that has one, and treating the identity as being as old as its oldest member or its <code>WorkloadRecommendation</code>, whichever is older.</p>
 <p>Every choice is decided by the members' names, creation times or an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. Discovery (<code>wlrcache.Ensure</code>) is the only controller writer of <code>status.observedResources</code>, from that union computed once per identity by the inventory, and the record never touches it, so a group whose members and metrics are unchanged costs no status write on subsequent reconciles.</p>
