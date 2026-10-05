@@ -156,6 +156,29 @@ func Take(ctx context.Context, r client.Reader, opts Options) (*Snapshot, error)
 	return b.snapshot(), nil
 }
 
+// TakeForPolicy reads the identities policy can govern: those in its
+// selector's namespaces whose kind it manages, outside excludedNamespaces.
+// Every identity it returns has a kind policy manages, and is whole: its
+// members share its namespace and kind, so the narrowed read also sees what
+// makes one Conflicted. A Policy managing no kind reads nothing.
+func TakeForPolicy(ctx context.Context, r client.Reader, policy *sustainv1alpha1.Policy, excludedNamespaces []string) (*Snapshot, error) {
+	var kinds []string
+	for _, kind := range workload.SupportedKinds {
+		if policy.Spec.RightSizing.Update.Types.ModeForKind(kind) != nil {
+			kinds = append(kinds, kind)
+		}
+	}
+	// An empty Kinds would read every kind.
+	if len(kinds) == 0 {
+		return &Snapshot{}, nil
+	}
+	return Take(ctx, r, Options{
+		Namespaces:         policy.Spec.Selector.Namespaces,
+		Kinds:              kinds,
+		ExcludedNamespaces: excludedNamespaces,
+	})
+}
+
 // builder is the governance.Reader of its snapshot: it serves the Policies it
 // listed and memoised Namespace annotations.
 type builder struct {

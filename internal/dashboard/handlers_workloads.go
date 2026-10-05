@@ -130,11 +130,7 @@ func (s *Server) handlePolicyWorkloads(w http.ResponseWriter, r *http.Request, p
 // governedBy returns the identities policy governs, Departed ones included,
 // reading only the namespaces and kinds it can govern.
 func (s *Server) governedBy(ctx context.Context, policy *sustainv1alpha1.Policy) ([]*inventory.Identity, error) {
-	kinds := managedKinds(policy)
-	if len(kinds) == 0 {
-		return nil, nil
-	}
-	snap, err := s.identities(ctx, inventory.Options{Namespaces: policy.Spec.Selector.Namespaces, Kinds: kinds})
+	snap, err := inventory.TakeForPolicy(ctx, s.K8sClient, policy, s.ExcludedNamespaces)
 	if err != nil {
 		return nil, err
 	}

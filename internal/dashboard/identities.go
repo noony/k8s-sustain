@@ -76,18 +76,6 @@ func (s *Server) governingPolicy(ctx context.Context, id *inventory.Identity) *s
 	return policy
 }
 
-// managedKinds returns the kinds policy manages, which bound the identities it
-// can govern.
-func managedKinds(policy *sustainv1alpha1.Policy) []string {
-	var kinds []string
-	for _, kind := range supportedWorkloadKinds {
-		if policy.Spec.RightSizing.Update.Types.ModeForKind(kind) != nil {
-			kinds = append(kinds, kind)
-		}
-	}
-	return kinds
-}
-
 // conflictingPolicies names the Policies a Conflicted identity's members opt
 // into, nil otherwise.
 func conflictingPolicies(id *inventory.Identity) []string {

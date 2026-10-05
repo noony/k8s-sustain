@@ -146,27 +146,6 @@ func (r *PolicyReconciler) applyTuningDefaults() {
 	}
 }
 
-// snapshot reads the identities in policy's namespaces and kinds. Every
-// member of an identity shares its namespace and kind, so the narrowed
-// snapshot still sees whole identities, and what makes one Conflicted.
-func (r *PolicyReconciler) snapshot(ctx context.Context, policy *sustainv1alpha1.Policy) (*inventory.Snapshot, error) {
-	var kinds []string
-	for _, kind := range workload.SupportedKinds {
-		if policy.Spec.RightSizing.Update.Types.ModeForKind(kind) != nil {
-			kinds = append(kinds, kind)
-		}
-	}
-	// An empty Kinds would read every kind.
-	if len(kinds) == 0 {
-		return &inventory.Snapshot{}, nil
-	}
-	return inventory.Take(ctx, r.Client, inventory.Options{
-		Namespaces:         policy.Spec.Selector.Namespaces,
-		Kinds:              kinds,
-		ExcludedNamespaces: r.ExcludedNamespaces,
-	})
-}
-
 // Reconcile is the main reconciliation loop for Policy objects.
 func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("policy", req.Name)
@@ -214,7 +193,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	logger.Info("starting reconcile cycle")
 
-	snap, listErr := r.snapshot(ctx, policy)
+	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, r.ExcludedNamespaces)
 	if listErr != nil {
 		logger.Error(listErr, "failed to list workloads")
 		_ = r.failCondition(ctx, policy, "ListFailed", listErr)

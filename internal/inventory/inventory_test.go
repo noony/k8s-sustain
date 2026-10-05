@@ -372,6 +372,48 @@ func TestOptionsNarrowTheSnapshot(t *testing.T) {
 	}
 }
 
+// A Policy's snapshot reads only its selector's namespaces and the kinds it
+// manages, governs nothing in an excluded namespace, and is empty for a
+// Policy managing no kind rather than reading every kind.
+func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
+	p := managing("p", sustainv1alpha1.UpdateTypes{Deployment: ongoing()})
+	p.Spec.Selector.Namespaces = []string{"a", "excluded"}
+	none := managing("none", sustainv1alpha1.UpdateTypes{})
+	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(
+		p, none,
+		deployment("a", "web", base, optIn("p")),
+		deployment("b", "web", base, optIn("p")),
+		deployment("excluded", "web", base, optIn("p")),
+		job("a", "nightly", optIn("p")),
+		deployment("a", "idle", base, optIn("none")),
+	).Build()
+
+	snap, err := inventory.TakeForPolicy(context.Background(), c, p, []string{"excluded"})
+	if err != nil {
+		t.Fatalf("TakeForPolicy: %v", err)
+	}
+	var governed []promclient.WorkloadIdentity
+	for _, id := range snap.GovernedBy("p") {
+		governed = append(governed, id.Key)
+	}
+	if want := []promclient.WorkloadIdentity{key("a", "Deployment", "web")}; !slices.Equal(governed, want) {
+		t.Errorf("governed = %v, want %v", governed, want)
+	}
+	for _, k := range []promclient.WorkloadIdentity{key("b", "Deployment", "web"), key("a", "Job", "nightly")} {
+		if _, ok := snap.Lookup(k); ok {
+			t.Errorf("%v read outside the Policy's namespaces and kinds", k)
+		}
+	}
+
+	snap, err = inventory.TakeForPolicy(context.Background(), c, none, nil)
+	if err != nil {
+		t.Fatalf("TakeForPolicy: %v", err)
+	}
+	if len(snap.Identities) != 0 {
+		t.Errorf("a Policy managing no kind read %v", keys(snap))
+	}
+}
+
 // A kind the cluster does not serve has no identities; any other read error
 // fails the snapshot.
 func TestUnservedKindIsEmptyButOtherErrorsFail(t *testing.T) {
