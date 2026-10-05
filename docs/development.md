@@ -455,12 +455,15 @@ every default explicit), the outcome and the trace, so the Simulator shows
 the Policy's values and the recommender's defaults without holding either.
 
 The override is validated once, on the server, after the merge
-(`simulationSettings.validate`, `simulation_settings.go`). Its rules are a
-copy of the CRD's markers in `api/v1alpha1`; `TestOverrideRulesCoverTheCRD`
-walks the generated CRD and fails for a rule (a minimum, maximum, pattern,
-quantity or CEL message on these settings) that no case of
-`TestOverrideRejectsWhatTheCRDRejects` breaks, so a rule added to the API
-types needs its copy here.
+(`simulationSettings.violations`, `simulation_settings.go`): it is rejected
+for a rule the merged settings break that the starting Policy did not already
+break, since a Policy admitted before the CRD gained a rule is still what the
+controller computes with. The rules are a copy of the CRD's markers in
+`api/v1alpha1`; `TestOverrideRulesCoverTheCRD` walks the generated CRD and
+fails for a rule (a minimum, maximum, pattern, quantity or CEL message on
+these settings) that no case of `TestOverrideRejectsWhatTheCRDRejects` breaks,
+and for any schema keyword it cannot read, so a rule added to the API types
+needs its copy here.
 
 Batch simulate is a Simulation of every live identity a Policy governs with no
 override, in one assembly: it reports each identity's outcome, and counts only

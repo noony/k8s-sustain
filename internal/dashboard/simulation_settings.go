@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	jsonpatch "github.com/evanphx/json-patch/v5"
-	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -56,10 +56,11 @@ var quantityFields = [][]string{
 }
 
 // override merges patch, a JSON merge patch (RFC 7386) of simulationSettings,
-// onto s: a key it sets replaces the base's, and a null removes it. Settings
-// it changes are validated as the Policy CRD validates them; a patch that
-// changes nothing leaves s as the apiserver admitted it, which an older
-// object can have been under rules the CRD has since gained.
+// onto s: a key it sets replaces the base's, and a null removes it. The
+// merged settings are checked against the Policy CRD's rules, and a rule they
+// break is the override's unless s already broke it: the apiserver admitted
+// s, maybe before the CRD gained the rule, and the controller computes with it
+// all the same.
 func (s simulationSettings) override(patch json.RawMessage) (simulationSettings, error) {
 	if len(bytes.TrimSpace(patch)) == 0 || bytes.Equal(bytes.TrimSpace(patch), []byte("null")) {
 		return s, nil
@@ -84,10 +85,13 @@ func (s simulationSettings) override(patch json.RawMessage) (simulationSettings,
 	if err := dec.Decode(&out); err != nil {
 		return s, &settingsError{field: "override", msg: err.Error()}
 	}
-	if equality.Semantic.DeepEqual(out, s) {
-		return s, nil
+	admitted := s.violations()
+	for _, v := range out.violations() {
+		if !slices.Contains(admitted, v) {
+			return s, &v
+		}
 	}
-	return out, out.validate()
+	return out, nil
 }
 
 // checkQuantities rejects a malformed quantity in doc, naming its field.
@@ -114,44 +118,42 @@ func checkQuantities(doc []byte) error {
 	return nil
 }
 
-// validate checks s against the Policy CRD's rules on these settings. They
-// are copied from api/v1alpha1's markers; a test holds the copy to every rule
-// the generated CRD declares.
-func (s simulationSettings) validate() error {
-	for _, r := range []struct {
-		name string
-		cfg  sustainv1alpha1.ResourceConfig
-	}{{"cpu", s.ResourcesConfigs.CPU}, {"memory", s.ResourcesConfigs.Memory}} {
-		if err := validateResource("resourcesConfigs."+r.name, r.cfg); err != nil {
-			return err
-		}
-	}
+// violations lists every rule of the Policy CRD that s breaks. The rules are
+// copied from api/v1alpha1's markers; a test holds the copy to every rule the
+// generated CRD declares.
+func (s simulationSettings) violations() []settingsError {
+	out := resourceViolations("resourcesConfigs.cpu", s.ResourcesConfigs.CPU)
+	out = append(out, resourceViolations("resourcesConfigs.memory", s.ResourcesConfigs.Memory)...)
 	if a := s.AutoscalerCoordination.ReplicaBudgetAnchor; a != nil && (*a < 0 || *a > 1) {
-		return &settingsError{field: "autoscalerCoordination.replicaBudgetAnchor", msg: fmt.Sprintf("%v must be between 0 and 1", *a)}
+		out = append(out, settingsError{field: "autoscalerCoordination.replicaBudgetAnchor", msg: fmt.Sprintf("%v must be between 0 and 1", *a)})
 	}
-	return nil
+	return out
 }
 
-func validateResource(path string, c sustainv1alpha1.ResourceConfig) error {
+func resourceViolations(path string, c sustainv1alpha1.ResourceConfig) []settingsError {
+	var out []settingsError
+	broken := func(field, format string, args ...any) {
+		out = append(out, settingsError{field: path + field, msg: fmt.Sprintf(format, args...)})
+	}
 	if c.Window != "" && !windowPattern.MatchString(c.Window) {
-		return &settingsError{field: path + ".window", msg: fmt.Sprintf("%q must be a duration like 168h or 14d, with no sub-minute unit", c.Window)}
+		broken(".window", "%q must be a duration like 168h or 14d, with no sub-minute unit", c.Window)
 	}
 	req := c.Requests
 	if p := req.Percentile; p != nil && (*p < 1 || *p > 100) {
-		return &settingsError{field: path + ".requests.percentile", msg: fmt.Sprintf("%d must be between 1 and 100", *p)}
+		broken(".requests.percentile", "%d must be between 1 and 100", *p)
 	}
 	if h := req.Headroom; h != nil && (*h < 0 || *h > 100) {
-		return &settingsError{field: path + ".requests.headroom", msg: fmt.Sprintf("%d must be between 0 and 100", *h)}
+		broken(".requests.headroom", "%d must be between 0 and 100", *h)
 	}
 	if req.MinAllowed != nil && req.MaxAllowed != nil && req.MinAllowed.Cmp(*req.MaxAllowed) > 0 {
-		return &settingsError{field: path + ".requests", msg: "minAllowed must be less than or equal to maxAllowed"}
+		broken(".requests", "minAllowed must be less than or equal to maxAllowed")
 	}
 	if req.KeepRequest && (req.Headroom != nil || req.Percentile != nil || req.MinAllowed != nil || req.MaxAllowed != nil) {
-		return &settingsError{field: path + ".requests", msg: "keepRequest cannot be combined with headroom, percentile, minAllowed, or maxAllowed (they have no effect when the request is kept)"}
+		broken(".requests", "keepRequest cannot be combined with headroom, percentile, minAllowed, or maxAllowed (they have no effect when the request is kept)")
 	}
 	l := c.Limits
 	if r := l.RequestsLimitsRatio; r != nil && *r < 1 {
-		return &settingsError{field: path + ".limits.requestsLimitsRatio", msg: fmt.Sprintf("%v must be at least 1", *r)}
+		broken(".limits.requestsLimitsRatio", "%v must be at least 1", *r)
 	}
 	strategies := 0
 	for _, set := range []bool{l.EqualsToRequest, l.KeepLimit, l.KeepLimitRequestRatio, l.NoLimit, l.RequestsLimitsRatio != nil} {
@@ -160,10 +162,10 @@ func validateResource(path string, c sustainv1alpha1.ResourceConfig) error {
 		}
 	}
 	if strategies > 1 {
-		return &settingsError{field: path + ".limits", msg: "at most one of equalsToRequest, keepLimit, keepLimitRequestRatio, noLimit, requestsLimitsRatio may be set"}
+		broken(".limits", "at most one of equalsToRequest, keepLimit, keepLimitRequestRatio, noLimit, requestsLimitsRatio may be set")
 	}
 	if d := c.DownsizeThreshold; d != nil && d.Percent != nil && (*d.Percent < 0 || *d.Percent > 100) {
-		return &settingsError{field: path + ".downsizeThreshold.percent", msg: fmt.Sprintf("%d must be between 0 and 100", *d.Percent)}
+		broken(".downsizeThreshold.percent", "%d must be between 0 and 100", *d.Percent)
 	}
-	return nil
+	return out
 }

@@ -28,13 +28,19 @@ func TestHandleSimulate_RejectsNonPost(t *testing.T) {
 	}
 }
 
+// A body that is not JSON, or names a field the API does not have (such as
+// the former per-resource settings, now an override), is a 400.
 func TestHandleSimulate_RejectsBadJSON(t *testing.T) {
 	srv := &Server{Logger: testLogger(t)}
-	req := httptest.NewRequest(http.MethodPost, "/api/simulate", strings.NewReader("{not json"))
-	rec := httptest.NewRecorder()
-	srv.handleSimulate(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", rec.Code)
+	for _, body := range []string{
+		"{not json",
+		`{"namespace":"default","ownerKind":"Deployment","ownerName":"web","cpu":{"percentile":90}}`,
+	} {
+		rec := httptest.NewRecorder()
+		srv.handleSimulate(rec, httptest.NewRequest(http.MethodPost, "/api/simulate", strings.NewReader(body)))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", body, rec.Code)
+		}
 	}
 }
 

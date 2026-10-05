@@ -87,8 +87,8 @@ func TestOverrideRejectsWhatTheCRDRejects(t *testing.T) {
 }
 
 // Every rule the generated Policy CRD declares on these settings has a case
-// above: a rule added to the API types without its copy in validate fails
-// here.
+// above: a rule added to the API types without its copy in violations fails
+// here, and so does a kind of rule this test cannot read.
 func TestOverrideRulesCoverTheCRD(t *testing.T) {
 	raw, err := os.ReadFile("../../charts/k8s-sustain/files/crds/k8s.sustain.io_policies.yaml")
 	if err != nil {
@@ -98,7 +98,7 @@ func TestOverrideRulesCoverTheCRD(t *testing.T) {
 		Spec struct {
 			Versions []struct {
 				Schema struct {
-					OpenAPIV3Schema schemaNode `json:"openAPIV3Schema"`
+					OpenAPIV3Schema map[string]any `json:"openAPIV3Schema"`
 				} `json:"schema"`
 			} `json:"versions"`
 		} `json:"spec"`
@@ -106,10 +106,13 @@ func TestOverrideRulesCoverTheCRD(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &crd); err != nil {
 		t.Fatalf("parse CRD: %v", err)
 	}
-	rightSizing := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"].Properties["rightSizing"]
+	rightSizing := crd.Spec.Versions[0].Schema.OpenAPIV3Schema
+	for _, p := range []string{"spec", "rightSizing"} {
+		rightSizing = rightSizing["properties"].(map[string]any)[p].(map[string]any)
+	}
 	declared := map[string]bool{}
 	for _, field := range []string{"resourcesConfigs", "autoscalerCoordination", "excludeInitContainers"} {
-		rightSizing.Properties[field].rules(field, declared)
+		schemaRules(t, field, rightSizing["properties"].(map[string]any)[field].(map[string]any), declared)
 	}
 
 	covered := map[string]bool{
@@ -131,38 +134,34 @@ func TestOverrideRulesCoverTheCRD(t *testing.T) {
 	}
 }
 
-// schemaNode is the part of an OpenAPI schema that declares rules.
-type schemaNode struct {
-	Properties  map[string]schemaNode `json:"properties"`
-	Minimum     *float64              `json:"minimum"`
-	Maximum     *float64              `json:"maximum"`
-	Pattern     string                `json:"pattern"`
-	AnyOf       []any                 `json:"anyOf"`
-	Validations []struct {
-		Message string `json:"message"`
-	} `json:"x-kubernetes-validations"`
-}
-
-// rules adds, under path, every rule n and its properties declare to out, as
-// path:keyword or path:message. A pattern on an int-or-string is a quantity's.
-func (n schemaNode) rules(path string, out map[string]bool) {
-	if n.Minimum != nil {
-		out[path+":minimum"] = true
-	}
-	if n.Maximum != nil {
-		out[path+":maximum"] = true
-	}
-	switch {
-	case n.Pattern != "" && len(n.AnyOf) > 0:
-		out[path+":quantity"] = true
-	case n.Pattern != "":
-		out[path+":pattern"] = true
-	}
-	for _, v := range n.Validations {
-		out[path+":"+v.Message] = true
-	}
-	for name, p := range n.Properties {
-		p.rules(path+"."+name, out)
+// schemaRules adds, under path, every rule an OpenAPI schema node and its
+// properties declare to out, as path:keyword or path:message. A pattern on an
+// int-or-string is a quantity's; a format is enforced by the Go type a setting
+// decodes into.
+func schemaRules(t *testing.T, path string, node map[string]any, out map[string]bool) {
+	t.Helper()
+	for key, v := range node {
+		switch key {
+		case "type", "description", "format", "anyOf", "x-kubernetes-int-or-string":
+		case "minimum", "maximum":
+			out[path+":"+key] = true
+		case "pattern":
+			if node["x-kubernetes-int-or-string"] == true {
+				out[path+":quantity"] = true
+			} else {
+				out[path+":pattern"] = true
+			}
+		case "x-kubernetes-validations":
+			for _, rule := range v.([]any) {
+				out[path+":"+rule.(map[string]any)["message"].(string)] = true
+			}
+		case "properties":
+			for name, p := range v.(map[string]any) {
+				schemaRules(t, path+"."+name, p.(map[string]any), out)
+			}
+		default:
+			t.Errorf("%s declares %q, which this test does not read: teach it the rule", path, key)
+		}
 	}
 }
 
@@ -196,17 +195,23 @@ func TestOverrideMergesOntoTheBase(t *testing.T) {
 	}
 }
 
-// An override that changes nothing is the base as the apiserver admitted it,
-// even one admitted before the CRD gained a rule it breaks; a malformed one is
-// rejected as the override's.
+// A rule the base already broke, admitted before the CRD gained it, is the
+// Policy's: an override that leaves it as it is, changing nothing or
+// something else, is accepted, and one that breaks a rule of its own is not.
+// A malformed override is rejected as the override's.
 func TestOverrideShape(t *testing.T) {
 	admitted := baseSettings()
 	admitted.ResourcesConfigs.CPU.Requests.MinAllowed = ptr.To(resource.MustParse("2"))
 	admitted.ResourcesConfigs.CPU.Requests.MaxAllowed = ptr.To(resource.MustParse("1"))
-	for _, empty := range []string{"", "null", " {} ", `{"resourcesConfigs":{"cpu":{"requests":{"percentile":95}}}}`} {
-		if got, err := admitted.override(json.RawMessage(empty)); err != nil || got.ResourcesConfigs.CPU.Requests.Percentile == nil {
-			t.Errorf("override %q = %+v, %v; want the base", empty, got, err)
+	for _, accepted := range []string{"", "null", " {} ", `{"resourcesConfigs":{"cpu":{"requests":{"percentile":90}}}}`} {
+		if got, err := admitted.override(json.RawMessage(accepted)); err != nil || got.ResourcesConfigs.CPU.Requests.Percentile == nil {
+			t.Errorf("override %q = %+v, %v; want it accepted", accepted, got, err)
 		}
+	}
+	var invalid *settingsError
+	if _, err := admitted.override(json.RawMessage(`{"resourcesConfigs":{"cpu":{"requests":{"percentile":101}}}}`)); !errors.As(err, &invalid) ||
+		invalid.field != "resourcesConfigs.cpu.requests.percentile" {
+		t.Errorf("override breaking a rule of its own = %v, want it rejected on the percentile", err)
 	}
 	for _, bad := range []string{`[1]`, `"x"`, `{"recommendOnly": true}`, `{"resourcesConfigs":{"cpu":{"requests":{"percentil":90}}}}`} {
 		var invalid *settingsError

@@ -155,7 +155,7 @@ A stat strip shows **Total policies**, **Workloads covered**, **Cluster CPU save
 A Simulation is the Recommendation the controller would compute for an identity, under what-if changes to its Policy's settings. With no change it is exactly the controller's: the same identity (members, containers, age), the same Policy settings, and the same autoscaler, read for each member the Policy governs — the one difference is that the dashboard has no live OOM watcher, so a kill the controller saw in the last 30 minutes but Prometheus does not hold yet raises the controller's memory floor and not the Simulation's.
 
 1. Select a **workload** (namespace, kind, name). Kinds: Deployment, StatefulSet, DaemonSet, CronJob, Job, Rollout, Pod. **Open in Simulator** on a workload page fills it in.
-2. The Simulation **starts from** the workload's governing policy, and every control shows that policy's settings with the recommender's defaults filled in (`168h` window, 95th percentile, no headroom, the existing limit kept). Pick another policy to start from it instead, or none governs the workload and the defaults apply. **Reset** drops every change.
+2. The Simulation **starts from** the workload's governing policy, and every control shows that policy's settings with the recommender's defaults filled in (`168h` window, 95th percentile, no headroom, the existing limit kept). Start from another policy instead with the **Start from** selector, which drops your changes; when no policy governs the workload, the defaults apply. **Reset** drops every change.
 3. Change any of, per resource:
     - Window — the recommendation lookback (e.g. `168h`), independent of the chart time range
     - **Keep the current request** (`keepRequest`), or the percentile (50–100), headroom (0–100%) and min/max allowed it computes from
@@ -163,7 +163,7 @@ A Simulation is the Recommendation the controller would compute for an identity,
 
     and for the workload: **autoscaler coordination** (with its replica budget anchor) and **exclude init containers**.
 
-Only what you change is sent; everything else stays the starting policy's. The simulation re-runs automatically (debounced). The server checks the result against the Policy CRD's rules (ranges, minAllowed ≤ maxAllowed, at most one limit strategy, `keepRequest` alone, …) and shows a change it rejects above the form, keeping the last results. Results show:
+Only what you change is sent; everything else stays the starting policy's. The simulation re-runs automatically (debounced). The server checks the result against the Policy CRD's rules (ranges, minAllowed ≤ maxAllowed, at most one limit strategy, `keepRequest` alone, …) and shows a change it rejects above the form, keeping the last results; a rule the starting policy itself already breaks (admitted before the CRD gained it) is left to it. Results show:
 
 - A **Savings impact** band — projected CPU and memory change, with a note when the outcome is **Too young** (the controller would not apply it yet).
 - Per container: CPU/memory request and limit, current vs. recommended (`— removed —` under `noLimit`), and **How this was computed**: the Simulation's own [trace](../concepts/recommendation-pipeline.md#trace).
