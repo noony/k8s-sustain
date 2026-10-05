@@ -106,9 +106,6 @@ func runStart(_ *cobra.Command, _ []string) error {
 		return err
 	}
 	oomHandler := oomwatch.EventHandlerFunc(func(ctx context.Context, key oomwatch.Key, rec oomwatch.OOMRecord) {
-		if rec.PolicyName == "" {
-			return
-		}
 		controller.EmitOOMObserved(key.Namespace, key.OwnerKind, key.OwnerName, key.Container)
 		select {
 		case triggerCh <- event.GenericEvent{Object: &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: rec.PolicyName}}}:
@@ -116,9 +113,10 @@ func runStart(_ *cobra.Command, _ []string) error {
 		}
 	})
 	watcher := &oomwatch.Watcher{
-		Client:  mgr.GetClient(),
-		Sink:    oomCache,
-		Handler: oomHandler,
+		Client:             mgr.GetClient(),
+		Sink:               oomCache,
+		Handler:            oomHandler,
+		ExcludedNamespaces: cfg.ExcludedNamespaces,
 	}
 	if err := watcher.SetupWithManager(mgr); err != nil {
 		log.Error(err, "Unable to create OOM watcher")

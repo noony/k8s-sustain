@@ -24,9 +24,9 @@ type Key struct {
 type OOMRecord struct {
 	// Container is the container name within the pod that was OOM-killed.
 	Container string
-	// PolicyName is the Policy the source pod's workload opted into, resolved
-	// across all three annotation levels (see policymatch.ResolvePolicy) — not
-	// necessarily the pod's own annotation. Never empty on a recorded event.
+	// PolicyName is the Policy governing the source pod (see
+	// governance.Decide) — not necessarily the pod's own annotation. Never
+	// empty on a recorded event: a pod no Policy governs is never recorded.
 	PolicyName string
 	// ObservedAt is the wall-clock time at which the watcher first saw the
 	// kill. Distinct from TerminatedAt because the watcher may lag a few
