@@ -56,8 +56,20 @@ func Name(kind, name string) string {
 
 // RefreshInterval bounds how long an unchanged WorkloadRecommendation status
 // may keep its old ObservedAt before a writer rewrites it just to bump the
-// timestamp. Must stay well under the webhook's DefaultCacheStaleness (30m).
+// timestamp. Must stay well under DefaultStaleness.
 const RefreshInterval = 10 * time.Minute
+
+// DefaultStaleness is the default bound on the age of a Recommendation the
+// controller keeps refreshing: one full reconcile interval (5m) plus headroom
+// for a backed-up controller and small clock skew.
+const DefaultStaleness = 30 * time.Minute
+
+// DefaultRetention is the default --recommendation-retention, shared by the
+// controller, which keeps a Departed or Conflicted identity's object that
+// long, and the webhook, which stops serving it after that long: two literals
+// could drift into a window where the webhook serves what the controller
+// considers expired.
+const DefaultRetention = 168 * time.Hour
 
 // Upsert writes (or updates) the WorkloadRecommendation for ref: recs and the
 // traces of how they were derived. Idempotent: an unchanged status makes no
@@ -310,19 +322,6 @@ func buildStatus(
 	}
 	for name, rec := range recs {
 		out.Containers[name] = sustainv1alpha1.ContainerRecommendation(rec)
-	}
-	return out
-}
-
-// RecsFromStatus converts the stored per-container recommendations back into
-// the form the injection paths apply. Returns nil when nothing is stored.
-func RecsFromStatus(status sustainv1alpha1.WorkloadRecommendationStatus) map[string]workload.ContainerRecommendation {
-	if len(status.Containers) == 0 {
-		return nil
-	}
-	out := make(map[string]workload.ContainerRecommendation, len(status.Containers))
-	for name, c := range status.Containers {
-		out[name] = workload.ContainerRecommendation(c)
 	}
 	return out
 }

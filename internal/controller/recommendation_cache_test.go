@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -29,30 +28,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
-
-func TestWlrName(t *testing.T) {
-	if got := wlrcache.Name("Deployment", "web"); got != "deployment-web" {
-		t.Errorf("wlrName Deployment/web = %q, want deployment-web", got)
-	}
-	if got := wlrcache.Name("StatefulSet", "db"); got != "statefulset-db" {
-		t.Errorf("wlrName StatefulSet/db = %q", got)
-	}
-}
-
-// TestWlrName_LongNameTruncatedWithHash verifies names exceeding the 253-char
-// object-name limit are truncated with a stable hash suffix. The expected
-// literal is duplicated in the webhook package test — both copies of wlrName
-// must produce it, or controller and webhook disagree on the cache key.
-func TestWlrName_LongNameTruncatedWithHash(t *testing.T) {
-	want := "deployment-" + strings.Repeat("a", 231) + "-55335e7810"
-	got := wlrcache.Name("Deployment", strings.Repeat("a", 260))
-	if got != want {
-		t.Errorf("wlrName long input = %q, want %q", got, want)
-	}
-	if len(got) > 253 {
-		t.Errorf("wlrName long input length = %d, want <= 253", len(got))
-	}
-}
 
 // When the owner-name override makes IdentityKind/IdentityName differ from the
 // real Kind/Name, the WLR must be named and spec'd from the override.

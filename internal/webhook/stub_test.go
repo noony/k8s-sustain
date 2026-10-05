@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -192,6 +193,41 @@ func TestAdmitDoesNotRequestRecommendationWhenNoData(t *testing.T) {
 	}
 	if got.Status.Outcome != sustainv1alpha1.OutcomeNoData {
 		t.Fatalf("nodata status was disturbed by admission: %+v", got.Status)
+	}
+}
+
+// An undecided object — a stub awaiting its first reconcile, or one discovery
+// just created — is already in the controller's work-list. Reading it as
+// missing fired a Create per dedup window that could only be rejected with
+// AlreadyExists, for as long as the controller had not decided.
+func TestAdmitDoesNotRequestRecommendationWhenUndecided(t *testing.T) {
+	undecided := freshWLR("Deployment", "prod", "api", nil)
+	undecided.Status = sustainv1alpha1.WorkloadRecommendationStatus{
+		ObservedResources: map[string]sustainv1alpha1.ObservedContainerResources{"app": {}},
+	}
+	env := newAdmitEnv(t,
+		basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate),
+		deploymentReplicaSet("prod", "api-rs", "api"),
+		undecided,
+	)
+	counter := &countingCreateClient{Client: env.handler.Client}
+	env.handler.Client = counter
+
+	var resp *admissionv1.AdmissionResponse
+	delta := recSourceDelta(t, RecSourceUndecided, func() {
+		resp = env.handler.admit(context.Background(), admissionRequestFor(t, podWithRSOwner("prod", "api-rs-abc", "api-rs", "p")))
+	})
+	if !resp.Allowed || len(resp.Patch) != 0 {
+		t.Fatalf("an undecided object carries nothing to inject, got allowed=%v patch=%s", resp.Allowed, resp.Patch)
+	}
+	if delta != 1 {
+		t.Errorf("undecided delta = %v, want 1", delta)
+	}
+
+	// Let any (incorrectly) spawned stub goroutine land before asserting.
+	time.Sleep(100 * time.Millisecond)
+	if got := counter.count(); got != 0 {
+		t.Errorf("%d stub creates issued for an object that already exists", got)
 	}
 }
 

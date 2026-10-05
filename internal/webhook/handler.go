@@ -3,7 +3,6 @@ package webhook
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/httpx"
 	"github.com/noony/k8s-sustain/internal/policymatch"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -58,12 +58,14 @@ type Handler struct {
 	ExcludedNamespaces []string
 
 	// CacheStaleness bounds how old a WorkloadRecommendation may be before the
-	// webhook stops injecting from it. Zero falls back to DefaultCacheStaleness.
+	// webhook stops injecting from it. Zero falls back to
+	// wlrcache.DefaultStaleness.
 	CacheStaleness time.Duration
 
-	// RecommendationRetention bounds the age of a Departed WorkloadRecommendation,
-	// whose ObservedAt is frozen. It must mirror the controller's
-	// --recommendation-retention. Zero falls back to DefaultRecommendationRetention.
+	// RecommendationRetention bounds the age of a retained (Departed or
+	// Conflicted) WorkloadRecommendation, whose ObservedAt is frozen. It must
+	// mirror the controller's --recommendation-retention. Zero falls back to
+	// wlrcache.DefaultRetention.
 	RecommendationRetention time.Duration
 
 	// stubMu guards every stub field below, including stubWG.Add and
@@ -251,47 +253,27 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 	logger.V(1).Info("policy configured for workload kind", "mode", *mode)
 
-	staleness := h.CacheStaleness
-	if staleness == 0 {
-		staleness = DefaultCacheStaleness
-	}
 	cacheCtx, cacheCancel := context.WithTimeout(ctx, apiCallTimeout)
-	recs, retained, err := h.fetchRecommendations(cacheCtx, ownerKind, req.Namespace, ownerName, policyName, time.Now(), staleness)
+	known, err := h.storedRecommendation(cacheCtx, req.Namespace, ownerKind, ownerName)
 	cacheCancel()
-	// RecommendationSourceTotal counts the read outcome, not whether a patch
-	// is eventually emitted.
 	if err != nil {
-		if errors.Is(err, ErrRecommendationOtherPolicy) {
-			RecommendationSourceTotal.WithLabelValues(RecSourceOtherPolicy).Inc()
-			logger.V(1).Info("WorkloadRecommendation belongs to another Policy; allowing pod with template resources")
-			return allowWithLabelPatch(labelPatch)
-		}
-		if errors.Is(err, ErrRecommendationStale) {
-			RecommendationSourceTotal.WithLabelValues(RecSourceStale).Inc()
-			logger.V(1).Info("WorkloadRecommendation is stale; allowing pod with template resources")
-			return allowWithLabelPatch(labelPatch)
-		}
-		if errors.Is(err, ErrRecommendationNoData) {
-			RecommendationSourceTotal.WithLabelValues(RecSourceNoData).Inc()
-			logger.V(1).Info("WorkloadRecommendation has no recommendable data; allowing pod with template resources")
-			return allowWithLabelPatch(labelPatch)
-		}
 		RecommendationSourceTotal.WithLabelValues(RecSourceError).Inc()
 		logger.Error(err, "failed to read WorkloadRecommendation; allowing pod with template resources")
 		return allowWithLabelPatch(labelPatch)
 	}
-	if recs == nil {
-		RecommendationSourceTotal.WithLabelValues(RecSourceMissing).Inc()
-		// Only the missing path requests a stub; a stale object already exists.
+	reading := wlrcache.Read(known, policyName, time.Now(), h.freshness())
+	// RecommendationSourceTotal counts the read outcome, not whether a patch
+	// is eventually emitted.
+	RecommendationSourceTotal.WithLabelValues(recommendationSource(reading.Verdict)).Inc()
+	if reading.Verdict == wlrcache.Absent {
 		h.requestRecommendation(logger, req.Namespace, ownerKind, ownerName, policyName, pod.Spec.Containers, pod.Spec.InitContainers)
-		logger.V(1).Info("no WorkloadRecommendation for workload; requested one, allowing pod with template resources")
+	}
+	if !reading.Verdict.Injects() {
+		logger.V(1).Info("WorkloadRecommendation has nothing to inject; allowing pod with template resources",
+			"verdict", reading.Verdict.String())
 		return allowWithLabelPatch(labelPatch)
 	}
-	if retained {
-		RecommendationSourceTotal.WithLabelValues(RecSourceRetained).Inc()
-	} else {
-		RecommendationSourceTotal.WithLabelValues(RecSourceHit).Inc()
-	}
+	recs := reading.Recs
 
 	filtered := make(map[string]workload.ContainerRecommendation)
 	addMatchingRecs(filtered, pod.Spec.Containers, recs)
