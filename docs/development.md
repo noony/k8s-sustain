@@ -128,7 +128,7 @@ k8s-sustain/
 │   │   └── recommendertest/  # In-memory inputs adapter for tests
 │   ├── version/           # Build version
 │   ├── webhook/           # Admission webhook HTTP handler
-│   ├── wlrcache/          # WorkloadRecommendation naming and upsert
+│   ├── wlrcache/          # WorkloadRecommendation lifecycle: every write (Request, Ensure, Record) and verdict (Read, Expired)
 │   └── workload/          # Pod recycler, template/owner-ref helpers
 ├── charts/
 │   ├── k8s-sustain/          # Operator chart
@@ -557,7 +557,7 @@ A new identity rule goes in the inventory and its contract tests (`internal/inve
 
 #### Informer lag
 
-The controller's reads go through a watch-populated informer cache, so a `WorkloadRecommendation` that discovery created moments earlier in the same reconcile is often not yet visible, and nothing watches `WorkloadRecommendation` to re-trigger a reconcile when it becomes visible. The work-list is built from the snapshot's identities, not from the listed objects: a live identity whose object the cache cannot see yet is computed from its members' containers and dated by its earliest member, and its write lands through `wlrcache`'s read-after-write-safe path. Without that a freshly matched workload would wait a full `--reconcile-interval` before being computed.
+The controller's reads go through a watch-populated informer cache, so a `WorkloadRecommendation` that discovery created moments earlier in the same reconcile is often not yet visible, and nothing watches `WorkloadRecommendation` to re-trigger a reconcile when it becomes visible. The work-list is built from the snapshot's identities, not from the listed objects: a live identity whose object the cache cannot see yet is computed from its members' containers and dated by its earliest member, and its decision is recorded into the object `wlrcache.Ensure` returned, never into one re-read from the cache. Without that a freshly matched workload would wait a full `--reconcile-interval` before being computed.
 
 #### Per-identity computation under owner-name grouping
 
@@ -571,15 +571,15 @@ The computation unit is the identity, not the workload object: a group of worklo
 - **The fetch.** One `InputsFetcher` call per policy; the pass never sees shards, retries or the fallback ([ADR 0001](adr/0001-single-identity-is-a-batch-of-one.md)).
 - **The computation.** `recommender.Compute` decides everything about one identity from its inputs, its live OOM records and its age (the inventory's `Since`): the age gate, then every container through the stages of every [signal](#adding-a-recommendation-signal). Its OOM floor signal merges the live records the controller reads from the OOM watcher's cache with the Prometheus window and is the one place that decides whether a kill is recent, for both the bypass of the age gate and the memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the value after every stage that ran; `persist` stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read it. Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new trace field.
 
-The batch metrics are counted from the outcomes, not from the fetch's internals. `persist` records every outcome but "not fetched" in the `WorkloadRecommendation`'s `status.outcome` (`wlrcache.Upsert` for `Computed`, `wlrcache.RecordOutcome` for the rest), keeping the last Recommendation.
+The batch metrics are counted from the outcomes, not from the fetch's internals. `persist` records every outcome but "not fetched" with `wlrcache.Record`, departed or not, keeping the last Recommendation for every outcome but `Computed`. A live identity whose record failed — its object could not be ensured, or the write was rejected — keeps the error on its result (`identityResult.recordErr`), and `apply` skips its members that cycle, counting them as failed: the replacement pods of an eviction would read the old value. Departed identities have nothing to apply, so `persist` counts their failures itself.
 
-A Conflicted identity never enters the pass ([ADR 0002](adr/0002-conflicted-identity-freezes-its-recommendation.md)). Each Policy party to the conflict records `status.outcome: Conflicted` (`recordConflicted`) and nothing else; `EnsureExists`, which rewrites `spec.policy`, is only ever called by the governing Policy, which is what stops two Policies flipping one object between them.
+A Conflicted identity never enters the pass ([ADR 0002](adr/0002-conflicted-identity-freezes-its-recommendation.md)). Each Policy party to the conflict records `status.outcome: Conflicted` (`recordConflicted`) and nothing else; `wlrcache.Ensure`, which rewrites `spec.policy`, is only ever called by the governing Policy, which is what stops two Policies flipping one object between them.
 
 #### Owner-name group: merge order and write cost
 
 For an owner-name group, the union snapshot in `status.observedResources` is built from the governed members' containers. Where several members declare the same container name with different requests/limits, the newest member's entry is kept whole (ties broken by name), rather than mixing one member's request with another's limit: an older member's spec may predate a change the newer ones already run. The recommendation is computed against that union, using the autoscaler of the first member in `kind/namespace/name` order that has one, and treating the identity as being as old as its oldest member or its `WorkloadRecommendation`, whichever is older.
 
-Every choice is decided by the members' names, creation times or an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. Discovery (`EnsureExists`) and the computation phase (`wlrcache.Upsert`) both write `status.observedResources`, but always the same union computed once per identity by the inventory, so the two writers never disagree, and a group whose members and metrics are unchanged costs no status write on subsequent reconciles.
+Every choice is decided by the members' names, creation times or an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. Discovery (`wlrcache.Ensure`) is the only controller writer of `status.observedResources`, from that union computed once per identity by the inventory, and the record never touches it, so a group whose members and metrics are unchanged costs no status write on subsequent reconciles.
 
 A bare-pod identity's governed pods form one apply target (`targetsOf`), attributed to the newest pod for events; its pods are resized together and never evicted.
 
@@ -632,17 +632,17 @@ A stub becomes visible to the webhook's informer only after the create and watch
 
 Stub goroutines outlive the admission that started them (up to 30s queued plus 5s for the write), so on shutdown SIGTERM cancels in-flight stub writes and the process waits, bounded, for them to unwind before stopping the informer cache they read through. An abandoned request is re-issued by the next admission for the same identity.
 
-The status snapshot (`status.observedResources`) is also written on the `AlreadyExists` path, so an object lacking one can be filled in by a later admission; a snapshot discovery already wrote from the members' containers wins. Only the missing case creates a stub: on a stale object a create is a guaranteed no-op.
+Whether an admission requests anything is `wlrcache.ShouldRequest`: always when there is no object, and otherwise only to replace the snapshot of an object of the pod's Policy that is departed or has none, when the pod's containers differ. A live identity's snapshot is discovery's union of every member, which one pod's view would only flip back and forth. A request that loses the create race to another writer does nothing more: the next admission reads the winner's object. Only the absent case creates a stub: an undecided, nodata or stale object already exists, and a create would be a guaranteed no-op.
 
 The `k8s.sustain.io/stub` label is provenance, not control flow. The controller's own write path must `Create` before it can patch status (the status subresource discards status supplied at create), so every controller-written recommendation is transiently empty-status too.
 
-#### Policy check
+#### Read verdict
 
-The webhook injects only when the `WorkloadRecommendation`'s `spec.policy` is the Policy the pod resolves to (`ErrRecommendationOtherPolicy`, counted as `other-policy`). That is what keeps a Conflicted identity's frozen numbers out of the other Policy's pods, and it also keeps an identity moving between Policies from receiving numbers computed under the old one until the new one adopts it. A Conflicted object is exempt from the staleness gate like a departed one, bounded by the same retention window.
+The webhook takes `wlrcache.Read`'s verdict on the object it read: a pure function of the object, the pod's resolved Policy and the time, returning one of a closed set (absent, undecided, nodata, withheld, stale, fresh, retained) mapped one-to-one onto the `source` label. It injects only when both `spec.policy` and `status.computedBy` are the pod's Policy ([ADR 0003](adr/0003-a-recommendation-is-served-only-to-its-policy.md)): that keeps a Conflicted identity's frozen numbers out of the other Policy's pods, and keeps an identity moving between Policies from receiving numbers computed under the old one until the new one computes its own. A Conflicted object is exempt from the staleness gate like a departed one, bounded by the same retention window.
 
-#### Cache staleness constant
+#### Freshness constants
 
-The staleness window is `webhook.Handler.CacheStaleness` (default `DefaultCacheStaleness = 30m`, `internal/webhook/recommendations.go`). It is not exposed as a flag or Helm value.
+The refresh interval (`wlrcache.RefreshInterval`, 10m), the staleness window (`wlrcache.DefaultStaleness`, 30m) and the retention default (`wlrcache.DefaultRetention`, 168h, the default of both `--recommendation-retention` flags) live together in `internal/wlrcache`. The staleness window is `webhook.Handler.CacheStaleness` when set; it is not exposed as a flag or Helm value.
 
 #### Startup probe budget
 
@@ -684,18 +684,31 @@ while the `values.yaml` side still passes.
 
 ### WorkloadRecommendation lifecycle
 
+#### One module owns it
+
+`internal/wlrcache` is the only code that writes a `WorkloadRecommendation` or judges one; callers never patch the object themselves. Its interface:
+
+- `Request(ctx, client, known, ref, policy, observed)` — the webhook's stub, or its snapshot refresh (`ShouldRequest` decides whether there is anything to do).
+- `Ensure(ctx, client, ref, policy, observed)` — the governing Policy's per-cycle claim on a live identity: create or adopt, replace the snapshot when it differs, clear `departed`. It returns the object as written.
+- `Record(ctx, client, known, Decision, now)` — the one status write per identity per cycle: the outcome, the Recommendation and trace for `Computed`, and the `departed` fact, into the object `Ensure` returned (or, for a departed or Conflicted identity, the one the inventory read). An unchanged decision costs no write, except the refresh of a `Computed` one's `observedAt` every `RefreshInterval`. A missing object is an error, never a silent no-op.
+- `Read(known, policy, now, Freshness)` — the [read verdict](#read-verdict).
+- `Expired(known, policy, Standing, now, retention)` — the sweep verdict: keep or delete, given where the identity stands in the reconcile's snapshot (governed, ungoverned, departed, Conflicted).
+
+Every writer runs against a cache-backed client, so nothing re-reads an object it just wrote: each write patches off the object the previous one returned, and a create that loses the race to another writer claims that writer's object with a patch, whose response carries it. The lifecycle suite (`internal/wlrcache/lifecycle_test.go`) runs every writer against a client whose cache lags behind every create.
+
 #### GC preconditions
 
-- **Per-cycle sweep** deletes with `uid` + `resourceVersion` preconditions, because it decides on a copy read from the informer cache. With several reconciles running at once, a workload re-annotated from one policy to another is re-labelled and rewritten by the new policy while the old policy's sweep still holds the pre-rewrite copy; the precondition turns that delete into a conflict (left alone, re-judged next cycle) instead of destroying a fresh recommendation. A conflict is an expected outcome, not an error.
-- **Policy-deletion finalizer** deletes on `uid` alone. Its rule ("this object belongs to the policy being deleted") cannot be invalidated by a rewrite, so a `resourceVersion` precondition would only let a WLR rewritten inside the informer propagation window survive. The `uid` still refuses a name reused by a delete-and-recreate. Any failure, conflicts included, is returned so the finalizer stays on and the deletion is retried.
-- **Orphan reaper** keeps the strict `uid` + `resourceVersion` preconditions: its rule reads `spec.policy`, which is rewritten in place when a re-annotated workload's WLR is re-pointed at its new policy, so a stale copy can call a just-adopted object an orphan. It guarantees nothing, so it can afford the conflict.
+Every cleanup path decides on a copy read from the informer cache, so every one deletes with `uid` + `resourceVersion` preconditions: the `uid` refuses a name reused by a delete-and-recreate, the `resourceVersion` an object rewritten since it was listed — typically re-labelled and re-pointed at another Policy that adopted it. What a conflict means differs:
+
+- **Per-cycle sweep** and **orphan reaper** leave the object alone and re-judge it on their next pass. A conflict is an expected outcome, not an error.
+- **Policy-deletion finalizer** returns any failure, conflicts included, so the finalizer stays on and the deletion is retried. The retry re-lists the Policy's objects by label: one another Policy adopted meanwhile (a GitOps rename) is no longer listed and survives ([ADR 0003](adr/0003-a-recommendation-is-served-only-to-its-policy.md)).
 
 #### Freshness grace
 
-The sweep judges each of the Policy's `WorkloadRecommendation`s against the reconcile's inventory snapshot: one whose identity is Departed is retained, one whose identity is Conflicted or governed by another Policy is kept, one whose identity is live but governed by no Policy, or is outside the snapshot (namespace or kind no longer in the Policy's scope), is deleted.
+The sweep judges each of the Policy's `WorkloadRecommendation`s against the reconcile's inventory snapshot (`wlrcache.Expired`): one whose identity is Departed or Conflicted is kept for the retention window, counted from its last computation; one whose identity is governed by a Policy, this one or another that will adopt it, is kept; one whose identity is live but governed by no Policy, or is outside the snapshot (namespace or kind no longer in the Policy's scope), is deleted.
 
 Independently of retention, a `WorkloadRecommendation` created within the last 10 minutes is never swept; it protects an identity first written just after a reconcile took its snapshot. The grace keys off the creation timestamp, not `status.observedAt`: the computation phase refreshes `observedAt` for every identity it computes each cycle, departed identities included, so an `observedAt`-based guard would be self-satisfying and an opted-out workload would keep its recommendation (and its share of Prometheus load) indefinitely.
 
 #### Departed waiver bound
 
-The webhook bounds the `departed` (and Conflicted) staleness waiver with its own `--recommendation-retention` (rendered from the same `controller.recommendationRetention` Helm value as the controller's). Relying on the sweep to delete a lapsed object would leave the waiver unbounded whenever the controller stops sweeping: both the sweep and the clearing of `departed` live inside the reconcile, which returns early when the inventory cannot be read (RBAC revoked on one kind, an unreachable API group). `departed` is only set from a snapshot that read successfully, never on a failed read.
+The webhook bounds the `departed` (and Conflicted) staleness waiver with its own `--recommendation-retention` (rendered from the same `controller.recommendationRetention` Helm value as the controller's). Relying on the sweep to delete a lapsed object would leave the waiver unbounded whenever the controller stops sweeping: both the sweep and the record that sets or clears `departed` live inside the reconcile, which returns early when the inventory cannot be read (RBAC revoked on one kind, an unreachable API group). `departed` is only recorded from a snapshot that read successfully, never on a failed read.

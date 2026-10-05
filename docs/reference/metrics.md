@@ -144,16 +144,17 @@ Every panic the webhook recovered, by route pattern (e.g. `POST /mutate`), plus 
 
 #### `k8s_sustain_webhook_recommendation_source_total`
 
-The outcome of every admission's `WorkloadRecommendation` read, by `source`. A pod that misses its recommendation starts on its template resources with nothing in its spec to say so; this counter is the only place that is visible. Alert on a rising `stale` or `missing` rate relative to `hit`.
+The outcome of every admission's `WorkloadRecommendation` read, by `source`: one label per [read verdict](../concepts/workload-recommendations.md#admission-behaviour), plus `error`. A pod that misses its recommendation starts on its template resources with nothing in its spec to say so; this counter is the only place that is visible. Alert on a rising `stale` or `missing` rate relative to `hit`.
 
 | `source` | Meaning |
 |----------|---------|
 | `hit` | A fresh recommendation was injected. |
-| `retained` | Injected from a kept recommendation of a departed identity (finished Job, bare-pod group between runs), or the frozen one of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity into a pod of the Policy it names. Its age is bounded by `--recommendation-retention` instead of the staleness budget — see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). Steady `retained` is normal for recurring workloads; `retained` turning into `missing` means the gap between runs exceeds the retention window. |
-| `stale` | `observedAt` is older than the 30-minute staleness budget (or, for a departed identity, older than the retention window): the controller is behind, stuck, or the workload left its policy's scope. |
+| `retained` | Injected from a kept recommendation of a departed identity (finished Job, bare-pod group between runs), or the frozen one of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity into a pod of the Policy that computed it. Its age is bounded by `--recommendation-retention` instead of the staleness budget — see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). Steady `retained` is normal for recurring workloads; `retained` turning into `missing` means the gap between runs exceeds the retention window. |
+| `stale` | `observedAt` is older than the 30-minute staleness budget (or, for a departed or Conflicted identity, older than the retention window): the controller is behind, stuck, or the workload left its policy's scope. |
 | `missing` | No recommendation exists yet. The webhook creates a [stub](../concepts/workload-recommendations.md#cold-start-stub-recommendations) so the controller picks it up. Transient for new workloads; sustained for one identity means the controller never computes it. |
+| `undecided` | The object exists but the controller has decided nothing for it yet: a stub awaiting its first reconcile, or one discovery just created. No stub is created. Sustained for one identity means its Policy's reconcile is not reaching it. |
 | `nodata` | The recommendation exists and has an outcome but holds no values yet (too young, quiet, unmatched by the recording rules, or its fetch failed). No stub is created. Takes precedence over `stale`. |
-| `other-policy` | The recommendation was produced under a Policy other than the one the pod opts into: the other side of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity, or an identity moving between Policies until the new one adopts it. Admitted unchanged; no stub is created. |
+| `other-policy` | The recommendation was withheld: the object, or the values it holds, belong to a Policy other than the one the pod opts into ([ADR 0003](../adr/0003-a-recommendation-is-served-only-to-its-policy.md)). The other side of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity, or an identity moving between Policies until the new one computes its own values. Admitted unchanged; no stub is created. |
 | `error` | The read failed with an apiserver error other than NotFound. |
 
 #### About the `path` label

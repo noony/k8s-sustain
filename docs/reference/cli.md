@@ -54,7 +54,7 @@ k8s-sustain start [flags]
 | `--policy-concurrency-limit` | `10` | Maximum number of Policy objects reconciled in parallel |
 | `--prometheus-max-inflight` | `8` | Maximum concurrent Prometheus queries across the whole controller. Kept below Prometheus's own `--query.max-concurrency` (default 20) so k8s-sustain does not starve dashboards and alerting sharing the same server. A query that cannot get a slot within 2 minutes is abandoned rather than queued indefinitely; that is counted as a batch failure, not as a Prometheus failure, so it never trips the circuit breaker |
 | `--recycle-replacement-timeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) regularly takes longer than the default. |
-| `--recommendation-retention` | `168h` | How long a WorkloadRecommendation is kept after its workload object disappears (bare pods, deleted or finished Jobs). Set it above the longest gap between runs of a recurring workload; `0` sweeps on the next reconcile. See [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). |
+| `--recommendation-retention` | `168h` | How long a WorkloadRecommendation is kept after its workload object disappears (bare pods, deleted or finished Jobs), and how long a Conflicted identity's frozen one is kept. Set it above the longest gap between runs of a recurring workload; `0` sweeps on the next reconcile. See [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). |
 | `--query-shard-max-samples` | `10000000` | Projected Prometheus sample budget (containers × samples per container, summed across a shard's workloads: window-minutes for the CPU and memory queries, one per rule for the OOM query) a single batched shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own `--query.max-samples` (default `50000000`): that server-side limit *rejects* an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default leaves a 5x margin. |
 
 ### Prometheus authentication and TLS flags
@@ -130,7 +130,7 @@ k8s-sustain webhook [flags]
 | `--tls-key-file` | `/tls/tls.key` | Path to the TLS private key file |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces the webhook must never mutate. Pods in these namespaces are admitted unchanged. Mirrors the controller flag so both components stay in lockstep. |
-| `--recommendation-retention` | `168h` | Must match the controller flag. A departed identity's recommendation older than this is treated as stale instead of injected. The chart renders both from `controller.recommendationRetention`. |
+| `--recommendation-retention` | `168h` | Must match the controller flag. A departed or Conflicted identity's recommendation older than this is treated as stale instead of injected. The chart renders both from `controller.recommendationRetention`. |
 
 The webhook also honours each Policy's `spec.selector.namespaces` and `spec.selector.labelSelector` (see [Policy reference](./policy.md#specselector)). A pod is admitted without mutation if any of the following holds: its namespace is in `--excluded-namespaces`, its namespace is not in a non-empty `selector.namespaces`, or its pod labels do not satisfy `selector.labelSelector`. A malformed `labelSelector` causes the webhook to fail open (admit without mutation, log a warning) rather than deny.
 
@@ -161,7 +161,7 @@ helm upgrade k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
 ```
 
 !!! warning "Using `Fail` in production"
-    Setting `failurePolicy: Fail` means **pod creation is blocked** if the webhook is unavailable. Only use this if you have ≥2 webhook replicas. The webhook does not depend on Prometheus at admission time — it only needs the apiserver to read the cached `WorkloadRecommendation` — but it still needs the controller's cache to stay fresh (within `DefaultCacheStaleness`, 30 min) for injections to happen at all, and a webhook outage under `Fail` still blocks pod creation regardless.
+    Setting `failurePolicy: Fail` means **pod creation is blocked** if the webhook is unavailable. Only use this if you have ≥2 webhook replicas. The webhook does not depend on Prometheus at admission time — it only needs the apiserver to read the cached `WorkloadRecommendation` — but it still needs the controller's cache to stay fresh (within the 30-minute staleness window) for injections to happen at all, and a webhook outage under `Fail` still blocks pod creation regardless.
 
 ---
 
