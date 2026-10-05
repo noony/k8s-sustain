@@ -108,8 +108,8 @@ func TestIsTransientError(t *testing.T) {
 		transient bool
 	}{
 		{"nil", nil, false},
-		{"context canceled", context.Canceled, false},
-		{"context deadline", context.DeadlineExceeded, false},
+		{"context canceled", context.Canceled, true},
+		{"query timeout", fmt.Errorf("querying cpu: %w", context.DeadlineExceeded), true},
 		{"not found", apierrors.NewNotFound(schema.GroupResource{Resource: "pods"}, "web"), false},
 		{"invalid", apierrors.NewInvalid(schema.GroupKind{Kind: "Pod"}, "web", nil), false},
 		{"server timeout", apierrors.NewServerTimeout(schema.GroupResource{Resource: "pods"}, "list", 5), true},

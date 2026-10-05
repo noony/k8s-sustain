@@ -272,8 +272,10 @@ func TestHandleStepError_ContextCanceled_StaysSilent(t *testing.T) {
 	rec := events.NewFakeRecorder(10)
 	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
 	tgt := deploymentTarget("default", "web")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	if err := r.handleStepError(context.Background(), tgt, "patch", "Pod recycle failed", context.Canceled); err != nil {
+	if err := r.handleStepError(ctx, tgt, "patch", "Pod recycle failed", context.Canceled); err != nil {
 		t.Fatalf("context cancellation must return nil, got %v", err)
 	}
 	select {

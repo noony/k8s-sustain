@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -213,17 +212,19 @@ func (r *PolicyReconciler) skipFailedDryRun(ctx context.Context, t *workloadTarg
 // this member is the one it reports; msg is the human-readable description
 // used in the event and log line.
 func (r *PolicyReconciler) handleStepError(ctx context.Context, t *workloadTarget, phase, msg string, err error) error {
+	// Graceful shutdown, not a workload error: don't spam events or logs on the
+	// way out. Only the reconcile's own context says so; an error that merely
+	// wraps a context error comes from a call that ran out of its own timeout.
+	if ctx.Err() != nil {
+		return nil //nolint:nilerr // shutdown is not a workload error
+	}
 	if !isTransientError(err) {
 		r.retries.clear(t.key())
-		// Context cancellation is graceful shutdown, not a misconfiguration —
-		// don't spam events/logs on the way out.
-		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			// Permanent errors (e.g. 403 from missing RBAC) are never retried,
-			// so surface them loudly — otherwise they fail invisibly forever.
-			r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, "ReconciliationFailed", "ReconciliationFailed",
-				"%s: %v. Permanent error, not retrying", msg, err)
-			log.FromContext(ctx).Error(err, msg+", permanent error, not retrying", "phase", phase)
-		}
+		// Permanent errors (e.g. 403 from missing RBAC) are never retried,
+		// so surface them loudly — otherwise they fail invisibly forever.
+		r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, "ReconciliationFailed", "ReconciliationFailed",
+			"%s: %v. Permanent error, not retrying", msg, err)
+		log.FromContext(ctx).Error(err, msg+", permanent error, not retrying", "phase", phase)
 		return nil
 	}
 	// Take the state recordFailure computed under its own lock rather than

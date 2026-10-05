@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -323,6 +324,44 @@ func TestReconcile_FetchFailureFailsOnlyThatIdentity(t *testing.T) {
 	}
 	if cpu := podCPU(t, r, "default", "healthy-pod"); cpu != "100m" {
 		t.Errorf("healthy pod CPU = %s, want its 100m recommendation despite its neighbour failing", cpu)
+	}
+}
+
+// A Prometheus call that runs out of its own timeout wraps
+// context.DeadlineExceeded. That is a failed fetch, not a shutdown: an
+// overloaded Prometheus must turn the Policy not-Ready and back the identity
+// off, never pass for a healthy cycle.
+func TestReconcile_QueryTimeoutIsAFetchFailure(t *testing.T) {
+	timeout := fmt.Errorf("querying cpu: %w", context.DeadlineExceeded)
+	inputs := recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), timeout)
+	r := reconcilerWithInputs(t, inputs, true,
+		ongoingDeployments("p"), establishedDeployment("default", "web", "p"), runningPod("default", "web-pod", "web"))
+	rec := r.recorder.(*events.FakeRecorder)
+
+	reconcileOnce(t, r, "p")
+
+	ready := readyCondition(t, r, "p")
+	if ready.Status == metav1.ConditionTrue || !strings.Contains(ready.Message, "1 of 1 workloads failed") {
+		t.Errorf("Ready = %s %q, want False naming 1 of 1 workloads failed", ready.Status, ready.Message)
+	}
+	if state := r.retries.getState("Deployment/default/web"); state == nil || state.attempts != 1 {
+		t.Errorf("retry state = %+v, want one recorded attempt", state)
+	}
+	if !slices.ContainsFunc(drainEvents(rec), func(e string) bool { return strings.Contains(e, "ReconciliationRetryScheduled") }) {
+		t.Error("want a ReconciliationRetryScheduled event on the workload")
+	}
+}
+
+// drainEvents returns every event rec holds.
+func drainEvents(rec *events.FakeRecorder) []string {
+	var out []string
+	for {
+		select {
+		case e := <-rec.Events:
+			out = append(out, e)
+		default:
+			return out
+		}
 	}
 }
 

@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"sync"
@@ -135,12 +134,11 @@ func (rt *retryTracker) blockedPhase(key string) (string, bool) {
 }
 
 // isTransientError returns true for errors that should trigger a retry with backoff.
-// Permanent errors (not found, invalid, context cancellation) return false.
+// Permanent errors (not found, invalid) return false. A wrapped context error
+// is transient: a Prometheus call that ran out of its own timeout wraps
+// context.DeadlineExceeded, and only the reconcile's context ending is shutdown.
 func isTransientError(err error) bool {
 	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	var statusErr *apierrors.StatusError
