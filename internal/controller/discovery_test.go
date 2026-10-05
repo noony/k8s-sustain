@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -34,7 +33,8 @@ func testScheme(t *testing.T) *runtime.Scheme {
 // When Ensure fails the identity is still computed, but not applied: its
 // recommendation has nowhere to be cached. A persistent cause (missing RBAC, a
 // rejecting admission webhook, a quota) must not leave the Policy reporting
-// Ready while the cache silently goes stale.
+// Ready while the cache silently goes stale, and the one failure is counted
+// once, as its withheld member's.
 func TestReconcileSurfacesDiscoveryFailures(t *testing.T) {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
 	policy := &sustainv1alpha1.Policy{
@@ -91,8 +91,8 @@ func TestReconcileSurfacesDiscoveryFailures(t *testing.T) {
 	if ready.Status != metav1.ConditionFalse {
 		t.Errorf("Ready = %s, want False: an identity that could not be registered must not report success", ready.Status)
 	}
-	if !strings.Contains(ready.Message, "could not be registered") {
-		t.Errorf("message = %q, want it to name the registration failure", ready.Message)
+	if want := "1 of 1 workloads failed; Blocked workload identities: 1"; ready.Message != want {
+		t.Errorf("message = %q, want %q: the failed Ensure counted once", ready.Message, want)
 	}
 	if got := r.ledger.health("Deployment/default/web").blockedOn; got != phaseStore {
 		t.Errorf("member blocked on %q, want %q: a member withheld for a failed Ensure is Blocked", got, phaseStore)

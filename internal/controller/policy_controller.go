@@ -226,7 +226,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	logger.Info("collected governed identities", "count", len(governed))
 
 	items := computeItems(ctx, policy, governed)
-	discoveryFailures := r.discover(ctx, policy.Name, items)
+	r.discover(ctx, policy.Name, items)
 	r.health.observe(policy.Name, items, r.ledger)
 	r.recordConflicted(ctx, policy.Name, snap)
 
@@ -247,7 +247,6 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	logger.Info("reconcile cycle complete",
 		"identities", len(items),
 		"dispatched", units,
-		"discoveryFailures", discoveryFailures,
 		"skipped", skipped,
 		"failed", failed,
 		"concurrency", r.WorkloadConcurrencyLimit)
@@ -263,7 +262,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// failed is per dispatched unit, so units is the denominator. blocked
 	// also covers the members this pass skipped in backoff. A failed Ensure
-	// always surfaces as one of the two; discoveryFailures only names it.
+	// counts once, as its withheld members' failure.
 	if failed > 0 || blocked > 0 {
 		var parts []string
 		if failed > 0 {
@@ -271,9 +270,6 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		if blocked > 0 {
 			parts = append(parts, fmt.Sprintf("Blocked workload identities: %d", blocked))
-		}
-		if discoveryFailures > 0 {
-			parts = append(parts, fmt.Sprintf("%d workload identities could not be registered for computation", discoveryFailures))
 		}
 		msg := strings.Join(parts, "; ")
 		_ = r.failCondition(ctx, policy, "PartialFailure", errors.New(msg))

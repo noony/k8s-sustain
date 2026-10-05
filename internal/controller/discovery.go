@@ -16,15 +16,12 @@ import (
 // spec.policy back and forth.
 //
 // Errors are logged and skipped so one unwritable WLR cannot stop the rest of
-// the policy, but the count is returned: a persistent cause (missing RBAC, a
-// rejecting admission webhook, a namespace quota) would otherwise leave the
-// policy reporting success forever while doing nothing. The identity is still
-// computed, from its members' own container sets, but has no object to record
-// its decision into, so it is not applied this cycle: its members fail on the
-// store step with the Ensure error, and are Blocked until an Ensure succeeds.
-func (r *PolicyReconciler) discover(ctx context.Context, policyName string, items []computeItem) int {
+// the policy. The identity is still computed, from its members' own container
+// sets, but has no object to record its decision into, so it is not applied
+// this cycle: its members fail on the store step with the Ensure error, which
+// is the one count the failure gets, and are Blocked until an Ensure succeeds.
+func (r *PolicyReconciler) discover(ctx context.Context, policyName string, items []computeItem) {
 	logger := log.FromContext(ctx)
-	failures := 0
 	for i := range items {
 		it := &items[i]
 		if len(it.Targets) == 0 {
@@ -33,11 +30,9 @@ func (r *PolicyReconciler) discover(ctx context.Context, policyName string, item
 		known, err := wlrcache.Ensure(ctx, r.Client, it.ref(), policyName, it.Observed)
 		it.WLR, it.EnsureErr = known, err
 		if err != nil {
-			failures++
 			logger.Error(err, "failed to ensure the WorkloadRecommendation is current; "+
 				"the identity is still computed this cycle, but its recommendation cannot be stored for the webhook, so it is not applied",
 				"kind", it.Identity.OwnerKind, "name", it.Identity.OwnerName, "namespace", it.Identity.Namespace)
 		}
 	}
-	return failures
 }

@@ -250,14 +250,14 @@ These three reasons are the complete set the controller writes to
 | Reason | Status | Meaning |
 |--------|--------|---------|
 | `ReconciliationSucceeded` | True | Every matching workload was processed, and no workload identity is Blocked |
-| `PartialFailure` | False | Some workloads failed this cycle, some workload identities are Blocked (including those whose workloads this cycle skipped in retry backoff), and/or some could not be registered for computation; see `message`, which names only what actually happened |
+| `PartialFailure` | False | Some workloads failed this cycle and/or some workload identities are Blocked (including those whose workloads this cycle skipped in retry backoff); see `message`, which names only what actually happened |
 | `ListFailed` | False | The cycle could not even build its work list — listing the matching workloads failed, or listing the policy's `WorkloadRecommendation` objects did. No workload was processed |
 
 A workload fails when its Prometheus inputs cannot be read, when evicting or
 resizing its pods fails, or when it is left alone because its identity's
-recommendation could not be stored for the webhook (its identity could not
-be registered, or the write was rejected). Every such failure counts toward
-`PartialFailure` and leaves the identity
+recommendation could not be stored for the webhook (its
+`WorkloadRecommendation` could not be claimed, or the write was rejected).
+Every such failure counts once toward `PartialFailure` and leaves the identity
 [Blocked](../reference/metrics.md#drift-retry-autoscaler) until a later
 cycle succeeds, whether the error is transient or permanent:
 
@@ -271,10 +271,6 @@ cycle succeeds, whether the error is transient or permanent:
   Warning event on the workload object when the workload enters the failure,
   and is retried on every cycle without backoff, so fixing its cause takes
   effect at the next cycle.
-
-The registration count is per **identity**, not per workload object:
-workloads grouped under a shared `k8s.sustain.io/owner-name` register once,
-together.
 
 ---
 
