@@ -149,28 +149,38 @@ func (h *Handler) pruneStubRequestsLocked(now time.Time) {
 	}
 }
 
-// requestRecommendation runs wlrcache.Request in a detached goroutine for the
-// identity ref, whose object the admission read as known: it creates an
-// empty-status stub for an identity that has none, or refreshes the container
-// snapshot of one the controller keeps no live view of. Without it, a workload
-// the controller never catches alive (a short Job, a bare-pod group) would
-// never enter its work-list, or be computed against its first run's
-// containers forever. Errors are logged and dropped; the next pod of the same
-// workload retries.
-func (h *Handler) requestRecommendation(
-	logger logr.Logger,
-	known *sustainv1alpha1.WorkloadRecommendation,
-	ref sustainv1alpha1.WorkloadReference,
-	policyName string,
-	observed map[string]sustainv1alpha1.ObservedContainerResources,
-) {
-	key := ref.Namespace + "/" + wlrcache.Name(ref.Kind, ref.Name)
+// stubRequest is the one effect an admission can call for: wlrcache.Request
+// for the identity ref, whose object the admission read as known, the pod
+// opting into policy and running observed.
+type stubRequest struct {
+	known    *sustainv1alpha1.WorkloadRecommendation
+	ref      sustainv1alpha1.WorkloadReference
+	policy   string
+	observed map[string]sustainv1alpha1.ObservedContainerResources
+}
+
+// requestRecommendation runs r in a detached goroutine: it creates an
+// empty-status stub for an identity that has no object, or refreshes the
+// container snapshot of one the controller keeps no live view of. Without it,
+// a workload the controller never catches alive (a short Job, a bare-pod
+// group) would never enter its work-list, or be computed against its first
+// run's containers forever. Errors are logged and dropped; the next pod of the
+// same workload retries.
+func (h *Handler) requestRecommendation(logger logr.Logger, r stubRequest) {
+	key := r.ref.Namespace + "/" + wlrcache.Name(r.ref.Kind, r.ref.Name)
 	parent, claimed, ok := h.beginStubRequest(key, time.Now())
 	if !ok {
 		return
 	}
 	go func() {
 		defer h.stubWG.Done()
+		// No recover runs above a detached goroutine: a panic here would end
+		// the webhook process.
+		defer func() {
+			if rec := recover(); rec != nil {
+				reportPanic(logger, panicLabelStub, rec, "key", key)
+			}
+		}()
 
 		queueCtx, queueCancel := context.WithTimeout(parent, stubRequestQueueTimeout)
 		defer queueCancel()
@@ -184,7 +194,7 @@ func (h *Handler) requestRecommendation(
 
 		ctx, cancel := context.WithTimeout(parent, stubWriteTimeout)
 		defer cancel()
-		if err := wlrcache.Request(log.IntoContext(ctx, logger), h.Client, known, ref, policyName, observed); err != nil {
+		if err := wlrcache.Request(log.IntoContext(ctx, logger), h.Client, r.known, r.ref, r.policy, r.observed); err != nil {
 			logger.V(1).Info("failed to request a recommendation", "err", err)
 		}
 	}()

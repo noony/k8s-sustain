@@ -248,9 +248,6 @@ func TestDecide(t *testing.T) {
 			if d.Identity != tc.identity {
 				t.Errorf("identity = %+v, want %+v", d.Identity, tc.identity)
 			}
-			if want := d.Governed() || d.Refusal == governance.KindNotManaged; d.Selected() != want {
-				t.Errorf("selected = %v, want %v", d.Selected(), want)
-			}
 			if !slices.Equal(src.reads, tc.reads) {
 				t.Errorf("reads = %v, want %v", src.reads, tc.reads)
 			}

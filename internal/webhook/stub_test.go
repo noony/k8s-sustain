@@ -9,8 +9,6 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	admissionv1 "k8s.io/api/admission/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -20,10 +18,10 @@ import (
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
-// The missing-WLR admission path must request a recommendation, otherwise a
-// workload the controller never catches alive (a short-lived Job, a bare-pod
-// group) would start every one of its pods on template resources forever.
-func TestAdmitRequestsRecommendationWhenWLRMissing(t *testing.T) {
+// decide only calls for the stub request; admit must run it, or a workload the
+// controller never catches alive (a short-lived Job, a bare-pod group) would
+// start every one of its pods on template resources forever.
+func TestAdmitRunsTheStubRequestItDecided(t *testing.T) {
 	env := newAdmitEnv(t,
 		basicPolicy("p1", sustainv1alpha1.UpdateModeOnCreate),
 		deploymentReplicaSet("prod", "api-rs", "api"),
@@ -53,154 +51,31 @@ func TestAdmitRequestsRecommendationWhenWLRMissing(t *testing.T) {
 	}
 }
 
-// The stale path must NOT create a stub: the object already exists, so the
-// Create is a guaranteed AlreadyExists no-op — a wasted apiserver write on
-// every admission of a workload whose controller has fallen behind, which is
-// exactly when the apiserver is least able to absorb it.
-func TestAdmitDoesNotRequestRecommendationWhenWLRStale(t *testing.T) {
-	stale := freshWLR("Deployment", "prod", "api", map[string]sustainv1alpha1.ContainerRecommendation{
-		"app": wlrRec("100m", "128Mi"),
-	})
-	stale.Spec.Policy = "p1"
-	stale.Status.ObservedAt = metav1.NewTime(time.Now().Add(-24 * time.Hour))
+type panickingCreateClient struct{ client.Client }
 
-	env := newAdmitEnv(t,
-		basicPolicy("p1", sustainv1alpha1.UpdateModeOnCreate),
-		deploymentReplicaSet("prod", "api-rs", "api"),
-		stale,
-	)
-
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, podWithRSOwner("prod", "api-rs-abc", "api-rs", "p1")))
-	if !resp.Allowed {
-		t.Fatal("pod must be allowed")
-	}
-	if len(resp.Patch) != 0 {
-		t.Fatalf("stale WLR must not be injected, got patch: %s", resp.Patch)
-	}
-
-	// Give any (incorrectly) spawned goroutine time to land before asserting.
-	time.Sleep(100 * time.Millisecond)
-	var got sustainv1alpha1.WorkloadRecommendation
-	key := types.NamespacedName{Namespace: "prod", Name: wlrcache.Name("Deployment", "api")}
-	if err := env.handler.Client.Get(context.Background(), key, &got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Status.Containers) != 1 {
-		t.Fatalf("stale WLR status was disturbed by admission: %+v", got.Status)
-	}
+func (panickingCreateClient) Create(context.Context, client.Object, ...client.CreateOption) error {
+	panic("boom")
 }
 
-// A nodata WLR must NOT trigger a stub request. The object already exists, so
-// the Create could only ever return AlreadyExists and the follow-up Get would
-// re-read an object that already has everything the webhook could add — wasted
-// apiserver calls per admission, for as long as the identity has no history, on
-// exactly the high-churn identities that stay nodata longest.
-func TestAdmitDoesNotRequestRecommendationWhenNoData(t *testing.T) {
-	nodata := freshWLR("Deployment", "prod", "api", nil)
-	nodata.Spec.Policy = "p1"
-	nodata.Status.Outcome = sustainv1alpha1.OutcomeNoData
-
-	env := newAdmitEnv(t,
-		basicPolicy("p1", sustainv1alpha1.UpdateModeOnCreate),
-		deploymentReplicaSet("prod", "api-rs", "api"),
-		nodata,
-	)
-
-	before := testutil.ToFloat64(RecommendationSourceTotal.WithLabelValues(RecSourceNoData))
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, podWithRSOwner("prod", "api-rs-abc", "api-rs", "p1")))
-	if !resp.Allowed {
-		t.Fatal("pod must be allowed")
-	}
-	if len(resp.Patch) != 0 {
-		t.Fatalf("a nodata WLR carries nothing to inject, got patch: %s", resp.Patch)
-	}
-	if got := testutil.ToFloat64(RecommendationSourceTotal.WithLabelValues(RecSourceNoData)); got != before+1 {
-		t.Fatalf("nodata source not counted: %v -> %v", before, got)
-	}
-
-	// Let any (incorrectly) spawned stub goroutine land before asserting the
-	// object was left exactly as it was.
-	time.Sleep(100 * time.Millisecond)
-	var got sustainv1alpha1.WorkloadRecommendation
-	key := types.NamespacedName{Namespace: "prod", Name: wlrcache.Name("Deployment", "api")}
-	if err := env.handler.Client.Get(context.Background(), key, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Status.Outcome != sustainv1alpha1.OutcomeNoData {
-		t.Fatalf("nodata status was disturbed by admission: %+v", got.Status)
-	}
-}
-
-// An undecided object — a stub awaiting its first reconcile, or one discovery
-// just created — is already in the controller's work-list. Reading it as
-// missing fired a Create per dedup window that could only be rejected with
-// AlreadyExists, for as long as the controller had not decided.
-func TestAdmitDoesNotRequestRecommendationWhenUndecided(t *testing.T) {
-	undecided := freshWLR("Deployment", "prod", "api", nil)
-	undecided.Status = sustainv1alpha1.WorkloadRecommendationStatus{
-		ObservedResources: map[string]sustainv1alpha1.ObservedContainerResources{"app": {}},
-	}
-	env := newAdmitEnv(t,
-		basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate),
-		deploymentReplicaSet("prod", "api-rs", "api"),
-		undecided,
-	)
-	counter := &countingCreateClient{Client: env.handler.Client}
-	env.handler.Client = counter
-
-	var resp *admissionv1.AdmissionResponse
-	delta := recSourceDelta(t, RecSourceUndecided, func() {
-		resp = env.handler.admit(context.Background(), admissionRequestFor(t, podWithRSOwner("prod", "api-rs-abc", "api-rs", "p")))
-	})
-	if !resp.Allowed || len(resp.Patch) != 0 {
-		t.Fatalf("an undecided object carries nothing to inject, got allowed=%v patch=%s", resp.Allowed, resp.Patch)
-	}
-	if delta != 1 {
-		t.Errorf("undecided delta = %v, want 1", delta)
-	}
-
-	// Let any (incorrectly) spawned stub goroutine land before asserting.
-	time.Sleep(100 * time.Millisecond)
-	if got := counter.count(); got != 0 {
-		t.Errorf("%d stub creates issued for an object that already exists", got)
-	}
-}
-
-// A departed identity's snapshot is the controller's only container list for
-// it, and the webhook the only component that sees its next run: an admission
-// whose pod runs a container the snapshot lacks adds it, and still gets the
-// retained Recommendation.
-func TestAdmitAddsNewContainersToTheSnapshotOfADepartedIdentity(t *testing.T) {
-	departed := freshWLR("Deployment", "prod", "api", map[string]sustainv1alpha1.ContainerRecommendation{
-		"app": wlrRec("100m", "128Mi"),
-	})
-	departed.Status.Departed = true
-	departed.Status.ObservedResources = map[string]sustainv1alpha1.ObservedContainerResources{"retired": {}}
-	env := newAdmitEnv(t,
-		basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate),
-		deploymentReplicaSet("prod", "api-rs", "api"),
-		departed,
-	)
-
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, podWithRSOwner("prod", "api-rs-abc", "api-rs", "p")))
-	if len(resp.Patch) == 0 {
-		t.Error("the retained Recommendation must still be injected")
-	}
-
-	key := types.NamespacedName{Namespace: "prod", Name: wlrcache.Name("Deployment", "api")}
-	deadline := time.Now().Add(5 * time.Second)
-	var got sustainv1alpha1.WorkloadRecommendation
-	for time.Now().Before(deadline) {
-		if err := env.handler.Client.Get(context.Background(), key, &got); err != nil {
-			t.Fatal(err)
+// The stub write runs on a detached goroutine, past every recover the
+// request path has: unguarded, one panic there ends the webhook process.
+func TestRequestRecommendationRecoversAPanickingWrite(t *testing.T) {
+	h := &Handler{Client: panickingCreateClient{Client: fake.NewClientBuilder().WithScheme(config.Scheme()).Build()}}
+	defer func() {
+		if err := h.Shutdown(context.Background()); err != nil {
+			t.Errorf("Shutdown: %v", err)
 		}
-		if _, ok := got.Status.ObservedResources["app"]; ok {
-			break
+	}()
+
+	before := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelStub))
+	h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef("etl"), policy: "p1"})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelStub)) == before {
+		if time.Now().After(deadline) {
+			t.Fatal("the stub goroutine's panic was never counted")
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-	if _, ok := got.Status.ObservedResources["app"]; !ok || len(got.Status.ObservedResources) != 2 {
-		t.Fatalf("snapshot = %v, want the admitted pod's container added to the retired one", got.Status.ObservedResources)
 	}
 }
 
@@ -249,7 +124,7 @@ func TestRequestRecommendation_DeduplicatesBurstForSameIdentity(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h.requestRecommendation(logr.Discard(), nil, jobRef("etl"), "p1", nil)
+			h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef("etl"), policy: "p1"})
 		}()
 	}
 	wg.Wait()
@@ -287,7 +162,7 @@ func TestRequestRecommendation_DoesNotDropDistinctIdentities(t *testing.T) {
 
 	const identities = 50
 	for i := range identities {
-		h.requestRecommendation(logr.Discard(), nil, jobRef(fmt.Sprintf("etl-%03d", i)), "p1", nil)
+		h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef(fmt.Sprintf("etl-%03d", i)), policy: "p1"})
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -383,7 +258,7 @@ func TestHandlerShutdownWaitsForAnInFlightStubWrite(t *testing.T) {
 	release := func() { releaseOnce.Do(func() { close(blocking.release) }) }
 	defer release() // never leave the goroutine parked, whatever the test does.
 
-	h.requestRecommendation(logr.Discard(), nil, jobRef("etl"), "p1", nil)
+	h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef("etl"), policy: "p1"})
 	select {
 	case <-blocking.entered:
 	case <-time.After(5 * time.Second):
@@ -436,7 +311,7 @@ func TestHandlerShutdownReleasesAStubRequestParkedOnAWriteSlot(t *testing.T) {
 		releases = append(releases, rel)
 	}
 
-	h.requestRecommendation(logr.Discard(), nil, jobRef("etl"), "p1", nil)
+	h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef("etl"), policy: "p1"})
 
 	start := time.Now()
 	if err := h.Shutdown(context.Background()); err != nil {
@@ -464,7 +339,7 @@ func TestRequestRecommendationIsRefusedAfterShutdown(t *testing.T) {
 	if err := h.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown on an idle handler: %v", err)
 	}
-	h.requestRecommendation(logr.Discard(), nil, jobRef("etl"), "p1", nil)
+	h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef("etl"), policy: "p1"})
 
 	// beginStubRequest refuses under stubMu, so "no claim recorded" is a
 	// synchronous fact, not a race with a goroutine that may or may not exist.

@@ -3,12 +3,16 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	"golang.org/x/sync/singleflight"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -17,10 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
-	"github.com/noony/k8s-sustain/internal/wlrcache"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // maxAdmissionBodyBytes caps the AdmissionReview payload the webhook decodes.
@@ -93,20 +94,6 @@ type jsonPatch struct {
 	Value json.RawMessage `json:"value,omitempty"`
 }
 
-// allowWithLabelPatch returns an allow response carrying only the owner-name
-// label-mirror patch, if any.
-func allowWithLabelPatch(labelPatch *jsonPatch) *admissionv1.AdmissionResponse {
-	if labelPatch == nil {
-		return &admissionv1.AdmissionResponse{Allowed: true}
-	}
-	b, err := json.Marshal([]jsonPatch{*labelPatch})
-	if err != nil {
-		return &admissionv1.AdmissionResponse{Allowed: true}
-	}
-	pt := admissionv1.PatchTypeJSONPatch
-	return &admissionv1.AdmissionResponse{Allowed: true, Patch: b, PatchType: &pt}
-}
-
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logger := log.FromContext(r.Context())
 
@@ -134,129 +121,95 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// admit processes a single AdmissionRequest. On any error it fails open and
-// allows the pod unmutated.
+// admit decodes the pod, decides what admitting it does, runs the effects the
+// decision calls for and responds. Every path admits the pod.
 func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) *admissionv1.AdmissionResponse {
 	ctx, cancel := context.WithTimeout(ctx, admissionTimeout)
 	defer cancel()
 
 	logger := log.FromContext(ctx).WithValues("namespace", req.Namespace, "name", req.Name, "uid", req.UID)
-	allow := &admissionv1.AdmissionResponse{Allowed: true}
-
 	logger.V(1).Info("admit invoked", "operation", req.Operation, "kind", req.Kind.Kind)
 
+	pod, err := decodePod(req)
+	if err != nil {
+		logger.Error(err, "failed to decode Pod; allowing it unmutated")
+		return respond(nil, admission{reason: reasonUndecodable})
+	}
+	a := h.decideRecovering(ctx, logger, pod)
+	if a.source != "" {
+		RecommendationSourceTotal.WithLabelValues(a.source).Inc()
+	}
+	if a.stub != nil {
+		h.requestRecommendation(logger, *a.stub)
+	}
+	h.logAdmission(logger, a)
+	return respond(pod, a)
+}
+
+func decodePod(req *admissionv1.AdmissionRequest) (*corev1.Pod, error) {
 	if len(req.Object.Raw) == 0 {
-		logger.V(1).Info("admission request has empty Object.Raw, allowing without injection")
-		return allow
+		return nil, errors.New("admission request carries no object")
 	}
 	var pod corev1.Pod
 	if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
-		logger.Error(err, "failed to decode Pod")
-		return allow
+		return nil, err
 	}
 	pod.Namespace = req.Namespace
+	return &pod, nil
+}
 
-	govCtx, govCancel := context.WithTimeout(ctx, governanceTimeout)
-	decision, err := governance.Decide(govCtx, governance.Pod(&pod), admissionReader{h})
-	govCancel()
-	if err != nil {
-		logger.Error(err, "failed to decide which Policy governs the pod; allowing pod without injection")
-		return allow
-	}
-	if decision.OptIn != "" {
-		logger = logger.WithValues("policy", decision.OptIn, "optInLevel", decision.Level)
-	}
-	if !decision.Selected() {
-		// A malformed label selector selects nothing, never a denial.
-		if decision.Refusal == governance.SelectorInvalid {
-			logger.Info("policy has invalid labelSelector; allowing pod without injection (fail-open)")
-		} else {
-			logger.V(1).Info("pod is not governed, allowing without injection", "refusal", decision.Refusal)
+// decideRecovering is decide with a panic turned into an admission like any
+// other. Left to the HTTP middleware it would answer 500, which hands the pod
+// to the webhook's failurePolicy and drops its owner-name label.
+func (h *Handler) decideRecovering(ctx context.Context, logger logr.Logger, pod *corev1.Pod) (a admission) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			reportPanic(logger, panicLabelDecide, rec)
+			a = admission{reason: reasonPanic}
 		}
-		return allow
-	}
+	}()
+	return h.decide(ctx, pod)
+}
 
-	// Mirror the owner-name annotation onto a label so kube-state-metrics
-	// exposes it for the recording rules. Applied even in recommend-only mode.
-	labelPatch := ownerNameLabelPatch(&pod)
-
-	ownerKind, ownerName := decision.Identity.OwnerKind, decision.Identity.OwnerName
-	logger = logger.WithValues("ownerKind", ownerKind, "ownerName", ownerName)
-	if !decision.Governed() {
-		logger.V(1).Info("pod is not governed, allowing without injection", "refusal", decision.Refusal)
-		return allowWithLabelPatch(labelPatch)
+// respond is the only constructor of an admission response, and it always
+// allows the pod. It mirrors a valid owner-name annotation onto the pod's
+// labels whatever the admission decided, because the annotation is the
+// user's own grouping request and kube-state-metrics only exposes labels; it
+// sets resources only on the containers an admission writes. pod is nil when
+// it could not be decoded.
+func respond(pod *corev1.Pod, a admission) *admissionv1.AdmissionResponse {
+	var patches []jsonPatch
+	if p := ownerNameLabelPatch(pod); p != nil {
+		patches = append(patches, *p)
 	}
-	policy := decision.Policy
-	policyName := policy.Name
-	logger.V(1).Info("pod is governed", "mode", *policy.Spec.RightSizing.Update.Types.ModeForKind(ownerKind))
-
-	cacheCtx, cacheCancel := context.WithTimeout(ctx, apiCallTimeout)
-	known, err := h.storedRecommendation(cacheCtx, req.Namespace, ownerKind, ownerName)
-	cacheCancel()
-	if err != nil {
-		RecommendationSourceTotal.WithLabelValues(RecSourceError).Inc()
-		logger.Error(err, "failed to read WorkloadRecommendation; allowing pod with template resources")
-		return allowWithLabelPatch(labelPatch)
-	}
-	reading := wlrcache.Read(known, policyName, time.Now(), h.freshness())
-	// RecommendationSourceTotal counts the read outcome, not whether a patch
-	// is eventually emitted.
-	RecommendationSourceTotal.WithLabelValues(recommendationSource(reading.Verdict)).Inc()
-	observed := wlrcache.BuildObservedResources(pod.Spec.Containers, pod.Spec.InitContainers)
-	if wlrcache.ShouldRequest(known, policyName, observed) {
-		ref := sustainv1alpha1.WorkloadReference{Kind: ownerKind, Namespace: req.Namespace, Name: ownerName}
-		h.requestRecommendation(logger, known, ref, policyName, observed)
-	}
-	if !reading.Verdict.Injects() {
-		logger.V(1).Info("WorkloadRecommendation has nothing to inject; allowing pod with template resources",
-			"verdict", reading.Verdict.String())
-		return allowWithLabelPatch(labelPatch)
-	}
-	recs := reading.Recs
-
-	inj := workload.Inject(pod.Spec.Containers, pod.Spec.InitContainers, policy.Spec.RightSizing.ExcludeInitContainers, recs)
-	filtered := inj.Recs
-	if len(filtered) == 0 {
-		logger.V(1).Info("no recommendations match pod containers, allowing without injection",
-			"podContainers", len(pod.Spec.Containers), "podInitContainers", len(pod.Spec.InitContainers), "recommendations", len(recs))
-		return allowWithLabelPatch(labelPatch)
-	}
-
-	recommendOnly := policy.EffectiveRecommendOnly(h.RecommendOnly)
-
-	if recommendOnly {
-		source := "policy"
-		if h.RecommendOnly {
-			source = "flag"
+	for _, w := range a.writes {
+		path := "/spec/containers/"
+		if w.Init {
+			path = "/spec/initContainers/"
 		}
-		logger.Info("recommend-only: would inject resources", "source", source, "containers", len(filtered), "recommendations", filtered)
-		return allowWithLabelPatch(labelPatch)
+		// Marshalling resource requirements cannot fail, and "add" replaces a
+		// value already at the path.
+		value, _ := json.Marshal(w.Resources)
+		patches = append(patches, jsonPatch{Op: "add", Path: path + strconv.Itoa(w.Index) + "/resources", Value: value})
 	}
-
-	patchBytes, err := buildPatches(inj.Writes, labelPatch)
+	if len(patches) == 0 {
+		return &admissionv1.AdmissionResponse{Allowed: true}
+	}
+	b, err := json.Marshal(patches)
 	if err != nil {
-		logger.Error(err, "failed to build JSON patches")
-		return allowWithLabelPatch(labelPatch)
+		return &admissionv1.AdmissionResponse{Allowed: true}
 	}
-	if patchBytes == nil {
-		logger.V(1).Info("no patch needed (recommendations match current pod spec)")
-		return allow
-	}
-
 	pt := admissionv1.PatchTypeJSONPatch
-	logger.Info("injecting resources", "containers", len(filtered))
-	logger.V(1).Info("injection details", "recommendations", filtered, "patchBytes", len(patchBytes))
-	return &admissionv1.AdmissionResponse{
-		Allowed:   true,
-		Patch:     patchBytes,
-		PatchType: &pt,
-	}
+	return &admissionv1.AdmissionResponse{Allowed: true, Patch: b, PatchType: &pt}
 }
 
 // ownerNameLabelPatch returns the patch mirroring a valid owner-name
 // annotation onto the pod's labels, or nil when there is nothing to mirror.
 // Marshalling a string or a string map cannot fail.
 func ownerNameLabelPatch(pod *corev1.Pod) *jsonPatch {
+	if pod == nil {
+		return nil
+	}
 	v, ok := pod.Annotations[sustainv1alpha1.OwnerNameAnnotation]
 	if !ok || len(apivalidation.IsValidLabelValue(v)) != 0 || pod.Labels[sustainv1alpha1.OwnerNameAnnotation] == v {
 		return nil
@@ -269,30 +222,9 @@ func ownerNameLabelPatch(pod *corev1.Pod) *jsonPatch {
 	return &jsonPatch{Op: "add", Path: "/metadata/labels/" + strings.ReplaceAll(sustainv1alpha1.OwnerNameAnnotation, "/", "~1"), Value: value}
 }
 
-// buildPatches generates an RFC 6902 JSON Patch setting the resources of
-// every container written, plus the owner-name label patch when present.
-func buildPatches(writes []workload.ContainerWrite, labelPatch *jsonPatch) ([]byte, error) {
-	var patches []jsonPatch
-	if labelPatch != nil {
-		patches = append(patches, *labelPatch)
-	}
-	for _, w := range writes {
-		resJSON, err := json.Marshal(w.Resources)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling resources for container %s: %w", w.Name, err)
-		}
-		basePath := "/spec/containers"
-		if w.Init {
-			basePath = "/spec/initContainers"
-		}
-		patches = append(patches, jsonPatch{
-			Op:    "add", // "add" replaces if path already exists
-			Path:  fmt.Sprintf("%s/%d/resources", basePath, w.Index),
-			Value: resJSON,
-		})
-	}
-	if len(patches) == 0 {
-		return nil, nil
-	}
-	return json.Marshal(patches)
+// reportPanic logs a recovered panic with its stack and counts it on
+// PanicTotal under op, which must be a bounded constant.
+func reportPanic(logger logr.Logger, op string, rec any, keysAndValues ...any) {
+	logger.Error(nil, "recovered panic", append([]any{"operation", op, "panic", fmt.Sprint(rec), "stack", string(debug.Stack())}, keysAndValues...)...)
+	PanicTotal.WithLabelValues(op).Inc()
 }

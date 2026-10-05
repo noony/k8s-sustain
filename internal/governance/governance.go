@@ -73,9 +73,8 @@ type Decision struct {
 	OptIn string
 	Level Level
 	// Policy is the governing Policy, nil when Refusal is set.
-	Policy   *sustainv1alpha1.Policy
-	Refusal  Refusal
-	selected bool
+	Policy  *sustainv1alpha1.Policy
+	Refusal Refusal
 }
 
 // Governed reports whether a Policy governs the subject.
@@ -88,11 +87,6 @@ func (d Decision) PolicyName() string {
 	}
 	return d.Policy.Name
 }
-
-// Selected reports whether the Policy the subject opts into exists and
-// accepts its namespace and labels. A governed subject is selected; a selected
-// one is refused only when the Policy does not manage its kind.
-func (d Decision) Selected() bool { return d.selected }
 
 // Subject is the pod template or pod a Decision is about. Its labels are what
 // a Policy's label selector matches, and its annotations are the most
@@ -216,7 +210,6 @@ func (w *walk) decide() (Decision, error) {
 		d.Refusal = refusal
 		return d, nil
 	}
-	d.selected = true
 	if err := w.readOwner(); err != nil {
 		return d, err
 	}
@@ -239,7 +232,6 @@ func (w *walk) departedDecision() (Decision, error) {
 		d.Refusal = refusal
 		return d, nil
 	}
-	d.selected = true
 	if p.Spec.RightSizing.Update.Types.ModeForKind(d.Identity.OwnerKind) == nil {
 		d.Refusal = KindNotManaged
 		return d, nil

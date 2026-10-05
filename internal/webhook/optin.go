@@ -3,7 +3,6 @@ package webhook
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -95,13 +94,7 @@ func sfPanicSafe(logger logr.Logger, op, key string, fn func() (any, error)) fun
 			if rec == nil {
 				return
 			}
-			logger.Error(nil, "recovered panic in singleflight owner resolution",
-				"operation", op,
-				"key", key,
-				"panic", fmt.Sprint(rec),
-				"stack", string(debug.Stack()),
-			)
-			PanicTotal.WithLabelValues(op).Inc()
+			reportPanic(logger, op, rec, "key", key)
 			val, err = nil, fmt.Errorf("panic resolving %s for %s: %v", op, key, rec)
 		}()
 		return fn()
