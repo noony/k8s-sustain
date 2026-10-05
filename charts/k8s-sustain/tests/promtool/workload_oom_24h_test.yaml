@@ -1,0 +1,43 @@
+# Unit test for k8s_sustain:workload_oom_24h, the OOM floor's recency signal.
+#
+# It counts OOM kills per container, so a sibling restarted for another reason
+# is never floored, and it sees the one kill of a Job pod that is never
+# restarted, where the restart counter stays at zero.
+rule_files:
+  - rules-only.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_owner{namespace="shop",pod="api-6f9-a",owner_kind="ReplicaSet",owner_name="api-6f9",owner_is_controller="true"}'
+        values: '1x10'
+      - series: 'kube_replicaset_owner{namespace="shop",replicaset="api-6f9",owner_kind="Deployment",owner_name="api",owner_is_controller="true"}'
+        values: '1x10'
+      # app is OOM-killed and restarted twice.
+      - series: 'kube_pod_container_status_restarts_total{namespace="shop",pod="api-6f9-a",container="app"}'
+        values: '0x1 1x2 2x5'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="shop",pod="api-6f9-a",container="app",reason="OOMKilled"}'
+        values: '_x2 1x8'
+      # Its sidecar is restarted once, for another reason.
+      - series: 'kube_pod_container_status_restarts_total{namespace="shop",pod="api-6f9-a",container="sidecar"}'
+        values: '0x1 1x8'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="shop",pod="api-6f9-a",container="sidecar",reason="Error"}'
+        values: '_x2 1x8'
+      # A standalone Job's pod is OOM-killed once and never restarted.
+      - series: 'kube_pod_owner{namespace="shop",pod="report-x9z",owner_kind="Job",owner_name="report",owner_is_controller="true"}'
+        values: '1x10'
+      - series: 'kube_pod_container_status_restarts_total{namespace="shop",pod="report-x9z",container="worker"}'
+        values: '0x10'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="shop",pod="report-x9z",container="worker",reason="OOMKilled"}'
+        values: '_x2 1x8'
+
+    promql_expr_test:
+      - expr: k8s_sustain:workload_oom_24h
+        eval_time: 10m
+        exp_samples:
+          - labels: 'k8s_sustain:workload_oom_24h{container="app",namespace="shop",owner_kind="Deployment",owner_name="api"}'
+            value: 2
+          - labels: 'k8s_sustain:workload_oom_24h{container="worker",namespace="shop",owner_kind="Job",owner_name="report"}'
+            value: 1
