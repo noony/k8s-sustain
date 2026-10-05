@@ -229,6 +229,8 @@ sum(
 
 Cluster-total CPU savings: sum of `template_request - recommendation`. Uses `k8s_sustain_workload_template_cpu_cores` (the original pod-template request, stable across webhook injection) so savings reflect the gap from the user's original spec, not the injected pod's already-rightsized value.
 
+Both gauges exist only for the live members of the identities a Policy governs, under that Policy, so the savings rules count each member once: a member that is deleted, opts out or becomes part of a Conflicted identity drops out at its Policy's next reconcile, and one that moves to another Policy counts under the new one only, once both have reconciled (see [Series lifecycle](metrics.md#series-lifecycle)).
+
 ### `k8s_sustain:cluster_memory_savings_bytes`
 
 ```promql
@@ -271,7 +273,7 @@ sum by (policy) (
 )
 ```
 
-Per-policy CPU savings. Carries a static `resource="cpu"` label.
+Per-policy CPU savings: the members of the identities the policy governs. Carries a static `resource="cpu"` label.
 
 ### `k8s_sustain:policy_memory_savings_bytes`
 

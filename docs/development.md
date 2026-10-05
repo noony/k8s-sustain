@@ -115,7 +115,7 @@ k8s-sustain/
 ├── internal/
 │   ├── autoscaler/        # HPA / KEDA detection used by recommender + webhook
 │   ├── config/            # Centralized Viper config (flags, env, file)
-│   ├── controller/        # Policy reconciler
+│   ├── controller/        # Policy reconciler: the pass, the ledger, and the publisher of its metric series
 │   ├── dashboard/         # Dashboard HTTP server + embedded Vue SPA (ui/)
 │   ├── governance/        # One decision per pod or pod template: identity, opt-in, governing Policy or refusal
 │   ├── httpx/             # Shared HTTP stack: envelope, middleware, hardened NewServer, shutdown
@@ -128,7 +128,7 @@ k8s-sustain/
 │   │   └── recommendertest/  # In-memory inputs adapter for tests
 │   ├── version/           # Build version
 │   ├── webhook/           # Admission webhook HTTP handler
-│   ├── wlrcache/          # WorkloadRecommendation lifecycle: every write (Request, Ensure, Record) and verdict (Read, Expired)
+│   ├── wlrcache/          # WorkloadRecommendation lifecycle: every write (Request, Ensure, Record) and verdict (Read, Held, Expired)
 │   └── workload/          # Applying a Recommendation: container injection (requests never above limits), the patcher (one rule per kind), template/owner-ref helpers
 ├── charts/
 │   ├── k8s-sustain/          # Operator chart
@@ -430,12 +430,13 @@ identity's `WorkloadRecommendation`, its `status.outcome` and its
 health signal: the board reads them from the coordination stage of the stored
 trace (`coordinationFactorsOf`, through `recommender.TracedCoordination`).
 
-The port works because the controller emits every health metric under the
-identity's labels: `internal/controller/identity_health.go` aggregates the
+The port works because the controller publishes every health metric under
+the identity's labels: `internal/controller/identity_health.go` aggregates the
 apply outcomes of an identity's members (pod counts summed, Blocked if any
-member is) and deletes the series of identities no policy targets any more.
-A new health signal therefore needs both halves: an identity-keyed metric in
-the controller and a field on `identityHealth` filled by the adapter.
+member is), and the [series publisher](#metric-series) deletes the series of
+identities no Policy includes any more. A new health signal therefore needs
+both halves: an identity series in the controller's publication and a field
+on `identityHealth` filled by the adapter.
 
 ## Dashboard frontend
 
@@ -621,7 +622,7 @@ The computation unit is the identity, not the workload object: a group of worklo
 
 #### The Policy pass
 
-`Reconcile` reads the Policy, handles deletion and the finalizer, takes the `inventory.TakeForPolicy` snapshot, and runs one pass over it (`runPass` in `internal/controller/pass.go`). Everything after the pass consumes the **report** it returns, one entry per identity on the work-list (its key, whether it is departed, its outcome, whether its fetch resolved, a departed identity's failure, and one `applyResult` per live member): `settle` hands the member results to the [ledger](#apply-results-and-the-ledger) and returns how many identities failed, the health tracker publishes the identities' series and how many are Blocked, the report's coverage feeds the batch metrics, the sweep runs, `passCondition` derives the `Ready` condition from those counts, and the ledger schedules the requeue. The pass keeps no state between passes, and no step reads another's struct fields: each takes what it needs from the earlier steps' return values, in the order the pass calls them.
+`Reconcile` reads the Policy, handles deletion and the finalizer, takes the `inventory.TakeForPolicy` snapshot, and runs one pass over it (`runPass` in `internal/controller/pass.go`). Everything after the pass consumes the **report** it returns, one entry per identity on the work-list (its key, whether it is departed, its outcome, whether its fetch resolved, a departed identity's failure, one `applyResult` per live member, the Recommendation a live identity holds for the Policy after the pass, and what computing it found: its autoscaler, whether its members disagree on it, and the containers the OOM floor determined): `settle` hands the member results to the [ledger](#apply-results-and-the-ledger) and returns how many identities failed and, per identity, how many members, the health tracker aggregates each live identity's health from the ledger, the [series publisher](#metric-series) publishes what the report, the health and those counts describe, the sweep runs, `passCondition` derives the `Ready` condition from those counts, and the ledger schedules the requeue. The pass keeps no state between passes, and no step reads another's struct fields: each takes what it needs from the earlier steps' return values, in the order the pass calls them.
 
 - **Work-list.** The identities the Policy governs, taken from the inventory as they are: a departed one's containers come from its stored snapshot, and one without a snapshot is left out (counted as `no_snapshot`). Init containers are dropped here, once, when the Policy excludes them. Each live member is a `workloadTarget` (`targetsOf`; a bare-pod identity's governed pods form one), and the [ledger](#apply-results-and-the-ledger) is asked once, before the fetch, which members may run: backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out.
 - **Claim.** `wlrcache.Ensure` for every live identity, with its members' container union as the observed snapshot. It returns the object each decision is recorded into: the one `Ensure` wrote, or the one the inventory read for a departed identity. A failed claim is logged and kept for that identity alone.
@@ -671,9 +672,20 @@ Every choice is decided by the members' names, creation times or an aggregate ov
 
 A bare-pod identity's governed pods form one apply target (`targetsOf`), attributed to the newest pod for events; its pods are resized together and never evicted.
 
-#### Identity health series
+#### Identity health
 
-The health series (`k8s_sustain_workload_pods`, `…_stale_pods`, `…_retry_state`, `…_retry_attempts`) are per identity, aggregated by `healthTracker` from the ledger's state of each of its members, once per pass from the report's live members. It also tells the ledger to forget a member once no Policy claims it. A Conflicted identity is governed by no Policy, so no Policy reports it and its series are deleted on the next reconcile of the Policy that last governed it; the dashboard shows its Conflicted state from the inventory instead.
+An identity's health (its pod counts and the step it is Blocked on) is aggregated by `healthTracker` (`identity_health.go`) from the ledger's state of each of its members, once per pass from the report's live members, and unioned across Policies so an identity moving between two keeps one aggregate. It also tells the ledger to forget a member once no Policy claims it. A Conflicted identity is governed by no Policy, so no Policy reports it; the dashboard shows its Conflicted state from the inventory instead.
+
+#### Metric series
+
+The series publisher (`publisher.go`) is the only code that writes or deletes the controller's per-Policy, per-identity and per-member series; `metrics.go` only declares the vectors. Each pass hands it a `publication` built from the report (`passReport.publication`): the Policy's rollup and fetch coverage, and per identity its health, what computing it found, its failed members, whether it was Too young, and per live member the Recommendation it holds narrowed to its containers. Outside a pass, `Reconcile` reports each reconcile's result and duration, and the OOM watcher's handler reports each kill (`PolicyReconciler.ObserveOOM`) under the Policy it found governing the pod.
+
+The publisher remembers every series it wrote, by owner, and deletes exactly those that nothing desires any more, so there is no hand-kept list of vectors to delete:
+
+- A Policy owns its own series and its members' (`policy` label). Each publication replaces the gauges of the last one; `forget`, on Policy deletion, deletes them all.
+- An identity owns the series without a `policy` label. They live while the last publication of some Policy included the identity, live or departed: its gauges are replaced by every publication that includes it, its counters accumulate, and all go once no Policy includes it, which resets the counters if it comes back. The autoscaler gauges are the exception to replacement: an identity the pass did not compute keeps the ones its last computation set.
+
+A member's Recommendation series show what the identity holds for the Policy (`wlrcache.Held` when the pass recorded nothing new), never only what the pass computed, so a fetch failure or a backoff does not drop them. A new controller series is a field of the publication and a line in `publish`.
 
 ### OOM watcher
 

@@ -36,7 +36,7 @@ Except for the four recommendation gauges below, `namespace`, `owner_kind` and `
 
 `container_kind` is `regular` or `init`, identifying whether the container originated as a regular pod container or an init container (including restartable sidecars). Use it to slice dashboards by container kind.
 
-These four gauges are emitted per member object: `owner_kind` and `owner_name` are the real object's kind and name, even inside an owner-name group.
+These four gauges are emitted per member object: `owner_kind` and `owner_name` are the real object's kind and name, even inside an owner-name group. Every live member of an identity the policy governs has them, for each container its Recommendation names: the one the policy computed this reconcile or, when it computed none (the fetch failed, Prometheus had no data, every member was in retry backoff), the one its `WorkloadRecommendation` kept from the policy's last computation, so a Prometheus outage does not drop the savings. A Recommendation another policy computed is never published under this one.
 
 `k8s_sustain_workload_template_cpu_cores` and `k8s_sustain_workload_template_memory_bytes` record the CPU/memory request from the workload's pod-template spec (the pre-injection value). Stable across webhook injection so savings rules can compare against the template.
 
@@ -75,7 +75,7 @@ These four gauges are emitted per member object: `owner_kind` and `owner_name` a
 - `workload_retry_attempts` — failed applies summed over the identity's members, transient and permanent alike: a permanent failure counts once per reconcile.
 - `policy_workload_count` — live identities the policy governs: an owner-name or bare-pod group counts once however many members it has, a Departed identity does not count, and a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity counts for no policy.
 - `policy_blocked_count` — those identities that are Blocked, i.e. have a `workload_retry_state` series. The policy is not Ready while it is above zero.
-- `autoscaler_present`, `autoscaler_target_configured` — the autoscaler the identity's recommendation is shaped against: the first member, in name order, that an HPA or KEDA ScaledObject targets. The coordination factors it led to are not a metric: they are in the `WorkloadRecommendation`'s [trace](../concepts/recommendation-pipeline.md#trace).
+- `autoscaler_present`, `autoscaler_target_configured` — the autoscaler the identity's recommendation is shaped against: the first member, in name order, that an HPA or KEDA ScaledObject targets. A reconcile that does not compute the identity (its fetch failed, or every member is in retry backoff) leaves them as the last computation set them. The coordination factors it led to are not a metric: they are in the `WorkloadRecommendation`'s [trace](../concepts/recommendation-pipeline.md#trace).
 - `recycle_suppressed_total` — decreases held back by the policy's [`downsizeThreshold`](policy.md#cpudownsizethreshold-memorydownsizethreshold), once per resource per pod per reconcile, summed over the identity's members. Increases are never counted.
 - `group_autoscaler_mismatch_total` — once per reconcile for an [owner-name group](../guides/standalone-pods-and-grouping.md) whose members disagree on autoscaler presence or kind. The group's single recommendation follows the first sorted member's autoscaler, so any non-zero rate is a misconfiguration.
 
@@ -89,13 +89,16 @@ Each reconcile fetches Prometheus data for all of a policy's workloads in one ba
 
 `resolved < requested` with flat `failures_total` is normal (young or quiet workloads). Alert on `failures_total`; treat a low resolved/requested ratio as a data-maturity signal.
 
-#### Series lifetime when a Policy is deleted
+#### Series lifecycle
 
-Every series with a `policy` label is removed by the Policy's `k8s.sustain.io/cleanup` finalizer, together with its `WorkloadRecommendation`s. Recreating a Policy under the same name restarts its counters from zero.
+Each reconcile of a Policy publishes the series it describes and deletes those its previous reconcile published that it no longer does, so no series outlives what it describes:
 
-#### Series lifetime when an identity departs
+- **Series with a `policy` label**: the policy's own (`reconcile_*`, `policy_*`) and the four [recommendation gauges](#recommendations) of its members. A member that is deleted, opts out, leaves the selector, moves to another Policy or becomes part of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity loses its gauges at the policy's next reconcile, and so does a container removed from a member. A workload moved from one Policy to another is therefore published, and summed by the [savings rules](recording-rules.md#k8s_sustainpolicy_cpu_savings_cores), only by the Policy that governs it once both have reconciled.
+- **Identity series**, which carry no `policy` label (`workload_pods`, `workload_stale_pods`, `workload_retry_state`, `workload_retry_attempts`, `autoscaler_present`, `autoscaler_target_configured`, `recommendation_skipped_total`, `oom_floor_applied_total`, `oom_observed_total`, `oom_reaction_latency_seconds`, `recycle_suppressed_total`, `group_autoscaler_mismatch_total`): an identity keeps them while the last reconcile of some Policy included it, live or Departed, so one moving between Policies keeps one set. The gauges describe its live members, so a Departed identity has none. The counters and the histogram keep accumulating until no Policy includes the identity any more: its last member opted out or left every selector, it became Conflicted, or it stayed Departed past `--recommendation-retention` and its `WorkloadRecommendation` was swept, after which its series go at the next reconcile. They are then deleted, so a counter restarts from zero if the identity comes back; `rate()` and `increase()` treat that as a counter reset.
+- `oom_observed_total` is counted by the OOM watcher as a kill happens, between reconciles. It joins the identity's series under the Policy the watcher found governing the pod, and is deleted with them if that Policy's next reconcile does not include the identity.
+- **Deleting a Policy** removes, through its `k8s.sustain.io/cleanup` finalizer and together with its `WorkloadRecommendation`s, every series with its `policy` label and the series of every identity no other Policy includes. Recreating a Policy under the same name restarts its counters from zero.
 
-When no Policy governs an identity any more (its last member was deleted, opted out or left the selector, or its members now opt into different Policies and it is Conflicted), its `workload_pods`, `workload_stale_pods`, `workload_retry_state`, `workload_retry_attempts`, `autoscaler_present`, `autoscaler_target_configured` and `recycle_suppressed_total` series are deleted in the next reconcile, so a departed identity never reports a frozen state.
+`wlr_refresh_total` (labelled by namespace and kind only) and `oom_cache_entries` are never deleted. A restarted controller publishes a Policy's series again at its first reconcile.
 
 #### `k8s_sustain_wlr_refresh_total`
 
