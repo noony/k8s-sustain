@@ -9,7 +9,6 @@ import (
 
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -98,9 +97,6 @@ func (r *PolicyReconciler) reconcileWorkload(
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
 	excludeInit := policy.Spec.RightSizing.ExcludeInitContainers
 	tol := buildTolerance(policy.Spec.RightSizing.ResourcesConfigs)
-	suppressionObserver := func(resource string) {
-		EmitRecycleSuppressed(t.identity(), resource)
-	}
 	containers, initNames := t.recommendableContainers(excludeInit)
 	logger.V(1).Info("reconciling workload",
 		"containers", len(t.Containers),
@@ -151,87 +147,35 @@ func (r *PolicyReconciler) reconcileWorkload(
 		return nil
 	}
 
-	var counts workload.PodCounts
-	applyOpts := []workload.RecycleOption{workload.WithPodCounts(&counts)}
-	// OnCreate never touches running pods; the dry run only measures how many
-	// still wait for a rollout to pick up the recommendation.
-	if t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate {
-		applyOpts = append(applyOpts, workload.WithDryRun())
+	out, err := r.patcher.Apply(ctx, t.member(), recs, workload.ApplySettings{
+		// OnCreate never touches running pods; the dry run only measures how
+		// many still wait for a rollout to pick up the recommendation.
+		DryRun:            t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate,
+		Tolerance:         tol,
+		IgnoreSafeToEvict: policy.Spec.RightSizing.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations,
+	})
+	for resource, n := range out.Suppressed {
+		EmitRecycleSuppressed(t.identity(), resource, n)
 	}
-
-	// Bare-pod identities (Kind == "Pod") are NEVER evicted: no controller
-	// would recreate the pod. In-place resize needs no controller, so on
-	// clusters that support it the running pods are corrected directly —
-	// otherwise a long-running Airflow task would stay on whatever it was
-	// admitted with, forever. Below k8s 1.33 resizeInPlaceTarget is a no-op
-	// and bare pods stay untouched.
-	//
-	// OnCreate bare pods reach this branch only as a dry run (WithDryRun in
-	// applyOpts): they are counted, never resized.
-	if t.Kind == "Pod" {
-		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, &counts, func() (int, error) {
-			return r.resizeBarePods(ctx, t, recs, tol, suppressionObserver, applyOpts...)
-		})
-	}
-
-	// CronJob: never mutate the CronJob spec (would cause GitOps drift) and
-	// never evict job pods (would kill in-flight runs). On clusters that
-	// support InPlacePodVerticalScaling we resize the currently-running job
-	// pods directly; new scheduled runs always pick up the latest resources
-	// from the webhook at admission time.
-	if t.Kind == "CronJob" {
-		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, &counts, func() (int, error) {
-			return r.resizeCronJobPods(ctx, t, recs, tol, suppressionObserver, applyOpts...)
-		})
-	}
-
-	// Standalone Job: never mutate the Job spec and never evict job pods
-	// (killing them discards in-flight work). A standalone Job has no next
-	// run, so resizing the running pod in place is the only way to correct it
-	// after creation. CronJob-owned Jobs never reach here — the inventory
-	// never makes them members and the CronJob branch above handles them.
-	if t.Kind == "Job" {
-		return r.resizeInPlaceTarget(ctx, t, containers, recs, tol, &counts, func() (int, error) {
-			return r.resizeJobPods(ctx, t, recs, tol, suppressionObserver, applyOpts...)
-		})
-	}
-
-	sel, err := metav1.LabelSelectorAsSelector(t.Selector)
 	if err != nil {
-		r.retries.clear(t.key())
-		return err
-	}
-
-	// Identify the target so the patcher only touches pods owned by this
-	// workload — a bare pod or an overlapping selector from a workload that
-	// did not opt in must never be recycled.
-	tw := workload.TargetWorkload{Kind: t.Kind, Name: t.Name}
-	if t.Object != nil {
-		tw.UID = t.Object.GetUID()
-	}
-	logger.V(1).Info("recycling pods", "selector", sel.String())
-	recycled, err := r.patcher.RecyclePods(ctx, tw, t.Namespace, sel, recs,
-		append([]workload.RecycleOption{
-			workload.WithTolerance(tol),
-			workload.WithSuppressionObserver(suppressionObserver),
-			workload.WithIgnoreSafeToEvictAnnotations(policy.Spec.RightSizing.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations),
-		}, applyOpts...)...,
-	)
-	if err != nil {
-		if t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate {
+		switch {
+		case t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate:
 			return r.skipFailedDryRun(ctx, t, err)
+		case out.InPlaceOnly:
+			return r.handleStepError(ctx, t, "resize", t.Kind+" pod resize failed", err)
+		default:
+			return r.handleStepError(ctx, t, "patch", "Pod recycle failed", err)
 		}
-		return r.handleStepError(ctx, t, "patch", "Pod recycle failed", err)
 	}
 
-	r.health.setPods(t.key(), counts)
+	r.health.setPods(t.key(), out.Pods)
 	r.recordStepSuccess(t)
 
 	// The pod template is never patched, so it differs from the recommendation
 	// on every reconcile: only the patcher's count says whether anything
 	// happened. The container list stays a best-effort approximation — the
 	// patcher decides per live pod, the template is all we have here.
-	if recycled == 0 {
+	if out.Changed == 0 {
 		logger.V(1).Info("no pod resized or evicted, no event emitted")
 		return nil
 	}
@@ -239,36 +183,15 @@ func (r *PolicyReconciler) reconcileWorkload(
 	if len(changed) == 0 {
 		return nil
 	}
-	r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
-		"Updated resources on %d pod(s) for containers: %v", recycled, changed)
-	logger.Info("workload resources updated", "containers", changed, "pods", recycled)
-
-	return nil
-}
-
-// resizeInPlaceTarget runs the reconcile tail shared by the CronJob and
-// standalone Job paths. Both resize their currently-running pods in place and
-// never evict them or mutate the workload spec, so the only kind-specific part
-// is the pod enumeration + resize, supplied as resizeFn (it returns the number
-// of pods the API server actually resized). The ResourcesUpdated event is only
-// emitted when at least one pod was resized — the workload spec is never
-// mutated, so changedContainers alone would fire on every reconcile.
-func (r *PolicyReconciler) resizeInPlaceTarget(ctx context.Context, t *workloadTarget, containers []corev1.Container, recs map[string]workload.ContainerRecommendation, tol workload.Tolerance, counts *workload.PodCounts, resizeFn func() (int, error)) error {
-	resized, err := resizeFn()
-	if err != nil {
-		if t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate {
-			return r.skipFailedDryRun(ctx, t, err)
-		}
-		return r.handleStepError(ctx, t, "resize", t.Kind+" pod resize failed", err)
+	if out.InPlaceOnly {
+		r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
+			"In-place resized %d %s pod(s) for containers: %v", out.Changed, strings.ToLower(t.Kind), changed)
+	} else {
+		r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
+			"Updated resources on %d pod(s) for containers: %v", out.Changed, changed)
 	}
-	r.recordStepSuccess(t)
-	r.health.setPods(t.key(), *counts)
-	if resized > 0 {
-		if changed := changedContainers(containers, recs, tol); len(changed) > 0 {
-			r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
-				"In-place resized %d %s pod(s) for containers: %v", resized, strings.ToLower(t.Kind), changed)
-		}
-	}
+	logger.Info("workload resources updated", "containers", changed, "pods", out.Changed)
+
 	return nil
 }
 

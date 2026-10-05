@@ -2,12 +2,14 @@ package workload
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -43,26 +46,6 @@ func evictionInterceptor(evictedNames *[]string) interceptor.Funcs {
 			*evictedNames = append(*evictedNames, obj.GetName())
 			return inner.Delete(ctx, obj)
 		},
-	}
-}
-
-func TestRecyclePods_ExposesPublicMethod(t *testing.T) {
-	p := New(nil, false)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
-		MatchLabels: map[string]string{"app": "test"},
-	})
-
-	defer func() {
-		if r := recover(); r != nil {
-			// nil client causes a panic when listing pods — that's expected
-			// and confirms RecyclePods delegates to the real implementation.
-			t.Logf("recovered expected panic: %v", r)
-		}
-	}()
-
-	_, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, nil)
-	if err == nil {
-		t.Error("expected error with nil client")
 	}
 }
 
@@ -324,16 +307,33 @@ func TestApplyRecommendationsToSidecars_OnlyMutatesRestartableContainers(t *test
 	}
 }
 
-// runningPod is a small builder for pods used by recyclePods tests. The pod
-// is Running and has PodReady=True so the eviction loop's post-eviction wait
-// sees the workload as quiescent — overriding the Conditions in a specific
-// test lets it simulate a Pending replacement or a NotReady peer.
+func testSelector() *metav1.LabelSelector {
+	return &metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}}
+}
+
+// testMember is the DaemonSet every runningPod belongs to. DaemonSet pods carry
+// a direct controller ownerRef, so ownership needs no ReplicaSet read.
+func testMember() Member {
+	return Member{Kind: "DaemonSet", Object: &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "test", UID: "test-uid"},
+		Spec:       appsv1.DaemonSetSpec{Selector: testSelector()},
+	}}
+}
+
+// runningPod is a small builder for pods of testMember. The pod is Running and
+// has PodReady=True so the eviction loop's post-eviction wait sees the workload
+// as quiescent — overriding the Conditions in a specific test lets it simulate
+// a Pending replacement or a NotReady peer.
 func runningPod(name string, requests corev1.ResourceList) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
 			Name:      name,
+			UID:       types.UID("uid-" + name),
 			Labels:    map[string]string{"app": "test"},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "DaemonSet", Name: "test", UID: "test-uid", Controller: ptr.To(true),
+			}},
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{{
@@ -351,9 +351,25 @@ func runningPod(name string, requests corev1.ResourceList) *corev1.Pod {
 	}
 }
 
+func jobMember() Member {
+	return Member{Kind: "Job", Object: &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "batch", UID: "batch-uid"},
+	}}
+}
+
+// jobPod is a runningPod of the Job jobMember names instead of testMember.
+func jobPod(name string, requests corev1.ResourceList) *corev1.Pod {
+	p := runningPod(name, requests)
+	p.Labels[batchv1.JobNameLabel] = "batch"
+	p.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "batch/v1", Kind: "Job", Name: "batch", UID: "batch-uid", Controller: ptr.To(true),
+	}}
+	return p
+}
+
 // On a non-in-place cluster stale pods are evicted; pods already at target are
 // left alone.
-func TestRecyclePods_Eviction_HappyPath(t *testing.T) {
+func TestApply_Eviction_HappyPath(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	fresh := runningPod("fresh", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")})
 
@@ -369,11 +385,10 @@ func TestRecyclePods_Eviction_HappyPath(t *testing.T) {
 		Build()
 
 	p := New(c, false /* not in-place */, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "stale" {
 		t.Errorf("expected only 'stale' evicted, got %v", evicted)
@@ -382,7 +397,7 @@ func TestRecyclePods_Eviction_HappyPath(t *testing.T) {
 
 // The returned count drives the caller's ResourcesUpdated event: it must only
 // count pods actually resized or evicted, never pods already at target.
-func TestRecyclePods_ReturnsChangedCount(t *testing.T) {
+func TestApply_ReturnsChangedCount(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		inPlace bool
@@ -406,15 +421,14 @@ func TestRecyclePods_ReturnsChangedCount(t *testing.T) {
 				Build()
 
 			p := New(c, tc.inPlace, testEvictionOpts()...)
-			sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 			recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-			changed, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs)
+			out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
 			if err != nil {
-				t.Fatalf("RecyclePods: %v", err)
+				t.Fatalf("Apply: %v", err)
 			}
-			if changed != 1 {
-				t.Errorf("changed count = %d, want 1 (only the stale pod)", changed)
+			if out.Changed != 1 {
+				t.Errorf("changed count = %d, want 1 (only the stale pod)", out.Changed)
 			}
 		})
 	}
@@ -423,7 +437,7 @@ func TestRecyclePods_ReturnsChangedCount(t *testing.T) {
 // Terminating and terminal pods are skipped, but Pending ones stay eligible: a
 // pod stuck Pending on an oversized request is exactly what the webhook should
 // re-inject a smaller recommendation for.
-func TestRecyclePods_SkipsTerminatingAndTerminal(t *testing.T) {
+func TestApply_SkipsTerminatingAndTerminal(t *testing.T) {
 	terminating := runningPod("terminating", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	now := metav1.Now()
 	terminating.DeletionTimestamp = &now
@@ -451,11 +465,10 @@ func TestRecyclePods_SkipsTerminatingAndTerminal(t *testing.T) {
 		Build()
 
 	p := New(c, false, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "pending" {
 		t.Errorf("expected only the Pending pod to be evicted, got %v", evicted)
@@ -464,7 +477,7 @@ func TestRecyclePods_SkipsTerminatingAndTerminal(t *testing.T) {
 
 // A 429 from the Eviction API (PDB blocking) is a no-op, not an error, so the
 // next reconcile retries.
-func TestEvictPod_PDBBlocked_ReturnsNil(t *testing.T) {
+func TestApply_Eviction_PDBBlocked_ReturnsNil(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
@@ -485,15 +498,14 @@ func TestEvictPod_PDBBlocked_ReturnsNil(t *testing.T) {
 		Build()
 
 	p := New(c, false)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
 		t.Errorf("expected nil on PDB block, got %v", err)
 	}
 }
 
-func TestEvictPod_NotFound_ReturnsNil(t *testing.T) {
+func TestApply_Eviction_NotFound_ReturnsNil(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
@@ -514,15 +526,14 @@ func TestEvictPod_NotFound_ReturnsNil(t *testing.T) {
 		Build()
 
 	p := New(c, false)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
 		t.Errorf("expected nil on NotFound, got %v", err)
 	}
 }
 
-func TestPatchPodInPlace_HappyPath(t *testing.T) {
+func TestApply_InPlace_HappyPath(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
@@ -551,11 +562,10 @@ func TestPatchPodInPlace_HappyPath(t *testing.T) {
 		Build()
 
 	p := New(c, true /* in-place */)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if !resizeCalled {
 		t.Error("expected /resize subresource patch to be called")
@@ -592,7 +602,7 @@ func withResizeErrorCondition(pod *corev1.Pod) *corev1.Pod {
 // apiserver accepted the resize but it cannot land on the node. The pod is
 // evicted even though the spec looks fresh — the spec lies about what is
 // actually allocated.
-func TestPatchPodInPlace_InfeasibleConditionFallsBackToEviction(t *testing.T) {
+func TestApply_InPlace_InfeasibleConditionFallsBackToEviction(t *testing.T) {
 	stale := withResizePendingCondition(
 		runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
 		corev1.PodReasonInfeasible,
@@ -625,11 +635,10 @@ func TestPatchPodInPlace_InfeasibleConditionFallsBackToEviction(t *testing.T) {
 		Build()
 
 	p := New(c, true, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if resizeCalled {
 		t.Error("did not expect /resize when PodResizePending=Infeasible and spec is at target")
@@ -642,7 +651,7 @@ func TestPatchPodInPlace_InfeasibleConditionFallsBackToEviction(t *testing.T) {
 // The kubelet does not retry an errored resize on its own, so without this
 // eviction the pod runs on its old allocation forever while the spec claims the
 // target.
-func TestPatchPodInPlace_ErroredResizeFallsBackToEviction(t *testing.T) {
+func TestApply_InPlace_ErroredResizeFallsBackToEviction(t *testing.T) {
 	stale := withResizeErrorCondition(
 		runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
 	)
@@ -674,11 +683,10 @@ func TestPatchPodInPlace_ErroredResizeFallsBackToEviction(t *testing.T) {
 		Build()
 
 	p := New(c, true, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if resizeCalled {
 		t.Error("did not expect /resize when the staged resize already errored")
@@ -690,7 +698,7 @@ func TestPatchPodInPlace_ErroredResizeFallsBackToEviction(t *testing.T) {
 
 // An Infeasible verdict for an OLD target must not block a NEW recommendation:
 // the kubelet re-evaluates a resubmitted resize, and a lower request may fit.
-func TestPatchPodInPlace_InfeasibleWithNewTargetRetriesResize(t *testing.T) {
+func TestApply_InPlace_InfeasibleWithNewTargetRetriesResize(t *testing.T) {
 	// Spec carries 400m (the old, infeasible target); the new recommendation
 	// is 200m, which the node may well be able to satisfy.
 	stale := withResizePendingCondition(
@@ -723,11 +731,10 @@ func TestPatchPodInPlace_InfeasibleWithNewTargetRetriesResize(t *testing.T) {
 		Build()
 
 	p := New(c, true, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if !resizeCalled {
 		t.Error("expected /resize with the NEW target despite stale Infeasible verdict")
@@ -739,7 +746,7 @@ func TestPatchPodInPlace_InfeasibleWithNewTargetRetriesResize(t *testing.T) {
 
 // NotFound from /resize means the pod went away between List and patch: no
 // direct pod patch, no eviction, no error.
-func TestPatchPodInPlace_ResizeNotFoundSkips(t *testing.T) {
+func TestApply_InPlace_ResizeNotFoundSkips(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
@@ -772,11 +779,10 @@ func TestPatchPodInPlace_ResizeNotFoundSkips(t *testing.T) {
 		Build()
 
 	p := New(c, true)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if !resizeCalled {
 		t.Error("expected /resize attempt")
@@ -793,7 +799,7 @@ func TestPatchPodInPlace_ResizeNotFoundSkips(t *testing.T) {
 // means THIS resize is invalid for THIS pod (QoS class change, memory-limit
 // decrease under a NotRequired policy). The pod is evicted, but in-place mode
 // must stay enabled: every other pod still gets its own /resize try.
-func TestPatchPodInPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
+func TestApply_InPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
 	stale1 := runningPod("stale1", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	stale2 := runningPod("stale2", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
@@ -830,11 +836,10 @@ func TestPatchPodInPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
 		Build()
 
 	p := New(c, true, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 2 {
 		t.Errorf("expected both pods to be evicted after IsInvalid; got %v", evicted)
@@ -851,13 +856,16 @@ func TestPatchPodInPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
 
 // A sidecar resize failure (older cluster, gate disabled for sidecars) must not
 // fail the reconcile: regular containers are still patched in place.
-func TestPatchPodInPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
+func TestApply_InPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
 	always := corev1.ContainerRestartPolicyAlways
 	stale := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "default",
 			Name:      "stale-with-sidecar",
 			Labels:    map[string]string{"app": "test"},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1", Kind: "DaemonSet", Name: "test", UID: "test-uid", Controller: ptr.To(true),
+			}},
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{{
@@ -921,13 +929,12 @@ func TestPatchPodInPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
 		Build()
 
 	p := New(c, true)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{
 		"app":     {CPURequest: qtyp("200m")},
 		"sidecar": {CPURequest: qtyp("100m")},
 	}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
 		t.Fatalf("sidecar rejection should be best-effort, got: %v", err)
 	}
 	if !regularResizeOK {
@@ -946,7 +953,7 @@ func TestPatchPodInPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
 
 // A deferred resize on a spec already at target is left alone: the kubelet
 // applies it when conditions allow.
-func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
+func TestApply_InPlace_DeferredIsNoOp(t *testing.T) {
 	// Spec already at the recommended 200m: the resize was accepted but the
 	// kubelet is waiting for room to apply it.
 	stale := withResizePendingCondition(
@@ -979,11 +986,10 @@ func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
 		Build()
 
 	p := New(c, true)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if resizeCalled || evictionCalled {
 		t.Errorf("expected no-op when resize Deferred (resize=%v, eviction=%v)", resizeCalled, evictionCalled)
@@ -992,7 +998,7 @@ func TestPatchPodInPlace_DeferredIsNoOp(t *testing.T) {
 
 // A Deferred verdict for an OLD target must not block a NEW recommendation: the
 // kubelet re-evaluates the deferred resize against the new values.
-func TestPatchPodInPlace_DeferredWithNewTargetPatches(t *testing.T) {
+func TestApply_InPlace_DeferredWithNewTargetPatches(t *testing.T) {
 	stale := withResizePendingCondition(
 		runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("400m")}),
 		corev1.PodReasonDeferred,
@@ -1023,11 +1029,10 @@ func TestPatchPodInPlace_DeferredWithNewTargetPatches(t *testing.T) {
 		Build()
 
 	p := New(c, true)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if !resizeCalled {
 		t.Error("expected /resize with the NEW target despite Deferred verdict on the old one")
@@ -1039,7 +1044,7 @@ func TestPatchPodInPlace_DeferredWithNewTargetPatches(t *testing.T) {
 
 // applyRecToContainer compares before setting, so a pod already at target must
 // submit no patch at all rather than an empty one every cycle.
-func TestPatchPodInPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
+func TestApply_InPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
 	fresh := runningPod("fresh", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")})
 
 	scheme := runtime.NewScheme()
@@ -1071,11 +1076,10 @@ func TestPatchPodInPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
 		Build()
 
 	p := New(c, true)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if resizeCalled || podPatchCalled || evictionCalled {
 		t.Errorf("expected zero patches for pod already at target (resize=%v, patch=%v, eviction=%v)",
@@ -1085,7 +1089,7 @@ func TestPatchPodInPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
 
 // A pod deleted between List and patch is a no-op: NotFound must not surface as
 // a reconcile error, trigger an eviction, or disable in-place mode.
-func TestPatchPodInPlace_PodGoneDuringResize_NoError(t *testing.T) {
+func TestApply_InPlace_PodGoneDuringResize_NoError(t *testing.T) {
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
@@ -1116,10 +1120,9 @@ func TestPatchPodInPlace_PodGoneDuringResize_NoError(t *testing.T) {
 		Build()
 
 	p := New(c, true)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
 		t.Fatalf("expected NotFound on a vanished pod to be a no-op, got: %v", err)
 	}
 	if evictionCalled {
@@ -1130,8 +1133,8 @@ func TestPatchPodInPlace_PodGoneDuringResize_NoError(t *testing.T) {
 	}
 }
 
-func TestResizePodsInPlace_HappyPath(t *testing.T) {
-	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+func TestApply_InPlaceOnly_HappyPath(t *testing.T) {
+	stale := jobPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -1160,26 +1163,26 @@ func TestResizePodsInPlace_HappyPath(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{stale}, recs)
+	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
 	if err != nil {
-		t.Fatalf("ResizePodsInPlace: %v", err)
+		t.Fatalf("Apply: %v", err)
 	}
 	if !resizeCalled {
 		t.Error("expected /resize subresource patch to be called")
 	}
 	if evictionCalled {
-		t.Error("ResizePodsInPlace must never evict")
+		t.Error("a Job pod must never be evicted")
 	}
-	if resized != 1 {
-		t.Errorf("resized count = %d, want 1", resized)
+	if out.Changed != 1 {
+		t.Errorf("resized count = %d, want 1", out.Changed)
 	}
 }
 
 // The returned count must reflect resizes the API server accepted, or the
 // caller reports a ResourcesUpdated event for a resize that never happened.
-func TestResizePodsInPlace_ReturnsAppliedCount(t *testing.T) {
-	ok := runningPod("ok", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
-	rejected := runningPod("rejected", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+func TestApply_InPlaceOnly_ReturnsAppliedCount(t *testing.T) {
+	ok := jobPod("ok", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	rejected := jobPod("rejected", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -1201,20 +1204,20 @@ func TestResizePodsInPlace_ReturnsAppliedCount(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{ok, rejected}, recs)
+	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
 	if err != nil {
-		t.Fatalf("ResizePodsInPlace: %v", err)
+		t.Fatalf("Apply: %v", err)
 	}
-	if resized != 1 {
-		t.Errorf("resized count = %d, want 1 (the Invalid-rejected pod must not be counted)", resized)
+	if out.Changed != 1 {
+		t.Errorf("resized count = %d, want 1 (the Invalid-rejected pod must not be counted)", out.Changed)
 	}
 }
 
 // A Job pod whose resize errored during actuation is left alone — never
 // evicted, never counted. The next run inherits the resources via the webhook.
-func TestResizePodsInPlace_ErroredResizeSkipsNoEviction(t *testing.T) {
+func TestApply_InPlaceOnly_ErroredResizeSkipsNoEviction(t *testing.T) {
 	pod := withResizeErrorCondition(
-		runningPod("errored", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
+		jobPod("errored", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
 	)
 
 	scheme := runtime.NewScheme()
@@ -1244,19 +1247,19 @@ func TestResizePodsInPlace_ErroredResizeSkipsNoEviction(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{pod}, recs)
+	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
 	if err != nil {
-		t.Fatalf("ResizePodsInPlace: %v", err)
+		t.Fatalf("Apply: %v", err)
 	}
-	if resizeCalled || evictionCalled || resized != 0 {
-		t.Errorf("expected errored Job pod left alone (resize=%v, eviction=%v, resized=%d)", resizeCalled, evictionCalled, resized)
+	if resizeCalled || evictionCalled || out.Changed != 0 {
+		t.Errorf("expected errored Job pod left alone (resize=%v, eviction=%v, resized=%d)", resizeCalled, evictionCalled, out.Changed)
 	}
 }
 
 // With inPlace=false there is no eviction fallback: Job pods must finish on
 // their existing resources, and the next run inherits new ones via the webhook.
-func TestResizePodsInPlace_NoOpWhenInPlaceDisabled(t *testing.T) {
-	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+func TestApply_InPlaceOnly_NoOpWhenInPlaceDisabled(t *testing.T) {
+	stale := jobPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -1285,22 +1288,22 @@ func TestResizePodsInPlace_NoOpWhenInPlaceDisabled(t *testing.T) {
 	p := New(c, false /* inPlace disabled */)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{stale}, recs)
+	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
 	if err != nil {
-		t.Fatalf("ResizePodsInPlace: %v", err)
+		t.Fatalf("Apply: %v", err)
 	}
-	if anyCall || resized != 0 {
-		t.Errorf("ResizePodsInPlace must no-op (no API calls, count 0) when inPlace is disabled; resized=%d", resized)
+	if anyCall || out.Changed != 0 {
+		t.Errorf("a Job pod must be left alone (no API calls, count 0) when inPlace is disabled; resized=%d", out.Changed)
 	}
 }
 
-func TestResizePodsInPlace_SkipsTerminatingAndNonRunning(t *testing.T) {
+func TestApply_InPlaceOnly_SkipsTerminatingAndNonRunning(t *testing.T) {
 	deletionTime := metav1.Now()
-	terminating := runningPod("terminating", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	terminating := jobPod("terminating", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	terminating.DeletionTimestamp = &deletionTime
 	terminating.Finalizers = []string{"k8s-sustain.io/test"}
 
-	pending := runningPod("pending", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	pending := jobPod("pending", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	pending.Status.Phase = corev1.PodPending
 
 	scheme := runtime.NewScheme()
@@ -1324,20 +1327,20 @@ func TestResizePodsInPlace_SkipsTerminatingAndNonRunning(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{terminating, pending}, recs)
+	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
 	if err != nil {
-		t.Fatalf("ResizePodsInPlace: %v", err)
+		t.Fatalf("Apply: %v", err)
 	}
-	if resizeCalled || resized != 0 {
-		t.Errorf("expected no /resize call and count 0 for terminating or non-Running pods; resized=%d", resized)
+	if resizeCalled || out.Changed != 0 {
+		t.Errorf("expected no /resize call and count 0 for terminating or non-Running pods; resized=%d", out.Changed)
 	}
 }
 
 // Job pods are never evicted, so an Infeasible resize on a spec already at
 // target is left alone; the next run inherits the resources via the webhook.
-func TestResizePodsInPlace_InfeasibleSkipsNoEviction(t *testing.T) {
+func TestApply_InPlaceOnly_InfeasibleSkipsNoEviction(t *testing.T) {
 	pod := withResizePendingCondition(
-		runningPod("infeasible", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
+		jobPod("infeasible", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
 		corev1.PodReasonInfeasible,
 	)
 
@@ -1368,23 +1371,23 @@ func TestResizePodsInPlace_InfeasibleSkipsNoEviction(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{pod}, recs)
+	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
 	if err != nil {
-		t.Fatalf("ResizePodsInPlace: %v", err)
+		t.Fatalf("Apply: %v", err)
 	}
-	if resizeCalled || resized != 0 {
-		t.Errorf("did not expect /resize (or a non-zero count) for Infeasible status; resized=%d", resized)
+	if resizeCalled || out.Changed != 0 {
+		t.Errorf("did not expect /resize (or a non-zero count) for Infeasible status; resized=%d", out.Changed)
 	}
 	if evictionCalled {
-		t.Error("ResizePodsInPlace must never evict, even on Infeasible")
+		t.Error("a Job pod must never be evicted, even on Infeasible")
 	}
 }
 
 // An Infeasible verdict on an old target must not stop a NEW recommendation
 // from being submitted — the kubelet re-evaluates the new values.
-func TestResizePodsInPlace_InfeasibleWithNewTargetRetries(t *testing.T) {
+func TestApply_InPlaceOnly_InfeasibleWithNewTargetRetries(t *testing.T) {
 	pod := withResizePendingCondition(
-		runningPod("infeasible", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("400m")}),
+		jobPod("infeasible", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("400m")}),
 		corev1.PodReasonInfeasible,
 	)
 
@@ -1415,22 +1418,22 @@ func TestResizePodsInPlace_InfeasibleWithNewTargetRetries(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{pod}, recs)
+	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
 	if err != nil {
-		t.Fatalf("ResizePodsInPlace: %v", err)
+		t.Fatalf("Apply: %v", err)
 	}
-	if !resizeCalled || resized != 1 {
-		t.Errorf("expected /resize with the NEW target despite stale Infeasible verdict; resized=%d", resized)
+	if !resizeCalled || out.Changed != 1 {
+		t.Errorf("expected /resize with the NEW target despite stale Infeasible verdict; resized=%d", out.Changed)
 	}
 	if evictionCalled {
-		t.Error("ResizePodsInPlace must never evict")
+		t.Error("a Job pod must never be evicted")
 	}
 }
 
 // An Invalid response is a per-pod verdict: skip that pod without evicting it,
 // and without disabling in-place mode for the others.
-func TestResizePodsInPlace_PerPodInvalidSkipsWithoutDisabling(t *testing.T) {
-	pod := runningPod("rejected", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+func TestApply_InPlaceOnly_PerPodInvalidSkipsWithoutDisabling(t *testing.T) {
+	pod := jobPod("rejected", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -1459,15 +1462,15 @@ func TestResizePodsInPlace_PerPodInvalidSkipsWithoutDisabling(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{pod}, recs)
+	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
 	if err != nil {
-		t.Fatalf("ResizePodsInPlace: %v", err)
+		t.Fatalf("Apply: %v", err)
 	}
 	if evictionCalled {
-		t.Error("ResizePodsInPlace must never evict, even on per-pod Invalid")
+		t.Error("a Job pod must never be evicted, even on per-pod Invalid")
 	}
-	if resized != 0 {
-		t.Errorf("Invalid-rejected pod must not be counted as resized; resized=%d", resized)
+	if out.Changed != 0 {
+		t.Errorf("Invalid-rejected pod must not be counted as resized; resized=%d", out.Changed)
 	}
 	if !p.InPlace() {
 		t.Error("per-pod Invalid on /resize must NOT disable in-place mode")
@@ -1476,8 +1479,8 @@ func TestResizePodsInPlace_PerPodInvalidSkipsWithoutDisabling(t *testing.T) {
 
 // NotFound from /resize (pod gone between List and patch) skips without
 // eviction, is not counted as resized, and attempts no direct pod patch.
-func TestResizePodsInPlace_PodGoneSkips(t *testing.T) {
-	pod := runningPod("gone", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+func TestApply_InPlaceOnly_PodGoneSkips(t *testing.T) {
+	pod := jobPod("gone", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -1510,12 +1513,12 @@ func TestResizePodsInPlace_PodGoneSkips(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{pod}, recs)
+	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
 	if err != nil {
-		t.Fatalf("ResizePodsInPlace: %v", err)
+		t.Fatalf("Apply: %v", err)
 	}
-	if evictionCalled || podPatchCalled || resized != 0 {
-		t.Errorf("expected gone pod to be skipped (patch=%v, eviction=%v, resized=%d)", podPatchCalled, evictionCalled, resized)
+	if evictionCalled || podPatchCalled || out.Changed != 0 {
+		t.Errorf("expected gone pod to be skipped (patch=%v, eviction=%v, resized=%d)", podPatchCalled, evictionCalled, out.Changed)
 	}
 }
 
@@ -1530,9 +1533,17 @@ func statefulSetPod(name string, requests corev1.ResourceList) *corev1.Pod {
 		APIVersion: "apps/v1",
 		Kind:       "StatefulSet",
 		Name:       "web",
+		UID:        "sts-uid",
 		Controller: &controller,
 	}}
 	return p
+}
+
+func statefulSetMember() Member {
+	return Member{Kind: "StatefulSet", Object: &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web", UID: "sts-uid"},
+		Spec:       appsv1.StatefulSetSpec{Selector: testSelector()},
+	}}
 }
 
 // statefulSetEvictionInterceptor mimics the StatefulSet controller: when a
@@ -1585,7 +1596,7 @@ func statefulSetEvictionInterceptor(evictedNames *[]string, recs map[string]Cont
 // wait must recognise a replacement that reuses the evicted name under a new
 // UID — keyed on name, the wait would never see it and every recycle would
 // finish only via the readyTimeout fallback.
-func TestRecyclePods_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
+func TestApply_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	pods := []*corev1.Pod{
 		statefulSetPod("web-0", stale),
@@ -1611,17 +1622,17 @@ func TestRecyclePods_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
 		Build()
 
 	p := New(c, false, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
+	target := statefulSetMember()
 
 	// Each waitForReplacement call must return promptly because the replacement
 	// is already Ready at observation time. A regression would take
 	// readyTimeout * 3, which the deadline below catches early.
 	start := time.Now()
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), target, recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
-		t.Errorf("RecyclePods took %s; replacements should be detected immediately (bug 1 regression?)", elapsed)
+		t.Errorf("Apply took %s; replacements should be detected immediately (bug 1 regression?)", elapsed)
 	}
 
 	want := []string{"web-2", "web-1", "web-0"}
@@ -1643,7 +1654,8 @@ func TestSortPodsForRecycle_DetectsStatefulSetFromAnyPod(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	// pods[0] has NO ownerRef. pods[1..3] carry the StatefulSet ownerRef.
 	// The expected order is descending ordinal among the four pods.
-	orphan := runningPod("web-2", stale) // no ownerRef
+	orphan := runningPod("web-2", stale)
+	orphan.OwnerReferences = nil
 	owned1 := statefulSetPod("web-0", stale)
 	owned10 := statefulSetPod("web-10", stale)
 	owned1b := statefulSetPod("web-1", stale)
@@ -1665,7 +1677,7 @@ func TestSortPodsForRecycle_DetectsStatefulSetFromAnyPod(t *testing.T) {
 
 // An eviction that happens inside the in-place path's Invalid fallback must
 // still go through the outer loop's post-eviction wait.
-func TestRecyclePods_InPlaceInvalidFallback_WaitsForReplacement(t *testing.T) {
+func TestApply_InPlaceInvalidFallback_WaitsForReplacement(t *testing.T) {
 	stale1 := runningPod("a", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
 	stale1.UID = types.UID("uid-a")
 
@@ -1712,11 +1724,10 @@ func TestRecyclePods_InPlaceInvalidFallback_WaitsForReplacement(t *testing.T) {
 		Build()
 
 	p := New(c, true /* in-place */, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 
 	if len(evicted) != 1 || evicted[0] != "a" {
@@ -1739,7 +1750,7 @@ func TestRecyclePods_InPlaceInvalidFallback_WaitsForReplacement(t *testing.T) {
 
 // Non-StatefulSet pods evict alphabetically. The order matters less than the
 // determinism, for operators reading logs and for tests.
-func TestRecyclePods_DefaultOrderIsAlphabetical(t *testing.T) {
+func TestApply_DefaultOrderIsAlphabetical(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	pods := []*corev1.Pod{
 		runningPod("c", stale),
@@ -1763,11 +1774,10 @@ func TestRecyclePods_DefaultOrderIsAlphabetical(t *testing.T) {
 		Build()
 
 	p := New(c, false, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	want := []string{"a", "b", "c"}
 	if len(evicted) != len(want) {
@@ -1784,7 +1794,7 @@ func TestRecyclePods_DefaultOrderIsAlphabetical(t *testing.T) {
 // A CrashLoopBackOff in the selector halts the loop: otherwise a bad
 // recommendation cascades through every pod in the workload before the next
 // reconcile can revise it.
-func TestRecyclePods_CrashLoopBackOffAbortsLoop(t *testing.T) {
+func TestApply_CrashLoopBackOffAbortsLoop(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	pod1 := runningPod("a", stale)
 	pod2 := runningPod("b", stale)
@@ -1810,13 +1820,12 @@ func TestRecyclePods_CrashLoopBackOffAbortsLoop(t *testing.T) {
 		Build()
 
 	p := New(c, false, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
 	// Expect a non-nil error (the abort) and exactly one eviction (the first
 	// pod) — the loop must NOT continue to evict pod "b" while a peer is
 	// crashlooping.
-	_, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs)
+	_, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
 	if err == nil {
 		t.Fatal("expected error surfacing CrashLoopBackOff abort, got nil")
 	}
@@ -1828,7 +1837,7 @@ func TestRecyclePods_CrashLoopBackOffAbortsLoop(t *testing.T) {
 // The wait looks for a quiescent selector, not for the pre-eviction Ready-count
 // baseline: an HPA scale-down concurrent with an eviction would otherwise block
 // the loop until readyTimeout.
-func TestRecyclePods_HPAScaleDownDoesNotStallEvictionLoop(t *testing.T) {
+func TestApply_HPAScaleDownDoesNotStallEvictionLoop(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	// Mark the surviving peer as Ready so isProgressing returns false. The
 	// HPA-scaled-down case: pre-eviction had {a, b}; we evict 'a'; HPA does
@@ -1854,11 +1863,10 @@ func TestRecyclePods_HPAScaleDownDoesNotStallEvictionLoop(t *testing.T) {
 		Build()
 
 	p := New(c, false, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	// Both pods should be evicted in order — the wait between them must not
 	// stall on a baseline that can never be reached after HPA scale-down.
@@ -1869,7 +1877,7 @@ func TestRecyclePods_HPAScaleDownDoesNotStallEvictionLoop(t *testing.T) {
 
 // When no replacement comes up the loop must abort rather than evict into a
 // broken state: only the first pod goes, the rest wait for the next reconcile.
-func TestRecyclePods_TimesOutWhenReplacementMissing(t *testing.T) {
+func TestApply_TimesOutWhenReplacementMissing(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	pod1 := runningPod("a", stale)
 	pod2 := runningPod("b", stale)
@@ -1896,10 +1904,9 @@ func TestRecyclePods_TimesOutWhenReplacementMissing(t *testing.T) {
 		Build()
 
 	p := New(c, false, WithReadyPollInterval(5*time.Millisecond), WithReadyTimeout(50*time.Millisecond))
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	_, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs)
+	_, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
 	if err == nil {
 		t.Fatal("expected timeout error when replacement never appears, got nil")
 	}
@@ -1923,6 +1930,13 @@ func replicaSetOwnedPod(name, rsName string, requests corev1.ResourceList) *core
 		Controller: &controller,
 	}}
 	return p
+}
+
+func deploymentMember(name string, uid types.UID) Member {
+	return Member{Kind: "Deployment", Object: &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: name, UID: uid},
+		Spec:       appsv1.DeploymentSpec{Selector: testSelector()},
+	}}
 }
 
 // replicaSetOwnedBy is a builder for ReplicaSets controlled by a Deployment
@@ -1949,12 +1963,13 @@ func replicaSetOwnedBy(name, deployName string, deployUID types.UID) *appsv1.Rep
 // and a pod behind another Deployment's ReplicaSet must be left untouched. The
 // ReplicaSet→owner lookup is memoized per pass: one GET per distinct
 // ReplicaSet, not per pod.
-func TestRecyclePods_Eviction_SkipsPodsNotOwnedByTarget(t *testing.T) {
+func TestApply_Eviction_SkipsPodsNotOwnedByTarget(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	owned1 := replicaSetOwnedPod("owned-1", "web-abc", stale)
 	owned2 := replicaSetOwnedPod("owned-2", "web-abc", stale)
 	foreign := replicaSetOwnedPod("zz-foreign", "other-abc", stale)
 	bare := runningPod("zz-bare-debug", stale)
+	bare.OwnerReferences = nil
 
 	targetRS := replicaSetOwnedBy("web-abc", "web", "dep-uid")
 	otherRS := replicaSetOwnedBy("other-abc", "other", "other-dep-uid")
@@ -1980,12 +1995,11 @@ func TestRecyclePods_Eviction_SkipsPodsNotOwnedByTarget(t *testing.T) {
 		Build()
 
 	p := New(c, false /* eviction path */, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-	target := TargetWorkload{Kind: "Deployment", Name: "web", UID: "dep-uid"}
+	target := deploymentMember("web", "dep-uid")
 
-	if _, err := p.RecyclePods(context.Background(), target, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), target, recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	want := []string{"owned-1", "owned-2"}
 	if len(evicted) != len(want) || evicted[0] != want[0] || evicted[1] != want[1] {
@@ -2008,7 +2022,7 @@ func TestRecyclePods_Eviction_SkipsPodsNotOwnedByTarget(t *testing.T) {
 
 // The same ownership filter on the in-place path: only a pod whose controller
 // ownerRef UID matches the target is resized.
-func TestRecyclePods_InPlace_SkipsPodsNotOwnedByTarget(t *testing.T) {
+func TestApply_InPlace_SkipsPodsNotOwnedByTarget(t *testing.T) {
 	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
 	owned := statefulSetPod("web-0", stale)
 	owned.OwnerReferences[0].UID = "sts-uid"
@@ -2016,6 +2030,7 @@ func TestRecyclePods_InPlace_SkipsPodsNotOwnedByTarget(t *testing.T) {
 	other.OwnerReferences[0].Name = "web2"
 	other.OwnerReferences[0].UID = "other-sts-uid"
 	bare := runningPod("bare-debug", stale)
+	bare.OwnerReferences = nil
 
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -2044,12 +2059,11 @@ func TestRecyclePods_InPlace_SkipsPodsNotOwnedByTarget(t *testing.T) {
 		Build()
 
 	p := New(c, true /* in-place */)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-	target := TargetWorkload{Kind: "StatefulSet", Name: "web", UID: "sts-uid"}
+	target := statefulSetMember()
 
-	if _, err := p.RecyclePods(context.Background(), target, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), target, recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if len(resized) != 1 || resized[0] != "web-0" {
 		t.Errorf("expected only the owned pod web-0 resized, got %v", resized)
@@ -2059,7 +2073,7 @@ func TestRecyclePods_InPlace_SkipsPodsNotOwnedByTarget(t *testing.T) {
 	}
 }
 
-func TestRecyclePods_SuppressesSmallDecrease(t *testing.T) {
+func TestApply_SuppressesSmallDecrease(t *testing.T) {
 	// Pod at 1000m CPU. Rec 995m (-5m) is below the band max(50m,10m)=50m.
 	pod := runningPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m")})
 	scheme := runtime.NewScheme()
@@ -2069,26 +2083,22 @@ func TestRecyclePods_SuppressesSmallDecrease(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).
 		WithInterceptorFuncs(evictionInterceptor(&evicted)).Build()
 	p := New(c, false, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("995m")}}
 
-	var observed []string
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
-		WithTolerance(tol5),
-		WithSuppressionObserver(func(r string) { observed = append(observed, r) })); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{Tolerance: tol5})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 0 {
 		t.Fatalf("sub-threshold decrease must not evict, got %v", evicted)
 	}
-	// The suppressed decrease must be reported to the observer — the controller's
-	// metric depends on it firing.
-	if len(observed) != 1 || observed[0] != "cpu" {
-		t.Fatalf("expected observer to report [cpu], got %v", observed)
+	// The controller's suppression metric is fed from this count.
+	if want := map[string]int{"cpu": 1}; !maps.Equal(out.Suppressed, want) {
+		t.Fatalf("suppressed = %v, want %v", out.Suppressed, want)
 	}
 }
 
-func TestRecyclePods_AppliesIncrease(t *testing.T) {
+func TestApply_AppliesIncrease(t *testing.T) {
 	pod := runningPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m")})
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -2097,12 +2107,10 @@ func TestRecyclePods_AppliesIncrease(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).
 		WithInterceptorFuncs(evictionInterceptor(&evicted)).Build()
 	p := New(c, false, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("1010m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
-		WithTolerance(tol5)); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{Tolerance: tol5}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 1 {
 		t.Fatalf("increase must recycle, got %v", evicted)
@@ -2110,10 +2118,10 @@ func TestRecyclePods_AppliesIncrease(t *testing.T) {
 }
 
 // The in-place path honours the downsize tolerance: a sub-threshold decrease
-// produces no /resize patch and is reported to the observer.
-func TestResizePodsInPlace_SuppressesSmallDecrease(t *testing.T) {
+// produces no /resize patch and is counted as suppressed.
+func TestApply_InPlaceOnly_SuppressesSmallDecrease(t *testing.T) {
 	// Pod at 1000m CPU. Rec 995m (-5m) is below the band max(50m,10m)=50m.
-	pod := runningPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m")})
+	pod := jobPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m")})
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	_ = policyv1.AddToScheme(scheme)
@@ -2130,32 +2138,29 @@ func TestResizePodsInPlace_SuppressesSmallDecrease(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("995m")}}
 
-	var observed []string
-	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{pod}, recs,
-		WithTolerance(tol5),
-		WithSuppressionObserver(func(r string) { observed = append(observed, r) }))
+	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5})
 	if err != nil {
-		t.Fatalf("ResizePodsInPlace: %v", err)
+		t.Fatalf("Apply: %v", err)
 	}
 	if resizeCalled {
 		t.Error("sub-threshold decrease must not trigger an in-place resize")
 	}
-	if resized != 0 {
-		t.Errorf("resized count = %d, want 0", resized)
+	if out.Changed != 0 {
+		t.Errorf("resized count = %d, want 0", out.Changed)
 	}
-	if len(observed) != 1 || observed[0] != "cpu" {
-		t.Fatalf("expected observer to report [cpu], got %v", observed)
+	if want := map[string]int{"cpu": 1}; !maps.Equal(out.Suppressed, want) {
+		t.Fatalf("suppressed = %v, want %v", out.Suppressed, want)
 	}
 }
 
 // Tolerance is per-dimension: when CPU crosses the threshold but memory does
 // not, the patch carries the new CPU request only and memory alone is reported
 // suppressed.
-func TestResizePodsInPlace_MixedRecAppliesCrossingDimensionOnly(t *testing.T) {
+func TestApply_InPlaceOnly_MixedRecAppliesCrossingDimensionOnly(t *testing.T) {
 	// current CPU 1000m, memory 1Gi (1024Mi).
 	// rec CPU 900m: delta 100m >= band max(50m,10m)=50m -> applied.
 	// rec memory 1000Mi: delta 24Mi < band max(51Mi,15Mi)=51Mi -> suppressed (kept 1Gi).
-	pod := runningPod("p", corev1.ResourceList{
+	pod := jobPod("p", corev1.ResourceList{
 		corev1.ResourceCPU:    resource.MustParse("1000m"),
 		corev1.ResourceMemory: resource.MustParse("1Gi"),
 	})
@@ -2175,15 +2180,12 @@ func TestResizePodsInPlace_MixedRecAppliesCrossingDimensionOnly(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("900m"), MemoryRequest: qtyp("1000Mi")}}
 
-	var observed []string
-	resized, err := p.ResizePodsInPlace(context.Background(), []*corev1.Pod{pod}, recs,
-		WithTolerance(tol5),
-		WithSuppressionObserver(func(r string) { observed = append(observed, r) }))
+	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5})
 	if err != nil {
-		t.Fatalf("ResizePodsInPlace: %v", err)
+		t.Fatalf("Apply: %v", err)
 	}
-	if resized != 1 {
-		t.Fatalf("resized count = %d, want 1 (CPU crosses threshold)", resized)
+	if out.Changed != 1 {
+		t.Fatalf("resized count = %d, want 1 (CPU crosses threshold)", out.Changed)
 	}
 	if patched == nil {
 		t.Fatal("expected a /resize patch carrying the CPU change")
@@ -2195,8 +2197,8 @@ func TestResizePodsInPlace_MixedRecAppliesCrossingDimensionOnly(t *testing.T) {
 	if got.Memory().Cmp(resource.MustParse("1Gi")) != 0 {
 		t.Errorf("memory request = %s, want 1Gi unchanged (sub-threshold decrease suppressed)", got.Memory().String())
 	}
-	if len(observed) != 1 || observed[0] != "memory" {
-		t.Fatalf("expected observer to report [memory] only, got %v", observed)
+	if want := map[string]int{"memory": 1}; !maps.Equal(out.Suppressed, want) {
+		t.Fatalf("suppressed = %v, want %v (memory only)", out.Suppressed, want)
 	}
 }
 
@@ -2210,7 +2212,7 @@ func withSafeToEvictAnnotation(pod *corev1.Pod, value string) *corev1.Pod {
 	return pod
 }
 
-func TestRecyclePods_SafeToEvictFalseBlocksEviction(t *testing.T) {
+func TestApply_SafeToEvictFalseBlocksEviction(t *testing.T) {
 	blocked := withSafeToEvictAnnotation(
 		runningPod("blocked", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}), "false")
 	stale := runningPod("stale", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
@@ -2227,18 +2229,17 @@ func TestRecyclePods_SafeToEvictFalseBlocksEviction(t *testing.T) {
 		Build()
 
 	p := New(c, false, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "stale" {
 		t.Errorf("expected only 'stale' evicted (annotated pod skipped), got %v", evicted)
 	}
 }
 
-func TestRecyclePods_SafeToEvictIgnoredWhenOptionSet(t *testing.T) {
+func TestApply_SafeToEvictIgnoredWhenOptionSet(t *testing.T) {
 	blocked := withSafeToEvictAnnotation(
 		runningPod("blocked", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}), "false")
 
@@ -2254,12 +2255,10 @@ func TestRecyclePods_SafeToEvictIgnoredWhenOptionSet(t *testing.T) {
 		Build()
 
 	p := New(c, false, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs,
-		WithIgnoreSafeToEvictAnnotations(true)); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{IgnoreSafeToEvict: true}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "blocked" {
 		t.Errorf("expected 'blocked' evicted with ignore option, got %v", evicted)
@@ -2267,7 +2266,7 @@ func TestRecyclePods_SafeToEvictIgnoredWhenOptionSet(t *testing.T) {
 }
 
 // Only the literal value "false" blocks eviction, matching cluster-autoscaler.
-func TestRecyclePods_SafeToEvictNonFalseValueDoesNotBlock(t *testing.T) {
+func TestApply_SafeToEvictNonFalseValueDoesNotBlock(t *testing.T) {
 	safeTrue := withSafeToEvictAnnotation(
 		runningPod("safe-true", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}), "true")
 	garbage := withSafeToEvictAnnotation(
@@ -2285,11 +2284,10 @@ func TestRecyclePods_SafeToEvictNonFalseValueDoesNotBlock(t *testing.T) {
 		Build()
 
 	p := New(c, false, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 2 {
 		t.Errorf("expected both pods evicted (annotation not 'false'), got %v", evicted)
@@ -2297,7 +2295,7 @@ func TestRecyclePods_SafeToEvictNonFalseValueDoesNotBlock(t *testing.T) {
 }
 
 // The safe-to-evict gate covers the in-place path's eviction fallback too.
-func TestPatchPodInPlace_InfeasibleFallbackHonorsSafeToEvict(t *testing.T) {
+func TestApply_InPlace_InfeasibleFallbackHonorsSafeToEvict(t *testing.T) {
 	blocked := withSafeToEvictAnnotation(
 		withResizePendingCondition(
 			runningPod("blocked", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}),
@@ -2316,11 +2314,10 @@ func TestPatchPodInPlace_InfeasibleFallbackHonorsSafeToEvict(t *testing.T) {
 		Build()
 
 	p := New(c, true /* in-place */, testEvictionOpts()...)
-	sel, _ := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"app": "test"}})
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.RecyclePods(context.Background(), TargetWorkload{}, "default", sel, recs); err != nil {
-		t.Fatalf("RecyclePods: %v", err)
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 0 {
 		t.Errorf("expected no eviction for annotated pod, got %v", evicted)

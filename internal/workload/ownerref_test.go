@@ -79,6 +79,28 @@ func TestPodOwnedByWorkload(t *testing.T) {
 	}
 }
 
+func TestIsOwnedBy_ControllerRefMatch(t *testing.T) {
+	uid := types.UID("cj-uid")
+	tests := []struct {
+		name string
+		refs []metav1.OwnerReference
+		want bool
+	}{
+		{"empty", nil, false},
+		{"different uid", []metav1.OwnerReference{{Controller: ptr.To(true), UID: "other"}}, false},
+		{"matching uid but not controller", []metav1.OwnerReference{{Controller: ptr.To(false), UID: uid}}, false},
+		{"matching uid with controller", []metav1.OwnerReference{{Controller: ptr.To(true), UID: uid}}, true},
+		{"controller nil", []metav1.OwnerReference{{UID: uid}}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsOwnedBy(tc.refs, uid); got != tc.want {
+				t.Errorf("IsOwnedBy = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestApplyOwnerNameOverride(t *testing.T) {
 	tests := []struct {
 		name        string

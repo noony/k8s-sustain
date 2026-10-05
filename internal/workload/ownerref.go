@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	apivalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
@@ -131,6 +132,44 @@ func PodOwnedByWorkload(ctx context.Context, c client.Client, pod *corev1.Pod, u
 	owned := IsOwnedBy(rs.OwnerReferences, uid)
 	rsOwned[ref.Name] = owned
 	return owned, nil
+}
+
+// activeJobsOf returns the Jobs the CronJob controls (controller ownerRef)
+// that are neither Complete nor Failed.
+func activeJobsOf(ctx context.Context, c client.Reader, cj *batchv1.CronJob) ([]batchv1.Job, error) {
+	var list batchv1.JobList
+	if err := c.List(ctx, &list, client.InNamespace(cj.Namespace)); err != nil {
+		return nil, err
+	}
+	var out []batchv1.Job
+	for i := range list.Items {
+		j := &list.Items[i]
+		if IsOwnedBy(j.OwnerReferences, cj.UID) && !JobFinished(j) {
+			out = append(out, *j)
+		}
+	}
+	return out, nil
+}
+
+// podsOfJob returns the Job's pods, found by the job-name label and confirmed
+// by controller ownerRef UID: the label alone is no proof of ownership, any
+// pod can carry it.
+func podsOfJob(ctx context.Context, c client.Reader, job *batchv1.Job) ([]*corev1.Pod, error) {
+	var list corev1.PodList
+	if err := c.List(ctx, &list, client.InNamespace(job.Namespace), client.MatchingLabels{batchv1.JobNameLabel: job.Name}); err != nil {
+		return nil, err
+	}
+	out := make([]*corev1.Pod, 0, len(list.Items))
+	for i := range list.Items {
+		pod := &list.Items[i]
+		if !IsOwnedBy(pod.OwnerReferences, job.UID) {
+			log.FromContext(ctx).Info("skipping pod carrying job-name label but not owned by job",
+				"pod", pod.Name, "namespace", pod.Namespace, "job", job.Name)
+			continue
+		}
+		out = append(out, pod)
+	}
+	return out, nil
 }
 
 // ApplyOwnerNameOverride applies the k8s.sustain.io/owner-name annotation

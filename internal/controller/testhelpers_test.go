@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -74,9 +75,15 @@ func makeReconciler(t *testing.T, objs ...runtime.Object) *PolicyReconciler {
 	return &PolicyReconciler{Client: c.Build(), Scheme: scheme}
 }
 
+// controllerRef is the controller ownerReference to the kind/name object the
+// helpers below build, whose UID is always name-uid.
+func controllerRef(kind, name string) []metav1.OwnerReference {
+	return []metav1.OwnerReference{{Kind: kind, Name: name, UID: types.UID(name + "-uid"), Controller: ptr.To(true)}}
+}
+
 func annotatedDeployment(ns, name, policy string) *appsv1.Deployment {
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: types.UID(name + "-uid")},
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
 			Template: corev1.PodTemplateSpec{
@@ -92,7 +99,7 @@ func annotatedDeployment(ns, name, policy string) *appsv1.Deployment {
 
 func annotatedCronJob(ns, name, policy string) *batchv1.CronJob {
 	return &batchv1.CronJob{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: types.UID(name + "-uid")},
 		Spec: batchv1.CronJobSpec{
 			Schedule: "* * * * *",
 			JobTemplate: batchv1.JobTemplateSpec{
@@ -127,7 +134,7 @@ func annotatedJob(ns, name, policy string) *batchv1.Job {
 
 func annotatedRollout(ns, name, policy string) *rolloutsv1alpha1.Rollout {
 	return &rolloutsv1alpha1.Rollout{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: types.UID(name + "-uid")},
 		Spec: rolloutsv1alpha1.RolloutSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
 			Template: corev1.PodTemplateSpec{
@@ -233,6 +240,8 @@ func policyForReconcileWorkload(t *testing.T, name string) *sustainv1alpha1.Poli
 	}
 }
 
+// deploymentTarget is the apply target of Deployment ns/name, whose pods are
+// labelled app=name and carry controllerRef("Deployment", name).
 func deploymentTarget(ns, name string) *workloadTarget {
 	return &workloadTarget{
 		Kind:         "Deployment",
@@ -240,7 +249,6 @@ func deploymentTarget(ns, name string) *workloadTarget {
 		Namespace:    ns,
 		IdentityKind: "Deployment",
 		IdentityName: name,
-		Selector:     &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
 		Containers: []corev1.Container{{
 			Name: "app",
 			Resources: corev1.ResourceRequirements{
@@ -250,7 +258,10 @@ func deploymentTarget(ns, name string) *workloadTarget {
 				},
 			},
 		}},
-		Object: &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}},
+		Object: &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: types.UID(name + "-uid")},
+			Spec:       appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}}},
+		},
 	}
 }
 
@@ -309,7 +320,7 @@ func reconcilerCountingWLRStatusWrites(
 func targetFromObject(obj client.Object, kind string) workloadTarget {
 	m := inventory.Member{Object: obj}
 	name := obj.GetName()
-	if tmpl, _, ok := workload.PodTemplateOf(obj); ok {
+	if tmpl, ok := workload.PodTemplateOf(obj); ok {
 		m.Containers, m.InitContainers = tmpl.Spec.Containers, tmpl.Spec.InitContainers
 		_, name = workload.ApplyOwnerNameOverride(kind, name, tmpl.Annotations)
 	}
@@ -372,4 +383,89 @@ func runComputeAndApply(ctx context.Context, r *PolicyReconciler, policy *sustai
 	}
 	r.health.emit(policy.Name, r.retries)
 	return err
+}
+
+// barePod builds a running bare pod opted into policy "p" under the
+// owner-name identity ownerName, with the owner-name label the webhook
+// mirrors at admission.
+func barePod(ns, name, ownerName string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      name,
+			UID:       types.UID(name + "-uid"),
+			Annotations: map[string]string{
+				sustainv1alpha1.PolicyAnnotation:    "p",
+				sustainv1alpha1.OwnerNameAnnotation: ownerName,
+			},
+			Labels: map[string]string{sustainv1alpha1.OwnerNameAnnotation: ownerName},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "worker",
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
+			},
+		}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// barePodTarget builds the target the way Reconcile does — an inventory
+// snapshot of the namespace's pods, then targetsOf under policy "p" — so
+// membership comes from the production rule rather than being hand-assembled.
+// pods is everything the cluster holds, including pods of other identities and
+// pods the rule disqualifies, which must not end up as members.
+func barePodTarget(t *testing.T, ns, ownerName string, pods ...*corev1.Pod) *workloadTarget {
+	t.Helper()
+	ongoing := sustainv1alpha1.UpdateModeOngoing
+	objs := []client.Object{ongoingPolicy("p", sustainv1alpha1.UpdateTypes{Pod: &ongoing})}
+	for _, p := range pods {
+		objs = append(objs, p.DeepCopy())
+	}
+	c := fake.NewClientBuilder().WithScheme(testFullScheme(t)).WithObjects(objs...).Build()
+	snap, err := inventory.Take(context.Background(), c, inventory.Options{})
+	if err != nil {
+		t.Fatalf("inventory: %v", err)
+	}
+	if id, ok := snap.Lookup(identityOf(ns, "Pod", ownerName)); ok {
+		if targets := targetsOf(id, "p", ongoing); len(targets) == 1 {
+			return targets[0]
+		}
+	}
+	return &workloadTarget{Kind: "Pod", Name: ownerName, Namespace: ns, IdentityKind: "Pod", IdentityName: ownerName}
+}
+
+// podRecorder records which pods received a /resize subresource patch and
+// which were evicted.
+type podRecorder struct {
+	resized map[string]bool
+	evicted map[string]bool
+}
+
+// recordPods rewires r onto a fake cluster holding objs whose resizes and
+// evictions are recorded, never applied.
+func recordPods(t *testing.T, r *PolicyReconciler, objs ...client.Object) *podRecorder {
+	t.Helper()
+	rec := &podRecorder{resized: map[string]bool{}, evicted: map[string]bool{}}
+	r.Client = fake.NewClientBuilder().
+		WithScheme(r.Scheme).
+		WithStatusSubresource(&sustainv1alpha1.Policy{}, &sustainv1alpha1.WorkloadRecommendation{}).
+		WithObjects(objs...).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if _, ok := obj.(*corev1.Pod); ok && sub == "resize" {
+					rec.resized[obj.GetName()] = true
+				}
+				return nil
+			},
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub == "eviction" {
+					rec.evicted[obj.GetName()] = true
+				}
+				return nil
+			},
+		}).
+		Build()
+	r.patcher = workload.New(r.Client, r.InPlaceUpdates)
+	return rec
 }

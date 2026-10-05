@@ -347,10 +347,10 @@ func TestEmitWorkloadFromRecs_EmptyRecsIsNoOp(t *testing.T) {
 
 func TestEmitRecycleSuppressed(t *testing.T) {
 	before := testutil.ToFloat64(recycleSuppressedTotal.WithLabelValues("ns", "Deployment", "web", "cpu"))
-	EmitRecycleSuppressed(testIdentity("ns", "Deployment", "web"), "cpu")
+	EmitRecycleSuppressed(testIdentity("ns", "Deployment", "web"), "cpu", 2)
 	after := testutil.ToFloat64(recycleSuppressedTotal.WithLabelValues("ns", "Deployment", "web", "cpu"))
-	if after-before != 1 {
-		t.Fatalf("counter not incremented: before=%v after=%v", before, after)
+	if after-before != 2 {
+		t.Fatalf("counter must grow by the pods counted: before=%v after=%v", before, after)
 	}
 }
 
