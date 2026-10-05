@@ -437,14 +437,33 @@ container, Kubernetes restarts it, and the cycle repeats.
   i.e. ≥ ~115Mi before headroom.
 - `k8s_sustain_oom_floor_applied_total{owner_name="stress"}` increments on
   each reconcile while the OOM is within the 24 h window, and the
-  `WorkloadRecommendation`'s `status.trace.stress.memory.oomFloor` shows the
-  floor with `determined: true`.
+  `WorkloadRecommendation`'s `status.trace.stress.memory.request` holds an
+  `oomFloor` stage with the fact `determined: "true"`.
 
 ```bash
 kubectl get wlrec -n scenario-oom-kill deployment-stress -o yaml
 kubectl --raw \
   /api/v1/namespaces/k8s-sustain/services/k8s-sustain-metrics:8080/proxy/metrics \
   | grep 'k8s_sustain_oom_floor_applied_total'
+```
+
+### `oom-kill-keep-limit`
+
+The `oom-kill` workload under a Policy that keeps the memory limit
+(`keepLimit`), with a burst that overshoots the 96Mi limit by less. The OOM
+floor lifts the memory request above the limit the container keeps, so the
+limit has to follow it ([ADR 0005](../adr/0005-a-limit-never-falls-below-its-request.md)).
+
+**Expected:**
+
+- The `WorkloadRecommendation` holds a memory limit equal to the memory
+  request, and `status.trace.stress.memory.limit` ends with a `guard` stage
+  after `keepLimit`.
+- The pod is resized (or replaced) with that limit instead of being rejected
+  for a request above its limit, and the OOM kills stop.
+
+```bash
+kubectl get wlrec -n scenario-oom-kill-keep-limit deployment-stress -o yaml
 ```
 
 ### `qos-change`

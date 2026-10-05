@@ -7,3 +7,4 @@ Decisions that shape how the code is structured, recorded when they were made. A
 | [0001](0001-single-identity-is-a-batch-of-one.md) | A single identity is a batch of one | Accepted |
 | [0002](0002-conflicted-identity-freezes-its-recommendation.md) | A Conflicted identity freezes its recommendation | Accepted, refined by 0003 |
 | [0003](0003-a-recommendation-is-served-only-to-its-policy.md) | A Recommendation is served only to its Policy | Accepted |
+| [0005](0005-a-limit-never-falls-below-its-request.md) | A limit never falls below its request | Accepted |

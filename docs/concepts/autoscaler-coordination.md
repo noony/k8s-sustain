@@ -135,14 +135,16 @@ spec:
 ## Observability
 
 The factors applied are recorded per container in the identity's
-`WorkloadRecommendation`, in `status.trace.<container>.<cpu|memory>.coordination`:
-`overheadFactor`, `replicaFactor` (CPU, with a `replicaBudgetAnchor`), the
-request they `scaled` to and the `value` after the min/max clamp is applied
-again (see [Trace](recommendation-pipeline.md#trace)). The dashboard shows them
-as the **Coordinated** badge on the workload list and detail page.
+`WorkloadRecommendation`, as the `coordination` stage of
+`status.trace.<container>.<cpu|memory>.request`: its `value` is the request
+after the min/max clamp is applied again, and its facts are `overheadFactor`,
+`replicaFactor` (CPU, with a `replicaBudgetAnchor`) and, when that clamp
+capped it, the request the factors `scaled` to (see
+[Trace](recommendation-pipeline.md#trace)). The dashboard shows them as the
+**Coordinated** badge on the workload list and detail page.
 
 ```bash
-kubectl get wlrec -n example deployment-web -o jsonpath='{.status.trace.app.cpu.coordination}'
+kubectl get wlrec -n example deployment-web -o jsonpath='{.status.trace.app.cpu.request[?(@.stage=="coordination")]}'
 ```
 
 `k8s_sustain_autoscaler_present` and `k8s_sustain_autoscaler_target_configured`

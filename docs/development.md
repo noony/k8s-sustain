@@ -329,12 +329,16 @@ A [signal](concepts/recommendation-pipeline.md#signals) is one module of
 `internal/recommender` (`signal_usage.go` holds the CPU and memory usage
 signals, `signal_oom.go` the OOM floor) implementing the `signal` interface in
 `signal.go`: its query and shard cost, how it collects samples into
-per-container values, its failure policy, where its stage runs (`slot`: base or
-adjuster, CPU or memory), its contribution to a container's request, and its
-trace entry. `PromInputs` fetches every signal in the `signals` list, and
-`Compute` runs their stages in a fixed order: base signals, adjusters,
-headroom and clamp, coordination, limit. Neither has a line specific to any
-signal. To add one:
+per-container values, its failure policy, whether its values excuse a Too
+young identity from the age gate (`excusesAge`), where its stage runs (`slot`:
+base, adjuster or limit adjuster, CPU or memory), its contribution to a
+container's request or limit, and its trace stage. `PromInputs` fetches every
+signal in the `signals` list, and `Compute` runs one chain per resource in a
+fixed order: on the request side base signals, adjusters, headroom, clamp and
+coordination; on the limit side the Policy's limit strategy, limit adjusters
+and the guard (`limit.go`). Neither has a line specific to any signal: the age
+gate asks every signal, and live OOM kills reach the OOM floor through the
+inputs port (`WithLiveOOMs`), not through `Compute`. To add one:
 
 1. Write `internal/recommender/signal_<name>.go`. Build its PromQL from the
    `internal/prometheus` primitives (`Shard.Selector`, `Shard.MetricsSelector`,
@@ -343,20 +347,30 @@ signal. To add one:
    every signal shares. Give its per-container values a field in
    `WorkloadInputs`, which is what `recommendertest.StaticInputs` serves
 2. List it in `signals` (`internal/recommender/signal.go`). Within a role,
-   stages run in list order
-3. If it reads new Policy settings or records a new trace entry, add the
-   fields to `api/v1alpha1` (`ResourcesConfigs`, `ResourceTrace`), then run
-   `make generate manifests`
+   stages run in list order. A base signal or adjuster shapes the request; a
+   limit adjuster may only raise the limit the strategy set, never remove it
+   or give one to a container without, and the guard still raises a limit
+   left below the request
+3. Its trace stage is a `TraceStage` it builds itself: its name, the value it
+   contributed and any facts as key/values. The trace is a list, so a new
+   stage needs no CRD, `api.ts` or dashboard change (the dashboard shows an
+   unknown stage under its own name; add a display name to
+   `RecommendationTrace.vue` if you want a nicer one). A consumer that needs
+   one of its facts reads it through a function of the signal's module, as
+   the controller reads the OOM floor's with `TracedOOMFloor`. If it reads new
+   Policy settings, add the fields to `api/v1alpha1` (`ResourcesConfigs`),
+   then run `make generate manifests`
 4. If it reads a new recording rule, add the name to
    `internal/prometheus/metricnames.go` and the rule to
    `charts/k8s-sustain/values.yaml` under `prometheusRule.groups`, and document
    it in [Recording Rules](reference/recording-rules.md)
 5. Test it at its own interface, next to `signal_usage_test.go` and
    `signal_oom_test.go`: the query built from settings, the values collected
-   from `ShardSample`s, its failure policy, its contribution and trace entry.
-   Test what it does to a whole recommendation through `Compute`.
-   `signal_test.go` shows that a signal defined only in a test is fetched and
-   computed from its list entry alone
+   from `ShardSample`s, its failure policy, its contribution and trace stage.
+   Test what it does to a whole recommendation through `Compute`, at a fixed
+   `Request.Now`. `signal_test.go` shows that a signal defined only in a test
+   is fetched, and computed on the limit side with its own trace stage, from
+   its list entry alone
 6. Add it to the signals table in
    [Recommendation Pipeline](concepts/recommendation-pipeline.md#signals) and
    describe its stage there
@@ -394,8 +408,8 @@ count and the controller agree on members, containers, age, Departed and the
 governing Policy. The detail page shows the Recommendation stored in the
 identity's `WorkloadRecommendation`, its `status.outcome` and its
 `status.trace`; only the Simulator recomputes. Coordination factors are not a
-health signal: the board reads them from the stored trace
-(`coordinationFactorsOf`).
+health signal: the board reads them from the coordination stage of the stored
+trace (`coordinationFactorsOf`, through `recommender.TracedCoordination`).
 
 The port works because the controller emits every health metric under the
 identity's labels: `internal/controller/identity_health.go` aggregates the
@@ -583,8 +597,8 @@ The computation unit is the identity, not the workload object: a group of worklo
 `Reconcile` runs inventory → discover → recommendation pass → persist → apply → rollup → sweep. The pass (`internal/controller/recommendation_pass.go`) gives every identity on the work-list exactly one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff). It owns the three things that used to be spread across `Reconcile`:
 
 - **The backoff split, taken once.** Backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out. The pass records which members to apply and which it skipped, and the apply step uses that split.
-- **The fetch.** One `InputsFetcher` call per policy; the pass never sees shards, retries or the fallback ([ADR 0001](adr/0001-single-identity-is-a-batch-of-one.md)).
-- **The computation.** `recommender.Compute` decides everything about one identity from its inputs, its live OOM records and its age (the inventory's `Since`): the age gate, then every container through the stages of every [signal](#adding-a-recommendation-signal). Its OOM floor signal merges the live records the controller reads from the OOM watcher's cache with the Prometheus window and is the one place that decides whether a kill is recent, for both the bypass of the age gate and the memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the value after every stage that ran; `persist` stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read it. Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new trace field.
+- **The fetch.** One `InputsFetcher` call per policy; the pass never sees shards, retries or the fallback ([ADR 0001](adr/0001-single-identity-is-a-batch-of-one.md)). The controller's fetcher is `PromInputs` decorated by `recommender.WithLiveOOMs`, which merges the kills the OOM watcher's cache holds into each identity's OOM inputs after the fetch; the dashboard uses the undecorated port.
+- **The computation.** `recommender.Compute` decides everything about one identity from its inputs and its age (the inventory's `Since`), as of one instant per pass taken once the fetch returns (`Request.Now`; nothing in the recommender reads the clock): the age gate, then every container through the chain of stages of every [signal](#adding-a-recommendation-signal). The OOM floor signal is the one place that decides whether a kill is recent, for both its answer to the age gate and the memory floor; the decorator decides whether a live record is still within `LiveOOMWindow`. The dashboard's simulations call the same function, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the list of stages that ran on the request and the limit; `persist` stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read its OOM floor stage (`recommender.TracedOOMFloor`). Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new stage or fact.
 
 The batch metrics are counted from the outcomes, not from the fetch's internals. `persist` records every outcome but "not fetched" with `wlrcache.Record`, departed or not, keeping the last Recommendation for every outcome but `Computed`. A live identity whose record failed — its object could not be ensured, or the write was rejected — keeps the error on its result (`identityResult.recordErr`), and `apply` skips its members that cycle, counting them as failed: the replacement pods of an eviction would read the old value. Departed identities have nothing to apply, so `persist` counts their failures itself.
 

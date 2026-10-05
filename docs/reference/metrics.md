@@ -49,7 +49,7 @@ These four gauges are emitted per member object: `owner_kind` and `owner_name` a
 | `k8s_sustain_oom_cache_entries`             | gauge   | — |
 
 - `recommendation_skipped_total` — recommendations not emitted, by `reason`. `workload_too_young`: the identity is younger than the 10-minute [workload-age gate](../concepts/recommendation-pipeline.md#stages).
-- `oom_floor_applied_total` — memory recommendations whose final request the OOM floor (`max(peak_24h, oom_time_limit × 1.20)` plus headroom, after an OOM in the last 24h) determined: it beat the percentile and no min/max clamp, before or after autoscaler coordination, replaced it. Matches `oomFloor.determined` in the [trace](../concepts/recommendation-pipeline.md#trace).
+- `oom_floor_applied_total` — memory recommendations whose final request the OOM floor (`max(peak_24h, oom_time_limit × 1.20)` plus headroom, after an OOM in the last 24h) determined: it beat the percentile and no min/max clamp, before or after autoscaler coordination, replaced it. Read from the `determined` fact of the `oomFloor` stage in the [trace](../concepts/recommendation-pipeline.md#trace).
 - `oom_observed_total`, `oom_reaction_latency_seconds`, `oom_cache_entries` — from the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher): deduped OOM kills, delay from `TerminatedAt` to the responding recommendation, and current cache size.
 
 ### Drift, retry, autoscaler

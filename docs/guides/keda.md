@@ -53,7 +53,7 @@ Each reconcile that finds an autoscaler emits an `AutoscalerDetected` event on t
 kubectl get events -n example --field-selector reason=AutoscalerDetected
 ```
 
-With coordination enabled, the workload's `WorkloadRecommendation` records the applied multiplier as `overheadFactor` in `status.trace.<container>.<cpu|memory>.coordination`, and the dashboard shows it on the **Coordinated** badge:
+With coordination enabled, the workload's `WorkloadRecommendation` records the applied multiplier as the `overheadFactor` fact of the `coordination` stage in `status.trace.<container>.<cpu|memory>.request`, and the dashboard shows it on the **Coordinated** badge:
 
 ```bash
 kubectl get wlrec -n example deployment-web -o jsonpath='{.status.trace}'

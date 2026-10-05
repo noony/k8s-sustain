@@ -189,15 +189,17 @@ Configures recommendations for CPU and memory independently.
 
 #### `cpu.limits` / `memory.limits`
 
-At most one of the following fields may be set (enforced by CRD validation). If none is set, the existing limit is kept unchanged.
+At most one of the following fields may be set (enforced by CRD validation). If none is set, the existing limit is kept, as with `keepLimit`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `keepLimit` | bool | Leave the existing limit unchanged |
-| `keepLimitRequestRatio` | bool | Preserve the current limit-to-request ratio (e.g. if limit was 2× request, it stays 2× the new request) |
+| `keepLimit` | bool | Keep the existing limit, unless it is below the new request: then it is raised to the request |
+| `keepLimitRequestRatio` | bool | Preserve the current limit-to-request ratio (e.g. if limit was 2× request, it stays 2× the new request). A container without a request or a limit has no ratio and keeps its limit, or keeps having none |
 | `equalsToRequest` | bool | Set the limit equal to the new request (Guaranteed QoS) |
 | `noLimit` | bool | Remove the limit entirely |
 | `requestsLimitsRatio` | float64 | Set limit = request × ratio (e.g. `1.5` sets limit to 150% of request). Must be `>= 1`. |
+
+Whatever the strategy, a limit never ends below the request: the apiserver rejects such a pod, so a kept limit the new request outgrows (an OOM floor, headroom, `minAllowed` or autoscaler coordination can each push it there) is raised to the request. The request is never lowered to fit the limit. The `WorkloadRecommendation`'s trace records the raise as its `guard` stage ([ADR 0005](../adr/0005-a-limit-never-falls-below-its-request.md)).
 
 #### `cpu.downsizeThreshold` / `memory.downsizeThreshold`
 

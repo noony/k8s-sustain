@@ -99,40 +99,60 @@ status:
                                     # member; exempt from the staleness check, see below
   containers:
     app:
-      cpuRequest: 250m
-      memoryRequest: 256Mi
-      cpuLimit: 500m
-      memoryLimit: 512Mi
+      cpuRequest: 314m
+      memoryRequest: 264Mi
+      cpuLimit: 628m
+      memoryLimit: 264Mi
       removeCpuLimit: false         # true when the policy says NoLimit
       removeMemoryLimit: false
   trace:                            # how each container's values were derived
     app:
       cpu:
-        percentile: 227500u         # usage percentile of the busiest pod
-        withHeadroom: 228m          # + headroom, rounded up
-        clamped: 228m               # after minAllowed/maxAllowed
-        coordination:               # only when an autoscaler shapes it
-          overheadFactor: 1.375     # 110 / HPA target (80%)
-          scaled: 314m
+        request:                    # the stages that ran, in order
+        - stage: percentile         # usage percentile of the busiest pod
+          value: 227500u
+        - stage: headroom           # + headroom, rounded up
+          value: 228m
+        - stage: clamp              # after minAllowed/maxAllowed
+          value: 228m
+        - stage: coordination       # only when an autoscaler shapes it
           value: 314m               # re-clamped: the final request
-        limit: 628m
+          facts:
+            overheadFactor: "1.375" # 110 / HPA target (80%)
+        limit:
+        - stage: requestsLimitsRatio
+          value: 628m
+          facts:
+            ratio: "2"
       memory:
-        percentile: "183500800"
-        oomFloor:                   # only after a recent OOM kill
+        request:
+        - stage: percentile
+          value: "183500800"
+        - stage: oomFloor           # only after a recent OOM kill
           value: 240Mi
-          determined: true          # the floor set the final request
-        withHeadroom: 264Mi
-        clamped: 264Mi
-        coordination:
-          overheadFactor: 1         # the HPA has no memory target
-          scaled: 264Mi
+          facts:
+            determined: "true"      # the floor set the final request
+            anchor: killedAtLimit
+            killedAtLimit: 200Mi
+        - stage: headroom
+          value: 264Mi
+        - stage: clamp
+          value: 264Mi
+        - stage: coordination
+          value: 264Mi
+          facts:
+            overheadFactor: "1"     # the HPA has no memory target
+        limit:
+        - stage: keepLimit          # the container's own limit...
+          value: 200Mi
+        - stage: guard              # ...raised to the request it fell below
           value: 264Mi
   observedResources:                # what the workload actually ran with
     app:
       cpuRequest: "1"
-      memoryRequest: 1Gi
+      memoryRequest: 128Mi
       cpuLimit: "2"
-      memoryLimit: 2Gi
+      memoryLimit: 200Mi
     istio-proxy:
       init: true                    # init or sidecar container
       cpuRequest: 100m
@@ -143,7 +163,7 @@ status:
 
 `computedBy` is written with every `Computed` outcome and kept by every other one, like `containers`. It differs from `spec.policy` only after another Policy adopted the identity and before that Policy computed a Recommendation of its own; the webhook then withholds `containers` from every pod (see [above](#a-recommendation-is-served-only-to-its-policy)).
 
-`trace` is the record of how each container's values were derived: per resource, the request after every [stage](recommendation-pipeline.md#stages) that ran, in order, then the limit derived from the final request (`limit`, or `removeLimit`; neither means the container keeps its own). A stage that did not run is absent: `oomFloor` without a recent OOM kill, `coordination` without autoscaler coordination, `percentile` for memory anchored on an OOM kill alone; a resource whose request is kept has no trace. `percentile` is stored at full precision (nanocores, bytes). `coordination.replicaFactor` appears for CPU when the Policy sets a `replicaBudgetAnchor`, and `coordination.value` differs from `scaled` when a min/max clamp capped the coordinated request. `oomFloor.determined` says the floor set the final request: it beat the percentile and no clamp, before or after coordination, replaced it. The trace is written together with `containers`; a pass whose values are unchanged but whose trace moved (a percentile that rounds to the same request) writes nothing, so the trace can lag the latest samples by up to the 10-minute refresh.
+`trace` is the record of how each container's values were derived: per resource, the list of [stages](recommendation-pipeline.md#stages) that ran on the request, in order, then those that ran on the limit (the strategy, any limit-side signal, the guard). Each entry has a `stage` name, its `value` (or `removed: true` for a stripped limit; neither on a limit stage means the container has no limit) and the stage's own `facts`; the [Trace](recommendation-pipeline.md#trace) section lists them. A stage that did not run is absent: `oomFloor` without a recent OOM kill, `coordination` without autoscaler coordination, `percentile` for memory anchored on an OOM kill alone, `guard` when the limit was not below the request; a resource whose request is kept has no trace. `percentile` is stored at full precision (nanocores, bytes). The `oomFloor` stage's `determined` fact says the floor set the final request: it beat the percentile and no clamp, before or after coordination, replaced it. The trace is written together with `containers`; a pass whose values are unchanged but whose trace moved (a percentile that rounds to the same request) writes nothing, so the trace can lag the latest samples by up to the 10-minute refresh.
 
 `observedResources` is written by discovery from the union of the identity's governed members' containers (or by the webhook from the admitted pod, for an identity the controller sees no live member of). It keeps current-vs-recommended visible on the dashboard after the workload is gone, and supplies the container list for identities with no workload object.
 

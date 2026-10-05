@@ -130,6 +130,7 @@ nav:
       - A single identity is a batch of one: adr/0001-single-identity-is-a-batch-of-one.md
       - A Conflicted identity freezes its recommendation: adr/0002-conflicted-identity-freezes-its-recommendation.md
       - A Recommendation is served only to its Policy: adr/0003-a-recommendation-is-served-only-to-its-policy.md
+      - A limit never falls below its request: adr/0005-a-limit-never-falls-below-its-request.md
 
 extra:
   version:
