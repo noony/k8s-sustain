@@ -151,8 +151,8 @@ var (
 	groupAutoscalerMismatchTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_group_autoscaler_mismatch_total",
 		Help: "Owner-name groups whose members disagree on autoscaler presence or kind, counted once per " +
-			"reconcile per identity. The group's shared recommendation is still shaped by the first sorted " +
-			"member's autoscaler (see groupAutoscalerInfo) -- this counter exists to surface the resulting " +
+			"reconcile per identity. The group's shared recommendation is still shaped by the autoscaler of its " +
+			"first member, in name order, that has one -- this counter exists to surface the resulting " +
 			"misconfiguration, e.g. an un-autoscaled member silently inheriting an HPA-coordinated value it " +
 			"was never meant to get.",
 	}, []string{"namespace", "owner_kind", "owner_name"})
