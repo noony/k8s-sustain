@@ -10,57 +10,51 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// apply applies every identity's result to its live members not in backoff,
+// apply applies every identity's verdict to its live members not in backoff,
 // one task per member so a large owner-name group spreads across the slots,
-// and returns exactly one result per live member, backed-off ones included.
-// It keeps no retry or health state: settle records the results.
+// and returns, per identity, exactly one result per live member, backed-off
+// ones included. It keeps no retry or health state: the ledger records the
+// results from the pass's report.
 //
-// An identity whose decision persist could not store is not applied: the
+// An identity whose decision could not be stored is not applied: the
 // replacements of the pods it would evict read the stored Recommendation at
 // admission, and would start on template resources. Its members fail on the
 // store step instead.
 func (r *PolicyReconciler) apply(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
-	results []identityResult,
+	work []passIdentity,
+	recs []recommendation,
+	stored []error,
 	autoSnap *autoscaler.NamespacedSnapshot,
-) []applyResult {
+) [][]applyResult {
 	logger := log.FromContext(ctx)
-	n := 0
-	for i := range results {
-		n += len(results[i].backedOff) + len(results[i].apply)
-	}
-	out := make([]applyResult, n)
-	slot := 0
+	out := make([][]applyResult, len(work))
 	var g errgroup.Group
 	g.SetLimit(r.WorkloadConcurrencyLimit)
-	for i := range results {
-		res := &results[i]
-		for _, t := range res.backedOff {
+	for i, w := range work {
+		out[i] = make([]applyResult, len(w.backedOff)+len(w.run))
+		for j, t := range w.backedOff {
 			logger.V(1).Info("skipping workload in retry backoff", "target", t.key())
-			out[slot] = applyResult{member: t, kind: applySkipped}
-			slot++
+			out[i][j] = applyResult{member: t, kind: applySkipped}
 		}
-		if res.recordErr != nil && len(res.apply) > 0 {
-			id := res.item.Identity
+		run := out[i][len(w.backedOff):]
+		if stored[i] != nil && len(w.run) > 0 {
+			id := w.id.Key
 			logger.Info("not applying: the identity's recommendation could not be stored for the webhook",
 				"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
-				"members", len(res.apply), "err", res.recordErr.Error())
-			for _, t := range res.apply {
-				out[slot] = applyResult{member: t, kind: applyFailed, phase: phaseStore, err: res.recordErr}
-				slot++
+				"members", len(w.run), "err", stored[i].Error())
+			for j, t := range w.run {
+				run[j] = applyResult{member: t, kind: applyFailed, phase: phaseStore, err: stored[i]}
 			}
 			continue
 		}
-		for _, t := range res.apply {
-			dst := &out[slot]
-			slot++
+		for j, t := range w.run {
 			g.Go(func() error {
-				*dst = r.reconcileWorkload(ctx, policy, t, autoSnap, res.recs, res.err)
+				run[j] = r.reconcileWorkload(ctx, policy, t, autoSnap, recs[i].recs, recs[i].err)
 				return nil
 			})
 		}
@@ -69,37 +63,10 @@ func (r *PolicyReconciler) apply(
 	return out
 }
 
-// settle records every member's result in the ledger and emits the events the
-// ledger calls for. It returns how many identities had a member fail this
-// pass, and how many had one not skipped.
-func (r *PolicyReconciler) settle(ctx context.Context, results []applyResult) (failed, dispatched int) {
-	logger := log.FromContext(ctx)
-	failedIDs := map[promclient.WorkloadIdentity]struct{}{}
-	dispatchedIDs := map[promclient.WorkloadIdentity]struct{}{}
-	for _, res := range results {
-		if res.kind != applySkipped {
-			dispatchedIDs[res.member.identity()] = struct{}{}
-		}
-		ev, isFailure := r.ledger.record(ctx, res)
-		if !isFailure {
-			continue
-		}
-		failedIDs[res.member.identity()] = struct{}{}
-		t := res.member
-		IncrementRetryAttempt(t.identity())
-		logger.Error(res.err, "applying the recommendation failed",
-			"kind", t.Kind, "name", t.Name, "namespace", t.Namespace, "phase", res.phase)
-		if ev != nil {
-			r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, ev.reason, ev.reason, "%s", ev.message)
-		}
-	}
-	return len(failedIDs), len(dispatchedIDs)
-}
-
 // reconcileWorkload APPLIES an identity's recommendation to a single workload
 // target: recycles or resizes its pods and emits its events. It does not
 // compute anything and does not write the WorkloadRecommendation — the
-// recommendation pass and persist did both, once for the identity, before any
+// recommendation pass and its record did both, once for the identity, before any
 // member reached this function.
 //
 // recs is that shared recommendation, covering the union of the identity's

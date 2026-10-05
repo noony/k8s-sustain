@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -12,7 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/noony/k8s-sustain/internal/autoscaler"
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
@@ -28,12 +27,6 @@ func (f *fakeOOMSource) ByWorkload(_, _, _ string) map[string]*oomwatch.OOMRecor
 	return f.records
 }
 
-func recommendOne(t *testing.T, r *PolicyReconciler, it computeItem) identityResult {
-	t.Helper()
-	return r.recommend(context.Background(), policyForReconcileWorkload(t, "p"), []computeItem{it},
-		autoscaler.NewNamespacedSnapshot(r.Client))[0]
-}
-
 func histogramCount(t *testing.T, vec *prom.HistogramVec, labels ...string) uint64 {
 	t.Helper()
 	var m dto.Metric
@@ -47,29 +40,27 @@ func histogramCount(t *testing.T, vec *prom.HistogramVec, labels ...string) uint
 // inputs: the killed container's memory is floored above its limit at the
 // kill, the floor is counted from its trace stage, and so is how long after
 // the kill the recommendation responded.
-func TestRecommend_LiveOOMRaisesTheFloorAndIsCounted(t *testing.T) {
+func TestReconcile_LiveOOMRaisesTheFloorAndIsCounted(t *testing.T) {
 	const ns = "liveoom"
+	dep := establishedDeployment(ns, "web", "p")
+	dep.Spec.Template.Spec.Containers = append(dep.Spec.Template.Spec.Containers, corev1.Container{Name: "side"})
 	static := recommendertest.NewStaticInputs().Set(identityOf(ns, "Deployment", "web"), &recommender.WorkloadInputs{
 		CPUPerPod: promclient.ContainerValues{"app": 0.1, "side": 0.05},
 		MemPerPod: promclient.ContainerValues{"app": 100 << 20, "side": 100 << 20},
 	})
 	r := reconcilerWithInputs(t, recommender.WithLiveOOMs(static, &fakeOOMSource{records: map[string]*oomwatch.OOMRecord{
 		"app": {Container: "app", ObservedAt: time.Now(), TerminatedAt: time.Now().Add(-10 * time.Second), OOMLimitBytes: 200 << 20},
-	}}, time.Now), true)
-	tgt := deploymentTarget(ns, "web")
-	tgt.Containers = []corev1.Container{{Name: "app"}, {Name: "side"}}
+	}}, time.Now), true, ongoingDeployments("p"), dep)
 	floorBefore := testutilCounterValue(t, oomFloorApplied, ns, "Deployment", "web", "app")
 	latencyBefore := histogramCount(t, oomReactionLatencySeconds, ns, "Deployment", "web")
 
-	res := recommendOne(t, r, itemForTarget(tgt))
+	reconcileOnce(t, r, "p")
 
-	if res.outcome != outcomeRecommended {
-		t.Fatalf("outcome = %v, want recommended", res.outcome)
-	}
-	if got := res.recs["app"].MemoryRequest; got == nil || got.Cmp(resource.MustParse("200Mi")) <= 0 {
+	stored := getWLRFor(t, r, ns, "Deployment", "web").Status.Containers
+	if got := stored["app"].MemoryRequest; got == nil || got.Cmp(resource.MustParse("200Mi")) <= 0 {
 		t.Errorf("app memory = %v, want a bump above the 200Mi limit it was killed at", got)
 	}
-	if got := res.recs["side"].MemoryRequest; got == nil || got.String() != "100Mi" {
+	if got := stored["side"].MemoryRequest; got == nil || got.String() != "100Mi" {
 		t.Errorf("side memory = %v, want its 100Mi percentile", got)
 	}
 	if after := testutilCounterValue(t, oomFloorApplied, ns, "Deployment", "web", "app"); after-floorBefore != 1 {
@@ -80,22 +71,20 @@ func TestRecommend_LiveOOMRaisesTheFloorAndIsCounted(t *testing.T) {
 	}
 }
 
-// A Too young identity has no Recommendation: nothing is handed to persist or
-// apply, and the skip is counted.
-func TestRecommend_TooYoungIsNotARecommendation(t *testing.T) {
+// A Too young identity has no Recommendation: its outcome is recorded with
+// nothing to inject, and the skip is counted.
+func TestReconcile_TooYoungIsNotARecommendation(t *testing.T) {
 	const ns = "tooyoung"
-	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true)
-	tgt := deploymentTarget(ns, "web")
-	tgt.Object.SetCreationTimestamp(metav1.NewTime(time.Now().Add(-time.Minute)))
+	dep := annotatedDeployment(ns, "web", "p")
+	dep.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Minute))
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true, ongoingDeployments("p"), dep)
 	before := testutil.ToFloat64(recommendationSkipped.WithLabelValues(ns, "Deployment", "web", "workload_too_young"))
 
-	res := recommendOne(t, r, itemForTarget(tgt))
+	reconcileOnce(t, r, "p")
 
-	if res.outcome != outcomeTooYoung {
-		t.Fatalf("outcome = %v, want too young", res.outcome)
-	}
-	if res.recs != nil {
-		t.Errorf("recs = %v, want none for a Too young identity", res.recs)
+	got := getWLRFor(t, r, ns, "Deployment", "web")
+	if got.Status.Outcome != sustainv1alpha1.OutcomeTooYoung || len(got.Status.Containers) != 0 {
+		t.Errorf("outcome = %q with %v, want TooYoung and no Recommendation", got.Status.Outcome, got.Status.Containers)
 	}
 	if after := testutil.ToFloat64(recommendationSkipped.WithLabelValues(ns, "Deployment", "web", "workload_too_young")); after-before != 1 {
 		t.Errorf("recommendation_skipped delta = %v, want 1", after-before)

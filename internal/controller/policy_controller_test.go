@@ -54,7 +54,9 @@ func readyCondition(t *testing.T, r *PolicyReconciler, name string) *metav1.Cond
 	return nil
 }
 
-func ongoingPolicy(name string, kinds sustainv1alpha1.UpdateTypes) *sustainv1alpha1.Policy {
+// policyManaging is a Policy managing kinds, holding the cleanup finalizer a
+// first Reconcile would add.
+func policyManaging(name string, kinds sustainv1alpha1.UpdateTypes) *sustainv1alpha1.Policy {
 	return &sustainv1alpha1.Policy{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Finalizers: []string{"k8s.sustain.io/cleanup"}},
 		Spec: sustainv1alpha1.PolicySpec{
@@ -67,7 +69,7 @@ func ongoingPolicy(name string, kinds sustainv1alpha1.UpdateTypes) *sustainv1alp
 
 func ongoingDeployments(name string) *sustainv1alpha1.Policy {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
-	return ongoingPolicy(name, sustainv1alpha1.UpdateTypes{Deployment: &ongoing})
+	return policyManaging(name, sustainv1alpha1.UpdateTypes{Deployment: &ongoing})
 }
 
 // establishedDeployment is an opted-in Deployment old enough to clear the age
@@ -84,6 +86,11 @@ func establishedDeployment(ns, name, policy string) *appsv1.Deployment {
 // runningPod is a Running pod of establishedDeployment(ns, app), with
 // container "app" at 10m CPU.
 func runningPod(ns, name, app string) *corev1.Pod {
+	return runningPodAt(ns, name, app, "10m")
+}
+
+// runningPodAt is runningPod with container "app" at cpu.
+func runningPodAt(ns, name, app, cpu string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns, Name: name, Labels: map[string]string{"app": app},
@@ -91,7 +98,7 @@ func runningPod(ns, name, app string) *corev1.Pod {
 		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
 			Name:      "app",
-			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")}},
+			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)}},
 		}}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
@@ -191,7 +198,7 @@ func TestReconcile_DeletedPolicy_RemovesFinalizer(t *testing.T) {
 // is due when the retry is, not a whole reconcile interval later.
 func TestReconcile_PartialFailure_SetsConditionAndRequeues(t *testing.T) {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
-	policy := ongoingPolicy("p", sustainv1alpha1.UpdateTypes{Job: &ongoing})
+	policy := policyManaging("p", sustainv1alpha1.UpdateTypes{Job: &ongoing})
 	job := annotatedJob("default", "app", "p")
 	inputs := recommendertest.NewStaticInputs().Fail(identityOf("default", "Job", "app"), errors.New("prometheus down"))
 	r := reconcilerWithInputs(t, inputs, false, policy, job)
@@ -244,7 +251,7 @@ func TestReconcile_ReadyCountsIdentities(t *testing.T) {
 func TestReconcileFetchesJobAndPodIdentities(t *testing.T) {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
 	const policyName = "batch-job-pod"
-	policy := ongoingPolicy(policyName, sustainv1alpha1.UpdateTypes{Job: &ongoing, Pod: &ongoing})
+	policy := policyManaging(policyName, sustainv1alpha1.UpdateTypes{Job: &ongoing, Pod: &ongoing})
 	job := annotatedJob("default", "nightly", policyName)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -299,22 +306,30 @@ func TestReconcile_FetchesEveryIdentityInOneCall(t *testing.T) {
 }
 
 // The normal path: the identity's Recommendation and its trace are written to
-// its WorkloadRecommendation and applied to its running pod.
+// its WorkloadRecommendation and applied to its running pod, which is then
+// counted and no longer stale.
 func TestReconcile_RecommendsPersistsAndApplies(t *testing.T) {
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true,
-		ongoingDeployments("p"), establishedDeployment("default", "web", "p"), runningPod("default", "web-pod", "web"))
+	const ns = "applied"
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+		ongoingDeployments("p"), establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web"))
 
 	reconcileOnce(t, r, "p")
 
-	wlr := getWLRFor(t, r, "default", "Deployment", "web")
+	wlr := getWLRFor(t, r, ns, "Deployment", "web")
 	if got := wlr.Status.Containers["app"].CPURequest; got == nil || got.String() != "100m" {
 		t.Errorf("stored CPU recommendation = %v, want 100m", got)
 	}
 	if tr := wlr.Status.Trace["app"].CPU; tr == nil || len(tr.Request) < 2 || tr.Request[len(tr.Request)-1].Value.String() != "100m" {
 		t.Errorf("stored CPU trace = %+v, want the stages that arrived at 100m", tr)
 	}
-	if cpu := podCPU(t, r, "default", "web-pod"); cpu != "100m" {
+	if cpu := podCPU(t, r, ns, "web-pod"); cpu != "100m" {
 		t.Errorf("pod CPU = %s, want the 100m recommendation applied in place", cpu)
+	}
+	if got := gaugeOf(t, "k8s_sustain_workload_pods", ns, "Deployment", "web"); got != 1 {
+		t.Errorf("pods = %v, want 1", got)
+	}
+	if got := gaugeOf(t, "k8s_sustain_workload_stale_pods", ns, "Deployment", "web"); got != 0 {
+		t.Errorf("stale pods = %v, want 0 after the in-place resize", got)
 	}
 	if ready := readyCondition(t, r, "p"); ready.Status != metav1.ConditionTrue {
 		t.Errorf("Ready = %s, want True", ready.Status)
@@ -552,7 +567,7 @@ func TestReconcile_BackedOffIdentityIsNotFetched(t *testing.T) {
 		ongoingDeployments("p"), expiring, annotatedDeployment("default", "healthy", "p"))
 	r.ledger = newLedger(clk)
 	member := targetFromObject(expiring, "Deployment")
-	r.settle(context.Background(), []applyResult{failedStep(&member, phasePatch, errors.New("apiserver unavailable"))})
+	r.ledger.record(context.Background(), failedStep(&member, phasePatch, errors.New("apiserver unavailable")))
 
 	reconcileOnce(t, r, "p")
 

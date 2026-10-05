@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -28,8 +27,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/inventory"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -201,80 +200,103 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		reconcileTotal.WithLabelValues(policy.Name, "error").Inc()
 		return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
 	}
-	governed := snap.GovernedBy(policy.Name)
-	logger.Info("collected governed identities", "count", len(governed))
 
-	items := computeItems(ctx, policy, governed)
-	r.discover(ctx, policy.Name, items)
-	r.health.observe(policy.Name, items, r.ledger)
-	r.recordConflicted(ctx, policy.Name, snap)
-
-	// One autoscaler snapshot per pass; it lists each namespace once, lazily.
-	autoSnap := autoscaler.NewNamespacedSnapshot(r.Client)
-
-	// Every identity is computed and persisted before any pod is touched, so the
-	// webhook serves the new value before replacement pods are admitted.
-	results := r.recommend(ctx, policy, items, autoSnap)
-	departed, departedFailed := r.persist(ctx, results)
-	applied := r.apply(ctx, policy, results, autoSnap)
-	failed, units := r.settle(ctx, applied)
-	units += departed
-	failed += departedFailed
-
-	logger.Info("reconcile cycle complete",
-		"identities", len(items),
-		"dispatched", units,
-		"failed", failed,
-		"concurrency", r.WorkloadConcurrencyLimit)
-
-	blocked := r.health.emit(policy.Name, r.ledger)
-	EmitPolicyRollup(policy.Name, liveIdentities(governed), blocked)
-
-	requested, resolved, fetchFailures := passCoverage(results)
+	report := r.runPass(ctx, policy, snap)
+	failed := r.settle(ctx, report)
+	live := report.liveMembers()
+	blocked := r.health.emit(policy.Name, live, r.ledger)
+	EmitPolicyRollup(policy.Name, len(live), blocked)
+	requested, resolved, fetchFailures := report.coverage()
 	EmitPolicyBatchCoverage(policy.Name, requested, resolved)
 	EmitPolicyBatchFailures(policy.Name, fetchFailures)
 
 	r.sweepWorkloadRecommendations(ctx, policy.Name, snap)
 
-	// failed and units count identities, as every count of workloads does.
-	// blocked also covers the members this pass skipped in backoff. A failed
-	// Ensure counts once, as its withheld members' failure.
-	if failed > 0 || blocked > 0 {
-		var parts []string
-		if failed > 0 {
-			parts = append(parts, fmt.Sprintf("%d of %d workloads failed", failed, units))
-		}
-		if blocked > 0 {
-			parts = append(parts, fmt.Sprintf("Blocked workload identities: %d", blocked))
-		}
-		msg := strings.Join(parts, "; ")
-		_ = r.failCondition(ctx, policy, "PartialFailure", errors.New(msg))
-		r.recorder.Eventf(policy, nil, corev1.EventTypeWarning, "PartialFailure", "PartialFailure", "%s", msg)
-		reconcileTotal.WithLabelValues(policy.Name, "error").Inc()
-	} else {
-		msg := fmt.Sprintf("All %d workloads have been processed.", units)
-		_ = r.setCondition(ctx, policy, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionTrue,
-			Reason:             "ReconciliationSucceeded",
-			Message:            msg,
-			ObservedGeneration: policy.Generation,
-		})
-		r.recorder.Eventf(policy, nil, corev1.EventTypeNormal, "ReconciliationSucceeded", "ReconciliationSucceeded",
-			"%s", msg)
-		reconcileTotal.WithLabelValues(policy.Name, "success").Inc()
-	}
+	processed := report.processed()
+	logger.Info("reconcile cycle complete",
+		"identities", len(report),
+		"processed", processed,
+		"failed", failed,
+		"blocked", blocked,
+		"concurrency", r.WorkloadConcurrencyLimit)
 
-	return ctrl.Result{RequeueAfter: r.requeueAfter(applied)}, nil
+	cond := passCondition(processed, failed, blocked)
+	cond.ObservedGeneration = policy.Generation
+	_ = r.setCondition(ctx, policy, cond)
+	eventType, result := corev1.EventTypeNormal, "success"
+	if cond.Status != metav1.ConditionTrue {
+		eventType, result = corev1.EventTypeWarning, "error"
+	}
+	r.recorder.Eventf(policy, nil, eventType, cond.Reason, cond.Reason, "%s", cond.Message)
+	reconcileTotal.WithLabelValues(policy.Name, result).Inc()
+
+	return ctrl.Result{RequeueAfter: r.requeueAfter(live)}, nil
+}
+
+// settle hands every member's result in report to the ledger, emits the
+// events and retry attempts it calls for, and returns how many identities
+// failed this pass: a departed one whose decision could not be made or
+// stored, or a live one with a member the ledger counts as failed.
+func (r *PolicyReconciler) settle(ctx context.Context, report passReport) (failed int) {
+	logger := log.FromContext(ctx)
+	for _, rep := range report {
+		identityFailed := rep.err != nil
+		for _, res := range rep.members {
+			ev, isFailure := r.ledger.record(ctx, res)
+			if !isFailure {
+				continue
+			}
+			identityFailed = true
+			t := res.member
+			IncrementRetryAttempt(t.identity())
+			logger.Error(res.err, "applying the recommendation failed",
+				"kind", t.Kind, "name", t.Name, "namespace", t.Namespace, "phase", res.phase)
+			if ev != nil {
+				r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, ev.reason, ev.reason, "%s", ev.message)
+			}
+		}
+		if identityFailed {
+			failed++
+		}
+	}
+	return failed
+}
+
+// passCondition is the Ready condition a pass leaves: True only when no
+// identity failed this pass and none is Blocked, which also covers the
+// members the pass skipped in backoff. Its counts are of identities, as every
+// count of workloads is.
+func passCondition(processed, failed, blocked int) metav1.Condition {
+	if failed == 0 && blocked == 0 {
+		return metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionTrue,
+			Reason:  "ReconciliationSucceeded",
+			Message: fmt.Sprintf("All %d workloads have been processed.", processed),
+		}
+	}
+	var parts []string
+	if failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d of %d workloads failed", failed, processed))
+	}
+	if blocked > 0 {
+		parts = append(parts, fmt.Sprintf("Blocked workload identities: %d", blocked))
+	}
+	return metav1.Condition{
+		Type:    "Ready",
+		Status:  metav1.ConditionFalse,
+		Reason:  "PartialFailure",
+		Message: strings.Join(parts, "; "),
+	}
 }
 
 // requeueAfter schedules the Policy's next pass at the reconcile interval, or
-// earlier when one of its members' retries falls due first, so the time a
-// retry event names is a time a pass runs.
-func (r *PolicyReconciler) requeueAfter(applied []applyResult) time.Duration {
-	members := make([]string, len(applied))
-	for i, res := range applied {
-		members[i] = res.member.key()
+// earlier when a retry of one of its live members falls due first, so the
+// time a retry event names is a time a pass runs.
+func (r *PolicyReconciler) requeueAfter(live map[promclient.WorkloadIdentity][]string) time.Duration {
+	var members []string
+	for _, keys := range live {
+		members = append(members, keys...)
 	}
 	due, ok := r.ledger.nextRetry(members)
 	if !ok {
@@ -282,16 +304,4 @@ func (r *PolicyReconciler) requeueAfter(applied []applyResult) time.Duration {
 	}
 	// A zero RequeueAfter means no requeue at all.
 	return min(r.ReconcileInterval, max(due, time.Second))
-}
-
-// liveIdentities counts the governed identities with a live member, which is
-// what k8s_sustain_policy_workload_count reports.
-func liveIdentities(governed []*inventory.Identity) int {
-	n := 0
-	for _, id := range governed {
-		if !id.Departed() {
-			n++
-		}
-	}
-	return n
 }

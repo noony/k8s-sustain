@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -32,9 +33,8 @@ const (
 	outcomeNotFetched
 )
 
-// identityResult is the recommendation pass's verdict on one identity.
-type identityResult struct {
-	item    computeItem
+// recommendation is the recommendation pass's verdict on one identity.
+type recommendation struct {
 	outcome outcome
 	// recs is the identity's Recommendation and traces how it was derived,
 	// both set only for outcomeRecommended.
@@ -44,25 +44,16 @@ type identityResult struct {
 	inputs *recommender.WorkloadInputs
 	// err is why the inputs are unavailable, set only for outcomeFetchFailed.
 	err error
-	// apply holds the live members to apply to and backedOff those skipped for
-	// retry backoff. The split is decided once, before the fetch: backoff is
-	// time-based and the fetch can take minutes, so asking again at apply time
-	// would act on members the fetch left out.
-	apply     []*workloadTarget
-	backedOff []*workloadTarget
-	// recordErr is why persist could not store a live identity's decision.
-	// Its members are then not applied this cycle.
-	recordErr error
 }
 
-// decision is what the result records in the identity's
+// decision is what the verdict records in the identity's
 // WorkloadRecommendation; false for an identity that was not fetched, which
 // records nothing.
-func (res *identityResult) decision(departed bool) (wlrcache.Decision, bool) {
+func (rec recommendation) decision(departed bool) (wlrcache.Decision, bool) {
 	d := wlrcache.Decision{Departed: departed}
-	switch res.outcome {
+	switch rec.outcome {
 	case outcomeRecommended:
-		d.Outcome, d.Recs, d.Traces = sustainv1alpha1.OutcomeComputed, res.recs, res.traces
+		d.Outcome, d.Recs, d.Traces = sustainv1alpha1.OutcomeComputed, rec.recs, rec.traces
 	case outcomeTooYoung:
 		d.Outcome = sustainv1alpha1.OutcomeTooYoung
 	case outcomeNoData:
@@ -75,36 +66,26 @@ func (res *identityResult) decision(departed bool) (wlrcache.Decision, bool) {
 	return d, true
 }
 
-// recommend is the recommendation pass: one result per identity, in item
-// order. An identity whose live members are all in retry backoff is not
-// fetched; every other identity is fetched in one batch call and then
-// computed, in parallel, before anything is written or applied.
+// recommend is the recommendation pass: one verdict per identity on the
+// work-list, in its order. An identity whose live members are all in retry
+// backoff is not fetched; every other identity is fetched in one batch call
+// and then computed, in parallel, before anything is written or applied.
 func (r *PolicyReconciler) recommend(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
-	items []computeItem,
+	work []passIdentity,
 	autoSnap *autoscaler.NamespacedSnapshot,
-) []identityResult {
-	excludeInit := policy.Spec.RightSizing.ExcludeInitContainers
-	results := make([]identityResult, len(items))
-	reqs := make([]recommender.InputsRequest, 0, len(items))
-	for i, it := range items {
-		res := &results[i]
-		res.item = it
-		for _, t := range it.Targets {
-			if !r.ledger.mayRun(t.key()) {
-				res.backedOff = append(res.backedOff, t)
-			} else {
-				res.apply = append(res.apply, t)
-			}
-		}
-		if len(res.backedOff) > 0 && len(res.apply) == 0 {
-			res.outcome = outcomeNotFetched
+) []recommendation {
+	out := make([]recommendation, len(work))
+	reqs := make([]recommender.InputsRequest, 0, len(work))
+	for i, w := range work {
+		if !w.fetched() {
+			out[i].outcome = outcomeNotFetched
 			continue
 		}
 		reqs = append(reqs, recommender.InputsRequest{
-			Identity:   it.Identity,
-			Containers: len(containersFromObserved(it.Observed, excludeInit)),
+			Identity:   w.id.Key,
+			Containers: len(w.containers),
 		})
 	}
 
@@ -115,65 +96,63 @@ func (r *PolicyReconciler) recommend(
 
 	var g errgroup.Group
 	g.SetLimit(r.WorkloadConcurrencyLimit)
-	for i := range results {
-		res := &results[i]
-		if res.outcome == outcomeNotFetched {
+	for i, w := range work {
+		if !w.fetched() {
 			continue
 		}
-		f := fetched[res.item.Identity]
+		f := fetched[w.id.Key]
 		if f.Err != nil {
-			res.outcome = outcomeFetchFailed
-			res.err = f.Err
+			out[i] = recommendation{outcome: outcomeFetchFailed, err: f.Err}
 			continue
 		}
-		res.inputs = f.Inputs
 		g.Go(func() error {
-			r.computeIdentity(ctx, policy, res, autoSnap, now)
+			out[i] = r.computeIdentity(ctx, policy, w, f.Inputs, autoSnap, now)
 			return nil
 		})
 	}
 	_ = g.Wait()
-	return results
+	return out
 }
 
-// computeIdentity computes one fetched identity's outcome as of now. It runs
+// computeIdentity computes one fetched identity's verdict as of now. It runs
 // once per identity, never per member: members share one Prometheus series
 // and one WorkloadRecommendation, so per-member computation produced
 // competing answers.
 func (r *PolicyReconciler) computeIdentity(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
-	res *identityResult,
+	w passIdentity,
+	inputs *recommender.WorkloadInputs,
 	autoSnap *autoscaler.NamespacedSnapshot,
 	now time.Time,
-) {
-	it := res.item
-	id := it.Identity
+) recommendation {
+	id := w.id.Key
 	rs := policy.Spec.RightSizing
 
 	// A departed identity has nothing for an autoscaler to scale.
 	autoInfo := autoscaler.Info{Kind: autoscaler.KindNone}
-	if len(it.Targets) > 0 {
-		autoInfo = r.groupAutoscalerInfo(ctx, id, it.Targets, autoSnap)
+	if !w.id.Departed() {
+		autoInfo = r.groupAutoscalerInfo(ctx, id, slices.Concat(w.run, w.backedOff), autoSnap)
 		EmitAutoscalerPresent(id, string(autoInfo.Kind))
 		EmitAutoscalerTargetsConfigured(id, string(autoInfo.Kind), autoInfo.ConfiguredTargets)
 	}
 	out := recommender.Compute(recommender.Request{
-		Containers:   containersFromObserved(it.Observed, rs.ExcludeInitContainers),
+		Containers:   w.containers,
 		Resources:    rs.ResourcesConfigs,
 		Coordination: rs.AutoscalerCoordination,
 		AutoInfo:     autoInfo,
-		Inputs:       res.inputs,
-		Since:        it.Since,
+		Inputs:       inputs,
+		Since:        w.id.Since,
 		Now:          now,
 	})
+	res := recommendation{inputs: inputs}
 	switch out.Outcome {
 	case recommender.TooYoung:
 		res.outcome = outcomeTooYoung
 		recommendationSkipped.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, "workload_too_young").Inc()
 		log.FromContext(ctx).Info("skipping recommendation: workload too young",
 			"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
-			"age", recommender.AgeForLog(it.Since, now), "minAge", recommender.MinWorkloadAge)
+			"age", recommender.AgeForLog(w.id.Since, now), "minAge", recommender.MinWorkloadAge)
 	case recommender.NoData:
 		res.outcome = outcomeNoData
 	default:
@@ -182,6 +161,53 @@ func (r *PolicyReconciler) computeIdentity(
 		res.traces = out.Traces
 		emitContainerComputation(id, out.Traces, now)
 	}
+	return res
+}
+
+// groupAutoscalerInfo resolves the autoscaler an identity's recommendation is
+// shaped against: the first member in sorted key() order that has one, or
+// KindNone. It also flags a mixed-autoscaler group, since the one shared
+// recommendation is injected into every member's pods.
+func (r *PolicyReconciler) groupAutoscalerInfo(
+	ctx context.Context,
+	identity promclient.WorkloadIdentity,
+	targets []*workloadTarget,
+	autoSnap *autoscaler.NamespacedSnapshot,
+) autoscaler.Info {
+	logger := log.FromContext(ctx)
+	winner := autoscaler.Info{Kind: autoscaler.KindNone}
+	haveWinner := false
+	var baseline autoscaler.Kind
+	haveBaseline := false
+	var disagreeing []string
+
+	for _, t := range sortedTargets(targets) {
+		info, err := autoSnap.Lookup(ctx, t.Namespace, t.Kind, t.Name)
+		if err != nil {
+			logger.Error(err, "autoscaler detection failed, proceeding without it",
+				"kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
+			continue
+		}
+		if !haveWinner && info.Kind != autoscaler.KindNone {
+			winner, haveWinner = info, true
+		}
+		if !haveBaseline {
+			baseline, haveBaseline = info.Kind, true
+		} else if info.Kind != baseline {
+			disagreeing = append(disagreeing, t.key()+"="+string(info.Kind))
+		}
+	}
+
+	if len(disagreeing) > 0 {
+		logger.V(1).Info("owner-name group members disagree on autoscaler state; "+
+			"the shared recommendation is shaped by the first sorted member that HAS an autoscaler "+
+			"(see governingAutoscaler), not by the first sorted member",
+			"namespace", identity.Namespace, "ownerKind", identity.OwnerKind, "ownerName", identity.OwnerName,
+			"governingAutoscaler", winner.Kind, "baseline", baseline, "disagreeing", disagreeing)
+		EmitGroupAutoscalerMismatch(identity.Namespace, identity.OwnerKind, identity.OwnerName)
+	}
+
+	return winner
 }
 
 // emitContainerComputation counts the containers whose memory request the OOM
@@ -199,23 +225,4 @@ func emitContainerComputation(id promclient.WorkloadIdentity, traces map[string]
 			EmitOOMReactionLatency(ns, kind, name, now.Sub(floor.LiveKillAt).Seconds())
 		}
 	}
-}
-
-// passCoverage summarises the pass for the batch metrics: identities fetched,
-// those that came back with at least one CPU or memory sample, and those whose
-// fetch failed. A young workload on a healthy Prometheus resolves to nothing
-// too, so only the failure count tells an outage apart.
-func passCoverage(results []identityResult) (requested, resolved, failed int) {
-	for _, res := range results {
-		switch {
-		case res.outcome == outcomeNotFetched:
-			continue
-		case res.outcome == outcomeFetchFailed:
-			failed++
-		case len(res.inputs.CPUPerPod) > 0 || len(res.inputs.MemPerPod) > 0:
-			resolved++
-		}
-		requested++
-	}
-	return requested, resolved, failed
 }

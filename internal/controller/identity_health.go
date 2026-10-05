@@ -23,33 +23,6 @@ type healthTracker struct {
 	byPolicy map[string]map[promclient.WorkloadIdentity][]string
 }
 
-// observe records policy's live identities and their members, deleting the
-// series of identities, and the ledger state of members, that no policy has
-// any more. It must run before the policy emits for this cycle. A Conflicted
-// identity is governed by no Policy, so it loses its series here: nothing
-// applies to it.
-func (h *healthTracker) observe(policy string, items []computeItem, l *ledger) {
-	next := make(map[promclient.WorkloadIdentity][]string, len(items))
-	for _, it := range items {
-		if len(it.Targets) == 0 {
-			continue
-		}
-		keys := make([]string, 0, len(it.Targets))
-		for _, t := range it.Targets {
-			keys = append(keys, t.key())
-		}
-		next[it.Identity] = keys
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.byPolicy == nil {
-		h.byPolicy = make(map[string]map[promclient.WorkloadIdentity][]string)
-	}
-	prev := h.byPolicy[policy]
-	h.byPolicy[policy] = next
-	h.dropUnclaimedLocked(prev, l)
-}
-
 func (h *healthTracker) forget(policy string, l *ledger) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -96,19 +69,28 @@ func (h *healthTracker) membersLocked(id promclient.WorkloadIdentity) []string {
 	return out
 }
 
-// emit writes the pod and retry-state series of every identity policy
-// observed, each aggregated over all of the identity's members, and returns
-// how many of those identities are Blocked.
+// emit takes live, the keys of the members of every live identity policy
+// governs, and writes each identity's pod and retry-state series, aggregated
+// over all of its members, returning how many of those identities are
+// Blocked. The identities, and the ledger state of the members, that no
+// policy claims any more lose theirs. A Conflicted identity is governed by no
+// Policy, so it loses its series: nothing applies to it.
 //
 // Pod counts are summed over the members that have been measured, so a
 // member skipped this cycle (backoff, a failed pass) contributes its last
 // counts. An identity is Blocked when any member is; the reason is the failed
 // step of the first blocked member in sorted order.
-func (h *healthTracker) emit(policy string, l *ledger) int {
+func (h *healthTracker) emit(policy string, live map[promclient.WorkloadIdentity][]string, l *ledger) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.byPolicy == nil {
+		h.byPolicy = make(map[string]map[promclient.WorkloadIdentity][]string)
+	}
+	prev := h.byPolicy[policy]
+	h.byPolicy[policy] = live
+	h.dropUnclaimedLocked(prev, l)
 	blocked := 0
-	for id := range h.byPolicy[policy] {
+	for id := range live {
 		var sum workload.PodCounts
 		measured := false
 		reason := ""

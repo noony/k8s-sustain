@@ -111,9 +111,7 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	etl := promclient.WorkloadIdentity{Namespace: ns, OwnerKind: "Pod", OwnerName: "etl"}
 
 	onCreate := sustainv1alpha1.UpdateModeOnCreate
-	policy := policyForReconcileWorkload(t, policyName)
-	policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
-	policy.Spec.RightSizing.Update.Types = sustainv1alpha1.UpdateTypes{Deployment: &onCreate, Pod: &onCreate}
+	policy := policyManaging(policyName, sustainv1alpha1.UpdateTypes{Deployment: &onCreate, Pod: &onCreate})
 
 	blue := groupedDeployment(ns, "api-blue", "api", policyName)
 	green := groupedDeployment(ns, "api-green", "api", policyName)
@@ -188,10 +186,10 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	ctx := context.Background()
 	blueTarget, greenTarget := targetFromObject(blue, "Deployment"), targetFromObject(green, "Deployment")
 	transient := apierrors.NewServiceUnavailable("apiserver unavailable")
-	r.settle(ctx, []applyResult{
+	r.settle(ctx, passReport{{key: api, members: []applyResult{
 		failedStep(&greenTarget, phasePrometheus, transient),
 		failedStep(&blueTarget, phasePatch, transient),
-	})
+	}}})
 
 	reconcilePolicy(t, r, policyName)
 
@@ -241,11 +239,7 @@ func TestReconcile_PolicyDeletionRemovesIdentityHealth(t *testing.T) {
 	const ns, name, policyName = "health-deleted", "web", "health-deleted"
 	dep := annotatedDeployment(ns, name, policyName)
 	dep.CreationTimestamp = metav1.NewTime(time.Now().Add(-24 * time.Hour))
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	policy := policyForReconcileWorkload(t, policyName)
-	policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
-	policy.Spec.RightSizing.Update.Types = sustainv1alpha1.UpdateTypes{Deployment: &ongoing}
-	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", name), false, policy, dep)
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", name), false, ongoingDeployments(policyName), dep)
 
 	reconcilePolicy(t, r, policyName)
 	if got := len(seriesForWorkload(t, "k8s_sustain_workload_pods", ns, "Deployment", name)); got != 1 {
@@ -267,16 +261,18 @@ func TestReconcile_PolicyDeletionRemovesIdentityHealth(t *testing.T) {
 	}
 }
 
-func TestReconcileWorkload_RecycleSuppressedCountsUnderIdentity(t *testing.T) {
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, deploymentPod("default", "web-blue-pod", "web-blue"))
-	tgt := deploymentTarget("default", "web-blue")
-	tgt.IdentityName = "web"
-	policy := policyForReconcileWorkload(t, "p")
+// A decrease the downsize threshold withholds is counted under the identity,
+// never under the owner-name member whose pod it was withheld from.
+func TestReconcile_RecycleSuppressedCountsUnderIdentity(t *testing.T) {
+	const ns = "suppressed"
+	policy := ongoingDeployments("p")
 	policy.Spec.RightSizing.ResourcesConfigs.CPU.DownsizeThreshold = &sustainv1alpha1.DownsizeThreshold{Percent: ptr.To[int32](100)}
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+		policy, groupedDeployment(ns, "web-blue", "web", "p"), deploymentPod(ns, "web-blue-pod", "web-blue"))
 
 	counter := func(name string) float64 {
 		var v float64
-		for _, m := range seriesForWorkload(t, "k8s_sustain_recycle_suppressed_total", "default", "Deployment", name) {
+		for _, m := range seriesForWorkload(t, "k8s_sustain_recycle_suppressed_total", ns, "Deployment", name) {
 			if labelOf(m, "resource") == "cpu" {
 				v += m.GetCounter().GetValue()
 			}
@@ -284,13 +280,13 @@ func TestReconcileWorkload_RecycleSuppressedCountsUnderIdentity(t *testing.T) {
 		return v
 	}
 	before := counter("web")
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatal(err)
-	}
+
+	reconcilePolicy(t, r, "p")
+
 	if got := counter("web") - before; got != 1 {
 		t.Errorf("suppressed cpu decreases under the identity = %v, want 1", got)
 	}
-	if got := len(seriesForWorkload(t, "k8s_sustain_recycle_suppressed_total", "default", "Deployment", "web-blue")); got != 0 {
+	if got := len(seriesForWorkload(t, "k8s_sustain_recycle_suppressed_total", ns, "Deployment", "web-blue")); got != 0 {
 		t.Errorf("recycle_suppressed_total must not carry the member name, got %d series", got)
 	}
 }

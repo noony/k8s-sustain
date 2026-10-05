@@ -187,7 +187,7 @@ func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 }
 
 // controllerStores stores recs for Deployment default/web under policy the way
-// a reconcile does: discovery's claim on the identity, then the pass's record,
+// a reconcile's pass does: its claim on the identity, then its record,
 // computed at.
 func controllerStores(t *testing.T, c client.Client, policy string, recs map[string]workload.ContainerRecommendation, at time.Time) {
 	t.Helper()

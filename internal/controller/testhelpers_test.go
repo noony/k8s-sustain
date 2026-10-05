@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,12 +25,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
-	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -42,38 +39,6 @@ func testutilCounterValue(t *testing.T, vec *prom.CounterVec, ns, kind, name, co
 	return testutil.ToFloat64(vec.With(prom.Labels{
 		"namespace": ns, "owner_kind": kind, "owner_name": name, "container": container,
 	}))
-}
-
-// makeReconciler builds a PolicyReconciler with a fake client preloaded with objs.
-func makeReconciler(t *testing.T, objs ...runtime.Object) *PolicyReconciler {
-	t.Helper()
-	scheme := runtime.NewScheme()
-	if err := appsv1.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme apps: %v", err)
-	}
-	if err := batchv1.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme batch: %v", err)
-	}
-	if err := rolloutsv1alpha1.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme rollouts: %v", err)
-	}
-	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme sustain: %v", err)
-	}
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatalf("scheme core: %v", err)
-	}
-
-	objsTyped := make([]runtime.Object, 0, len(objs))
-	objsTyped = append(objsTyped, objs...)
-	c := fake.NewClientBuilder().WithScheme(scheme)
-	for _, o := range objsTyped {
-		if co, ok := o.(metav1.Object); ok {
-			_ = co // keep typed
-		}
-	}
-	c = c.WithRuntimeObjects(objsTyped...)
-	return &PolicyReconciler{Client: c.Build(), Scheme: scheme}
 }
 
 // controllerRef is the controller ownerReference to the kind/name object the
@@ -184,8 +149,8 @@ func reconcilerOn(c client.Client, scheme *runtime.Scheme, inputs recommender.In
 
 // fakeClientBuilder preloads objs. WorkloadRecommendation needs its status
 // subresource registered: the fake client rejects Status().Patch outright for
-// types it was not told about, and the computation phase reads the
-// observed-resources snapshot that discovery writes there.
+// types it was not told about, and the pass's claim writes the
+// observed-resources snapshot there.
 func fakeClientBuilder(scheme *runtime.Scheme, objs ...runtime.Object) *fake.ClientBuilder {
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -224,22 +189,6 @@ func appUsage() *recommender.WorkloadInputs {
 // recommendation for it deterministically.
 func usageFor(ns, kind, name string) *recommendertest.StaticInputs {
 	return recommendertest.NewStaticInputs().Set(identityOf(ns, kind, name), appUsage())
-}
-
-func policyForReconcileWorkload(t *testing.T, name string) *sustainv1alpha1.Policy {
-	t.Helper()
-	p95 := int32(95)
-	return &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-					CPU:    sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-					Memory: sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-				},
-			},
-		},
-	}
 }
 
 // deploymentTarget is the apply target of Deployment ns/name, whose pods are
@@ -329,63 +278,6 @@ func targetFromObject(obj client.Object, kind string) workloadTarget {
 	return *targetFromMember(identityOf(obj.GetNamespace(), kind, name), m, "")
 }
 
-// itemForTarget builds the computeItem the reconciler's computation phase would
-// hand a single-member identity, so a test can drive computeIdentity or the WLR
-// write path without standing up a full Reconcile.
-func itemForTarget(t *workloadTarget) computeItem {
-	return itemForTargetWithWLR(t, &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: t.Namespace,
-			Name:      wlrcache.Name(t.IdentityKind, t.IdentityName),
-		},
-	})
-}
-
-// itemForTargetWithWLR is itemForTarget for tests that need the identity's
-// WorkloadRecommendation to carry something in particular. The identity is
-// dated as the inventory dates it: by its member or its WorkloadRecommendation,
-// whichever is older.
-func itemForTargetWithWLR(t *workloadTarget, wlr *sustainv1alpha1.WorkloadRecommendation) computeItem {
-	ref := sustainv1alpha1.WorkloadReference{Kind: t.IdentityKind, Namespace: t.Namespace, Name: t.IdentityName}
-	wlr.Spec.WorkloadRef = ref
-	since := wlr.CreationTimestamp.Time
-	if t.Object != nil {
-		if created := t.Object.GetCreationTimestamp().Time; !created.IsZero() && (since.IsZero() || created.Before(since)) {
-			since = created
-		}
-	}
-	return computeItem{
-		WLR:      wlr,
-		Targets:  []*workloadTarget{t},
-		Identity: promclient.WorkloadIdentity{Namespace: t.Namespace, OwnerKind: t.IdentityKind, OwnerName: t.IdentityName},
-		Observed: wlrcache.BuildObservedResources(t.Containers, t.InitContainers),
-		Since:    since,
-	}
-}
-
-// runComputeAndApply drives the phases Reconcile runs for a single-member
-// identity: discovery, the recommendation pass, the WorkloadRecommendation
-// record, the apply of its member, the ledger's record of the result and the
-// identity's health emission. It returns the errors of the steps that failed.
-func runComputeAndApply(ctx context.Context, r *PolicyReconciler, policy *sustainv1alpha1.Policy, it computeItem) error {
-	items := []computeItem{it}
-	r.discover(ctx, policy.Name, items)
-	r.health.observe(policy.Name, items, r.ledger)
-	snap := autoscaler.NewNamespacedSnapshot(r.Client)
-	results := r.recommend(ctx, policy, items, snap)
-	r.persist(ctx, results)
-	applied := r.apply(ctx, policy, results, snap)
-	r.settle(ctx, applied)
-	r.health.emit(policy.Name, r.ledger)
-	var err error
-	for _, res := range applied {
-		if res.kind == applyFailed {
-			err = errors.Join(err, res.err)
-		}
-	}
-	return err
-}
-
 // failedStep is the result of a member whose step failed with err.
 func failedStep(t *workloadTarget, phase string, err error) applyResult {
 	return applyResult{member: t, kind: applyFailed, phase: phase, err: err}
@@ -424,7 +316,7 @@ func barePod(ns, name, ownerName string) *corev1.Pod {
 func barePodTarget(t *testing.T, ns, ownerName string, pods ...*corev1.Pod) *workloadTarget {
 	t.Helper()
 	ongoing := sustainv1alpha1.UpdateModeOngoing
-	objs := []client.Object{ongoingPolicy("p", sustainv1alpha1.UpdateTypes{Pod: &ongoing})}
+	objs := []client.Object{policyManaging("p", sustainv1alpha1.UpdateTypes{Pod: &ongoing})}
 	for _, p := range pods {
 		objs = append(objs, p.DeepCopy())
 	}
