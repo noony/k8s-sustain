@@ -163,6 +163,27 @@ jobs:
       - name: Run chart unit tests
         run: make helm-unittest
 
+      - name: Install promtool and yq
+        # Release binaries, pinned and checksum-verified for the same reason
+        # actions are SHA-pinned.
+        env:
+          PROMETHEUS_VERSION: 3.11.2
+          PROMETHEUS_SHA256: f643ea1ee90d109329302d27bddb1fb2e52655b1fa84e9e26f9a6f340da144a6
+          YQ_VERSION: v4.53.2
+          YQ_SHA256: d56bf5c6819e8e696340c312bd70f849dc1678a7cda9c2ad63eebd906371d56b
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sSfL -o prometheus.tar.gz \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          echo "${PROMETHEUS_SHA256}  prometheus.tar.gz" | sha256sum -c -
+          tar -xzf prometheus.tar.gz --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          curl -sSfL -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  yq" | sha256sum -c -
+          sudo install -m 0755 promtool yq /usr/local/bin/
+
+      - name: Validate and unit-test the recording rules
+        run: make helm-promtool
+
   gosec:
     runs-on: ubuntu-latest
     permissions:
