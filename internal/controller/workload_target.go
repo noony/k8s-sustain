@@ -2,7 +2,6 @@ package controller
 
 import (
 	"slices"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -111,14 +110,4 @@ func targetFromMember(key promclient.WorkloadIdentity, m inventory.Member, mode 
 		IdentityName:   key.OwnerName,
 		UpdateMode:     mode,
 	}
-}
-
-// sortedTargets returns a copy of targets ordered by key(), so every decision
-// taken across an identity's members — which member's autoscaler shapes the
-// recommendation — depends on the members' own names rather than the
-// listing or goroutine-completion order.
-func sortedTargets(targets []*workloadTarget) []*workloadTarget {
-	return slices.SortedFunc(slices.Values(targets), func(a, b *workloadTarget) int {
-		return strings.Compare(a.key(), b.key())
-	})
 }

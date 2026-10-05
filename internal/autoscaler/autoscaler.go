@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"sync"
 
@@ -64,26 +65,38 @@ var scaledObjectListGVK = schema.GroupVersionKind{
 }
 
 // targetKey identifies a workload by its scaleTargetRef (kind, name) within a
-// single namespace. It is the index key shared by Detect and Snapshot.Lookup.
+// single namespace.
 type targetKey struct {
 	kind string
 	name string
 }
 
-// Snapshot is a per-namespace, pre-built index of autoscaler targets, so a
-// caller processing many workloads in one namespace pays the two List calls
-// once instead of re-listing per workload. Safe for concurrent Lookup.
-type Snapshot struct {
+// snapshot is one namespace's autoscalers, indexed by scaleTargetRef.
+type snapshot struct {
 	// A nil map (e.g. when the KEDA CRD is absent) is treated as empty.
 	hpa  map[targetKey]Info
 	keda map[targetKey]Info
 }
 
-// NamespacedSnapshot builds and caches one Snapshot per namespace on first
+// Group is what targets each member of one identity. One Recommendation is
+// injected into every member's pods, so one autoscaler shapes it.
+type Group struct {
+	// Info is the autoscaler the identity's Recommendation is shaped against:
+	// that of the first member, in name order, that has one. KindNone when
+	// none has.
+	Info Info
+	// Members holds each member's own autoscaler, by name.
+	Members map[string]Info
+	// Disagreeing names each member whose kind of autoscaler differs from the
+	// first member's, as name=Kind.
+	Disagreeing []string
+}
+
+// NamespacedSnapshot builds and caches one snapshot per namespace on first
 // successful access, so a reconcile pass never lists a namespace it does not
 // touch. Failed builds are deliberately NOT cached: a transient List blip fails
-// only the Lookup that hit it, and the next one retries. Safe for concurrent
-// Lookup; same-namespace builds serialize behind a per-entry mutex.
+// only the read that hit it, and the next one retries. Safe for concurrent
+// use; same-namespace builds serialize behind a per-entry mutex.
 type NamespacedSnapshot struct {
 	c client.Client
 
@@ -92,22 +105,59 @@ type NamespacedSnapshot struct {
 }
 
 type nsEntry struct {
-	// mu serializes BuildSnapshot so concurrent first Lookups don't double-build.
+	// mu serializes buildSnapshot so concurrent first reads don't double-build.
 	mu   sync.Mutex
-	snap *Snapshot
+	snap *snapshot
 }
 
 // NewNamespacedSnapshot returns a lazy, per-namespace snapshot bound to the
-// client. No I/O happens until the first Lookup for a namespace.
+// client. No I/O happens until the first read of a namespace.
 func NewNamespacedSnapshot(c client.Client) *NamespacedSnapshot {
 	return &NamespacedSnapshot{c: c, byNS: map[string]*nsEntry{}}
 }
 
+// ForIdentity reads the autoscaler of every member of one identity, each a
+// workload of kind in namespace named in members. An identity without members
+// has none and lists nothing. A failed read caches nothing and returns a Group
+// with Info{Kind: KindNone} and the error; the next read retries.
+func (m *NamespacedSnapshot) ForIdentity(ctx context.Context, namespace, kind string, members []string) (Group, error) {
+	g := Group{Info: Info{Kind: KindNone}}
+	if len(members) == 0 {
+		return g, nil
+	}
+	snap, err := m.namespace(ctx, namespace)
+	if err != nil {
+		return g, err
+	}
+	names := slices.Sorted(slices.Values(members))
+	g.Members = make(map[string]Info, len(names))
+	for _, name := range names {
+		info := snap.lookup(kind, name)
+		g.Members[name] = info
+		if g.Info.Kind == KindNone {
+			g.Info = info
+		}
+		if first := g.Members[names[0]]; info.Kind != first.Kind {
+			g.Disagreeing = append(g.Disagreeing, name+"="+string(info.Kind))
+		}
+	}
+	return g, nil
+}
+
 // Lookup returns the autoscaler Info for (kind, name) in namespace, building the
-// namespace's Snapshot on first use and caching it on success. A build error
-// caches nothing and returns Info{Kind: KindNone} plus the error, matching
-// Detect's contract; the next Lookup retries the build.
+// namespace's snapshot on first use and caching it on success. A build error
+// caches nothing and returns Info{Kind: KindNone} plus the error; the next
+// Lookup retries the build.
 func (m *NamespacedSnapshot) Lookup(ctx context.Context, namespace, workloadKind, workloadName string) (Info, error) {
+	snap, err := m.namespace(ctx, namespace)
+	if err != nil {
+		return Info{Kind: KindNone}, err
+	}
+	return snap.lookup(workloadKind, workloadName), nil
+}
+
+// namespace returns the namespace's snapshot, building it on first use.
+func (m *NamespacedSnapshot) namespace(ctx context.Context, namespace string) (*snapshot, error) {
 	m.mu.Lock()
 	e, ok := m.byNS[namespace]
 	if !ok {
@@ -119,20 +169,18 @@ func (m *NamespacedSnapshot) Lookup(ctx context.Context, namespace, workloadKind
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.snap == nil {
-		snap, err := BuildSnapshot(ctx, m.c, namespace)
+		snap, err := buildSnapshot(ctx, m.c, namespace)
 		if err != nil {
-			// Don't cache failures: the next Lookup retries BuildSnapshot.
-			return Info{Kind: KindNone}, err
+			return nil, err
 		}
 		e.snap = snap
 	}
-	return e.snap.Lookup(workloadKind, workloadName), nil
+	return e.snap, nil
 }
 
-// BuildSnapshot lists HPAs and ScaledObjects in the namespace once and indexes
-// them by scaleTargetRef. A missing KEDA CRD is treated as "no ScaledObjects",
-// the same fallback Detect applies.
-func BuildSnapshot(ctx context.Context, c client.Client, namespace string) (*Snapshot, error) {
+// buildSnapshot lists HPAs and ScaledObjects in the namespace once and indexes
+// them by scaleTargetRef. A missing KEDA CRD is treated as "no ScaledObjects".
+func buildSnapshot(ctx context.Context, c client.Client, namespace string) (*snapshot, error) {
 	hpa, err := indexHPAs(ctx, c, namespace)
 	if err != nil {
 		return nil, err
@@ -141,13 +189,13 @@ func BuildSnapshot(ctx context.Context, c client.Client, namespace string) (*Sna
 	if err != nil {
 		return nil, err
 	}
-	return &Snapshot{hpa: hpa, keda: keda}, nil
+	return &snapshot{hpa: hpa, keda: keda}, nil
 }
 
-// Lookup returns the autoscaler Info for the workload (kind, name), applying the
-// same precedence as Detect: ScaledObject (KEDA) wins over HPA, and Info{Kind:
-// KindNone} is returned when neither targets the workload.
-func (s *Snapshot) Lookup(workloadKind, workloadName string) Info {
+// lookup returns the autoscaler Info for the workload (kind, name): a
+// ScaledObject (KEDA) wins over an HPA, and Info{Kind: KindNone} is returned
+// when neither targets the workload.
+func (s *snapshot) lookup(workloadKind, workloadName string) Info {
 	key := targetKey{kind: workloadKind, name: workloadName}
 	if info, ok := s.keda[key]; ok {
 		return info
@@ -156,28 +204,6 @@ func (s *Snapshot) Lookup(workloadKind, workloadName string) Info {
 		return info
 	}
 	return Info{Kind: KindNone}
-}
-
-// Detect is the single-workload entry point (the webhook hot path). A KEDA
-// ScaledObject wins over an HPA because KEDA owns the HPA it generates, and a
-// missing KEDA CRD is treated as "no ScaledObject". It short-circuits on the
-// first matching target rather than indexing the namespace; callers resolving
-// many workloads should BuildSnapshot once and Lookup instead. Its result is
-// identical to Snapshot.Lookup — the equivalence tests guard that contract.
-func Detect(ctx context.Context, c client.Client, namespace, workloadKind, workloadName string) (Info, error) {
-	if so, err := lookupScaledObject(ctx, c, namespace, workloadKind, workloadName); err != nil {
-		return Info{Kind: KindNone}, err
-	} else if so != nil {
-		return *so, nil
-	}
-
-	if hpa, err := lookupHPA(ctx, c, namespace, workloadKind, workloadName); err != nil {
-		return Info{Kind: KindNone}, err
-	} else if hpa != nil {
-		return *hpa, nil
-	}
-
-	return Info{Kind: KindNone}, nil
 }
 
 // hpaInfo converts an HPA into an autoscaler Info, defaulting MinReplicas to 1
@@ -217,53 +243,6 @@ func scaledObjectInfo(so *unstructured.Unstructured, spec map[string]any) Info {
 	}
 }
 
-func lookupHPA(ctx context.Context, c client.Client, namespace, workloadKind, workloadName string) (*Info, error) {
-	var list autoscalingv2.HorizontalPodAutoscalerList
-	if err := c.List(ctx, &list, client.InNamespace(namespace)); err != nil {
-		return nil, fmt.Errorf("list HPAs: %w", err)
-	}
-	for i := range list.Items {
-		hpa := &list.Items[i]
-		if hpa.Spec.ScaleTargetRef.Kind != workloadKind || hpa.Spec.ScaleTargetRef.Name != workloadName {
-			continue
-		}
-		info := hpaInfo(hpa)
-		return &info, nil
-	}
-	return nil, nil
-}
-
-// lookupScaledObject mirrors indexScaledObjects' per-item extraction so Detect
-// and Snapshot.Lookup agree. A missing KEDA CRD yields (nil, nil).
-func lookupScaledObject(ctx context.Context, c client.Client, namespace, workloadKind, workloadName string) (*Info, error) {
-	var list unstructured.UnstructuredList
-	list.SetGroupVersionKind(scaledObjectListGVK)
-	if err := c.List(ctx, &list, client.InNamespace(namespace)); err != nil {
-		// CRD not installed → behave as if no ScaledObject exists.
-		if meta.IsNoMatchError(err) || runtime.IsNotRegisteredError(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("list ScaledObjects: %w", err)
-	}
-	for i := range list.Items {
-		so := &list.Items[i]
-		spec, ok := so.Object["spec"].(map[string]any)
-		if !ok {
-			continue
-		}
-		ref, ok := spec["scaleTargetRef"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if str(ref["kind"]) != workloadKind || str(ref["name"]) != workloadName {
-			continue
-		}
-		info := scaledObjectInfo(so, spec)
-		return &info, nil
-	}
-	return nil, nil
-}
-
 func indexHPAs(ctx context.Context, c client.Client, namespace string) (map[targetKey]Info, error) {
 	var list autoscalingv2.HorizontalPodAutoscalerList
 	if err := c.List(ctx, &list, client.InNamespace(namespace)); err != nil {
@@ -273,7 +252,7 @@ func indexHPAs(ctx context.Context, c client.Client, namespace string) (map[targ
 	for i := range list.Items {
 		hpa := &list.Items[i]
 		key := targetKey{kind: hpa.Spec.ScaleTargetRef.Kind, name: hpa.Spec.ScaleTargetRef.Name}
-		// First HPA targeting a workload wins, matching Detect's linear scan.
+		// The first HPA listed for a workload wins.
 		if _, exists := out[key]; exists {
 			continue
 		}
@@ -336,7 +315,7 @@ func indexScaledObjects(ctx context.Context, c client.Client, namespace string) 
 			continue
 		}
 		key := targetKey{kind: str(ref["kind"]), name: str(ref["name"])}
-		// First ScaledObject targeting a workload wins, matching Detect's scan.
+		// The first ScaledObject listed for a workload wins.
 		if _, exists := out[key]; exists {
 			continue
 		}

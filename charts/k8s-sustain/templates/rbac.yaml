@@ -70,11 +70,11 @@ rules:
   - apiGroups: [""]
     resources: [pods/eviction]
     verbs: [create]
-  # HPA detection (read-only; autoscaler.Detect queries only)
+  # HPA detection (read-only; listed per namespace for autoscaler coordination)
   - apiGroups: [autoscaling]
     resources: [horizontalpodautoscalers]
     verbs: [get, list, watch]
-  # KEDA ScaledObjects (read-only; autoscaler.Detect queries only)
+  # KEDA ScaledObjects (read-only; listed per namespace for autoscaler coordination)
   - apiGroups: [keda.sh]
     resources: [scaledobjects]
     verbs: [get, list, watch]

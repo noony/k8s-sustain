@@ -185,9 +185,9 @@ func (r *PolicyReconciler) computeIdentity(
 }
 
 // groupAutoscalerInfo resolves the autoscaler an identity's recommendation is
-// shaped against: the first member in sorted key() order that has one, or
-// KindNone. It also reports a mixed-autoscaler group, since the one shared
-// recommendation is injected into every member's pods.
+// shaped against from its members' (autoscaler.Group), and reports a
+// mixed-autoscaler group, since the one shared recommendation is injected into
+// every member's pods.
 func (r *PolicyReconciler) groupAutoscalerInfo(
 	ctx context.Context,
 	identity promclient.WorkloadIdentity,
@@ -195,38 +195,22 @@ func (r *PolicyReconciler) groupAutoscalerInfo(
 	autoSnap *autoscaler.NamespacedSnapshot,
 ) (autoscaler.Info, bool) {
 	logger := log.FromContext(ctx)
-	winner := autoscaler.Info{Kind: autoscaler.KindNone}
-	haveWinner := false
-	var baseline autoscaler.Kind
-	haveBaseline := false
-	var disagreeing []string
-
-	for _, t := range sortedTargets(targets) {
-		info, err := autoSnap.Lookup(ctx, t.Namespace, t.Kind, t.Name)
-		if err != nil {
-			logger.Error(err, "autoscaler detection failed, proceeding without it",
-				"kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
-			continue
-		}
-		if !haveWinner && info.Kind != autoscaler.KindNone {
-			winner, haveWinner = info, true
-		}
-		if !haveBaseline {
-			baseline, haveBaseline = info.Kind, true
-		} else if info.Kind != baseline {
-			disagreeing = append(disagreeing, t.key()+"="+string(info.Kind))
-		}
+	names := make([]string, len(targets))
+	for i, t := range targets {
+		names[i] = t.Name
 	}
-
-	if len(disagreeing) > 0 {
+	g, err := autoSnap.ForIdentity(ctx, identity.Namespace, identity.OwnerKind, names)
+	if err != nil {
+		logger.Error(err, "autoscaler detection failed, proceeding without it",
+			"kind", identity.OwnerKind, "name", identity.OwnerName, "namespace", identity.Namespace)
+	}
+	if len(g.Disagreeing) > 0 {
 		logger.V(1).Info("owner-name group members disagree on autoscaler state; "+
-			"the shared recommendation is shaped by the first sorted member that HAS an autoscaler "+
-			"(see governingAutoscaler), not by the first sorted member",
+			"the shared recommendation is shaped by the first member by name that HAS an autoscaler",
 			"namespace", identity.Namespace, "ownerKind", identity.OwnerKind, "ownerName", identity.OwnerName,
-			"governingAutoscaler", winner.Kind, "baseline", baseline, "disagreeing", disagreeing)
+			"governingAutoscaler", g.Info.Kind, "disagreeing", g.Disagreeing)
 	}
-
-	return winner, len(disagreeing) > 0
+	return g.Info, len(g.Disagreeing) > 0
 }
 
 // oomFloorsOf reads, from the OOM floor stage of each container's trace,
