@@ -210,6 +210,38 @@ func TestReadCarriesTheWholeRecommendation(t *testing.T) {
 	}
 }
 
+// What a Policy holds does not age and survives every later outcome, but is
+// never another Policy's numbers.
+func TestHeldIsOnlyWhatThePolicyComputed(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name   string
+		known  func() *sustainv1alpha1.WorkloadRecommendation
+		policy string
+		want   bool
+	}{
+		{"none stored", func() *sustainv1alpha1.WorkloadRecommendation { return nil }, "p", false},
+		{"computed long ago", func() *sustainv1alpha1.WorkloadRecommendation { return computed(24*time.Hour, now) }, "p", true},
+		{"kept through a later outcome", func() *sustainv1alpha1.WorkloadRecommendation {
+			w := computed(time.Hour, now)
+			w.Status.Outcome = sustainv1alpha1.OutcomeFetchFailed
+			return w
+		}, "p", true},
+		{"computed by another Policy", func() *sustainv1alpha1.WorkloadRecommendation { return computed(time.Minute, now) }, "q", false},
+		{"never computed", withoutRecommendation(now, sustainv1alpha1.OutcomeNoData), "p", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := wlrcache.Held(tc.known(), tc.policy)
+			if tc.want != (got != nil) {
+				t.Fatalf("held = %v, want a Recommendation: %v", got, tc.want)
+			}
+			if tc.want && got["app"].CPURequest.Cmp(*qty("200m")) != 0 {
+				t.Errorf("held[app] = %+v, want the stored 200m", got["app"])
+			}
+		})
+	}
+}
+
 // Every test below runs against cluster, whose cache lags behind every
 // create: each writer is exercised under the lag it meets in production.
 
