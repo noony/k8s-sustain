@@ -2,7 +2,9 @@ package workload
 
 import (
 	"context"
+	"errors"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1831,6 +1833,147 @@ func TestApply_CrashLoopBackOffAbortsLoop(t *testing.T) {
 	}
 	if len(evicted) != 1 || evicted[0] != "a" {
 		t.Errorf("expected exactly one eviction (pod 'a'), got %v", evicted)
+	}
+}
+
+func crashLooping(pod *corev1.Pod) *corev1.Pod {
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:  "app",
+		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+	}}
+	return pod
+}
+
+// The defect this pins: the post-eviction wait halted pass 1 on the
+// crash-looping replacement, but pass 2 evicted the next pod before waiting
+// and noticing the same replacement, one more pod per reconcile.
+func TestApply_CrashLoopingUpdatedPodHaltsEvictionsAcrossPasses(t *testing.T) {
+	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evicted []string
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(runningPod("a", stale), runningPod("b", stale), runningPod("c", stale)).
+		WithInterceptorFuncs(interceptor.Funcs{
+			// The replacement is admitted with the recommendation and
+			// crash-loops on it.
+			SubResourceCreate: func(ctx context.Context, inner client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				if sub != "eviction" {
+					return nil
+				}
+				evicted = append(evicted, obj.GetName())
+				if err := inner.Delete(ctx, obj); err != nil {
+					return err
+				}
+				replacement := runningPod(obj.GetName()+"-new", nil)
+				applyRecsToPodSpec(&replacement.Spec, recs)
+				return inner.Create(ctx, crashLooping(replacement))
+			},
+		}).
+		Build()
+	p := New(c, false, testEvictionOpts()...)
+
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); !errors.Is(err, errCrashLoopBackOff) {
+		t.Fatalf("pass 1: err = %v, want the crash-loop halt", err)
+	}
+	if want := []string{"a"}; !slices.Equal(evicted, want) {
+		t.Fatalf("pass 1 evicted %v, want %v", evicted, want)
+	}
+
+	out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
+	if !errors.Is(err, errCrashLoopBackOff) {
+		t.Fatalf("pass 2: err = %v, want the crash-loop halt reported again", err)
+	}
+	if want := []string{"a"}; !slices.Equal(evicted, want) {
+		t.Errorf("pass 2 evicted more pods while a-new crash-loops on the recommendation: %v", evicted)
+	}
+	if out.Changed != 0 {
+		t.Errorf("pass 2 changed = %d, want 0", out.Changed)
+	}
+}
+
+// Only a pod already running the recommendation proves it bad. A stale
+// crash-looping pod is evicted like any other: the new numbers may fix it.
+func TestApply_CrashLoopingStalePodIsStillEvicted(t *testing.T) {
+	stale := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evicted []string
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(crashLooping(runningPod("a", stale)), runningPod("b", stale)).
+		WithInterceptorFuncs(evictionInterceptor(&evicted)).
+		Build()
+	p := New(c, false, testEvictionOpts()...)
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if want := []string{"a", "b"}; !slices.Equal(evicted, want) {
+		t.Errorf("evicted %v, want %v", evicted, want)
+	}
+}
+
+// A crash-looping pod on the recommendation halts nothing when no pod is left
+// to evict: the member is not Blocked for a crash the pass cannot spread.
+func TestApply_CrashLoopingUpdatedPodWithNothingToEvict(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evicted []string
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(crashLooping(runningPod("a", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}))).
+		WithInterceptorFuncs(evictionInterceptor(&evicted)).
+		Build()
+	p := New(c, false, testEvictionOpts()...)
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(evicted) != 0 || out.Pods != (PodCounts{Total: 1, Stale: 0}) {
+		t.Errorf("evicted %v, pods %+v; want nothing evicted and the pod counted fresh", evicted, out.Pods)
+	}
+}
+
+// In place, the halt holds back the eviction fallback; resizes that need no
+// eviction are not what spreads a crash across replacements.
+func TestApply_InPlace_CrashLoopingUpdatedPodHaltsFallbackEviction(t *testing.T) {
+	updated := crashLooping(runningPod("a", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}))
+	rejected := runningPod("b", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = policyv1.AddToScheme(scheme)
+
+	var evicted []string
+	funcs := evictionInterceptor(&evicted)
+	funcs.SubResourcePatch = func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+		if sub == "resize" {
+			return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), obj.GetName(), nil)
+		}
+		return nil
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(updated, rejected).WithInterceptorFuncs(funcs).Build()
+	p := New(c, true, testEvictionOpts()...)
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
+
+	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); !errors.Is(err, errCrashLoopBackOff) {
+		t.Fatalf("err = %v, want the crash-loop halt", err)
+	}
+	if len(evicted) != 0 {
+		t.Errorf("evicted %v while a pod on the recommendation crash-loops", evicted)
 	}
 }
 

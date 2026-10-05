@@ -275,7 +275,7 @@ func (p *Patcher) resizePodInPlaceWith(ctx context.Context, pod *corev1.Pod, rec
 
 // recycle resizes or evicts stale pods one at a time, waiting for each
 // replacement and aborting on CrashLoopBackOff so a bad recommendation
-// cannot cascade through the workload.
+// cannot cascade through the workload, within a pass or across passes.
 func (p *Patcher) recycle(ctx context.Context, set podSet, recs map[string]ContainerRecommendation, s ApplySettings) (Outcome, error) {
 	var out Outcome
 	logger := log.FromContext(ctx).WithValues("namespace", set.namespace, "selector", set.selector.String())
@@ -292,6 +292,10 @@ func (p *Patcher) recycle(ctx context.Context, set podSet, recs map[string]Conta
 		return out, nil
 	}
 	fixed := map[types.UID]bool{}
+	// Read before the loop: an in-place resize rewrites the spec of the pod it
+	// resizes, and a stale pod resized this pass is no proof against the
+	// recommendation.
+	gate := evictionGate{ignoreSafeToEvict: s.IgnoreSafeToEvict, halted: updatedPodCrashLooping(pods, recs, s.Tolerance)}
 
 	var errs []error
 	processed, skipped := 0, 0
@@ -324,12 +328,16 @@ func (p *Patcher) recycle(ctx context.Context, set podSet, recs map[string]Conta
 			err              error
 		)
 		if p.inPlace {
-			applied, evicted, err = p.patchPodInPlace(ctx, pod, podRecs, s.IgnoreSafeToEvict)
+			applied, evicted, err = p.patchPodInPlace(ctx, pod, podRecs, gate)
 		} else {
-			evicted, err = p.evictPod(ctx, pod, podRecs, s.IgnoreSafeToEvict)
+			evicted, err = p.evictPod(ctx, pod, podRecs, gate)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
+		}
+		if errors.Is(err, errCrashLoopBackOff) {
+			logger.Info("halting eviction loop for this reconcile", "reason", err.Error())
+			break
 		}
 		processed++
 		if applied || evicted {
@@ -356,17 +364,17 @@ func (p *Patcher) recycle(ctx context.Context, set podSet, recs map[string]Conta
 // patchPodInPlace resizes a pod in place, falling back to eviction when the
 // resize is Infeasible/Error or rejected as Invalid. Returns (applied,
 // evicted, err).
-func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, ignoreSafeToEvict bool) (bool, bool, error) {
+func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, gate evictionGate) (bool, bool, error) {
 	return p.resizePodInPlaceWith(ctx, pod, recs, unapplyStrategy{
 		unsatisfiableLog: "staged in-place resize cannot complete, falling back to eviction",
 		unappliedLog:     "falling back to eviction",
 		// submitEviction, not evictPod: the spec already matches the
 		// recommendation, so evictPod's staleness gate would skip it.
 		onUnsatisfiable: func(ctx context.Context, pod *corev1.Pod, verdict string) (bool, error) {
-			return p.submitEviction(ctx, pod, "in-place resize verdict "+verdict, ignoreSafeToEvict)
+			return p.submitEviction(ctx, pod, "in-place resize verdict "+verdict, gate)
 		},
 		onUnapplied: func(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
-			return p.evictPod(ctx, pod, recs, ignoreSafeToEvict)
+			return p.evictPod(ctx, pod, recs, gate)
 		},
 	})
 }
@@ -419,28 +427,38 @@ func (p *Patcher) applySidecarResize(ctx context.Context, pod, base *corev1.Pod,
 	return true
 }
 
+// evictionGate is what can hold back an eviction in one recycle pass.
+type evictionGate struct {
+	ignoreSafeToEvict bool
+	// halted, when set, is returned instead of evicting.
+	halted error
+}
+
 // evictPod evicts a pod running stale resources. Returns (evicted, err);
 // evicted=false covers pods already fresh, gone, or PDB-blocked.
-func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, ignoreSafeToEvict bool) (bool, error) {
+func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, gate evictionGate) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
 	if !podIsStale(pod, recs) {
 		logger.V(1).Info("pod already running recommended resources, eviction skipped")
 		return false, nil
 	}
-	return p.submitEviction(ctx, pod, "stale resources", ignoreSafeToEvict)
+	return p.submitEviction(ctx, pod, "stale resources", gate)
 }
 
 // submitEviction creates the Eviction without a staleness gate. It is the
-// single safe-to-evict check for both eviction triggers.
-func (p *Patcher) submitEviction(ctx context.Context, pod *corev1.Pod, why string, ignoreSafeToEvict bool) (bool, error) {
+// single gate check for both eviction triggers.
+func (p *Patcher) submitEviction(ctx context.Context, pod *corev1.Pod, why string, gate evictionGate) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
-	if !ignoreSafeToEvict && pod.Annotations[SafeToEvictAnnotation] == "false" {
+	if !gate.ignoreSafeToEvict && pod.Annotations[SafeToEvictAnnotation] == "false" {
 		logger.Info("eviction skipped: pod annotated safe-to-evict=false",
 			"reason", why,
 			"override", "spec.rightSizing.update.eviction.ignoreAutoscalerSafeToEvictAnnotations")
 		return false, nil
+	}
+	if gate.halted != nil {
+		return false, gate.halted
 	}
 
 	eviction := &policyv1.Eviction{
@@ -468,8 +486,28 @@ func (p *Patcher) submitEviction(ctx context.Context, pod *corev1.Pod, why strin
 }
 
 // errCrashLoopBackOff aborts the recycle loop when a pod in the selector
-// enters CrashLoopBackOff during the post-eviction wait.
+// enters CrashLoopBackOff during the post-eviction wait, or when the pass
+// would evict while a pod already running the recommendation crash-loops.
 var errCrashLoopBackOff = errors.New("pod in CrashLoopBackOff; aborting eviction loop")
+
+// updatedPodCrashLooping returns the error that halts a pass's evictions when
+// a live pod already running recs is in CrashLoopBackOff. The post-eviction
+// wait only sees crash-loops that start during the pass that evicted, so
+// without this each pass would evict one more pod before halting on the same
+// crash-looping replacement. A stale crash-looping pod halts nothing: the new
+// numbers may be its fix.
+func updatedPodCrashLooping(pods []*corev1.Pod, recs map[string]ContainerRecommendation, tol Tolerance) error {
+	for _, pod := range pods {
+		if !countable(pod) || !hasCrashLoopBackOff(pod) {
+			continue
+		}
+		if podIsStale(pod, ClampRecsToTolerance(podContainers(pod), recs, tol)) {
+			continue
+		}
+		return fmt.Errorf("%w: %s already runs the recommendation", errCrashLoopBackOff, pod.Name)
+	}
+	return nil
+}
 
 // waitForReplacement blocks until the evicted pod is gone and the selector
 // is quiescent, the timeout fires, or a pod enters CrashLoopBackOff.
