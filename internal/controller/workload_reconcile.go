@@ -21,6 +21,11 @@ import (
 // one task per member so a large owner-name group spreads across the slots. It
 // returns how many members it dispatched, how many of those failed, and how
 // many it skipped for backoff.
+//
+// An identity whose decision persist could not store is not applied: the
+// replacements of the pods it would evict read the stored Recommendation at
+// admission, and would start on template resources. Its members count as
+// dispatched and failed, and the next cycle retries.
 func (r *PolicyReconciler) apply(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
@@ -29,6 +34,7 @@ func (r *PolicyReconciler) apply(
 ) (dispatched, failed, skipped int) {
 	logger := log.FromContext(ctx)
 	var failures atomic.Int32
+	withheld := 0
 	var g errgroup.Group
 	g.SetLimit(r.WorkloadConcurrencyLimit)
 	for i := range results {
@@ -36,6 +42,15 @@ func (r *PolicyReconciler) apply(
 		for _, t := range res.backedOff {
 			logger.V(1).Info("skipping workload in retry backoff", "target", t.key())
 			skipped++
+		}
+		if res.recordErr != nil && len(res.apply) > 0 {
+			id := res.item.Identity
+			logger.Info("not applying: the identity's recommendation could not be stored for the webhook; retrying next cycle",
+				"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
+				"members", len(res.apply), "err", res.recordErr.Error())
+			dispatched += len(res.apply)
+			withheld += len(res.apply)
+			continue
 		}
 		for _, t := range res.apply {
 			dispatched++
@@ -48,7 +63,7 @@ func (r *PolicyReconciler) apply(
 		}
 	}
 	_ = g.Wait()
-	return dispatched, int(failures.Load()), skipped
+	return dispatched, int(failures.Load()) + withheld, skipped
 }
 
 // reconcileWorkload APPLIES an identity's recommendation to a single workload

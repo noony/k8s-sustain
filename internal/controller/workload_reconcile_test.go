@@ -450,7 +450,7 @@ func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
 			var evicted bool
 			r.Client = fake.NewClientBuilder().
 				WithScheme(r.Scheme).
-				WithStatusSubresource(&sustainv1alpha1.Policy{}).
+				WithStatusSubresource(&sustainv1alpha1.Policy{}, &sustainv1alpha1.WorkloadRecommendation{}).
 				WithObjects(pod).
 				WithInterceptorFuncs(interceptor.Funcs{
 					SubResourceCreate: func(ctx context.Context, c client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {

@@ -93,8 +93,8 @@ func containersFromObserved(
 // before anything is applied, so the webhook serves the new value by the time
 // replacement pods are admitted. Departed identities are never applied, so
 // persist accounts for them: it returns how many there were and how many
-// failed. A live identity's write is best-effort; its apply step reports for
-// it.
+// failed. A live identity's failure is kept on its result for apply, which
+// holds its members back and reports for them.
 func (r *PolicyReconciler) persist(ctx context.Context, results []identityResult) (departed, failed int) {
 	var failures atomic.Int32
 	var g errgroup.Group
@@ -125,7 +125,7 @@ func (r *PolicyReconciler) persist(ctx context.Context, results []identityResult
 // of "undecided".
 func (r *PolicyReconciler) persistLive(ctx context.Context, res *identityResult) {
 	if d, ok := res.decision(false); ok {
-		_ = wlrcache.Record(ctx, r.Client, res.item.WLR, d, time.Now())
+		res.recordErr = wlrcache.Record(ctx, r.Client, res.item.WLR, d, time.Now())
 	}
 }
 

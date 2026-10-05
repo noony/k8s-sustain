@@ -51,6 +51,9 @@ type identityResult struct {
 	// would act on members the fetch left out.
 	apply     []*workloadTarget
 	backedOff []*workloadTarget
+	// recordErr is why persist could not store a live identity's decision.
+	// Its members are then not applied this cycle.
+	recordErr error
 }
 
 // decision is what the result records in the identity's
