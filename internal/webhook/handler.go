@@ -12,23 +12,19 @@ import (
 	"golang.org/x/sync/singleflight"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 	apivalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
-	"github.com/noony/k8s-sustain/internal/policymatch"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // maxAdmissionBodyBytes caps the AdmissionReview payload the webhook decodes.
 const maxAdmissionBodyBytes = 1 << 20
-
-// maxPolicyNameLen is the Kubernetes DNS-subdomain name limit.
-const maxPolicyNameLen = 253
 
 // apiCallTimeout bounds each Kubernetes API Get inside the admission path, so
 // one slow apiserver round-trip cannot eat the whole admission budget.
@@ -38,14 +34,6 @@ const apiCallTimeout = 2 * time.Second
 // timeout is 5s by default; failing open inside that budget beats letting the
 // apiserver time out and fall back to failurePolicy.
 const admissionTimeout = 4 * time.Second
-
-// isValidPolicyName reports whether name is a DNS-1123 subdomain.
-func isValidPolicyName(name string) bool {
-	if name == "" || len(name) > maxPolicyNameLen {
-		return false
-	}
-	return len(apivalidation.IsDNS1123Subdomain(name)) == 0
-}
 
 // Handler is the mutating admission handler. On Pod CREATE it injects the
 // resources cached in the controller-written WorkloadRecommendation; it never
@@ -168,58 +156,23 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 	pod.Namespace = req.Namespace
 
-	var resolvedOwner podOwner
-
-	policyName := pod.Annotations[sustainv1alpha1.PolicyAnnotation]
-	if pod.Annotations[sustainv1alpha1.OptOutAnnotation] == "true" {
-		logger.V(1).Info("pod opts out, allowing without injection")
+	govCtx, govCancel := context.WithTimeout(ctx, governanceTimeout)
+	decision, err := governance.Decide(govCtx, governance.Pod(&pod), admissionReader{h})
+	govCancel()
+	if err != nil {
+		logger.Error(err, "failed to decide which Policy governs the pod; allowing pod without injection")
 		return allow
 	}
-	if policyName == "" {
-		optInCtx, optInCancel := context.WithTimeout(ctx, optInTimeout)
-		name, level, owner, err := h.resolveOptIn(optInCtx, logger, &pod)
-		optInCancel()
-		if err != nil {
-			logger.Error(err, "failed to resolve multi-level policy opt-in; allowing pod without injection")
-			return allow
+	if decision.OptIn != "" {
+		logger = logger.WithValues("policy", decision.OptIn, "optInLevel", decision.Level)
+	}
+	if !decision.Selected() {
+		// A malformed label selector selects nothing, never a denial.
+		if decision.Refusal == governance.SelectorInvalid {
+			logger.Info("policy has invalid labelSelector; allowing pod without injection (fail-open)")
+		} else {
+			logger.V(1).Info("pod is not governed, allowing without injection", "refusal", decision.Refusal)
 		}
-		if name == "" {
-			logger.V(1).Info("pod has no policy annotation at any level, allowing without injection")
-			return allow
-		}
-		policyName, resolvedOwner = name, owner
-		logger = logger.WithValues("optInLevel", level)
-	}
-	if !isValidPolicyName(policyName) {
-		logger.Info("pod has invalid policy annotation, allowing without injection", "policy", policyName)
-		return allow
-	}
-	logger = logger.WithValues("policy", policyName)
-	logger.V(1).Info("pod is annotated with policy")
-
-	var policy sustainv1alpha1.Policy
-	policyCtx, policyCancel := context.WithTimeout(ctx, apiCallTimeout)
-	policyErr := h.Client.Get(policyCtx, types.NamespacedName{Name: policyName}, &policy)
-	policyCancel()
-	if policyErr != nil {
-		if client.IgnoreNotFound(policyErr) == nil {
-			logger.V(1).Info("policy not found, allowing pod")
-			return allow
-		}
-		logger.Error(policyErr, "failed to fetch policy")
-		return allow
-	}
-
-	// A malformed label selector is treated as non-matching, never as a denial.
-	sel, selErr := policymatch.SelectorOK(policy.Spec.Selector.LabelSelector)
-	if selErr != nil {
-		logger.Info("policy has invalid labelSelector; allowing pod without injection (fail-open)", "err", selErr)
-		return allow
-	}
-	if !policymatch.MatchesSelector(&policy, req.Namespace, pod.Labels, h.ExcludedNamespaces, sel) {
-		logger.V(1).Info("pod does not match policy selector (namespace/labels) or is in excluded namespace; allowing without injection",
-			"selectorNamespaces", policy.Spec.Selector.Namespaces,
-			"excludedNamespaces", h.ExcludedNamespaces)
 		return allow
 	}
 
@@ -227,31 +180,15 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	// exposes it for the recording rules. Applied even in recommend-only mode.
 	labelPatch := ownerNameLabelPatch(&pod)
 
-	ownerKind, ownerName := resolvedOwner.Kind, resolvedOwner.Name
-	if !resolvedOwner.Resolved {
-		ownerCtx, ownerCancel := context.WithTimeout(ctx, 2*apiCallTimeout)
-		var err error
-		ownerKind, ownerName, err = h.resolveCachedPodOwner(ownerCtx, &pod)
-		ownerCancel()
-		if err != nil {
-			logger.Error(err, "failed to resolve owner kind")
-			return allowWithLabelPatch(labelPatch)
-		}
-	}
-	ownerKind, ownerName = workload.ApplyOwnerNameOverride(ownerKind, ownerName, pod.Annotations)
-	if ownerKind == "" {
-		logger.V(1).Info("standalone pod (no controller owner), skipping injection")
-		return allowWithLabelPatch(labelPatch)
-	}
+	ownerKind, ownerName := decision.Identity.OwnerKind, decision.Identity.OwnerName
 	logger = logger.WithValues("ownerKind", ownerKind, "ownerName", ownerName)
-	logger.V(1).Info("resolved pod owner")
-
-	mode := policy.Spec.RightSizing.Update.Types.ModeForKind(ownerKind)
-	if mode == nil {
-		logger.V(1).Info("policy does not configure this workload kind, skipping")
+	if !decision.Governed() {
+		logger.V(1).Info("pod is not governed, allowing without injection", "refusal", decision.Refusal)
 		return allowWithLabelPatch(labelPatch)
 	}
-	logger.V(1).Info("policy configured for workload kind", "mode", *mode)
+	policy := decision.Policy
+	policyName := policy.Name
+	logger.V(1).Info("pod is governed", "mode", *policy.Spec.RightSizing.Update.Types.ModeForKind(ownerKind))
 
 	cacheCtx, cacheCancel := context.WithTimeout(ctx, apiCallTimeout)
 	known, err := h.storedRecommendation(cacheCtx, req.Namespace, ownerKind, ownerName)

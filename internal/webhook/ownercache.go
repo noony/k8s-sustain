@@ -20,7 +20,7 @@ const ownerAnnotationsCacheTTL = 30 * time.Second
 // ownerAnnotationsCacheMaxEntries bounds the cache's footprint independent of
 // TTL, so many distinct owners cannot grow it without bound between expiries.
 // Entries stay small only because cacheableOwnerAnnotations copies out just the
-// two keys ResolvePolicy reads — an owner's raw annotations can carry
+// two keys governance reads — an owner's raw annotations can carry
 // last-applied-configuration, up to Kubernetes' 256KB per-object ceiling.
 const ownerAnnotationsCacheMaxEntries = 4096
 

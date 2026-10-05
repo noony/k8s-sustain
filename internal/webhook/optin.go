@@ -12,58 +12,38 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/policymatch"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// optInTimeout is one shared budget for the whole opt-in chain, which runs
-// for every pod without its own annotation. A shared budget keeps a slow
-// path here from eating the admission budget the Policy and
-// WorkloadRecommendation reads still need.
-const optInTimeout = 2 * time.Second
+// governanceTimeout is one shared budget for every read governance.Decide
+// makes for a pod. A shared budget keeps a slow path here from eating the
+// admission budget the WorkloadRecommendation read still needs.
+const governanceTimeout = 2 * time.Second
 
-// podOwner carries a resolved pod owner so admit() does not resolve it twice.
-// Resolved distinguishes an orphan pod from "not resolved yet".
-type podOwner struct {
-	Kind, Name string
-	Resolved   bool
+// admissionReader is the governance.Reader of one admission: Policies and
+// Namespaces come from the informer cache, the owner chain through the TTL
+// caches below.
+type admissionReader struct{ h *Handler }
+
+func (r admissionReader) Policies(ctx context.Context) (*governance.Policies, error) {
+	var list sustainv1alpha1.PolicyList
+	if err := r.h.Client.List(ctx, &list); err != nil {
+		return nil, fmt.Errorf("listing policies: %w", err)
+	}
+	return governance.NewPolicies(list.Items, r.h.ExcludedNamespaces), nil
 }
 
-// resolveOptIn finds the Policy a pod opts into when the pod itself carries no
-// policy annotation, by reading the owning workload's and the Namespace's
-// annotations. The pre-gate short-circuits when no Policy could cover the
-// pod; past it both reads always run, because ResolvePolicy needs all levels
-// together. Every error is returned for the caller to fail open on.
-func (h *Handler) resolveOptIn(ctx context.Context, logger logr.Logger, pod *corev1.Pod) (string, policymatch.Level, podOwner, error) {
-	var owner podOwner
+func (r admissionReader) PodOwner(ctx context.Context, pod *corev1.Pod) (string, string, error) {
+	return r.h.resolveCachedPodOwner(ctx, pod)
+}
 
-	covered, err := h.anyPolicyCovers(ctx, pod.Namespace, pod.Labels)
-	if err != nil {
-		return "", policymatch.LevelNone, owner, err
-	}
-	if !covered {
-		logger.V(1).Info("no policy selector covers this pod; skipping multi-level opt-in resolution")
-		return "", policymatch.LevelNone, owner, nil
-	}
+func (r admissionReader) WorkloadAnnotations(ctx context.Context, namespace, kind, name string) (map[string]string, error) {
+	return r.h.ownerAnnotations(ctx, namespace, kind, name)
+}
 
-	nsAnnotations, err := workload.NamespaceAnnotations(ctx, h.Client, pod.Namespace)
-	if err != nil {
-		return "", policymatch.LevelNone, owner, err
-	}
-
-	ownerKind, ownerName, err := h.resolveCachedPodOwner(ctx, pod)
-	if err != nil {
-		return "", policymatch.LevelNone, owner, err
-	}
-	owner = podOwner{Kind: ownerKind, Name: ownerName, Resolved: true}
-
-	workloadAnnotations, err := h.ownerAnnotations(ctx, pod.Namespace, ownerKind, ownerName)
-	if err != nil {
-		return "", policymatch.LevelNone, owner, err
-	}
-
-	name, level := policymatch.ResolvePolicy(pod.Annotations, workloadAnnotations, nsAnnotations)
-	return name, level, owner, nil
+func (r admissionReader) NamespaceAnnotations(ctx context.Context, namespace string) (map[string]string, error) {
+	return workload.NamespaceAnnotations(ctx, r.h.Client, namespace)
 }
 
 // resolveCachedPodOwner is workload.ResolvePodOwner with the ReplicaSet/Job
@@ -141,27 +121,6 @@ func (h *Handler) fetchAndCacheOwnerRef(namespace string, ref metav1.OwnerRefere
 	v := resolvedOwnerRef{Kind: kind, Name: name}
 	h.ownerRefCache.set(key, v, ownerRefCacheTTL, ownerRefCacheMaxEntries)
 	return v, nil
-}
-
-// anyPolicyCovers reports whether at least one Policy's selector could claim a
-// pod in this namespace with these labels. A Policy with an unparseable label
-// selector is skipped, matching admit()'s fail-open handling.
-func (h *Handler) anyPolicyCovers(ctx context.Context, namespace string, podLabels map[string]string) (bool, error) {
-	var list sustainv1alpha1.PolicyList
-	if err := h.Client.List(ctx, &list); err != nil {
-		return false, fmt.Errorf("listing policies: %w", err)
-	}
-	for i := range list.Items {
-		p := &list.Items[i]
-		sel, err := policymatch.SelectorOK(p.Spec.Selector.LabelSelector)
-		if err != nil {
-			continue
-		}
-		if policymatch.MatchesSelector(p, namespace, podLabels, h.ExcludedNamespaces, sel) {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // ownerAnnotations reads the workload object's own metadata.annotations,

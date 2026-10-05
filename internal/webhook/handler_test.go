@@ -26,6 +26,8 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
+	"github.com/noony/k8s-sustain/internal/inventory"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -511,80 +513,6 @@ func TestAdmit_EmptyObjectRaw_AllowsWithoutPatch(t *testing.T) {
 	}
 }
 
-func TestAdmit_NoAnnotation_AllowsWithoutPatch(t *testing.T) {
-	env := newAdmitEnv(t)
-
-	pod := podWithRSOwner("default", "p", "rs", "")
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatal("expected allow")
-	}
-	if resp.Patch != nil {
-		t.Errorf("expected no patch, got %d bytes", len(resp.Patch))
-	}
-}
-
-// An annotation naming a Policy that does not exist must fail open.
-func TestAdmit_PolicyNotFound_AllowsWithoutPatch(t *testing.T) {
-	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, rs)
-
-	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "missing-policy")
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatal("expected allow")
-	}
-	if resp.Patch != nil {
-		t.Errorf("expected no patch when policy missing, got %d bytes", len(resp.Patch))
-	}
-}
-
-// A pod without a controller owner is skipped: there is no workload kind to
-// resolve.
-func TestAdmit_StandalonePod_AllowsWithoutPatch(t *testing.T) {
-	env := newAdmitEnv(t, basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate))
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:   "default",
-			Name:        "standalone",
-			Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
-		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
-	}
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatal("expected allow")
-	}
-	if resp.Patch != nil {
-		t.Error("expected no patch for standalone pod")
-	}
-}
-
-func TestAdmit_KindNotConfigured_AllowsWithoutPatch(t *testing.T) {
-	mode := sustainv1alpha1.UpdateModeOnCreate
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p"},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				// Only StatefulSet configured — Deployment-owned pods should be skipped.
-				Update: sustainv1alpha1.UpdateSpec{Types: sustainv1alpha1.UpdateTypes{StatefulSet: &mode}},
-			},
-		},
-	}
-	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, policy, rs)
-
-	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatal("expected allow")
-	}
-	if resp.Patch != nil {
-		t.Error("expected no patch when kind not configured")
-	}
-}
-
 func TestAdmit_RecommendOnly_AllowsWithoutPatch(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
@@ -942,85 +870,8 @@ func TestServeHTTP_BadBody_Returns400(t *testing.T) {
 	}
 }
 
-func TestIsValidPolicyName(t *testing.T) {
-	cases := []struct {
-		name string
-		want bool
-	}{
-		{"good", true},
-		{"good-name-123", true},
-		{"", false},
-		{"UPPER", false},                  // DNS-1123 is lowercase
-		{"a/b", false},                    // slash
-		{strings.Repeat("a", 254), false}, // > 253 chars
-		{"-leading-dash", false},
-		{"trailing-dash-", false},
-		{"a..b", false}, // empty label
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := isValidPolicyName(c.name)
-			if got != c.want {
-				t.Errorf("isValidPolicyName(%q) = %v, want %v", c.name, got, c.want)
-			}
-		})
-	}
-}
-
-// A malformed annotation value is rejected before it is ever used to look up a
-// Policy object.
-func TestAdmit_InvalidPolicyAnnotation_AllowsWithoutPatch(t *testing.T) {
-	env := newAdmitEnv(t, basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate))
-
-	pod := podWithRSOwner("default", "p", "rs", strings.Repeat("a", 300))
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatal("expected allow for invalid annotation")
-	}
-	if resp.Patch != nil {
-		t.Errorf("expected no patch for invalid policy name, got %d bytes", len(resp.Patch))
-	}
-}
-
-func TestAdmit_PolicySelectorNamespaces_PodOutsideListSkipped(t *testing.T) {
-	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
-	policy.Spec.Selector.Namespaces = []string{"production"}
-
-	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, policy, rs)
-
-	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatal("expected allow (fail-open) for pod outside selector.namespaces")
-	}
-	if resp.Patch != nil {
-		t.Errorf("expected no patch when pod ns not in selector.namespaces, got %d bytes", len(resp.Patch))
-	}
-}
-
-func TestAdmit_PolicySelectorNamespaces_PodInsideListInjected(t *testing.T) {
-	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
-	policy.Spec.Selector.Namespaces = []string{"production"}
-
-	rs := deploymentReplicaSet("production", "my-app-rs", "my-app")
-	wlr := freshWLR("Deployment", "production", "my-app", map[string]sustainv1alpha1.ContainerRecommendation{
-		"app": wlrRec("100m", "64Mi"),
-	})
-	env := newAdmitEnv(t, policy, rs, wlr)
-
-	pod := podWithRSOwner("production", "my-app-rs-xyz", "my-app-rs", "p")
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatal("expected allow")
-	}
-	if resp.Patch == nil {
-		t.Fatal("expected patch when pod ns in selector.namespaces")
-	}
-}
-
-// --excluded-namespaces wins regardless of how the policy selector is
-// configured.
+// The handler's --excluded-namespaces reaches governance: a pod there is never
+// injected, whatever it opts into.
 func TestAdmit_ExcludedNamespaces_Skipped(t *testing.T) {
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
 
@@ -1035,72 +886,6 @@ func TestAdmit_ExcludedNamespaces_Skipped(t *testing.T) {
 	}
 	if resp.Patch != nil {
 		t.Errorf("expected no patch for excluded namespace, got %d bytes", len(resp.Patch))
-	}
-}
-
-func TestAdmit_LabelSelector_PodLabelsDontMatch_Skipped(t *testing.T) {
-	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
-	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{
-		MatchLabels: map[string]string{"team": "platform"},
-	}
-
-	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, policy, rs)
-
-	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
-	pod.Labels = map[string]string{"team": "growth"}
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatal("expected allow for non-matching labels")
-	}
-	if resp.Patch != nil {
-		t.Errorf("expected no patch when labels don't match, got %d bytes", len(resp.Patch))
-	}
-}
-
-func TestAdmit_LabelSelector_PodLabelsMatch_Injected(t *testing.T) {
-	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
-	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{
-		MatchLabels: map[string]string{"team": "platform"},
-	}
-
-	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	wlr := freshWLR("Deployment", "default", "my-app", map[string]sustainv1alpha1.ContainerRecommendation{
-		"app": wlrRec("100m", "64Mi"),
-	})
-	env := newAdmitEnv(t, policy, rs, wlr)
-
-	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
-	pod.Labels = map[string]string{"team": "platform"}
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatal("expected allow")
-	}
-	if resp.Patch == nil {
-		t.Fatal("expected patch when labels match selector")
-	}
-}
-
-// A malformed selector fails open: the pod is admitted unmutated, never denied.
-func TestAdmit_InvalidLabelSelector_FailsOpen(t *testing.T) {
-	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
-	policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{
-		MatchExpressions: []metav1.LabelSelectorRequirement{{
-			Key:      "app",
-			Operator: "InvalidOperator",
-		}},
-	}
-
-	rs := deploymentReplicaSet("default", "my-app-rs", "my-app")
-	env := newAdmitEnv(t, policy, rs)
-
-	pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatal("webhook must fail open (allow) on invalid selector")
-	}
-	if resp.Patch != nil {
-		t.Errorf("must not patch when selector is malformed, got %d bytes", len(resp.Patch))
 	}
 }
 
@@ -1127,65 +912,6 @@ func TestAdmit_NamespaceLevelOptIn_Injects(t *testing.T) {
 	}
 	if len(resp.Patch) == 0 {
 		t.Fatalf("expected a resource patch for a namespace-opted-in pod, got none")
-	}
-}
-
-// The escape hatch end to end: the namespace opts everything in, the Deployment
-// opts back out, no patch.
-func TestAdmit_WorkloadOptOutBeatsNamespaceOptIn(t *testing.T) {
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name:        "team-a",
-		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
-	}}
-	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-		Namespace: "team-a", Name: "web",
-		Annotations: map[string]string{sustainv1alpha1.OptOutAnnotation: "true"},
-	}}
-	env := newAdmitEnv(t,
-		basicPolicy("p", sustainv1alpha1.UpdateModeOngoing),
-		ns, d,
-		deploymentReplicaSet("team-a", "web-abc", "web"),
-		freshWLR("Deployment", "team-a", "web", map[string]sustainv1alpha1.ContainerRecommendation{
-			"app": wlrRec("100m", "128Mi"),
-		}),
-	)
-	pod := podWithRSOwner("team-a", "web-abc-1", "web-abc", "")
-
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatalf("pod must always be allowed")
-	}
-	if len(resp.Patch) != 0 {
-		t.Fatalf("an opted-out workload must not be patched, got %s", resp.Patch)
-	}
-}
-
-// The escape hatch at the most specific level, a distinct path from the
-// workload-level opt-out: admit() catches this one directly off pod.Annotations,
-// before resolveOptIn and therefore before any owner or Namespace read.
-func TestAdmit_PodLevelOptOutBeatsNamespaceOptIn(t *testing.T) {
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name:        "team-a",
-		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
-	}}
-	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
-	env := newAdmitEnv(t,
-		basicPolicy("p", sustainv1alpha1.UpdateModeOngoing),
-		ns, d,
-		deploymentReplicaSet("team-a", "web-abc", "web"),
-		freshWLR("Deployment", "team-a", "web", map[string]sustainv1alpha1.ContainerRecommendation{
-			"app": wlrRec("100m", "128Mi"),
-		}),
-	)
-	pod := podWithRSOwner("team-a", "web-abc-1", "web-abc", "")
-	pod.Annotations[sustainv1alpha1.OptOutAnnotation] = "true"
-
-	resp := env.handler.admit(context.Background(), admissionRequestFor(t, pod))
-	if !resp.Allowed {
-		t.Fatalf("pod must always be allowed")
-	}
-	if len(resp.Patch) != 0 {
-		t.Fatalf("a pod-level opt-out must not be patched, got %s", resp.Patch)
 	}
 }
 
@@ -1227,10 +953,10 @@ func TestAdmit_OwnerGetFailure_FailsOpen(t *testing.T) {
 	}
 }
 
-// A pod annotated directly on its template skips resolveOptIn entirely, so it
-// bypasses that path's owner cache. admit() must still route through
-// resolveCachedPodOwner, or a rolling restart pays N uncached ReplicaSet Gets
-// on the admission hot path.
+// A pod annotated on its template reads its owner only for its identity, once
+// its Policy accepts it. That read must still go through resolveCachedPodOwner,
+// or a rolling restart pays N uncached ReplicaSet Gets on the admission hot
+// path.
 func TestAdmit_PodTemplateAnnotated_ConcurrentAdmissionsCollapseToOneReplicaSetGet(t *testing.T) {
 	const n = 50
 	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
@@ -1318,5 +1044,57 @@ func TestAdmit_PodOfAnotherPolicyIsAdmittedUnmutated(t *testing.T) {
 	resp = env.handler.admit(context.Background(), admissionRequestFor(t, podWithRSOwner("default", "my-app-rs-abc", "my-app-rs", "p")))
 	if len(resp.Patch) == 0 {
 		t.Error("a pod of the WorkloadRecommendation's own Policy must keep receiving its frozen numbers")
+	}
+}
+
+// A Policy's label selector matches the pod template's labels for the
+// controller's inventory and the webhook alike. Labels only on the
+// Deployment's own metadata never reach its pods, so neither governs it; had
+// they disagreed, an Ongoing workload would be evicted every pass and come
+// back unmutated.
+func TestPolicySelectorMatchesThePodTemplateForInventoryAndWebhook(t *testing.T) {
+	tierWeb := map[string]string{"tier": "web"}
+	for _, tc := range []struct {
+		name       string
+		onTemplate bool
+	}{
+		{name: "labels on the Deployment only"},
+		{name: "labels on the pod template", onTemplate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := basicPolicy("p", sustainv1alpha1.UpdateModeOngoing)
+			policy.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: tierWeb}
+			d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "my-app"}}
+			d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
+			d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
+			if tc.onTemplate {
+				d.Spec.Template.Labels = tierWeb
+			} else {
+				d.Labels = tierWeb
+			}
+			c := fake.NewClientBuilder().WithScheme(config.Scheme()).
+				WithObjects(policy, d, deploymentReplicaSet("default", "my-app-rs", "my-app"),
+					freshWLR("Deployment", "default", "my-app", map[string]sustainv1alpha1.ContainerRecommendation{
+						"app": wlrRec("100m", "64Mi"),
+					})).
+				WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
+
+			snap, err := inventory.Take(context.Background(), c, inventory.Options{})
+			if err != nil {
+				t.Fatalf("Take: %v", err)
+			}
+			id, ok := snap.Lookup(promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "my-app"})
+			if !ok {
+				t.Fatal("the Deployment is no identity")
+			}
+			pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
+			pod.Labels = d.Spec.Template.Labels
+			resp := (&Handler{Client: c}).admit(context.Background(), admissionRequestFor(t, pod))
+
+			governed, injected := id.Policy == "p", strings.Contains(string(resp.Patch), "/resources")
+			if governed != tc.onTemplate || injected != tc.onTemplate {
+				t.Errorf("inventory governs = %v, webhook injects = %v; want both %v", governed, injected, tc.onTemplate)
+			}
+		})
 	}
 }
