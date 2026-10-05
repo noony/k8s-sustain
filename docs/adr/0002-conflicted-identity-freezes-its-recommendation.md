@@ -32,3 +32,4 @@ Identities are built in one place, `internal/inventory`, and the controller's ru
 - Pods of the losing side start on their template resources until the conflict is fixed. Pods of the side the object names keep getting the last Recommendation, which ages: past the retention window they start on template resources too.
 - The webhook now also withholds numbers from an identity moving between Policies until the new Policy's next reconcile adopts its object, since those numbers were computed under the old one.
 - The Overview's KPIs and attention lists are built from Prometheus health signals alone and do not show Conflicted identities yet; the Workloads list and detail pages do.
+    - *Amended 2026-10-05:* the Overview is now built from the same identity inventory as the Workloads list, so it counts and lists Conflicted identities too, each once, as Conflicted.

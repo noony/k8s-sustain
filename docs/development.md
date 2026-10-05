@@ -363,24 +363,39 @@ signal. To add one:
 
 ## Dashboard health signals
 
-Every dashboard view reads workload health — OOM kills in 24h, Blocked, stale
-and total pods, whether an autoscaler is present — through one port,
-`HealthSignals` (`internal/dashboard/health.go`), keyed by identity. Its
-Prometheus adapter (`health_prometheus.go`) holds the only health PromQL;
-tests use the in-memory `memHealthSignals` instead of faking query text. The
-Risk state is classified in exactly one place, `riskStateOf`, and returned in
-every payload (`riskState`); the SPA renders it and never derives its own.
-Conflicted, the top of the precedence, is the one input that does not come
-from the port: views set `identityHealth.Conflicted` from the inventory before
-classifying.
+Every dashboard view — the Overview, both workload lists and the detail page —
+is a view of one **board** (`internal/dashboard/board.go`): `Server.board`
+takes inventory identities, reads their health — OOM kills in 24h, Blocked,
+stale and total pods, whether an autoscaler is present — in one batch through
+the `HealthSignals` port (`internal/dashboard/health.go`), sets Conflicted
+from the inventory, and returns one status per identity: its health, its Risk
+state and the coordination factors of its stored trace. The port's Prometheus
+adapter (`health_prometheus.go`) holds the only health PromQL; tests use the
+in-memory `memHealthSignals` instead of faking query text. The Risk state is
+classified in exactly one place, `riskStateOf`, called only by the board, and
+returned in every payload (`riskState`); the SPA renders it and never derives
+its own state or count.
 
-Every list and detail endpoint builds its identities from `internal/inventory`
-(`Server.identities` / `Server.identity`), so a row, a detail page and the
-controller agree on members, containers, age, Departed and the governing
-Policy. The detail page shows the Recommendation stored in the identity's
-`WorkloadRecommendation`, its `status.outcome` and its `status.trace`; only the
-Simulator recomputes. Coordination factors are not a health signal: list rows
-and the detail page read them from the stored trace (`coordinationFactorsOf`).
+The Overview (`/api/summary`) and the Workloads list (`/api/workloads`) read
+the board of the same identities (`Server.clusterIdentities`: every kind,
+`--excluded-namespaces` applied), so every Overview count equals that list
+filtered by the same Risk state: a Prometheus series for an identity the
+inventory does not hold (deleted, never inventoried) counts nowhere. The
+Overview's Risk-state and Coordinated KPIs, its attention lists (the worst ten
+per state, with each state's true total) and its per-Policy Blocked counts all
+come from that one board. Its inventory read happens inside the summary
+recompute, so it is cached and single-flighted with the rest of
+`/api/summary`. The Policies pages still read their Blocked counts from the
+controller's `k8s_sustain_policy_blocked_count`.
+
+Every endpoint builds its identities from `internal/inventory`
+(`Server.identities` / `Server.identity`), so a row, a detail page, an Overview
+count and the controller agree on members, containers, age, Departed and the
+governing Policy. The detail page shows the Recommendation stored in the
+identity's `WorkloadRecommendation`, its `status.outcome` and its
+`status.trace`; only the Simulator recomputes. Coordination factors are not a
+health signal: the board reads them from the stored trace
+(`coordinationFactorsOf`).
 
 The port works because the controller emits every health metric under the
 identity's labels: `internal/controller/identity_health.go` aggregates the
