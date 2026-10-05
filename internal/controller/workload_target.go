@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -22,7 +21,6 @@ type workloadTarget struct {
 	Namespace      string
 	Containers     []corev1.Container
 	InitContainers []corev1.Container
-	Selector       *metav1.LabelSelector
 	Object         client.Object
 	// IdentityKind and IdentityName are the identity this target reports
 	// into: what Prometheus, the WorkloadRecommendation and every health
@@ -44,6 +42,11 @@ type workloadTarget struct {
 // key returns a unique identifier for this workload target, used as the retry map key.
 func (w *workloadTarget) key() string {
 	return w.Kind + "/" + w.Namespace + "/" + w.Name
+}
+
+// member is what the apply step drives toward the Recommendation.
+func (w *workloadTarget) member() workload.Member {
+	return workload.Member{Kind: w.Kind, Object: w.Object, Pods: w.BarePodMembers}
 }
 
 // identity is the identity this target reports into: what Prometheus, the
@@ -97,7 +100,7 @@ func targetsOf(id *inventory.Identity, policyName string, mode sustainv1alpha1.U
 }
 
 func targetFromMember(key promclient.WorkloadIdentity, m inventory.Member, mode sustainv1alpha1.UpdateMode) *workloadTarget {
-	t := &workloadTarget{
+	return &workloadTarget{
 		Kind:           key.OwnerKind,
 		Name:           m.Object.GetName(),
 		Namespace:      key.Namespace,
@@ -108,10 +111,6 @@ func targetFromMember(key promclient.WorkloadIdentity, m inventory.Member, mode 
 		IdentityName:   key.OwnerName,
 		UpdateMode:     mode,
 	}
-	if _, selector, ok := workload.PodTemplateOf(m.Object); ok {
-		t.Selector = selector
-	}
-	return t
 }
 
 // sortedTargets returns a copy of targets ordered by key(), so every decision

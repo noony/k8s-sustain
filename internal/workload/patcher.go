@@ -38,41 +38,11 @@ type ContainerRecommendation struct {
 // value "false" blocks eviction. In-place resizes are never gated by it.
 const SafeToEvictAnnotation = "cluster-autoscaler.kubernetes.io/safe-to-evict"
 
-// RecycleOption configures a RecyclePods / ResizePodsInPlace call.
-type RecycleOption func(*recycleOptions)
-
-type recycleOptions struct {
-	tol               Tolerance
-	observe           func(resource string)
-	ignoreSafeToEvict bool
-	counts            *PodCounts
-	dryRun            bool
-}
-
 // PodCounts reports live pods still differing from the recommendation after a
 // pass (Stale) out of all live pods owned by the workload (Total).
 type PodCounts struct {
 	Total int
 	Stale int
-}
-
-// WithPodCounts writes pod counts to c when the call returns a nil error.
-func WithPodCounts(c *PodCounts) RecycleOption {
-	return func(o *recycleOptions) { o.counts = c }
-}
-
-// WithDryRun lists and evaluates pods exactly like a real pass but never
-// mutates them; only meaningful combined with WithPodCounts.
-func WithDryRun() RecycleOption {
-	return func(o *recycleOptions) { o.dryRun = true }
-}
-
-// ApplyCounts writes c through any WithPodCounts option in opts, for callers
-// that short-circuit before reaching the patcher.
-func ApplyCounts(opts []RecycleOption, c PodCounts) {
-	if o := newRecycleOptions(opts); o.counts != nil {
-		*o.counts = c
-	}
 }
 
 func countable(pod *corev1.Pod) bool {
@@ -91,32 +61,6 @@ func countPods(pods []*corev1.Pod, recs map[string]ContainerRecommendation, tol 
 		}
 	}
 	return pc
-}
-
-func newRecycleOptions(opts []RecycleOption) recycleOptions {
-	var o recycleOptions
-	for _, fn := range opts {
-		fn(&o)
-	}
-	return o
-}
-
-// WithTolerance suppresses recycling for resource decreases below the given
-// per-resource bands. The zero Tolerance disables suppression.
-func WithTolerance(tol Tolerance) RecycleOption {
-	return func(o *recycleOptions) { o.tol = tol }
-}
-
-// WithSuppressionObserver registers a callback invoked once per resource
-// ("cpu"/"memory") for each pod whose decrease was suppressed by the tolerance.
-func WithSuppressionObserver(fn func(resource string)) RecycleOption {
-	return func(o *recycleOptions) { o.observe = fn }
-}
-
-// WithIgnoreSafeToEvictAnnotations disables the safe-to-evict gate so
-// annotated pods are evicted like any other.
-func WithIgnoreSafeToEvictAnnotations(ignore bool) RecycleOption {
-	return func(o *recycleOptions) { o.ignoreSafeToEvict = ignore }
 }
 
 func podContainers(pod *corev1.Pod) []corev1.Container {
@@ -185,67 +129,50 @@ func New(c client.Client, inPlace bool, opts ...Option) *Patcher {
 // InPlace reports whether the patcher uses in-place pod resource updates.
 func (p *Patcher) InPlace() bool { return p.inPlace }
 
-// TargetWorkload identifies the workload whose pods are being recycled.
-// Kind and Name are for logging; an empty UID disables the ownership check.
-type TargetWorkload struct {
-	Kind string
-	Name string
-	UID  types.UID
-}
-
-// RecyclePods drives pods matching the selector toward the recommended
-// resources, skipping pods not owned by the target workload. It returns the
-// number of pods resized in place or evicted.
-func (p *Patcher) RecyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation, opts ...RecycleOption) (int, error) {
-	return p.recyclePods(ctx, target, namespace, selector, recs, newRecycleOptions(opts))
-}
-
-// ResizePodsInPlace resizes the given pods in place and never evicts, for
-// Job/CronJob pods where eviction would kill in-flight work. It returns the
-// number of pods whose resize the API server accepted.
-func (p *Patcher) ResizePodsInPlace(ctx context.Context, pods []*corev1.Pod, recs map[string]ContainerRecommendation, opts ...RecycleOption) (int, error) {
-	o := newRecycleOptions(opts)
+// resizeInPlaceOnly resizes running pods in place and never evicts, for kinds
+// where eviction would destroy work nothing redoes. Without in-place support
+// it only counts.
+func (p *Patcher) resizeInPlaceOnly(ctx context.Context, pods []*corev1.Pod, recs map[string]ContainerRecommendation, s ApplySettings) (Outcome, error) {
+	out := Outcome{InPlaceOnly: true}
 	logger := log.FromContext(ctx)
-	if !p.inPlace || o.dryRun {
+	if !p.inPlace || s.DryRun {
 		if !p.inPlace {
 			logger.V(1).Info("in-place resize disabled on this cluster; deferring to next pod creation via webhook")
 		}
-		if o.counts != nil {
-			*o.counts = countPods(pods, recs, o.tol, nil)
-		}
-		return 0, nil
+		out.Pods = countPods(pods, recs, s.Tolerance, nil)
+		return out, nil
 	}
 	fixed := map[types.UID]bool{}
 
 	var errs []error
-	resized, processed, skipped := 0, 0, 0
+	processed, skipped := 0, 0
 	for _, pod := range pods {
 		if ctx.Err() != nil {
-			return resized, ctx.Err()
+			return out, ctx.Err()
 		}
 		if pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
 			logger.V(1).Info("skipping pod", "pod", pod.Name, "phase", pod.Status.Phase, "deleting", pod.DeletionTimestamp != nil)
 			skipped++
 			continue
 		}
-		podRecs := ClampRecsToTolerance(podContainers(pod), recs, o.tol)
-		observeSuppressed(recs, podRecs, o.observe)
+		podRecs := ClampRecsToTolerance(podContainers(pod), recs, s.Tolerance)
+		observeSuppressed(recs, podRecs, out.countSuppressed)
 		applied, err := p.resizePodInPlaceNoEvict(ctx, pod, podRecs)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
 		}
 		if applied {
-			resized++
+			out.Changed++
 			fixed[pod.UID] = true
 		}
 		processed++
 	}
-	logger.Info("in-place resize pass complete", "processed", processed, "skipped", skipped, "resized", resized, "errors", len(errs))
+	logger.Info("in-place resize pass complete", "processed", processed, "skipped", skipped, "resized", out.Changed, "errors", len(errs))
 	err := errors.Join(errs...)
-	if err == nil && o.counts != nil {
-		*o.counts = countPods(pods, recs, o.tol, fixed)
+	if err == nil {
+		out.Pods = countPods(pods, recs, s.Tolerance, fixed)
 	}
-	return resized, err
+	return out, err
 }
 
 // unapplyStrategy decides what happens when an in-place resize cannot be
@@ -277,7 +204,7 @@ func resizePendingReason(pod *corev1.Pod) string {
 }
 
 // resizePodInPlaceNoEvict mirrors patchPodInPlace but never evicts, for
-// Job/CronJob pods where eviction would kill in-flight work.
+// in-place-only kinds.
 func (p *Patcher) resizePodInPlaceNoEvict(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
 	applied, _, err := p.resizePodInPlaceWith(ctx, pod, recs, unapplyStrategy{
 		unsatisfiableLog: "staged in-place resize cannot complete for short-lived pod, skipping (next run will pick up new resources)",
@@ -346,128 +273,104 @@ func (p *Patcher) resizePodInPlaceWith(ctx context.Context, pod *corev1.Pod, rec
 	return applied, false, nil
 }
 
-// recyclePods resizes or evicts stale pods one at a time, waiting for each
+// recycle resizes or evicts stale pods one at a time, waiting for each
 // replacement and aborting on CrashLoopBackOff so a bad recommendation
-// cannot cascade through the workload. It returns the number of pods resized
-// or evicted.
-func (p *Patcher) recyclePods(ctx context.Context, target TargetWorkload, namespace string, selector klabels.Selector, recs map[string]ContainerRecommendation, o recycleOptions) (int, error) {
-	logger := log.FromContext(ctx).WithValues("namespace", namespace, "selector", selector.String())
-
-	var podList corev1.PodList
-	if err := p.client.List(ctx, &podList,
-		client.InNamespace(namespace),
-		client.MatchingLabelsSelector{Selector: selector},
-	); err != nil {
-		return 0, fmt.Errorf("listing pods: %w", err)
-	}
+// cannot cascade through the workload, within a pass or across passes.
+func (p *Patcher) recycle(ctx context.Context, set podSet, recs map[string]ContainerRecommendation, s ApplySettings) (Outcome, error) {
+	var out Outcome
+	logger := log.FromContext(ctx).WithValues("namespace", set.namespace, "selector", set.selector.String())
 	strategy := "eviction"
 	if p.inPlace {
 		strategy = "inPlace"
 	}
-	logger.V(1).Info("listed pods for recycle", "count", len(podList.Items), "strategy", strategy)
+	logger.V(1).Info("listed pods for recycle", "count", len(set.pods), "strategy", strategy)
 
-	// Ownership is verified via ownerRef UID so bystander pods that merely
-	// share the selector are never touched.
-	rsOwned := map[string]bool{}
-	pods := make([]*corev1.Pod, 0, len(podList.Items))
-	for i := range podList.Items {
-		pod := &podList.Items[i]
-		if target.UID != "" {
-			owned, err := PodOwnedByWorkload(ctx, p.client, pod, target.UID, rsOwned)
-			if err != nil {
-				return 0, fmt.Errorf("resolving owner of pod %s: %w", pod.Name, err)
-			}
-			if !owned {
-				logger.V(1).Info("skipping pod matching selector but not owned by target workload",
-					"pod", pod.Name, "targetKind", target.Kind, "targetName", target.Name)
-				continue
-			}
-		}
-		pods = append(pods, pod)
-	}
+	pods := set.pods
 	sortPodsForRecycle(pods)
-	if o.dryRun {
-		if o.counts != nil {
-			*o.counts = countPods(pods, recs, o.tol, nil)
-		}
-		return 0, nil
+	if s.DryRun {
+		out.Pods = countPods(pods, recs, s.Tolerance, nil)
+		return out, nil
 	}
 	fixed := map[types.UID]bool{}
+	// Read before the loop: an in-place resize rewrites the spec of the pod it
+	// resizes, and a stale pod resized this pass is no proof against the
+	// recommendation.
+	gate := evictionGate{ignoreSafeToEvict: s.IgnoreSafeToEvict, halted: updatedPodCrashLooping(pods, recs, s.Tolerance)}
 
 	var errs []error
-	changed, processed, skipped := 0, 0, 0
+	processed, skipped := 0, 0
 	for _, pod := range pods {
 		if ctx.Err() != nil {
-			return changed, ctx.Err()
+			return out, ctx.Err()
 		}
 		if pod.DeletionTimestamp != nil {
 			logger.V(1).Info("skipping terminating pod", "pod", pod.Name)
 			skipped++
 			continue
 		}
-		// Pending pods are still evicted: one stuck on an oversized request is
-		// exactly what the webhook should re-inject.
 		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			logger.V(1).Info("skipping terminal pod", "pod", pod.Name, "phase", pod.Status.Phase)
 			skipped++
 			continue
 		}
-		if p.inPlace && pod.Status.Phase != corev1.PodRunning {
-			logger.V(1).Info("skipping non-Running pod for in-place resize", "pod", pod.Name, "phase", pod.Status.Phase)
-			skipped++
-			continue
-		}
 		// Clamp per pod: siblings may carry different current allocations.
-		podRecs := ClampRecsToTolerance(podContainers(pod), recs, o.tol)
-		observeSuppressed(recs, podRecs, o.observe)
+		podRecs := ClampRecsToTolerance(podContainers(pod), recs, s.Tolerance)
+		observeSuppressed(recs, podRecs, out.countSuppressed)
 		var (
 			applied, evicted bool
 			err              error
 		)
-		if p.inPlace {
-			applied, evicted, err = p.patchPodInPlace(ctx, pod, podRecs, o.ignoreSafeToEvict)
+		// A pod that is not Running cannot be resized in place, so it is evicted
+		// in both modes: one stuck Pending on an oversized request is exactly
+		// what the webhook should re-inject.
+		if p.inPlace && pod.Status.Phase == corev1.PodRunning {
+			applied, evicted, err = p.patchPodInPlace(ctx, pod, podRecs, gate)
 		} else {
-			evicted, err = p.evictPod(ctx, pod, podRecs, o.ignoreSafeToEvict)
+			evicted, err = p.evictPod(ctx, pod, podRecs, gate)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
 		}
+		if errors.Is(err, errCrashLoopBackOff) {
+			logger.Info("halting eviction loop for this reconcile", "reason", err.Error())
+			break
+		}
 		processed++
 		if applied || evicted {
-			changed++
+			out.Changed++
 			fixed[pod.UID] = true
 		}
 		if !evicted {
 			continue
 		}
-		if waitErr := p.waitForReplacement(ctx, namespace, selector, pod.Name, pod.UID); waitErr != nil {
+		if waitErr := p.waitForReplacement(ctx, set.namespace, set.selector, pod.Name, pod.UID); waitErr != nil {
 			errs = append(errs, fmt.Errorf("after evicting %s: %w", pod.Name, waitErr))
 			logger.Info("halting eviction loop for this reconcile", "reason", waitErr.Error())
 			break
 		}
 	}
-	logger.Info("recycle pass complete", "processed", processed, "skipped", skipped, "changed", changed, "errors", len(errs), "strategy", strategy)
+	logger.Info("recycle pass complete", "processed", processed, "skipped", skipped, "changed", out.Changed, "errors", len(errs), "strategy", strategy)
 	err := errors.Join(errs...)
-	if err == nil && o.counts != nil {
-		*o.counts = countPods(pods, recs, o.tol, fixed)
+	if err == nil {
+		out.Pods = countPods(pods, recs, s.Tolerance, fixed)
 	}
-	return changed, err
+	return out, err
 }
 
 // patchPodInPlace resizes a pod in place, falling back to eviction when the
 // resize is Infeasible/Error or rejected as Invalid. Returns (applied,
 // evicted, err).
-func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, ignoreSafeToEvict bool) (bool, bool, error) {
+func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, gate evictionGate) (bool, bool, error) {
 	return p.resizePodInPlaceWith(ctx, pod, recs, unapplyStrategy{
 		unsatisfiableLog: "staged in-place resize cannot complete, falling back to eviction",
 		unappliedLog:     "falling back to eviction",
 		// submitEviction, not evictPod: the spec already matches the
 		// recommendation, so evictPod's staleness gate would skip it.
 		onUnsatisfiable: func(ctx context.Context, pod *corev1.Pod, verdict string) (bool, error) {
-			return p.submitEviction(ctx, pod, "in-place resize verdict "+verdict, ignoreSafeToEvict)
+			return p.submitEviction(ctx, pod, "in-place resize verdict "+verdict, gate)
 		},
 		onUnapplied: func(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
-			return p.evictPod(ctx, pod, recs, ignoreSafeToEvict)
+			return p.evictPod(ctx, pod, recs, gate)
 		},
 	})
 }
@@ -520,28 +423,38 @@ func (p *Patcher) applySidecarResize(ctx context.Context, pod, base *corev1.Pod,
 	return true
 }
 
+// evictionGate is what can hold back an eviction in one recycle pass.
+type evictionGate struct {
+	ignoreSafeToEvict bool
+	// halted, when set, is returned instead of evicting.
+	halted error
+}
+
 // evictPod evicts a pod running stale resources. Returns (evicted, err);
 // evicted=false covers pods already fresh, gone, or PDB-blocked.
-func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, ignoreSafeToEvict bool) (bool, error) {
+func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, gate evictionGate) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
 	if !podIsStale(pod, recs) {
 		logger.V(1).Info("pod already running recommended resources, eviction skipped")
 		return false, nil
 	}
-	return p.submitEviction(ctx, pod, "stale resources", ignoreSafeToEvict)
+	return p.submitEviction(ctx, pod, "stale resources", gate)
 }
 
 // submitEviction creates the Eviction without a staleness gate. It is the
-// single safe-to-evict check for both eviction triggers.
-func (p *Patcher) submitEviction(ctx context.Context, pod *corev1.Pod, why string, ignoreSafeToEvict bool) (bool, error) {
+// single gate check for both eviction triggers.
+func (p *Patcher) submitEviction(ctx context.Context, pod *corev1.Pod, why string, gate evictionGate) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
-	if !ignoreSafeToEvict && pod.Annotations[SafeToEvictAnnotation] == "false" {
+	if !gate.ignoreSafeToEvict && pod.Annotations[SafeToEvictAnnotation] == "false" {
 		logger.Info("eviction skipped: pod annotated safe-to-evict=false",
 			"reason", why,
 			"override", "spec.rightSizing.update.eviction.ignoreAutoscalerSafeToEvictAnnotations")
 		return false, nil
+	}
+	if gate.halted != nil {
+		return false, gate.halted
 	}
 
 	eviction := &policyv1.Eviction{
@@ -569,8 +482,28 @@ func (p *Patcher) submitEviction(ctx context.Context, pod *corev1.Pod, why strin
 }
 
 // errCrashLoopBackOff aborts the recycle loop when a pod in the selector
-// enters CrashLoopBackOff during the post-eviction wait.
+// enters CrashLoopBackOff during the post-eviction wait, or when the pass
+// would evict while a pod already running the recommendation crash-loops.
 var errCrashLoopBackOff = errors.New("pod in CrashLoopBackOff; aborting eviction loop")
+
+// updatedPodCrashLooping returns the error that halts a pass's evictions when
+// a live pod already running recs is in CrashLoopBackOff. The post-eviction
+// wait only sees crash-loops that start during the pass that evicted, so
+// without this each pass would evict one more pod before halting on the same
+// crash-looping replacement. A stale crash-looping pod halts nothing: the new
+// numbers may be its fix.
+func updatedPodCrashLooping(pods []*corev1.Pod, recs map[string]ContainerRecommendation, tol Tolerance) error {
+	for _, pod := range pods {
+		if !countable(pod) || !hasCrashLoopBackOff(pod) {
+			continue
+		}
+		if podIsStale(pod, ClampRecsToTolerance(podContainers(pod), recs, tol)) {
+			continue
+		}
+		return fmt.Errorf("%w: %s already runs the recommendation", errCrashLoopBackOff, pod.Name)
+	}
+	return nil
+}
 
 // waitForReplacement blocks until the evicted pod is gone and the selector
 // is quiescent, the timeout fires, or a pod enters CrashLoopBackOff.

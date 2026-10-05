@@ -9,7 +9,7 @@ k8s-sustain detects support at startup and picks the code path. Clusters below 1
 | k8s version | k8s-sustain behaviour |
 |-------------|-----------------------|
 | **1.29 – 1.32** | `inPlace=false` → eviction path. Stale pods are evicted via the Eviction API; the webhook injects the recommendation into the replacement. CronJob, Job and bare-pod pods are not touched. |
-| **1.33+** | `inPlace=true`. All resizes go through `pods/resize`; sidecar (restartable init) containers are resized in a separate call. |
+| **1.33+** | `inPlace=true`. All resizes go through `pods/resize`; sidecar (restartable init) containers are resized in a separate call. A stale pod that is not Running yet (Pending) cannot be resized and is evicted instead, except for CronJob, Job and bare-pod pods. |
 
 The gate is the server version alone: the controller compares `major.minor` against 1.33 and does not probe feature gates.
 
@@ -27,9 +27,9 @@ INFO  InPlacePodVerticalScaling support  enabled=false  server=v1.30.5
 
 In both modes only pods owned by the target workload are touched — see [Eviction safeguards](update-modes.md#eviction-safeguards).
 
-`Pod`-kind targets have no ownerRef or selector; their membership comes from the grouping rule instead — see [Bare pods](#bare-pods).
+A bare-pod identity has no owner object or selector: its pods are the members the inventory found — see [Bare pods](#bare-pods).
 
-When `Ongoing` mode is active and `inPlace=true`, the patcher walks each running pod and:
+When `Ongoing` mode is active and `inPlace=true`, a pod that is not Running yet cannot be resized in place. A stale one is evicted through the [eviction fallback](#eviction-fallback) — a pod stuck Pending on an oversized request is exactly what the webhook should re-inject — except for the [kinds that are never evicted](#kinds-that-are-never-evicted), whose Pending pods are left alone. The patcher walks each running pod and:
 
 1. Compares the pod spec against the current recommendation.
    - **Spec differs** — a resize is submitted with the new values, even if a previous resize is still pending. The kubelet re-evaluates pending resizes against the new desired state, so a recommendation that has since been lowered can succeed where the old one was infeasible.
@@ -46,7 +46,7 @@ Sidecar (restartable init) containers are resized in a **separate** `/resize` ca
 
 ## Eviction fallback
 
-On clusters below 1.33, and for pods whose in-place resize fails on newer clusters, stale pods are evicted. The guards (ownership check, PDBs, `safe-to-evict`, one pod at a time, crash-loop halt, StatefulSet ordering) are listed in [Eviction safeguards](update-modes.md#eviction-safeguards). Details of the wait between evictions:
+On clusters below 1.33, and on newer clusters for pods whose in-place resize fails or that are not Running yet, stale pods are evicted. The guards (ownership check, PDBs, `safe-to-evict`, one pod at a time, crash-loop halt, StatefulSet ordering) are listed in [Eviction safeguards](update-modes.md#eviction-safeguards). Details of the wait between evictions:
 
 - Quiescence is judged from pod state (evicted pod gone, no peer `Pending` or `Running`-but-not-Ready), not a Ready-count baseline, so HPA scale-down is handled: if no replacement is provisioned, the remaining peers stay Ready and the wait returns immediately.
 - The wait times out after `--recycle-replacement-timeout` (Helm `controller.recycleReplacementTimeout`, default 5m), sized to cover a node-autoscaler provisioning a fresh node for the replacement. When it elapses, the loop stops for this reconcile so a stuck workload loses no more pods.
@@ -64,7 +64,7 @@ The controller never mutates the CronJob or Job spec and never evicts a job pod 
 
 Bare pods opted in via `k8s.sustain.io/owner-name` (kind `Pod`) are the third member of that family, and the strongest case of it: no controller exists that could recreate an evicted bare pod, so eviction would not disrupt the workload — it would delete it. Under `pod: Ongoing` their running pods **are** resized in place, through the same `pods/resize` machinery; an in-place resize needs no controller behind it, and without it a long-running Airflow task would keep whatever it was admitted with for its entire life. Under `pod: OnCreate`, nothing is applied to a running pod at all and the recommendation reaches the identity's next pod through the webhook.
 
-Membership is decided by the grouping rule rather than a label selector: a pod with no controller `ownerReference`, a valid `k8s.sustain.io/owner-name`, and a `k8s.sustain.io/policy` annotation matching the policy that claimed the group. A ReplicaSet-owned pod that carries the mirrored `owner-name` label is therefore never a member, and a pod opted into a different policy is logged and skipped.
+Membership is decided when the identity is built rather than by a label selector: a pod with no controller `ownerReference` and a valid `k8s.sustain.io/owner-name` is a member, and only the members the policy governs are resized. A ReplicaSet-owned pod that carries the mirrored `owner-name` label is therefore never a member. A pod of the group opted into another policy that accepts it makes the identity [Conflicted](workload-recommendations.md#conflicted-identities), and then no pod of it is resized; one whose policy does not exist or does not select it is simply left alone — see [Group membership](../guides/standalone-pods-and-grouping.md).
 
 A container with `resizePolicy: RestartContainer` for memory restarts on a memory resize, which for a task means losing in-flight work (see [Caveats](#caveats)). Use `pod: OnCreate` if that is not acceptable. See [Standalone Pods & Identity Grouping](../guides/standalone-pods-and-grouping.md).
 

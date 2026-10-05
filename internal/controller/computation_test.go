@@ -101,7 +101,10 @@ func TestReconcileAppliesToEveryMemberOfAnOwnerNameGroup(t *testing.T) {
 	// cannot suppress it and any non-application is unambiguous.
 	pod := func(name, app string) *corev1.Pod {
 		return &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: map[string]string{"app": app}},
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: ns, Name: name, Labels: map[string]string{"app": app},
+				OwnerReferences: controllerRef("Deployment", app),
+			},
 			Spec: corev1.PodSpec{Containers: []corev1.Container{{
 				Name:      "app",
 				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")}},

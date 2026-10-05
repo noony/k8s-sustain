@@ -206,10 +206,10 @@ func SetOOMCacheEntries(n int) {
 	oomCacheEntries.Set(float64(n))
 }
 
-// EmitRecycleSuppressed increments the counter for a resource decrease that the
-// downsize threshold held back on a pod of the identity.
-func EmitRecycleSuppressed(id promclient.WorkloadIdentity, resource string) {
-	recycleSuppressedTotal.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, resource).Inc()
+// EmitRecycleSuppressed counts pods of the identity on which the downsize
+// threshold held back a decrease of resource.
+func EmitRecycleSuppressed(id promclient.WorkloadIdentity, resource string, pods int) {
+	recycleSuppressedTotal.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, resource).Add(float64(pods))
 }
 
 // WorkloadRecommendation refresh outcomes for EmitWLRRefresh.

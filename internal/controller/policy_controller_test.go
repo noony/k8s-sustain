@@ -77,11 +77,14 @@ func establishedDeployment(ns, name, policy string) *appsv1.Deployment {
 	return d
 }
 
-// runningPod is a Running pod selected by establishedDeployment(ns, app),
-// with container "app" at 10m CPU.
+// runningPod is a Running pod of establishedDeployment(ns, app), with
+// container "app" at 10m CPU.
 func runningPod(ns, name, app string) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: map[string]string{"app": app}},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns, Name: name, Labels: map[string]string{"app": app},
+			OwnerReferences: controllerRef("Deployment", app),
+		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
 			Name:      "app",
 			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")}},

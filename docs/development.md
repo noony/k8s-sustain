@@ -129,7 +129,7 @@ k8s-sustain/
 │   ├── version/           # Build version
 │   ├── webhook/           # Admission webhook HTTP handler
 │   ├── wlrcache/          # WorkloadRecommendation lifecycle: every write (Request, Ensure, Record) and verdict (Read, Expired)
-│   └── workload/          # Pod recycler, template/owner-ref helpers
+│   └── workload/          # Applying a Recommendation to a member's pods (one rule per kind), template/owner-ref helpers
 ├── charts/
 │   ├── k8s-sustain/          # Operator chart
 │   └── k8s-sustain-policies/ # Policy objects chart
@@ -317,10 +317,10 @@ kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 
 1. Add `<Kind> *UpdateMode` to `UpdateTypes` in `api/v1alpha1/policy_types.go`, add the case to `UpdateTypes.ModeForKind`, then run `make generate` and `make manifests`
 2. Add the kind to the `ownerKinds` table in `internal/workload/kindobjects.go` (object and list constructors plus its `GroupResource`) and, if the controller and dashboard should list it, to `workload.SupportedKinds`. This single table drives the inventory's listing (`internal/inventory`, which both the controller and the dashboard read identities from), the dashboard's NotFound errors, and the workload-level annotation reads in the webhook and the OOM watcher. A kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)
-3. Add the kind's pod template and selector to `workload.PodTemplateOf` in `internal/workload/templates.go`. Return a nil selector for kinds whose pods must never be recycled (see Job and CronJob)
+3. Add the kind's pod template to `workload.PodTemplateOf` in `internal/workload/templates.go`
 4. Add the same kind to `k8s.OwnerChainDisableFor()` in `internal/k8s/client.go`. Every kind in `ownerKinds` must appear here too, or its first Get on the admission hot path stands up a cluster-wide informer over every object of that kind instead of costing one Get. `TestDisableForCoversOwnerAnnotationKinds` (`internal/webhook/optin_test.go`) cross-checks the two lists and fails if one is missing from the other
 5. If the kind is a CRD, register its scheme in `internal/config/config.go` and `internal/dashboard/server.go`
-6. If the kind's pods cannot be evicted (job-like workloads), add an in-place-only branch in `reconcileWorkload` (`internal/controller/workload_reconcile.go`) alongside the Job, CronJob and bare-pod ones; selector-based kinds need nothing more
+6. Give the kind its apply rule in `applyRules` (`internal/workload/apply.go`): where a member's pods come from (`selectedPods` with the kind's selector for a workload whose pods it owns through a selector, a function of its own otherwise) and whether the kind is `inPlaceOnly`, its pods never evicted (like Job, CronJob and bare `Pod`). `TestApply_EveryKindHasAnApplyRule` fails for a kind of `SupportedKinds` without a rule, and `TestApply_EveryKindUnderEveryMode` (`internal/workload/apply_test.go`) needs a fixture for it
 7. Add RBAC markers (`+kubebuilder:rbac:...`) to the controller and the Helm RBAC rule in `charts/k8s-sustain/templates/rbac.yaml`
 
 ## Adding a recommendation signal
@@ -574,6 +574,14 @@ The computation unit is the identity, not the workload object: a group of worklo
 The batch metrics are counted from the outcomes, not from the fetch's internals. `persist` records every outcome but "not fetched" with `wlrcache.Record`, departed or not, keeping the last Recommendation for every outcome but `Computed`. A live identity whose record failed — its object could not be ensured, or the write was rejected — keeps the error on its result (`identityResult.recordErr`), and `apply` skips its members that cycle, counting them as failed: the replacement pods of an eviction would read the old value. Departed identities have nothing to apply, so `persist` counts their failures itself.
 
 A Conflicted identity never enters the pass ([ADR 0002](adr/0002-conflicted-identity-freezes-its-recommendation.md)). Each Policy party to the conflict records `status.outcome: Conflicted` (`recordConflicted`) and nothing else; `wlrcache.Ensure`, which rewrites `spec.policy`, is only ever called by the governing Policy, which is what stops two Policies flipping one object between them.
+
+#### Applying to a member
+
+The apply step is one call per member: `Patcher.Apply(ctx, member, recs, settings)` in `internal/workload/apply.go`. In: the member (its kind and object, or for a bare-pod identity the governed pods the inventory holds, each its own member object), the Recommendation narrowed to the containers the member declares, and the Policy's settings (a dry run for `OnCreate`, the downsize tolerance, the `safe-to-evict` override). Out: an `Outcome` with the pods changed, the pod counts (set whenever the pass succeeds), the decreases the tolerance withheld per resource, and whether the kind is in-place-only.
+
+Behind it, one rule per kind (`applyRules`) says where a member's pods come from and whether they may be evicted: the selector plus the ownerRef UID for Deployment, StatefulSet, DaemonSet and Rollout; the active Jobs, then each Job's `batch.kubernetes.io/job-name` label plus its UID for a CronJob; the label plus the UID for a Job; the inventory's pods for a bare-pod identity. CronJob, Job and bare `Pod` are in-place-only. Everything else is the patcher's: the ownership check, StatefulSet ordering, the choice between an in-place resize and an eviction, the replacement wait and the crash-loop halt, the in-place → eviction fallback, the dry run and the counts. A member without a UID, a workload without a selector or a kind without a rule is refused with an error, never applied to every labelled pod or, silently, to none.
+
+The controller keeps what is policy rather than mechanism: the gates (shutdown, fetch failure, nothing to apply, recommend-only), retry and backoff (a failed `OnCreate` dry run counts as success), events, health counts and metrics. The `Outcome`'s kind family picks the failed step a Blocked identity reports (`patch` for kinds that evict, `resize` for in-place-only ones) and the `ResourcesUpdated` event's text.
 
 #### Owner-name group: merge order and write cost
 

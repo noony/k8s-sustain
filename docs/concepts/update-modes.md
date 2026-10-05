@@ -60,7 +60,7 @@ spec:
 
 **Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.33):**
 
-1. Controller resizes each running, non-terminating pod through the `pods/resize` subresource
+1. Controller resizes each running, non-terminating pod through the `pods/resize` subresource. A stale Pending pod cannot be resized, so it is evicted as on older clusters
 2. The kubelet applies the new resources, without restarting the container unless its `resizePolicy` requires it
 3. If the kubelet reports `Infeasible` or `Error`, or the API server rejects the resize as invalid, the pod is evicted as a fallback; `Deferred` resizes are left to the kubelet
 
@@ -108,13 +108,13 @@ See the [Policy reference](../reference/policy.md#cpudownsizethreshold-memorydow
 
 ## Eviction safeguards
 
-Whenever the controller evicts a pod — on k8s < 1.33, or as the fallback for a failed in-place resize — it applies these guards:
+Whenever the controller evicts a pod — on k8s < 1.33, or on newer clusters as the fallback for a failed in-place resize or for a pod not Running yet — it applies these guards:
 
 - **Ownership check.** Pods are listed by the workload's selector and then kept only when their controller ownerRef chain resolves to the target workload's UID (directly for StatefulSet/DaemonSet/Job, via the ReplicaSet for Deployment/Argo Rollout). A bystander pod that merely shares the labels is never touched. The same check gates in-place resizes.
 - **PodDisruptionBudgets.** Evictions go through the Eviction API; a PDB-blocked pod is skipped and retried next reconcile.
 - **`safe-to-evict` annotation.** Pods annotated `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` are never evicted. Set `spec.rightSizing.update.eviction.ignoreAutoscalerSafeToEvictAnnotations: true` to evict them anyway. In-place resizes are not gated by it.
 - **One pod at a time.** After each eviction the controller waits for the workload to become quiescent (evicted pod gone, no peer Pending or not Ready) before evicting the next, up to `--recycle-replacement-timeout` (default 5m). On timeout it stops for this reconcile.
-- **Crash-loop halt.** If any pod of the workload enters `CrashLoopBackOff` during that wait, the loop stops so a bad recommendation cannot cascade.
+- **Crash-loop halt.** If any pod of the workload enters `CrashLoopBackOff` during that wait, the loop stops. Later reconciles evict nothing while a pod already running the recommendation is still in `CrashLoopBackOff`, so a bad recommendation cannot cascade one pod per reconcile either: the workload is Blocked (see `k8s_sustain_workload_retry_state` in [Metrics](../reference/metrics.md#drift-retry-autoscaler)) until the pod recovers or the recommendation changes. A crash-looping pod still on its old resources halts nothing — the new values may be its fix.
 - **StatefulSet ordering.** StatefulSet pods are evicted in descending ordinal order (`web-2 → web-1 → web-0`); other kinds in name order.
 
 CronJob, Job and bare-pod pods are never evicted — see [Kinds that are never evicted](in-place-updates.md#kinds-that-are-never-evicted). More detail on the wait is in [Eviction fallback](in-place-updates.md#eviction-fallback).

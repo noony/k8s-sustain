@@ -53,7 +53,7 @@ func groupedDeployment(ns, name, ownerName, policy string) *appsv1.Deployment {
 func identityPod(ns, name string, labels, annotations map[string]string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ns, Name: name, Labels: labels, Annotations: annotations,
+			Namespace: ns, Name: name, UID: types.UID(name + "-uid"), Labels: labels, Annotations: annotations,
 			CreationTimestamp: metav1.NewTime(time.Now().Add(-24 * time.Hour)),
 		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
@@ -62,6 +62,13 @@ func identityPod(ns, name string, labels, annotations map[string]string) *corev1
 		}}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
+}
+
+// deploymentPod is an identityPod of the Deployment the helpers name dep.
+func deploymentPod(ns, name, dep string) *corev1.Pod {
+	pod := identityPod(ns, name, map[string]string{"app": dep}, nil)
+	pod.OwnerReferences = controllerRef("Deployment", dep)
+	return pod
 }
 
 func gaugeOf(t *testing.T, metric, ns, kind, name string) float64 {
@@ -130,9 +137,9 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	}
 	objs := []runtime.Object{
 		policy, blue, green, hpa,
-		identityPod(ns, "api-blue-1", map[string]string{"app": "api-blue"}, nil),
-		identityPod(ns, "api-blue-2", map[string]string{"app": "api-blue"}, nil),
-		identityPod(ns, "api-green-1", map[string]string{"app": "api-green"}, nil),
+		deploymentPod(ns, "api-blue-1", "api-blue"),
+		deploymentPod(ns, "api-blue-2", "api-blue"),
+		deploymentPod(ns, "api-green-1", "api-green"),
 		identityPod(ns, "etl-run-1", nil, etlAnnotations),
 		identityPod(ns, "etl-run-2", nil, etlAnnotations),
 	}
@@ -259,7 +266,7 @@ func TestReconcile_PolicyDeletionRemovesIdentityHealth(t *testing.T) {
 }
 
 func TestReconcileWorkload_RecycleSuppressedCountsUnderIdentity(t *testing.T) {
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, identityPod("default", "web-blue-pod", map[string]string{"app": "web-blue"}, nil))
+	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, deploymentPod("default", "web-blue-pod", "web-blue"))
 	tgt := deploymentTarget("default", "web-blue")
 	tgt.IdentityName = "web"
 	policy := policyForReconcileWorkload(t, "p")

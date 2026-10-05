@@ -215,7 +215,7 @@ func (b *builder) addWorkloads(ctx context.Context, kind string) error {
 			(workload.IsOwnedByKind(job.OwnerReferences, "CronJob") || workload.JobFinished(job)) {
 			return nil
 		}
-		tmpl, _, ok := workload.PodTemplateOf(obj)
+		tmpl, ok := workload.PodTemplateOf(obj)
 		if !ok {
 			return nil
 		}
