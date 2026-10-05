@@ -7,6 +7,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/autoscaler"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
@@ -56,6 +57,100 @@ func TestLimit_Strategies(t *testing.T) {
 			} else {
 				assertQty(t, "recommended limit", rec.CPULimit, tc.wantRec)
 			}
+		})
+	}
+}
+
+// Whatever pushes the request above the container's limit and whatever the
+// strategy, the limit a pod would run is never below its request: a kept
+// limit below it is raised to it, and the guard stage is recorded exactly when
+// it changed the limit.
+func TestLimit_NeverBelowTheRequest(t *testing.T) {
+	strategies := []struct {
+		name      string
+		cfg       sustainv1alpha1.ResourceLimitsConfig
+		wantGuard bool
+	}{
+		{"keepLimit", sustainv1alpha1.ResourceLimitsConfig{KeepLimit: true}, true},
+		{"no strategy", sustainv1alpha1.ResourceLimitsConfig{}, true},
+		{"requestsLimitsRatio", sustainv1alpha1.ResourceLimitsConfig{RequestsLimitsRatio: ptr.To(1.5)}, false},
+		{"keepLimitRequestRatio", sustainv1alpha1.ResourceLimitsConfig{KeepLimitRequestRatio: true}, false},
+		{"equalsToRequest", sustainv1alpha1.ResourceLimitsConfig{EqualsToRequest: true}, false},
+		{"noLimit", sustainv1alpha1.ResourceLimitsConfig{NoLimit: true}, false},
+	}
+	usage := promclient.ContainerValues{"app": 100 * mib}
+	pushes := []struct {
+		name string
+		req  Request
+	}{
+		// 128Mi x 1.2, rounded up to a whole MiB.
+		{"OOM floor above the limit", Request{Inputs: &WorkloadInputs{MemPerPod: usage, OOM: map[string]OOM{"app": {Kills: 1, LimitBytes: 128 * mib}}}}},
+		{"headroom", Request{
+			Inputs:    &WorkloadInputs{MemPerPod: usage},
+			Resources: sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)}}},
+		}},
+		{"minAllowed", Request{
+			Inputs:    &WorkloadInputs{MemPerPod: usage},
+			Resources: sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{MinAllowed: qtyp("200Mi")}}},
+		}},
+		{"coordination", Request{
+			Inputs:       &WorkloadInputs{MemPerPod: usage},
+			Coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true},
+			AutoInfo:     autoscaler.Info{Kind: autoscaler.KindKEDA, ConfiguredTargets: map[string]int32{autoscaler.ResourceMemory: 50}},
+		}},
+	}
+	app := limited(corev1.ResourceList{corev1.ResourceMemory: qty("100Mi")}, corev1.ResourceList{corev1.ResourceMemory: qty("128Mi")})
+
+	for _, p := range pushes {
+		for _, s := range strategies {
+			t.Run(p.name+"/"+s.name, func(t *testing.T) {
+				req := p.req
+				req.Containers, req.Now = []corev1.Container{app}, now
+				req.Resources.Memory.Limits = s.cfg
+
+				res := Compute(req)
+
+				rec, tr := res.Recs["app"], res.Traces["app"].Memory
+				if rec.MemoryRequest == nil || rec.MemoryRequest.Cmp(qty("128Mi")) <= 0 {
+					t.Fatalf("request = %v, want it pushed above the 128Mi limit", rec.MemoryRequest)
+				}
+				switch {
+				case rec.RemoveMemoryLimit:
+				case rec.MemoryLimit != nil:
+					if rec.MemoryLimit.Cmp(*rec.MemoryRequest) < 0 {
+						t.Errorf("limit %s < request %s", rec.MemoryLimit, rec.MemoryRequest)
+					}
+				default:
+					t.Errorf("the container keeps its 128Mi limit below the %s request", rec.MemoryRequest)
+				}
+				last := tr.Limit[len(tr.Limit)-1]
+				if guarded := last.Stage == "guard"; guarded != s.wantGuard {
+					t.Fatalf("limit stages = %+v, want a guard stage %v", tr.Limit, s.wantGuard)
+				}
+				if s.wantGuard {
+					assertQty(t, "guard", last.Value, rec.MemoryRequest.String())
+					assertQty(t, "limit", rec.MemoryLimit, rec.MemoryRequest.String())
+				}
+			})
+		}
+	}
+}
+
+// A kept limit already at or above the request is left alone, and a
+// container without a limit is not given one.
+func TestLimit_GuardLeavesALimitAboveTheRequestAlone(t *testing.T) {
+	for name, c := range map[string]corev1.Container{
+		"above":    limited(nil, corev1.ResourceList{corev1.ResourceCPU: qty("1")}),
+		"equal":    limited(nil, corev1.ResourceList{corev1.ResourceCPU: qty("200m")}),
+		"no limit": limited(nil, nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec, tr := computeLimited(t, c, 0.2, sustainv1alpha1.ResourceLimitsConfig{})
+
+			if rec.CPULimit != nil || rec.RemoveCPULimit {
+				t.Errorf("limit = %v remove %v, want the container's own", rec.CPULimit, rec.RemoveCPULimit)
+			}
+			assertStages(t, "limit", tr.Limit, "keepLimit")
 		})
 	}
 }

@@ -10,13 +10,14 @@ import (
 )
 
 // Stage names of the limit side that are not a signal's: one per limit
-// strategy, named after its Policy field.
+// strategy, named after its Policy field, and the guard.
 const (
 	stageKeepLimit             = "keepLimit"
 	stageNoLimit               = "noLimit"
 	stageEqualsToRequest       = "equalsToRequest"
 	stageRequestsLimitsRatio   = "requestsLimitsRatio"
 	stageKeepLimitRequestRatio = "keepLimitRequestRatio"
+	stageGuard                 = "guard"
 )
 
 const factRatio = "ratio"
@@ -52,8 +53,11 @@ func (l limit) stage(name string, facts map[string]string) sustainv1alpha1.Trace
 }
 
 // limitChain runs one container's limit for res through its stages: the
-// Policy's limit strategy applied to the final request, then the limit
-// adjusters.
+// Policy's limit strategy applied to the final request, the limit adjusters,
+// then the guard. A limit below the request, derived or the container's own,
+// is rejected by the apiserver, so the guard raises it to the request; the
+// request is never capped instead, as it may carry the OOM floor
+// (docs/adr/0005).
 func limitChain(
 	res resourceKind,
 	request resource.Quantity,
@@ -77,9 +81,17 @@ func limitChain(
 		}
 		raised = append(raised, contributed{signal: s, value: ct.value})
 	}
+	guarded := l.value != nil && l.value.Cmp(request) < 0
+	if guarded {
+		q := request.DeepCopy()
+		l, winner = limit{value: &q, set: true}, -1
+	}
 
 	for i, r := range raised {
 		stages = append(stages, r.signal.stage(in, c.Name, r.value, i == winner))
+	}
+	if guarded {
+		stages = append(stages, l.stage(stageGuard, nil))
 	}
 	return l, stages
 }
