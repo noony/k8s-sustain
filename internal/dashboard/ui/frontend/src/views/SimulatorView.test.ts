@@ -122,6 +122,24 @@ describe('SimulatorView', () => {
     expect(w.find('.rec-card').exists()).toBe(true)
   })
 
+  it('counts a kept request as no change in the savings', async () => {
+    serveSimulator(async () => ({
+      ...simulation(),
+      resources: { app: { cpuRequest: '200m', memoryRequest: '256Mi' } },
+    }))
+    const w = mountOpened()
+    await flushPromises()
+
+    const kpi = (label: string) =>
+      w
+        .findAll('.kpi-card')
+        .find((c) => c.find('.kpi-label').text() === label)!
+        .find('.kpi-value')
+        .text()
+    expect(kpi('CPU change')).toBe('-0.10 cores')
+    expect(kpi('Memory change')).toBe('0 Mi')
+  })
+
   it('reset drops every edit and starts again from the policy', async () => {
     vi.useFakeTimers()
     const bodies = serveSimulator(async () => simulation())

@@ -151,7 +151,7 @@ const resourcePath = (r: Resource, ...p: string[]): Path => ['resourcesConfigs',
 
 function setWindow(r: Resource, v: string) {
   form[r].window = v
-  edit(resourcePath(r, 'window'), v)
+  edit(resourcePath(r, 'window'), v || null)
 }
 function setRequest(r: Resource, key: 'percentile' | 'headroom', v: number) {
   form[r][key] = v
@@ -328,6 +328,7 @@ function scheduleSimulation() {
 async function runSimulation() {
   debounceTimer = null
   if (!simNs.value || !simName.value) {
+    requestId++
     simData.value = null
     simulating.value = false
     destroyAllCharts()
@@ -482,60 +483,43 @@ function renderCharts(data: SimulationResult) {
   })
 }
 
+// Counts only containers with both a current and a recommended request: a
+// kept request is recommended nothing, and changes nothing.
+function requestDelta(key: 'cpuRequest' | 'memoryRequest', parse: (q: string) => number): number {
+  let delta = 0
+  for (const [cname, rec] of Object.entries(simData.value?.containers ?? {})) {
+    const current = simData.value?.resources?.[cname]?.[key]
+    const recommended = rec[key]
+    if (current && recommended) delta += parse(recommended) - parse(current)
+  }
+  return delta
+}
+
+function deltaTone(delta: number): 'positive' | 'danger' | 'neutral' {
+  if (delta < 0) return 'positive'
+  if (delta > 0) return 'danger'
+  return 'neutral'
+}
+
 function cpuDeltaSummary(): string {
   if (!simData.value) return '-'
-  let curMillis = 0,
-    recMillis = 0
-  for (const [cname, rec] of Object.entries(simData.value.containers)) {
-    const cur = simData.value.resources?.[cname]?.cpuRequest
-    if (cur) curMillis += parseCPUQuantity(cur) * 1000
-    if (rec.cpuRequest) recMillis += parseCPUQuantity(rec.cpuRequest) * 1000
-  }
-  const deltaMillis = recMillis - curMillis
-  const sign = deltaMillis > 0 ? '+' : ''
-  return `${sign}${(deltaMillis / 1000).toFixed(2)} cores`
+  const cores = requestDelta('cpuRequest', parseCPUQuantity)
+  return `${cores > 0 ? '+' : ''}${cores.toFixed(2)} cores`
 }
 
 function cpuDeltaTone(): 'positive' | 'danger' | 'neutral' {
-  if (!simData.value) return 'neutral'
-  let curMillis = 0,
-    recMillis = 0
-  for (const [cname, rec] of Object.entries(simData.value.containers)) {
-    const cur = simData.value.resources?.[cname]?.cpuRequest
-    if (cur) curMillis += parseCPUQuantity(cur) * 1000
-    if (rec.cpuRequest) recMillis += parseCPUQuantity(rec.cpuRequest) * 1000
-  }
-  if (recMillis < curMillis) return 'positive'
-  if (recMillis > curMillis) return 'danger'
-  return 'neutral'
+  return deltaTone(requestDelta('cpuRequest', parseCPUQuantity))
 }
 
 function memDeltaSummary(): string {
   if (!simData.value) return '-'
-  let curBytes = 0,
-    recBytes = 0
-  for (const [cname, rec] of Object.entries(simData.value.containers)) {
-    const cur = simData.value.resources?.[cname]?.memoryRequest
-    if (cur) curBytes += parseMemoryQuantity(cur)
-    if (rec.memoryRequest) recBytes += parseMemoryQuantity(rec.memoryRequest)
-  }
-  const delta = recBytes - curBytes
-  const sign = delta > 0 ? '+' : delta < 0 ? '-' : ''
-  return `${sign}${formatBytes(Math.abs(delta))}`
+  const bytes = requestDelta('memoryRequest', parseMemoryQuantity)
+  const sign = bytes > 0 ? '+' : bytes < 0 ? '-' : ''
+  return `${sign}${formatBytes(Math.abs(bytes))}`
 }
 
 function memDeltaTone(): 'positive' | 'danger' | 'neutral' {
-  if (!simData.value) return 'neutral'
-  let curBytes = 0,
-    recBytes = 0
-  for (const [cname, rec] of Object.entries(simData.value.containers)) {
-    const cur = simData.value.resources?.[cname]?.memoryRequest
-    if (cur) curBytes += parseMemoryQuantity(cur)
-    if (rec.memoryRequest) recBytes += parseMemoryQuantity(rec.memoryRequest)
-  }
-  if (recBytes < curBytes) return 'positive'
-  if (recBytes > curBytes) return 'danger'
-  return 'neutral'
+  return deltaTone(requestDelta('memoryRequest', parseMemoryQuantity))
 }
 
 async function trySample() {
@@ -692,7 +676,7 @@ onUnmounted(() => {
                 <input
                   type="range"
                   :value="form[r.key].percentile"
-                  min="50"
+                  min="1"
                   max="100"
                   :aria-label="r.label + ' percentile'"
                   :aria-valuetext="form[r.key].percentile + ' percent'"

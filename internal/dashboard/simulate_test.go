@@ -221,4 +221,7 @@ func TestRunSimulation_WithoutOverrideComputesTheControllersRequest(t *testing.T
 	if c := res.Containers["main"]; c.CPURequest != "2200m" || c.MemoryRequest != "" || len(res.Containers) != 1 {
 		t.Errorf("containers = %+v, want main alone, coordinated, with its memory request kept", res.Containers)
 	}
+	if res.CPURecommendations == nil || res.MemRecommendations != nil {
+		t.Errorf("recommendation series cpu=%v memory=%v, want none for the kept memory request", res.CPURecommendations, res.MemRecommendations)
+	}
 }

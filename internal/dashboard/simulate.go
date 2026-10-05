@@ -107,10 +107,16 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(ctx, ns, kind, name, tr, step)
 	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(ctx, ns, kind, name, tr, step)
 
-	cpuRecSeries, _ := s.PromClient.QueryWorkloadCPURecommendationRangeByContainer(ctx, ns, kind, name,
-		recommender.PercentileQuantile(resources.CPU.Requests.Percentile), resources.CPU.Window, tr, step)
-	memRecSeries, _ := s.PromClient.QueryWorkloadMemoryRecommendationRangeByContainer(ctx, ns, kind, name,
-		recommender.PercentileQuantile(resources.Memory.Requests.Percentile), resources.Memory.Window, tr, step)
+	// A kept request is recommended nothing, so it has no series to draw.
+	var cpuRecSeries, memRecSeries promclient.ContainerTimeSeries
+	if !resources.CPU.Requests.KeepRequest {
+		cpuRecSeries, _ = s.PromClient.QueryWorkloadCPURecommendationRangeByContainer(ctx, ns, kind, name,
+			recommender.PercentileQuantile(resources.CPU.Requests.Percentile), resources.CPU.Window, tr, step)
+	}
+	if !resources.Memory.Requests.KeepRequest {
+		memRecSeries, _ = s.PromClient.QueryWorkloadMemoryRecommendationRangeByContainer(ctx, ns, kind, name,
+			recommender.PercentileQuantile(resources.Memory.Requests.Percentile), resources.Memory.Window, tr, step)
+	}
 
 	return &simulationResult{
 		Policy:             policy,
