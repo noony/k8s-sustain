@@ -249,21 +249,32 @@ These three reasons are the complete set the controller writes to
 
 | Reason | Status | Meaning |
 |--------|--------|---------|
-| `ReconciliationSucceeded` | True | Every matching workload was processed, and every workload identity was registered for computation |
-| `PartialFailure` | False | Some workloads failed, and/or some workload identities could not be registered for computation; see `message`, which names only whichever of the two actually happened |
+| `ReconciliationSucceeded` | True | Every matching workload was processed, and no workload identity is Blocked |
+| `PartialFailure` | False | Some workloads failed this cycle, some workload identities are Blocked (including those whose workloads this cycle skipped in retry backoff), and/or some could not be registered for computation; see `message`, which names only what actually happened |
 | `ListFailed` | False | The cycle could not even build its work list — listing the matching workloads failed, or listing the policy's `WorkloadRecommendation` objects did. No workload was processed |
 
-`ReconciliationFailed` is **not** a condition reason. It is an Event reason,
-recorded as a `Warning` on the *workload object* (not on the `Policy`) when
-that individual workload hits a permanent, non-retried error. A permanent
-error is dropped from the retry tracker and does not count toward the
-cycle's failure total, so a cycle in which every emitted event is
-`ReconciliationFailed` still leaves the policy at `ReconciliationSucceeded`.
-`PartialFailure` is driven instead by transient errors — which emit
-`ReconciliationRetryScheduled`, not `ReconciliationFailed` — and by
-workload identities that could not be registered for computation. That
-second count is per **identity**, not per workload object: workloads grouped
-under a shared `k8s.sustain.io/owner-name` register once, together.
+A workload fails when its Prometheus inputs cannot be read, when evicting or
+resizing its pods fails, or when it is left alone because its identity's
+recommendation could not be stored for the webhook (its identity could not
+be registered, or the write was rejected). Every such failure counts toward
+`PartialFailure` and leaves the identity
+[Blocked](../reference/metrics.md#drift-retry-autoscaler) until a later
+cycle succeeds, whether the error is transient or permanent:
+
+- A **transient** error (Prometheus errors and timeouts, API 5xx and 429) is
+  retried with exponential backoff, 30s doubling up to 5 minutes. Each
+  attempt records a `ReconciliationRetryScheduled` Warning event on the
+  workload object naming when the next one runs, and the policy's next cycle
+  is scheduled for that time when it comes before `--reconcile-interval`.
+- A **permanent** error (an API rejection such as 403, 401 or Invalid, e.g.
+  missing RBAC on `pods/eviction`) records one `ReconciliationFailed`
+  Warning event on the workload object when the workload enters the failure,
+  and is retried on every cycle without backoff, so fixing its cause takes
+  effect at the next cycle.
+
+The registration count is per **identity**, not per workload object:
+workloads grouped under a shared `k8s.sustain.io/owner-name` register once,
+together.
 
 ---
 

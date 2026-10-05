@@ -62,7 +62,7 @@ _Avoid_: preview, dry-run (dry-run means recommend-only)
 The single most actionable condition of an identity, in this precedence: Conflicted, then Blocked, then At risk, then Drifted, then Safe.
 
 **Blocked**:
-The controller keeps failing to apply an identity's Recommendation and is backing off. One failing member is enough to block the identity.
+The controller's last attempt to apply an identity's Recommendation to one of its members failed, and none has succeeded since. A transient failure is retried with growing backoff; a permanent one (forbidden, invalid) every reconcile, until something outside the controller fixes it. A member left alone because its Recommendation could not be stored for the webhook has failed too. One Blocked member is enough to block the identity, and a Policy with a Blocked identity is not Ready.
 
 **At risk**:
 An identity with an OOM kill in the last 24 hours.

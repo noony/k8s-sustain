@@ -32,9 +32,9 @@ flowchart LR
 
 The controller is a standard [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) reconciler that watches `Policy` objects.
 
-**Reconcile loop:** a `Policy` event (create / update / periodic requeue) takes an **inventory** of the identities the policy can govern, then runs three phases in order — **discovery**, **computation**, **application**. Only computation talks to Prometheus. Independent `Policy` objects reconcile in parallel, bounded by `--policy-concurrency-limit` (default 10) — a separate knob from the per-workload fan-out inside the computation phase.
+**Reconcile loop:** a `Policy` event (create, spec change, deletion, periodic requeue) takes an **inventory** of the identities the policy can govern, then runs three phases in order — **discovery**, **computation**, **application**. Only computation talks to Prometheus. Independent `Policy` objects reconcile in parallel, bounded by `--policy-concurrency-limit` (default 10) — a separate knob from the per-workload fan-out inside the computation phase.
 
-The controller requeues after `--reconcile-interval` (default `5m`).
+The controller requeues after `--reconcile-interval` (default `5m`), or sooner when a workload's retry falls due first (see [Application](#application)).
 
 ### Inventory
 
@@ -80,7 +80,10 @@ Only the governed members of live identities in `Ongoing` mode are applied, and 
 - CronJob, Job and bare-pod pods are resized in place only, never evicted — see [Kinds that are never evicted](in-place-updates.md#kinds-that-are-never-evicted)
 - Under owner-name grouping, every member is applied independently against the identity's one shared recommendation, narrowed to the containers that member actually declares
 - Emit a `ResourcesUpdated` event on the workload object **only when at least one pod was actually resized in place or evicted** in that reconcile. The workload's pod template is never patched, so it permanently differs from the recommendation — a reconcile that finds every pod already at target stays silent. The message names the pod count and the containers (e.g. `Updated resources on 2 pod(s) for containers: [app]`); the applied values are on each pod's own `ResizeStarted` event. The events API groups events by object and reason, so updates of the same workload less than ~6 minutes apart are folded into one Event whose `series.count` and `lastObservedTime` advance
-- On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a `ReconciliationRetryScheduled` warning event on the workload
+- On transient failure (Prometheus error or timeout, API 5xx or 429), back the workload off exponentially (30s base, 5min cap) and emit a `ReconciliationRetryScheduled` warning event on the workload naming when it is retried. The policy's next reconcile is scheduled for the earliest such retry when it comes before `--reconcile-interval`, so that time is when the retry runs
+- On permanent failure (an API rejection such as 403, 401 or Invalid, typically missing RBAC on `pods/eviction` or `pods/resize`), emit a `ReconciliationFailed` warning event once, when the workload enters the failure, and retry it on every reconcile without backoff, so a fix is picked up without a restart
+- A workload whose last failure, transient or permanent, has not been followed by a success is **Blocked**, and so is its identity. A workload left alone because its identity's recommendation could not be stored counts as a failure of the `store` step. Only shutdown, never a timeout of a single call, ends a reconcile without counting its failures
+- The policy is `Ready` only when no workload failed this reconcile and none of its identities is Blocked, including those whose workloads this reconcile set aside in backoff (see [Policy status](../reference/policy.md#status)). The controller's own status writes do not trigger a reconcile; only a new `generation` (a spec change or a deletion), the interval, a due retry or a live OOM kill does
 
 Up to `--policy-concurrency-limit` policies (10 by default) fetch at once, each running up to 8 shard queries concurrently, more while a failed shard is re-queried one identity at a time — enough to burst well past Prometheus's own `--query.max-concurrency` (default 20, shared with every other consumer of that server: Grafana dashboards, alerting rules). `--prometheus-max-inflight` (default 8) is a separate, global cap on concurrent Prometheus queries across the whole controller process — it throttles the client itself rather than the fan-out, so it protects Prometheus even if the concurrency limits are turned up.
 
