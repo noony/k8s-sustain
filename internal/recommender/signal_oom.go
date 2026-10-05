@@ -127,6 +127,25 @@ func (oomFloor) query(_ sustainv1alpha1.ResourcesConfigs, shard promclient.Shard
 	return shard.MetricsSelector(oomRules...)
 }
 
+// contract: the rules are read as an instant vector, so the cost does not
+// depend on their evaluation interval.
+func (oomFloor) contract() PromContract {
+	return PromContract{
+		Rules:  oomRules,
+		Labels: shardLabels,
+		CAdvisor: []string{
+			"container_memory_max_usage_bytes",
+			"container_memory_peak_working_set_bytes",
+			"container_memory_working_set_bytes",
+			"container_spec_memory_limit_bytes",
+		},
+		KubeStateMetrics: append([]string{
+			"kube_pod_container_status_restarts_total",
+			"kube_pod_container_status_last_terminated_reason",
+		}, podWorkloadMetrics...),
+	}
+}
+
 // collect sums kill counts and keeps the highest peak and limit of each
 // container, collapsing the duplicate series several kube-state-metrics
 // replicas produce.

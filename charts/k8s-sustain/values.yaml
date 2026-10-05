@@ -1066,9 +1066,10 @@ prometheusRule:
     # recommender reads workload_max_pod_cpu/memory below as a plain RANGE
     # VECTOR (`quantile_over_time(p, rule[window])`), not as a `[window:1m]`
     # subquery, so this interval IS the percentile's sample resolution — there
-    # is no subquery step left to resample it. Raising it to cut Prometheus
-    # memory would silently coarsen every recommendation percentile in the
-    # product.
+    # is no subquery step left to resample it — and what the shard sample
+    # budget counts. Raising it to cut Prometheus memory would coarsen every
+    # recommendation percentile in the product. The usage signals declare it in
+    # their contract, so hack/signalcontract fails when it changes.
     - name: k8s_sustain.workload_max_pod
       interval: 1m
       rules:
@@ -1165,7 +1166,8 @@ prometheus:
         target_label: node
       # Keep only the cAdvisor series the recording rules consume. Everything
       # else (network, fs, accelerator, hugepages, sched stats, etc.) is dropped
-      # at ingestion to slash TSDB cardinality.
+      # at ingestion to slash TSDB cardinality. hack/signalcontract fails when
+      # this drops a series a recommendation signal's rules compute from.
       metric_relabel_configs:
       - action: keep
         source_labels: [__name__]
@@ -1250,7 +1252,9 @@ prometheus:
           target_label: pod
       # Keep only the kube-state-metrics series the recording rules consume.
       # Everything else (node info, deployment status, hpa, pdb, services, etc.)
-      # is dropped at ingestion to slash TSDB cardinality.
+      # is dropped at ingestion to slash TSDB cardinality. hack/signalcontract
+      # fails when this drops a series a recommendation signal's rules compute
+      # from.
       metric_relabel_configs:
         - action: keep
           source_labels: [__name__]

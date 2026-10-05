@@ -2,7 +2,9 @@ package prometheus
 
 // k8s_sustain_* names are emitted directly by the Go code; k8s_sustain:*
 // recording rules are defined in charts/k8s-sustain/values.yaml under
-// `prometheusRule.groups` — adding one means updating both places.
+// `prometheusRule.groups` — adding one means updating both places. A rule a
+// recommendation signal reads is also in that signal's PromContract
+// (internal/recommender), which hack/signalcontract checks against the chart.
 const (
 	MetricClusterCPUSavingsCores         = "k8s_sustain:cluster_cpu_savings_cores"
 	MetricClusterCPUSavingsRatio         = "k8s_sustain:cluster_cpu_savings_ratio"

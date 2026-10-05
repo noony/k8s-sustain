@@ -2,6 +2,7 @@ package recommender
 
 import (
 	"context"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -34,6 +35,10 @@ func (*listedSignal) samplesPerContainer(sustainv1alpha1.ResourcesConfigs) int {
 
 func (*listedSignal) query(_ sustainv1alpha1.ResourcesConfigs, shard promclient.Shard) string {
 	return listedSignalRule + shard.Selector()
+}
+
+func (*listedSignal) contract() PromContract {
+	return PromContract{Rules: []string{listedSignalRule}, Labels: shardLabels}
 }
 
 func (l *listedSignal) collect(_ *WorkloadInputs, samples []promclient.ShardSample) {
@@ -143,5 +148,30 @@ func TestSignals_ComputeRunsAListedLimitSignalsStage(t *testing.T) {
 	})
 	if rec := unlimited.Recs["app"]; rec.MemoryLimit != nil || rec.RemoveMemoryLimit {
 		t.Errorf("app without a limit = %+v, want it to keep having none", rec)
+	}
+}
+
+var ruleRef = regexp.MustCompile(`k8s_sustain:[a-z0-9_:]+`)
+
+// Listing a signal is enough for its contract to be checked against the
+// chart, and each contract declares exactly the rules its signal's query
+// reads.
+func TestSignals_ContractDeclaresTheRulesItsQueryReads(t *testing.T) {
+	listSignal(t, &listedSignal{})
+
+	contracts := PromContracts()
+
+	if len(contracts) != len(signals) {
+		t.Fatalf("%d contracts, want one per signal (%d)", len(contracts), len(signals))
+	}
+	for i, s := range signals {
+		c := contracts[i]
+		if c.Signal != s.name() {
+			t.Errorf("contract %d is %q's, want %q's", i, c.Signal, s.name())
+		}
+		read := ruleRef.FindAllString(s.query(sustainv1alpha1.ResourcesConfigs{}, dottedShard), -1)
+		if got, want := slices.Sorted(slices.Values(read)), slices.Sorted(slices.Values(c.Rules)); !slices.Equal(got, want) {
+			t.Errorf("%s reads %v, its contract declares %v", s.name(), got, want)
+		}
 	}
 }

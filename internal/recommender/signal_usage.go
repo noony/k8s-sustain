@@ -3,6 +3,7 @@ package recommender
 import (
 	"maps"
 	"slices"
+	"time"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -17,13 +18,23 @@ type usage struct {
 	// rule holds, per identity and container, the busiest pod's usage at each
 	// minute.
 	rule string
+	// scraped is the cAdvisor metric rule computes usage from.
+	scraped string
 }
 
 const stagePercentile = "percentile"
 
 var (
-	cpuUsage    = usage{resource: cpuResource, rule: promclient.MetricWorkloadMaxPodCPUCores}
-	memoryUsage = usage{resource: memoryResource, rule: promclient.MetricWorkloadMaxPodMemoryBytes}
+	cpuUsage = usage{
+		resource: cpuResource,
+		rule:     promclient.MetricWorkloadMaxPodCPUCores,
+		scraped:  "container_cpu_usage_seconds_total",
+	}
+	memoryUsage = usage{
+		resource: memoryResource,
+		rule:     promclient.MetricWorkloadMaxPodMemoryBytes,
+		scraped:  "container_memory_working_set_bytes",
+	}
 )
 
 func (u usage) name() string { return string(u.resource) }
@@ -46,11 +57,22 @@ func (u usage) query(cfg sustainv1alpha1.ResourcesConfigs, shard promclient.Shar
 	return promclient.QuantileOverTime(quantile, u.rule, shard.Selector(), u.window(cfg))
 }
 
+// contract: the rule is read as a plain range vector, so its evaluation
+// interval is the percentile's sample resolution and what samplesPerContainer
+// counts.
+func (u usage) contract() PromContract {
+	return PromContract{
+		Rules:            []string{u.rule},
+		Labels:           shardLabels,
+		Interval:         time.Minute,
+		CAdvisor:         []string{u.scraped},
+		KubeStateMetrics: podWorkloadMetrics,
+	}
+}
+
 // collect keeps the last sample of each container. That is safe only because
-// the rule already aggregates by (namespace, owner_kind, owner_name,
-// container) (see charts/k8s-sustain/values.yaml), so at most one series per
-// container of an identity can be returned. If its by() clause ever drops one
-// of those labels, this breaks silently.
+// the contract holds the rule to aggregating by exactly shardLabels, so at
+// most one series per container of an identity can be returned.
 func (u usage) collect(in *WorkloadInputs, samples []promclient.ShardSample) {
 	values := make(promclient.ContainerValues, len(samples))
 	for _, s := range samples {
