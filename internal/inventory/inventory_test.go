@@ -23,7 +23,6 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/inventory"
-	"github.com/noony/k8s-sustain/internal/policymatch/policymatchtest"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
@@ -310,56 +309,37 @@ func TestMembersOfDifferentPoliciesAreConflicted(t *testing.T) {
 	}
 }
 
-// A member governs nothing through a Policy that does not accept it: missing,
-// not managing its kind, or not selecting it.
-func TestOptInNeedsThePolicysConsent(t *testing.T) {
+// A member is decided on its pod template, its object's own annotations and
+// its Namespace's; the Policy's label selector matches the pod template's
+// labels, never the object's own.
+func TestMembersAreGovernedThroughTheirPodTemplate(t *testing.T) {
 	selective := managing("selective", sustainv1alpha1.UpdateTypes{Deployment: ongoing()})
 	selective.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"tier": "web"}}
-	elsewhere := managing("elsewhere", sustainv1alpha1.UpdateTypes{Deployment: ongoing()})
-	elsewhere.Spec.Selector.Namespaces = []string{"other"}
-	jobsOnly := managing("jobs-only", sustainv1alpha1.UpdateTypes{Job: ongoing()})
+	templateLabelled := deployment("prod", "template-labelled", base, optIn("selective"))
+	templateLabelled.Spec.Template.Labels = map[string]string{"tier": "web"}
+	objectLabelled := deployment("prod", "object-labelled", base, optIn("selective"))
+	objectLabelled.Labels = map[string]string{"tier": "web"}
+	workloadLevel := deployment("prod", "workload-level", base, nil)
+	workloadLevel.Annotations = optIn("p")
+	team := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team", Annotations: optIn("p")}}
 
-	labelled := deployment("prod", "labelled", base, optIn("selective"))
-	labelled.Labels = map[string]string{"tier": "web"}
-	cases := map[string]*appsv1.Deployment{
-		"selector rejects labels": deployment("prod", "unlabelled", base, optIn("selective")),
-		"namespace not selected":  deployment("prod", "misplaced", base, optIn("elsewhere")),
-		"kind not managed":        deployment("prod", "wrong-kind", base, optIn("jobs-only")),
-		"policy missing":          deployment("prod", "dangling", base, optIn("ghost")),
-		"excluded namespace":      deployment("kube-system", "excluded", base, optIn("selective")),
-	}
-	objs := []client.Object{selective, elsewhere, jobsOnly, labelled}
-	for _, d := range cases {
-		objs = append(objs, d)
-	}
-	snap := take(t, inventory.Options{ExcludedNamespaces: []string{"kube-system"}}, objs...)
+	snap := take(t, inventory.Options{ExcludedNamespaces: []string{"kube-system"}},
+		everyKind("p"), selective, team, templateLabelled, objectLabelled, workloadLevel,
+		deployment("team", "namespace-level", base, nil),
+		deployment("kube-system", "excluded", base, optIn("p")),
+	)
 
-	if got := lookup(t, snap, key("prod", "Deployment", "labelled")).Policy; got != "selective" {
-		t.Errorf("labelled: policy = %q, want selective", got)
-	}
-	for name, d := range cases {
-		id := lookup(t, snap, key(d.Namespace, "Deployment", d.Name))
-		if id.Policy != "" || id.Members[0].Policy != "" {
-			t.Errorf("%s: policy = %q, want none", name, id.Policy)
+	for k, want := range map[promclient.WorkloadIdentity]string{
+		key("prod", "Deployment", "template-labelled"): "selective",
+		key("prod", "Deployment", "object-labelled"):   "",
+		key("prod", "Deployment", "workload-level"):    "p",
+		key("team", "Deployment", "namespace-level"):   "p",
+		key("kube-system", "Deployment", "excluded"):   "",
+	} {
+		id := lookup(t, snap, k)
+		if id.Policy != want || id.Members[0].Policy != want {
+			t.Errorf("%s: policy = %q, want %q", k.OwnerName, id.Policy, want)
 		}
-	}
-}
-
-// Replays the shared annotation contract: the three opt-in levels resolve
-// here exactly as policymatch.ResolvePolicy says.
-func TestAnnotationLevels(t *testing.T) {
-	for _, tc := range policymatchtest.AnnotationCases() {
-		t.Run(tc.Name, func(t *testing.T) {
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Annotations: tc.Namespace}}
-			d := deployment("team-a", "web", base, tc.Template, container("app", ""))
-			d.Annotations = tc.Workload
-
-			snap := take(t, inventory.Options{}, everyKind("p"), everyKind("other"), ns, d)
-
-			if got := lookup(t, snap, key("team-a", "Deployment", "web")).Policy; got != tc.WantPolicy {
-				t.Errorf("policy = %q, want %q", got, tc.WantPolicy)
-			}
-		})
 	}
 }
 

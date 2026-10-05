@@ -22,7 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/policymatch"
+	"github.com/noony/k8s-sustain/internal/governance"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -115,7 +115,7 @@ func (id *Identity) MemberPolicies() []string {
 type Member struct {
 	Object client.Object
 	// Policy governs this member: the Policy it opts into, when that Policy
-	// exists, manages its kind and selects it. Empty otherwise.
+	// exists, manages its kind and selects its pod template. Empty otherwise.
 	Policy         string
 	Containers     []corev1.Container
 	InitContainers []corev1.Container
@@ -156,11 +156,13 @@ func Take(ctx context.Context, r client.Reader, opts Options) (*Snapshot, error)
 	return b.snapshot(), nil
 }
 
+// builder is the governance.Reader of its snapshot: it serves the Policies it
+// listed and memoised Namespace annotations.
 type builder struct {
 	reader     client.Reader
 	opts       Options
 	namespaces []string
-	policies   map[string]*sustainv1alpha1.Policy
+	policies   *governance.Policies
 	byKey      map[promclient.WorkloadIdentity]*Identity
 	// nsAnn memoises Namespace annotations, read only for objects whose own
 	// annotations leave the opt-in undecided.
@@ -177,10 +179,7 @@ func (b *builder) listPolicies(ctx context.Context) error {
 	if err := b.reader.List(ctx, &list); err != nil {
 		return fmt.Errorf("listing policies: %w", err)
 	}
-	b.policies = make(map[string]*sustainv1alpha1.Policy, len(list.Items))
-	for i := range list.Items {
-		b.policies[list.Items[i].Name] = &list.Items[i]
-	}
+	b.policies = governance.NewPolicies(list.Items, b.opts.ExcludedNamespaces)
 	return nil
 }
 
@@ -219,14 +218,13 @@ func (b *builder) addWorkloads(ctx context.Context, kind string) error {
 		if !ok {
 			return nil
 		}
-		_, name := workload.ApplyOwnerNameOverride(kind, obj.GetName(), tmpl.Annotations)
-		policy, err := b.resolve(ctx, obj.GetNamespace(), tmpl.Annotations, obj.GetAnnotations())
+		d, err := governance.Decide(ctx, governance.PodTemplate(obj, kind, tmpl), b)
 		if err != nil {
 			return err
 		}
-		b.addMember(promclient.WorkloadIdentity{Namespace: obj.GetNamespace(), OwnerKind: kind, OwnerName: name}, Member{
+		b.addMember(promclient.WorkloadIdentity(d.Identity), Member{
 			Object:         obj,
-			Policy:         b.govern(policy, kind, obj.GetNamespace(), obj.GetLabels()),
+			Policy:         d.PolicyName(),
 			Containers:     tmpl.Spec.Containers,
 			InitContainers: tmpl.Spec.InitContainers,
 		})
@@ -243,17 +241,16 @@ func (b *builder) addBarePods(ctx context.Context) error {
 		if metav1.GetControllerOf(pod) != nil {
 			return nil
 		}
-		kind, name := workload.ApplyOwnerNameOverride("", "", pod.Annotations)
-		if kind == "" {
-			return nil
-		}
-		policy, err := b.resolve(ctx, pod.Namespace, pod.Annotations, nil)
+		d, err := governance.Decide(ctx, governance.Pod(pod), b)
 		if err != nil {
 			return err
 		}
-		b.addMember(promclient.WorkloadIdentity{Namespace: pod.Namespace, OwnerKind: kind, OwnerName: name}, Member{
+		if d.Refusal == governance.NoOwner {
+			return nil
+		}
+		b.addMember(promclient.WorkloadIdentity(d.Identity), Member{
 			Object:         pod,
-			Policy:         b.govern(policy, kind, pod.Namespace, pod.Labels),
+			Policy:         d.PolicyName(),
 			Containers:     pod.Spec.Containers,
 			InitContainers: pod.Spec.InitContainers,
 		})
@@ -261,6 +258,8 @@ func (b *builder) addBarePods(ctx context.Context) error {
 	})
 }
 
+// addRecommendations runs after every kind's members are in: only then is an
+// identity without one Departed, and governed by its object's Policy.
 func (b *builder) addRecommendations(ctx context.Context) error {
 	return b.list(ctx, func() client.ObjectList { return &sustainv1alpha1.WorkloadRecommendationList{} }, func(obj client.Object) error {
 		wlr := obj.(*sustainv1alpha1.WorkloadRecommendation)
@@ -268,7 +267,17 @@ func (b *builder) addRecommendations(ctx context.Context) error {
 		if !b.inScope(ref.Kind) {
 			return nil
 		}
-		b.identity(promclient.WorkloadIdentity{Namespace: ref.Namespace, OwnerKind: ref.Kind, OwnerName: ref.Name}).Recommendation = wlr
+		key := promclient.WorkloadIdentity{Namespace: ref.Namespace, OwnerKind: ref.Kind, OwnerName: ref.Name}
+		id := b.identity(key)
+		id.Recommendation = wlr
+		if !id.Departed() {
+			return nil
+		}
+		d, err := governance.Decide(ctx, governance.Departed(governance.Identity(key), wlr.Spec.Policy), b)
+		if err != nil {
+			return err
+		}
+		id.Policy = d.PolicyName()
 		return nil
 	})
 }
@@ -287,27 +296,28 @@ func (b *builder) addMember(key promclient.WorkloadIdentity, m Member) {
 	id.Members = append(id.Members, m)
 }
 
-// resolve returns the Policy an object opts into across the three annotation
-// levels, reading the Namespace only when the object's own levels leave it
-// undecided.
-func (b *builder) resolve(ctx context.Context, namespace string, template, object map[string]string) (string, error) {
-	if policymatch.DecidesAt(template) || policymatch.DecidesAt(object) {
-		name, _ := policymatch.ResolvePolicy(template, object, nil)
-		return name, nil
-	}
-	ns, err := b.namespaceAnnotations(ctx, namespace)
-	if err != nil {
-		return "", err
-	}
-	name, _ := policymatch.ResolvePolicy(template, object, ns)
-	return name, nil
+// Policies is governance.Reader's: the Policies listed when the snapshot began.
+func (b *builder) Policies(context.Context) (*governance.Policies, error) {
+	return b.policies, nil
 }
 
-// namespaceAnnotations reads one Namespace per name when the snapshot is
+// PodOwner is governance.Reader's. The only pods the inventory decides are
+// bare pods, which have no controller to resolve.
+func (b *builder) PodOwner(_ context.Context, pod *corev1.Pod) (string, string, error) {
+	return "", "", fmt.Errorf("pod %s/%s: the inventory resolves no controller owner", pod.Namespace, pod.Name)
+}
+
+// WorkloadAnnotations is governance.Reader's. A pod template carries its
+// workload's annotations, and a bare pod has no workload.
+func (b *builder) WorkloadAnnotations(_ context.Context, namespace, kind, name string) (map[string]string, error) {
+	return nil, fmt.Errorf("%s %s/%s: the inventory reads no workload annotations", kind, namespace, name)
+}
+
+// NamespaceAnnotations reads one Namespace per name when the snapshot is
 // narrowed to namespaces, and lists them all once otherwise. A missing
 // Namespace has no annotations: namespaces are deleted while snapshots are
 // taken.
-func (b *builder) namespaceAnnotations(ctx context.Context, name string) (map[string]string, error) {
+func (b *builder) NamespaceAnnotations(ctx context.Context, name string) (map[string]string, error) {
 	if a, ok := b.nsAnn[name]; ok || b.nsAnnListed {
 		return a, nil
 	}
@@ -328,36 +338,6 @@ func (b *builder) namespaceAnnotations(ctx context.Context, name string) (map[st
 	}
 	b.nsAnn[name] = ns.Annotations
 	return ns.Annotations, nil
-}
-
-// govern returns policy when it accepts an object of kind in namespace with
-// labels: it exists, manages the kind, and its selector matches. Opting in is
-// necessary but not sufficient.
-func (b *builder) govern(policy, kind, namespace string, labels map[string]string) string {
-	p, ok := b.policies[policy]
-	if !ok || p.Spec.RightSizing.Update.Types.ModeForKind(kind) == nil {
-		return ""
-	}
-	if !policymatch.Matches(p, namespace, labels, b.opts.ExcludedNamespaces) {
-		return ""
-	}
-	return policy
-}
-
-// governsDeparted is govern for an identity with no member left to carry
-// labels: only the namespace half of the selector can be checked.
-func (b *builder) governsDeparted(id *Identity) string {
-	if id.Recommendation == nil {
-		return ""
-	}
-	p, ok := b.policies[id.Recommendation.Spec.Policy]
-	if !ok || p.Spec.RightSizing.Update.Types.ModeForKind(id.Key.OwnerKind) == nil {
-		return ""
-	}
-	if !policymatch.MatchesSelector(p, id.Key.Namespace, nil, b.opts.ExcludedNamespaces, nil) {
-		return ""
-	}
-	return p.Name
 }
 
 func (b *builder) snapshot() *Snapshot {
@@ -382,7 +362,6 @@ func (b *builder) settle(id *Identity) {
 		return strings.Compare(a.Object.GetName(), b.Object.GetName())
 	})
 	if id.Departed() {
-		id.Policy = b.governsDeparted(id)
 		id.Containers, id.InitContainers = wlrcache.ContainersFromObserved(id.Recommendation.Status.ObservedResources)
 		id.Since = id.Recommendation.CreationTimestamp.Time
 		return
