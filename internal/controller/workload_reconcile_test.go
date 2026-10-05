@@ -748,12 +748,20 @@ func TestReconcileWorkload_CronJobResizesActiveRunInPlace(t *testing.T) {
 // "patch" for kinds that evict, "resize" for kinds only ever resized in place.
 func TestReconcileWorkload_FailedApplyRecordsItsFamilyPhase(t *testing.T) {
 	unavailable := apierrors.NewServiceUnavailable("apiserver unavailable")
+	// Only the pods' resize and eviction fail: a failed WorkloadRecommendation
+	// write would skip the apply altogether.
 	failSubresources := interceptor.Funcs{
-		SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption) error {
-			return unavailable
+		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			if _, isPod := obj.(*corev1.Pod); isPod {
+				return unavailable
+			}
+			return c.SubResource(sub).Patch(ctx, obj, patch, opts...)
 		},
-		SubResourceCreate: func(context.Context, client.Client, string, client.Object, client.Object, ...client.SubResourceCreateOption) error {
-			return unavailable
+		SubResourceCreate: func(ctx context.Context, c client.Client, sub string, obj, subObj client.Object, opts ...client.SubResourceCreateOption) error {
+			if _, isPod := obj.(*corev1.Pod); isPod {
+				return unavailable
+			}
+			return c.SubResource(sub).Create(ctx, obj, subObj, opts...)
 		},
 	}
 	job, jobPod := jobWithPod("batch-1", "999m")
