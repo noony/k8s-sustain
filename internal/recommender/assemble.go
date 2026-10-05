@@ -43,9 +43,16 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 	resources := WithDefaults(spec.ResourcesConfigs)
 	out := make([]Assembled, len(ids))
 	reqs := make([]InputsRequest, len(ids))
+	// A failed read fails every identity of its namespace: logged once.
+	unread := map[string]bool{}
 	for i, id := range ids {
 		containers := ContainersOf(spec, id)
-		group := autoscalerOf(ctx, autoscalers, id)
+		group, err := autoscalerOf(ctx, autoscalers, id)
+		if ns := id.Key.Namespace; err != nil && !unread[ns] {
+			unread[ns] = true
+			log.FromContext(ctx).Error(err, "reading the namespace's autoscalers failed; its identities are recommended uncoordinated",
+				"namespace", ns)
+		}
 		out[i] = Assembled{
 			Request: Request{
 				containers:   containers,
@@ -91,21 +98,16 @@ func ContainersOf(spec sustainv1alpha1.RightSizingSpec, id *inventory.Identity) 
 // autoscalerOf reads the autoscaler of each member the identity's containers
 // come from. A departed identity has none, and a failed read leaves the
 // identity uncoordinated.
-func autoscalerOf(ctx context.Context, autoscalers Autoscalers, id *inventory.Identity) autoscaler.Group {
+func autoscalerOf(ctx context.Context, autoscalers Autoscalers, id *inventory.Identity) (autoscaler.Group, error) {
 	members := id.Contributors()
 	if len(members) == 0 {
-		return autoscaler.Group{Info: autoscaler.Info{Kind: autoscaler.KindNone}}
+		return autoscaler.Group{Info: autoscaler.Info{Kind: autoscaler.KindNone}}, nil
 	}
 	names := make([]string, len(members))
 	for i, m := range members {
 		names[i] = m.Object.GetName()
 	}
-	g, err := autoscalers.ForIdentity(ctx, id.Key.Namespace, id.Key.OwnerKind, names)
-	if err != nil {
-		log.FromContext(ctx).Error(err, "autoscaler detection failed, proceeding without it",
-			"kind", id.Key.OwnerKind, "name", id.Key.OwnerName, "namespace", id.Key.Namespace)
-	}
-	return g
+	return autoscalers.ForIdentity(ctx, id.Key.Namespace, id.Key.OwnerKind, names)
 }
 
 // WithDefaults returns cfg with every setting the recommender defaults made

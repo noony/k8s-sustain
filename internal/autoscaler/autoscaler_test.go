@@ -93,7 +93,6 @@ func TestForIdentity(t *testing.T) {
 	cases := []struct {
 		name    string
 		objs    []client.Object
-		kind    string
 		members []string
 		want    Group
 	}{
@@ -193,12 +192,8 @@ func TestForIdentity(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(tc.objs...).Build()
-			kind := tc.kind
-			if kind == "" {
-				kind = "Deployment"
-			}
 
-			got, err := NewNamespacedSnapshot(c).ForIdentity(context.Background(), "default", kind, tc.members)
+			got, err := NewNamespacedSnapshot(c).ForIdentity(context.Background(), "default", "Deployment", tc.members)
 			if err != nil {
 				t.Fatalf("ForIdentity: %v", err)
 			}

@@ -155,6 +155,18 @@ func TestAssemble(t *testing.T) {
 			wantAuto:       autoscaler.KindNone,
 		},
 		{
+			name: "a departed identity's snapshot init containers are left out when the Policy excludes them",
+			spec: sustainv1alpha1.RightSizingSpec{ExcludeInitContainers: true},
+			id: &inventory.Identity{
+				Key:            promclient.WorkloadIdentity{Namespace: "batch", OwnerKind: "Job", OwnerName: "nightly"},
+				Policy:         "p",
+				Containers:     containers("main"),
+				InitContainers: containers("prep"),
+			},
+			wantContainers: []string{"main"},
+			wantAuto:       autoscaler.KindNone,
+		},
+		{
 			name:           "a failed autoscaler read leaves the identity uncoordinated",
 			id:             governed("prod", "api"),
 			autoscalers:    &memberAutoscalers{err: errors.New("forbidden")},
