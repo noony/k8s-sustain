@@ -32,7 +32,7 @@ flowchart LR
 
 The controller is a standard [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) reconciler that watches `Policy` objects.
 
-**Reconcile loop:** a `Policy` event (create, spec change, deletion, periodic requeue) takes an **inventory** of the identities the policy can govern, then runs three phases in order — **discovery**, **computation**, **application**. Only computation talks to Prometheus. Independent `Policy` objects reconcile in parallel, bounded by `--policy-concurrency-limit` (default 10) — a separate knob from the per-workload fan-out inside the computation phase.
+**Reconcile loop:** a `Policy` event (create, spec change, deletion, periodic requeue) takes an **inventory** of the identities the policy can govern, then runs one pass over them in three phases in order — **discovery**, **computation**, **application** — which reports, per identity, its outcome and what happened to each of its workloads. The policy's health series, `Ready` condition and next requeue are derived from that report. Only computation talks to Prometheus. Independent `Policy` objects reconcile in parallel, bounded by `--policy-concurrency-limit` (default 10) — a separate knob from the per-workload fan-out inside the computation phase.
 
 The controller requeues after `--reconcile-interval` (default `5m`), or sooner when a workload's retry falls due first (see [Application](#application)).
 
