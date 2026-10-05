@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	jsonpatch "github.com/evanphx/json-patch/v5"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -55,9 +56,10 @@ var quantityFields = [][]string{
 }
 
 // override merges patch, a JSON merge patch (RFC 7386) of simulationSettings,
-// onto s: a key it sets replaces the base's, and a null removes it. The merged
-// settings are validated as the Policy CRD validates them; an empty patch
-// leaves s, which the apiserver already admitted, as it is.
+// onto s: a key it sets replaces the base's, and a null removes it. Settings
+// it changes are validated as the Policy CRD validates them; a patch that
+// changes nothing leaves s as the apiserver admitted it, which an older
+// object can have been under rules the CRD has since gained.
 func (s simulationSettings) override(patch json.RawMessage) (simulationSettings, error) {
 	if len(bytes.TrimSpace(patch)) == 0 || bytes.Equal(bytes.TrimSpace(patch), []byte("null")) {
 		return s, nil
@@ -81,6 +83,9 @@ func (s simulationSettings) override(patch json.RawMessage) (simulationSettings,
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&out); err != nil {
 		return s, &settingsError{field: "override", msg: err.Error()}
+	}
+	if equality.Semantic.DeepEqual(out, s) {
+		return s, nil
 	}
 	return out, out.validate()
 }

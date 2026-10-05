@@ -196,11 +196,15 @@ func TestOverrideMergesOntoTheBase(t *testing.T) {
 	}
 }
 
-// An empty override is the base as the apiserver admitted it; a malformed one
-// is rejected as the override's.
+// An override that changes nothing is the base as the apiserver admitted it,
+// even one admitted before the CRD gained a rule it breaks; a malformed one is
+// rejected as the override's.
 func TestOverrideShape(t *testing.T) {
-	for _, empty := range []string{"", "null", " {} "} {
-		if got, err := baseSettings().override(json.RawMessage(empty)); err != nil || got.ResourcesConfigs.CPU.Requests.Percentile == nil {
+	admitted := baseSettings()
+	admitted.ResourcesConfigs.CPU.Requests.MinAllowed = ptr.To(resource.MustParse("2"))
+	admitted.ResourcesConfigs.CPU.Requests.MaxAllowed = ptr.To(resource.MustParse("1"))
+	for _, empty := range []string{"", "null", " {} ", `{"resourcesConfigs":{"cpu":{"requests":{"percentile":95}}}}`} {
+		if got, err := admitted.override(json.RawMessage(empty)); err != nil || got.ResourcesConfigs.CPU.Requests.Percentile == nil {
 			t.Errorf("override %q = %+v, %v; want the base", empty, got, err)
 		}
 	}
