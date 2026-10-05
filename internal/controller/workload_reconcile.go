@@ -123,7 +123,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 
 	// The identity's recommendation covers the union of its members'
 	// containers; this member applies only the subset it declares.
-	recs = recsForTarget(recs, containers)
+	recs = workload.Inject(t.Containers, t.InitContainers, excludeInit, recs).Recs
 	if len(recs) == 0 {
 		logger.V(1).Info("no recommendations available yet (no Prometheus data)")
 		r.health.clearPods(t.key())

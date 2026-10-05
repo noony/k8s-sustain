@@ -174,7 +174,7 @@ func TestBuildPatches_EmptyRecs(t *testing.T) {
 		},
 	}
 	recs := map[string]workload.ContainerRecommendation{}
-	result, err := buildPatches(pod, recs, nil)
+	result, err := buildPatches(workload.Inject(pod.Spec.Containers, pod.Spec.InitContainers, false, recs).Writes, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestBuildPatches_SetsResources(t *testing.T) {
 		},
 	}
 
-	result, err := buildPatches(pod, recs, nil)
+	result, err := buildPatches(workload.Inject(pod.Spec.Containers, pod.Spec.InitContainers, false, recs).Writes, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestBuildPatches_MultipleContainers(t *testing.T) {
 		"sidecar": {CPURequest: qtyp("50m")},
 	}
 
-	result, err := buildPatches(pod, recs, nil)
+	result, err := buildPatches(workload.Inject(pod.Spec.Containers, pod.Spec.InitContainers, false, recs).Writes, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestBuildPatches_SkipsUnmatchedContainer(t *testing.T) {
 		"app": {CPURequest: qtyp("100m")},
 	}
 
-	result, err := buildPatches(pod, recs, nil)
+	result, err := buildPatches(workload.Inject(pod.Spec.Containers, pod.Spec.InitContainers, false, recs).Writes, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestBuildPatches_NameCollisionInitAndRegular(t *testing.T) {
 		"shared": {CPURequest: qtyp("123m"), MemoryRequest: qtyp("64Mi")},
 	}
 
-	result, err := buildPatches(pod, recs, nil)
+	result, err := buildPatches(workload.Inject(pod.Spec.Containers, pod.Spec.InitContainers, false, recs).Writes, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestBuildPatches_PatchesInitContainers(t *testing.T) {
 		"warm-cache": {CPURequest: qtyp("50m")},
 	}
 
-	result, err := buildPatches(pod, recs, nil)
+	result, err := buildPatches(workload.Inject(pod.Spec.Containers, pod.Spec.InitContainers, false, recs).Writes, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

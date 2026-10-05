@@ -14,7 +14,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // computeItem is one identity the Policy governs, as the recommendation pass
@@ -210,20 +209,4 @@ func (r *PolicyReconciler) groupAutoscalerInfo(
 	}
 
 	return winner
-}
-
-// recsForTarget narrows an identity's recommendation to the containers a
-// member declares, so changedContainers does not report containers the member
-// does not have.
-func recsForTarget(
-	recs map[string]workload.ContainerRecommendation,
-	containers []corev1.Container,
-) map[string]workload.ContainerRecommendation {
-	out := make(map[string]workload.ContainerRecommendation, len(containers))
-	for _, c := range containers {
-		if rec, ok := recs[c.Name]; ok {
-			out[c.Name] = rec
-		}
-	}
-	return out
 }

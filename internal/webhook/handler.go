@@ -214,11 +214,8 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	}
 	recs := reading.Recs
 
-	filtered := make(map[string]workload.ContainerRecommendation)
-	addMatchingRecs(filtered, pod.Spec.Containers, recs)
-	if !policy.Spec.RightSizing.ExcludeInitContainers {
-		addMatchingRecs(filtered, pod.Spec.InitContainers, recs)
-	}
+	inj := workload.Inject(pod.Spec.Containers, pod.Spec.InitContainers, policy.Spec.RightSizing.ExcludeInitContainers, recs)
+	filtered := inj.Recs
 	if len(filtered) == 0 {
 		logger.V(1).Info("no recommendations match pod containers, allowing without injection",
 			"podContainers", len(pod.Spec.Containers), "podInitContainers", len(pod.Spec.InitContainers), "recommendations", len(recs))
@@ -236,7 +233,7 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		return allowWithLabelPatch(labelPatch)
 	}
 
-	patchBytes, err := buildPatches(&pod, filtered, labelPatch)
+	patchBytes, err := buildPatches(inj.Writes, labelPatch)
 	if err != nil {
 		logger.Error(err, "failed to build JSON patches")
 		return allowWithLabelPatch(labelPatch)
@@ -272,67 +269,30 @@ func ownerNameLabelPatch(pod *corev1.Pod) *jsonPatch {
 	return &jsonPatch{Op: "add", Path: "/metadata/labels/" + strings.ReplaceAll(sustainv1alpha1.OwnerNameAnnotation, "/", "~1"), Value: value}
 }
 
-func addMatchingRecs(dst map[string]workload.ContainerRecommendation, containers []corev1.Container, recs map[string]workload.ContainerRecommendation) {
-	for _, c := range containers {
-		if rec, ok := recs[c.Name]; ok {
-			dst[c.Name] = rec
-		}
-	}
-}
-
-// buildPatches generates an RFC 6902 JSON Patch setting resources on the
-// containers listed in recs, plus the owner-name label patch when present.
-func buildPatches(pod *corev1.Pod, recs map[string]workload.ContainerRecommendation, labelPatch *jsonPatch) ([]byte, error) {
+// buildPatches generates an RFC 6902 JSON Patch setting the resources of
+// every container written, plus the owner-name label patch when present.
+func buildPatches(writes []workload.ContainerWrite, labelPatch *jsonPatch) ([]byte, error) {
 	var patches []jsonPatch
 	if labelPatch != nil {
 		patches = append(patches, *labelPatch)
 	}
-
-	addPatches, err := patchesForContainers(pod.Spec.Containers, recs, "/spec/containers")
-	if err != nil {
-		return nil, err
+	for _, w := range writes {
+		resJSON, err := json.Marshal(w.Resources)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling resources for container %s: %w", w.Name, err)
+		}
+		basePath := "/spec/containers"
+		if w.Init {
+			basePath = "/spec/initContainers"
+		}
+		patches = append(patches, jsonPatch{
+			Op:    "add", // "add" replaces if path already exists
+			Path:  fmt.Sprintf("%s/%d/resources", basePath, w.Index),
+			Value: resJSON,
+		})
 	}
-	patches = append(patches, addPatches...)
-
-	addPatches, err = patchesForContainers(pod.Spec.InitContainers, recs, "/spec/initContainers")
-	if err != nil {
-		return nil, err
-	}
-	patches = append(patches, addPatches...)
-
 	if len(patches) == 0 {
 		return nil, nil
 	}
 	return json.Marshal(patches)
-}
-
-func patchesForContainers(cs []corev1.Container, recs map[string]workload.ContainerRecommendation, basePath string) ([]jsonPatch, error) {
-	var patches []jsonPatch
-	for i, c := range cs {
-		rec, ok := recs[c.Name]
-		if !ok {
-			continue
-		}
-		copyC := c.DeepCopy()
-		if !workload.ApplyRecommendation(copyC, rec) {
-			continue
-		}
-		newRes := copyC.Resources
-		// ApplyRecommendation seeds non-nil Limits; drop it back to nil when
-		// empty so the patch matches a pod that never had limits.
-		if len(newRes.Limits) == 0 {
-			newRes.Limits = nil
-		}
-
-		resJSON, err := json.Marshal(newRes)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling resources for container %s: %w", c.Name, err)
-		}
-		patches = append(patches, jsonPatch{
-			Op:    "add", // "add" replaces if path already exists
-			Path:  fmt.Sprintf("%s/%d/resources", basePath, i),
-			Value: resJSON,
-		})
-	}
-	return patches, nil
 }

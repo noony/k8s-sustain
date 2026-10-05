@@ -23,14 +23,6 @@ func MergeContainersForRecommendation(containers, initContainers []corev1.Contai
 	return merged, initNames
 }
 
-// ApplyRecommendation applies a single recommendation to one container in
-// place, returning whether anything changed. A zero/empty rec is a no-op.
-// Callers that need a fresh ResourceRequirements (e.g. the admission webhook
-// JSON-patch builder) should DeepCopy the container first.
-func ApplyRecommendation(c *corev1.Container, rec ContainerRecommendation) bool {
-	return applyRecToContainer(c, rec)
-}
-
 // JobFinished reports whether the Job is Complete or Failed: it has no pods
 // left to resize and is no longer a live member of its identity.
 func JobFinished(job *batchv1.Job) bool {

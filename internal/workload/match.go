@@ -6,7 +6,8 @@ import (
 )
 
 // ContainerMatches reports whether applying rec to a container would leave its
-// CPU/memory requests and limits unchanged.
+// CPU/memory requests and limits unchanged, the limit Inject raises to a
+// request included.
 //
 // It is the single source of truth for "is this container already at the
 // recommended size?": both the controller's recycle decision and the patcher's
@@ -17,43 +18,8 @@ import (
 // equal. Remove*Limit matches only when the current limit is unset or zero.
 // Comparison is numeric, so 1000m and 1 match while 100m and 101m do not.
 func ContainerMatches(current corev1.ResourceRequirements, rec ContainerRecommendation) bool {
-	if !requestMatches(current.Requests.Cpu(), rec.CPURequest) {
-		return false
-	}
-	if !requestMatches(current.Requests.Memory(), rec.MemoryRequest) {
-		return false
-	}
-	if !limitMatches(current.Limits.Cpu(), rec.CPULimit, rec.RemoveCPULimit) {
-		return false
-	}
-	if !limitMatches(current.Limits.Memory(), rec.MemoryLimit, rec.RemoveMemoryLimit) {
-		return false
-	}
-	return true
-}
-
-// requestMatches reports whether applying rec to current would leave the
-// request unchanged. A nil rec means "leave alone" → always matches. current is
-// never nil: ResourceList.Cpu()/Memory() return a zero Quantity when unset.
-func requestMatches(current *resource.Quantity, rec *resource.Quantity) bool {
-	if rec == nil {
-		return true
-	}
-	return current.Cmp(*rec) == 0
-}
-
-// limitMatches reports whether applying the limit recommendation to current
-// would leave the limit unchanged. remove=true matches iff the current limit is
-// absent/zero; otherwise a nil rec means "leave alone" and a non-nil rec
-// matches iff it equals current numerically. current is never nil.
-func limitMatches(current *resource.Quantity, rec *resource.Quantity, remove bool) bool {
-	if remove {
-		return current.IsZero()
-	}
-	if rec == nil {
-		return true
-	}
-	return current.Cmp(*rec) == 0
+	_, _, changed := applyTo(current, rec)
+	return !changed
 }
 
 // DefaultDownsizePercent is the default percent used to compute the relative
@@ -105,9 +71,9 @@ func withinDecrease(current, rec *resource.Quantity, percent int32, floor resour
 // clampDecreaseToTolerance returns a copy of rec in which each dimension that is
 // a sub-threshold decrease vs current is cleared to nil ("leave alone").
 // Increases and above-threshold decreases pass through unchanged; limit
-// removals are always significant and never cleared. Both ContainerMatches and
-// applyRecToContainer treat the cleared (nil) dimensions as no-ops, so this is
-// the single enforcement point for the asymmetric downsize threshold.
+// removals are always significant and never cleared. ContainerMatches and
+// Inject treat the cleared (nil) dimensions as no-ops, so this is the single
+// enforcement point for the asymmetric downsize threshold.
 func clampDecreaseToTolerance(current corev1.ResourceRequirements, rec ContainerRecommendation, tol Tolerance) ContainerRecommendation {
 	out := rec
 	if withinDecrease(current.Requests.Cpu(), out.CPURequest, tol.CPUPercent, tol.CPUFloor) {

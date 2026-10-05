@@ -20,7 +20,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // A departed identity with no observed-resources snapshot has no container
@@ -407,28 +406,6 @@ func TestGroupedIdentityStopsWritingStatusAfterTheFirstCycle(t *testing.T) {
 			t.Errorf("cycle %d changed the stored recommendation:\nfirst = %v\nnow   = %v",
 				n, first.Containers, status.Containers)
 		}
-	}
-}
-
-// An identity's recommendation covers the union of its group's containers, so a
-// member can be handed one for a container it does not declare. Nothing would
-// be applied to it — no pod has that container — but changedContainers counts a
-// recommended name with no matching container as CHANGED, which would put a
-// phantom container into that member's ResourcesUpdated event on every cycle.
-func TestRecsForTargetDropsContainersTheMemberDoesNotRun(t *testing.T) {
-	recs := map[string]workload.ContainerRecommendation{
-		"main":    {CPURequest: qty("100m")},
-		"sidecar": {CPURequest: qty("50m")},
-	}
-	got := recsForTarget(recs, []corev1.Container{{Name: "main"}})
-	if len(got) != 1 {
-		t.Fatalf("got %d recommendations, want 1 (only the container this member runs): %v", len(got), got)
-	}
-	if _, ok := got["sidecar"]; ok {
-		t.Error("sidecar must not be applied to a member that does not declare it")
-	}
-	if got["main"].CPURequest.Cmp(*qty("100m")) != 0 {
-		t.Errorf("main = %v, want the identity's 100m unchanged", got["main"].CPURequest)
 	}
 }
 
