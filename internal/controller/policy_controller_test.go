@@ -12,11 +12,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -387,6 +390,38 @@ func TestReconcile_EmptySuccessfulResponse_DeploymentSucceedsWithNoRetry(t *test
 	}
 }
 
+// The replacements of the pods apply evicts read the identity's stored
+// Recommendation at admission. When storing it fails, evicting would start
+// them on template resources — as it did when an informer-lag 404 silently
+// dropped the record. The identity's members are left alone this cycle, and
+// the Policy reports the failure.
+func TestReconcile_DoesNotApplyAnIdentityWhoseRecordFailed(t *testing.T) {
+	const ns = "unrecorded"
+	scheme := testFullScheme(t)
+	c := fakeClientBuilder(scheme, ongoingDeployments("p"), establishedDeployment(ns, "api", "p"), runningPod(ns, "api-pod", "api")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
+				patch client.Patch, opts ...client.SubResourcePatchOption,
+			) error {
+				if wlr, ok := obj.(*sustainv1alpha1.WorkloadRecommendation); ok && wlr.Status.Outcome != "" {
+					return apierrors.NewInternalError(errors.New("etcdserver: request timed out"))
+				}
+				return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	r := reconcilerOn(c, scheme, usageFor(ns, "Deployment", "api"), true)
+
+	reconcileOnce(t, r, "p")
+
+	if cpu := podCPU(t, r, ns, "api-pod"); cpu != "10m" {
+		t.Errorf("api-pod CPU = %s, want it untouched at 10m: its recommendation was never stored", cpu)
+	}
+	if ready := readyCondition(t, r, "p"); ready.Status != metav1.ConditionFalse {
+		t.Errorf("Ready = %s, want False: the identity was not applied", ready.Status)
+	}
+}
+
 // A Conflicted identity is governed by no Policy (ADR 0002): neither party
 // rewrites its WorkloadRecommendation's spec.policy, recomputes it, or applies
 // it. The stored Recommendation stays frozen, the outcome records why, and the
@@ -418,6 +453,7 @@ func TestReconcile_ConflictedIdentityFreezesItsRecommendation(t *testing.T) {
 		ongoingDeployments("p"), ongoingDeployments("q"), blue, green, frozen,
 		runningPod(ns, "blue-pod", "api-blue"), runningPod(ns, "green-pod", "api-green"),
 		establishedDeployment(ns, "solo", "p"), runningPod(ns, "solo-pod", "solo"))
+	r.RecommendationRetention = wlrcache.DefaultRetention
 
 	reconcileOnce(t, r, "p")
 	reconcileOnce(t, r, "q")

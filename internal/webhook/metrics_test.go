@@ -61,7 +61,8 @@ func TestAdmit_RecommendationSourceMetric_Stale(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: wlrcache.Name("Deployment", "my-app")},
 		Spec:       sustainv1alpha1.WorkloadRecommendationSpec{Policy: "p"},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
-			ObservedAt: metav1.NewTime(time.Now().Add(-2 * time.Hour)), // > DefaultCacheStaleness (30m)
+			ObservedAt: metav1.NewTime(time.Now().Add(-2 * time.Hour)), // > wlrcache.DefaultStaleness (30m)
+			ComputedBy: "p",
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
 				"app": wlrRec("100m", "64Mi"),
 			},

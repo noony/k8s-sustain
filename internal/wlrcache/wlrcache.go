@@ -1,24 +1,33 @@
-// Package wlrcache centralizes writes of WorkloadRecommendation cache objects.
-// The controller (every reconcile) and the webhook (pod creation, for ephemeral
-// identities that live and die between two reconciles) share it so object
-// naming, no-op suppression and the observed-resources snapshot cannot diverge
-// — the webhook fallback contract breaks silently if naming does.
+// Package wlrcache owns the WorkloadRecommendation lifecycle. Every write goes
+// through it, and so does every verdict on a stored object; callers never patch
+// a WorkloadRecommendation themselves, so which writer owns which field is
+// decided in one place:
 //
-// # Never re-read after a successful Create
+//   - Request is the webhook's ask for an identity it admits a pod of: it
+//     creates the object when absent, with the pod's container snapshot.
+//   - Ensure is the governing Policy's claim on a live identity, each cycle: it
+//     creates or adopts the object, refreshes the snapshot and clears departed.
+//   - Record stores one pass's decision for the identity, departed included.
+//     It alone writes the Recommendation, its trace, observedAt, the outcome
+//     and computedBy, the Policy the Recommendation is served to (ADR 0003).
+//   - Read is what a stored object means to a pod being admitted, and Expired
+//     whether a sweep deletes it.
 //
-// Both writers run against a CACHE-BACKED client, so a Get issued right after a
-// successful Create races the informer's watch event and reliably returns
-// NotFound. The result is not a retried write but an object stranded with an
-// empty status.observedResources, which the computation phase then skips — for
-// a once-a-day bare pod, for a day. So Create populates the passed object in
-// place and every function below patches status off that object; a Get is
-// reserved for the paths where somebody else wrote the object (the initial
-// lookup, the AlreadyExists branch). The tests use a lagging-reader interceptor
-// because fake.NewClientBuilder is read-your-writes and cannot express cache lag.
+// # Never re-read after a write
+//
+// Every writer runs against a CACHE-BACKED client, so a Get issued right after
+// a Create races the informer's watch event and reliably returns NotFound. The
+// result is not a retried write but an object stranded half-written — for a
+// once-a-day bare pod, for a day. So nothing re-reads an object it just wrote:
+// Create and Patch return the stored object, each write patches off the object
+// the previous one returned, and Ensure hands its object to Record. A Get is
+// reserved for the initial lookup; a Create that loses the race to another
+// writer claims that writer's object with a patch, whose response carries it.
+// The tests use a lagging-reader interceptor because fake.NewClientBuilder is
+// read-your-writes and cannot express cache lag.
 package wlrcache
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -27,15 +36,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // maxNameLength is the Kubernetes object-name limit (DNS subdomain).
@@ -54,217 +58,26 @@ func Name(kind, name string) string {
 	return n[:maxNameLength-len(hash)-1] + "-" + hash
 }
 
+func keyOf(ref sustainv1alpha1.WorkloadReference) types.NamespacedName {
+	return types.NamespacedName{Namespace: ref.Namespace, Name: Name(ref.Kind, ref.Name)}
+}
+
 // RefreshInterval bounds how long an unchanged WorkloadRecommendation status
 // may keep its old ObservedAt before a writer rewrites it just to bump the
-// timestamp. Must stay well under the webhook's DefaultCacheStaleness (30m).
+// timestamp. Must stay well under DefaultStaleness.
 const RefreshInterval = 10 * time.Minute
 
-// Upsert writes (or updates) the WorkloadRecommendation for ref: recs and the
-// traces of how they were derived. Idempotent: an unchanged status makes no
-// API call, subject to RefreshInterval.
-//
-// Every failure is both logged at V(1) and returned. The reconcile path may
-// ignore the result — a failed cache write does not invalidate the recycle it
-// accompanies — but the departed-refresh path must not: there the write IS the
-// deliverable, and swallowing the error would have
-// k8s_sustain_wlr_refresh_total count an unwritten recommendation as computed.
-func Upsert(
-	ctx context.Context,
-	c client.Client,
-	ref sustainv1alpha1.WorkloadReference,
-	policyName string,
-	recs map[string]workload.ContainerRecommendation,
-	traces map[string]sustainv1alpha1.ContainerTrace,
-	observed map[string]sustainv1alpha1.ObservedContainerResources,
-	now metav1.Time,
-) error {
-	logger := log.FromContext(ctx).WithValues("kind", ref.Kind, "name", ref.Name, "namespace", ref.Namespace)
+// DefaultStaleness is the default bound on the age of a Recommendation the
+// controller keeps refreshing: one full reconcile interval (5m) plus headroom
+// for a backed-up controller and small clock skew.
+const DefaultStaleness = 30 * time.Minute
 
-	desired := buildStatus(recs, traces, observed, now)
-	if len(desired.Containers) == 0 {
-		return nil
-	}
-
-	key, existing, err := getOrCreate(ctx, c, ref, policyName)
-	if err != nil {
-		return err
-	}
-
-	if statusEquivalent(existing.Status, desired) &&
-		now.Sub(existing.Status.ObservedAt.Time) < RefreshInterval {
-		return nil
-	}
-
-	patched := existing.DeepCopy()
-	patched.Status = desired
-	if err := c.Status().Patch(ctx, patched, client.MergeFrom(&existing)); err != nil {
-		logger.V(1).Info("failed to patch WorkloadRecommendation status", "err", err)
-		return fmt.Errorf("patching WorkloadRecommendation %s status: %w", key, err)
-	}
-	return nil
-}
-
-// EnsureExists creates the WorkloadRecommendation for ref if missing and keeps
-// its spec, policy label and observed-resources snapshot current. It never
-// writes Containers, Outcome or ObservedAt.
-//
-// It is the discovery half of the write path: Upsert deliberately refuses to
-// create an object with no recommendation in it, but the object must exist
-// BEFORE anything can compute it. Clearing Departed here makes discovery the
-// authority on that flag — an identity with a live member is by definition
-// not departed.
-//
-// It rewrites spec.policy and the label to policyName, so only the Policy
-// governing the identity may call it: two callers would flip the object
-// between them every cycle.
-func EnsureExists(
-	ctx context.Context,
-	c client.Client,
-	ref sustainv1alpha1.WorkloadReference,
-	policyName string,
-	observed map[string]sustainv1alpha1.ObservedContainerResources,
-) error {
-	logger := log.FromContext(ctx).WithValues("kind", ref.Kind, "name", ref.Name, "namespace", ref.Namespace)
-	key, existing, err := getOrCreate(ctx, c, ref, policyName)
-	if err != nil {
-		return err
-	}
-
-	if !existing.Status.Departed && observedEquivalent(existing.Status.ObservedResources, observed) {
-		return nil
-	}
-	patched := existing.DeepCopy()
-	patched.Status.Departed = false
-	if observed != nil {
-		patched.Status.ObservedResources = observed
-	}
-	if pErr := c.Status().Patch(ctx, patched, client.MergeFrom(&existing)); pErr != nil {
-		logger.V(1).Info("failed to patch WorkloadRecommendation status", "err", pErr)
-		return fmt.Errorf("patching WorkloadRecommendation %s status: %w", key, pErr)
-	}
-	return nil
-}
-
-// getOrCreate reads the WorkloadRecommendation for ref, creating it when
-// missing, and brings its spec and policy label up to date. It never touches
-// status. A Create that loses the race to another writer (the webhook's stub
-// creation) re-reads: that object is equivalent, but only a read can say what
-// status it already carries, so this is the one branch that re-reads.
-func getOrCreate(
-	ctx context.Context,
-	c client.Client,
-	ref sustainv1alpha1.WorkloadReference,
-	policyName string,
-) (types.NamespacedName, sustainv1alpha1.WorkloadRecommendation, error) {
-	logger := log.FromContext(ctx).WithValues("kind", ref.Kind, "name", ref.Name, "namespace", ref.Namespace)
-	key := types.NamespacedName{Namespace: ref.Namespace, Name: Name(ref.Kind, ref.Name)}
-
-	var existing sustainv1alpha1.WorkloadRecommendation
-	err := c.Get(ctx, key, &existing)
-	if apierrors.IsNotFound(err) {
-		obj := &sustainv1alpha1.WorkloadRecommendation{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: key.Namespace,
-				Name:      key.Name,
-				Labels:    map[string]string{sustainv1alpha1.WLRPolicyLabel: policyName},
-			},
-			Spec: sustainv1alpha1.WorkloadRecommendationSpec{WorkloadRef: ref, Policy: policyName},
-		}
-		switch cErr := c.Create(ctx, obj); {
-		case cErr == nil:
-			// No re-read: see the read-after-write note on this package.
-			existing = *obj
-		case apierrors.IsAlreadyExists(cErr):
-			if gErr := c.Get(ctx, key, &existing); gErr != nil {
-				logger.V(1).Info("failed to re-read WorkloadRecommendation after create race", "err", gErr)
-				return key, existing, fmt.Errorf("re-reading WorkloadRecommendation %s after create race: %w", key, gErr)
-			}
-		default:
-			logger.V(1).Info("failed to create WorkloadRecommendation", "err", cErr)
-			return key, existing, fmt.Errorf("creating WorkloadRecommendation %s: %w", key, cErr)
-		}
-	} else if err != nil {
-		logger.V(1).Info("failed to read WorkloadRecommendation", "err", err)
-		return key, existing, fmt.Errorf("reading WorkloadRecommendation %s: %w", key, err)
-	}
-
-	if existing.Spec.WorkloadRef != ref || existing.Spec.Policy != policyName ||
-		existing.Labels[sustainv1alpha1.WLRPolicyLabel] != policyName {
-		patched := existing.DeepCopy()
-		patched.Spec.WorkloadRef = ref
-		patched.Spec.Policy = policyName
-		if patched.Labels == nil {
-			patched.Labels = map[string]string{}
-		}
-		patched.Labels[sustainv1alpha1.WLRPolicyLabel] = policyName
-		if pErr := c.Patch(ctx, patched, client.MergeFrom(&existing)); pErr != nil {
-			logger.V(1).Info("failed to patch WorkloadRecommendation spec", "err", pErr)
-			return key, existing, fmt.Errorf("patching WorkloadRecommendation %s spec: %w", key, pErr)
-		}
-		existing = *patched
-	}
-	return key, existing, nil
-}
-
-// RecordOutcome records an outcome that carries no new Recommendation:
-// NoData, TooYoung, FetchFailed or Conflicted.
-//
-// It never touches Containers, Trace or ObservedAt: every identity is recomputed
-// every cycle, including departed ones whose samples eventually age out of
-// the query window, and clearing a retained last-known-good would strip
-// exactly the recommendation retention exists to preserve. A missing object
-// is left missing; an unchanged outcome costs no write.
-func RecordOutcome(
-	ctx context.Context,
-	c client.Client,
-	ref sustainv1alpha1.WorkloadReference,
-	outcome sustainv1alpha1.RecommendationOutcome,
-) error {
-	logger := log.FromContext(ctx).WithValues("kind", ref.Kind, "name", ref.Name, "namespace", ref.Namespace)
-	key := types.NamespacedName{Namespace: ref.Namespace, Name: Name(ref.Kind, ref.Name)}
-	var existing sustainv1alpha1.WorkloadRecommendation
-	if err := c.Get(ctx, key, &existing); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		logger.V(1).Info("failed to read WorkloadRecommendation", "err", err)
-		return fmt.Errorf("reading WorkloadRecommendation %s: %w", key, err)
-	}
-	if existing.Status.Outcome == outcome {
-		return nil
-	}
-	patched := existing.DeepCopy()
-	patched.Status.Outcome = outcome
-	if err := c.Status().Patch(ctx, patched, client.MergeFrom(&existing)); err != nil {
-		logger.V(1).Info("failed to patch WorkloadRecommendation status", "err", err)
-		return fmt.Errorf("patching WorkloadRecommendation %s status: %w", key, err)
-	}
-	return nil
-}
-
-// observedEquivalent suppresses a write every cycle for an unchanged workload.
-func observedEquivalent(a, b map[string]sustainv1alpha1.ObservedContainerResources) bool {
-	if b == nil {
-		return true // caller had nothing to snapshot; leave what is there
-	}
-	if len(a) != len(b) {
-		return false
-	}
-	for name, av := range a {
-		if bv, ok := b[name]; !ok || !observedContainerEqual(av, bv) {
-			return false
-		}
-	}
-	return true
-}
-
-func observedContainerEqual(a, b sustainv1alpha1.ObservedContainerResources) bool {
-	return a.Init == b.Init &&
-		quantityEqual(a.CPURequest, b.CPURequest) &&
-		quantityEqual(a.MemoryRequest, b.MemoryRequest) &&
-		quantityEqual(a.CPULimit, b.CPULimit) &&
-		quantityEqual(a.MemoryLimit, b.MemoryLimit)
-}
+// DefaultRetention is the default --recommendation-retention, shared by the
+// controller, which keeps a Departed or Conflicted identity's object that
+// long, and the webhook, which stops serving it after that long: two literals
+// could drift into a window where the webhook serves what the controller
+// considers expired.
+const DefaultRetention = 168 * time.Hour
 
 // BuildObservedResources snapshots per-container requests/limits so the
 // recommendation record keeps showing what the workload actually ran with
@@ -293,38 +106,6 @@ func quantityFrom(rl corev1.ResourceList, name corev1.ResourceName) *resource.Qu
 		return nil
 	}
 	return &q
-}
-
-func buildStatus(
-	recs map[string]workload.ContainerRecommendation,
-	traces map[string]sustainv1alpha1.ContainerTrace,
-	observed map[string]sustainv1alpha1.ObservedContainerResources,
-	now metav1.Time,
-) sustainv1alpha1.WorkloadRecommendationStatus {
-	out := sustainv1alpha1.WorkloadRecommendationStatus{
-		ObservedAt:        now,
-		Outcome:           sustainv1alpha1.OutcomeComputed,
-		Containers:        map[string]sustainv1alpha1.ContainerRecommendation{},
-		Trace:             traces,
-		ObservedResources: observed,
-	}
-	for name, rec := range recs {
-		out.Containers[name] = sustainv1alpha1.ContainerRecommendation(rec)
-	}
-	return out
-}
-
-// RecsFromStatus converts the stored per-container recommendations back into
-// the form the injection paths apply. Returns nil when nothing is stored.
-func RecsFromStatus(status sustainv1alpha1.WorkloadRecommendationStatus) map[string]workload.ContainerRecommendation {
-	if len(status.Containers) == 0 {
-		return nil
-	}
-	out := make(map[string]workload.ContainerRecommendation, len(status.Containers))
-	for name, c := range status.Containers {
-		out[name] = workload.ContainerRecommendation(c)
-	}
-	return out
 }
 
 // ContainersFromObserved rebuilds the container lists from an observed-
@@ -359,31 +140,37 @@ func setQuantity(rl *corev1.ResourceList, name corev1.ResourceName, q *resource.
 	(*rl)[name] = *q
 }
 
+// observedEqual compares two snapshots container by container.
+func observedEqual(a, b map[string]sustainv1alpha1.ObservedContainerResources) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, av := range a {
+		bv, ok := b[name]
+		if !ok || av.Init != bv.Init ||
+			!quantityEqual(av.CPURequest, bv.CPURequest) ||
+			!quantityEqual(av.MemoryRequest, bv.MemoryRequest) ||
+			!quantityEqual(av.CPULimit, bv.CPULimit) ||
+			!quantityEqual(av.MemoryLimit, bv.MemoryLimit) {
+			return false
+		}
+	}
+	return true
+}
+
 // statusEquivalent compares two statuses ignoring ObservedAt and Trace, so
 // write amplification scales with change rather than workload count. The
 // trace moves with every sample (a percentile that rounds to the same request)
 // and is only worth a write together with the values it explains.
 func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
-	if a.Outcome != b.Outcome {
-		return false
-	}
-	// A departed identity coming back must write even with unchanged values: the
-	// write is what clears Departed, and leaving it set keeps the webhook
-	// waiving the freshness gate for a workload that is running again. The
-	// caller's RefreshInterval condition happens to force this today, but that
-	// is a coincidence of two independently-tuned constants.
-	if a.Departed != b.Departed {
-		return false
-	}
-	if len(a.Containers) != len(b.Containers) {
+	if a.Outcome != b.Outcome || a.ComputedBy != b.ComputedBy || a.Departed != b.Departed ||
+		len(a.Containers) != len(b.Containers) {
 		return false
 	}
 	for name, av := range a.Containers {
 		bv, ok := b.Containers[name]
-		if !ok {
-			return false
-		}
-		if !quantityEqual(av.CPURequest, bv.CPURequest) ||
+		if !ok ||
+			!quantityEqual(av.CPURequest, bv.CPURequest) ||
 			!quantityEqual(av.MemoryRequest, bv.MemoryRequest) ||
 			!quantityEqual(av.CPULimit, bv.CPULimit) ||
 			!quantityEqual(av.MemoryLimit, bv.MemoryLimit) ||
@@ -392,9 +179,7 @@ func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
 			return false
 		}
 	}
-
-	return observedEquivalent(a.ObservedResources, b.ObservedResources) &&
-		len(a.ObservedResources) == len(b.ObservedResources)
+	return observedEqual(a.ObservedResources, b.ObservedResources)
 }
 
 // quantityEqual treats a nil pointer and an explicit zero as the same "unset"

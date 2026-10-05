@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-04
+- **Refined by:** [ADR 0003](0003-a-recommendation-is-served-only-to-its-policy.md) — the webhook also requires the Policy that computed the numbers to be the pod's
 
 ## Context
 

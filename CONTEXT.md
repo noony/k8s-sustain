@@ -19,7 +19,7 @@ An identity with no live members, whose WorkloadRecommendation is kept for the r
 _Avoid_: inactive, gone
 
 **Conflicted**:
-An identity whose members are governed by different Policies. No Policy governs it until they agree: its Recommendation is frozen as the last governing Policy left it, nothing is recomputed or applied, and only pods opting into that Policy still receive it. A member that opts out, or whose Policy does not accept it, is no party to a conflict.
+An identity whose members are governed by different Policies. No Policy governs it until they agree: its Recommendation is frozen as the last governing Policy left it, nothing is recomputed or applied, and only pods opting into that Policy still receive it, for the retention window. A member that opts out, or whose Policy does not accept it, is no party to a conflict.
 
 **Too young**:
 An identity younger than its Policy's minimum age, which gets no Recommendation yet.
@@ -30,11 +30,11 @@ An identity younger than its Policy's minimum age, which gets no Recommendation 
 A cluster-wide rule set that governs the identities whose members it accepts: which kinds it manages, how it computes recommendations, and how it applies them. An identity is governed by at most one Policy.
 
 **WorkloadRecommendation**:
-The stored record of one identity's Recommendation and of the outcome of the controller's last decision for it (Computed, NoData, Too young, FetchFailed, Conflicted), written by the controller.
+The stored record of one identity's Recommendation, the Policy that computed it, and the outcome of the controller's last decision for it (Computed, NoData, Too young, FetchFailed, Conflicted). The governing Policy writes it; the webhook only asks for one, and records the containers of identities no reconcile sees alive.
 _Avoid_: cache entry, wlrec (outside kubectl)
 
 **Recommendation**:
-The requests and limits an identity's pods should run, as held in its WorkloadRecommendation. Applying it (resizing, evicting, injecting) is a separate step that recommend-only, OnCreate or a suppressed decrease can withhold.
+The requests and limits an identity's pods should run, as held in its WorkloadRecommendation. It is served only to pods of the Policy that computed it: an identity another Policy adopts gets none until that Policy computes its own. Applying it (resizing, evicting, injecting) is a separate step that recommend-only, OnCreate or a suppressed decrease can withhold.
 _Avoid_: applied recommendation, current recommendation
 
 **Signal**:

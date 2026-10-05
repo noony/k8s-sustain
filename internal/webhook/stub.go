@@ -2,14 +2,9 @@ package webhook
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -154,14 +149,22 @@ func (h *Handler) pruneStubRequestsLocked(now time.Time) {
 	}
 }
 
-// requestRecommendation asks the controller to compute a recommendation for a
-// workload identity that has none yet, by creating an empty-status
-// WorkloadRecommendation stub in a detached goroutine. Without it, a workload
+// requestRecommendation runs wlrcache.Request in a detached goroutine for the
+// identity ref, whose object the admission read as known: it creates an
+// empty-status stub for an identity that has none, or refreshes the container
+// snapshot of one the controller keeps no live view of. Without it, a workload
 // the controller never catches alive (a short Job, a bare-pod group) would
-// never enter its work-list. Errors are logged and dropped; the next pod of
-// the same workload retries.
-func (h *Handler) requestRecommendation(logger logr.Logger, ns, ownerKind, ownerName, policyName string, containers, initContainers []corev1.Container) {
-	key := ns + "/" + wlrcache.Name(ownerKind, ownerName)
+// never enter its work-list, or be computed against its first run's
+// containers forever. Errors are logged and dropped; the next pod of the same
+// workload retries.
+func (h *Handler) requestRecommendation(
+	logger logr.Logger,
+	known *sustainv1alpha1.WorkloadRecommendation,
+	ref sustainv1alpha1.WorkloadReference,
+	policyName string,
+	observed map[string]sustainv1alpha1.ObservedContainerResources,
+) {
+	key := ref.Namespace + "/" + wlrcache.Name(ref.Kind, ref.Name)
 	parent, claimed, ok := h.beginStubRequest(key, time.Now())
 	if !ok {
 		return
@@ -181,63 +184,8 @@ func (h *Handler) requestRecommendation(logger logr.Logger, ns, ownerKind, owner
 
 		ctx, cancel := context.WithTimeout(parent, stubWriteTimeout)
 		defer cancel()
-		if err := h.createStub(log.IntoContext(ctx, logger), ns, ownerKind, ownerName, policyName, containers, initContainers); err != nil {
-			logger.V(1).Info("failed to create recommendation stub", "err", err)
+		if err := wlrcache.Request(log.IntoContext(ctx, logger), h.Client, known, ref, policyName, observed); err != nil {
+			logger.V(1).Info("failed to request a recommendation", "err", err)
 		}
 	}()
-}
-
-// createStub creates the empty-status WorkloadRecommendation, treating
-// AlreadyExists as success, and records the admitted pod's container set in
-// status.observedResources when it is still empty.
-//
-// It is Create, never Update: an existing object may hold a live
-// recommendation. The snapshot is written on the AlreadyExists path too,
-// because the webhook is the only component that reliably sees an ephemeral
-// identity's containers.
-func (h *Handler) createStub(ctx context.Context, ns, ownerKind, ownerName, policyName string, containers, initContainers []corev1.Container) error {
-	name := wlrcache.Name(ownerKind, ownerName)
-	obj := &sustainv1alpha1.WorkloadRecommendation{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ns,
-			Name:      name,
-			Labels: map[string]string{
-				sustainv1alpha1.WLRPolicyLabel: policyName,
-				sustainv1alpha1.WLRStubLabel:   "true",
-			},
-		},
-		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
-			WorkloadRef: sustainv1alpha1.WorkloadReference{
-				Kind:      ownerKind,
-				Namespace: ns,
-				Name:      ownerName,
-			},
-			Policy: policyName,
-		},
-	}
-	// Create cannot carry status, so the snapshot always needs a follow-up patch.
-	var existing sustainv1alpha1.WorkloadRecommendation
-	if err := h.Client.Create(ctx, obj); err != nil {
-		if !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("creating recommendation stub %s/%s: %w", ns, obj.Name, err)
-		}
-		key := client.ObjectKey{Namespace: ns, Name: name}
-		if gErr := h.Client.Get(ctx, key, &existing); gErr != nil {
-			return fmt.Errorf("reading existing recommendation stub %s/%s: %w", ns, name, gErr)
-		}
-	} else {
-		// Client reads of this kind are cache-backed, so a Get right after
-		// Create races the watch event and returns NotFound. Patch off obj.
-		existing = *obj
-	}
-	if len(existing.Status.ObservedResources) > 0 {
-		return nil
-	}
-
-	patched := existing.DeepCopy()
-	patched.Status.ObservedResources = wlrcache.BuildObservedResources(containers, initContainers)
-	if err := h.Client.Status().Patch(ctx, patched, client.MergeFrom(&existing)); err != nil {
-		return fmt.Errorf("patching recommendation stub %s/%s observed resources: %w", ns, name, err)
-	}
-	return nil
 }

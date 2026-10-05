@@ -50,7 +50,7 @@ A reconcile reads only the namespaces in `selector.namespaces` (all when empty) 
 
 ### Discovery
 
-For every live identity the policy governs, ensure a `WorkloadRecommendation` exists, creating it when missing and keeping its policy label and `status.observedResources` snapshot current. Only the governing Policy writes it, so two Policies never rewrite the same object back and forth.
+For every live identity the policy governs, claim its `WorkloadRecommendation`: create it when missing, or adopt it (its `spec.policy` and policy label become this Policy's), replace its `status.observedResources` snapshot when it differs from the members' containers, and clear `status.departed`. Only the governing Policy claims it, so two Policies never rewrite the same object back and forth. An adopted object keeps the previous Policy's Recommendation, which the webhook withholds until this Policy computes its own ([ADR 0003](../adr/0003-a-recommendation-is-served-only-to-its-policy.md)).
 
 Discovery issues **no Prometheus queries**, so expect one `WorkloadRecommendation` per governed identity from the first reconcile onward, most of them briefly empty.
 
@@ -63,8 +63,8 @@ The work-list is **every identity the policy governs**, Departed ones included, 
 - Compute the fetched identities in parallel (bounded by `--workload-concurrency-limit`, default 5): detect autoscalers (HPA / KEDA `ScaledObject`) targeting the workload — read-only, no patches — and compute a per-container recommendation with its [trace](recommendation-pipeline.md#trace) (see [Recommendation Pipeline](recommendation-pipeline.md))
 - Each identity leaves this pass with one outcome: a recommendation, too young, no data, fetch failed, or not fetched
 - The unit is the **identity**, not the workload object: a group of workloads sharing an owner-name produces one computation and one write, against the union of the members' containers
-- Write the result back to the `WorkloadRecommendation`, regardless of update mode and before any pod is touched — this keeps `OnCreate` workloads visible on the dashboard and is the webhook's only source of recommendations at admission (it never queries Prometheus itself)
-- Record the outcome in `status.outcome` (`Computed`, `NoData`, `TooYoung`, `FetchFailed`). An outcome other than `Computed` keeps the last Recommendation — a last-known-good is never overwritten. The identity is recomputed on the next cycle and converges as soon as Prometheus has enough history
+- Record the result in the `WorkloadRecommendation` in one status write, regardless of update mode and before any pod is touched — this keeps `OnCreate` workloads visible on the dashboard and is the webhook's only source of recommendations at admission (it never queries Prometheus itself). An unchanged result costs no write
+- The record holds the outcome in `status.outcome` (`Computed`, `NoData`, `TooYoung`, `FetchFailed`) and whether the identity is departed in `status.departed`. A `Computed` outcome also stores the Recommendation and the Policy that computed it (`status.computedBy`); any other outcome keeps the last Recommendation — a last-known-good is never overwritten. The identity is recomputed on the next cycle and converges as soon as Prometheus has enough history
 - A **departed** identity stops here. It is computed and cached so the webhook can inject it into that identity's *next* pod, but there are no running pods to align
 
 Departed refreshes are counted in `k8s_sustain_wlr_refresh_total{namespace, owner_kind, outcome}`; see [Metrics](../reference/metrics.md#k8s_sustain_wlr_refresh_total).
@@ -73,7 +73,7 @@ A Conflicted identity is only recorded: `status.outcome: Conflicted` on its `Wor
 
 ### Application
 
-Only the governed members of live identities in `Ongoing` mode are applied. `OnCreate`-mode workloads stop after computation — the recommendation is cached but never applied by the controller, because resource injection at pod creation is the webhook's job — and a departed identity has no pods to apply anything to, so it stopped in the previous phase.
+Only the governed members of live identities in `Ongoing` mode are applied, and only when the identity's result was recorded: an identity whose `WorkloadRecommendation` could not be claimed or written is left alone that cycle and counted as failed, because the replacement pods of an eviction read the stored Recommendation at admission and would start on template resources. `OnCreate`-mode workloads stop after computation — the recommendation is cached but never applied by the controller, because resource injection at pod creation is the webhook's job — and a departed identity has no pods to apply anything to, so it stopped in the previous phase.
 
 - If recommend-only is in effect, log the recommendation and skip patching — see [Recommend-only mode](update-modes.md#recommend-only-mode)
 - Recycle stale running pods: in place through the `pods/resize` subresource on k8s ≥ 1.33, PDB-respecting eviction otherwise, with the webhook injecting the latest resources into replacement pods. Only pods owned by the member are touched — see [Eviction safeguards](update-modes.md#eviction-safeguards)
@@ -114,19 +114,21 @@ The webhook is a [mutating admission webhook](https://kubernetes.io/docs/referen
    - `Pod → StatefulSet / DaemonSet`
    - a `k8s.sustain.io/owner-name` annotation replaces the resolved name; on a pod with no controller owner it makes the pod a `Pod`-kind identity (see [Standalone Pods & Identity Grouping](../guides/standalone-pods-and-grouping.md))
 6. Checks that the policy manages that workload kind at all. Both `OnCreate` **and** `Ongoing` inject — otherwise an `Ongoing` pod would start on template resources and wait for a resize it does not need
-7. Reads the `WorkloadRecommendation` the controller already cached for that workload (`fetchRecommendations` in `internal/webhook/recommendations.go`) — the webhook itself never queries Prometheus — and uses it only when its `spec.policy` is the Policy the pod opts into
-8. Narrows the cached recommendation to the containers present in this pod, matched by name. A container that already has resources set is *not* skipped — the patch replaces whatever the template specified
-9. If the cache is stale beyond `DefaultCacheStaleness` (30 min), or `--recommend-only` is set, allows the pod through with its template resources unchanged. If the cache is **missing entirely**, additionally creates a stub `WorkloadRecommendation` so the controller computes one for the next pod of this workload
-10. Otherwise returns an RFC 6902 JSON Patch with the recommended resources
+7. Reads the `WorkloadRecommendation` the controller already cached for that workload — the webhook itself never queries Prometheus — and takes `wlrcache.Read`'s [verdict](workload-recommendations.md#admission-behaviour) on it: inject, or why not. A Recommendation is injected only into pods of the Policy that computed it, and only while it is fresh (30 min) or, for a departed or Conflicted identity, retained
+8. If the verdict injects nothing, allows the pod through with its template resources unchanged. If there is **no object at all**, additionally creates a stub `WorkloadRecommendation` so the controller computes one for the next pod of this workload
+9. Narrows the cached recommendation to the containers present in this pod, matched by name. A container that already has resources set is *not* skipped — the patch replaces whatever the template specified
+10. If recommend-only is in effect, allows the pod through unchanged; otherwise returns an RFC 6902 JSON Patch with the recommended resources
 11. The API server applies the patch before persisting the pod
 
 The webhook **fails open** (`failurePolicy: Ignore` by default) — if it is unreachable or returns an error, the pod is admitted unchanged. See [Admission behaviour](workload-recommendations.md#admission-behaviour) for each outcome.
 
 **Latency budget.** The handler is bounded by a hard 4s deadline on the admission context (under the apiserver's 5s `MutatingWebhookConfiguration` timeout). The only outbound work in the admission path is a handful of Kubernetes API reads (Policy lookup, owner resolution, the `WorkloadRecommendation` read), each bounded by a 2s per-call timeout. `Policy`, `WorkloadRecommendation` and `Namespace` reads are served from an informer cache.
 
-**Stub writes (the webhook's only write).** The webhook computes nothing, so it never writes a recommendation. It does write one thing: when a pod is admitted for a workload identity that has no `WorkloadRecommendation` at all, it creates an empty-status **stub** — recording the admitted pod's container set in `status.observedResources` — and admits the pod unchanged. Creating the object is what puts the identity into the controller's work-list; the [computation phase](#computation) fills in the recommendation on its next cycle, so the next pod of that workload is injected.
+**Stub writes (the webhook's only write).** The webhook computes nothing, so it never writes a recommendation. It does write one thing, the container snapshot of identities the controller cannot see. When a pod is admitted for a workload identity that has no `WorkloadRecommendation` at all, it creates an empty-status **stub** — recording the admitted pod's container set in `status.observedResources` — and admits the pod unchanged. Creating the object is what puts the identity into the controller's work-list; the [computation phase](#computation) fills in the recommendation on its next cycle, so the next pod of that workload is injected. For a departed identity, or one that never got a snapshot, it replaces the snapshot when the admitted pod's containers differ, so a short-lived identity is computed against its latest run rather than its first.
 
 This is how identities no reconcile ever sees alive — bare pods and standalone Jobs created and deleted between two reconciles — get discovered. See [Cold start](workload-recommendations.md#cold-start-stub-recommendations) for the full lifecycle.
+
+Every `WorkloadRecommendation` write, the controller's and the webhook's, goes through `internal/wlrcache`; so does every judgement on a stored object (what the webhook injects, what the sweep deletes). See [Lifecycle](workload-recommendations.md#lifecycle).
 
 ## Dashboard (`k8s-sustain dashboard`)
 

@@ -1,50 +1,12 @@
 package wlrcache
 
 import (
-	"reflect"
 	"testing"
-	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
-
-func TestStatusEquivalent_DistinguishesSameValuesFromDifferentOutcomes(t *testing.T) {
-	cpu := resource.MustParse("250m")
-	now := metav1.NewTime(time.Now())
-	later := metav1.NewTime(now.Add(time.Minute))
-
-	a := sustainv1alpha1.WorkloadRecommendationStatus{
-		ObservedAt: now,
-		Outcome:    sustainv1alpha1.OutcomeComputed,
-		Containers: map[string]sustainv1alpha1.ContainerRecommendation{
-			"app": {CPURequest: &cpu},
-		},
-	}
-	b := a
-	b.ObservedAt = later
-	if !statusEquivalent(a, b) {
-		t.Error("differ only by ObservedAt → should be equivalent")
-	}
-
-	c := a
-	c.Outcome = sustainv1alpha1.OutcomeNoData
-	if statusEquivalent(a, c) {
-		t.Error("different Outcome → should NOT be equivalent")
-	}
-
-	percentile := resource.MustParse("249900u")
-	d := a
-	d.Trace = map[string]sustainv1alpha1.ContainerTrace{"app": {CPU: &sustainv1alpha1.ResourceTrace{
-		Percentile: &percentile, WithHeadroom: cpu, Clamped: cpu,
-	}}}
-	if !statusEquivalent(a, d) {
-		t.Error("differ only by Trace → should be equivalent")
-	}
-}
 
 func TestContainersFromObserved_SplitsAndSorts(t *testing.T) {
 	cpu := resource.MustParse("100m")
@@ -68,20 +30,5 @@ func TestContainersFromObserved_SplitsAndSorts(t *testing.T) {
 	}
 	if got := initContainers[0].Resources.Limits.Memory(); got.Cmp(cpu) != 0 {
 		t.Errorf("init memory limit = %v, want %v", got, cpu)
-	}
-}
-
-func TestRecsFromStatus_RoundTripsBuildStatus(t *testing.T) {
-	cpu := resource.MustParse("250m")
-	mem := resource.MustParse("64Mi")
-	in := map[string]workload.ContainerRecommendation{
-		"app": {CPURequest: &cpu, MemoryRequest: &mem, MemoryLimit: &mem, RemoveCPULimit: true},
-	}
-	got := RecsFromStatus(buildStatus(in, nil, nil, metav1.Now()))
-	if !reflect.DeepEqual(got, in) {
-		t.Fatalf("round trip = %+v, want %+v", got, in)
-	}
-	if RecsFromStatus(sustainv1alpha1.WorkloadRecommendationStatus{}) != nil {
-		t.Error("empty status should yield nil")
 	}
 }

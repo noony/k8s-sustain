@@ -234,7 +234,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Every identity is computed and persisted before any pod is touched, so the
 	// webhook serves the new value before replacement pods are admitted.
 	results := r.recommend(ctx, policy, items, autoSnap)
-	departed, departedFailed := r.persist(ctx, policy.Name, results)
+	departed, departedFailed := r.persist(ctx, results)
 	dispatched, failed, skipped := r.apply(ctx, policy, results, autoSnap)
 	// units counts dispatched work: one per applied member plus one per
 	// departed identity.
@@ -259,7 +259,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	r.sweepWorkloadRecommendations(ctx, policy.Name, snap)
 
 	// failed is per dispatched unit, so units is the denominator.
-	// discoveryFailures is reported separately so a persistent EnsureExists
+	// discoveryFailures is reported separately so a persistent Ensure
 	// failure cannot report Ready.
 	if failed > 0 || discoveryFailures > 0 {
 		var parts []string

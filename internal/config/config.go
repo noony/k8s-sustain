@@ -19,6 +19,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
 // The bind* helpers register a pflag and bind it to a Viper key in one call.
@@ -213,13 +214,6 @@ func loadPrometheusTransport(keyPrefix string) (promclient.TransportConfig, erro
 // assert against the shipped value rather than a second literal.
 const DefaultQueryShardMaxSamples = 10_000_000
 
-// DefaultRecommendationRetention is shared by the controller and webhook
-// bindings on purpose: the controller decides how long a departed
-// WorkloadRecommendation is kept and the webhook refuses to inject from one
-// older than that, so two literals could drift into a window where the webhook
-// serves what the controller considers expired.
-const DefaultRecommendationRetention = 168 * time.Hour
-
 // BindControllerFlags registers flags for the "start" subcommand.
 func BindControllerFlags(cmd *cobra.Command) {
 	flags := cmd.Flags()
@@ -237,8 +231,8 @@ func BindControllerFlags(cmd *cobra.Command) {
 		"Maximum concurrent Prometheus queries across the whole controller. Kept below Prometheus's own --query.max-concurrency (default 20) so k8s-sustain does not starve dashboards and alerting")
 	bindDuration(flags, "recycle-replacement-timeout", "recycle-replacement-timeout", 5*time.Minute,
 		"In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) takes several minutes.")
-	bindDuration(flags, "recommendation-retention", "recommendation-retention", DefaultRecommendationRetention,
-		"How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs). Also decides whether a RECURRING ephemeral identity is rightsized at admission on its next run: the webhook's only recommendation source is this object, so an identity whose gap between runs exceeds this window cold-starts every time. Set it above the longest expected inter-run gap (the 7d default covers weekly batch). The dashboard shows retained entries as inactive workloads. 0 sweeps them on the next reconcile.")
+	bindDuration(flags, "recommendation-retention", "recommendation-retention", wlrcache.DefaultRetention,
+		"How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs). Also decides whether a RECURRING ephemeral identity is rightsized at admission on its next run: the webhook's only recommendation source is this object, so an identity whose gap between runs exceeds this window cold-starts every time. Set it above the longest expected inter-run gap (the 7d default covers weekly batch). It also bounds how long a Conflicted identity's frozen recommendation is kept. The dashboard shows retained entries as inactive workloads. 0 sweeps them on the next reconcile.")
 	bindInt(flags, "query-shard-max-samples", "query-shard-max-samples", DefaultQueryShardMaxSamples,
 		"Projected Prometheus sample budget (containers x samples per container, summed across a shard's workloads: window-minutes for the CPU and memory queries, one per rule for the OOM query) a single batched shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own --query.max-samples (default 50,000,000): that server-side limit REJECTS an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default here leaves a 5x margin.")
 	bindPrometheusTransportFlags(flags, "")
@@ -303,8 +297,8 @@ func BindWebhookFlags(cmd *cobra.Command) {
 	// Prefixed key despite the shared flag name: BindPFlag maps a key to exactly
 	// one pflag, so a flat key would leave the webhook reading the controller's
 	// unset flagset. The DEFAULT is shared, which is what must not drift.
-	bindDuration(flags, "webhook.recommendation-retention", "recommendation-retention", DefaultRecommendationRetention,
-		"Must match the controller's --recommendation-retention. It bounds the one case where the webhook injects from a WorkloadRecommendation older than the staleness budget: an identity the controller marked departed, whose ObservedAt is frozen by design. Past this window the object is one the controller's sweep should already have deleted, so the webhook treats it as stale instead of injecting it forever. The chart renders both flags from the single controller.recommendationRetention value.")
+	bindDuration(flags, "webhook.recommendation-retention", "recommendation-retention", wlrcache.DefaultRetention,
+		"Must match the controller's --recommendation-retention. It bounds the one case where the webhook injects from a WorkloadRecommendation older than the staleness budget: an identity the controller marked departed, or a Conflicted one, whose ObservedAt is frozen by design. Past this window the object is one the controller's sweep should already have deleted, so the webhook treats it as stale instead of injecting it forever. The chart renders both flags from the single controller.recommendationRetention value.")
 }
 
 // WebhookConfig holds resolved configuration for the webhook server.

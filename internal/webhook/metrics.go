@@ -15,7 +15,7 @@ const (
 	// this admission — the normal, healthy-pipeline outcome.
 	RecSourceHit = "hit"
 	// RecSourceStale means a WorkloadRecommendation object existed but its
-	// ObservedAt was older than the staleness budget (DefaultCacheStaleness
+	// ObservedAt was older than the staleness budget (wlrcache.DefaultStaleness
 	// or Handler.CacheStaleness) — the controller reconcile loop is falling
 	// behind, stuck, or the workload was deleted from its policy's scope.
 	RecSourceStale = "stale"
@@ -26,6 +26,11 @@ const (
 	// Handler.requestRecommendation), so a *sustained* missing rate for the
 	// same identity means the controller is not computing it.
 	RecSourceMissing = "missing"
+	// RecSourceUndecided means a WorkloadRecommendation exists but the
+	// controller has not decided anything for it yet: a stub awaiting its
+	// first reconcile, or an object discovery just created. No stub is
+	// created — the object is already in the controller's work-list.
+	RecSourceUndecided = "undecided"
 	// RecSourceNoData means a WorkloadRecommendation exists but the identity
 	// produced nothing recommendable (too young, no metrics, workload gone).
 	// Distinct from "missing" because no stub is created — the object is
@@ -88,7 +93,7 @@ var (
 
 	RecommendationSourceTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_webhook_recommendation_source_total",
-		Help: "Outcome of each admission's WorkloadRecommendation read, by source: hit, retained, stale, missing, nodata, other-policy, error.",
+		Help: "Outcome of each admission's WorkloadRecommendation read, by source: hit, retained, stale, missing, undecided, nodata, other-policy, error.",
 	}, []string{"source"})
 )
 

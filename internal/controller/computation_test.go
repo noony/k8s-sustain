@@ -193,6 +193,51 @@ func TestReconcile_RefreshesDepartedIdentity(t *testing.T) {
 	}
 }
 
+// The pass records a departed identity's decision together with the fact that
+// it has no live member left, which is what waives the webhook's staleness gate
+// for its retained Recommendation: its observedAt stops advancing once its
+// samples age out, so without the mark every run after the first would start
+// on template resources.
+func TestReconcile_MarksDepartedIdentity(t *testing.T) {
+	const ns = "airflow-departs"
+	wlr := departedWLR(ns)
+	wlr.Status.Departed = false
+	r := reconcilerWithInputs(t, usageFor(ns, "Pod", "dag-task"), false, barePodPolicy(t, "pol"), wlr)
+	r.RecommendationRetention = 24 * time.Hour
+
+	reconcileOnce(t, r, "pol")
+
+	if got := getWLRFor(t, r, ns, "Pod", "dag-task"); !got.Status.Departed {
+		t.Error("a departed identity's record did not mark it departed")
+	}
+}
+
+// A departed identity whose samples are still in its window is recomputed to
+// the same Recommendation every cycle. That cost two status writes per cycle —
+// the record cleared departed, the sweep set it back — whatever the refresh
+// interval said. One record carries both, so a converged identity costs none.
+func TestReconcile_DepartedIdentityCostsNoWriteOnceRecorded(t *testing.T) {
+	const ns = "airflow-steady"
+	var writes atomic.Int32
+	r := reconcilerCountingWLRStatusWrites(t, usageFor(ns, "Pod", "dag-task"), &writes, barePodPolicy(t, "pol"), departedWLR(ns))
+	r.RecommendationRetention = 24 * time.Hour
+
+	reconcileOnce(t, r, "pol")
+	if writes.Load() == 0 {
+		t.Fatal("the first cycle recorded nothing")
+	}
+	writes.Store(0)
+	reconcileOnce(t, r, "pol")
+	reconcileOnce(t, r, "pol")
+
+	if n := writes.Load(); n != 0 {
+		t.Errorf("%d status writes over two cycles for a converged departed identity, want 0", n)
+	}
+	if got := getWLRFor(t, r, ns, "Pod", "dag-task"); !got.Status.Departed {
+		t.Error("the converged departed identity is no longer marked departed")
+	}
+}
+
 // Recomputing every identity every cycle means a departed one WILL eventually
 // produce nothing: its samples age out of the query window while the retention
 // window still holds the recommendation. Writing anything on that path — even
