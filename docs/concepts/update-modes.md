@@ -60,7 +60,7 @@ spec:
 
 **Ongoing reconciliation (controller) on clusters with in-place update support (k8s ≥ 1.33):**
 
-1. Controller resizes each running, non-terminating pod through the `pods/resize` subresource
+1. Controller resizes each running, non-terminating pod through the `pods/resize` subresource. A stale Pending pod cannot be resized, so it is evicted as on older clusters
 2. The kubelet applies the new resources, without restarting the container unless its `resizePolicy` requires it
 3. If the kubelet reports `Infeasible` or `Error`, or the API server rejects the resize as invalid, the pod is evicted as a fallback; `Deferred` resizes are left to the kubelet
 
@@ -108,7 +108,7 @@ See the [Policy reference](../reference/policy.md#cpudownsizethreshold-memorydow
 
 ## Eviction safeguards
 
-Whenever the controller evicts a pod — on k8s < 1.33, or as the fallback for a failed in-place resize — it applies these guards:
+Whenever the controller evicts a pod — on k8s < 1.33, or on newer clusters as the fallback for a failed in-place resize or for a pod not Running yet — it applies these guards:
 
 - **Ownership check.** Pods are listed by the workload's selector and then kept only when their controller ownerRef chain resolves to the target workload's UID (directly for StatefulSet/DaemonSet/Job, via the ReplicaSet for Deployment/Argo Rollout). A bystander pod that merely shares the labels is never touched. The same check gates in-place resizes.
 - **PodDisruptionBudgets.** Evictions go through the Eviction API; a PDB-blocked pod is skipped and retried next reconcile.

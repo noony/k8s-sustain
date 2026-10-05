@@ -308,15 +308,8 @@ func (p *Patcher) recycle(ctx context.Context, set podSet, recs map[string]Conta
 			skipped++
 			continue
 		}
-		// Pending pods are still evicted: one stuck on an oversized request is
-		// exactly what the webhook should re-inject.
 		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			logger.V(1).Info("skipping terminal pod", "pod", pod.Name, "phase", pod.Status.Phase)
-			skipped++
-			continue
-		}
-		if p.inPlace && pod.Status.Phase != corev1.PodRunning {
-			logger.V(1).Info("skipping non-Running pod for in-place resize", "pod", pod.Name, "phase", pod.Status.Phase)
 			skipped++
 			continue
 		}
@@ -327,7 +320,10 @@ func (p *Patcher) recycle(ctx context.Context, set podSet, recs map[string]Conta
 			applied, evicted bool
 			err              error
 		)
-		if p.inPlace {
+		// A pod that is not Running cannot be resized in place, so it is evicted
+		// in both modes: one stuck Pending on an oversized request is exactly
+		// what the webhook should re-inject.
+		if p.inPlace && pod.Status.Phase == corev1.PodRunning {
 			applied, evicted, err = p.patchPodInPlace(ctx, pod, podRecs, gate)
 		} else {
 			evicted, err = p.evictPod(ctx, pod, podRecs, gate)

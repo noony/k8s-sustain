@@ -379,3 +379,42 @@ func TestApply_InPlaceOnlyMemberWithoutPods(t *testing.T) {
 		})
 	}
 }
+
+// A Pending pod cannot be resized in place. One stuck on an oversized request
+// is evicted so the webhook re-injects the replacement, unless its kind is
+// in-place-only: there it waits for the next run, as it would without in-place
+// support.
+func TestApply_InPlace_PendingPod(t *testing.T) {
+	inPlaceOnly := map[string]bool{"CronJob": true, "Job": true, "Pod": true}
+	for _, kind := range SupportedKinds {
+		t.Run(kind, func(t *testing.T) {
+			fx := kindFixtures()[kind]
+			for _, o := range fx.objs {
+				if pod, ok := o.(*corev1.Pod); ok && pod.Name == "owned" {
+					pod.Status.Phase = corev1.PodPending
+					pod.Status.Conditions = nil
+				}
+			}
+			var acts podActions
+			p := New(acts.client(t, fx.objs...), true, testEvictionOpts()...)
+
+			out, err := p.Apply(context.Background(), fx.member, applyRecs, ApplySettings{})
+			if err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(acts.resized) != 0 {
+				t.Errorf("resized %v: a Pending pod cannot be resized in place", acts.resized)
+			}
+			wantEvicted := []string{"owned"}
+			if inPlaceOnly[kind] {
+				wantEvicted = nil
+			}
+			if !slices.Equal(acts.evicted, wantEvicted) {
+				t.Errorf("evicted %v, want %v", acts.evicted, wantEvicted)
+			}
+			if out.Changed != len(wantEvicted) {
+				t.Errorf("changed = %d, want %d", out.Changed, len(wantEvicted))
+			}
+		})
+	}
+}

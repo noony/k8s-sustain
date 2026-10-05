@@ -9,7 +9,7 @@ k8s-sustain detects support at startup and picks the code path. Clusters below 1
 | k8s version | k8s-sustain behaviour |
 |-------------|-----------------------|
 | **1.29 – 1.32** | `inPlace=false` → eviction path. Stale pods are evicted via the Eviction API; the webhook injects the recommendation into the replacement. CronJob, Job and bare-pod pods are not touched. |
-| **1.33+** | `inPlace=true`. All resizes go through `pods/resize`; sidecar (restartable init) containers are resized in a separate call. |
+| **1.33+** | `inPlace=true`. All resizes go through `pods/resize`; sidecar (restartable init) containers are resized in a separate call. A stale pod that is not Running yet (Pending) cannot be resized and is evicted instead, except for CronJob, Job and bare-pod pods. |
 
 The gate is the server version alone: the controller compares `major.minor` against 1.33 and does not probe feature gates.
 
@@ -29,7 +29,7 @@ In both modes only pods owned by the target workload are touched — see [Evicti
 
 A bare-pod identity has no owner object or selector: its pods are the members the inventory found — see [Bare pods](#bare-pods).
 
-When `Ongoing` mode is active and `inPlace=true`, the patcher walks each running pod and:
+When `Ongoing` mode is active and `inPlace=true`, a pod that is not Running yet cannot be resized in place. A stale one is evicted through the [eviction fallback](#eviction-fallback) — a pod stuck Pending on an oversized request is exactly what the webhook should re-inject — except for the [kinds that are never evicted](#kinds-that-are-never-evicted), whose Pending pods are left alone. The patcher walks each running pod and:
 
 1. Compares the pod spec against the current recommendation.
    - **Spec differs** — a resize is submitted with the new values, even if a previous resize is still pending. The kubelet re-evaluates pending resizes against the new desired state, so a recommendation that has since been lowered can succeed where the old one was infeasible.
@@ -46,7 +46,7 @@ Sidecar (restartable init) containers are resized in a **separate** `/resize` ca
 
 ## Eviction fallback
 
-On clusters below 1.33, and for pods whose in-place resize fails on newer clusters, stale pods are evicted. The guards (ownership check, PDBs, `safe-to-evict`, one pod at a time, crash-loop halt, StatefulSet ordering) are listed in [Eviction safeguards](update-modes.md#eviction-safeguards). Details of the wait between evictions:
+On clusters below 1.33, and on newer clusters for pods whose in-place resize fails or that are not Running yet, stale pods are evicted. The guards (ownership check, PDBs, `safe-to-evict`, one pod at a time, crash-loop halt, StatefulSet ordering) are listed in [Eviction safeguards](update-modes.md#eviction-safeguards). Details of the wait between evictions:
 
 - Quiescence is judged from pod state (evicted pod gone, no peer `Pending` or `Running`-but-not-Ready), not a Ready-count baseline, so HPA scale-down is handled: if no replacement is provisioned, the remaining peers stay Ready and the wait returns immediately.
 - The wait times out after `--recycle-replacement-timeout` (Helm `controller.recycleReplacementTimeout`, default 5m), sized to cover a node-autoscaler provisioning a fresh node for the replacement. When it elapses, the loop stops for this reconcile so a stuck workload loses no more pods.
