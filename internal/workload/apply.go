@@ -2,6 +2,7 @@ package workload
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
@@ -13,6 +14,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+// ErrRefused is wrapped by every error Apply returns for a member it will not
+// touch as it stands: a kind without an apply rule, an object of another
+// kind, a member without a UID, a workload without a valid selector. Retrying
+// cannot help until the member or the controller changes.
+var ErrRefused = errors.New("refused")
 
 // Member is one live object of an identity that a Recommendation is applied
 // to. For a workload kind it is the workload object, and only pods whose
@@ -69,7 +76,7 @@ func (o *Outcome) countSuppressed(resource string) {
 func (p *Patcher) Apply(ctx context.Context, m Member, recs map[string]ContainerRecommendation, s ApplySettings) (Outcome, error) {
 	rule, ok := applyRules[m.Kind]
 	if !ok {
-		return Outcome{}, fmt.Errorf("no apply rule for kind %q", m.Kind)
+		return Outcome{}, fmt.Errorf("%w: no apply rule for kind %q", ErrRefused, m.Kind)
 	}
 	set, err := rule.podsOf(ctx, p.client, m)
 	if err != nil {
@@ -120,10 +127,10 @@ func memberObject[T client.Object](m Member) (T, error) {
 	obj, ok := m.Object.(T)
 	if !ok {
 		var zero T
-		return zero, fmt.Errorf("%s member is a %T", m.Kind, m.Object)
+		return zero, fmt.Errorf("%w: %s member is a %T", ErrRefused, m.Kind, m.Object)
 	}
 	if obj.GetUID() == "" {
-		return obj, fmt.Errorf("%s %s/%s has no UID", m.Kind, obj.GetNamespace(), obj.GetName())
+		return obj, fmt.Errorf("%w: %s %s/%s has no UID", ErrRefused, m.Kind, obj.GetNamespace(), obj.GetName())
 	}
 	return obj, nil
 }
@@ -140,11 +147,11 @@ func selectedPods[T client.Object](selectorOf func(T) *metav1.LabelSelector) fun
 		// converged while none of its pods was ever considered.
 		ls := selectorOf(obj)
 		if ls == nil {
-			return podSet{}, fmt.Errorf("%s %s/%s has no selector", m.Kind, obj.GetNamespace(), obj.GetName())
+			return podSet{}, fmt.Errorf("%w: %s %s/%s has no selector", ErrRefused, m.Kind, obj.GetNamespace(), obj.GetName())
 		}
 		sel, err := metav1.LabelSelectorAsSelector(ls)
 		if err != nil {
-			return podSet{}, fmt.Errorf("parsing selector of %s %s/%s: %w", m.Kind, obj.GetNamespace(), obj.GetName(), err)
+			return podSet{}, fmt.Errorf("%w: parsing selector of %s %s/%s: %w", ErrRefused, m.Kind, obj.GetNamespace(), obj.GetName(), err)
 		}
 		var list corev1.PodList
 		if err := c.List(ctx, &list, client.InNamespace(obj.GetNamespace()), client.MatchingLabelsSelector{Selector: sel}); err != nil {
@@ -210,7 +217,7 @@ func barePods(ctx context.Context, _ client.Client, m Member) (podSet, error) {
 	pods := make([]*corev1.Pod, 0, len(m.Pods))
 	for _, pod := range m.Pods {
 		if pod.UID == "" {
-			return podSet{}, fmt.Errorf("bare pod %s/%s has no UID", pod.Namespace, pod.Name)
+			return podSet{}, fmt.Errorf("%w: bare pod %s/%s has no UID", ErrRefused, pod.Namespace, pod.Name)
 		}
 		if ref := metav1.GetControllerOf(pod); ref != nil {
 			log.FromContext(ctx).Info("skipping controller-owned pod in a bare-pod identity",

@@ -246,27 +246,32 @@ func (l *ledger) forget(member string) {
 }
 
 // permanentError reports whether retrying err cannot help until something
-// outside the controller changes: an API rejection other than throttling
-// (403, 401, Invalid, …) anywhere in its tree, so one forbidden eviction
-// among several pod errors is enough. Everything else (Prometheus errors and
-// timeouts, 5xx, 429, network errors) is transient.
+// outside the controller changes: a member workload.Apply refuses, or an API
+// rejection (403, 401, Invalid, …) anywhere in its tree, so one forbidden
+// eviction among several pod errors is enough. Everything else (Prometheus
+// errors and timeouts, 5xx, network errors) is transient, and so are a 429
+// and a 409, an optimistic-concurrency loss the next attempt re-reads past.
 func permanentError(err error) bool {
+	return errors.Is(err, workload.ErrRefused) || rejected(err)
+}
+
+func rejected(err error) bool {
 	if err == nil {
 		return false
 	}
 	if s, ok := err.(apierrors.APIStatus); ok {
 		code := s.Status().Code
-		if code >= 400 && code < 500 && code != http.StatusTooManyRequests {
+		if code >= 400 && code < 500 && code != http.StatusConflict && code != http.StatusTooManyRequests {
 			return true
 		}
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		for _, e := range joined.Unwrap() {
-			if permanentError(e) {
+			if rejected(e) {
 				return true
 			}
 		}
 		return false
 	}
-	return permanentError(errors.Unwrap(err))
+	return rejected(errors.Unwrap(err))
 }

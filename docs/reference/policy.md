@@ -261,13 +261,15 @@ Every such failure counts once toward `PartialFailure` and leaves the identity
 [Blocked](../reference/metrics.md#drift-retry-autoscaler) until a later
 cycle succeeds, whether the error is transient or permanent:
 
-- A **transient** error (Prometheus errors and timeouts, API 5xx and 429) is
+- A **transient** error (Prometheus errors and timeouts, API 5xx, 409
+  Conflict and 429) is
   retried with exponential backoff, 30s doubling up to 5 minutes. Each
   attempt records a `ReconciliationRetryScheduled` Warning event on the
   workload object naming when the next one runs, and the policy's next cycle
   is scheduled for that time when it comes before `--reconcile-interval`.
 - A **permanent** error (an API rejection such as 403, 401 or Invalid, e.g.
-  missing RBAC on `pods/eviction`) records one `ReconciliationFailed`
+  missing RBAC on `pods/eviction`, or a workload the controller refuses to
+  apply to: one without a UID or a valid selector) records one `ReconciliationFailed`
   Warning event on the workload object when the workload enters the failure,
   and is retried on every cycle without backoff, so fixing its cause takes
   effect at the next cycle.

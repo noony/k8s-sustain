@@ -64,6 +64,14 @@ func TestLedger_Record(t *testing.T) {
 			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: phasePatch, wantMayRun: true,
 		},
 		{
+			name: "a conflict is retried with backoff", res: failedOn(phaseResize, apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, "web-1", errors.New("modified"))),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: phaseResize,
+		},
+		{
+			name: "a refused member blocks without backoff", res: failedOn(phasePatch, fmt.Errorf("%w: Deployment default/web has no selector", workload.ErrRefused)),
+			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: phasePatch, wantMayRun: true,
+		},
+		{
 			name: "member withheld for a failed write counts", res: failedOn(phaseStore, unavailable),
 			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: phaseStore,
 		},
@@ -222,6 +230,10 @@ func TestPermanentError(t *testing.T) {
 		{"query timeout", fmt.Errorf("querying cpu: %w", context.DeadlineExceeded), false},
 		{"server timeout", apierrors.NewServerTimeout(pods, "list", 5), false},
 		{"throttled", apierrors.NewTooManyRequests("slow down", 5), false},
+		{"conflict", apierrors.NewConflict(pods, "web-1", errors.New("the object has been modified")), false},
+		{"wrapped conflict", fmt.Errorf("pod web-1: %w", apierrors.NewConflict(pods, "web-1", errors.New("modified"))), false},
+		{"apply refusal", fmt.Errorf("%w: Deployment default/web has no UID", workload.ErrRefused), true},
+		{"apply refusal among pod errors", errors.Join(fmt.Errorf("pod web-1: %w", unavailable), fmt.Errorf("%w: no selector", workload.ErrRefused)), true},
 		{"unavailable", unavailable, false},
 		{"internal error", apierrors.NewInternalError(errors.New("oops")), false},
 		{"forbidden", forbidden, true},
