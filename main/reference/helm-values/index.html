@@ -2027,6 +2027,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Recommendation is served only to its Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2554,7 +2582,7 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 <tr>
 <td><code>controller.recommendationRetention</code></td>
 <td><code>168h</code></td>
-<td>How long a WorkloadRecommendation outlives its departed workload; rendered into both the controller and webhook <code>--recommendation-retention</code>. See <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</td>
+<td>How long a WorkloadRecommendation outlives its departed workload, or stays frozen for a Conflicted identity; rendered into both the controller and webhook <code>--recommendation-retention</code>. See <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</td>
 </tr>
 <tr>
 <td><code>controller.prometheusMaxInflight</code></td>

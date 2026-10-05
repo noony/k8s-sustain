@@ -2083,6 +2083,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Recommendation is served only to its Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2494,7 +2522,7 @@
 <tr>
 <td><code>--recommendation-retention</code></td>
 <td><code>168h</code></td>
-<td>How long a WorkloadRecommendation is kept after its workload object disappears (bare pods, deleted or finished Jobs). Set it above the longest gap between runs of a recurring workload; <code>0</code> sweeps on the next reconcile. See <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</td>
+<td>How long a WorkloadRecommendation is kept after its workload object disappears (bare pods, deleted or finished Jobs), and how long a Conflicted identity's frozen one is kept. Set it above the longest gap between runs of a recurring workload; <code>0</code> sweeps on the next reconcile. See <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</td>
 </tr>
 <tr>
 <td><code>--query-shard-max-samples</code></td>
@@ -2665,7 +2693,7 @@ line, since a public-CA ingress on the same address would then fail with
 <tr>
 <td><code>--recommendation-retention</code></td>
 <td><code>168h</code></td>
-<td>Must match the controller flag. A departed identity's recommendation older than this is treated as stale instead of injected. The chart renders both from <code>controller.recommendationRetention</code>.</td>
+<td>Must match the controller flag. A departed or Conflicted identity's recommendation older than this is treated as stale instead of injected. The chart renders both from <code>controller.recommendationRetention</code>.</td>
 </tr>
 </tbody>
 </table>
@@ -2719,7 +2747,7 @@ line, since a public-CA ingress on the same address would then fail with
 </code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Using <code>Fail</code> in production</p>
-<p>Setting <code>failurePolicy: Fail</code> means <strong>pod creation is blocked</strong> if the webhook is unavailable. Only use this if you have ≥2 webhook replicas. The webhook does not depend on Prometheus at admission time — it only needs the apiserver to read the cached <code>WorkloadRecommendation</code> — but it still needs the controller's cache to stay fresh (within <code>DefaultCacheStaleness</code>, 30 min) for injections to happen at all, and a webhook outage under <code>Fail</code> still blocks pod creation regardless.</p>
+<p>Setting <code>failurePolicy: Fail</code> means <strong>pod creation is blocked</strong> if the webhook is unavailable. Only use this if you have ≥2 webhook replicas. The webhook does not depend on Prometheus at admission time — it only needs the apiserver to read the cached <code>WorkloadRecommendation</code> — but it still needs the controller's cache to stay fresh (within the 30-minute staleness window) for injections to happen at all, and a webhook outage under <code>Fail</code> still blocks pod creation regardless.</p>
 </div>
 <hr />
 <h2 id="k8s-sustain-dashboard"><code>k8s-sustain dashboard</code><a class="headerlink" href="#k8s-sustain-dashboard" title="Permanent link">&para;</a></h2>

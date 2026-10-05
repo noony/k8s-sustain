@@ -10,13 +10,11 @@
       
       
       
-        <link rel="canonical" href="https://noony.github.io/k8s-sustain/main/adr/0001-single-identity-is-a-batch-of-one/">
+        <link rel="canonical" href="https://noony.github.io/k8s-sustain/main/adr/0003-a-recommendation-is-served-only-to-its-policy/">
       
       
-        <link rel="prev" href="../">
+        <link rel="prev" href="../0002-conflicted-identity-freezes-its-recommendation/">
       
-      
-        <link rel="next" href="../0002-conflicted-identity-freezes-its-recommendation/">
       
       
         
@@ -27,7 +25,7 @@
     
     
       
-        <title>A single identity is a batch of one - k8s-sustain</title>
+        <title>A Recommendation is served only to its Policy - k8s-sustain</title>
       
     
     
@@ -74,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#1-a-single-identity-is-a-batch-of-one" class="md-skip">
+        <a href="#3-a-recommendation-is-served-only-to-its-policy" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +111,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              A single identity is a batch of one
+              A Recommendation is served only to its Policy
             
           </span>
         </div>
@@ -1790,6 +1788,62 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A single identity is a batch of one
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Conflicted identity freezes its recommendation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -1809,7 +1863,7 @@
   <span class="md-ellipsis">
     
   
-    A single identity is a batch of one
+    A Recommendation is served only to its Policy
   
 
     
@@ -1827,7 +1881,7 @@
   <span class="md-ellipsis">
     
   
-    A single identity is a batch of one
+    A Recommendation is served only to its Policy
   
 
     
@@ -1889,62 +1943,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -2084,27 +2082,30 @@
   
 
 
-<h1 id="1-a-single-identity-is-a-batch-of-one">1. A single identity is a batch of one<a class="headerlink" href="#1-a-single-identity-is-a-batch-of-one" title="Permanent link">&para;</a></h1>
+<h1 id="3-a-recommendation-is-served-only-to-its-policy">3. A Recommendation is served only to its Policy<a class="headerlink" href="#3-a-recommendation-is-served-only-to-its-policy" title="Permanent link">&para;</a></h1>
 <ul>
 <li><strong>Status:</strong> Accepted</li>
-<li><strong>Date:</strong> 2026-10-04</li>
+<li><strong>Date:</strong> 2026-10-05</li>
+<li><strong>Refines:</strong> <a href="../0002-conflicted-identity-freezes-its-recommendation/">ADR 0002</a></li>
 </ul>
 <h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
-<p>Recommendation inputs (CPU and memory percentiles, the 24h OOM signal) were read two ways. The controller packed a policy's identities into sharded PromQL queries; the dashboard, identities with no observed-resources snapshot to size a shard by, and the fallback for a failed shard each queried one workload at a time through a second set of queries with exact-match selectors.</p>
-<p>Both sets had to return identical values, so every query change was made twice, and comments guarded the duplication. The fallback ran through the very path that had not failed: a shard Prometheus rejected (typically over <code>--query.max-samples</code>) was re-read with different queries, and callers had to know which path had produced an identity's inputs, or that none had.</p>
+<p><a href="../0002-conflicted-identity-freezes-its-recommendation/">ADR 0002</a> made the webhook inject only when the pod's resolved Policy is the one the <code>WorkloadRecommendation</code> names in <code>spec.policy</code>, so that a pod only gets numbers computed under its own Policy. But <code>spec.policy</code> says which Policy governs the identity now, not which one computed the numbers the object holds.</p>
+<p>When another Policy starts governing an identity (a workload re-annotated, a Conflicted identity whose members come to agree on the other Policy, a GitOps rename), its first reconcile adopts the object: it rewrites <code>spec.policy</code> and the policy label, and keeps the stored Recommendation, as every outcome but <code>Computed</code> does. If that Policy's first pass decided anything else — too young under its own minimum age, no data under its own window, a failed fetch — the webhook served the previous Policy's numbers to the new Policy's pods as a fresh hit, for up to the 30-minute staleness budget. A Conflicted identity resolving to the Policy whose pods had been left unmutated was worse: its frozen numbers were served as retained, and if every member stayed in retry backoff, nothing recorded anything until the retention window ran out.</p>
+<p>The same adoption broke the Policy-deletion cleanup. It deleted the deleted Policy's objects on their UID alone, reasoning that "this object belongs to the Policy being deleted" could not change. Adoption changes it: when a rename creates the new Policy before deleting the old one, the new Policy can adopt an object between the old one's finalizer listing it and deleting it, and the delete destroyed the adopted object.</p>
 <h2 id="decision">Decision<a class="headerlink" href="#decision" title="Permanent link">&para;</a></h2>
-<p>There is one query path, the sharded one. A single identity is a shard with one name: a batch of one.</p>
+<p><strong>A Recommendation is served only to pods of the Policy that computed it.</strong></p>
 <ul>
-<li>Recommendation inputs are read through one port, <code>recommender.InputsFetcher</code>. In: a <code>ResourcesConfigs</code> and the identities to fetch, each with a container-count size hint that may be unknown. Out: one result per identity, its inputs or the error that made them unavailable.</li>
-<li>The Prometheus adapter, <code>recommender.PromInputs</code>, plans shards from the sample budget, retries a failed shard once, then re-queries its identities as one-identity shards. An identity of unknown size gets a one-identity shard from the start. CPU and memory are required; OOM is best-effort.</li>
-<li>The controller and the dashboard both fetch through the port.</li>
+<li><code>status.computedBy</code> records the Policy that computed <code>status.containers</code>. It is written with every <code>Computed</code> outcome, from the Policy the object names, and kept by every other outcome, like the Recommendation itself.</li>
+<li>The webhook injects only when both <code>spec.policy</code> and <code>status.computedBy</code> are the pod's resolved Policy; otherwise the Recommendation is withheld (<code>other-policy</code>).</li>
+<li>Adopting an object keeps the previous Policy's numbers in place, attributed to it. They are withheld from every pod until the adopting Policy records a Recommendation of its own.</li>
+<li>A Conflicted identity keeps working as ADR 0002 describes: neither <code>spec.policy</code> nor <code>status.computedBy</code> changes while its members disagree, so pods of the last governing Policy keep the frozen numbers.</li>
+<li>Every cleanup path deletes a <code>WorkloadRecommendation</code> only at the revision it judged (UID and <code>resourceVersion</code>). On the Policy-deletion path a conflict is returned, so the finalizer stays until a retry re-lists the Policy's objects; one another Policy adopted meanwhile is no longer listed and survives.</li>
 </ul>
 <h2 id="consequences">Consequences<a class="headerlink" href="#consequences" title="Permanent link">&para;</a></h2>
 <ul>
-<li>One query construction per signal. A failed shard degrades to the same queries narrowed to one name, so the fallback cannot drift from the batch.</li>
-<li>Callers know nothing of shards, retries or fallback. Tests substitute an in-memory adapter, <code>recommendertest.StaticInputs</code>, instead of serving PromQL.</li>
-<li>A one-identity shard selects with an alternation of one escaped name (<code>owner_name=~"…"</code>) rather than an exact match; the selected series are the same.</li>
-<li>The dashboard has no shard-budget flag; it batches with the controller's default budget.</li>
+<li>An identity moving between Policies starts its pods on template resources from the move until the new Policy's first Recommendation, instead of on numbers computed under the old Policy's window, percentile, headroom and limits. For a live identity with history that is the new Policy's first reconcile.</li>
+<li>An object written before <code>status.computedBy</code> existed carries none and is withheld until its Policy records a Recommendation. A live identity with samples gets one on its next reconcile; a departed identity whose samples have aged out never does, and starts on template resources until it runs again.</li>
+<li>The Policy-deletion cleanup can take more than one reconcile when an object is rewritten while it runs.</li>
 </ul>
 
 
@@ -2143,7 +2144,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../" class="md-footer__link md-footer__link--prev" aria-label="Previous: Architecture Decisions">
+          <a href="../0002-conflicted-identity-freezes-its-recommendation/" class="md-footer__link md-footer__link--prev" aria-label="Previous: A Conflicted identity freezes its recommendation">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -2153,27 +2154,11 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Architecture Decisions
-              </div>
-            </div>
-          </a>
-        
-        
-          
-          <a href="../0002-conflicted-identity-freezes-its-recommendation/" class="md-footer__link md-footer__link--next" aria-label="Next: A Conflicted identity freezes its recommendation">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
                 A Conflicted identity freezes its recommendation
               </div>
             </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
           </a>
+        
         
       </nav>
     

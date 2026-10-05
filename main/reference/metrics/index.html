@@ -2105,6 +2105,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Recommendation is served only to its Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2752,7 +2780,7 @@
 <h4 id="k8s_sustain_webhook_panic_total"><code>k8s_sustain_webhook_panic_total</code><a class="headerlink" href="#k8s_sustain_webhook_panic_total" title="Permanent link">&para;</a></h4>
 <p>Every panic the webhook recovered, by route pattern (e.g. <code>POST /mutate</code>), plus two non-route values, <code>singleflight/ownerRef</code> and <code>singleflight/ownerAnnotations</code>, for panics in the <a href="../annotation/#the-webhooks-cost-control-does-not-fully-bound-itself">owner-resolution caches</a>. Each is contained: that admission fails open. Any non-zero rate is a bug.</p>
 <h4 id="k8s_sustain_webhook_recommendation_source_total"><code>k8s_sustain_webhook_recommendation_source_total</code><a class="headerlink" href="#k8s_sustain_webhook_recommendation_source_total" title="Permanent link">&para;</a></h4>
-<p>The outcome of every admission's <code>WorkloadRecommendation</code> read, by <code>source</code>. A pod that misses its recommendation starts on its template resources with nothing in its spec to say so; this counter is the only place that is visible. Alert on a rising <code>stale</code> or <code>missing</code> rate relative to <code>hit</code>.</p>
+<p>The outcome of every admission's <code>WorkloadRecommendation</code> read, by <code>source</code>: one label per <a href="../../concepts/workload-recommendations/#admission-behaviour">read verdict</a>, plus <code>error</code>. A pod that misses its recommendation starts on its template resources with nothing in its spec to say so; this counter is the only place that is visible. Alert on a rising <code>stale</code> or <code>missing</code> rate relative to <code>hit</code>.</p>
 <table>
 <thead>
 <tr>
@@ -2767,15 +2795,19 @@
 </tr>
 <tr>
 <td><code>retained</code></td>
-<td>Injected from a kept recommendation of a departed identity (finished Job, bare-pod group between runs), or the frozen one of a <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted</a> identity into a pod of the Policy it names. Its age is bounded by <code>--recommendation-retention</code> instead of the staleness budget — see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>. Steady <code>retained</code> is normal for recurring workloads; <code>retained</code> turning into <code>missing</code> means the gap between runs exceeds the retention window.</td>
+<td>Injected from a kept recommendation of a departed identity (finished Job, bare-pod group between runs), or the frozen one of a <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted</a> identity into a pod of the Policy that computed it. Its age is bounded by <code>--recommendation-retention</code> instead of the staleness budget — see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>. Steady <code>retained</code> is normal for recurring workloads; <code>retained</code> turning into <code>missing</code> means the gap between runs exceeds the retention window.</td>
 </tr>
 <tr>
 <td><code>stale</code></td>
-<td><code>observedAt</code> is older than the 30-minute staleness budget (or, for a departed identity, older than the retention window): the controller is behind, stuck, or the workload left its policy's scope.</td>
+<td><code>observedAt</code> is older than the 30-minute staleness budget (or, for a departed or Conflicted identity, older than the retention window): the controller is behind, stuck, or the workload left its policy's scope.</td>
 </tr>
 <tr>
 <td><code>missing</code></td>
 <td>No recommendation exists yet. The webhook creates a <a href="../../concepts/workload-recommendations/#cold-start-stub-recommendations">stub</a> so the controller picks it up. Transient for new workloads; sustained for one identity means the controller never computes it.</td>
+</tr>
+<tr>
+<td><code>undecided</code></td>
+<td>The object exists but the controller has decided nothing for it yet: a stub awaiting its first reconcile, or one discovery just created. No stub is created. Sustained for one identity means its Policy's reconcile is not reaching it.</td>
 </tr>
 <tr>
 <td><code>nodata</code></td>
@@ -2783,7 +2815,7 @@
 </tr>
 <tr>
 <td><code>other-policy</code></td>
-<td>The recommendation was produced under a Policy other than the one the pod opts into: the other side of a <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted</a> identity, or an identity moving between Policies until the new one adopts it. Admitted unchanged; no stub is created.</td>
+<td>The recommendation was withheld: the object, or the values it holds, belong to a Policy other than the one the pod opts into (<a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/">ADR 0003</a>). The other side of a <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted</a> identity, or an identity moving between Policies until the new one computes its own values. Admitted unchanged; no stub is created.</td>
 </tr>
 <tr>
 <td><code>error</code></td>

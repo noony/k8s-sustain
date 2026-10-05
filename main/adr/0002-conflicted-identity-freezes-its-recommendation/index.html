@@ -16,6 +16,8 @@
         <link rel="prev" href="../0001-single-identity-is-a-batch-of-one/">
       
       
+        <link rel="next" href="../0003-a-recommendation-is-served-only-to-its-policy/">
+      
       
         
       
@@ -1920,6 +1922,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    A Recommendation is served only to its Policy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -2058,6 +2088,7 @@
 <ul>
 <li><strong>Status:</strong> Accepted</li>
 <li><strong>Date:</strong> 2026-10-04</li>
+<li><strong>Refined by:</strong> <a href="../0003-a-recommendation-is-served-only-to-its-policy/">ADR 0003</a> — the webhook also requires the Policy that computed the numbers to be the pod's</li>
 </ul>
 <h2 id="context">Context<a class="headerlink" href="#context" title="Permanent link">&para;</a></h2>
 <p>An identity can span several objects: owner-name groups (<code>api-blue</code> and <code>api-green</code> both reporting as <code>Deployment/api</code>) and bare-pod groups. Each object opts into a Policy on its own, so members of one identity can name different Policies. The identity still has one Prometheus series and one <code>WorkloadRecommendation</code>.</p>
@@ -2133,6 +2164,22 @@
             </div>
           </a>
         
+        
+          
+          <a href="../0003-a-recommendation-is-served-only-to-its-policy/" class="md-footer__link md-footer__link--next" aria-label="Next: A Recommendation is served only to its Policy">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                A Recommendation is served only to its Policy
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
         
       </nav>
     
