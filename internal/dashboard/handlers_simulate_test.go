@@ -147,27 +147,6 @@ func TestHandleSimulate_AcceptsPod(t *testing.T) {
 	}
 }
 
-// TestHandleSimulate_RejectsMalformedQuantity guards against the previous
-// resource.MustParse panic that would surface as an unhelpful HTTP 500
-// (after the runtime's panic recovery). Now must return a clean 400.
-func TestHandleSimulate_RejectsMalformedQuantity(t *testing.T) {
-	srv := &Server{Logger: testLogger(t)}
-	bad := "not a quantity"
-	body := mustJSON(t, simulateRequest{
-		Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
-		CPU: simulateResourceConfig{MinAllowed: &bad},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
-	rec := httptest.NewRecorder()
-	srv.handleSimulate(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 (malformed Quantity must not panic into a 500)", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "minAllowed") {
-		t.Errorf("expected 'minAllowed' in body, got %s", rec.Body.String())
-	}
-}
-
 // TestHandleSimulate_RejectsBadDuration verifies user-supplied window/step
 // strings are validated against the Prometheus duration grammar before they
 // flow into Prometheus queries (where they'd cause a late, less actionable
@@ -189,23 +168,51 @@ func TestHandleSimulate_RejectsBadDuration(t *testing.T) {
 	}
 }
 
-// TestHandleSimulate_RejectsOutOfRangePercentile catches the no-validation
-// hole on percentile / headroom — both should match the CRD's accepted ranges.
-func TestHandleSimulate_RejectsOutOfRangePercentile(t *testing.T) {
-	srv := &Server{Logger: testLogger(t)}
-	bad := int32(150)
-	body := mustJSON(t, simulateRequest{
-		Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
-		CPU: simulateResourceConfig{Percentile: &bad},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
-	rec := httptest.NewRecorder()
-	srv.handleSimulate(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", rec.Code)
+// An override the Policy CRD would reject is a 400 naming its field, and a
+// starting Policy that does not exist is a 404.
+func TestHandleSimulate_RejectsWhatItCannotStartFrom(t *testing.T) {
+	srv := &Server{
+		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		PromClient: &fakePromClient{},
+		Inputs:     recommendertest.NewStaticInputs(),
+		Logger:     testLogger(t),
 	}
-	if !strings.Contains(rec.Body.String(), "percentile") {
-		t.Errorf("expected 'percentile' in body, got %s", rec.Body.String())
+	cases := []struct {
+		name       string
+		req        simulateRequest
+		wantStatus int
+		wantField  string
+	}{
+		{
+			name: "invalid override",
+			req: simulateRequest{
+				Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
+				Override: json.RawMessage(`{"resourcesConfigs":{"memory":{"requests":{"minAllowed":"2Gi","maxAllowed":"1Gi"}}}}`),
+			},
+			wantStatus: http.StatusBadRequest,
+			wantField:  "resourcesConfigs.memory.requests",
+		},
+		{
+			name:       "unknown starting Policy",
+			req:        simulateRequest{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web", Policy: "ghost"},
+			wantStatus: http.StatusNotFound,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			srv.handleSimulate(rec, httptest.NewRequest(http.MethodPost, "/api/simulate", mustJSON(t, tc.req)))
+
+			var body struct {
+				Error struct {
+					Field string `json:"field"`
+				} `json:"error"`
+			}
+			_ = json.Unmarshal(rec.Body.Bytes(), &body)
+			if rec.Code != tc.wantStatus || body.Error.Field != tc.wantField {
+				t.Errorf("status %d with field %q, want %d with %q; body=%s", rec.Code, body.Error.Field, tc.wantStatus, tc.wantField, rec.Body)
+			}
+		})
 	}
 }
 

@@ -3,10 +3,12 @@ package dashboard
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/resource"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
@@ -16,16 +18,23 @@ import (
 )
 
 type simulationResult struct {
-	Containers         map[string]simulationContainerResult `json:"containers"`
-	InitContainers     []string                             `json:"initContainers,omitempty"`
-	TooYoung           bool                                 `json:"tooYoung,omitempty"`
-	CPUSeries          promclient.ContainerTimeSeries       `json:"cpuSeries"`
-	MemSeries          promclient.ContainerTimeSeries       `json:"memorySeries"`
-	Resources          map[string]containerResources        `json:"resources,omitempty"`
-	CPURequests        promclient.ContainerTimeSeries       `json:"cpuRequests,omitempty"`
-	MemoryRequests     promclient.ContainerTimeSeries       `json:"memoryRequests,omitempty"`
-	CPURecommendations promclient.ContainerTimeSeries       `json:"cpuRecommendations,omitempty"`
-	MemRecommendations promclient.ContainerTimeSeries       `json:"memoryRecommendations,omitempty"`
+	// Policy is the Policy the Simulation started from, empty when the
+	// identity has no governing Policy and none was chosen.
+	Policy string `json:"policy,omitempty"`
+	// Effective is what it ran with: the Policy's settings with the override
+	// merged in and every default explicit.
+	Effective          simulationSettings                        `json:"effective"`
+	Outcome            sustainv1alpha1.RecommendationOutcome     `json:"outcome"`
+	Containers         map[string]simulationContainerResult      `json:"containers"`
+	Trace              map[string]sustainv1alpha1.ContainerTrace `json:"trace,omitempty"`
+	InitContainers     []string                                  `json:"initContainers,omitempty"`
+	CPUSeries          promclient.ContainerTimeSeries            `json:"cpuSeries"`
+	MemSeries          promclient.ContainerTimeSeries            `json:"memorySeries"`
+	Resources          map[string]containerResources             `json:"resources,omitempty"`
+	CPURequests        promclient.ContainerTimeSeries            `json:"cpuRequests,omitempty"`
+	MemoryRequests     promclient.ContainerTimeSeries            `json:"memoryRequests,omitempty"`
+	CPURecommendations promclient.ContainerTimeSeries            `json:"cpuRecommendations,omitempty"`
+	MemRecommendations promclient.ContainerTimeSeries            `json:"memoryRecommendations,omitempty"`
 }
 
 type simulationContainerResult struct {
@@ -39,48 +48,32 @@ type simulationContainerResult struct {
 	MemoryUsageBytes   float64 `json:"memoryUsageBytes,omitempty"`
 }
 
-// rightSizing maps a user-supplied request onto the Policy shape. A
-// resource's window falls back to the chart window; the assembly supplies the
-// final default.
-func (req simulateRequest) rightSizing(coordination sustainv1alpha1.AutoscalerCoordination) sustainv1alpha1.RightSizingSpec {
-	return sustainv1alpha1.RightSizingSpec{
-		ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-			CPU: sustainv1alpha1.ResourceConfig{
-				Window:   cmp.Or(req.CPU.Window, req.Window),
-				Requests: buildRequestsConfig(req.CPU),
-				Limits:   buildLimitsConfig(req.CPU.Limits),
-			},
-			Memory: sustainv1alpha1.ResourceConfig{
-				Window:   cmp.Or(req.Memory.Window, req.Window),
-				Requests: buildRequestsConfig(req.Memory),
-				Limits:   buildLimitsConfig(req.Memory.Limits),
-			},
-		},
-		AutoscalerCoordination: coordination,
-	}
-}
+// errBasePolicy is a Policy a Simulation should start from that could not be
+// read.
+var errBasePolicy = errors.New("reading the Policy to simulate")
 
-// runSimulation resolves the identity and the coordination baseline, then
-// simulates the request. Coordination defaults to the governing Policy's
-// setting so an untouched simulation matches what the controller does; the
-// request can override it.
+// runSimulation computes the Request the controller would make of the
+// identity, under the starting Policy's settings with the override merged in:
+// with no override and the governing Policy, exactly the controller's, live
+// OOM kills aside. An identity the inventory does not hold is simulated from
+// whatever Prometheus reports for it.
 func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simulationResult, error) {
 	key := promclient.WorkloadIdentity{Namespace: req.Namespace, OwnerKind: req.OwnerKind, OwnerName: req.OwnerName}
-	// A failed read is tolerated: an unknown identity simulates with no
-	// resources or init containers rather than failing.
 	id, err := s.identity(ctx, key)
-	if err != nil {
-		s.Logger.Error(err, "failed to read the workload identity", "namespace", req.Namespace, "kind", req.OwnerKind, "name", req.OwnerName)
-		id = &inventory.Identity{Key: key}
-	}
-	var coordination sustainv1alpha1.AutoscalerCoordination
 	switch {
-	case req.AutoscalerCoordination != nil:
-		coordination = *req.AutoscalerCoordination
-	default:
-		if policy := s.governingPolicy(ctx, id); policy != nil {
-			coordination = policy.Spec.RightSizing.AutoscalerCoordination
-		}
+	case apierrors.IsNotFound(err):
+		id = &inventory.Identity{Key: key}
+	case err != nil:
+		return nil, fmt.Errorf("reading the workload identity: %w", err)
+	}
+	policy := cmp.Or(req.Policy, id.Policy)
+	base, err := s.policySettings(ctx, policy)
+	if err != nil {
+		return nil, err
+	}
+	settings, err := base.override(req.Override)
+	if err != nil {
+		return nil, err
 	}
 
 	var tr promclient.TimeRange
@@ -93,12 +86,13 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		}
 	}
 
-	a := recommender.Assemble(ctx, s.Inputs, autoscaler.NewNamespacedSnapshot(s.K8sClient), req.rightSizing(coordination), []*inventory.Identity{id})[0]
+	a := recommender.Assemble(ctx, s.Inputs, autoscaler.NewNamespacedSnapshot(s.K8sClient), settings.rightSizing(), []*inventory.Identity{id})[0]
 	if a.Err != nil {
 		return nil, a.Err
 	}
 	res := recommender.Compute(a.Request)
-	inputs := a.Request.Inputs()
+	resources := a.Request.Resources()
+	settings.ResourcesConfigs = resources
 
 	step := cmp.Or(req.Step, "5m")
 	ns, kind, name := key.Namespace, key.OwnerKind, key.OwnerName
@@ -113,16 +107,18 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(ctx, ns, kind, name, tr, step)
 	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(ctx, ns, kind, name, tr, step)
 
-	resources := a.Request.Resources()
 	cpuRecSeries, _ := s.PromClient.QueryWorkloadCPURecommendationRangeByContainer(ctx, ns, kind, name,
 		recommender.PercentileQuantile(resources.CPU.Requests.Percentile), resources.CPU.Window, tr, step)
 	memRecSeries, _ := s.PromClient.QueryWorkloadMemoryRecommendationRangeByContainer(ctx, ns, kind, name,
 		recommender.PercentileQuantile(resources.Memory.Requests.Percentile), resources.Memory.Window, tr, step)
 
 	return &simulationResult{
-		Containers:         simulationContainers(res, inputs),
+		Policy:             policy,
+		Effective:          settings,
+		Outcome:            simulationOutcome(res.Outcome),
+		Containers:         simulationContainers(res, a.Request.Inputs()),
+		Trace:              res.Traces,
 		InitContainers:     initContainerNamesOf(id),
-		TooYoung:           res.Outcome == recommender.TooYoung,
 		CPUSeries:          cpuSeries,
 		MemSeries:          memSeries,
 		Resources:          containerResourcesOf(id),
@@ -131,6 +127,19 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		CPURecommendations: recommendationSeries(cpuRecSeries, a.Request, false),
 		MemRecommendations: recommendationSeries(memRecSeries, a.Request, true),
 	}, nil
+}
+
+// policySettings reads the settings of the Policy named name; none for an
+// empty name, which leaves every setting to its default.
+func (s *Server) policySettings(ctx context.Context, name string) (simulationSettings, error) {
+	if name == "" {
+		return simulationSettings{}, nil
+	}
+	var policy sustainv1alpha1.Policy
+	if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: name}, &policy); err != nil {
+		return simulationSettings{}, fmt.Errorf("%w %q: %w", errBasePolicy, name, err)
+	}
+	return settingsOf(policy.Spec.RightSizing), nil
 }
 
 // simulationContainers renders the computed recommendations next to the raw
@@ -195,38 +204,4 @@ func recommendationSeries(series promclient.ContainerTimeSeries, req recommender
 		out[name] = clamped
 	}
 	return out
-}
-
-func buildRequestsConfig(cfg simulateResourceConfig) sustainv1alpha1.ResourceRequestsConfig {
-	rc := sustainv1alpha1.ResourceRequestsConfig{
-		Percentile: cfg.Percentile,
-		Headroom:   cfg.Headroom,
-	}
-	// handleSimulate pre-validates these, so a parse failure is unreachable;
-	// ParseQuantity rather than MustParse keeps a caller that skips the handler
-	// from panicking into an HTTP 500.
-	if cfg.MinAllowed != nil {
-		if q, err := resource.ParseQuantity(*cfg.MinAllowed); err == nil {
-			rc.MinAllowed = &q
-		}
-	}
-	if cfg.MaxAllowed != nil {
-		if q, err := resource.ParseQuantity(*cfg.MaxAllowed); err == nil {
-			rc.MaxAllowed = &q
-		}
-	}
-	return rc
-}
-
-func buildLimitsConfig(cfg *simulateLimitsConfig) sustainv1alpha1.ResourceLimitsConfig {
-	if cfg == nil {
-		return sustainv1alpha1.ResourceLimitsConfig{}
-	}
-	return sustainv1alpha1.ResourceLimitsConfig{
-		EqualsToRequest:       cfg.EqualsToRequest,
-		KeepLimit:             cfg.KeepLimit,
-		KeepLimitRequestRatio: cfg.KeepLimitRequestRatio,
-		NoLimit:               cfg.NoLimit,
-		RequestsLimitsRatio:   cfg.RequestsLimitsRatio,
-	}
 }

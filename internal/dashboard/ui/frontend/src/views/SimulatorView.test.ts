@@ -1,10 +1,142 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import SimulatorView from './SimulatorView.vue'
 import * as api from '../lib/api'
 vi.mock('../lib/api', async (o) => ({ ...((await o()) as object), api: vi.fn() }))
 
+// What the server answers for web under policy p: its effective settings
+// differ from every value the recommender would default.
+const simulation = (): api.SimulationResult => ({
+  policy: 'p',
+  effective: {
+    resourcesConfigs: {
+      cpu: { window: '96h', requests: { percentile: 90, headroom: 10 }, limits: { noLimit: true } },
+      memory: { window: '168h', requests: { keepRequest: true }, limits: { keepLimit: true } },
+    },
+    autoscalerCoordination: { enabled: true },
+  },
+  outcome: 'Computed',
+  containers: { app: { cpuRequest: '100m' } },
+  trace: { app: { cpu: { request: [{ stage: 'percentile', value: '90m' }] } } },
+  cpuSeries: {},
+  memorySeries: {},
+})
+
+// serveSimulator answers the simulator's reads, and every POST /api/simulate
+// with simulate(body), recording each body.
+function serveSimulator(simulate: (body: api.SimulateRequest) => Promise<unknown>) {
+  const bodies: api.SimulateRequest[] = []
+  ;(api.api as any).mockReset()
+  ;(api.api as any).mockImplementation(async (path: string, opts?: RequestInit) => {
+    if (path === '/api/simulate') {
+      const body = JSON.parse(opts!.body as string)
+      bodies.push(body)
+      return simulate(body)
+    }
+    if (path.startsWith('/api/workloads?')) return { items: [], total: 0, pageSize: 200 }
+    return []
+  })
+  return bodies
+}
+
+function mountOpened() {
+  return mount(SimulatorView, {
+    props: { namespace: 'prod', kind: 'Deployment', name: 'web' },
+    global: { stubs: ['TimeRangePicker'] },
+  })
+}
+
 describe('SimulatorView', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('opens on the governing policy: sends no override and shows its effective settings', async () => {
+    const bodies = serveSimulator(async () => simulation())
+    const w = mountOpened()
+    await flushPromises()
+
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0].override).toEqual({})
+    expect(bodies[0].policy).toBeUndefined()
+    expect(w.find('[data-test="starting-point"]').text()).toContain('policy p')
+    expect((w.find('[data-test="cpu-percentile"]').element as HTMLInputElement).value).toBe('90')
+    expect((w.find('#cpu-limit-mode').element as HTMLSelectElement).value).toBe('noLimit')
+    expect((w.find('[data-test="memory-keep-request"]').element as HTMLInputElement).checked).toBe(
+      true,
+    )
+    expect(w.find('[data-test="memory-percentile"]').exists()).toBe(false)
+    expect((w.find('[data-test="coordination"]').element as HTMLInputElement).checked).toBe(true)
+    expect(w.text()).toContain('Usage percentile')
+  })
+
+  it('sends only what the user changed', async () => {
+    vi.useFakeTimers()
+    const bodies = serveSimulator(async () => simulation())
+    const w = mountOpened()
+    await flushPromises()
+
+    await w.find('[data-test="cpu-percentile"]').setValue('80')
+    await w.find('#memory-limit-mode').setValue('equalsToRequest')
+    vi.advanceTimersByTime(400)
+    await flushPromises()
+
+    expect(bodies).toHaveLength(2)
+    expect(bodies[1].override).toEqual({
+      resourcesConfigs: {
+        cpu: { requests: { percentile: 80 } },
+        memory: {
+          limits: {
+            equalsToRequest: true,
+            keepLimit: false,
+            keepLimitRequestRatio: false,
+            noLimit: false,
+            requestsLimitsRatio: null,
+          },
+        },
+      },
+    })
+    expect((w.find('[data-test="cpu-percentile"]').element as HTMLInputElement).value).toBe('80')
+  })
+
+  it("shows the server's rejection of an override and keeps the last results", async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    serveSimulator(async () => {
+      if (calls++ === 0) return simulation()
+      throw new api.ApiError(
+        'invalid override: resourcesConfigs.cpu.requests: minAllowed must be less than or equal to maxAllowed',
+        {
+          code: 'BAD_REQUEST',
+          status: 400,
+          field: 'resourcesConfigs.cpu.requests',
+        },
+      )
+    })
+    const w = mountOpened()
+    await flushPromises()
+
+    await w.find('[data-test="cpu-percentile"]').setValue('70')
+    vi.advanceTimersByTime(400)
+    await flushPromises()
+
+    expect(w.find('[data-test="override-error"]').text()).toContain('minAllowed must be')
+    expect(w.find('.rec-card').exists()).toBe(true)
+  })
+
+  it('reset drops every edit and starts again from the policy', async () => {
+    vi.useFakeTimers()
+    const bodies = serveSimulator(async () => simulation())
+    const w = mountOpened()
+    await flushPromises()
+
+    await w.find('[data-test="cpu-percentile"]').setValue('80')
+    await w.find('[data-test="reset-override"]').trigger('click')
+    vi.advanceTimersByTime(400)
+    await flushPromises()
+
+    expect(bodies.at(-1)!.override).toEqual({})
+    expect((w.find('[data-test="cpu-percentile"]').element as HTMLInputElement).value).toBe('90')
+  })
+
   it('renders form with Rollout option', async () => {
     ;(api.api as any).mockResolvedValue([])
     const w = mount(SimulatorView, { global: { stubs: ['TimeRangePicker'] } })

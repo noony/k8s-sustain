@@ -288,46 +288,49 @@ export interface StoredRecommendation {
   trace?: Record<string, ContainerTrace>
 }
 
+/** The settings of a Policy's right-sizing spec that shape a Recommendation. */
+export interface SimulationSettings {
+  resourcesConfigs: { cpu?: ResourceConfig; memory?: ResourceConfig }
+  autoscalerCoordination: AutoscalerCoordination
+  excludeInitContainers?: boolean
+}
+
+/** A JSON merge patch (RFC 7386): a key set replaces the base's, null removes it. */
+export type MergePatch<T> = {
+  [K in keyof T]?: NonNullable<T[K]> extends object
+    ? NonNullable<T[K]> extends unknown[]
+      ? T[K] | null
+      : MergePatch<NonNullable<T[K]>> | null
+    : T[K] | null
+}
+
+export type SimulationOverride = MergePatch<SimulationSettings>
+
 export interface SimulateRequest {
   namespace: string
   ownerKind: string
   ownerName: string
+  /** The chart range; it does not change the recommendation windows. */
   window?: string
   fromTs?: number
   toTs?: number
   step: string
-  cpu: SimulateResourceConfig
-  memory: SimulateResourceConfig
-  /** Overrides the managing policy's autoscaler coordination; omit to inherit it. */
-  autoscalerCoordination?: SimulateAutoscalerCoordination
-}
-
-export interface SimulateAutoscalerCoordination {
-  enabled?: boolean
-  replicaBudgetAnchor?: number
-}
-
-export interface SimulateResourceConfig {
-  percentile: number
-  headroom: number
-  window: string
-  minAllowed?: string
-  maxAllowed?: string
-  limits?: SimulateLimitsConfig
-}
-
-export interface SimulateLimitsConfig {
-  equalsToRequest?: boolean
-  keepLimit?: boolean
-  keepLimitRequestRatio?: boolean
-  noLimit?: boolean
-  requestsLimitsRatio?: number
+  /** The Policy to start from; omit for the identity's governing Policy. */
+  policy?: string
+  /** Merged onto the starting Policy's settings; omit to simulate what the controller does. */
+  override?: SimulationOverride
 }
 
 export interface SimulationResult {
+  /** The Policy the Simulation started from; absent when none governs the identity and none was chosen. */
+  policy?: string
+  /** What it ran with: the Policy's settings, the override merged in, every default explicit. */
+  effective: SimulationSettings
+  outcome: Exclude<RecommendationOutcome, 'FetchFailed' | 'Conflicted'>
   containers: Record<string, RecommendationContainer>
+  /** How each container's values were derived, stage by stage. */
+  trace?: Record<string, ContainerTrace>
   initContainers?: string[]
-  tooYoung?: boolean
   cpuSeries: Record<string, TimeValue[]>
   memorySeries: Record<string, TimeValue[]>
   resources?: Record<string, ContainerResources>

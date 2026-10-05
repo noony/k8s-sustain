@@ -753,6 +753,24 @@ tbody tr:last-child td {
   color: var(--accent-light);
   font-family: var(--font-mono);
 }
+.sim-shared {
+  margin-top: 24px;
+}
+.sim-starting-point {
+  margin: 0 0 16px;
+}
+.sim-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 16px;
+  cursor: pointer;
+}
+.sim-check input[type='checkbox'] {
+  accent-color: var(--accent);
+}
 .sim-subsection {
   margin-bottom: 8px;
 }

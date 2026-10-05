@@ -2,14 +2,17 @@ package dashboard
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -126,16 +129,96 @@ func TestRecommendationSeries_ComputesEachPointWithTheIdentitysOOMs(t *testing.T
 	}
 }
 
-func TestRunSimulation_RequestOverridesCoordination(t *testing.T) {
+// The override merges onto the governing Policy: what it leaves alone is the
+// Policy's, and the effective settings it returns have every default
+// explicit.
+func TestRunSimulation_OverrideMergesOntoTheGoverningPolicy(t *testing.T) {
 	srv := newCoordinatedSimulateServer(t)
 	res, err := srv.runSimulation(context.Background(), simulateRequest{
 		Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
-		AutoscalerCoordination: &sustainv1alpha1.AutoscalerCoordination{Enabled: false},
+		Override: json.RawMessage(`{"resourcesConfigs":{"cpu":{"requests":{"headroom":10}}}}`),
 	})
 	if err != nil {
 		t.Fatalf("runSimulation: %v", err)
 	}
-	if got := res.Containers["main"].CPURequest; got != "1" {
-		t.Errorf("cpu = %q, want 1 (request disabled coordination)", got)
+	if got := res.Containers["main"].CPURequest; got != "2420m" {
+		t.Errorf("cpu = %q, want 2420m: 1 core with 10%% headroom, coordinated as the Policy says", got)
+	}
+	cpu := res.Effective.ResourcesConfigs.CPU
+	if res.Policy != "p" || !res.Effective.AutoscalerCoordination.Enabled || *cpu.Requests.Headroom != 10 ||
+		*cpu.Requests.Percentile != 95 || cpu.Window != "168h" || !cpu.Limits.KeepLimit {
+		t.Errorf("policy %q, effective %+v; want p's coordination, the override's headroom and the defaults", res.Policy, res.Effective)
+	}
+	if _, ok := recommender.TracedCoordination(res.Trace["main"].CPU); !ok {
+		t.Errorf("trace = %+v, want the Simulation's own, with its coordination stage", res.Trace["main"])
+	}
+}
+
+// A Simulation can start from any Policy instead of the governing one.
+func TestRunSimulation_StartsFromTheChosenPolicy(t *testing.T) {
+	srv := newCoordinatedSimulateServer(t)
+	uncoordinated := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "flat"}}
+	if err := srv.K8sClient.Create(context.Background(), uncoordinated); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	res, err := srv.runSimulation(context.Background(), simulateRequest{
+		Namespace: "default", OwnerKind: "Deployment", OwnerName: "web", Policy: "flat",
+	})
+	if err != nil {
+		t.Fatalf("runSimulation: %v", err)
+	}
+	if got := res.Containers["main"].CPURequest; res.Policy != "flat" || got != "1" {
+		t.Errorf("policy %q, cpu %q; want flat's uncoordinated 1 core", res.Policy, got)
+	}
+}
+
+// With no override, a Simulation hands Compute the Request the controller
+// would: the governing Policy's right-sizing spec, init containers excluded,
+// a kept request, and the autoscaler of the member it targets.
+func TestRunSimulation_WithoutOverrideComputesTheControllersRequest(t *testing.T) {
+	srv := newCoordinatedSimulateServer(t)
+	ctx := context.Background()
+	var policy sustainv1alpha1.Policy
+	if err := srv.K8sClient.Get(ctx, client.ObjectKey{Name: "p"}, &policy); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	policy.Spec.RightSizing.ExcludeInitContainers = true
+	policy.Spec.RightSizing.ResourcesConfigs.Memory.Requests.KeepRequest = true
+	if err := srv.K8sClient.Update(ctx, &policy); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	var green appsv1.Deployment
+	if err := srv.K8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "web-green"}, &green); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	green.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "migrate"}}
+	if err := srv.K8sClient.Update(ctx, &green); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	key := promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"}
+	srv.Inputs = recommendertest.NewStaticInputs().Set(key, &recommender.WorkloadInputs{
+		CPUPerPod: promclient.ContainerValues{"main": 1, "migrate": 0.5},
+		MemPerPod: promclient.ContainerValues{"main": 64 << 20, "migrate": 64 << 20},
+	})
+
+	res, err := srv.runSimulation(ctx, simulateRequest{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"})
+	if err != nil {
+		t.Fatalf("runSimulation: %v", err)
+	}
+
+	id, err := srv.identity(ctx, key)
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	a := recommender.Assemble(ctx, srv.Inputs, autoscaler.NewNamespacedSnapshot(srv.K8sClient), policy.Spec.RightSizing, []*inventory.Identity{id})[0]
+	want := recommender.Compute(a.Request)
+	if res.Outcome != simulationOutcome(want.Outcome) ||
+		!reflect.DeepEqual(res.Containers, simulationContainers(want, a.Request.Inputs())) ||
+		!equality.Semantic.DeepEqual(res.Trace, want.Traces) {
+		t.Errorf("simulation = %s %+v, want the controller's %v %+v", res.Outcome, res.Containers, want.Outcome, want.Recs)
+	}
+	if c := res.Containers["main"]; c.CPURequest != "2200m" || c.MemoryRequest != "" || len(res.Containers) != 1 {
+		t.Errorf("containers = %+v, want main alone, coordinated, with its memory request kept", res.Containers)
 	}
 }

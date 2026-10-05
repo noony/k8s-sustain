@@ -164,7 +164,7 @@ func TestOwnerNameGroupShowsUnionContainersAndEarliestAge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runSimulation: %v", err)
 	}
-	if res.TooYoung {
+	if res.Outcome == sustainv1alpha1.OutcomeTooYoung {
 		t.Error("TooYoung: the identity's age must run from its earliest member, not its newest")
 	}
 	if len(res.Resources) != 2 {

@@ -1,15 +1,24 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import {
   api,
+  ApiError,
   type PolicySummary,
-  type PolicySpec,
   type SimulationResult,
   type SimulateRequest,
+  type SimulationOverride,
+  type SimulationSettings,
   type RecommendationContainer,
   type ResourceLimitsConfig,
+  type WorkloadListData,
 } from '../lib/api'
-import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs, formatBytes } from '../lib/format'
+import {
+  outcomeLabels,
+  parseCPUQuantity,
+  parseMemoryQuantity,
+  parseStepToMs,
+  formatBytes,
+} from '../lib/format'
 import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
@@ -23,12 +32,12 @@ import { useTimeRange } from '../composables/useTimeRange'
 import { simulateRangeBody, resolveRange, DEFAULT_RANGE, type TimeRange } from '../lib/timerange'
 import DurationCombobox from '../components/DurationCombobox.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
+import RecommendationTrace from '../components/RecommendationTrace.vue'
 import KpiCard from '../components/KpiCard.vue'
 import ErrorState from '../components/ErrorState.vue'
 import EmptyState from '../components/EmptyState.vue'
 import PageHeader from '../components/PageHeader.vue'
 import Combobox from '../components/Combobox.vue'
-import { type WorkloadListData } from '../lib/api'
 
 const props = defineProps<{
   namespace?: string
@@ -40,38 +49,63 @@ const simNs = ref(props.namespace || '')
 const simKind = ref(props.kind || 'Deployment')
 const simName = ref(props.name || '')
 const { range } = useTimeRange()
-const cpuWindow = ref('168h')
-const memWindow = ref('168h')
-const cpuPct = ref(95)
-const cpuHr = ref(0)
-const cpuMin = ref('')
-const cpuMax = ref('')
-const memPct = ref(95)
-const memHr = ref(0)
-const memMin = ref('')
-const memMax = ref('')
 
-// Limits config — at most one of these modes is active per resource.
-// "Keep existing limit" is the default; it emits { keepLimit: true } so the
-// payload is always explicit (an unset limits field would be semantically
-// identical but introduces two synonyms in the UI).
+type Resource = 'cpu' | 'memory'
+const resources: { key: Resource; label: string; tag: string }[] = [
+  { key: 'cpu', label: 'CPU', tag: 'sim-tag-cpu' },
+  { key: 'memory', label: 'Memory', tag: 'sim-tag-mem' },
+]
+
 type LimitMode =
   'keepLimit' | 'noLimit' | 'equalsToRequest' | 'requestsLimitsRatio' | 'keepLimitRequestRatio'
-const cpuLimitMode = ref<LimitMode>('keepLimit')
-const cpuLimitRatio = ref(1)
-const memLimitMode = ref<LimitMode>('keepLimit')
-const memLimitRatio = ref(1)
+
+// Filled from the server's effective settings, never from defaults of its
+// own: the server alone knows the Policy and the recommender's defaults.
+interface ResourceForm {
+  window: string
+  percentile: number
+  headroom: number
+  minAllowed: string
+  maxAllowed: string
+  keepRequest: boolean
+  limitMode: LimitMode
+  limitRatio: number
+}
+function blankResource(): ResourceForm {
+  return {
+    window: '',
+    percentile: 0,
+    headroom: 0,
+    minAllowed: '',
+    maxAllowed: '',
+    keepRequest: false,
+    limitMode: 'keepLimit',
+    limitRatio: 1,
+  }
+}
+const form = reactive({
+  cpu: blankResource(),
+  memory: blankResource(),
+  coordination: false,
+  anchor: '',
+  excludeInit: false,
+})
+
+// The user's edits, sent as a merge patch onto the starting Policy's
+// settings; a field it does not name keeps the server's value.
+const override = ref<SimulationOverride>({})
+const basePolicy = ref('')
 
 const policies = ref<PolicySummary[]>([])
-const selectedPolicy = ref('')
 const simData = ref<SimulationResult | null>(null)
 const simError = ref('')
+const overrideError = ref('')
 const firstRun = ref(true)
 const simulating = ref(false)
 const liveMessage = ref('')
 const workloadList = ref<WorkloadListData['items']>([])
 
-function limitHelpText(mode: LimitMode, kind: 'cpu' | 'memory'): string {
+function limitHelpText(mode: LimitMode, kind: Resource): string {
   switch (mode) {
     case 'keepLimit':
       return 'Existing pod limits stay unchanged.'
@@ -90,70 +124,118 @@ function limitHelpText(mode: LimitMode, kind: 'cpu' | 'memory'): string {
   }
 }
 
-const cpuLimitHelp = computed(() => limitHelpText(cpuLimitMode.value, 'cpu'))
-const memLimitHelp = computed(() => limitHelpText(memLimitMode.value, 'memory'))
+type Path = string[]
 
-// Validation — mirrors the CRD constraints exactly so the user sees errors
-// inline instead of waiting for the backend 400.
-const WINDOW_RE = /^([0-9]+(m|h|d|w|y))+$/
-const QUANTITY_RE = /^[+-]?(\d+(\.\d*)?|\.\d+)(e[+-]?\d+|[EPTGMK]i?|m|n|u)?$/
-
-function validateWindow(s: string): string {
-  if (!s) return ''
-  return WINDOW_RE.test(s) ? '' : 'Must be a Prometheus duration (e.g. 168h, 7d, 1h30m)'
-}
-function validateQuantity(s: string): string {
-  if (!s) return ''
-  return QUANTITY_RE.test(s) ? '' : 'Invalid Kubernetes quantity (e.g. 100m, 64Mi, 2Gi)'
-}
-function validateMinMax(min: string, max: string, parser: (s: string) => number): string {
-  if (!min || !max) return ''
-  const lo = parser(min)
-  const hi = parser(max)
-  if (isNaN(lo) || isNaN(hi)) return ''
-  return lo > hi ? 'Min must be ≤ Max' : ''
-}
-function validateRatio(r: number): string {
-  return r >= 1 ? '' : 'Ratio must be ≥ 1'
+function valueAt(obj: unknown, path: Path): unknown {
+  return path.reduce<unknown>(
+    (o, k) => (o != null && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined),
+    obj,
+  )
 }
 
-const cpuWindowError = computed(() => validateWindow(cpuWindow.value))
-const memWindowError = computed(() => validateWindow(memWindow.value))
-const cpuMinError = computed(() => validateQuantity(cpuMin.value))
-const cpuMaxError = computed(() => validateQuantity(cpuMax.value))
-const cpuMinMaxError = computed(() =>
-  cpuMinError.value || cpuMaxError.value
-    ? ''
-    : validateMinMax(cpuMin.value, cpuMax.value, parseCPUQuantity),
-)
-const memMinError = computed(() => validateQuantity(memMin.value))
-const memMaxError = computed(() => validateQuantity(memMax.value))
-const memMinMaxError = computed(() =>
-  memMinError.value || memMaxError.value
-    ? ''
-    : validateMinMax(memMin.value, memMax.value, parseMemoryQuantity),
-)
-const cpuRatioError = computed(() =>
-  cpuLimitMode.value === 'requestsLimitsRatio' ? validateRatio(cpuLimitRatio.value) : '',
-)
-const memRatioError = computed(() =>
-  memLimitMode.value === 'requestsLimitsRatio' ? validateRatio(memLimitRatio.value) : '',
-)
-const hasValidationErrors = computed(
-  () =>
-    !!(
-      cpuWindowError.value ||
-      memWindowError.value ||
-      cpuMinError.value ||
-      cpuMaxError.value ||
-      cpuMinMaxError.value ||
-      memMinError.value ||
-      memMaxError.value ||
-      memMinMaxError.value ||
-      cpuRatioError.value ||
-      memRatioError.value
-    ),
-)
+function edited(path: Path): boolean {
+  return valueAt(override.value, path) !== undefined
+}
+
+function edit(path: Path, value: unknown) {
+  let o = override.value as Record<string, unknown>
+  for (const k of path.slice(0, -1)) {
+    if (o[k] == null || typeof o[k] !== 'object') o[k] = {}
+    o = o[k] as Record<string, unknown>
+  }
+  o[path[path.length - 1]] = value
+  scheduleSimulation()
+}
+
+const resourcePath = (r: Resource, ...p: string[]): Path => ['resourcesConfigs', r, ...p]
+
+function setWindow(r: Resource, v: string) {
+  form[r].window = v
+  edit(resourcePath(r, 'window'), v)
+}
+function setRequest(r: Resource, key: 'percentile' | 'headroom', v: number) {
+  form[r][key] = v
+  edit(resourcePath(r, 'requests', key), v)
+}
+function setBound(r: Resource, key: 'minAllowed' | 'maxAllowed', v: string) {
+  form[r][key] = v
+  edit(resourcePath(r, 'requests', key), v || null)
+}
+// A kept request takes no percentile, headroom or bounds; letting it go
+// again hands them back to the Policy.
+function setKeepRequest(r: Resource, keep: boolean) {
+  form[r].keepRequest = keep
+  edit(
+    resourcePath(r, 'requests'),
+    keep
+      ? { keepRequest: true, percentile: null, headroom: null, minAllowed: null, maxAllowed: null }
+      : { keepRequest: false },
+  )
+}
+// The limit strategy is one choice: every other one is cleared.
+function setLimit(r: Resource, mode: LimitMode, ratio: number) {
+  form[r].limitMode = mode
+  form[r].limitRatio = ratio
+  edit(resourcePath(r, 'limits'), {
+    equalsToRequest: mode === 'equalsToRequest',
+    keepLimit: mode === 'keepLimit',
+    keepLimitRequestRatio: mode === 'keepLimitRequestRatio',
+    noLimit: mode === 'noLimit',
+    requestsLimitsRatio: mode === 'requestsLimitsRatio' ? ratio : null,
+  })
+}
+function setCoordination(enabled: boolean) {
+  form.coordination = enabled
+  edit(['autoscalerCoordination', 'enabled'], enabled)
+}
+function setAnchor(v: string) {
+  form.anchor = v
+  edit(['autoscalerCoordination', 'replicaBudgetAnchor'], v === '' ? null : Number(v))
+}
+function setExcludeInit(v: boolean) {
+  form.excludeInit = v
+  edit(['excludeInitContainers'], v)
+}
+
+function limitModeOf(lim: ResourceLimitsConfig | undefined): LimitMode {
+  if (lim?.noLimit) return 'noLimit'
+  if (lim?.equalsToRequest) return 'equalsToRequest'
+  if (lim?.keepLimitRequestRatio) return 'keepLimitRequestRatio'
+  if (typeof lim?.requestsLimitsRatio === 'number') return 'requestsLimitsRatio'
+  return 'keepLimit'
+}
+
+// Never over a control the user edited: the response may predate the edit.
+function fill(eff: SimulationSettings) {
+  for (const { key: r } of resources) {
+    const c = eff.resourcesConfigs[r] ?? {}
+    const f = form[r]
+    const fresh = (...p: string[]) => !edited(resourcePath(r, ...p))
+    if (fresh('window')) f.window = c.window ?? ''
+    if (fresh('requests', 'keepRequest')) f.keepRequest = !!c.requests?.keepRequest
+    if (fresh('requests', 'percentile')) f.percentile = c.requests?.percentile ?? f.percentile
+    if (fresh('requests', 'headroom')) f.headroom = c.requests?.headroom ?? f.headroom
+    if (fresh('requests', 'minAllowed')) f.minAllowed = c.requests?.minAllowed ?? ''
+    if (fresh('requests', 'maxAllowed')) f.maxAllowed = c.requests?.maxAllowed ?? ''
+    if (fresh('limits')) {
+      f.limitMode = limitModeOf(c.limits)
+      f.limitRatio = c.limits?.requestsLimitsRatio ?? f.limitRatio
+    }
+  }
+  if (!edited(['autoscalerCoordination', 'enabled']))
+    form.coordination = !!eff.autoscalerCoordination.enabled
+  if (!edited(['autoscalerCoordination', 'replicaBudgetAnchor'])) {
+    const a = eff.autoscalerCoordination.replicaBudgetAnchor
+    form.anchor = a == null ? '' : String(a)
+  }
+  if (!edited(['excludeInitContainers'])) form.excludeInit = !!eff.excludeInitContainers
+}
+
+const startingPoint = computed(() => {
+  if (!simData.value) return ''
+  if (simData.value.policy) return `Starting from policy ${simData.value.policy}`
+  return 'No policy governs this workload: starting from the recommender defaults'
+})
 
 const namespaceOptions = computed(() =>
   Array.from(new Set(workloadList.value.map((w) => w.namespace))),
@@ -228,79 +310,23 @@ async function loadPolicies() {
   }
 }
 
-function limitModeFromCfg(lim: ResourceLimitsConfig | undefined): {
-  mode: LimitMode
-  ratio: number
-} {
-  if (!lim) return { mode: 'keepLimit', ratio: 1 }
-  if (lim.keepLimit) return { mode: 'keepLimit', ratio: 1 }
-  if (lim.noLimit) return { mode: 'noLimit', ratio: 1 }
-  if (lim.equalsToRequest) return { mode: 'equalsToRequest', ratio: 1 }
-  if (lim.keepLimitRequestRatio) return { mode: 'keepLimitRequestRatio', ratio: 1 }
-  if (typeof lim.requestsLimitsRatio === 'number') {
-    return { mode: 'requestsLimitsRatio', ratio: lim.requestsLimitsRatio }
-  }
-  return { mode: 'keepLimit', ratio: 1 }
+function startFrom(policy: string) {
+  basePolicy.value = policy
+  resetOverride()
 }
 
-async function loadPolicyConfig(policyName: string) {
-  if (!policyName) return
-  try {
-    const p = await api<PolicySpec>(`/api/policies/${encodeURIComponent(policyName)}`)
-    const rs = p.spec?.rightSizing?.resourcesConfigs || {}
-    const cpuCfg = rs.cpu || {}
-    const memCfg = rs.memory || {}
-    const cpuReq = cpuCfg.requests || {}
-    const memReq = memCfg.requests || {}
-
-    cpuPct.value = cpuReq.percentile || 95
-    cpuHr.value = cpuReq.headroom || 0
-    cpuMin.value = cpuReq.minAllowed || ''
-    cpuMax.value = cpuReq.maxAllowed || ''
-    memPct.value = memReq.percentile || 95
-    memHr.value = memReq.headroom || 0
-    memMin.value = memReq.minAllowed || ''
-    memMax.value = memReq.maxAllowed || ''
-    if (cpuCfg.window) cpuWindow.value = cpuCfg.window
-    if (memCfg.window) memWindow.value = memCfg.window
-    const cpuLim = limitModeFromCfg(cpuCfg.limits)
-    cpuLimitMode.value = cpuLim.mode
-    cpuLimitRatio.value = cpuLim.ratio
-    const memLim = limitModeFromCfg(memCfg.limits)
-    memLimitMode.value = memLim.mode
-    memLimitRatio.value = memLim.ratio
-
-    scheduleSimulation()
-  } catch (e) {
-    console.error('Failed to load policy:', e)
-  }
-}
-
-function buildLimitsPayload(mode: LimitMode, ratio: number) {
-  switch (mode) {
-    case 'keepLimit':
-      return { keepLimit: true }
-    case 'noLimit':
-      return { noLimit: true }
-    case 'equalsToRequest':
-      return { equalsToRequest: true }
-    case 'keepLimitRequestRatio':
-      return { keepLimitRequestRatio: true }
-    case 'requestsLimitsRatio':
-      return { requestsLimitsRatio: ratio }
-  }
+function resetOverride() {
+  override.value = {}
+  scheduleSimulation()
 }
 
 function scheduleSimulation() {
   if (debounceTimer) clearTimeout(debounceTimer)
-  if (hasValidationErrors.value) {
-    simulating.value = false
-    return
-  }
   debounceTimer = setTimeout(runSimulation, 400)
 }
 
 async function runSimulation() {
+  debounceTimer = null
   if (!simNs.value || !simName.value) {
     simData.value = null
     simulating.value = false
@@ -317,15 +343,9 @@ async function runSimulation() {
     ownerKind: simKind.value,
     ownerName: simName.value,
     ...simulateRangeBody(range.value, Date.now()),
-    cpu: { percentile: cpuPct.value, headroom: cpuHr.value, window: cpuWindow.value },
-    memory: { percentile: memPct.value, headroom: memHr.value, window: memWindow.value },
+    override: override.value,
   }
-  if (cpuMin.value) body.cpu.minAllowed = cpuMin.value
-  if (cpuMax.value) body.cpu.maxAllowed = cpuMax.value
-  if (memMin.value) body.memory.minAllowed = memMin.value
-  if (memMax.value) body.memory.maxAllowed = memMax.value
-  body.cpu.limits = buildLimitsPayload(cpuLimitMode.value, cpuLimitRatio.value)
-  body.memory.limits = buildLimitsPayload(memLimitMode.value, memLimitRatio.value)
+  if (basePolicy.value) body.policy = basePolicy.value
 
   try {
     const data = await api<SimulationResult>('/api/simulate', {
@@ -338,19 +358,25 @@ async function runSimulation() {
 
     simData.value = data
     simError.value = ''
+    overrideError.value = ''
     firstRun.value = false
     simulating.value = false
     liveMessage.value = `Simulation updated for ${simNs.value}/${simName.value}`
+    fill(data.effective)
 
     await nextTick()
     renderCharts(data)
   } catch (e: any) {
-    if (id === requestId) {
-      simError.value = e.message
-      simulating.value = false
-      liveMessage.value = `Simulation failed: ${e.message}`
-      destroyAllCharts()
+    if (id !== requestId) return
+    simulating.value = false
+    liveMessage.value = `Simulation failed: ${e.message}`
+    // An override the server rejects leaves the last results up.
+    if (e instanceof ApiError && e.status === 400 && simData.value) {
+      overrideError.value = e.message
+      return
     }
+    simError.value = e.message
+    destroyAllCharts()
   }
 }
 
@@ -525,29 +551,7 @@ async function trySample() {
   }
 }
 
-watch(
-  [
-    simNs,
-    simKind,
-    simName,
-    range,
-    cpuWindow,
-    memWindow,
-    cpuPct,
-    cpuHr,
-    cpuMin,
-    cpuMax,
-    cpuLimitMode,
-    cpuLimitRatio,
-    memPct,
-    memHr,
-    memMin,
-    memMax,
-    memLimitMode,
-    memLimitRatio,
-  ],
-  scheduleSimulation,
-)
+watch([simNs, simKind, simName, range], scheduleSimulation)
 
 // Drag-to-zoom sets the shared range to the selected window — updating the URL
 // + picker and re-running the simulation at finer resolution. The previous
@@ -626,208 +630,197 @@ onUnmounted(() => {
   </div>
 
   <!-- Configuration -->
-  <div class="card">
+  <div v-if="simData" class="card">
     <div class="card-header">
       <h2>Configuration</h2>
       <div class="row">
         <span v-if="simulating" class="simulating-pill" aria-hidden="true">Simulating…</span>
         <div class="sr-only" aria-live="polite" aria-atomic="true">{{ liveMessage }}</div>
         <div class="sim-policy-loader">
-          <label for="sim-policy">Load from policy</label>
+          <label for="sim-policy">Start from</label>
           <select
             id="sim-policy"
-            v-model="selectedPolicy"
-            @change="loadPolicyConfig(selectedPolicy)"
+            :value="basePolicy"
+            @change="startFrom(($event.target as HTMLSelectElement).value)"
           >
-            <option value="">Select a policy</option>
+            <option value="">Governing policy</option>
             <option v-for="p in policies" :key="p.name" :value="p.name">{{ p.name }}</option>
           </select>
+        </div>
+        <button
+          class="btn btn-secondary btn-sm"
+          type="button"
+          data-test="reset-override"
+          @click="resetOverride"
+        >
+          Reset
+        </button>
+      </div>
+    </div>
+    <p class="form-helper sim-starting-point" data-test="starting-point">{{ startingPoint }}</p>
+    <p v-if="overrideError" class="form-error" role="alert" data-test="override-error">
+      {{ overrideError }}
+    </p>
+
+    <div class="sim-grid">
+      <div v-for="r in resources" :key="r.key" class="sim-section">
+        <h3>
+          <span class="sim-section-tag" :class="r.tag">{{ r.label }}</span> Configuration
+        </h3>
+        <div class="sim-subsection">
+          <div class="sim-subsection-title">Requests</div>
+          <div class="form-group">
+            <label>Window</label>
+            <DurationCombobox
+              :model-value="form[r.key].window"
+              @update:model-value="(v: string) => setWindow(r.key, v)"
+            />
+          </div>
+          <label class="sim-check">
+            <input
+              type="checkbox"
+              :checked="form[r.key].keepRequest"
+              :data-test="r.key + '-keep-request'"
+              @change="setKeepRequest(r.key, ($event.target as HTMLInputElement).checked)"
+            />
+            Keep the current request
+          </label>
+          <template v-if="!form[r.key].keepRequest">
+            <div class="form-group">
+              <label>Percentile</label>
+              <div class="slider-row">
+                <input
+                  type="range"
+                  :value="form[r.key].percentile"
+                  min="50"
+                  max="100"
+                  :aria-label="r.label + ' percentile'"
+                  :aria-valuetext="form[r.key].percentile + ' percent'"
+                  :data-test="r.key + '-percentile'"
+                  @input="
+                    setRequest(
+                      r.key,
+                      'percentile',
+                      Number(($event.target as HTMLInputElement).value),
+                    )
+                  "
+                />
+                <span class="slider-value">{{ form[r.key].percentile }}%</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Headroom</label>
+              <div class="slider-row">
+                <input
+                  type="range"
+                  :value="form[r.key].headroom"
+                  min="0"
+                  max="100"
+                  :aria-label="r.label + ' headroom'"
+                  :aria-valuetext="form[r.key].headroom + ' percent'"
+                  @input="
+                    setRequest(r.key, 'headroom', Number(($event.target as HTMLInputElement).value))
+                  "
+                />
+                <span class="slider-value">{{ form[r.key].headroom }}%</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Min Allowed</label>
+              <input
+                type="text"
+                :value="form[r.key].minAllowed"
+                :placeholder="r.key === 'cpu' ? 'e.g. 50m' : 'e.g. 64Mi'"
+                @input="setBound(r.key, 'minAllowed', ($event.target as HTMLInputElement).value)"
+              />
+            </div>
+            <div class="form-group">
+              <label>Max Allowed</label>
+              <input
+                type="text"
+                :value="form[r.key].maxAllowed"
+                :placeholder="r.key === 'cpu' ? 'e.g. 4000m' : 'e.g. 8Gi'"
+                @input="setBound(r.key, 'maxAllowed', ($event.target as HTMLInputElement).value)"
+              />
+            </div>
+          </template>
+        </div>
+        <div class="sim-subsection">
+          <div class="sim-subsection-title">Limits</div>
+          <div class="form-group">
+            <label :for="r.key + '-limit-mode'">Mode</label>
+            <select
+              :id="r.key + '-limit-mode'"
+              :value="form[r.key].limitMode"
+              :aria-describedby="r.key + '-limit-help'"
+              @change="
+                setLimit(
+                  r.key,
+                  ($event.target as HTMLSelectElement).value as LimitMode,
+                  form[r.key].limitRatio,
+                )
+              "
+            >
+              <option value="keepLimit">Keep existing limit</option>
+              <option value="noLimit">Remove limit</option>
+              <option value="equalsToRequest">Equal to request</option>
+              <option value="requestsLimitsRatio">Multiple of request</option>
+              <option value="keepLimitRequestRatio">Preserve current limit/request ratio</option>
+            </select>
+            <p :id="r.key + '-limit-help'" class="form-helper">
+              {{ limitHelpText(form[r.key].limitMode, r.key) }}
+            </p>
+          </div>
+          <div v-if="form[r.key].limitMode === 'requestsLimitsRatio'" class="form-group">
+            <label>Ratio (limit ÷ request)</label>
+            <input
+              type="number"
+              inputmode="decimal"
+              placeholder="e.g. 1.5"
+              :value="form[r.key].limitRatio"
+              @input="
+                setLimit(
+                  r.key,
+                  'requestsLimitsRatio',
+                  Number(($event.target as HTMLInputElement).value),
+                )
+              "
+            />
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="sim-grid">
-      <!-- CPU -->
-      <div class="sim-section">
-        <h3><span class="sim-section-tag sim-tag-cpu">CPU</span> Configuration</h3>
-        <div class="sim-subsection">
-          <div class="sim-subsection-title">Requests</div>
-          <div class="form-group" :class="{ 'has-error': cpuWindowError }">
-            <label>Window</label>
-            <DurationCombobox v-model="cpuWindow" />
-            <p v-if="cpuWindowError" class="form-error" role="alert">{{ cpuWindowError }}</p>
-          </div>
-          <div class="form-group">
-            <label>Percentile</label>
-            <div class="slider-row">
-              <input
-                type="range"
-                v-model.number="cpuPct"
-                min="50"
-                max="100"
-                aria-label="CPU percentile"
-                :aria-valuetext="cpuPct + ' percent'"
-              />
-              <span class="slider-value">{{ cpuPct }}%</span>
-            </div>
-          </div>
-          <div class="form-group">
-            <label>Headroom</label>
-            <div class="slider-row">
-              <input
-                type="range"
-                v-model.number="cpuHr"
-                min="0"
-                max="100"
-                aria-label="CPU headroom"
-                :aria-valuetext="cpuHr + ' percent'"
-              />
-              <span class="slider-value">{{ cpuHr }}%</span>
-            </div>
-          </div>
-          <div class="form-group" :class="{ 'has-error': cpuMinError }">
-            <label>Min Allowed</label>
-            <input
-              v-model="cpuMin"
-              type="text"
-              placeholder="e.g. 50m"
-              :aria-invalid="!!cpuMinError"
-            />
-            <p v-if="cpuMinError" class="form-error" role="alert">{{ cpuMinError }}</p>
-          </div>
-          <div class="form-group" :class="{ 'has-error': cpuMaxError || cpuMinMaxError }">
-            <label>Max Allowed</label>
-            <input
-              v-model="cpuMax"
-              type="text"
-              placeholder="e.g. 4000m"
-              :aria-invalid="!!(cpuMaxError || cpuMinMaxError)"
-            />
-            <p v-if="cpuMaxError" class="form-error" role="alert">{{ cpuMaxError }}</p>
-            <p v-else-if="cpuMinMaxError" class="form-error" role="alert">{{ cpuMinMaxError }}</p>
-          </div>
-        </div>
-        <div class="sim-subsection">
-          <div class="sim-subsection-title">Limits</div>
-          <div class="form-group">
-            <label for="cpu-limit-mode">Mode</label>
-            <select id="cpu-limit-mode" v-model="cpuLimitMode" aria-describedby="cpu-limit-help">
-              <option value="keepLimit">Keep existing limit</option>
-              <option value="noLimit">Remove limit</option>
-              <option value="equalsToRequest">Equal to request</option>
-              <option value="requestsLimitsRatio">Multiple of request</option>
-              <option value="keepLimitRequestRatio">Preserve current limit/request ratio</option>
-            </select>
-            <p id="cpu-limit-help" class="form-helper">{{ cpuLimitHelp }}</p>
-          </div>
-          <div
-            v-if="cpuLimitMode === 'requestsLimitsRatio'"
-            class="form-group"
-            :class="{ 'has-error': cpuRatioError }"
-          >
-            <label>Ratio (limit ÷ request)</label>
-            <input
-              v-model.number="cpuLimitRatio"
-              type="number"
-              inputmode="decimal"
-              placeholder="e.g. 1.5"
-              :aria-invalid="!!cpuRatioError"
-            />
-            <p v-if="cpuRatioError" class="form-error" role="alert">{{ cpuRatioError }}</p>
-          </div>
-        </div>
+    <div class="sim-section sim-shared">
+      <h3>Workload</h3>
+      <label class="sim-check">
+        <input
+          type="checkbox"
+          :checked="form.coordination"
+          data-test="coordination"
+          @change="setCoordination(($event.target as HTMLInputElement).checked)"
+        />
+        Coordinate with the autoscaler
+      </label>
+      <div v-if="form.coordination" class="form-group">
+        <label>Replica budget anchor (0–1)</label>
+        <input
+          type="number"
+          inputmode="decimal"
+          step="0.05"
+          placeholder="no replica correction"
+          :value="form.anchor"
+          @input="setAnchor(($event.target as HTMLInputElement).value)"
+        />
       </div>
-
-      <!-- Memory -->
-      <div class="sim-section">
-        <h3><span class="sim-section-tag sim-tag-mem">Memory</span> Configuration</h3>
-        <div class="sim-subsection">
-          <div class="sim-subsection-title">Requests</div>
-          <div class="form-group" :class="{ 'has-error': memWindowError }">
-            <label>Window</label>
-            <DurationCombobox v-model="memWindow" />
-            <p v-if="memWindowError" class="form-error" role="alert">{{ memWindowError }}</p>
-          </div>
-          <div class="form-group">
-            <label>Percentile</label>
-            <div class="slider-row">
-              <input
-                type="range"
-                v-model.number="memPct"
-                min="50"
-                max="100"
-                aria-label="Memory percentile"
-                :aria-valuetext="memPct + ' percent'"
-              />
-              <span class="slider-value">{{ memPct }}%</span>
-            </div>
-          </div>
-          <div class="form-group">
-            <label>Headroom</label>
-            <div class="slider-row">
-              <input
-                type="range"
-                v-model.number="memHr"
-                min="0"
-                max="100"
-                aria-label="Memory headroom"
-                :aria-valuetext="memHr + ' percent'"
-              />
-              <span class="slider-value">{{ memHr }}%</span>
-            </div>
-          </div>
-          <div class="form-group" :class="{ 'has-error': memMinError }">
-            <label>Min Allowed</label>
-            <input
-              v-model="memMin"
-              type="text"
-              placeholder="e.g. 64Mi"
-              :aria-invalid="!!memMinError"
-            />
-            <p v-if="memMinError" class="form-error" role="alert">{{ memMinError }}</p>
-          </div>
-          <div class="form-group" :class="{ 'has-error': memMaxError || memMinMaxError }">
-            <label>Max Allowed</label>
-            <input
-              v-model="memMax"
-              type="text"
-              placeholder="e.g. 8Gi"
-              :aria-invalid="!!(memMaxError || memMinMaxError)"
-            />
-            <p v-if="memMaxError" class="form-error" role="alert">{{ memMaxError }}</p>
-            <p v-else-if="memMinMaxError" class="form-error" role="alert">{{ memMinMaxError }}</p>
-          </div>
-        </div>
-        <div class="sim-subsection">
-          <div class="sim-subsection-title">Limits</div>
-          <div class="form-group">
-            <label for="mem-limit-mode">Mode</label>
-            <select id="mem-limit-mode" v-model="memLimitMode" aria-describedby="mem-limit-help">
-              <option value="keepLimit">Keep existing limit</option>
-              <option value="noLimit">Remove limit</option>
-              <option value="equalsToRequest">Equal to request</option>
-              <option value="requestsLimitsRatio">Multiple of request</option>
-              <option value="keepLimitRequestRatio">Preserve current limit/request ratio</option>
-            </select>
-            <p id="mem-limit-help" class="form-helper">{{ memLimitHelp }}</p>
-          </div>
-          <div
-            v-if="memLimitMode === 'requestsLimitsRatio'"
-            class="form-group"
-            :class="{ 'has-error': memRatioError }"
-          >
-            <label>Ratio (limit ÷ request)</label>
-            <input
-              v-model.number="memLimitRatio"
-              type="number"
-              inputmode="decimal"
-              placeholder="e.g. 1.5"
-              :aria-invalid="!!memRatioError"
-            />
-            <p v-if="memRatioError" class="form-error" role="alert">{{ memRatioError }}</p>
-          </div>
-        </div>
-      </div>
+      <label class="sim-check">
+        <input
+          type="checkbox"
+          :checked="form.excludeInit"
+          @change="setExcludeInit(($event.target as HTMLInputElement).checked)"
+        />
+        Exclude init containers
+      </label>
     </div>
   </div>
 
@@ -858,6 +851,9 @@ onUnmounted(() => {
     <template v-else>
       <div class="card">
         <div class="card-header"><h2>Savings impact</h2></div>
+        <p v-if="simData.outcome !== 'Computed'" class="form-helper" data-test="sim-outcome">
+          {{ outcomeLabels[simData.outcome] }}: the controller would not apply this yet.
+        </p>
         <div class="stats-row">
           <KpiCard label="CPU change" :value="cpuDeltaSummary()" :tone="cpuDeltaTone()" />
           <KpiCard label="Memory change" :value="memDeltaSummary()" :tone="memDeltaTone()" />
@@ -867,6 +863,10 @@ onUnmounted(() => {
         <div class="card-header">
           <h2>Simulation Results</h2>
         </div>
+        <p class="form-helper">
+          Computed from Prometheus alone: an OOM kill the controller's watcher saw in the last 30
+          minutes, not yet in Prometheus, raises the controller's memory floor but not this one.
+        </p>
         <div v-if="simAllContainers().length > 0" class="rec-grid">
           <div
             v-for="{ name: cname, rec, isInit } in simAllContainers()"
@@ -913,6 +913,7 @@ onUnmounted(() => {
                 resource-type="memory"
               />
             </div>
+            <RecommendationTrace v-if="simData.trace?.[cname]" :trace="simData.trace[cname]" />
           </div>
         </div>
       </div>
