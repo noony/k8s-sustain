@@ -17,7 +17,9 @@ pods; or on a pod template, for owned workloads) does two things:
 
 - The admission webhook mirrors the annotation onto a pod **label** of the
   same name, so the value must also be a valid label value (RFC 1123, 63
-  characters or fewer).
+  characters or fewer). It does so on every admission it sees, whatever it
+  decides about resources: a pod that opts out, that no Policy governs, or
+  whose admission fails a read is still labelled.
 - kube-state-metrics (configured via `metricLabelsAllowlist` in the chart's
   `values.yaml`) exposes that label in `kube_pod_labels`, which a recording
   rule folds into `k8s_sustain:pod_workload`. Without it the override has no

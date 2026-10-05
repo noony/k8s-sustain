@@ -49,7 +49,7 @@ Every `k8s.sustain.io/` key the operator reads or writes:
 | `k8s.sustain.io/policy` | annotation | pod template, workload, Namespace, bare Pod | you | Opts into the named Policy. See [Resolution order](#resolution-order). |
 | `k8s.sustain.io/opt-out` | annotation | pod template, workload, Namespace, bare Pod | you | `"true"` stops resolution with no policy. |
 | `k8s.sustain.io/owner-name` | annotation | pod template, bare Pod | you | Overrides the workload identity: a bare Pod becomes kind `Pod` with this name; pods with a real owner are grouped under this name. Must be a valid label value (RFC 1123, ≤ 63 chars); invalid or empty values are ignored. Read from the pod template only, never from workload metadata. See [Standalone Pods & Identity Grouping](../guides/standalone-pods-and-grouping.md). |
-| `k8s.sustain.io/owner-name` | label | Pod | webhook | Mirror of the annotation, added at admission so kube-state-metrics (`kube_pod_labels`) exposes it to the recording rules. |
+| `k8s.sustain.io/owner-name` | label | Pod | webhook | Mirror of the annotation, added on every admission the webhook sees, governed or not, so kube-state-metrics (`kube_pod_labels`) exposes it to the recording rules. |
 | `k8s.sustain.io/policy` | label | `WorkloadRecommendation` | controller, webhook | Policy that produced the recommendation; used to scope list calls. |
 | `k8s.sustain.io/stub` | label | `WorkloadRecommendation` | webhook | `"true"` on a [cold-start stub](../concepts/workload-recommendations.md#cold-start-stub-recommendations) created at admission. Provenance only. |
 | `k8s.sustain.io/cleanup` | finalizer | `Policy` | controller | Deletes the policy's `WorkloadRecommendation`s and metric series before the Policy is removed. |

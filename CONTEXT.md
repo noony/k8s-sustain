@@ -38,7 +38,7 @@ The stored record of one identity's Recommendation, the Policy that computed it,
 _Avoid_: cache entry, wlrec (outside kubectl)
 
 **Recommendation**:
-The requests and limits an identity's pods should run, as held in its WorkloadRecommendation. It is served only to pods of the Policy that computed it: an identity another Policy adopts gets none until that Policy computes its own. Applying it (resizing, evicting, injecting) is a separate step that recommend-only, OnCreate or a suppressed decrease can withhold.
+The requests and limits an identity's pods should run, as held in its WorkloadRecommendation. It is served only to pods of the Policy that computed it: an identity another Policy adopts gets none until that Policy computes its own. Applying it (resizing, evicting, injecting) is a separate step that recommend-only, OnCreate or a suppressed decrease can withhold, and it never leaves a container's request above its limit: where it would, the limit is raised to the request.
 _Avoid_: applied recommendation, current recommendation
 
 **Signal**:

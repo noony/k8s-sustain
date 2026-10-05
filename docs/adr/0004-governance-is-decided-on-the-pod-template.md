@@ -25,5 +25,5 @@ Four readers need to know which Policy governs a pod or a pod template: the inve
 - Breaking: a `labelSelector` that matched labels present only on a workload object's own metadata stops matching. Its labels belong on the pod template.
 - Labels the workload controller adds to pods (`pod-template-hash`, `controller-uid`, `batch.kubernetes.io/job-name`, `statefulset.kubernetes.io/pod-name`, …) are not on the pod template, so the inventory never sees them while a pod reader may. A selector must not use them.
 - The webhook lists Policies from its informer cache on every admission that reads one, instead of getting one by name.
-- A webhook owner read that fails after the Policy accepted a pod now fails open like every other failed read, without the owner-name label mirror.
+- A webhook owner read that fails after the Policy accepted a pod now fails open like every other failed read. (The owner-name label is mirrored on every admission whatever governance decides; see the webhook's [admission flow](../concepts/architecture.md#admission-webhook-k8s-sustain-webhook).)
 - The OOM watcher no longer records a kill under a ReplicaSet when its owner lookup fails: no Policy governs a ReplicaSet. The termination stays unresolved, so the pod's next status event retries the lookup.

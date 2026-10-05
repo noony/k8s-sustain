@@ -140,7 +140,7 @@ Configured `averageUtilization` (%) of the autoscaler shaping the identity's rec
 
 #### `k8s_sustain_webhook_panic_total`
 
-Every panic the webhook recovered, by route pattern (e.g. `POST /mutate`), plus two non-route values, `singleflight/ownerRef` and `singleflight/ownerAnnotations`, for panics in the [owner-resolution caches](annotation.md#the-webhooks-cost-control-does-not-fully-bound-itself). Each is contained: that admission fails open. Any non-zero rate is a bug.
+Every panic the webhook recovered, by route pattern (e.g. `POST /mutate`), plus four non-route values: `singleflight/ownerRef` and `singleflight/ownerAnnotations` for panics in the [owner-resolution caches](annotation.md#the-webhooks-cost-control-does-not-fully-bound-itself), `admit/decide` for a panic while deciding an admission, and `stub/request` for one in the detached stub write. Each is contained: the admission fails open (a panic while deciding still admits the pod with its owner-name label), and a later admission of the identity asks for its stub again. Any non-zero rate is a bug.
 
 #### `k8s_sustain_webhook_recommendation_source_total`
 
