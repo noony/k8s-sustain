@@ -386,8 +386,9 @@ spec:
                   policy applies to.
                 properties:
                   labelSelector:
-                    description: LabelSelector restricts the set of workloads targeted
-                      by this policy; an empty selector matches all.
+                    description: |-
+                      LabelSelector restricts the set of workloads targeted by this policy to those whose pod template
+                      labels (a bare Pod's own labels) it matches; an empty selector matches all.
                     properties:
                       matchExpressions:
                         description: matchExpressions is a list of label selector

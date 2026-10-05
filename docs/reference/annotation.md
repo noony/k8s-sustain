@@ -1,4 +1,4 @@
-<!-- Source of truth: api/v1alpha1/policy_types.go (annotation and label constants) and internal/policymatch/resolve.go (ResolvePolicy) -->
+<!-- Source of truth: api/v1alpha1/policy_types.go (annotation and label constants) and internal/governance/governance.go (Decide) -->
 
 # Annotation Reference
 
@@ -14,7 +14,7 @@ metadata:
 
 ## Resolution order
 
-The controller, webhook, dashboard and OOM watcher all resolve the policy through `internal/policymatch.ResolvePolicy`, which reads three levels, most specific first:
+The controller, webhook, dashboard and OOM watcher all resolve the policy through `internal/governance.Decide`, which reads three levels, most specific first:
 
 | Level | Where | Notes |
 |---|---|---|
@@ -24,7 +24,7 @@ The controller, webhook, dashboard and OOM watcher all resolve the policy throug
 
 The first level that carries either a non-empty `k8s.sustain.io/policy` or `k8s.sustain.io/opt-out: "true"` decides; less specific levels are not read. An **empty** `k8s.sustain.io/policy` value falls through to the next level, so a Helm value that renders empty is not an opt-out.
 
-The annotation opts the workload in; the Policy must **also** accept it. A resolved policy applies only when its `spec.selector` (`namespaces` and `labelSelector`) matches the workload and the namespace is not in the operator's `--excluded-namespaces`. The annotation names the policy, the selector narrows it. This also makes Namespace opt-in delegated rather than sovereign: namespace owners choose among the policies whose selector already reaches them; they cannot grant themselves one.
+The annotation opts the workload in; the Policy must **also** accept it. A resolved policy applies only when it manages the workload's kind, its `spec.selector` matches the workload (`namespaces`, and `labelSelector` against the [pod template's labels](policy.md#specselectorlabelselector)) and the namespace is not in the operator's `--excluded-namespaces`. The annotation names the policy, the selector narrows it. This also makes Namespace opt-in delegated rather than sovereign: namespace owners choose among the policies whose selector already reaches them; they cannot grant themselves one.
 
 ### Opting out
 
@@ -208,15 +208,14 @@ kubectl annotate deployment my-app -n production \
 
 ## How the annotation is consumed
 
-Each component passes these levels to `ResolvePolicy`:
+Each component hands `governance.Decide` the pod template or pod it is deciding for, and a reader for the levels that subject does not carry. `Decide` reads a level only when every more specific one is silent, and before its first read it checks that some Policy's selector could accept the subject's namespace and labels at all — when none can, it reads nothing more.
 
-| Component | What it passes as the three levels |
-|-----------|-------------------------------------|
-| **Controller** | `workload.spec.template.metadata.annotations` (or `cronJob.spec.jobTemplate.spec.template.metadata.annotations`) as the pod-template level, the workload object's own `metadata.annotations`, and the Namespace's `metadata.annotations` |
-| **Webhook** | `pod.metadata.annotations` as the pod-template level (pods inherit it automatically, so this is usually all it needs); when the pod itself carries neither the policy nor the opt-out annotation, it also reads the owning workload's `metadata.annotations` and the Namespace's `metadata.annotations` before giving up |
-| **Dashboard** | the same three levels as the controller, read directly from the Kubernetes API for display and simulation |
-| **OOM watcher** | `pod.metadata.annotations`, the owning workload's `metadata.annotations`, and the Namespace's `metadata.annotations` — resolved lazily (the pod template first, since it costs nothing; the owner and Namespace reads are only paid for if it does not decide) on every fresh OOM kill, since a pod opted in above the pod-template level carries no annotation of its own for the watcher's event predicate to see (see [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher)) |
+| Component | Subject | How it reads the other levels |
+|-----------|---------|-------------------------------|
+| **Controller** and **dashboard** (through the inventory) | each workload's pod template (`spec.template`, or a CronJob's `spec.jobTemplate.spec.template`), carrying the workload object's own `metadata.annotations`; a bare Pod itself | the Namespace's `metadata.annotations`, read once per snapshot |
+| **Webhook** | the pod being admitted (pods inherit the pod-template annotations, so this is usually all it needs) | the owning workload and its `metadata.annotations` through ~30s TTL caches, the Namespace and the Policies from an informer cache |
+| **OOM watcher** | the OOM-killed pod, on every fresh kill — a pod opted in above the pod-template level carries no annotation of its own for the watcher's event predicate to see (see [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher)) | straight through the controller's client |
 
 ### The webhook's cost control does not fully bound itself
 
-When a Policy has an empty `selector`, every pod CREATE pays for up to two owner Gets (top-level owner, then its annotations for unannotated pods). Two ~30s TTL caches with `singleflight` collapse a rolling restart's burst to at most two Gets per owner, so a workload-level annotation change can take up to 30s to reach admission.
+When a Policy has an empty `selector`, the pre-check always passes, so every pod CREATE pays for up to two owner Gets (top-level owner, then its annotations for unannotated pods). Two ~30s TTL caches with `singleflight` collapse a rolling restart's burst to at most two Gets per owner, so a workload-level annotation change can take up to 30s to reach admission.

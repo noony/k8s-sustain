@@ -11,7 +11,7 @@ The unit a recommendation is computed for: one namespace, owner kind and owner n
 _Avoid_: target, entry, workload (when the unit is meant)
 
 **Member**:
-One live object (a Deployment, Job, bare Pod, …) that belongs to an identity. A member is governed by the Policy it opts into when that Policy exists, manages its kind and selects it. An identity's containers are the union of its governed members' containers, the newest member's winning for a container several declare, and its age runs from its earliest governed member or from when it was first seen, whichever is older. A finished standalone Job and a CronJob's Jobs are never members.
+One live object (a Deployment, Job, bare Pod, …) that belongs to an identity. A member is governed by the Policy it opts into when that Policy exists, manages its kind and selects it: accepts its namespace, and its pod template's labels (a bare Pod's own), never the object's own labels. An identity's containers are the union of its governed members' containers, the newest member's winning for a container several declare, and its age runs from its earliest governed member or from when it was first seen, whichever is older. A finished standalone Job and a CronJob's Jobs are never members.
 _Avoid_: representative
 
 **In-place-only kind**:

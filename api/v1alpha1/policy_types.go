@@ -243,7 +243,8 @@ type PolicySelector struct {
 	// Namespaces is a list of namespaces to target; an empty list targets all namespaces.
 	// +optional
 	Namespaces []string `json:"namespaces,omitempty"`
-	// LabelSelector restricts the set of workloads targeted by this policy; an empty selector matches all.
+	// LabelSelector restricts the set of workloads targeted by this policy to those whose pod template
+	// labels (a bare Pod's own labels) it matches; an empty selector matches all.
 	// +optional
 	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
 }

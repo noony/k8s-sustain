@@ -69,9 +69,9 @@ spec:
 
 ## `spec.selector`
 
-Restricts which namespaces and workloads this policy applies to. The selector only **narrows**: a workload must also opt in with the `k8s.sustain.io/policy` annotation (see [Resolution order](annotation.md#resolution-order)). The controller, webhook and dashboard all honour the same selector.
+Restricts which namespaces and workloads this policy applies to. The selector only **narrows**: a workload must also opt in with the `k8s.sustain.io/policy` annotation (see [Resolution order](annotation.md#resolution-order)). The controller, webhook, dashboard and OOM watcher decide it in one place (`internal/governance`, see [ADR 0004](../adr/0004-governance-is-decided-on-the-pod-template.md)), so they all honour the same selector.
 
-The controller and webhook also honour their operator-level `--excluded-namespaces` flag (see [CLI reference](./cli.md)); a workload in an excluded namespace is never managed regardless of selector configuration. If `spec.selector.labelSelector` is malformed, the webhook fails open (admits the pod without mutation and logs a warning) rather than denying it.
+The controller, webhook and OOM watcher also honour their operator-level `--excluded-namespaces` flag (see [CLI reference](./cli.md)); a workload in an excluded namespace is never managed regardless of selector configuration. A malformed `spec.selector.labelSelector` matches no pod template, so the policy governs no live workload, and the webhook fails open (admits the pod without mutation and logs a warning) rather than denying it.
 
 ### `spec.selector.namespaces`
 
@@ -89,7 +89,9 @@ spec:
 
 A standard Kubernetes [label selector](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors) that restricts which workloads are governed by this policy. An empty selector matches all workloads in the targeted namespaces.
 
-The controller matches against the workload object's `metadata.labels` (e.g. the `Deployment`'s own labels). The webhook matches against the *pod*'s labels (the pod template's `metadata.labels`, which become the labels of every replica).
+It matches the **pod template's** labels — `spec.template.metadata.labels` (a CronJob's `spec.jobTemplate.spec.template.metadata.labels`, a bare Pod's own `metadata.labels`), the labels every pod of the workload carries — never the workload object's own `metadata.labels`. Labels that only the `Deployment` carries select nothing; put them on its pod template.
+
+Labels the workload controller adds to pods (`pod-template-hash`, `controller-uid`, `batch.kubernetes.io/job-name`, `statefulset.kubernetes.io/pod-name`, …) are not on the pod template, so the controller never sees them while the webhook may. Do not select on them.
 
 ```yaml
 spec:

@@ -41,7 +41,7 @@ The controller requeues after `--reconcile-interval` (default `5m`).
 `internal/inventory` turns workload objects into **identities** — one namespace, kind and name, possibly spanning several objects under [owner-name grouping](../guides/standalone-pods-and-grouping.md) — and is the only place that does. The dashboard reads identities from it too, so both apply the same rules:
 
 - **Members** are the live objects of an identity. A finished standalone Job and a CronJob's Jobs are never members; a bare pod is one when it has no controller owner and a valid `k8s.sustain.io/owner-name`
-- Each member is **governed** by the Policy it opts into (see [resolution order](../reference/annotation.md#resolution-order)) when that Policy exists, manages its kind and its selector matches it
+- Each member is **governed** by the Policy it opts into (see [resolution order](../reference/annotation.md#resolution-order)) when that Policy exists, manages its kind and its selector matches it — its namespace and its pod template's labels. `internal/governance` makes that decision, for the webhook and the OOM watcher too ([ADR 0004](../adr/0004-governance-is-decided-on-the-pod-template.md))
 - An identity is governed by its members' Policy when they agree, and is **Conflicted** when they name different Policies — then no Policy governs it (see [Conflicted identities](workload-recommendations.md#conflicted-identities))
 - An identity with no member left but a `WorkloadRecommendation` is **Departed**; its Policy is the one its `WorkloadRecommendation` names, while that Policy still covers its namespace and kind
 - Its containers are the union of its governed members' containers (the newest member's declaration wins for a name several declare), and its age runs from its earliest member or from its `WorkloadRecommendation`'s creation, whichever is older
@@ -88,11 +88,11 @@ Up to `--policy-concurrency-limit` policies (10 by default) fetch at once, each 
 
 A second controller-runtime reconciler runs alongside the Policy reconciler and watches `Pod` objects cluster-wide, filtered by a local event predicate to those carrying the `k8s.sustain.io/policy` annotation OR a fresh `OOMKilled` container status. It exists to close the multi-minute latency window between an OOM kill and the next recording-rule-driven reconcile (kube-state-metrics scrape → Prometheus scrape → 1m rule evaluation → 5–10m reconcile interval).
 
-When a container's `LastTerminationState.Terminated.Reason == "OOMKilled"` is observed for a kill not already handled, the watcher resolves the pod's policy the same way every other reader does and, if the pod is managed by some policy:
+When a container's `LastTerminationState.Terminated.Reason == "OOMKilled"` is observed for a kill not already handled, the watcher decides which Policy governs the pod, through the same `internal/governance` decision as every other reader, and, if one does:
 
 - Resolves the pod's top-level workload owner and records the kill in an in-memory cache keyed by `(namespace, ownerKind, ownerName, container)`, deduplicated by restart count and termination time
 - Records the memory limit the kubelet had actually applied to the container (`ContainerStatus.Resources`, falling back to the pod spec), so the recommender has a bump anchor before Prometheus surfaces the OOM-time limit
-- Enqueues the owning Policy for immediate reconcile via a `source.Channel` wired into the Policy reconciler's work queue.
+- Enqueues the governing Policy for immediate reconcile via a `source.Channel` wired into the Policy reconciler's work queue, and counts the kill in `k8s_sustain_oom_observed_total`. A kill of a pod no Policy governs — one whose Policy does not select it, say — is neither recorded, nor counted, nor triggers anything.
 
 The recommender reads the cache when it computes an identity, and its [OOM floor signal](recommendation-pipeline.md#signals) merges what it finds with the Prometheus 24h window: a kill the watcher saw in the last 30 minutes counts as a recent OOM for that container only — equivalent to the per-container `workload_oom_24h` recency signal — and feeds the OOM-floor stage of the [Recommendation Pipeline](recommendation-pipeline.md#stages). The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.
 
@@ -106,23 +106,20 @@ The webhook is a [mutating admission webhook](https://kubernetes.io/docs/referen
 
 1. Pod creation request arrives at the API server
 2. API server calls `POST /mutate` on the webhook service
-3. Webhook resolves the pod's policy — see [resolution order](../reference/annotation.md#resolution-order)
-4. Fetches the named Policy and checks the pod matches its selector
-5. Resolves the pod's owner chain to determine the workload kind:
-   - `Pod → ReplicaSet → Deployment` or `Argo Rollout`
-   - `Pod → Job → CronJob`, or `Pod → Job` for a standalone Job
-   - `Pod → StatefulSet / DaemonSet`
-   - a `k8s.sustain.io/owner-name` annotation replaces the resolved name; on a pod with no controller owner it makes the pod a `Pod`-kind identity (see [Standalone Pods & Identity Grouping](../guides/standalone-pods-and-grouping.md))
-6. Checks that the policy manages that workload kind at all. Both `OnCreate` **and** `Ongoing` inject — otherwise an `Ongoing` pod would start on template resources and wait for a resize it does not need
-7. Reads the `WorkloadRecommendation` the controller already cached for that workload — the webhook itself never queries Prometheus — and takes `wlrcache.Read`'s [verdict](workload-recommendations.md#admission-behaviour) on it: inject, or why not. A Recommendation is injected only into pods of the Policy that computed it, and only while it is fresh (30 min) or, for a departed or Conflicted identity, retained
-8. If the verdict injects nothing, allows the pod through with its template resources unchanged. If there is **no object at all**, additionally creates a stub `WorkloadRecommendation` so the controller computes one for the next pod of this workload
-9. Narrows the cached recommendation to the containers present in this pod, matched by name. A container that already has resources set is *not* skipped — the patch replaces whatever the template specified
-10. If recommend-only is in effect, allows the pod through unchanged; otherwise returns an RFC 6902 JSON Patch with the recommended resources
-11. The API server applies the patch before persisting the pod
+3. Webhook decides which Policy governs the pod, as the controller does (`internal/governance`):
+   - resolves the pod's policy — see [resolution order](../reference/annotation.md#resolution-order)
+   - checks the Policy exists and its selector accepts the pod's namespace and labels
+   - resolves the pod's owner chain to determine the workload kind: `Pod → ReplicaSet → Deployment` or `Argo Rollout`, `Pod → Job → CronJob` (or `Pod → Job` for a standalone Job), `Pod → StatefulSet / DaemonSet`. A `k8s.sustain.io/owner-name` annotation replaces the resolved name; on a pod with no controller owner it makes the pod a `Pod`-kind identity (see [Standalone Pods & Identity Grouping](../guides/standalone-pods-and-grouping.md))
+   - checks that the policy manages that workload kind at all. Both `OnCreate` **and** `Ongoing` inject — otherwise an `Ongoing` pod would start on template resources and wait for a resize it does not need
+4. Reads the `WorkloadRecommendation` the controller already cached for that workload — the webhook itself never queries Prometheus — and takes `wlrcache.Read`'s [verdict](workload-recommendations.md#admission-behaviour) on it: inject, or why not. A Recommendation is injected only into pods of the Policy that computed it, and only while it is fresh (30 min) or, for a departed or Conflicted identity, retained
+5. If the verdict injects nothing, allows the pod through with its template resources unchanged. If there is **no object at all**, additionally creates a stub `WorkloadRecommendation` so the controller computes one for the next pod of this workload
+6. Narrows the cached recommendation to the containers present in this pod, matched by name. A container that already has resources set is *not* skipped — the patch replaces whatever the template specified
+7. If recommend-only is in effect, allows the pod through unchanged; otherwise returns an RFC 6902 JSON Patch with the recommended resources
+8. The API server applies the patch before persisting the pod
 
 The webhook **fails open** (`failurePolicy: Ignore` by default) — if it is unreachable or returns an error, the pod is admitted unchanged. See [Admission behaviour](workload-recommendations.md#admission-behaviour) for each outcome.
 
-**Latency budget.** The handler is bounded by a hard 4s deadline on the admission context (under the apiserver's 5s `MutatingWebhookConfiguration` timeout). The only outbound work in the admission path is a handful of Kubernetes API reads (Policy lookup, owner resolution, the `WorkloadRecommendation` read), each bounded by a 2s per-call timeout. `Policy`, `WorkloadRecommendation` and `Namespace` reads are served from an informer cache.
+**Latency budget.** The handler is bounded by a hard 4s deadline on the admission context (under the apiserver's 5s `MutatingWebhookConfiguration` timeout). The only outbound work in the admission path is a handful of Kubernetes API reads: the governance decision's (Policies, owner resolution, the owner's and the Namespace's annotations), which share one 2s budget, and the `WorkloadRecommendation` read, bounded by its own 2s timeout. `Policy`, `WorkloadRecommendation` and `Namespace` reads are served from an informer cache.
 
 **Stub writes (the webhook's only write).** The webhook computes nothing, so it never writes a recommendation. It does write one thing, the container snapshot of identities the controller cannot see. When a pod is admitted for a workload identity that has no `WorkloadRecommendation` at all, it creates an empty-status **stub** — recording the admitted pod's container set in `status.observedResources` — and admits the pod unchanged. Creating the object is what puts the identity into the controller's work-list; the [computation phase](#computation) fills in the recommendation on its next cycle, so the next pod of that workload is injected. For a departed identity, or one that never got a snapshot, it replaces the snapshot when the admitted pod's containers differ, so a short-lived identity is computed against its latest run rather than its first.
 
@@ -154,4 +151,4 @@ k8s-sustain ships recording rules that the controller and dashboard query. See [
 
 ## Policy selection
 
-Each workload explicitly opts into one policy through the `k8s.sustain.io/policy` annotation; the controller, webhook and dashboard resolve it through the same function. See [resolution order](../reference/annotation.md#resolution-order).
+Each workload explicitly opts into one policy through the `k8s.sustain.io/policy` annotation; the controller, webhook, dashboard and OOM watcher decide which Policy governs it through the same module, `internal/governance`. See [resolution order](../reference/annotation.md#resolution-order).

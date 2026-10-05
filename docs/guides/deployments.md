@@ -29,7 +29,7 @@ spec:
         limits:   { keepLimitRequestRatio: true }
 ```
 
-Both the annotation and the Policy's selector must match the workload — see [Resolution order](../reference/annotation.md#resolution-order).
+Both the annotation and the Policy's selector must match the workload — the selector its pod template's labels — see [Resolution order](../reference/annotation.md#resolution-order).
 
 ## What happens on each reconcile
 
