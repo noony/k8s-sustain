@@ -14,7 +14,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	"github.com/noony/k8s-sustain/internal/recommender"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 type batchSimulateResponse struct {
@@ -29,7 +28,10 @@ type workloadBatchResult struct {
 	Kind       string                          `json:"kind"`
 	Name       string                          `json:"name"`
 	Containers map[string]batchContainerResult `json:"containers"`
-	Error      string                          `json:"error,omitempty"`
+	// Outcome is what the identity's computation decided; only a Computed
+	// identity counts toward the savings.
+	Outcome sustainv1alpha1.RecommendationOutcome `json:"outcome,omitempty"`
+	Error   string                                `json:"error,omitempty"`
 }
 
 type batchContainerResult struct {
@@ -96,14 +98,21 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 
+		wbr.Outcome = simulationOutcome(r.res.Outcome)
+		cpuTally, memTally := &cpu, &mem
+		if r.res.Outcome != recommender.Recommended {
+			// A Too young identity's numbers are shown but would not be
+			// applied, so they save nothing.
+			cpuTally, memTally = &savings{}, &savings{}
+		}
 		for j, c := range slices.Concat(wl.Containers, wl.InitContainers) {
-			rec, ok := r.recs[c.Name]
+			rec, ok := r.res.Recs[c.Name]
 			if !ok && j >= len(wl.Containers) {
 				continue
 			}
 			var bcr batchContainerResult
-			bcr.CurrentCPU, bcr.RecommendedCPU, bcr.CPUDeltaPercent = cpu.add(c.Resources.Requests.Cpu(), rec.CPURequest)
-			bcr.CurrentMemory, bcr.RecommendedMemory, bcr.MemDeltaPercent = mem.add(c.Resources.Requests.Memory(), rec.MemoryRequest)
+			bcr.CurrentCPU, bcr.RecommendedCPU, bcr.CPUDeltaPercent = cpuTally.add(c.Resources.Requests.Cpu(), rec.CPURequest)
+			bcr.CurrentMemory, bcr.RecommendedMemory, bcr.MemDeltaPercent = memTally.add(c.Resources.Requests.Memory(), rec.MemoryRequest)
 			wbr.Containers[c.Name] = bcr
 		}
 
@@ -147,8 +156,8 @@ func (s *savings) add(current, recommended *resource.Quantity) (cur, rec string,
 }
 
 type recResult struct {
-	recs map[string]workload.ContainerRecommendation
-	err  error
+	res recommender.Result
+	err error
 }
 
 // computeRecommendations assembles every identity under the policy's own
@@ -162,9 +171,21 @@ func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1al
 			out[i].err = a.Err
 			continue
 		}
-		out[i].recs = recommender.Compute(a.Request).Recs
+		out[i].res = recommender.Compute(a.Request)
 	}
 	return out
+}
+
+// simulationOutcome names a computed outcome as a WorkloadRecommendation
+// records it.
+func simulationOutcome(o recommender.Outcome) sustainv1alpha1.RecommendationOutcome {
+	switch o {
+	case recommender.TooYoung:
+		return sustainv1alpha1.OutcomeTooYoung
+	case recommender.NoData:
+		return sustainv1alpha1.OutcomeNoData
+	}
+	return sustainv1alpha1.OutcomeComputed
 }
 
 func deltaPercent(current, recommended int64) float64 {

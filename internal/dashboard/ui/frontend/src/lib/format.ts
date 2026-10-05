@@ -21,6 +21,7 @@ export function parseMemoryQuantity(str: string): number {
 }
 
 import { format as formatDate, formatDistanceToNowStrict } from 'date-fns'
+import type { RecommendationOutcome } from './api'
 
 export function timeAgo(dateStr?: string): string {
   if (!dateStr) return '-'
@@ -34,6 +35,14 @@ export function formatDateTime(dateStr?: string): string {
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return '-'
   return formatDate(d, 'yyyy-MM-dd HH:mm:ss')
+}
+
+export const outcomeLabels: Record<RecommendationOutcome, string> = {
+  Computed: 'Computed',
+  NoData: 'No data',
+  TooYoung: 'Too young',
+  FetchFailed: 'Fetch failed',
+  Conflicted: 'Conflicted (frozen)',
 }
 
 export function deltaClass(pct: number | null | undefined): string {

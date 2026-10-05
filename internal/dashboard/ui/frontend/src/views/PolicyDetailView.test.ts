@@ -33,6 +33,64 @@ describe('PolicyDetailView', () => {
     expect(w.text()).toContain('View as YAML')
   })
 
+  it('flags a batch row whose outcome keeps it out of the savings', async () => {
+    const savings = {
+      savingsMillis: 0,
+      savingsFormatted: '0m',
+      currentFormatted: '0m',
+      recommendedFormatted: '0m',
+    }
+    ;(api.api as any).mockImplementation((path: string) => {
+      if (path === '/api/policies/p')
+        return Promise.resolve({
+          name: 'p',
+          conditions: [],
+          spec: { rightSizing: { resourcesConfigs: { cpu: {}, memory: {} } } },
+          effectivenessSeries: { cpu: [], memory: [] },
+        })
+      if (path.startsWith('/api/policies/p/workloads'))
+        return Promise.resolve({ items: [], total: 0, pageSize: 50 })
+      if (path === '/api/policies/p/batch-simulate')
+        return Promise.resolve({
+          cpu: savings,
+          memory: savings,
+          workloads: [
+            {
+              namespace: 'a',
+              kind: 'Deployment',
+              name: 'old',
+              outcome: 'Computed',
+              containers: { app: {} },
+            },
+            {
+              namespace: 'a',
+              kind: 'Deployment',
+              name: 'new',
+              outcome: 'TooYoung',
+              containers: { app: {} },
+            },
+          ],
+        })
+      return Promise.resolve({})
+    })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/:catchAll(.*)', component: { template: '<div/>' } }],
+    })
+    const w = mount(PolicyDetailView, {
+      props: { name: 'p' },
+      global: { plugins: [router], stubs: ['router-link', 'StatusBadge', 'TrendChart'] },
+    })
+    await flushPromises()
+    await w
+      .findAll('button')
+      .find((b) => b.text() === 'Simulate All')!
+      .trigger('click')
+    await flushPromises()
+    const badges = w.findAll('[data-test="batch-outcome"]')
+    expect(badges.map((b) => b.text())).toEqual(['Too young'])
+  })
+
   describe('matched workloads list', () => {
     const policyBody = {
       name: 'p',

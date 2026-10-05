@@ -23,9 +23,9 @@ import (
 
 // newBatchSimulateServer builds a server with `count` Deployments, wl-a,
 // wl-b, …, all annotated for policy "p", which opts the Deployment kind in.
-// Each Deployment has one container named "main", running with the requests
-// given at its index, none past them. Each is two days old.
-func newBatchSimulateServer(t *testing.T, inputs recommender.InputsFetcher, count int, requests ...corev1.ResourceList) *Server {
+// Each Deployment is two days old and has one container named "main"; the
+// edit at its index, if any, changes it.
+func newBatchSimulateServer(t *testing.T, inputs recommender.InputsFetcher, count int, edits ...func(*appsv1.Deployment)) *Server {
 	t.Helper()
 	mode := sustainv1alpha1.UpdateModeOnCreate
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
@@ -39,8 +39,8 @@ func newBatchSimulateServer(t *testing.T, inputs recommender.InputsFetcher, coun
 		}}
 		d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
 		d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "main"}}
-		if i < len(requests) {
-			d.Spec.Template.Spec.Containers[0].Resources.Requests = requests[i]
+		if i < len(edits) {
+			edits[i](d)
 		}
 		objs = append(objs, d)
 	}
@@ -50,6 +50,16 @@ func newBatchSimulateServer(t *testing.T, inputs recommender.InputsFetcher, coun
 
 func batchID(name string) promclient.WorkloadIdentity {
 	return promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: name}
+}
+
+// requesting runs container main with cpu and memory requests.
+func requesting(cpu, memory string) func(*appsv1.Deployment) {
+	return func(d *appsv1.Deployment) {
+		d.Spec.Template.Spec.Containers[0].Resources.Requests = corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse(cpu),
+			corev1.ResourceMemory: resource.MustParse(memory),
+		}
+	}
 }
 
 // Every workload of the policy is fetched in a single batch call, sized by
@@ -127,10 +137,7 @@ func TestBatchSimulateSavingsAreAgainstTheCurrentRequests(t *testing.T) {
 			MemPerPod: promclient.ContainerValues{"main": 64 << 20},
 		}).
 		Set(batchID("wl-b"), &recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"main": 0.3}})
-	srv := newBatchSimulateServer(t, inputs, 2, corev1.ResourceList{
-		corev1.ResourceCPU:    resource.MustParse("500m"),
-		corev1.ResourceMemory: resource.MustParse("256Mi"),
-	})
+	srv := newBatchSimulateServer(t, inputs, 2, requesting("500m", "256Mi"))
 
 	rows, resp := batchSimulate(t, srv)
 
@@ -149,6 +156,37 @@ func TestBatchSimulateSavingsAreAgainstTheCurrentRequests(t *testing.T) {
 	}
 	if resp.Memory.SavingsPercent != 75 {
 		t.Errorf("memory savings = %v%%, want 75%% (256Mi → 64Mi)", resp.Memory.SavingsPercent)
+	}
+}
+
+// Each identity reports its outcome. A Too young identity still shows its
+// numbers, as its Simulation does, but the controller would not apply them, so
+// they stay out of the savings; a NoData one has none.
+func TestBatchSimulateSavingsCountComputedIdentitiesOnly(t *testing.T) {
+	usage := &recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"main": 0.2}}
+	inputs := recommendertest.NewStaticInputs().Set(batchID("wl-a"), usage).Set(batchID("wl-b"), usage)
+	young := func(d *appsv1.Deployment) {
+		requesting("500m", "256Mi")(d)
+		d.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Minute))
+	}
+	srv := newBatchSimulateServer(t, inputs, 3, requesting("500m", "256Mi"), young, requesting("500m", "256Mi"))
+
+	rows, resp := batchSimulate(t, srv)
+
+	for name, want := range map[string]sustainv1alpha1.RecommendationOutcome{
+		"wl-a": sustainv1alpha1.OutcomeComputed,
+		"wl-b": sustainv1alpha1.OutcomeTooYoung,
+		"wl-c": sustainv1alpha1.OutcomeNoData,
+	} {
+		if got := rows[name].Outcome; got != want {
+			t.Errorf("%s outcome = %q, want %q", name, got, want)
+		}
+	}
+	if got := rows["wl-b"].Containers["main"].RecommendedCPU; got != "200m" {
+		t.Errorf("wl-b recommended %q, want its 200m shown", got)
+	}
+	if resp.CPU.CurrentMillis != 500 || resp.CPU.RecommendedMillis != 200 {
+		t.Errorf("cpu = %+v, want wl-a's 500m → 200m alone", resp.CPU)
 	}
 }
 

@@ -4,11 +4,16 @@ import {
   api,
   type MetricsData,
   type RecommendationContainer,
-  type RecommendationOutcome,
   type WorkloadDetailSnapshot,
   type CoordinationFactors,
 } from '../lib/api'
-import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs, timeAgo } from '../lib/format'
+import {
+  outcomeLabels,
+  parseCPUQuantity,
+  parseMemoryQuantity,
+  parseStepToMs,
+  timeAgo,
+} from '../lib/format'
 import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
@@ -50,14 +55,6 @@ const snapshot = useApi<WorkloadDetailSnapshot>(() =>
 // The Recommendation the controller stored; the detail page never recomputes
 // one (that is the Simulator's job).
 const stored = computed(() => snapshot.data.value?.recommendation)
-
-const outcomeLabels: Record<RecommendationOutcome, string> = {
-  Computed: 'Computed',
-  NoData: 'No data',
-  TooYoung: 'Too young',
-  FetchFailed: 'Fetch failed',
-  Conflicted: 'Conflicted (frozen)',
-}
 
 async function load() {
   const p = new URLSearchParams(rangeQueryParams(range.value, Date.now()))

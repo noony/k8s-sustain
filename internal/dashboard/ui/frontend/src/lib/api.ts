@@ -347,6 +347,8 @@ export interface BatchWorkloadResult {
   namespace: string
   kind: string
   name: string
+  /** Only a Computed identity counts toward the savings. */
+  outcome?: Exclude<RecommendationOutcome, 'FetchFailed' | 'Conflicted'>
   error?: string
   containers?: Record<
     string,
