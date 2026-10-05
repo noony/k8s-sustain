@@ -113,7 +113,7 @@ k8s-sustain/
 │   ├── webhook/           # webhook subcommand
 │   └── dashboard/         # dashboard subcommand
 ├── internal/
-│   ├── autoscaler/        # HPA / KEDA detection used by recommender + webhook
+│   ├── autoscaler/        # HPA / KEDA lookup of the members of an identity
 │   ├── config/            # Centralized Viper config (flags, env, file)
 │   ├── controller/        # Policy reconciler: the pass, the ledger, and the publisher of its metric series
 │   ├── dashboard/         # Dashboard HTTP server + embedded Vue SPA (ui/)
@@ -124,7 +124,7 @@ k8s-sustain/
 │   ├── logging/           # Shared zap logger setup
 │   ├── oomwatch/          # Live OOMKilled detection, re-triggers reconciles
 │   ├── prometheus/        # Prometheus HTTP API client + metric name constants
-│   ├── recommender/       # Recommendation signals (one module each), Compute composing their stages, and the batch-inputs port with its Prometheus adapter
+│   ├── recommender/       # The one Request assembly per identity, recommendation signals (one module each), Compute composing their stages, and the batch-inputs port with its Prometheus adapter
 │   │   └── recommendertest/  # In-memory inputs adapter for tests
 │   ├── version/           # Build version
 │   ├── webhook/           # Admission webhook HTTP handler
@@ -385,8 +385,9 @@ inputs port (`WithLiveOOMs`), not through `Compute`. To add one:
 5. Test it at its own interface, next to `signal_usage_test.go` and
    `signal_oom_test.go`: the query built from settings, the values collected
    from `ShardSample`s, its failure policy, its contribution and trace stage.
-   Test what it does to a whole recommendation through `Compute`, at a fixed
-   `Request.Now`. `signal_test.go` shows that a signal defined only in a test
+   Test what it does to a whole recommendation through `Compute`, from a
+   `Request` the test builds in the package at a fixed instant (`now`; outside
+   the package only `Assemble` builds one). `signal_test.go` shows that a signal defined only in a test
    is fetched, and computed on the limit side with its own trace stage, from
    its list entry alone, and checks that every listed signal's contract
    declares exactly the rules its query reads
@@ -437,6 +438,34 @@ member is), and the [series publisher](#metric-series) deletes the series of
 identities no Policy includes any more. A new health signal therefore needs
 both halves: an identity series in the controller's publication and a field
 on `identityHealth` filled by the adapter.
+
+## Dashboard Simulations
+
+A Simulation (`runSimulation` in `internal/dashboard/simulate.go`) is the
+controller's computation of one identity under what-if settings. It reads the
+identity from the inventory (one it does not hold is simulated from what
+Prometheus reports), starts from the settings of its governing Policy or of
+the Policy the request names (`simulationSettings`: `resourcesConfigs`,
+`autoscalerCoordination`, `excludeInitContainers`), merges the request's
+`override` onto them as a JSON merge patch, and hands the result to the same
+[assembly](#the-request-assembly) the controller uses. Without an override it
+is the controller's Request, the live OOM kills aside: the dashboard's inputs
+port is undecorated. It returns the effective settings (`Request.Resources`,
+every default explicit), the outcome and the trace, so the Simulator shows
+the Policy's values and the recommender's defaults without holding either.
+
+The override is validated once, on the server, after the merge
+(`simulationSettings.validate`, `simulation_settings.go`). Its rules are a
+copy of the CRD's markers in `api/v1alpha1`; `TestOverrideRulesCoverTheCRD`
+walks the generated CRD and fails for a rule (a minimum, maximum, pattern,
+quantity or CEL message on these settings) that no case of
+`TestOverrideRejectsWhatTheCRDRejects` breaks, so a rule added to the API
+types needs its copy here.
+
+Batch simulate is a Simulation of every live identity a Policy governs with no
+override, in one assembly: it reports each identity's outcome, and counts only
+`Computed` ones toward the savings, against the requests their containers run
+with.
 
 ## Dashboard frontend
 
@@ -620,13 +649,24 @@ The controller's reads go through a watch-populated informer cache, so a `Worklo
 
 The computation unit is the identity, not the workload object: a group of workloads sharing an owner-name produces exactly one computation and one write, against the union of the members' containers. Computing per member would give the single shared `WorkloadRecommendation` several competing answers, with the survivor decided by whichever member's goroutine finished last. Retry backoff is also per member: an identity is withheld from the fetch only when every member is backed off, so one failing member cannot deny its healthy siblings their inputs.
 
+#### The Request assembly
+
+`recommender.Assemble(ctx, inputs, autoscalers, spec, identities)` is the one place an identity becomes what `recommender.Compute` takes, for the controller's pass, a [Simulation](#dashboard-simulations) and a batch simulation alike. In: a Policy's right-sizing spec, `inventory.Identity` values, the inputs port and an `Autoscalers` port (`autoscaler.NamespacedSnapshot`, which lists each namespace's HPAs and ScaledObjects once). Out, per identity: its `Request`, the `autoscaler.Group` of its members, or the error that made its inputs unreadable. Behind it:
+
+- the containers recommended: the identity's, its init containers too unless the spec excludes them, which also sizes the fetch; an identity with no containers at all (one the inventory has not seen) is recommended for every container its inputs report;
+- the autoscaler: each member the identity's containers come from (`Identity.Contributors`) is looked up under its own name, and the first in name order that has one shapes the Recommendation (`ForIdentity`); a departed identity has none;
+- the spec's resources with every default explicit (`WithDefaults`: the window, the percentile and headroom unless the request is kept, `keepLimit` when no strategy is set), which the fetch and the computation both use and a Simulation returns as its effective settings;
+- one batch fetch, and one instant per batch taken once it returns: kills the live decorator merged in never postdate it.
+
+`Request` has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young). `Request.WithInputs` is the same Request computing from other inputs, which a Simulation's charts use for each past percentile.
+
 #### The Policy pass
 
 `Reconcile` reads the Policy, handles deletion and the finalizer, takes the `inventory.TakeForPolicy` snapshot, and runs one pass over it (`runPass` in `internal/controller/pass.go`). Everything after the pass consumes the **report** it returns, one entry per identity on the work-list (its key, whether it is departed, its outcome, whether its fetch resolved, a departed identity's failure, one `applyResult` per live member, the Recommendation a live identity holds for the Policy after the pass, and what computing it found: its autoscaler, whether its members disagree on it, and the containers the OOM floor determined): `settle` hands the member results to the [ledger](#apply-results-and-the-ledger) and returns how many identities failed and, per identity, how many members, the health tracker aggregates each live identity's health from the ledger, the [series publisher](#metric-series) publishes what the report, the health and those counts describe, the sweep runs, `passCondition` derives the `Ready` condition from those counts, and the ledger schedules the requeue. The pass keeps no state between passes, and no step reads another's struct fields: each takes what it needs from the earlier steps' return values, in the order the pass calls them.
 
-- **Work-list.** The identities the Policy governs, taken from the inventory as they are: a departed one's containers come from its stored snapshot, and one without a snapshot is left out (counted as `no_snapshot`). Init containers are dropped here, once, when the Policy excludes them. Each live member is a `workloadTarget` (`targetsOf`; a bare-pod identity's governed pods form one), and the [ledger](#apply-results-and-the-ledger) is asked once, before the fetch, which members may run: backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out.
+- **Work-list.** The identities the Policy governs, taken from the inventory as they are: a departed one's containers come from its stored snapshot, and one without a snapshot is left out (counted as `no_snapshot`). Each live member is a `workloadTarget` (`targetsOf`; a bare-pod identity's governed pods form one), and the [ledger](#apply-results-and-the-ledger) is asked once, before the fetch, which members may run: backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out.
 - **Claim.** `wlrcache.Ensure` for every live identity, with its members' container union as the observed snapshot. It returns the object each decision is recorded into: the one `Ensure` wrote, or the one the inventory read for a departed identity. A failed claim is logged and kept for that identity alone.
-- **Recommend** (`recommendation_pass.go`). One `InputsFetcher` call per policy for every identity not wholly in backoff; the pass never sees shards, retries or the fallback ([ADR 0001](adr/0001-single-identity-is-a-batch-of-one.md)). The controller's fetcher is `PromInputs` decorated by `recommender.WithLiveOOMs`, which merges the kills the OOM watcher's cache holds into each identity's OOM inputs after the fetch; the dashboard uses the undecorated port. Then `computeIdentity` per fetched identity, in parallel: `recommender.Compute` decides everything about one identity from its inputs and its age (the inventory's `Since`), as of one instant per pass taken once the fetch returns (`Request.Now`; nothing in the recommender reads the clock): the age gate, then every container through the chain of stages of every [signal](#adding-a-recommendation-signal). The OOM floor signal is the one place that decides whether a kill is recent, for both its answer to the age gate and the memory floor; the decorator decides whether a live record is still within `LiveOOMWindow`. The dashboard's simulations call the same function, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the list of stages that ran on the request and the limit; the record stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read its OOM floor stage (`recommender.TracedOOMFloor`). Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new stage or fact. Every identity leaves with one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff).
+- **Recommend** (`recommendation_pass.go`). One [assembly](#the-request-assembly) of every identity not wholly in backoff, under the Policy's right-sizing spec: one `InputsFetcher` call per policy, so the pass never sees shards, retries or the fallback ([ADR 0001](adr/0001-single-identity-is-a-batch-of-one.md)). The controller's fetcher is `PromInputs` decorated by `recommender.WithLiveOOMs`, which merges the kills the OOM watcher's cache holds into each identity's OOM inputs after the fetch; the dashboard uses the undecorated port. Then `computeIdentity` per fetched identity, in parallel: it publishes the identity's autoscaler series from the assembly's `autoscaler.Group` (and `k8s_sustain_group_autoscaler_mismatch_total` for a group whose members disagree), and `recommender.Compute` decides everything about one identity from its Request: the age gate, then every container through the chain of stages of every [signal](#adding-a-recommendation-signal). The OOM floor signal is the one place that decides whether a kill is recent, for both its answer to the age gate and the memory floor; the decorator decides whether a live record is still within `LiveOOMWindow`. The dashboard's simulations assemble and compute the same way, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the list of stages that ran on the request and the limit; the record stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read its OOM floor stage (`recommender.TracedOOMFloor`). Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new stage or fact. Every identity leaves with one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff).
 - **Record.** `wlrcache.Record` of every outcome but "not fetched", into the object the claim returned, before anything is applied, so the webhook serves the new value by the time a replacement pod is admitted. It keeps the last Recommendation for every outcome but `Computed`, and marks a departed identity departed. Because the record takes the claim's object as an argument, it cannot record into a copy read before the claim, which would attribute an adopting Policy's numbers to the previous one.
 - **Apply** (`workload_reconcile.go`). One task per live member not in backoff. A live identity whose decision could not be stored — its claim failed, or the record was rejected — is not applied that cycle, and each of its members fails on the `store` step: the replacement pods of an eviction would read the old value. That is the one count the failure gets.
 
@@ -662,11 +702,11 @@ The ledger takes an injected clock (`k8s.io/utils/clock`), so tests drive backof
 
 `workload.Inject(containers, initContainers, excludeInit, recs)` (`internal/workload/inject.go`) is the one place a Recommendation meets a container list, for the controller, the patcher and the webhook. It narrows the Recommendation to the containers declared (init containers too unless `excludeInit`; a name declared twice gets the one recommendation in both places) and returns, for each container whose resources change, what to set and where. It guarantees requests ≤ limits on what is finally written: when the request a container ends up with exceeds the limit it ends up with, the limit is raised to the request and named in `RaisedLimits` (logged at debug). That covers a recommended request above a running limit the recommendation keeps, and a request decrease the downsize tolerance withholds while letting the limit's through. `ContainerMatches` is defined as "applying changes nothing", so the patcher's staleness count and the controller's diff agree with what a resize would write and never chase a limit the guard raises back.
 
-The controller narrows a member's Recommendation with it; the patcher writes an in-place resize from its writes (sidecar init containers only, a classic one having exited); the webhook's responder turns its writes into the JSON patch. `MergeContainersForRecommendation` stays on the compute side.
+The controller narrows a member's Recommendation with it; the patcher writes an in-place resize from its writes (sidecar init containers only, a classic one having exited); the webhook's responder turns its writes into the JSON patch. The Policy's `excludeInitContainers` is applied to the identity by the [assembly](#the-request-assembly), so a Recommendation the controller computes never names an excluded init container and the controller narrows with `excludeInit` false; only the webhook still passes the Policy's flag, for a stored Recommendation computed before the Policy excluded them.
 
 #### Owner-name group: merge order and write cost
 
-For an owner-name group, the union snapshot in `status.observedResources` is built from the governed members' containers. Where several members declare the same container name with different requests/limits, the newest member's entry is kept whole (ties broken by name), rather than mixing one member's request with another's limit: an older member's spec may predate a change the newer ones already run. The recommendation is computed against that union, using the autoscaler of the first member in `kind/namespace/name` order that has one, and treating the identity as being as old as its oldest member or its `WorkloadRecommendation`, whichever is older.
+For an owner-name group, the union snapshot in `status.observedResources` is built from the governed members' containers. Where several members declare the same container name with different requests/limits, the newest member's entry is kept whole (ties broken by name), rather than mixing one member's request with another's limit: an older member's spec may predate a change the newer ones already run. The recommendation is computed against that union, using the autoscaler of the first member, in name order, that has one (`autoscaler.Group`), and treating the identity as being as old as its oldest member or its `WorkloadRecommendation`, whichever is older.
 
 Every choice is decided by the members' names, creation times or an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. The pass's claim (`wlrcache.Ensure`) is the only controller writer of `status.observedResources`, from that union computed once per identity by the inventory, and the record never touches it, so a group whose members and metrics are unchanged costs no status write on subsequent reconciles.
 

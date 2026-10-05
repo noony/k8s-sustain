@@ -104,6 +104,15 @@ The clamp `[0.5, 2.0]` exists so a single reconcile can't catastrophically up- o
 ## Detection rules
 
 - HPA matched by `scaleTargetRef`; `ScaledObject` by `spec.scaleTargetRef`.
+- Each member of an identity is looked up under its own kind and name, never
+  under the identity's: an [owner-name group](../guides/standalone-pods-and-grouping.md)
+  `api` of Deployments `api-blue` and `api-green` is coordinated by an HPA
+  targeting `api-green`. The group's one Recommendation is shaped by the
+  autoscaler of its first member, in name order, that has one; members that
+  disagree count `k8s_sustain_group_autoscaler_mismatch_total`. A departed
+  identity has no member, and no autoscaler.
+- The dashboard's [Simulations](../guides/dashboard.md#policy-simulator) read
+  the autoscalers the same way, through the same code.
 - Both objects targeting one workload → `ScaledObject` wins (KEDA owns the
   HPA).
 - Only HPA `Resource` metrics with `averageUtilization` count. Other metric

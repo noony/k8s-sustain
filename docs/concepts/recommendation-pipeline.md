@@ -160,7 +160,7 @@ The `guard` stage appears exactly when it changed the limit. A new signal brings
 
 The controller stores the trace in `status.trace` of the identity's `WorkloadRecommendation` together with the values, never on its own (see [Schema](workload-recommendations.md#schema)), and reads the `oomFloor` stage for its own metrics, so nothing re-derives a stage after the fact. The dashboard shows it per container on the workload detail page and reads the **Coordinated** factors of its list rows from the `coordination` stage.
 
-A Simulation computes a trace too, but the dashboard only shows the stored one: what explains the applied values is what the controller stored.
+A [Simulation](../guides/dashboard.md#policy-simulator) computes a trace of its own, which the Simulator shows with its values; the workload detail page shows only the stored one, since what explains the applied values is what the controller stored.
 
 ## Choosing a percentile
 

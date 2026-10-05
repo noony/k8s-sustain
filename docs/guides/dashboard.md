@@ -148,28 +148,50 @@ A stat strip shows **Total policies**, **Workloads covered**, **Cluster CPU save
 - **Selector** — target namespaces (or "all namespaces"), `matchLabels` and `matchExpressions`.
 - **Effectiveness over time** — CPU and memory savings for this policy over the selected range.
 - **Matched Workloads** — the identities the policy governs: Namespace, Kind, Name (with Departed badge), Risk, Drift, containers and their current CPU/memory requests; namespace filter, name search, **Reset filters**, and pagination (50 per page). Sorted by name by default; click Namespace, Kind, Name or Drift to sort across all pages. Filters, sort and page live in the URL alongside the time range, so Back from a workload restores the list.
-- **Simulate All** — runs the recommender with this policy's configuration over every matched workload (`GET /api/policies/{name}/batch-simulate`) and shows a **Batch Simulation Results** card: aggregate CPU and memory savings (current → recommended) and a per-container table. "Current" is the container's measured usage from Prometheus, not its configured request. A workload that fails to compute shows its error on its own row.
+- **Simulate All** — runs a [Simulation](#policy-simulator) with no override of every live identity the policy governs (`GET /api/policies/{name}/batch-simulate`) and shows a **Batch Simulation Results** card: aggregate CPU and memory savings (current → recommended) and a per-container table. "Current" is the request the container runs with; a container without one shows its recommendation but stays out of the totals. An identity whose outcome is **Too young** shows its numbers flagged as such and is left out of the totals, since the controller would not apply them; a **No data** one has none. A workload that fails to compute shows its error on its own row.
 
 ### Policy Simulator
 
-1. Select a **workload** (namespace, kind, name). Kinds: Deployment, StatefulSet, DaemonSet, CronJob, Job, Rollout, Pod.
-2. Optionally **Load from policy** to pre-fill every field from an existing policy.
-3. Adjust **CPU and memory** independently:
+A Simulation is the Recommendation the controller would compute for an identity, under what-if changes to its Policy's settings. With no change it is exactly the controller's: the same identity (members, containers, age), the same Policy settings, and the same autoscaler, read for each member the Policy governs — the one difference is that the dashboard has no live OOM watcher, so a kill the controller saw in the last 30 minutes but Prometheus does not hold yet raises the controller's memory floor and not the Simulation's.
+
+1. Select a **workload** (namespace, kind, name). Kinds: Deployment, StatefulSet, DaemonSet, CronJob, Job, Rollout, Pod. **Open in Simulator** on a workload page fills it in.
+2. The Simulation **starts from** the workload's governing policy, and every control shows that policy's settings with the recommender's defaults filled in (`168h` window, 95th percentile, no headroom, the existing limit kept). Pick another policy to start from it instead, or none governs the workload and the defaults apply. **Reset** drops every change.
+3. Change any of, per resource:
     - Window — the recommendation lookback (e.g. `168h`), independent of the chart time range
-    - Percentile (50–100)
-    - Headroom (0–100%)
-    - Min/Max allowed
-    - **Limits strategy** — `keepLimit` (default), `noLimit`, `equalsToRequest`, `requestsLimitsRatio` (with a multiplier), or `keepLimitRequestRatio`. Mirrors `spec.rightSizing.resourcesConfigs.<resource>.limits`.
+    - **Keep the current request** (`keepRequest`), or the percentile (50–100), headroom (0–100%) and min/max allowed it computes from
+    - **Limits strategy** — `keepLimit`, `noLimit`, `equalsToRequest`, `requestsLimitsRatio` (with a multiplier), or `keepLimitRequestRatio`. Mirrors `spec.rightSizing.resourcesConfigs.<resource>.limits`.
 
-The simulation re-runs automatically (debounced) whenever a parameter changes. Results show:
+    and for the workload: **autoscaler coordination** (with its replica budget anchor) and **exclude init containers**.
 
-- A **Savings impact** band — projected CPU and memory change.
-- Per container: CPU/memory request and limit, current vs. recommended (`— removed —` under `noLimit`).
+Only what you change is sent; everything else stays the starting policy's. The simulation re-runs automatically (debounced). The server checks the result against the Policy CRD's rules (ranges, minAllowed ≤ maxAllowed, at most one limit strategy, `keepRequest` alone, …) and shows a change it rejects above the form, keeping the last results. Results show:
+
+- A **Savings impact** band — projected CPU and memory change, with a note when the outcome is **Too young** (the controller would not apply it yet).
+- Per container: CPU/memory request and limit, current vs. recommended (`— removed —` under `noLimit`), and **How this was computed**: the Simulation's own [trace](../concepts/recommendation-pipeline.md#trace).
 - Charts with the sliding-window recommendation, historical request and current limit over usage.
 
-The simulator, the batch simulation and the controller share one algorithm (`internal/recommender`): percentile over the busiest replica, OOM-aware memory floor, limits derived from the real containers, and **autoscaler coordination** when an HPA or KEDA ScaledObject targets the workload. A Simulation is the only place the dashboard computes a recommendation; what is applied is what the controller stored. The simulator inherits the coordination setting of the workload's governing policy; the `autoscalerCoordination` field of the `POST /api/simulate` body overrides it. It dates the identity as the controller does (its earliest member or its `WorkloadRecommendation`, whichever is older) and reports a Too young identity as `tooYoung` instead of hiding the number; it skips only the live OOM watcher.
+The simulator, the batch simulation and the controller build each identity's computation in one place (`recommender.Assemble`) and run one algorithm (`internal/recommender`): percentile over the busiest replica, OOM-aware memory floor, limits derived from the real containers, and **autoscaler coordination** when an HPA or KEDA ScaledObject targets one of the identity's members. A Simulation is the only place the dashboard computes a recommendation; what is applied is what the controller stored. It dates the identity as the controller does (its earliest member or its `WorkloadRecommendation`, whichever is older) and reports a Too young identity's numbers with its outcome instead of hiding them.
 
 When a container OOM'd in the last 24h, its simulated memory recommendation is floored at `max(kernel high-water peak, OOM-time cgroup limit × 1.20)`, exactly as the controller applies it (see [Recommendation pipeline](../concepts/recommendation-pipeline.md)). Sibling containers that did not OOM keep their plain percentile.
+
+#### `POST /api/simulate`
+
+```json
+{
+  "namespace": "prod", "ownerKind": "Deployment", "ownerName": "web",
+  "window": "168h", "step": "10m",
+  "policy": "other-policy",
+  "override": {
+    "resourcesConfigs": {
+      "cpu": {"requests": {"percentile": 90}},
+      "memory": {"requests": {"minAllowed": null},
+                 "limits": {"keepLimit": false, "noLimit": true}}
+    },
+    "autoscalerCoordination": {"enabled": false}
+  }
+}
+```
+
+`window`/`step` (or `fromTs`/`toTs`) shape the charts only. `policy` names the Policy to start from; omitted, the identity's governing Policy. `override` is a [JSON merge patch](https://datatracker.ietf.org/doc/html/rfc7386) of `resourcesConfigs`, `autoscalerCoordination` and `excludeInitContainers` onto that Policy's: a key replaces the Policy's, `null` removes it, and a limit strategy is changed by setting the old one to `false`. An override the Policy CRD would reject is a `400` whose `field` names the setting (e.g. `resourcesConfigs.memory.requests`); an unknown `policy` is a `404`. The response carries the `policy` it started from, the `effective` settings it ran with (override merged, every default explicit), the `outcome` (`Computed`, `TooYoung` or `NoData`), and per container the values and their `trace`, next to the usage, request and recommendation series.
 
 ## Troubleshooting
 
@@ -193,11 +215,11 @@ The dashboard backs every UI page with a small JSON API under `/api/`. The same 
 | `GET` | `/api/policies` | Policies with per-policy rollups (`workloadCount`, savings, `blockedCount`) |
 | `GET` | `/api/policies/{name}` | One Policy |
 | `GET` | `/api/policies/{name}/workloads` | Identities the policy governs, Departed ones included, Conflicted ones never (`namespace`, `search`, `page`, `pageSize`); `sort` = `name` (default), `namespace`, `kind` or `stalePods`, prefix `-` for descending. `total` counts rows after filters, `matched` before |
-| `GET` | `/api/policies/{name}/batch-simulate` | Recommendations for every matched workload with aggregate savings |
+| `GET` | `/api/policies/{name}/batch-simulate` | A Simulation of every live identity the policy governs, each with its `outcome`, and the savings of the `Computed` ones against the requests their containers run with |
 | `GET` | `/api/workloads` | Every identity in the cluster (filters: `namespace`, `kind`, `automated`, `departed`, `risk`, `autoscaler`, `search`, `page`, `pageSize`); `sort` = `name` (default), `namespace`, `kind`, `stalePods` or `policyName`, prefix `-` for descending. Each row carries `departed`, `policyName`, and `conflictingPolicies` for a Conflicted identity; `counts` adds `conflicted` |
 | `GET` | `/api/workloads/{namespace}/{kind}/{name}` | Identity detail: governing policy (or `conflictingPolicies`), `departed`, mode, `riskState`, drift, OOM 24h, blocked, coordination, events of every member, and the stored `recommendation` (`outcome`, `observedAt`, per-container values, per-container `trace`). Coordination factors come from the trace. `404` for an unknown identity |
 | `GET` | `/api/workloads/{namespace}/{kind}/{name}/metrics` | Usage, request, limit and OOM time-series |
-| `POST` | `/api/simulate` | What-if recommendation for one workload |
+| `POST` | `/api/simulate` | A [Simulation](#post-apisimulate) of one identity: its governing (or a chosen) Policy with a what-if `override` |
 | `GET` | `/api/summary` | Overview snapshot: savings KPIs; `conflictedCount`, `blockedCount`, `atRiskCount`, `driftedCount` and `coordinatedCount` over the same identities as `/api/workloads`; headroom; `attention` keyed by Risk state (`conflicted`, `blocked`, `at-risk`, `drifted`), each `{total, rows}` with the worst ten rows; policy rollups |
 | `GET` | `/api/summary/trend` | Overview savings time-series |
 | `GET` | `/api/summary/activity` | Recent controller events |
