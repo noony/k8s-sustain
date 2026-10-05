@@ -87,7 +87,8 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 
 // ContainersOf is the containers spec recommends of id: its containers, and
 // its init containers unless spec excludes them. Assemble recommends these;
-// the Policy's excludeInitContainers is applied here and nowhere else.
+// the controller and the dashboard apply excludeInitContainers here and
+// nowhere else.
 func ContainersOf(spec sustainv1alpha1.RightSizingSpec, id *inventory.Identity) []corev1.Container {
 	if spec.ExcludeInitContainers {
 		return id.Containers

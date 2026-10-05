@@ -23,6 +23,7 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
 // seriesMatching returns every series of the named family whose labels
@@ -419,6 +420,49 @@ func TestSeries_FailedMembersCountUnderTheirIdentity(t *testing.T) {
 // published: the Recommendation its members hold, so a Prometheus outage is
 // no drop in savings, and the autoscaler it was shaped against. One that
 // computes it without an autoscaler drops the autoscaler series.
+// A Recommendation kept from before the Policy excluded init containers
+// still names them; a member's series show only the containers the Policy
+// recommends now.
+func TestSeries_KeptRecommendationOfAnExcludedInitContainerHasNoSeries(t *testing.T) {
+	const ns = "series-excluded-init"
+	policy := ongoingDeployments("p")
+	policy.Spec.RightSizing.ExcludeInitContainers = true
+	dep := establishedDeployment(ns, "web", "p")
+	dep.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "migrate"}}
+	kept := &sustainv1alpha1.WorkloadRecommendation{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns, Name: wlrcache.Name("Deployment", "web"),
+			Labels:            map[string]string{wlrPolicyLabel: "p"},
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour)),
+		},
+		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
+			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: ns, Name: "web"},
+			Policy:      "p",
+		},
+		Status: sustainv1alpha1.WorkloadRecommendationStatus{
+			ObservedAt: metav1.NewTime(time.Now().Add(-time.Hour).Truncate(time.Second)),
+			Outcome:    sustainv1alpha1.OutcomeComputed,
+			ComputedBy: "p",
+			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
+				"app": {CPURequest: qty("100m")}, "migrate": {CPURequest: qty("50m")},
+			},
+		},
+	}
+	inputs := recommendertest.NewStaticInputs().Fail(identityOf(ns, "Deployment", "web"), errors.New("prometheus down"))
+	r := reconcilerWithInputs(t, inputs, true, policy, dep, kept)
+
+	reconcileOnce(t, r, "p")
+
+	if got := memberSeriesFor(t, ns, "Deployment", "web", "migrate", "p"); len(got) != 0 {
+		t.Errorf("migrate series = %v, want none: the Policy excludes init containers", got)
+	}
+	if got := gaugeValue(t, "k8s_sustain_recommended_cpu_cores", map[string]string{
+		"namespace": ns, "owner_kind": "Deployment", "owner_name": "web", "container": "app", "container_kind": "regular", "policy": "p",
+	}); got != 0.1 {
+		t.Errorf("app recommended cpu = %v, want the kept 100m", got)
+	}
+}
+
 func TestSeries_FollowTheLastComputation(t *testing.T) {
 	const ns = "series-last-computation"
 	web := identityOf(ns, "Deployment", "web")
