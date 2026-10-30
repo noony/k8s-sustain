@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -248,6 +249,63 @@ func TestReconcile_DepartedIdentityCostsNoWriteOnceRecorded(t *testing.T) {
 	}
 	if got := getWLRFor(t, r, ns, "Pod", "dag-task"); !got.Status.Departed {
 		t.Error("the converged departed identity is no longer marked departed")
+	}
+}
+
+// shutdownDuringFetch cancels the reconcile's context while its fetch runs, as
+// a manager shutting down mid-pass does.
+type shutdownDuringFetch struct {
+	*recommendertest.StaticInputs
+	cancel context.CancelFunc
+}
+
+func (s shutdownDuringFetch) FetchInputs(
+	ctx context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []recommender.InputsRequest,
+) map[promclient.WorkloadIdentity]recommender.InputsResult {
+	s.cancel()
+	return s.StaticInputs.FetchInputs(ctx, cfg, reqs)
+}
+
+// As for a live member, a departed identity's failed fetch is a failure,
+// counted and refreshed as an error, unless the reconcile's own context
+// ended: then it is shutdown, and counts nothing.
+func TestReconcile_DepartedFailureCountsUnlessAtShutdown(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		shutdown   bool
+		wantReady  metav1.ConditionStatus
+		wantErrors float64
+	}{
+		{"failure", false, metav1.ConditionFalse, 1},
+		{"shutdown", true, metav1.ConditionTrue, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := "airflow-" + tc.name
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			static := recommendertest.NewStaticInputs().Fail(identityOf(ns, "Pod", "dag-task"), context.Canceled)
+			var inputs recommender.InputsFetcher = static
+			if tc.shutdown {
+				inputs = shutdownDuringFetch{StaticInputs: static, cancel: cancel}
+			}
+			r := reconcilerWithInputs(t, inputs, false, barePodPolicy("pol"), departedWLR(ns))
+			r.RecommendationRetention = 24 * time.Hour
+			errorRefreshes := func() float64 {
+				return testutil.ToFloat64(wlrRefreshTotal.WithLabelValues(ns, "Pod", WLRRefreshError))
+			}
+			before := errorRefreshes()
+
+			if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pol"}}); err != nil {
+				t.Fatal(err)
+			}
+
+			if ready := readyCondition(t, r, "pol"); ready.Status != tc.wantReady {
+				t.Errorf("Ready = %s %q, want %s", ready.Status, ready.Message, tc.wantReady)
+			}
+			if got := errorRefreshes() - before; got != tc.wantErrors {
+				t.Errorf("error refresh delta = %v, want %v", got, tc.wantErrors)
+			}
+		})
 	}
 }
 

@@ -87,7 +87,13 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 		}
 		switch {
 		case rep.departed:
-			rep.err = errors.Join(recs[i].err, stored[i])
+			// As for a live member (ledger.record), only the reconcile's own
+			// context ending is shutdown, and a pass cut short by it counts
+			// nothing.
+			if ctx.Err() == nil {
+				rep.err = errors.Join(recs[i].err, stored[i])
+				emitDepartedRefresh(ctx, w.id, rep)
+			}
 		case recs[i].outcome == sustainv1alpha1.OutcomeComputed && stored[i] == nil:
 			rep.held = recs[i].recs
 		default:
@@ -183,9 +189,6 @@ func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, clai
 		default:
 			g.Go(func() error {
 				errs[i] = wlrcache.Record(ctx, r.Client, claims[i].wlr, d, time.Now())
-				if w.id.Departed() {
-					emitDepartedRefresh(ctx, w.id, recs[i].outcome, errs[i])
-				}
 				return nil
 			})
 		}
@@ -194,15 +197,15 @@ func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, clai
 	return errs
 }
 
-// emitDepartedRefresh counts what a departed identity's pass decided, and
-// whether a Recommendation failed to be stored.
-func emitDepartedRefresh(ctx context.Context, id *inventory.Identity, o sustainv1alpha1.RecommendationOutcome, recordErr error) {
+// emitDepartedRefresh counts what the pass did with the departed identity of
+// rep: an error whenever it failed, as settle counts it.
+func emitDepartedRefresh(ctx context.Context, id *inventory.Identity, rep identityReport) {
 	ns, kind := id.Key.Namespace, id.Key.OwnerKind
 	refresh := WLRRefreshNoData
 	switch {
-	case o == sustainv1alpha1.OutcomeFetchFailed, o == sustainv1alpha1.OutcomeComputed && recordErr != nil:
+	case rep.err != nil:
 		refresh = WLRRefreshError
-	case o == sustainv1alpha1.OutcomeComputed:
+	case rep.outcome == sustainv1alpha1.OutcomeComputed:
 		refresh = WLRRefreshComputed
 	case len(id.Recommendation.Status.Containers) > 0:
 		// A cold start and a recommendation whose samples aged out both

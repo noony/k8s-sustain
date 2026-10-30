@@ -715,7 +715,7 @@ The apply step keeps no retry or health state. It returns exactly one `applyResu
 - Every failure counts toward the pass's failures and leaves the member Blocked until a later result other than skipped clears it.
 - `Reconcile` requeues at the reconcile interval or at the earliest due retry of the live members of the Policy's last pass, whichever comes first, so the time a retry event names is a time a pass runs, even after a pass that failed to list its workloads (`ListFailed`). Its `Ready` condition is False while an identity failed this pass or any of its identities is Blocked, so a pass that skipped a backed-off member never reports every workload processed. Its counts are of identities: one with any member failed counts once. The `For(&Policy{})` watch passes only generation changes, so the controller's own status write does not start a pass.
 
-The ledger takes an injected clock (`k8s.io/utils/clock`), so tests drive backoff with a fake clock instead of sleeping. Departed identities have no members and never reach it: `settle` counts their failures from the report.
+The ledger takes an injected clock (`k8s.io/utils/clock`), so tests drive backoff with a fake clock instead of sleeping. Departed identities have no members and never reach it: `settle` counts their failures from the report, which holds none, by the same shutdown rule, for a pass whose own context ended. Their `wlr_refresh_total` outcome is counted from the same report entry, so `error` is exactly a departed identity `settle` counts as failed.
 
 #### Container injection
 

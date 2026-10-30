@@ -110,7 +110,7 @@ Refresh outcomes, once per reconcile, for **departed** identities only — a `Wo
 | `nodata` | No recommendation yet and still no samples. Retried next cycle. |
 | `retained-empty` | Has a recommendation but this cycle produced nothing, so the previous values are kept and still served. Sustained for one identity means its data is gone for good — alert on this. |
 | `no-snapshot` | The object has no `status.observedResources`, so there is nothing to compute. Sustained means the snapshot write is failing. |
-| `error` | Computation or write failed. |
+| `error` | Its fetch or its write failed, whatever the outcome. A failure while the controller shuts down is not counted. |
 
 #### `k8s_sustain_workload_pods`
 
