@@ -165,7 +165,6 @@ func computeIdentity(ctx context.Context, id *inventory.Identity, a recommender.
 	return res
 }
 
-
 // oomFloorsOf reads, from the OOM floor stage of each container's trace,
 // the containers whose memory request the floor determined as of now.
 func oomFloorsOf(traces map[string]sustainv1alpha1.ContainerTrace, now time.Time) []oomFloor {

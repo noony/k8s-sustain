@@ -21,13 +21,6 @@ type workloadTarget struct {
 	Containers     []corev1.Container
 	InitContainers []corev1.Container
 	Object         client.Object
-	// IdentityKind and IdentityName are the identity this target reports
-	// into: what Prometheus, the WorkloadRecommendation and every health
-	// series are keyed by. They differ from Kind/Name under an owner-name
-	// override; Kind/Name stay the real object, used for key(), recycling
-	// and event attribution.
-	IdentityKind string
-	IdentityName string
 	// UpdateMode is the Policy's mode for the kind. OnCreate targets get
 	// recommendations and WLR cache writes but are never recycled or
 	// resized: the webhook applies resources at pod admission.
@@ -46,12 +39,6 @@ func (w *workloadTarget) key() string {
 // member is what the apply step drives toward the Recommendation.
 func (w *workloadTarget) member() workload.Member {
 	return workload.Member{Kind: w.Kind, Object: w.Object, Pods: w.BarePodMembers}
-}
-
-// identity is the identity this target reports into: what Prometheus, the
-// WorkloadRecommendation and every health series are keyed by.
-func (w *workloadTarget) identity() promclient.WorkloadIdentity {
-	return promclient.WorkloadIdentity{Namespace: w.Namespace, OwnerKind: w.IdentityKind, OwnerName: w.IdentityName}
 }
 
 // targetsOf returns the apply targets of an identity policy governs: one per
@@ -83,8 +70,6 @@ func targetsOf(id *inventory.Identity, policyName string, mode sustainv1alpha1.U
 		Containers:     id.Containers,
 		InitContainers: id.InitContainers,
 		Object:         newest,
-		IdentityKind:   id.Key.OwnerKind,
-		IdentityName:   id.Key.OwnerName,
 		UpdateMode:     mode,
 		BarePodMembers: pods,
 	})
@@ -98,8 +83,6 @@ func targetFromMember(key promclient.WorkloadIdentity, m inventory.Member, mode 
 		Containers:     m.Containers,
 		InitContainers: m.InitContainers,
 		Object:         m.Object,
-		IdentityKind:   key.OwnerKind,
-		IdentityName:   key.OwnerName,
 		UpdateMode:     mode,
 	}
 }

@@ -98,22 +98,6 @@ func annotatedJob(ns, name, policy string) *batchv1.Job {
 	}
 }
 
-func annotatedRollout(ns, name, policy string) *rolloutsv1alpha1.Rollout {
-	return &rolloutsv1alpha1.Rollout{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: types.UID(name + "-uid")},
-		Spec: rolloutsv1alpha1.RolloutSpec{
-			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels:      map[string]string{"app": name},
-					Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: policy},
-				},
-				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
-			},
-		},
-	}
-}
-
 // testFullScheme registers every kind the reconciler lists or writes.
 func testFullScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -195,11 +179,9 @@ func usageFor(ns, kind, name string) *recommendertest.StaticInputs {
 // labelled app=name and carry controllerRef("Deployment", name).
 func deploymentTarget(ns, name string) *workloadTarget {
 	return &workloadTarget{
-		Kind:         "Deployment",
-		Name:         name,
-		Namespace:    ns,
-		IdentityKind: "Deployment",
-		IdentityName: name,
+		Kind:      "Deployment",
+		Name:      name,
+		Namespace: ns,
 		Containers: []corev1.Container{{
 			Name: "app",
 			Resources: corev1.ResourceRequirements{
@@ -330,7 +312,7 @@ func barePodTarget(t *testing.T, ns, ownerName string, pods ...*corev1.Pod) *wor
 			return targets[0]
 		}
 	}
-	return &workloadTarget{Kind: "Pod", Name: ownerName, Namespace: ns, IdentityKind: "Pod", IdentityName: ownerName}
+	return &workloadTarget{Kind: "Pod", Name: ownerName, Namespace: ns}
 }
 
 // podRecorder records which pods received a /resize subresource patch and
