@@ -459,6 +459,17 @@ port is undecorated. It returns the effective settings (`Request.Resources`,
 every default explicit), the outcome and the trace, so the Simulator shows
 the Policy's values and the recommender's defaults without holding either.
 
+`TestSimulationRecommendsWhatTheControllerStores` holds that parity end to
+end. It lives in `internal/controller` as the external `controller_test`
+package, which can import the dashboard and reach `Reconcile` through
+`ReconcilerForTest` (`export_test.go`): from one fake cluster and one
+`StaticInputs` it runs a reconcile, then `POST /api/simulate` and
+`GET /api/policies/{name}/batch-simulate` through `Server.Handler`, and
+compares their Recommendation, outcome and trace with the stored
+`WorkloadRecommendation`'s, for an owner-name group coordinated against one
+member's HPA, with init containers excluded and not. A change to how either
+side builds the identity or picks the spec fails it.
+
 The override is validated once, on the server, after the merge
 (`simulationSettings.violations`, `simulation_settings.go`): it is rejected
 for a rule the merged settings break that the starting Policy did not already

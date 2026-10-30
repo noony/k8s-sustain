@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -173,33 +171,25 @@ func TestRunSimulation_StartsFromTheChosenPolicy(t *testing.T) {
 	}
 }
 
-// With no override, a Simulation hands Compute the Request the controller
-// would: the governing Policy's right-sizing spec, init containers excluded,
-// a kept request, and the autoscaler of the member it targets.
-func TestRunSimulation_WithoutOverrideComputesTheControllersRequest(t *testing.T) {
+// A kept request is recommended nothing, so a Simulation draws no
+// recommendation series for it. That a Simulation without an override equals
+// the controller's Recommendation is held by the controller's
+// TestSimulationRecommendsWhatTheControllerStores.
+func TestRunSimulation_AKeptRequestDrawsNoSeries(t *testing.T) {
 	srv := newCoordinatedSimulateServer(t)
 	ctx := context.Background()
 	var policy sustainv1alpha1.Policy
 	if err := srv.K8sClient.Get(ctx, client.ObjectKey{Name: "p"}, &policy); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	policy.Spec.RightSizing.ExcludeInitContainers = true
 	policy.Spec.RightSizing.ResourcesConfigs.Memory.Requests.KeepRequest = true
 	if err := srv.K8sClient.Update(ctx, &policy); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	var green appsv1.Deployment
-	if err := srv.K8sClient.Get(ctx, client.ObjectKey{Namespace: "default", Name: "web-green"}, &green); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	green.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "migrate"}}
-	if err := srv.K8sClient.Update(ctx, &green); err != nil {
-		t.Fatalf("update: %v", err)
-	}
 	key := promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"}
 	srv.Inputs = recommendertest.NewStaticInputs().Set(key, &recommender.WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"main": 1, "migrate": 0.5},
-		MemPerPod: promclient.ContainerValues{"main": 64 << 20, "migrate": 64 << 20},
+		CPUPerPod: promclient.ContainerValues{"main": 1},
+		MemPerPod: promclient.ContainerValues{"main": 64 << 20},
 	})
 
 	res, err := srv.runSimulation(ctx, simulateRequest{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"})
@@ -207,19 +197,8 @@ func TestRunSimulation_WithoutOverrideComputesTheControllersRequest(t *testing.T
 		t.Fatalf("runSimulation: %v", err)
 	}
 
-	id, err := srv.identity(ctx, key)
-	if err != nil {
-		t.Fatalf("identity: %v", err)
-	}
-	a := recommender.Assemble(ctx, srv.Inputs, autoscaler.NewNamespacedSnapshot(srv.K8sClient), policy.Spec.RightSizing, []*inventory.Identity{id})[0]
-	want := recommender.Compute(a.Request)
-	if res.Outcome != simulationOutcome(want.Outcome) ||
-		!reflect.DeepEqual(res.Containers, simulationContainers(want, a.Request.Inputs())) ||
-		!equality.Semantic.DeepEqual(res.Trace, want.Traces) {
-		t.Errorf("simulation = %s %+v, want the controller's %v %+v", res.Outcome, res.Containers, want.Outcome, want.Recs)
-	}
-	if c := res.Containers["main"]; c.CPURequest != "2200m" || c.MemoryRequest != "" || len(res.Containers) != 1 {
-		t.Errorf("containers = %+v, want main alone, coordinated, with its memory request kept", res.Containers)
+	if c := res.Containers["main"]; c.CPURequest != "2200m" || c.MemoryRequest != "" {
+		t.Errorf("main = %+v, want its CPU coordinated and its memory request kept", c)
 	}
 	if res.CPURecommendations == nil || res.MemRecommendations != nil {
 		t.Errorf("recommendation series cpu=%v memory=%v, want none for the kept memory request", res.CPURecommendations, res.MemRecommendations)
