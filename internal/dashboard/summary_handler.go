@@ -170,8 +170,6 @@ func (s *Server) computeAndCacheSummary() (val any, err error) {
 	return summaryComputation{resp: resp, failedReads: failedReads}, nil
 }
 
-// computeSummary runs the Prometheus and board fan-out and assembles the
-// response, returning it alongside the number of reads that failed.
 func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) {
 	resp := summaryResponseV2{
 		Headroom:  map[string]headroomBreakdown{},

@@ -117,13 +117,11 @@ const (
 	limitAdjuster
 )
 
-// slot places a signal's stage: its role, and the resource it shapes.
 type slot struct {
 	role     role
 	resource resourceKind
 }
 
-// inSlot lists the signals whose stage runs in sl, in their listed order.
 func inSlot(sl slot) []signal {
 	var out []signal
 	for _, s := range signals {
@@ -134,7 +132,6 @@ func inSlot(sl slot) []signal {
 	return out
 }
 
-// contribution is a signal's value for one container's request or limit.
 type contribution struct {
 	value float64
 	// anchors says the value justifies a request even with no usage behind

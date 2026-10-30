@@ -27,8 +27,7 @@ type Assembled struct {
 	// Autoscaler is what targets each of the identity's members. The Request
 	// is shaped against its Info.
 	Autoscaler autoscaler.Group
-	// Err is why the identity's inputs could not be read.
-	Err error
+	Err        error
 }
 
 // Assemble turns each identity into the Request spec makes of it, in order:

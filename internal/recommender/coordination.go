@@ -87,7 +87,6 @@ const (
 	factScaled = "scaled"
 )
 
-// coordinated is a request autoscaler coordination shaped.
 type coordinated struct {
 	// overhead is 110 / the autoscaler's averageUtilization target for the
 	// resource (clamped to 1-99), or 1 when it has none.

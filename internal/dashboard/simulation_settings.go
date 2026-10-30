@@ -94,7 +94,6 @@ func (s simulationSettings) override(patch json.RawMessage) (simulationSettings,
 	return out, nil
 }
 
-// checkQuantities rejects a malformed quantity in doc, naming its field.
 func checkQuantities(doc []byte) error {
 	var settings struct {
 		ResourcesConfigs map[string]map[string]any `json:"resourcesConfigs"`

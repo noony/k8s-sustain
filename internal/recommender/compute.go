@@ -104,10 +104,8 @@ type Request struct {
 	now time.Time
 }
 
-// Now is the instant the Request computes as of.
 func (r Request) Now() time.Time { return r.now }
 
-// Inputs are what the Request computes from.
 func (r Request) Inputs() *WorkloadInputs { return r.inputs }
 
 // Resources are the Policy's resources the Request computes with, every
@@ -141,8 +139,7 @@ type Result struct {
 	// Recs holds the computed requests and limits whatever the Outcome, so a
 	// Simulation can show what a Too young identity would get. Only a
 	// Recommended result is a Recommendation.
-	Recs map[string]workload.ContainerRecommendation
-	// Traces records how each container in Recs was computed.
+	Recs   map[string]workload.ContainerRecommendation
 	Traces map[string]sustainv1alpha1.ContainerTrace
 }
 
@@ -200,15 +197,12 @@ func computeContainer(c corev1.Container, req Request) (workload.ContainerRecomm
 	return rec, tr, true
 }
 
-// sizing is one resource of a container as its chain left it.
 type sizing struct {
 	request resource.Quantity
 	limit   limit
 	trace   sustainv1alpha1.ResourceTrace
 }
 
-// contributed is what one signal in role contributed to a container's
-// resource.
 type contributed struct {
 	signal signal
 	role   role
@@ -239,7 +233,6 @@ func stagesOf(cs []contributed, in *WorkloadInputs, container string, determined
 	return out
 }
 
-// Stage names of the request side that are not a signal's.
 const (
 	stageHeadroom = "headroom"
 	stageClamp    = "clamp"
@@ -285,13 +278,11 @@ func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justifi
 	return out, true
 }
 
-// quantityStage is a stage holding q and nothing else.
 func quantityStage(name string, q resource.Quantity) sustainv1alpha1.TraceStage {
 	v := q.DeepCopy()
 	return sustainv1alpha1.TraceStage{Stage: name, Value: &v}
 }
 
-// stageNamed finds the stage named name in stages.
 func stageNamed(stages []sustainv1alpha1.TraceStage, name string) (sustainv1alpha1.TraceStage, bool) {
 	i := slices.IndexFunc(stages, func(s sustainv1alpha1.TraceStage) bool { return s.Stage == name })
 	if i < 0 {

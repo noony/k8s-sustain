@@ -50,8 +50,6 @@ type simulationContainerResult struct {
 	MemoryUsageBytes   float64 `json:"memoryUsageBytes,omitempty"`
 }
 
-// errBasePolicy is a Policy a Simulation should start from that could not be
-// read.
 var errBasePolicy = errors.New("reading the Policy to simulate")
 
 // runSimulation computes the Request the controller would make of the

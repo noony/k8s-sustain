@@ -23,11 +23,10 @@ import (
 // recordedInputs serves canned inputs by identity, fails those in failed,
 // gives every other identity empty inputs, and records each call.
 type recordedInputs struct {
-	inputs map[promclient.WorkloadIdentity]*WorkloadInputs
-	failed map[promclient.WorkloadIdentity]error
-	cfgs   []sustainv1alpha1.ResourcesConfigs
-	calls  [][]InputsRequest
-	// returned is when the last call returned.
+	inputs   map[promclient.WorkloadIdentity]*WorkloadInputs
+	failed   map[promclient.WorkloadIdentity]error
+	cfgs     []sustainv1alpha1.ResourcesConfigs
+	calls    [][]InputsRequest
 	returned time.Time
 }
 

@@ -32,9 +32,8 @@ type workloadRow struct {
 	LastSeenAt          string               `json:"lastSeenAt,omitempty"`
 }
 
-// rowFor renders one identity's status. A Departed identity shows the
-// containers of its stored snapshot and when its Recommendation was last
-// refreshed.
+// A Departed identity's row shows the containers of its stored snapshot and
+// when its Recommendation was last refreshed.
 func rowFor(st identityStatus) workloadRow {
 	id := st.id
 	row := workloadRow{

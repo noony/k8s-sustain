@@ -22,11 +22,9 @@ const (
 
 const factRatio = "ratio"
 
-// limit is a resource's limit as its chain carries it.
 type limit struct {
 	// value is the limit, nil for none.
-	value *resource.Quantity
-	// removed strips the container's limit.
+	value   *resource.Quantity
 	removed bool
 	// set says the Recommendation sets value. Otherwise the container keeps
 	// its own limit, which value then is.
@@ -42,7 +40,6 @@ func (l limit) recommendation() (*resource.Quantity, bool) {
 	return nil, l.removed
 }
 
-// stage is a limit stage named name holding l.
 func (l limit) stage(name string, facts map[string]string) sustainv1alpha1.TraceStage {
 	st := sustainv1alpha1.TraceStage{Stage: name, Removed: l.removed, Facts: facts}
 	if l.value != nil {

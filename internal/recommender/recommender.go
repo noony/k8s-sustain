@@ -107,8 +107,6 @@ func (r resourceKind) of(rl corev1.ResourceList) *resource.Quantity {
 	return &q
 }
 
-// formatFactor renders a factor or ratio for a trace fact, to four
-// significant digits.
 func formatFactor(f float64) string {
 	return strconv.FormatFloat(f, 'g', 4, 64)
 }
