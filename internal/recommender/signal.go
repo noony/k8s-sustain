@@ -33,7 +33,8 @@ type signal interface {
 	// contract is what query reads from Prometheus and what that rests on.
 	contract() PromContract
 	// collect replaces the signal's values in in with those of one identity's
-	// samples. No samples leaves it holding empty values.
+	// samples. No samples leaves it holding empty values. It reads a sample
+	// of every rule contract declares, named as the query returns it.
 	collect(in *WorkloadInputs, samples []promclient.ShardSample)
 	// observed lists the containers in holds values of the signal for.
 	observed(in *WorkloadInputs) []string

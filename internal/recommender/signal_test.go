@@ -2,6 +2,7 @@ package recommender
 
 import (
 	"context"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -172,6 +173,26 @@ func TestSignals_ContractDeclaresTheRulesItsQueryReads(t *testing.T) {
 		read := ruleRef.FindAllString(s.query(sustainv1alpha1.ResourcesConfigs{}, dottedShard), -1)
 		if got, want := slices.Sorted(slices.Values(read)), slices.Sorted(slices.Values(c.Rules)); !slices.Equal(got, want) {
 			t.Errorf("%s reads %v, its contract declares %v", s.name(), got, want)
+		}
+	}
+}
+
+// Each signal's collect reads a sample of every rule its contract declares,
+// named as Prometheus returns it: with the test above, a series its query can
+// return is never dropped for a metric name its collect does not handle.
+func TestSignals_CollectReadsEveryRuleItsContractDeclares(t *testing.T) {
+	for _, s := range signals {
+		for _, rule := range s.contract().Rules {
+			t.Run(s.name()+"/"+rule, func(t *testing.T) {
+				var none, read WorkloadInputs
+				s.collect(&none, nil)
+
+				s.collect(&read, []promclient.ShardSample{{Identity: prodID("api"), Container: "app", Metric: rule, Value: 1}})
+
+				if reflect.DeepEqual(read, none) {
+					t.Errorf("collect left %+v as no samples would: it drops %s", read, rule)
+				}
+			})
 		}
 	}
 }

@@ -393,7 +393,9 @@ the inputs port (`WithLiveOOMs`), not through `Compute`. To add one:
    the package only `Assemble` builds one). `signal_test.go` shows that a signal defined only in a test
    is fetched, and computed on the limit side with its own trace stage, from
    its list entry alone, and checks that every listed signal's contract
-   declares exactly the rules its query reads
+   declares exactly the rules its query reads and that its `collect` reads a
+   sample of each of them, so no series its query returns is dropped for a
+   metric name `collect` does not handle
 6. Add it to the signals table in
    [Recommendation Pipeline](concepts/recommendation-pipeline.md#signals) and
    describe its stage there
