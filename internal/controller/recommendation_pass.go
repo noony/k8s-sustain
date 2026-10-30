@@ -15,28 +15,16 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// outcome is what the recommendation pass decided for one identity.
-type outcome int
-
-const (
-	// outcomeRecommended: the identity has a Recommendation.
-	outcomeRecommended outcome = iota
-	// outcomeTooYoung: the identity is Too young to be recommended.
-	outcomeTooYoung
-	// outcomeNoData: Prometheus answered but had nothing to recommend from.
-	outcomeNoData
-	// outcomeFetchFailed: the identity's inputs could not be read.
-	outcomeFetchFailed
-	// outcomeNotFetched: every live member is in retry backoff, so the
-	// identity was left out of the fetch.
-	outcomeNotFetched
-)
+// outcomeNotFetched is the outcome of an identity the pass left out of the
+// fetch, which records nothing.
+const outcomeNotFetched sustainv1alpha1.RecommendationOutcome = ""
 
 // recommendation is the recommendation pass's verdict on one identity.
 type recommendation struct {
-	outcome outcome
+	// outcome is what the pass records for the identity, or outcomeNotFetched.
+	outcome sustainv1alpha1.RecommendationOutcome
 	// recs is the identity's Recommendation and traces how it was derived,
-	// both set only for outcomeRecommended.
+	// both set only for a Computed outcome.
 	recs   map[string]workload.ContainerRecommendation
 	traces map[string]sustainv1alpha1.ContainerTrace
 	// inputs is what the identity was computed from, nil unless fetched.
@@ -44,7 +32,8 @@ type recommendation struct {
 	// autoscalers is what targets each of the identity's members, read for
 	// every identity the pass fetched.
 	autoscalers autoscaler.Group
-	// err is why the inputs are unavailable, set only for outcomeFetchFailed.
+	// err is why the inputs are unavailable, set only for a FetchFailed
+	// outcome.
 	err error
 	computed
 }
@@ -71,23 +60,12 @@ type oomFloor struct {
 }
 
 // decision is what the verdict records in the identity's
-// WorkloadRecommendation; false for an identity that was not fetched, which
-// records nothing.
+// WorkloadRecommendation; false for an identity that was not fetched.
 func (rec recommendation) decision(departed bool) (wlrcache.Decision, bool) {
-	d := wlrcache.Decision{Departed: departed}
-	switch rec.outcome {
-	case outcomeRecommended:
-		d.Outcome, d.Recs, d.Traces = sustainv1alpha1.OutcomeComputed, rec.recs, rec.traces
-	case outcomeTooYoung:
-		d.Outcome = sustainv1alpha1.OutcomeTooYoung
-	case outcomeNoData:
-		d.Outcome = sustainv1alpha1.OutcomeNoData
-	case outcomeFetchFailed:
-		d.Outcome = sustainv1alpha1.OutcomeFetchFailed
-	default:
-		return d, false
+	if rec.outcome == outcomeNotFetched {
+		return wlrcache.Decision{}, false
 	}
-	return d, true
+	return wlrcache.Decision{Departed: departed, Outcome: rec.outcome, Recs: rec.recs, Traces: rec.traces}, true
 }
 
 // recommend is the recommendation pass: one verdict per identity on the
@@ -116,7 +94,7 @@ func (r *PolicyReconciler) recommend(ctx context.Context, policy *sustainv1alpha
 	for k, a := range assembled {
 		i := at[k]
 		if a.Err != nil {
-			out[i] = recommendation{outcome: outcomeFetchFailed, autoscalers: a.Autoscaler, err: a.Err}
+			out[i] = recommendation{outcome: sustainv1alpha1.OutcomeFetchFailed, autoscalers: a.Autoscaler, err: a.Err}
 			continue
 		}
 		g.Go(func() error {
@@ -148,16 +126,13 @@ func computeIdentity(ctx context.Context, id *inventory.Identity, a recommender.
 			"governingAutoscaler", info.Kind, "disagreeing", a.Autoscaler.Disagreeing)
 	}
 	out := recommender.Compute(a.Request)
+	res.outcome = out.Outcome.Recorded()
 	switch out.Outcome {
 	case recommender.TooYoung:
-		res.outcome = outcomeTooYoung
 		log.FromContext(ctx).Info("skipping recommendation: workload too young",
 			"kind", key.OwnerKind, "name", key.OwnerName, "namespace", key.Namespace,
 			"age", recommender.AgeForLog(id.Since, a.Request.Now()), "minAge", recommender.MinWorkloadAge)
-	case recommender.NoData:
-		res.outcome = outcomeNoData
-	default:
-		res.outcome = outcomeRecommended
+	case recommender.Recommended:
 		res.recs = out.Recs
 		res.traces = out.Traces
 		res.oomFloors = oomFloorsOf(out.Traces, a.Request.Now())

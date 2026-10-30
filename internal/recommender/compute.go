@@ -84,6 +84,17 @@ const (
 	NoData
 )
 
+// Recorded is the status.outcome a WorkloadRecommendation records for o.
+func (o Outcome) Recorded() sustainv1alpha1.RecommendationOutcome {
+	switch o {
+	case TooYoung:
+		return sustainv1alpha1.OutcomeTooYoung
+	case NoData:
+		return sustainv1alpha1.OutcomeNoData
+	}
+	return sustainv1alpha1.OutcomeComputed
+}
+
 // Request is one identity's recommendation computation, the unit the
 // controller and the dashboard's Simulations share. Only Assemble builds one,
 // so every Request carries the instant it computes as of: a zero instant would

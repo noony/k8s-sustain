@@ -98,7 +98,7 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 
-		wbr.Outcome = simulationOutcome(r.res.Outcome)
+		wbr.Outcome = r.res.Outcome.Recorded()
 		cpuTally, memTally := &cpu, &mem
 		if r.res.Outcome != recommender.Recommended {
 			// A Too young identity's numbers are shown but would not be
@@ -174,18 +174,6 @@ func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1al
 		out[i].res = recommender.Compute(a.Request)
 	}
 	return out
-}
-
-// simulationOutcome names a computed outcome as a WorkloadRecommendation
-// records it.
-func simulationOutcome(o recommender.Outcome) sustainv1alpha1.RecommendationOutcome {
-	switch o {
-	case recommender.TooYoung:
-		return sustainv1alpha1.OutcomeTooYoung
-	case recommender.NoData:
-		return sustainv1alpha1.OutcomeNoData
-	}
-	return sustainv1alpha1.OutcomeComputed
 }
 
 func deltaPercent(current, recommended int64) float64 {

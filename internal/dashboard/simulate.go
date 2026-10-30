@@ -121,7 +121,7 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	return &simulationResult{
 		Policy:             policy,
 		Effective:          settings,
-		Outcome:            simulationOutcome(res.Outcome),
+		Outcome:            res.Outcome.Recorded(),
 		Containers:         simulationContainers(res, a.Request.Inputs()),
 		Trace:              res.Traces,
 		InitContainers:     initContainerNamesOf(id),

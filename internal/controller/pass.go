@@ -28,7 +28,7 @@ type passReport []identityReport
 type identityReport struct {
 	key      promclient.WorkloadIdentity
 	departed bool
-	outcome  outcome
+	outcome  sustainv1alpha1.RecommendationOutcome
 	// resolved is set when the fetch returned a CPU or memory sample.
 	resolved bool
 	// err is why a departed identity failed: its inputs could not be read or
@@ -89,7 +89,7 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 		switch {
 		case rep.departed:
 			rep.err = errors.Join(recs[i].err, stored[i])
-		case recs[i].outcome == outcomeRecommended && stored[i] == nil:
+		case recs[i].outcome == sustainv1alpha1.OutcomeComputed && stored[i] == nil:
 			rep.held = recs[i].recs
 		default:
 			rep.held = recommendedOf(wlrcache.Held(w.id.Recommendation, policy.Name), recommender.ContainersOf(policy.Spec.RightSizing, w.id))
@@ -197,13 +197,13 @@ func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, clai
 
 // emitDepartedRefresh counts what a departed identity's pass decided, and
 // whether a Recommendation failed to be stored.
-func emitDepartedRefresh(ctx context.Context, id *inventory.Identity, o outcome, recordErr error) {
+func emitDepartedRefresh(ctx context.Context, id *inventory.Identity, o sustainv1alpha1.RecommendationOutcome, recordErr error) {
 	ns, kind := id.Key.Namespace, id.Key.OwnerKind
 	refresh := WLRRefreshNoData
 	switch {
-	case o == outcomeFetchFailed, o == outcomeRecommended && recordErr != nil:
+	case o == sustainv1alpha1.OutcomeFetchFailed, o == sustainv1alpha1.OutcomeComputed && recordErr != nil:
 		refresh = WLRRefreshError
-	case o == outcomeRecommended:
+	case o == sustainv1alpha1.OutcomeComputed:
 		refresh = WLRRefreshComputed
 	case len(id.Recommendation.Status.Containers) > 0:
 		// A cold start and a recommendation whose samples aged out both
@@ -255,7 +255,7 @@ func (p passReport) coverage() (requested, resolved, failed int) {
 		switch {
 		case rep.outcome == outcomeNotFetched:
 			continue
-		case rep.outcome == outcomeFetchFailed:
+		case rep.outcome == sustainv1alpha1.OutcomeFetchFailed:
 			failed++
 		case rep.resolved:
 			resolved++
@@ -276,7 +276,7 @@ func (p passReport) publication(health healthReport, attempts map[promclient.Wor
 			health:   health[rep.key],
 			computed: rep.computed,
 			attempts: attempts[rep.key],
-			tooYoung: rep.outcome == outcomeTooYoung,
+			tooYoung: rep.outcome == sustainv1alpha1.OutcomeTooYoung,
 		}
 		if rep.departed {
 			// Even when its fetch failed: no member is left for an
