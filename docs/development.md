@@ -664,7 +664,7 @@ The computation unit is the identity, not the workload object: a group of worklo
 - the spec's resources with every default explicit (`WithDefaults`: the window, the percentile and headroom unless the request is kept, `keepLimit` when no strategy is set), which the fetch and the computation both use and a Simulation returns as its effective settings;
 - one batch fetch, and one instant per batch taken once it returns: kills the live decorator merged in never postdate it.
 
-`Request` has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young). `Request.WithInputs` is the same Request computing from other inputs, which a Simulation's charts use for each past percentile.
+`Request` has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young). `Request.WithInputs` is the same Request computing from other inputs, and `Request.ForContainer` the same Request recommending one of its containers alone; a Simulation's recommendation chart computes each past percentile point with both, so a chart costs one container's computation per point (`recommendationSeries`).
 
 #### The Policy pass
 

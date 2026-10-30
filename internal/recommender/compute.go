@@ -121,6 +121,20 @@ func (r Request) WithInputs(in *WorkloadInputs) Request {
 	return r
 }
 
+// ForContainer is the Request recommending the container named name alone,
+// none when it does not recommend that container. Every container is
+// computed on its own, so its Recommendation is the one the whole Request
+// computes for it.
+func (r Request) ForContainer(name string) Request {
+	i := slices.IndexFunc(r.containers, func(c corev1.Container) bool { return c.Name == name })
+	if i < 0 {
+		r.containers = nil
+		return r
+	}
+	r.containers = r.containers[i : i+1 : i+1]
+	return r
+}
+
 // Result is Compute's answer for one identity.
 type Result struct {
 	Outcome Outcome

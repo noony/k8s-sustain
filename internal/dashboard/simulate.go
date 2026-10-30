@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 type simulationResult struct {
@@ -130,8 +132,8 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		Resources:          containerResourcesOf(id),
 		CPURequests:        cpuRequests,
 		MemoryRequests:     memRequests,
-		CPURecommendations: recommendationSeries(cpuRecSeries, a.Request, false),
-		MemRecommendations: recommendationSeries(memRecSeries, a.Request, true),
+		CPURecommendations: recommendationSeries(cpuRecSeries, a.Request, corev1.ResourceCPU),
+		MemRecommendations: recommendationSeries(memRecSeries, a.Request, corev1.ResourceMemory),
 	}, nil
 }
 
@@ -176,38 +178,46 @@ func simulationContainers(res recommender.Result, inputs *recommender.WorkloadIn
 	return out
 }
 
-// recommendationSeries computes, at each raw percentile point, the request the
-// identity's Request would have computed had the point been its percentile,
-// with the container's OOM kills, so the chart shows exactly what would be
-// applied at each step.
-func recommendationSeries(series promclient.ContainerTimeSeries, req recommender.Request, memory bool) promclient.ContainerTimeSeries {
+// recommendationSeries computes, at each raw percentile point of res, the
+// request the identity's Request would have computed for the container had
+// the point been its percentile, with the container's OOM kills, so the chart
+// shows exactly what would be applied at each step. Each point computes the
+// one container: a chart costs its points, not its points times the
+// identity's containers.
+func recommendationSeries(series promclient.ContainerTimeSeries, req recommender.Request, res corev1.ResourceName) promclient.ContainerTimeSeries {
 	if series == nil {
 		return nil
 	}
 	out := make(promclient.ContainerTimeSeries, len(series))
 	for name, points := range series {
-		clamped := make([]promclient.TimeValue, len(points))
+		one := req.ForContainer(name)
+		recs := make([]promclient.TimeValue, len(points))
 		for i, p := range points {
 			point := recommender.WorkloadInputs{OOM: map[string]recommender.OOM{}}
 			if oom, ok := req.Inputs().OOM[name]; ok {
 				point.OOM[name] = oom
 			}
-			if memory {
-				point.MemPerPod = promclient.ContainerValues{name: p.Value}
+			usage := promclient.ContainerValues{name: p.Value}
+			if res == corev1.ResourceMemory {
+				point.MemPerPod = usage
 			} else {
-				point.CPUPerPod = promclient.ContainerValues{name: p.Value}
+				point.CPUPerPod = usage
 			}
-			rec := recommender.Compute(req.WithInputs(&point)).Recs[name]
-			var v float64
-			switch {
-			case memory && rec.MemoryRequest != nil:
-				v = float64(rec.MemoryRequest.Value())
-			case !memory && rec.CPURequest != nil:
-				v = float64(rec.CPURequest.MilliValue()) / 1000.0
-			}
-			clamped[i] = promclient.TimeValue{Timestamp: p.Timestamp, Value: v}
+			rec := recommender.Compute(one.WithInputs(&point)).Recs[name]
+			recs[i] = promclient.TimeValue{Timestamp: p.Timestamp, Value: requestOf(rec, res)}
 		}
-		out[name] = clamped
+		out[name] = recs
 	}
 	return out
+}
+
+// requestOf is rec's request of res in cores or bytes, zero when it has none.
+func requestOf(rec workload.ContainerRecommendation, res corev1.ResourceName) float64 {
+	switch {
+	case res == corev1.ResourceMemory && rec.MemoryRequest != nil:
+		return float64(rec.MemoryRequest.Value())
+	case res == corev1.ResourceCPU && rec.CPURequest != nil:
+		return float64(rec.CPURequest.MilliValue()) / 1000.0
+	}
+	return 0
 }

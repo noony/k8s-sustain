@@ -115,8 +115,8 @@ func TestRecommendationSeries_ComputesEachPointWithTheIdentitysOOMs(t *testing.T
 	at := time.Unix(1_700_000_000, 0)
 	points := func(v float64) []promclient.TimeValue { return []promclient.TimeValue{{Timestamp: at, Value: v}} }
 
-	mem := recommendationSeries(promclient.ContainerTimeSeries{"app": points(100 * mib), "side": points(100 * mib)}, req, true)
-	cpu := recommendationSeries(promclient.ContainerTimeSeries{"app": points(0.1)}, req, false)
+	mem := recommendationSeries(promclient.ContainerTimeSeries{"app": points(100 * mib), "side": points(100 * mib)}, req, corev1.ResourceMemory)
+	cpu := recommendationSeries(promclient.ContainerTimeSeries{"app": points(0.1)}, req, corev1.ResourceCPU)
 
 	if got := mem["app"][0].Value; got != 200*mib {
 		t.Errorf("app memory = %v, want the 200Mi OOM floor", got)

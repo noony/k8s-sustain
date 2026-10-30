@@ -6,6 +6,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/ptr"
 
@@ -55,6 +56,39 @@ func TestCompute_DeclaredContainersBoundTheResult(t *testing.T) {
 	}
 	if rec := res.Recs["app"]; rec.CPURequest == nil || rec.MemoryRequest == nil {
 		t.Errorf("app = %+v, want CPU and memory requests", rec)
+	}
+}
+
+// A Request narrowed to one container recommends it exactly as the whole
+// Request does, a sibling's OOM kill excusing the identity's age included,
+// and recommends nothing for a container it does not hold. The Request it
+// narrows still recommends every container.
+func TestRequest_ForContainer(t *testing.T) {
+	req := Request{
+		containers: containers("app", "side", "migrate"),
+		inputs: &WorkloadInputs{
+			CPUPerPod: promclient.ContainerValues{"app": 1, "side": 0.2, "migrate": 0.5},
+			MemPerPod: promclient.ContainerValues{"app": 64 * mib, "side": 32 * mib, "migrate": 16 * mib},
+			OOM:       map[string]OOM{"app": {Kills: 1, LimitBytes: 128 * mib}},
+		},
+		since: now.Add(-time.Minute),
+		now:   now,
+	}
+	whole := Compute(req)
+
+	side := Compute(req.ForContainer("side"))
+	absent := Compute(req.ForContainer("absent"))
+
+	if side.Outcome != Recommended || len(side.Recs) != 1 ||
+		!equality.Semantic.DeepEqual(side.Recs["side"], whole.Recs["side"]) ||
+		!equality.Semantic.DeepEqual(side.Traces["side"], whole.Traces["side"]) {
+		t.Errorf("side alone = %v %+v, want %+v as the whole Request computes it", side.Outcome, side.Recs, whole.Recs["side"])
+	}
+	if absent.Outcome != NoData || len(absent.Recs) != 0 {
+		t.Errorf("absent = %v %+v, want nothing recommended", absent.Outcome, absent.Recs)
+	}
+	if got := Compute(req); len(got.Recs) != 3 {
+		t.Errorf("the narrowed Request recommends %v, want all three containers", got.Recs)
 	}
 }
 
