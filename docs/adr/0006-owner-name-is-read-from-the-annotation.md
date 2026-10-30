@@ -12,7 +12,7 @@ The recording rules could not read an annotation: the bundled kube-state-metrics
 
 - The webhook fails open. A pod admitted during a webhook timeout or outage, or created before k8s-sustain was installed, carried the annotation but not the label. The controller grouped it under the override identity while Prometheus mapped it to its real owner, or not at all for a bare pod, so its usage silently dropped out of the identity's Recommendation, and nothing reported it.
 - The webhook mutated pods it does not govern: pods that opt out, that no Policy selects, and pods in `--excluded-namespaces` whenever the `MutatingWebhookConfiguration` still sent them.
-- It forced workarounds. The label was on pods but never on pod templates, so the controller and the webhook saw different labels, and [ADR 0004](0004-governance-is-decided-on-the-pod-template.md) had the Policy CRD reject `k8s.sustain.io/owner-name` as a selector key.
+- It forced workarounds. The label was on pods but never on pod templates, so the controller and the webhook saw different labels, and the Policy CRD had to reject `k8s.sustain.io/owner-name` as a selector key along with the labels controllers add to pods.
 - It copied metadata into the selection space: a grouping request became a label any selector could match.
 
 kube-state-metrics exports allowlisted annotations as `kube_pod_annotations{annotation_<key>}` (`--metric-annotations-allowlist`, since v2.2; the bundled subchart runs 2.18).
