@@ -9,7 +9,6 @@ export type KeyPath<T> = T extends readonly unknown[]
       }[keyof T & string]
     : never
 
-/** What T holds at path P. */
 export type ValueAt<T, P> = P extends readonly [infer K, ...infer Rest]
   ? K extends keyof NonNullable<T>
     ? ValueAt<NonNullable<T>[K], Rest>

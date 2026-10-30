@@ -3,7 +3,6 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from
 import {
   api,
   ApiError,
-  type MergePatch,
   type PolicySummary,
   type SimulationResult,
   type SimulateRequest,
@@ -11,7 +10,6 @@ import {
   type SimulationSettings,
   type RecommendationContainer,
   type Resource,
-  type ResourceConfig,
   type WorkloadListData,
 } from '../lib/api'
 import {
@@ -106,19 +104,19 @@ const simulating = ref(false)
 const liveMessage = ref('')
 const workloadList = ref<WorkloadListData['items']>([])
 
-type ResourcePath = KeyPath<ResourceConfig>
 type SettingPath = KeyPath<SimulationSettings>
 
-const resourceSetting = {
-  window: ['window'],
-  requests: ['requests'],
-  keepRequest: ['requests', 'keepRequest'],
-  percentile: ['requests', 'percentile'],
-  headroom: ['requests', 'headroom'],
-  minAllowed: ['requests', 'minAllowed'],
-  maxAllowed: ['requests', 'maxAllowed'],
-  limits: ['limits'],
-} as const satisfies Record<string, ResourcePath>
+const resourceSetting = (r: Resource) =>
+  ({
+    window: ['resourcesConfigs', r, 'window'],
+    requests: ['resourcesConfigs', r, 'requests'],
+    keepRequest: ['resourcesConfigs', r, 'requests', 'keepRequest'],
+    percentile: ['resourcesConfigs', r, 'requests', 'percentile'],
+    headroom: ['resourcesConfigs', r, 'requests', 'headroom'],
+    minAllowed: ['resourcesConfigs', r, 'requests', 'minAllowed'],
+    maxAllowed: ['resourcesConfigs', r, 'requests', 'maxAllowed'],
+    limits: ['resourcesConfigs', r, 'limits'],
+  }) as const satisfies Record<string, SettingPath>
 
 const workloadSetting = {
   coordination: ['autoscalerCoordination', 'enabled'],
@@ -126,40 +124,29 @@ const workloadSetting = {
   excludeInit: ['excludeInitContainers'],
 } as const satisfies Record<string, SettingPath>
 
-function editResource<P extends ResourcePath>(
-  r: Resource,
-  path: P,
-  value: ValueAt<MergePatch<ResourceConfig>, P>,
-) {
-  const configs = (override.value.resourcesConfigs ??= {})
-  setPatch<ResourceConfig, P>((configs[r] ??= {}), path, value)
-  scheduleSimulation()
-}
-
-function editWorkload<P extends SettingPath>(path: P, value: ValueAt<SimulationOverride, P>) {
+function edit<P extends SettingPath>(path: P, value: ValueAt<SimulationOverride, P>) {
   setPatch<SimulationSettings, P>(override.value, path, value)
   scheduleSimulation()
 }
 
 function setWindow(r: Resource, v: string) {
   form[r].window = v
-  editResource(r, resourceSetting.window, v || null)
+  edit(resourceSetting(r).window, v || null)
 }
 function setRequest(r: Resource, key: 'percentile' | 'headroom', v: number) {
   form[r][key] = v
-  editResource(r, resourceSetting[key], v)
+  edit(resourceSetting(r)[key], v)
 }
 function setBound(r: Resource, key: 'minAllowed' | 'maxAllowed', v: string) {
   form[r][key] = v
-  editResource(r, resourceSetting[key], v || null)
+  edit(resourceSetting(r)[key], v || null)
 }
 // A kept request takes no percentile, headroom or bounds; letting it go
 // again hands them back to the Policy.
 function setKeepRequest(r: Resource, keep: boolean) {
   form[r].keepRequest = keep
-  editResource(
-    r,
-    resourceSetting.requests,
+  edit(
+    resourceSetting(r).requests,
     keep
       ? { keepRequest: true, percentile: null, headroom: null, minAllowed: null, maxAllowed: null }
       : { keepRequest: false },
@@ -168,48 +155,42 @@ function setKeepRequest(r: Resource, keep: boolean) {
 function setLimit(r: Resource, mode: LimitMode, ratio: number) {
   form[r].limitMode = mode
   form[r].limitRatio = ratio
-  editResource(r, resourceSetting.limits, limitsPatch(mode, ratio))
+  edit(resourceSetting(r).limits, limitsPatch(mode, ratio))
 }
 function setCoordination(enabled: boolean) {
   form.coordination = enabled
-  editWorkload(workloadSetting.coordination, enabled)
+  edit(workloadSetting.coordination, enabled)
 }
 function setAnchor(v: string) {
   form.anchor = v
-  editWorkload(workloadSetting.anchor, v === '' ? null : Number(v))
+  edit(workloadSetting.anchor, v === '' ? null : Number(v))
 }
 function setExcludeInit(v: boolean) {
   form.excludeInit = v
-  editWorkload(workloadSetting.excludeInit, v)
+  edit(workloadSetting.excludeInit, v)
 }
 
 // Never over a control the user edited: the response may predate the edit.
 function fill(eff: SimulationSettings) {
-  for (const { key: r } of resources) {
-    const f = form[r]
-    const take = <P extends ResourcePath>(
-      p: P,
-      set: (v: ValueAt<ResourceConfig, P> | undefined) => void,
-    ) => {
-      if (!patches<ResourceConfig, P>(override.value.resourcesConfigs?.[r], p))
-        set(valueAt(eff.resourcesConfigs[r], p))
-    }
-    take(resourceSetting.window, (v) => (f.window = v ?? ''))
-    take(resourceSetting.keepRequest, (v) => (f.keepRequest = !!v))
-    take(resourceSetting.percentile, (v) => (f.percentile = v ?? f.percentile))
-    take(resourceSetting.headroom, (v) => (f.headroom = v ?? f.headroom))
-    take(resourceSetting.minAllowed, (v) => (f.minAllowed = v ?? ''))
-    take(resourceSetting.maxAllowed, (v) => (f.maxAllowed = v ?? ''))
-    take(resourceSetting.limits, (v) => {
-      f.limitMode = limitModeOf(v)
-      f.limitRatio = v?.requestsLimitsRatio ?? f.limitRatio
-    })
-  }
   const take = <P extends SettingPath>(
     p: P,
     set: (v: ValueAt<SimulationSettings, P> | undefined) => void,
   ) => {
     if (!patches<SimulationSettings, P>(override.value, p)) set(valueAt(eff, p))
+  }
+  for (const { key: r } of resources) {
+    const f = form[r]
+    const s = resourceSetting(r)
+    take(s.window, (v) => (f.window = v ?? ''))
+    take(s.keepRequest, (v) => (f.keepRequest = !!v))
+    take(s.percentile, (v) => (f.percentile = v ?? f.percentile))
+    take(s.headroom, (v) => (f.headroom = v ?? f.headroom))
+    take(s.minAllowed, (v) => (f.minAllowed = v ?? ''))
+    take(s.maxAllowed, (v) => (f.maxAllowed = v ?? ''))
+    take(s.limits, (v) => {
+      f.limitMode = limitModeOf(v)
+      f.limitRatio = v?.requestsLimitsRatio ?? f.limitRatio
+    })
   }
   take(workloadSetting.coordination, (v) => (form.coordination = !!v))
   take(workloadSetting.anchor, (v) => (form.anchor = v == null ? '' : String(v)))
