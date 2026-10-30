@@ -1,6 +1,7 @@
 package workload
 
 import (
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -8,14 +9,12 @@ import (
 // Injection is a Recommendation narrowed to the containers of one pod or pod
 // template, with what applying it sets on each.
 type Injection struct {
-	// Recs holds the recommendation of each container declared, by name.
 	Recs map[string]ContainerRecommendation
 	// Writes lists the containers whose resources change: containers first,
 	// then init containers, each in declaration order.
 	Writes []ContainerWrite
 }
 
-// ContainerWrite is what one container's resources become.
 type ContainerWrite struct {
 	Name string
 	// Init and Index locate the container: spec.initContainers[Index] when
@@ -25,6 +24,14 @@ type ContainerWrite struct {
 	Resources corev1.ResourceRequirements
 	// RaisedLimits names each resource whose limit was raised to its request.
 	RaisedLimits []corev1.ResourceName
+}
+
+// LogRaisedLimits logs at debug the limits Inject raised to their request,
+// for whoever writes w.
+func (w ContainerWrite) LogRaisedLimits(logger logr.Logger) {
+	if len(w.RaisedLimits) > 0 {
+		logger.V(1).Info("raised limits to the recommended request", "container", w.Name, "resources", w.RaisedLimits)
+	}
 }
 
 // Inject narrows recs to the containers declared, and to the init containers

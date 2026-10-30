@@ -931,8 +931,8 @@ func TestApply_InPlace_DeferredWithNewTargetPatches(t *testing.T) {
 	}
 }
 
-// applyRecToContainer compares before setting, so a pod already at target must
-// submit no patch at all rather than an empty one every cycle.
+// Inject writes only what changes, so a pod already at target must submit no
+// patch at all rather than an empty one every cycle.
 func TestApply_InPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
 	fresh := runningPod("fresh", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")})
 

@@ -698,9 +698,7 @@ func resized(logger logr.Logger, pod *corev1.Pod, recs map[string]ContainerRecom
 		default:
 			continue
 		}
-		if len(w.RaisedLimits) > 0 {
-			logger.V(1).Info("raised limits to the recommended request", "container", w.Name, "resources", w.RaisedLimits)
-		}
+		w.LogRaisedLimits(logger)
 	}
 	return containers, initContainers, regChanged, initChanged
 }
