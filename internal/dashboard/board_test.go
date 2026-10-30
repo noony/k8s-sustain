@@ -92,7 +92,7 @@ func attentionNames(g attentionGroup) []string {
 func TestOverviewCountsEachIdentityOnceUnderItsRiskState(t *testing.T) {
 	got := overview(t, riskBoardServer(t))
 
-	counts := [5]int{got.KPI.ConflictedCount, got.KPI.BlockedCount, got.KPI.AtRiskCount, got.KPI.DriftedCount, got.KPI.CoordinatedCount}
+	counts := [5]int{got.Attention[riskConflicted].Total, got.Attention[riskBlocked].Total, got.Attention[riskAtRisk].Total, got.Attention[riskDrifted].Total, got.KPI.CoordinatedCount}
 	if want := [5]int{1, 2, 2, 1, 1}; counts != want {
 		t.Errorf("conflicted/blocked/at-risk/drifted/coordinated = %v, want %v (split counts as Conflicted despite its OOM, gone is no identity)", counts, want)
 	}
@@ -130,8 +130,8 @@ func TestOverviewAttentionListIsCappedButCountsEveryIdentity(t *testing.T) {
 	if len(drift.Rows) != maxAttentionRows || drift.Rows[0].Name != "w14" {
 		t.Errorf("drift rows = %v, want the %d with the most stale pods, w14 first", attentionNames(drift), maxAttentionRows)
 	}
-	if drift.Total != maxAttentionRows+5 || got.KPI.DriftedCount != maxAttentionRows+5 {
-		t.Errorf("drift total/KPI = %d/%d, want every drifted identity", drift.Total, got.KPI.DriftedCount)
+	if drift.Total != maxAttentionRows+5 {
+		t.Errorf("drift total = %d, want every drifted identity", drift.Total)
 	}
 }
 
@@ -141,21 +141,16 @@ func TestOverviewCountsMatchTheWorkloadsList(t *testing.T) {
 	srv := riskBoardServer(t)
 	got := overview(t, srv)
 
-	for state, count := range map[riskState]int{
-		riskConflicted: got.KPI.ConflictedCount,
-		riskBlocked:    got.KPI.BlockedCount,
-		riskAtRisk:     got.KPI.AtRiskCount,
-		riskDrifted:    got.KPI.DriftedCount,
-	} {
+	for _, state := range []riskState{riskConflicted, riskBlocked, riskAtRisk, riskDrifted} {
 		rec := httptest.NewRecorder()
 		srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads?risk="+string(state), nil))
 		var page struct {
 			Total int `json:"total"`
 		}
 		decodeEnvelopeData(t, rec.Body, &page)
-		if page.Total != count || got.Attention[state].Total != count {
-			t.Errorf("%s: KPI %d, attention total %d, /api/workloads total %d, want all equal",
-				state, count, got.Attention[state].Total, page.Total)
+		if page.Total != got.Attention[state].Total {
+			t.Errorf("%s: attention total %d, /api/workloads total %d, want equal",
+				state, got.Attention[state].Total, page.Total)
 		}
 	}
 }

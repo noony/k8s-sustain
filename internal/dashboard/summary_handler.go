@@ -28,10 +28,6 @@ type summaryKPI struct {
 	MemSavedBytes    float64   `json:"memSavedBytes"`
 	MemSavedRatio    float64   `json:"memSavedRatio"`
 	MemSpark7d       []float64 `json:"memSpark7d"`
-	ConflictedCount  int       `json:"conflictedCount"`
-	BlockedCount     int       `json:"blockedCount"`
-	AtRiskCount      int       `json:"atRiskCount"`
-	DriftedCount     int       `json:"driftedCount"`
 	CoordinatedCount int       `json:"coordinatedCount"`
 }
 
@@ -343,10 +339,6 @@ func (resp *summaryResponseV2) fillRisk(statuses []identityStatus) {
 			resp.KPI.CoordinatedCount++
 		}
 	}
-	resp.KPI.ConflictedCount = len(byState[riskConflicted])
-	resp.KPI.BlockedCount = len(byState[riskBlocked])
-	resp.KPI.AtRiskCount = len(byState[riskAtRisk])
-	resp.KPI.DriftedCount = len(byState[riskDrifted])
 	for i := range resp.Policies {
 		resp.Policies[i].BlockedCount = blockedByPolicy[resp.Policies[i].Name]
 	}
