@@ -28,12 +28,6 @@ type compiled struct {
 	invalid  bool
 }
 
-// NewPolicies indexes items, which it keeps: a governing Policy is returned as
-// a pointer into items.
-func NewPolicies(items []sustainv1alpha1.Policy, excludedNamespaces []string) *Policies {
-	return index(items, excludedNamespaces, nil)
-}
-
 // PolicyLister lists every Policy for a reader, compiling a Policy's label
 // selector once per stored version of it, so a reader that lists on every
 // admission or event recompiles only what changed. The zero value is ready
