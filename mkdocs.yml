@@ -134,6 +134,7 @@ nav:
           - Governance is decided on the pod template: adr/0004-governance-is-decided-on-the-pod-template.md
           - A limit never falls below its request: adr/0005-a-limit-never-falls-below-its-request.md
           - The owner-name override is read from the annotation: adr/0006-owner-name-is-read-from-the-annotation.md
+          - The Overview is built from the identity inventory: adr/0007-the-overview-is-built-from-the-identity-inventory.md
 
 extra:
   version:
