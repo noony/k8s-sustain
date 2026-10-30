@@ -390,10 +390,10 @@ Deployment's own name is never used for Prometheus queries or the
 - After `WINDOW + reconcile_interval`, CPU request drops to ~`220m` and
   memory to ~`110Mi` (identical target to `steady`, since the load profile
   and `resourcesConfigs` match) — and the recommendation is only queryable
-  under the renamed identity:
+  under the renamed identity (`make port-forward` serves the dashboard on
+  `:8090`):
 
   ```bash
-  kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090 &
   curl -s localhost:8090/api/workloads/scenario-custom-name/Deployment/renamed-app
   ```
 
