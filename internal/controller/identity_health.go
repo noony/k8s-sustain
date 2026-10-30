@@ -7,11 +7,8 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// healthReport is the health of every live identity a pass reported,
-// aggregated over its members.
 type healthReport map[promclient.WorkloadIdentity]healthState
 
-// blocked counts the Blocked identities.
 func (h healthReport) blocked() int {
 	n := 0
 	for _, s := range h {

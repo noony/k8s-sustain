@@ -22,12 +22,10 @@ import (
 // identity order.
 type passReport []identityReport
 
-// identityReport is what one pass did with one identity.
 type identityReport struct {
 	key      promclient.WorkloadIdentity
 	departed bool
 	outcome  sustainv1alpha1.RecommendationOutcome
-	// resolved is set when the fetch returned a CPU or memory sample.
 	resolved bool
 	// err is why a departed identity failed: its inputs could not be read or
 	// its decision stored. A live identity fails through its members.
@@ -41,7 +39,6 @@ type identityReport struct {
 	computed
 }
 
-// passIdentity is one identity on the pass's work-list.
 type passIdentity struct {
 	id *inventory.Identity
 	// run are the live members to apply to and backedOff those in retry
@@ -61,8 +58,6 @@ func (w passIdentity) fetched() bool {
 	return len(w.run) > 0
 }
 
-// claimed is the WorkloadRecommendation an identity's decision is recorded
-// into, or why the governing Policy could not claim it.
 type claimed struct {
 	wlr *sustainv1alpha1.WorkloadRecommendation
 	err error
@@ -109,8 +104,6 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 	return report
 }
 
-// workList turns the identities policy governs into the pass's work-list,
-// taking the backoff split of every live member.
 func (r *PolicyReconciler) workList(policy *sustainv1alpha1.Policy, governed []*inventory.Identity) []passIdentity {
 	work := make([]passIdentity, 0, len(governed))
 	for _, id := range governed {
@@ -191,8 +184,8 @@ func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, clai
 	return errs
 }
 
-// emitDepartedRefresh counts what the pass did with the departed identity of
-// rep: an error whenever it failed, as settle counts it.
+// emitDepartedRefresh counts an error exactly when settle counts the departed
+// identity of rep as failed.
 func emitDepartedRefresh(ctx context.Context, id *inventory.Identity, rep identityReport) {
 	ns, kind := id.Key.Namespace, id.Key.OwnerKind
 	refresh := WLRRefreshNoData
@@ -218,8 +211,6 @@ func emitDepartedRefresh(ctx context.Context, id *inventory.Identity, rep identi
 	EmitWLRRefresh(ns, kind, refresh)
 }
 
-// processed counts the identities the pass worked on: every departed one it
-// fetched, and every live one with a member it did not skip.
 func (p passReport) processed() int {
 	n := 0
 	for _, rep := range p {
@@ -231,9 +222,6 @@ func (p passReport) processed() int {
 	return n
 }
 
-// liveMembers is the key of every live member, by identity: one entry per
-// identity with a live member, which is what
-// k8s_sustain_policy_workload_count counts.
 func (p passReport) liveMembers() map[promclient.WorkloadIdentity][]string {
 	out := make(map[promclient.WorkloadIdentity][]string, len(p))
 	for _, rep := range p {
@@ -249,10 +237,9 @@ func (p passReport) liveMembers() map[promclient.WorkloadIdentity][]string {
 	return out
 }
 
-// coverage summarises the fetch for the batch metrics: identities fetched,
-// those that came back with at least one CPU or memory sample, and those
-// whose fetch failed. A young workload on a healthy Prometheus resolves to
-// nothing too, so only the failure count tells an outage apart.
+// coverage counts the fetch failures apart from what resolved: a young
+// workload on a healthy Prometheus resolves to nothing too, so only the
+// failure count tells an outage apart.
 func (p passReport) coverage() (requested, resolved, failed int) {
 	for _, rep := range p {
 		switch {
@@ -268,8 +255,6 @@ func (p passReport) coverage() (requested, resolved, failed int) {
 	return requested, resolved, failed
 }
 
-// publication is the series the pass desires, from its report, the health
-// of its live identities and the members the ledger counted as failed.
 func (p passReport) publication(health healthReport, attempts map[promclient.WorkloadIdentity]int) publication {
 	pub := publication{blocked: health.blocked(), identities: make([]identitySeries, len(p))}
 	pub.requested, pub.resolved, pub.fetchFailed = p.coverage()
@@ -292,8 +277,6 @@ func (p passReport) publication(health healthReport, attempts map[promclient.Wor
 	return pub
 }
 
-// memberSeriesOf is the Recommendation the member of res holds: held,
-// narrowed to the containers it declares.
 func memberSeriesOf(res applyResult, held map[string]workload.ContainerRecommendation) memberSeries {
 	t := res.member
 	m := memberSeries{kind: t.Kind, name: t.Name, suppressed: res.suppressed}

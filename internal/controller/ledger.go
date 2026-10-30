@@ -34,7 +34,6 @@ var stepFailures = map[string]string{
 	phaseStore:      "Recommendation could not be stored for the webhook",
 }
 
-// applyKind is what one pass did with one live member.
 type applyKind int
 
 const (

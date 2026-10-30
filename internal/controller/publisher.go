@@ -26,7 +26,6 @@ type publication struct {
 	identities                       []identitySeries
 }
 
-// identitySeries is what one pass found about one identity.
 type identitySeries struct {
 	key    promclient.WorkloadIdentity
 	health healthState
@@ -180,7 +179,6 @@ func (id *published) publishIdentity(s identitySeries) {
 	}
 }
 
-// reconciled counts one reconcile of policy, by result, and how long it took.
 func (p *publisher) reconciled(policy, result string, took time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

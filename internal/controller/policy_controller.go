@@ -249,7 +249,6 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return ctrl.Result{RequeueAfter: r.requeueAfter(policy.Name)}, nil
 }
 
-// forget drops every series and member state policy left behind.
 func (r *PolicyReconciler) forget(policy string) {
 	r.series.forget(policy)
 	r.health.forget(policy, r.ledger)

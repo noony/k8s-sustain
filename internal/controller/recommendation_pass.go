@@ -45,9 +45,7 @@ type computed struct {
 	// disagree on theirs.
 	autoscaler *autoscaler.Info
 	mismatch   bool
-	// oomFloors are the containers whose memory request the OOM floor
-	// determined.
-	oomFloors []oomFloor
+	oomFloors  []oomFloor
 }
 
 // oomFloor is a container whose memory request the OOM floor determined.

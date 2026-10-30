@@ -90,7 +90,6 @@ func runningPod(ns, name, app string) *corev1.Pod {
 	return runningPodAt(ns, name, app, "10m")
 }
 
-// runningPodAt is runningPod with container "app" at cpu.
 func runningPodAt(ns, name, app, cpu string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -398,7 +397,6 @@ func TestReconcile_QueryTimeoutIsAFetchFailure(t *testing.T) {
 	}
 }
 
-// eventsWith counts the events naming reason.
 func eventsWith(evs []string, reason string) int {
 	n := 0
 	for _, e := range evs {
@@ -559,7 +557,6 @@ func TestPolicyEvents_OnlyGenerationChangesTriggerAPass(t *testing.T) {
 	}
 }
 
-// drainEvents returns every event rec holds.
 func drainEvents(rec *events.FakeRecorder) []string {
 	var out []string
 	for {
