@@ -11,7 +11,7 @@
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
-    "typecheck": "vue-tsc --noEmit",
+    "typecheck": "vue-tsc -b --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },

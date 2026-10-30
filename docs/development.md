@@ -483,7 +483,7 @@ cd internal/dashboard/ui/frontend
 npm install
 npm run dev        # Vite dev server on http://localhost:5173
 npm run test       # vitest
-npm run typecheck  # vue-tsc --noEmit
+npm run typecheck  # vue-tsc -b --noEmit (follows the tsconfig project references)
 npm run lint       # eslint src/
 ```
 
