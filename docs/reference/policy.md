@@ -261,8 +261,8 @@ Every such failure counts once toward `PartialFailure` and leaves the identity
 [Blocked](../reference/metrics.md#drift-retry-autoscaler) until a later
 cycle succeeds, whether the error is transient or permanent:
 
-- A **transient** error (Prometheus errors and timeouts, API 5xx, 409
-  Conflict and 429) is
+- A **transient** error (Prometheus errors and timeouts, API 5xx, 404 Not
+  Found, 409 Conflict and 429) is
   retried with exponential backoff, 30s doubling up to 5 minutes. Each
   attempt records a `ReconciliationRetryScheduled` Warning event on the
   workload object naming when the next one runs, and the policy's next cycle

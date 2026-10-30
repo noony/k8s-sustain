@@ -76,6 +76,11 @@ func TestLedger_Record(t *testing.T) {
 			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: phaseStore,
 		},
 		{
+			name: "member withheld for a record whose object was deleted since its claim backs off", res: failedOn(phaseStore,
+				apierrors.NewNotFound(schema.GroupResource{Resource: "workloadrecommendations"}, "deployment-web")),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: phaseStore,
+		},
+		{
 			name: "member withheld for a forbidden Ensure counts", res: failedOn(phaseStore, forbidden),
 			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: phaseStore, wantMayRun: true,
 		},
@@ -239,7 +244,8 @@ func TestPermanentError(t *testing.T) {
 		{"forbidden", forbidden, true},
 		{"unauthorized", apierrors.NewUnauthorized("expired token"), true},
 		{"invalid", apierrors.NewInvalid(schema.GroupKind{Kind: "Pod"}, "web", nil), true},
-		{"not found", apierrors.NewNotFound(pods, "web"), true},
+		{"not found", apierrors.NewNotFound(pods, "web"), false},
+		{"wrapped not found", fmt.Errorf("recording: %w", apierrors.NewNotFound(schema.GroupResource{Resource: "workloadrecommendations"}, "web")), false},
 		{"wrapped forbidden", fmt.Errorf("pod web-1: %w", forbidden), true},
 		{"one forbidden pod among transient ones", errors.Join(
 			fmt.Errorf("pod web-1: %w", unavailable), fmt.Errorf("pod web-2: %w", forbidden)), true},
