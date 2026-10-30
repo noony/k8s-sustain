@@ -68,8 +68,8 @@ func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error
 	depsCtx, stopDeps := context.WithCancel(context.Background())
 	defer stopDeps()
 
-	// Cached because admit() Gets the Policy, the owner chain and the
-	// WorkloadRecommendation on every Pod CREATE.
+	// Cached because every Pod CREATE lists the Policies and may read its
+	// Namespace and its WorkloadRecommendation.
 	//
 	// The two contexts are not decoration: this call BLOCKS for up to
 	// crdWaitTimeout (2m) plus the informer sync, before the HTTPS listener

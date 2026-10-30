@@ -7,9 +7,12 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	admissionv1 "k8s.io/api/admission/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -20,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
@@ -544,24 +548,111 @@ func TestAdmitAllowsAPodItCannotDecodeUnmutated(t *testing.T) {
 	}
 }
 
-// A panic deciding an admission must not reach the HTTP middleware, which
-// would answer 500 and leave the pod to the failurePolicy without its label.
-func TestAdmitTurnsAPanicDecidingIntoAnAllowedPodWithItsLabel(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
-		WithInterceptorFuncs(interceptor.Funcs{
-			List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
-				panic("boom")
-			},
-		}).Build()
-	h := &Handler{Client: c}
+// panicOnInfo is a log sink whose Info panics, to panic an admission past its
+// decision, where it is logged.
+type panicOnInfo struct{}
 
-	before := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelDecide))
-	resp := h.admit(context.Background(), admissionRequestFor(t, etlPod("p")))
-	if got := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelDecide)) - before; got != 1 {
-		t.Errorf("panics counted = %v, want 1", got)
+func (panicOnInfo) Init(logr.RuntimeInfo)            {}
+func (panicOnInfo) Enabled(level int) bool           { return level == 0 }
+func (panicOnInfo) Info(int, string, ...any)         { panic("boom") }
+func (panicOnInfo) Error(error, string, ...any)      {}
+func (s panicOnInfo) WithValues(...any) logr.LogSink { return s }
+func (s panicOnInfo) WithName(string) logr.LogSink   { return s }
+
+// A panic admitting a decoded pod, while deciding or after, must not reach the
+// HTTP middleware, which would answer 500 and leave the pod to the
+// failurePolicy without its label.
+func TestAdmitTurnsAPanicIntoAnAllowedPodWithItsLabel(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		funcs  interceptor.Funcs
+		logger logr.Logger
+	}{
+		{
+			name: "deciding",
+			funcs: interceptor.Funcs{
+				List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+					panic("boom")
+				},
+			},
+			logger: logr.Discard(),
+		},
+		{name: "logging the injection decided", logger: logr.New(panicOnInfo{})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wlr := freshWLR("Pod", "default", "etl-daily", map[string]sustainv1alpha1.ContainerRecommendation{"app": wlrRec("100m", "64Mi")})
+			withSnapshot(wlr)
+			c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(podPolicy("p"), wlr).
+				WithInterceptorFuncs(tc.funcs).Build()
+			h := &Handler{Client: c}
+
+			before := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelAdmit))
+			resp := h.admit(log.IntoContext(context.Background(), tc.logger), admissionRequestFor(t, etlPod("p")))
+			if got := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelAdmit)) - before; got != 1 {
+				t.Errorf("panics counted = %v, want 1", got)
+			}
+			patches := patchesOf(t, resp)
+			if len(patches) != 1 || patches[0].Path != "/metadata/labels" || !strings.Contains(string(patches[0].Value), "etl-daily") {
+				t.Errorf("patches = %v, want the owner-name label only", patches)
+			}
+		})
 	}
-	patches := patchesOf(t, resp)
-	if len(patches) != 1 || patches[0].Path != "/metadata/labels" || !strings.Contains(string(patches[0].Value), "etl-daily") {
-		t.Errorf("patches = %v, want the owner-name label only", patches)
+}
+
+// The admission's log line carries what an operator needs to tell what the
+// pod got, or why it got nothing.
+func TestAdmitLogsTheDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		recs   map[string]sustainv1alpha1.ContainerRecommendation
+		fields []string
+	}{
+		{
+			name: "injected",
+			recs: map[string]sustainv1alpha1.ContainerRecommendation{"app": wlrRec("100m", "64Mi")},
+			fields: []string{
+				`"reason"="injected"`, `"policy"="p"`, `"optInLevel"="podTemplate"`, `"ownerKind"="Pod"`,
+				`"ownerName"="etl-daily"`, `"mode"="OnCreate"`, `"verdict"="fresh"`,
+			},
+		},
+		{
+			name: "no container matches",
+			recs: map[string]sustainv1alpha1.ContainerRecommendation{"other": wlrRec("100m", "64Mi")},
+			fields: []string{
+				`"reason"="no-container-matches"`, `"mode"="OnCreate"`, `"verdict"="fresh"`,
+				`"podContainers"=1`, `"podInitContainers"=0`, `"recommendations"=1`,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wlr := freshWLR("Pod", "default", "etl-daily", tc.recs)
+			withSnapshot(wlr)
+			c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(podPolicy("p"), wlr).Build()
+			h := &Handler{Client: c}
+			var mu sync.Mutex
+			var lines []string
+			logger := funcr.New(func(_, args string) {
+				mu.Lock()
+				defer mu.Unlock()
+				lines = append(lines, args)
+			}, funcr.Options{Verbosity: 1})
+
+			h.admit(log.IntoContext(context.Background(), logger), admissionRequestFor(t, etlPod("p")))
+
+			mu.Lock()
+			defer mu.Unlock()
+			for _, line := range lines {
+				if !strings.Contains(line, tc.fields[0]) {
+					continue
+				}
+				for _, f := range tc.fields[1:] {
+					if !strings.Contains(line, f) {
+						t.Errorf("log line %s lacks %s", line, f)
+					}
+				}
+				return
+			}
+			t.Errorf("no log line with %s in %v", tc.fields[0], lines)
+		})
 	}
 }

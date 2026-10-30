@@ -129,10 +129,10 @@ k8s-sustain webhook [flags]
 | `--tls-cert-file` | `/tls/tls.crt` | Path to the TLS certificate file |
 | `--tls-key-file` | `/tls/tls.key` | Path to the TLS private key file |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
-| `--excluded-namespaces` | — | Comma-separated list of namespaces the webhook must never mutate. Pods in these namespaces are admitted unchanged. Mirrors the controller flag so both components stay in lockstep. |
+| `--excluded-namespaces` | — | Comma-separated list of namespaces no Policy governs: the webhook injects no resources into their pods, whatever they opt into. A valid `k8s.sustain.io/owner-name` annotation is still mirrored onto the pod's label, as on every admission. Mirrors the controller flag so both components stay in lockstep. The chart also drops these namespaces from the `MutatingWebhookConfiguration`'s `namespaceSelector`, so the webhook never sees their pods. |
 | `--recommendation-retention` | `168h` | Must match the controller flag. A departed or Conflicted identity's recommendation older than this is treated as stale instead of injected. The chart renders both from `controller.recommendationRetention`. |
 
-The webhook also honours each Policy's `spec.selector.namespaces` and `spec.selector.labelSelector` (see [Policy reference](./policy.md#specselector)). A pod is admitted without mutation if any of the following holds: its namespace is in `--excluded-namespaces`, its namespace is not in a non-empty `selector.namespaces`, or its pod labels — its pod template's, which the controller matches too — do not satisfy `selector.labelSelector`. A malformed `labelSelector` causes the webhook to fail open (admit without mutation, log a warning) rather than deny.
+The webhook also honours each Policy's `spec.selector.namespaces` and `spec.selector.labelSelector` (see [Policy reference](./policy.md#specselector)). A pod is admitted without resources injected if any of the following holds: its namespace is in `--excluded-namespaces`, its namespace is not in a non-empty `selector.namespaces`, or its pod labels — its pod template's, which the controller matches too — do not satisfy `selector.labelSelector`. Its owner-name label is mirrored all the same. A malformed `labelSelector` causes the webhook to fail open (admit without injection, log a warning with reason `selector-invalid`, whichever level the pod opts in at) rather than deny.
 
 ### Health endpoints
 

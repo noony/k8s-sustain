@@ -64,13 +64,13 @@ const (
 // Panic label values for PanicTotal that are not HTTP routes. The webhook
 // recovers these panics itself rather than leaving them to the httpx
 // middleware: the singleflight leaders in optin.go and the stub goroutine run
-// off the request goroutine, where nothing else would, and a panic deciding
-// an admission still admits the pod with its owner-name label instead of
+// off the request goroutine, where nothing else would, and a panic admitting
+// a decoded pod still admits it with its owner-name label instead of
 // answering 500. Constants, so they add exactly four bounded series.
 const (
 	panicLabelOwnerRef         = "singleflight/ownerRef"
 	panicLabelOwnerAnnotations = "singleflight/ownerAnnotations"
-	panicLabelDecide           = "admit/decide"
+	panicLabelAdmit            = "admit"
 	panicLabelStub             = "stub/request"
 )
 

@@ -139,14 +139,27 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 		logger.Error(err, "failed to decode Pod; allowing it unmutated")
 		return respond(nil, admission{reason: reasonUndecodable})
 	}
-	a := h.decideRecovering(ctx, logger, pod)
+	return h.admitDecoded(ctx, logger, pod)
+}
+
+// admitDecoded turns a panic anywhere past decoding into an admission like
+// any other. Left to the HTTP middleware it would answer 500, which hands the
+// pod to the webhook's failurePolicy and drops its owner-name label.
+func (h *Handler) admitDecoded(ctx context.Context, logger logr.Logger, pod *corev1.Pod) (resp *admissionv1.AdmissionResponse) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			reportPanic(logger, panicLabelAdmit, rec)
+			resp = respond(pod, admission{reason: reasonPanic})
+		}
+	}()
+	a := h.decide(ctx, pod)
 	if a.source != "" {
 		RecommendationSourceTotal.WithLabelValues(a.source).Inc()
 	}
 	if a.stub != nil {
 		h.requestRecommendation(logger, *a.stub)
 	}
-	h.logAdmission(logger, a)
+	h.logAdmission(logger, pod, a)
 	return respond(pod, a)
 }
 
@@ -160,19 +173,6 @@ func decodePod(req *admissionv1.AdmissionRequest) (*corev1.Pod, error) {
 	}
 	pod.Namespace = req.Namespace
 	return &pod, nil
-}
-
-// decideRecovering is decide with a panic turned into an admission like any
-// other. Left to the HTTP middleware it would answer 500, which hands the pod
-// to the webhook's failurePolicy and drops its owner-name label.
-func (h *Handler) decideRecovering(ctx context.Context, logger logr.Logger, pod *corev1.Pod) (a admission) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			reportPanic(logger, panicLabelDecide, rec)
-			a = admission{reason: reasonPanic}
-		}
-	}()
-	return h.decide(ctx, pod)
 }
 
 // respond is the only constructor of an admission response, and it always

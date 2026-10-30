@@ -7,6 +7,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/governance"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
@@ -20,11 +21,9 @@ import (
 type reason string
 
 const (
-	reasonUndecodable reason = "undecodable"
-	reasonPanic       reason = "panic"
-	// reasonGovernanceFailed: a read the governance decision needed failed.
-	reasonGovernanceFailed reason = "governance-failed"
-	// reasonRecommendationUnreadable: the WorkloadRecommendation read failed.
+	reasonUndecodable              reason = "undecodable"
+	reasonPanic                    reason = "panic"
+	reasonGovernanceFailed         reason = "governance-failed"
 	reasonRecommendationUnreadable reason = "recommendation-unreadable"
 	// reasonNoContainerMatches: the Recommendation names none of the pod's
 	// containers.
@@ -36,7 +35,6 @@ const (
 	reasonInjected         reason = "injected"
 )
 
-// admission is what decide works out for one pod.
 type admission struct {
 	reason reason
 	// identity, optIn and level are the governance decision, as far as it
@@ -44,13 +42,17 @@ type admission struct {
 	identity promclient.WorkloadIdentity
 	optIn    string
 	level    governance.Level
-	// policy is the governing Policy, empty when none governs.
+	// policy and mode are empty when no Policy governs the pod.
 	policy string
+	mode   sustainv1alpha1.UpdateMode
 	// source is the RecommendationSourceTotal label of the
-	// WorkloadRecommendation read, empty when nothing was read.
-	source string
-	// recs are the recommendations of the pod's containers, once a verdict
-	// injects.
+	// WorkloadRecommendation read and verdict wlrcache's name for what the
+	// read found; both are empty when nothing was read.
+	source  string
+	verdict string
+	// held is the Recommendation the verdict injects, recs the part of it
+	// that names the pod's containers.
+	held map[string]workload.ContainerRecommendation
 	recs map[string]workload.ContainerRecommendation
 	// writes are the containers the response sets resources on; only an
 	// injected admission has any.
@@ -61,11 +63,12 @@ type admission struct {
 	err  error
 }
 
-// decide works out what admitting pod does from reads alone: it writes
-// nothing and starts nothing, so every effect it calls for is in the
-// admission it returns. A pod is injected only when a Policy governs it and
-// its identity's WorkloadRecommendation holds a Recommendation that Policy
-// computed for it, fresh or retained.
+// decide works out what admitting pod does. It writes nothing but the owner
+// caches its governance reads fill, from singleflight leaders that may outlive
+// it; the stub request, the one effect an admission can call for, is left in
+// the admission it returns for admit to run. A pod is injected only when a
+// Policy governs it and its identity's WorkloadRecommendation holds a
+// Recommendation that Policy computed for it, fresh or retained.
 func (h *Handler) decide(ctx context.Context, pod *corev1.Pod) admission {
 	govCtx, govCancel := context.WithTimeout(ctx, governanceTimeout)
 	g, err := governance.Decide(govCtx, governance.Pod(pod), admissionReader{h})
@@ -79,7 +82,7 @@ func (h *Handler) decide(ctx context.Context, pod *corev1.Pod) admission {
 		return a
 	}
 	policy := g.Policy
-	a.policy = policy.Name
+	a.policy, a.mode = policy.Name, g.Mode
 
 	readCtx, readCancel := context.WithTimeout(ctx, apiCallTimeout)
 	known, err := h.storedRecommendation(readCtx, g.Identity)
@@ -89,7 +92,7 @@ func (h *Handler) decide(ctx context.Context, pod *corev1.Pod) admission {
 		return a
 	}
 	reading := wlrcache.Read(known, policy.Name, time.Now(), h.freshness())
-	a.source = recommendationSource(reading.Verdict)
+	a.source, a.verdict, a.held = recommendationSource(reading.Verdict), reading.Verdict.String(), reading.Recs
 	observed := wlrcache.BuildObservedResources(pod.Spec.Containers, pod.Spec.InitContainers)
 	if wlrcache.ShouldRequest(known, policy.Name, observed) {
 		a.stub = &stubRequest{known: known, identity: g.Identity, policy: policy.Name, observed: observed}
@@ -117,13 +120,19 @@ func (h *Handler) decide(ctx context.Context, pod *corev1.Pod) admission {
 // logAdmission logs one admission: an error for a failed read, info for what
 // an operator acts on (an injection, a recommend-only dry run, an invalid
 // selector), debug for every other way a pod is admitted unmutated.
-func (h *Handler) logAdmission(logger logr.Logger, a admission) {
+func (h *Handler) logAdmission(logger logr.Logger, pod *corev1.Pod, a admission) {
 	logger = logger.WithValues("reason", a.reason)
 	if a.optIn != "" {
 		logger = logger.WithValues("policy", a.optIn, "optInLevel", a.level)
 	}
 	if a.identity.OwnerKind != "" {
 		logger = logger.WithValues("ownerKind", a.identity.OwnerKind, "ownerName", a.identity.OwnerName)
+	}
+	if a.mode != "" {
+		logger = logger.WithValues("mode", a.mode)
+	}
+	if a.verdict != "" {
+		logger = logger.WithValues("verdict", a.verdict)
 	}
 	switch a.reason {
 	case reasonPanic:
@@ -134,6 +143,9 @@ func (h *Handler) logAdmission(logger logr.Logger, a admission) {
 		logger.Error(a.err, "failed to read WorkloadRecommendation; allowing pod with template resources")
 	case reason(governance.SelectorInvalid):
 		logger.Info("policy has invalid labelSelector; allowing pod without injection (fail-open)")
+	case reasonNoContainerMatches:
+		logger.V(1).Info("no recommendations match pod containers, allowing without injection",
+			"podContainers", len(pod.Spec.Containers), "podInitContainers", len(pod.Spec.InitContainers), "recommendations", len(a.held))
 	case reasonRecommendOnly:
 		source := "policy"
 		if h.RecommendOnly {
@@ -144,9 +156,7 @@ func (h *Handler) logAdmission(logger logr.Logger, a admission) {
 		logger.Info("injecting resources", "containers", len(a.writes))
 		logger.V(1).Info("injection details", "recommendations", a.recs)
 		for _, w := range a.writes {
-			if len(w.RaisedLimits) > 0 {
-				logger.V(1).Info("raised limits to the recommended request", "container", w.Name, "resources", w.RaisedLimits)
-			}
+			w.LogRaisedLimits(logger)
 		}
 	default:
 		logger.V(1).Info("allowing pod without injection")
