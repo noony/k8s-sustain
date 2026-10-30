@@ -27,7 +27,7 @@ type fakeOOMSource struct {
 	records map[string]*oomwatch.OOMRecord
 }
 
-func (f *fakeOOMSource) ByWorkload(_, _, _ string) map[string]*oomwatch.OOMRecord {
+func (f *fakeOOMSource) ByWorkload(promclient.WorkloadIdentity) map[string]*oomwatch.OOMRecord {
 	return f.records
 }
 

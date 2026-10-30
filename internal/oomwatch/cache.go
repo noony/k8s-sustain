@@ -228,24 +228,23 @@ func (c *Cache) markResolvedAt(now time.Time, podUID types.UID, container string
 	c.resolved[key] = now
 }
 
-// ByWorkload returns the records the cache holds for the given workload
-// identity, by container. The map is always non-nil so callers can range over
-// it without a nil check. Whether a kill is still recent is the reader's call:
-// the cache only drops records older than its TTL.
+// ByWorkload returns the records the cache holds for id, by container. The
+// map is always non-nil so callers can range over it without a nil check.
+// Whether a kill is still recent is the reader's call: the cache only drops
+// records older than its TTL.
 //
 // Reads run under RLock with the help of a secondary index keyed by workload,
 // so the recommender does not serialize against concurrent Record calls. Any
 // stale entries discovered along the way are deleted via a brief write lock
 // after the read pass completes.
-func (c *Cache) ByWorkload(ns, kind, name string) map[string]*OOMRecord {
+func (c *Cache) ByWorkload(id promclient.WorkloadIdentity) map[string]*OOMRecord {
 	out := make(map[string]*OOMRecord)
 	now := time.Now()
-	wk := promclient.WorkloadIdentity{Namespace: ns, OwnerKind: kind, OwnerName: name}
 
 	var stale []Key
 	c.mu.RLock()
-	for container := range c.byWorkload[wk] {
-		key := Key{WorkloadIdentity: wk, Container: container}
+	for container := range c.byWorkload[id] {
+		key := Key{WorkloadIdentity: id, Container: container}
 		entry, ok := c.entries[key]
 		if !ok {
 			continue

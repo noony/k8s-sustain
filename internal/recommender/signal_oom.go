@@ -280,7 +280,7 @@ func (l *liveOOMInputs) FetchInputs(
 		if r.Inputs == nil {
 			continue
 		}
-		r.Inputs = withLiveOOMs(r.Inputs, l.source.ByWorkload(id.Namespace, id.OwnerKind, id.OwnerName), now)
+		r.Inputs = withLiveOOMs(r.Inputs, l.source.ByWorkload(id), now)
 		out[id] = r
 	}
 	return out

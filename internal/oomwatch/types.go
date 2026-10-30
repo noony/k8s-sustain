@@ -53,9 +53,9 @@ type OOMRecord struct {
 // Source is the read-only API consumed by the recommender, which decides
 // which of the observations it returns are still recent.
 type Source interface {
-	// ByWorkload returns a workload's per-container records, none older than
+	// ByWorkload returns an identity's per-container records, none older than
 	// the source's retention. Returns an empty map when there is nothing.
-	ByWorkload(ns, kind, name string) map[string]*OOMRecord
+	ByWorkload(id promclient.WorkloadIdentity) map[string]*OOMRecord
 }
 
 // Sink is the write-only API used by the watcher to persist observations.

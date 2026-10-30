@@ -26,7 +26,7 @@ func liveKill(container string, ago time.Duration, limitBytes int64) *oomwatch.O
 // oomSource is an oomwatch.Source holding one identity's records.
 type oomSource map[string]*oomwatch.OOMRecord
 
-func (s oomSource) ByWorkload(_, _, _ string) map[string]*oomwatch.OOMRecord { return s }
+func (s oomSource) ByWorkload(promclient.WorkloadIdentity) map[string]*oomwatch.OOMRecord { return s }
 
 // fixedInputs is an InputsFetcher serving the same inputs to every identity,
 // and failing those in failed.
