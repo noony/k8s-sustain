@@ -18,9 +18,9 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// summaryKPI is the top-row of cluster-wide KPIs surfaced by /api/summary.
-// The Risk-state counts are identities by Risk state, so an identity counts
-// once.
+// summaryKPI is the top row of cluster-wide KPIs surfaced by /api/summary.
+// The per-Risk-state counts are not among them: they are the totals of the
+// response's attention groups.
 type summaryKPI struct {
 	CPUSavedCores    float64   `json:"cpuSavedCores"`
 	CPUSavedRatio    float64   `json:"cpuSavedRatio"`

@@ -45,7 +45,6 @@ type simulateRequest struct {
 	Override json.RawMessage `json:"override,omitempty"`
 }
 
-// simulateResponse is a Simulation as POST /api/simulate answers it.
 type simulateResponse struct {
 	simulationResult
 	// LiveOOMWindowSeconds is how long a kill the controller's OOM watcher saw
