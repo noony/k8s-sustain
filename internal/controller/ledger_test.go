@@ -33,7 +33,6 @@ func TestLedger_Record(t *testing.T) {
 		name        string
 		before      []applyResult
 		res         applyResult
-		shutdown    bool
 		wantFailed  bool
 		wantEvent   string
 		wantBlocked string
@@ -100,24 +99,15 @@ func TestLedger_Record(t *testing.T) {
 			name: "a skipped member stays Blocked", before: []applyResult{failedOn(phasePatch, unavailable)}, res: succeeded(applySkipped),
 			wantBlocked: phasePatch,
 		},
-		{
-			name: "a failure at shutdown is not recorded", res: failedOn(phasePatch, unavailable), shutdown: true,
-			wantMayRun: true,
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			l, _ := ledgerOnFakeClock()
 			for _, res := range tc.before {
-				l.record(context.Background(), res)
-			}
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			if tc.shutdown {
-				cancel()
+				l.record(res)
 			}
 
-			ev, failed := l.record(ctx, tc.res)
+			ev, failed := l.record(tc.res)
 
 			if failed != tc.wantFailed {
 				t.Errorf("failed = %v, want %v", failed, tc.wantFailed)
@@ -152,7 +142,7 @@ func TestLedger_TransientBackoffGrowsToItsCap(t *testing.T) {
 		want = append(want, maxRetryDelay)
 	}
 	for i, delay := range want {
-		ev, _ := l.record(context.Background(), failedStep(member, phasePatch, unavailable))
+		ev, _ := l.record(failedStep(member, phasePatch, unavailable))
 		got, ok := l.nextRetry([]string{member.key()})
 		if !ok || got != delay {
 			t.Fatalf("attempt %d: next retry in %v (%v), want %v", i+1, got, ok, delay)
@@ -176,12 +166,12 @@ func TestLedger_TransientBackoffGrowsToItsCap(t *testing.T) {
 func TestLedger_PermanentFailuresDoNotGrowTheBackoff(t *testing.T) {
 	l, clk := ledgerOnFakeClock()
 	member := deploymentTarget("default", "web")
-	l.record(context.Background(), failedStep(member, phasePatch, unavailable))
+	l.record(failedStep(member, phasePatch, unavailable))
 	for range 3 {
-		l.record(context.Background(), failedStep(member, phasePatch, forbidden))
+		l.record(failedStep(member, phasePatch, forbidden))
 	}
 
-	ev, _ := l.record(context.Background(), failedStep(member, phasePatch, unavailable))
+	ev, _ := l.record(failedStep(member, phasePatch, unavailable))
 
 	if got, ok := l.nextRetry([]string{member.key()}); !ok || got != baseRetryDelay {
 		t.Errorf("next retry in %v (%v), want %v", got, ok, baseRetryDelay)
@@ -196,11 +186,11 @@ func TestLedger_NextRetryIsTheEarliestBackoff(t *testing.T) {
 	l, clk := ledgerOnFakeClock()
 	first, second := deploymentTarget("default", "first"), deploymentTarget("default", "second")
 	denied, healthy := deploymentTarget("default", "denied"), deploymentTarget("default", "healthy")
-	l.record(context.Background(), failedStep(second, phasePatch, unavailable))
+	l.record(failedStep(second, phasePatch, unavailable))
 	clk.SetTime(clk.Now().Add(10 * time.Second))
-	l.record(context.Background(), failedStep(first, phasePatch, unavailable))
-	l.record(context.Background(), failedStep(denied, phasePatch, forbidden))
-	l.record(context.Background(), applyResult{member: healthy, kind: applyDone})
+	l.record(failedStep(first, phasePatch, unavailable))
+	l.record(failedStep(denied, phasePatch, forbidden))
+	l.record(applyResult{member: healthy, kind: applyDone})
 
 	all := []string{first.key(), second.key(), denied.key(), healthy.key()}
 	if got, ok := l.nextRetry(all); !ok || got != 20*time.Second {
@@ -232,9 +222,9 @@ func TestLedger_PodCounts(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l, _ := ledgerOnFakeClock()
-			l.record(context.Background(), applyResult{member: member, kind: applyDone, pods: measured})
+			l.record(applyResult{member: member, kind: applyDone, pods: measured})
 
-			l.record(context.Background(), tc.res)
+			l.record(tc.res)
 
 			got := l.health(member.key())
 			if got.measured != tc.wantMeasured || got.pods != tc.wantPods {

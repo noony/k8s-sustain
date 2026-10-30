@@ -266,9 +266,9 @@ func (r *PolicyReconciler) settle(ctx context.Context, report passReport) (faile
 	logger := log.FromContext(ctx)
 	attempts = make(map[promclient.WorkloadIdentity]int)
 	for _, rep := range report {
-		identityFailed := rep.err != nil
+		identityFailed := rep.failed
 		for _, res := range rep.members {
-			ev, isFailure := r.ledger.record(ctx, res)
+			ev, isFailure := r.ledger.record(res)
 			if !isFailure {
 				continue
 			}

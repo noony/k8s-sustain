@@ -645,7 +645,7 @@ func TestReconcile_BackedOffIdentityIsNotFetched(t *testing.T) {
 		ongoingDeployments("p"), expiring, annotatedDeployment("default", "healthy", "p"))
 	r.ledger = newLedger(clk)
 	member := targetFromObject(expiring, "Deployment")
-	r.ledger.record(context.Background(), failedStep(&member, phasePatch, errors.New("apiserver unavailable")))
+	r.ledger.record(failedStep(&member, phasePatch, errors.New("apiserver unavailable")))
 
 	reconcileOnce(t, r, "p")
 

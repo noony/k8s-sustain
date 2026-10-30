@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -137,7 +136,7 @@ func (l *ledger) mayRun(member string) bool {
 // counts as a failure of the pass; ev is the Warning to emit, once per
 // transition: every transient attempt, naming when the next runs, and a
 // permanent failure only when the member enters it.
-func (l *ledger) record(ctx context.Context, res applyResult) (ev *ledgerEvent, failed bool) {
+func (l *ledger) record(res applyResult) (ev *ledgerEvent, failed bool) {
 	key := res.member.key()
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -145,12 +144,6 @@ func (l *ledger) record(ctx context.Context, res applyResult) (ev *ledgerEvent, 
 	case applySkipped:
 		return nil, false
 	case applyFailed:
-		// Only the reconcile's own context ending is shutdown: an error that
-		// merely wraps a context error comes from a call that ran out of its
-		// own timeout.
-		if ctx.Err() != nil {
-			return nil, false
-		}
 		return l.failLocked(key, res), true
 	}
 	e := l.entryLocked(key)

@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"time"
 
@@ -30,9 +29,11 @@ type identityReport struct {
 	fetched  bool
 	outcome  sustainv1alpha1.RecommendationOutcome
 	resolved bool
-	// err is why a departed identity failed: its inputs could not be read or
-	// its decision stored. A live identity fails through its members.
-	err error
+	// failed is whether a departed identity failed: its inputs could not be
+	// read or its decision stored. settle counts it, and wlr_refresh_total
+	// counts its error, from this one field. A live identity fails through
+	// its members.
+	failed bool
 	// members is one result per live member, backed-off ones included.
 	members []applyResult
 	// held is the Recommendation a live identity holds for the Policy after
@@ -79,6 +80,11 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 	recs := r.recommend(ctx, policy, work)
 	stored := r.record(ctx, work, claims, recs)
 	applied := r.apply(ctx, policy, work, recs, stored)
+	// Only the reconcile's own context ending is shutdown: an error that
+	// merely wraps a context error comes from a call that ran out of its own
+	// timeout. A pass cut short by shutdown counts no failure, departed or
+	// live, and leaves every member's state as it was.
+	shutdown := ctx.Err() != nil
 
 	report := make(passReport, len(work))
 	for i, w := range work {
@@ -86,16 +92,16 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 			key: w.id.Key, departed: w.id.Departed(), fetched: w.fetched(), outcome: recs[i].outcome,
 			members: applied[i], computed: recs[i].computed,
 		}
+		if shutdown {
+			rep.members = leftAlone(rep.members)
+		}
 		if in := recs[i].inputs; in != nil {
 			rep.resolved = len(in.CPUPerPod) > 0 || len(in.MemPerPod) > 0
 		}
 		switch {
 		case rep.departed:
-			// As for a live member (ledger.record), only the reconcile's own
-			// context ending is shutdown, and a pass cut short by it counts
-			// nothing.
-			if ctx.Err() == nil {
-				rep.err = errors.Join(recs[i].err, stored[i])
+			if !shutdown {
+				rep.failed = recs[i].err != nil || stored[i] != nil
 				emitDepartedRefresh(ctx, w.id, rep)
 			}
 		case recs[i].outcome == sustainv1alpha1.OutcomeComputed && stored[i] == nil:
@@ -188,20 +194,29 @@ func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, clai
 	return errs
 }
 
-// emitDepartedRefresh counts an error exactly when settle counts the departed
-// identity of rep as failed.
+// leftAlone turns the failures among results into members left alone, which
+// keep their state.
+func leftAlone(results []applyResult) []applyResult {
+	for i, res := range results {
+		if res.kind == applyFailed {
+			results[i] = applyResult{member: res.member, kind: applySkipped}
+		}
+	}
+	return results
+}
+
 func emitDepartedRefresh(ctx context.Context, id *inventory.Identity, rep identityReport) {
 	ns, kind := id.Key.Namespace, id.Key.OwnerKind
 	refresh := WLRRefreshNoData
 	switch {
+	case rep.failed:
+		refresh = WLRRefreshError
 	case !rep.fetched:
 		// Never silent: this state once hid a read-after-write bug that
 		// stranded every new identity.
 		refresh = WLRRefreshNoSnapshot
 		log.FromContext(ctx).V(1).Info("departed identity has no observed-resources snapshot; skipping computation",
 			"kind", kind, "name", id.Key.OwnerName, "namespace", ns)
-	case rep.err != nil:
-		refresh = WLRRefreshError
 	case rep.outcome == sustainv1alpha1.OutcomeComputed:
 		refresh = WLRRefreshComputed
 	case len(id.Recommendation.Status.Containers) > 0:

@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -309,6 +310,39 @@ func TestReconcile_DepartedFailureCountsUnlessAtShutdown(t *testing.T) {
 				t.Errorf("error refresh delta = %v, want %v", got, tc.wantErrors)
 			}
 		})
+	}
+}
+
+// The same rule holds for a live member: one whose eviction fails as the
+// reconcile's own context ends was cut short by shutdown, so it is neither
+// counted failed nor Blocked, and warned about to no one.
+func TestReconcile_MemberFailingAtShutdownKeepsItsState(t *testing.T) {
+	const ns = "member-shutdown"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheme := testFullScheme(t)
+	c := fakeClientBuilder(scheme, ongoingDeployments("p"), establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceCreate: func(context.Context, client.Client, string, client.Object, client.Object, ...client.SubResourceCreateOption) error {
+				cancel()
+				return apierrors.NewServiceUnavailable("apiserver shutting down")
+			},
+		}).
+		Build()
+	r := reconcilerOn(c, scheme, usageFor(ns, "Deployment", "web"), false)
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if ready := readyCondition(t, r, "p"); ready.Status != metav1.ConditionTrue {
+		t.Errorf("Ready = %s %q, want True: a failure at shutdown counts nothing", ready.Status, ready.Message)
+	}
+	if got := seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, "Deployment", "web"); len(got) != 0 {
+		t.Errorf("retry_state = %v, want the identity not Blocked", got)
+	}
+	if evs := drainEvents(r.recorder.(*events.FakeRecorder)); eventsWith(evs, "ReconciliationRetryScheduled") != 0 {
+		t.Errorf("a failure at shutdown was warned about: %v", evs)
 	}
 }
 
