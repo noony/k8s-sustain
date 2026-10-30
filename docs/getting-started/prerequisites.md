@@ -4,7 +4,7 @@ Cluster, tooling, and metrics requirements before installing k8s-sustain.
 
 ## Kubernetes
 
-Kubernetes **1.29 or later**. The CRDs' CEL validation rules use the Kubernetes `quantity()` library, which older API servers reject when the CRD is applied.
+Kubernetes **1.30 or later**. The CRDs' CEL validation rules use the Kubernetes `quantity()` library, which older API servers reject when the CRD is applied. The Policy CRD's rules also rely on CRD validation ratcheting (`CRDValidationRatcheting`, on by default from 1.30): an update that leaves a field a rule rejects unchanged is still admitted, so a stored Policy can always be updated, its finalizer removed included.
 
 Running pods are resized in place from 1.33; older clusters fall back to eviction. See the [version matrix](../concepts/in-place-updates.md#version-matrix).
 

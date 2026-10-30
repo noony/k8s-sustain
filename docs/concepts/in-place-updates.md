@@ -2,13 +2,13 @@
 
 Kubernetes 1.33 enables in-place pod resize (`InPlacePodVerticalScaling`, beta and on by default) with the `pods/resize` subresource. It changes a pod's requests and limits **without recreating the pod**.
 
-k8s-sustain detects support at startup and picks the code path. Clusters below 1.33 (k8s-sustain itself needs [1.29 or later](../getting-started/prerequisites.md#kubernetes)) fall back to PDB-respecting eviction.
+k8s-sustain detects support at startup and picks the code path. Clusters below 1.33 (k8s-sustain itself needs [1.30 or later](../getting-started/prerequisites.md#kubernetes)) fall back to PDB-respecting eviction.
 
 ## Version matrix
 
 | k8s version | k8s-sustain behaviour |
 |-------------|-----------------------|
-| **1.29 – 1.32** | `inPlace=false` → eviction path. Stale pods are evicted via the Eviction API; the webhook injects the recommendation into the replacement. CronJob, Job and bare-pod pods are not touched. |
+| **1.30 – 1.32** | `inPlace=false` → eviction path. Stale pods are evicted via the Eviction API; the webhook injects the recommendation into the replacement. CronJob, Job and bare-pod pods are not touched. |
 | **1.33+** | `inPlace=true`. All resizes go through `pods/resize`; sidecar (restartable init) containers are resized in a separate call. A stale pod that is not Running yet (Pending) cannot be resized and is evicted instead, except for CronJob, Job and bare-pod pods. |
 
 The gate is the server version alone: the controller compares `major.minor` against 1.33 and does not probe feature gates.
