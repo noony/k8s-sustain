@@ -590,46 +590,22 @@ prometheusRule:
               )
             )
             unless on(namespace, pod) kube_pod_annotations{annotation_k8s_sustain_io_owner_name=~"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?"}
-        # Internal-only: pod → owner_kind for every pod with a REAL controller
-        # owner (StatefulSet/DaemonSet/Job direct, Job→CronJob, ReplicaSet→
-        # Deployment, ReplicaSet→Rollout) — the SAME four resolution paths as
-        # the rules above, but WITHOUT their owner-name `unless` exclusion.
+        # Internal-only: pod → the kind workload.ResolveControllerOwner
+        # resolves the pod's controller to: the CronJob of a CronJob's Job,
+        # the Deployment or Rollout of a ReplicaSet, otherwise the controller's
+        # own kind, whatever it is (a standalone Job, a StatefulSet, an orphan
+        # ReplicaSet, a ReplicationController, a custom controller). A pod
+        # without a controller has no row.
         #
-        # Why this duplication exists (do not "simplify" it away): the four
-        # rules above deliberately exclude any pod carrying a valid
-        # k8s.sustain.io/owner-name override annotation, so that
-        # k8s_sustain:pod_workload has exactly one row per pod. That means
-        # k8s_sustain:pod_workload has NO row at all for overridden pods,
-        # so it cannot be used to answer "what is this pod's REAL owner_kind,
-        # if any?" — which the owner-name override rule below needs, to tell
-        # apart a Deployment pod using the override for blue/green-style
-        # grouping (owner_kind must stay Deployment) from a bare pod with no
-        # real owner using the override (owner_kind must become the literal
-        # "Pod"). This rule is that unguarded, always-populated answer.
-        # Prometheus recording rules have no "compute X, then branch on X"
-        # primitive across rules other than chaining through a materialized
-        # intermediate series like this one, so some duplication of the join
-        # logic above is unavoidable.
+        # The owner-name override rule below needs this answer unguarded:
+        # k8s_sustain:pod_workload has no row for an overridden pod by
+        # construction, and a recording rule can branch on another rule's
+        # result only through a series like this one. The last alternative
+        # must stay unfiltered: a pod of a kind it left out would become
+        # Pod/<name>, and its usage would reach a bare-pod identity the
+        # controller never groups it under.
         - record: k8s_sustain:pod_owner_kind_internal
           expr: |
-            max by (namespace, pod, owner_kind) (
-              kube_pod_owner{
-                owner_kind=~"StatefulSet|DaemonSet|Job",
-                owner_is_controller="true"
-              }
-              unless on(namespace, pod)
-              (
-                label_replace(
-                  kube_pod_owner{owner_kind="Job", owner_is_controller="true"},
-                  "job_name", "$1", "owner_name", "(.*)"
-                )
-                * on(namespace, job_name) group_left
-                max by (namespace, job_name) (
-                  kube_job_owner{owner_kind="CronJob", owner_is_controller="true"}
-                )
-              )
-            )
-            or
             max by (namespace, pod, owner_kind) (
               label_replace(
                 label_replace(
@@ -658,38 +634,23 @@ prometheusRule:
               )
               * on(namespace, replicaset) group_left(owner_kind)
               max by (namespace, replicaset, owner_kind) (
-                kube_replicaset_owner{owner_kind="Deployment", owner_is_controller="true"}
+                kube_replicaset_owner{owner_kind=~"Deployment|Rollout", owner_is_controller="true"}
               )
             )
-            or
+            or on(namespace, pod)
             max by (namespace, pod, owner_kind) (
-              label_replace(
-                label_replace(
-                  max by (namespace, pod, owner_kind, owner_name, owner_is_controller) (
-                    kube_pod_owner{owner_kind="ReplicaSet", owner_is_controller="true"}
-                  ),
-                  "replicaset", "$1", "owner_name", "(.*)"
-                ),
-                "owner_kind", "", "owner_kind", ".*"
-              )
-              * on(namespace, replicaset) group_left(owner_kind)
-              max by (namespace, replicaset, owner_kind) (
-                kube_replicaset_owner{owner_kind="Rollout", owner_is_controller="true"}
-              )
+              kube_pod_owner{owner_is_controller="true"}
             )
         # Owner-name override (api/v1alpha1.OwnerNameAnnotation): read from
         # the pod's own annotation, which kube-state-metrics exposes as
         # kube_pod_annotations (metricAnnotationsAllowList, configured below),
         # for a value matching the same regex as the guards above. owner_name
-        # becomes the annotation value. owner_kind becomes the REAL kind when
-        # the pod has one — joined from k8s_sustain:pod_owner_kind_internal
-        # above, which (unlike k8s_sustain:pod_workload) is NOT guarded by the
-        # owner-name `unless` and therefore still has a row for these pods —
-        # or the literal "Pod" when it doesn't (no real controller owner).
-        # Both branches below must use that same unguarded source: testing
-        # "does this pod have a real owner" against k8s_sustain:pod_workload
-        # would always say "no" for overridden pods (they're excluded from
-        # it by construction), making the check meaningless.
+        # becomes the annotation value; owner_kind is the kind of the pod's
+        # controller from k8s_sustain:pod_owner_kind_internal, or the literal
+        # "Pod" for a pod without one, as in workload.ApplyOwnerNameOverride.
+        # Both branches test for a controller against that unguarded rule:
+        # against k8s_sustain:pod_workload, which never holds an overridden
+        # pod, every pod would look ownerless.
         - record: k8s_sustain:pod_workload
           expr: |
             (

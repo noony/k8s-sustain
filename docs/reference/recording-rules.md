@@ -65,23 +65,25 @@ If you bring your own Prometheus, it must scrape every series in the table.
 unless on(namespace, pod) kube_pod_annotations{annotation_k8s_sustain_io_owner_name=~"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?"}
 ```
 
-Five rules share this name and map every pod to its top-level workload:
+Five rules share this name and map each pod to the identity the controller groups it under (`workload.ResolveControllerOwner`, then `workload.ApplyOwnerNameOverride`):
 
 1. Direct owners (StatefulSet, DaemonSet, Job), excluding CronJob-owned Jobs — shown above.
 2. Pod → Job → CronJob via `kube_job_owner`.
 3. Pod → ReplicaSet → Deployment.
 4. Pod → ReplicaSet → Argo Rollout.
-5. Owner-name override: pods whose `kube_pod_annotations` carry an `annotation_k8s_sustain_io_owner_name` (the pod's own [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation) that is a valid, non-empty Kubernetes label value. `owner_name` becomes the annotation value; `owner_kind` is the pod's real owner kind, or `Pod` when it has none.
+5. Owner-name override: pods whose `kube_pod_annotations` carry an `annotation_k8s_sustain_io_owner_name` (the pod's own [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation) that is a valid, non-empty Kubernetes label value. `owner_name` becomes the annotation value; `owner_kind` is the kind of the pod's controller as the controller resolves it (the Deployment or Rollout of its ReplicaSet, the CronJob of its Job, otherwise the controller's own kind, whatever it is), or `Pod` when the pod has no controller.
 
-Rules 1–4 end with `unless on(namespace, pod) kube_pod_annotations{annotation_k8s_sustain_io_owner_name=~"…"}`, so a pod with an override is mapped only by rule 5 and every pod has exactly one row. The CronJob exclusion in rule 1 likewise stops a pod carrying both `owner_kind=Job` and `owner_kind=CronJob`.
+Rules 1–4 end with `unless on(namespace, pod) kube_pod_annotations{annotation_k8s_sustain_io_owner_name=~"…"}`, so a pod with an override is mapped only by rule 5 and every pod has at most one row. The CronJob exclusion in rule 1 likewise stops a pod carrying both `owner_kind=Job` and `owner_kind=CronJob`.
 
-All five rules select the annotation with the same regex, `[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?`. PromQL anchors a regex matcher at both ends, so it matches exactly the non-empty values Kubernetes accepts as a label value (apimachinery's `IsValidLabelValue`: at most 63 characters, alphanumerics, `-`, `_` and `.`, starting and ending with an alphanumeric), which are the values the controller applies the override for (`workload.ApplyOwnerNameOverride`). A pod whose annotation is empty or invalid keeps its real owner in rules 1–4, as it does in the controller, and a bare pod with one is not mapped at all. `go test ./hack/signalcontract` fails when their regexes differ or stop matching exactly the values the controller accepts, or when the bundled kube-state-metrics stops exporting the annotation.
+Rules 1–4 map only the kinds a Policy can manage. A pod whose controller is of another kind (an orphan ReplicaSet, a ReplicationController, a custom controller) has no row without an override: the controller resolves it to an identity of that kind, which no Policy manages and nothing queries. With an override, rule 5 maps it under that kind, as the controller groups it, never under `Pod`, so its usage stays out of a bare-pod identity of the same name.
+
+All five rules select the annotation with the same regex, `[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?`. PromQL anchors a regex matcher at both ends, so it matches exactly the non-empty values Kubernetes accepts as a label value (apimachinery's `IsValidLabelValue`: at most 63 characters, alphanumerics, `-`, `_` and `.`, starting and ending with an alphanumeric), which are the values the controller applies the override for (`workload.ApplyOwnerNameOverride`). A pod whose annotation is empty or invalid keeps its real owner in rules 1–4, as it does in the controller, and a bare pod with one is not mapped at all. `go test ./hack/signalcontract` fails when their regexes differ or stop matching exactly the values the controller accepts, when rule 5 gives a pod without a controller another kind than the controller does, or when the bundled kube-state-metrics stops exporting the annotation. `pod_workload_owner_name_test.yaml` pins the kind rule 5 gives a pod of each controller kind.
 
 Rule 5 needs the kube-state-metrics `metricAnnotationsAllowList: ["pods=[k8s.sustain.io/owner-name]"]` setting (the `--metric-annotations-allowlist` flag, on by default in the bundled subchart); without it, pods using the override are mapped to their real owner, and bare pods not at all.
 
 ### `k8s_sustain:pod_owner_kind_internal`
 
-Helper for rule 5: the pod's real `owner_kind` via the same four resolution paths as rules 1–4, but without their owner-name exclusion. Not meant to be queried directly.
+Helper for rule 5: the kind of each pod's controller as `workload.ResolveControllerOwner` resolves it (the CronJob of a CronJob's Job, the Deployment or Rollout of a ReplicaSet, otherwise the controller's own kind), with no owner-name exclusion, so it has a row for every pod with a controller, overridden or not. Its last alternative selects every controller kind: filtering it would make rule 5 map the pods of a kind it leaves out as `Pod`. Not meant to be queried directly.
 
 ### `k8s_sustain:container_cpu_usage:rate1m`
 

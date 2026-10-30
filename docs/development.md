@@ -312,9 +312,10 @@ cannot do. Add one whenever a rule's correctness depends on timing or on a
 join window, since that is exactly what a syntax check misses. Every rule a
 recommendation signal reads must have one: `hack/signalcontract` fails
 otherwise (see [Signal contracts](reference/recording-rules.md#signal-contracts)).
-It also fails when the regex `k8s_sustain:pod_workload` selects the
-owner-name annotation with stops matching exactly the values
-`workload.ApplyOwnerNameOverride` accepts, or when the bundled
+It also fails when the regex with which `k8s_sustain:pod_workload` selects
+the owner-name annotation stops matching exactly the values
+`workload.ApplyOwnerNameOverride` accepts, when the rules give an overridden
+pod without a controller another kind than it does, or when the bundled
 kube-state-metrics stops exporting the annotation
 (`pod_workload_owner_name_test.yaml` covers the mapping itself).
 

@@ -2,9 +2,10 @@
 #
 # The override is read from kube-state-metrics' kube_pod_annotations, and only
 # for a value the controller accepts too (a non-empty Kubernetes label value):
-# such a pod maps to the override alone, under its real owner kind or "Pod"
-# when it has none. Any other value leaves the pod to its real owner, and a
-# bare pod with one is not mapped at all. Every pod has at most one row.
+# such a pod maps to the override alone, under the kind the controller
+# resolves its controller to, or "Pod" when it has none. Any other value leaves
+# the pod to its real owner, and a bare pod with one is not mapped at all.
+# Every pod has at most one row.
 rule_files:
   - rules-only.yaml
 
@@ -67,4 +68,83 @@ tests:
           - labels: 'k8s_sustain:pod_workload{namespace="shop",pod="db-0",annotation_k8s_sustain_io_owner_name="d.b_0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaz",owner_kind="StatefulSet",owner_name="d.b_0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaz"}'
             value: 1
           - labels: 'k8s_sustain:pod_workload{namespace="airflow",pod="etl-daily-run-1",annotation_k8s_sustain_io_owner_name="etl-daily",owner_kind="Pod",owner_name="etl-daily"}'
+            value: 1
+
+  # The override keeps the kind workload.ResolveControllerOwner resolves the
+  # pod's controller to, whatever it is: pods of seven kinds sharing one name
+  # are seven identities, as in the controller, and only the ownerless one is
+  # Pod/etl. Without an override, a controller of a kind no Policy manages
+  # (an orphan ReplicaSet, a ReplicationController, a custom controller) maps
+  # nowhere.
+  - interval: 1m
+    input_series:
+      - series: 'kube_replicaset_owner{namespace="ops",replicaset="orphan-5c9",owner_kind="<none>",owner_name="<none>",owner_is_controller="<none>"}'
+        values: '1x5'
+      - series: 'kube_pod_owner{namespace="ops",pod="orphan-5c9-a",owner_kind="ReplicaSet",owner_name="orphan-5c9",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="ops",pod="orphan-5c9-a",annotation_k8s_sustain_io_owner_name="etl"}'
+        values: '1x5'
+      - series: 'kube_pod_owner{namespace="ops",pod="orphan-5c9-b",owner_kind="ReplicaSet",owner_name="orphan-5c9",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="ops",pod="orphan-5c9-b"}'
+        values: '1x5'
+      - series: 'kube_pod_owner{namespace="ops",pod="legacy-x1",owner_kind="ReplicationController",owner_name="legacy",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="ops",pod="legacy-x1",annotation_k8s_sustain_io_owner_name="etl"}'
+        values: '1x5'
+      - series: 'kube_pod_owner{namespace="ops",pod="legacy-x2",owner_kind="ReplicationController",owner_name="legacy",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="ops",pod="legacy-x2"}'
+        values: '1x5'
+      - series: 'kube_pod_owner{namespace="ops",pod="wf-1-step",owner_kind="Workflow",owner_name="wf-1",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="ops",pod="wf-1-step",annotation_k8s_sustain_io_owner_name="etl"}'
+        values: '1x5'
+      - series: 'kube_job_owner{namespace="ops",job_name="batch",owner_kind="<none>",owner_name="<none>",owner_is_controller="<none>"}'
+        values: '1x5'
+      - series: 'kube_pod_owner{namespace="ops",pod="batch-abc",owner_kind="Job",owner_name="batch",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="ops",pod="batch-abc",annotation_k8s_sustain_io_owner_name="etl"}'
+        values: '1x5'
+      - series: 'kube_job_owner{namespace="ops",job_name="nightly-29100",owner_kind="CronJob",owner_name="nightly",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_owner{namespace="ops",pod="nightly-29100-q",owner_kind="Job",owner_name="nightly-29100",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="ops",pod="nightly-29100-q",annotation_k8s_sustain_io_owner_name="etl"}'
+        values: '1x5'
+      - series: 'kube_replicaset_owner{namespace="ops",replicaset="canary-6f8",owner_kind="Rollout",owner_name="canary",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_owner{namespace="ops",pod="canary-6f8-z",owner_kind="ReplicaSet",owner_name="canary-6f8",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="ops",pod="canary-6f8-z",annotation_k8s_sustain_io_owner_name="etl"}'
+        values: '1x5'
+      # An owner that is not the controller leaves the pod ownerless.
+      - series: 'kube_pod_owner{namespace="ops",pod="adopted",owner_kind="ConfigMap",owner_name="cfg",owner_is_controller="false"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="ops",pod="adopted",annotation_k8s_sustain_io_owner_name="etl"}'
+        values: '1x5'
+      - series: 'kube_pod_owner{namespace="ops",pod="etl-run-7",owner_kind="<none>",owner_name="<none>",owner_is_controller="<none>"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="ops",pod="etl-run-7",annotation_k8s_sustain_io_owner_name="etl"}'
+        values: '1x5'
+
+    promql_expr_test:
+      - expr: k8s_sustain:pod_workload
+        eval_time: 2m
+        exp_samples:
+          - labels: 'k8s_sustain:pod_workload{namespace="ops",pod="orphan-5c9-a",annotation_k8s_sustain_io_owner_name="etl",owner_kind="ReplicaSet",owner_name="etl"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="ops",pod="legacy-x1",annotation_k8s_sustain_io_owner_name="etl",owner_kind="ReplicationController",owner_name="etl"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="ops",pod="wf-1-step",annotation_k8s_sustain_io_owner_name="etl",owner_kind="Workflow",owner_name="etl"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="ops",pod="batch-abc",annotation_k8s_sustain_io_owner_name="etl",owner_kind="Job",owner_name="etl"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="ops",pod="nightly-29100-q",annotation_k8s_sustain_io_owner_name="etl",owner_kind="CronJob",owner_name="etl"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="ops",pod="canary-6f8-z",annotation_k8s_sustain_io_owner_name="etl",owner_kind="Rollout",owner_name="etl"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="ops",pod="adopted",annotation_k8s_sustain_io_owner_name="etl",owner_kind="Pod",owner_name="etl"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="ops",pod="etl-run-7",annotation_k8s_sustain_io_owner_name="etl",owner_kind="Pod",owner_name="etl"}'
             value: 1
