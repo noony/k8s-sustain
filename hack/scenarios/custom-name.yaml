@@ -10,8 +10,10 @@
 # Verify the rename (status.sh's generic table queries recommendations by
 # the Deployment's own name and does not cover this case):
 #
-#   # the pod gets the webhook-mirrored label
-#   kubectl get pods -n scenario-custom-name --show-labels | grep k8s.sustain.io/owner-name
+#   # Prometheus maps the pod to Deployment/renamed-app, from its annotation
+#   # (make port-forward serves Prometheus on :9090)
+#   curl -s localhost:9090/api/v1/query \
+#     --data-urlencode 'query=k8s_sustain:pod_workload{namespace="scenario-custom-name"}'
 #
 #   # the WorkloadRecommendation is named by the override ("deployment-renamed-app"),
 #   # not by the Deployment's own name ("deployment-stress" does not exist)

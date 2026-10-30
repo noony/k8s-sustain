@@ -29,13 +29,13 @@ Each [recommendation signal](../concepts/recommendation-pipeline.md#signals) dec
 
 | Signal | Rules it reads | Aggregated by | Interval | cAdvisor series | kube-state-metrics series |
 |---|---|---|---|---|---|
-| CPU usage | `workload_max_pod_cpu:cores` | `namespace`, `owner_kind`, `owner_name`, `container` | 1m | `container_cpu_usage_seconds_total` | `kube_pod_owner`, `kube_job_owner`, `kube_replicaset_owner`, `kube_pod_labels` |
+| CPU usage | `workload_max_pod_cpu:cores` | `namespace`, `owner_kind`, `owner_name`, `container` | 1m | `container_cpu_usage_seconds_total` | `kube_pod_owner`, `kube_job_owner`, `kube_replicaset_owner`, `kube_pod_annotations` |
 | Memory usage | `workload_max_pod_memory:bytes` | the same | 1m | `container_memory_working_set_bytes` | the same four |
 | OOM floor | `workload_oom_24h`, `container_peak_memory_24h:bytes`, `container_oom_limit_24h:bytes` | the same | none assumed | `container_memory_max_usage_bytes`, `container_memory_peak_working_set_bytes`, `container_memory_working_set_bytes`, `container_spec_memory_limit_bytes` | `kube_pod_container_status_restarts_total`, `kube_pod_container_status_last_terminated_reason` and the same four |
 
 - **Labels.** A query reads a whole shard of identities at once and attributes each series by these four labels. A series missing one is dropped; a rule keeping one more, such as `pod`, would hand a container several series, and the usage signals keep only one of them.
 - **Interval.** The usage signals read their rule as a plain range vector, so its 1m interval is the percentile's sample resolution and what the shard sample budget counts. The OOM floor reads its rules as an instant vector, one sample per rule, whatever their interval.
-- **Series.** The four kube-state-metrics series shared by every signal are what `pod_workload` maps a pod to its identity from.
+- **Series.** The four kube-state-metrics series shared by every signal are what `pod_workload` maps a pod to its identity from; `kube_pod_annotations` carries the owner-name override.
 
 `go test ./hack/signalcontract`, part of `make test`, checks the chart against every contract. Each rule a signal reads must be recorded in `prometheusRule.groups`, be one aggregation `by` exactly the declared labels over its whole expression, evaluate at the declared interval, and be evaluated with expected samples by a promtool fixture in `charts/k8s-sustain/tests/promtool/` (run by `make helm-promtool`). Following the rules they read down to raw series, those series must be exactly the declared ones, and each must be kept by its exporter's keep-list in the bundled Prometheus: the `metric_relabel_configs` of `prometheus.scrapeConfigs.kubernetes-nodes-cadvisor`, or of the `kube-state-metrics` job in `prometheus.extraScrapeConfigs`. A signal that needs a series the chart does not keep yet, such as cAdvisor's CFS throttling counters, fails the test until the keep-list keeps it. Expressions are read textually, without the PromQL parser, so a rule a signal reads has to stay a single `<aggregation> by (…) (…)`.
 
@@ -62,7 +62,7 @@ If you bring your own Prometheus, it must scrape every series in the table.
     )
   )
 )
-unless on(namespace, pod) kube_pod_labels{label_k8s_sustain_io_owner_name!=""}
+unless on(namespace, pod) kube_pod_annotations{annotation_k8s_sustain_io_owner_name=~"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?"}
 ```
 
 Five rules share this name and map every pod to its top-level workload:
@@ -71,11 +71,13 @@ Five rules share this name and map every pod to its top-level workload:
 2. Pod → Job → CronJob via `kube_job_owner`.
 3. Pod → ReplicaSet → Deployment.
 4. Pod → ReplicaSet → Argo Rollout.
-5. Owner-name override: pods whose `kube_pod_labels` carry a non-empty `label_k8s_sustain_io_owner_name` (the label the webhook mirrors from the [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation). `owner_name` becomes the label value; `owner_kind` is the pod's real owner kind, or `Pod` when it has none.
+5. Owner-name override: pods whose `kube_pod_annotations` carry an `annotation_k8s_sustain_io_owner_name` (the pod's own [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation) that is a valid, non-empty Kubernetes label value. `owner_name` becomes the annotation value; `owner_kind` is the pod's real owner kind, or `Pod` when it has none.
 
-Rules 1–4 end with `unless on(namespace, pod) kube_pod_labels{label_k8s_sustain_io_owner_name!=""}`, so a pod with an override is mapped only by rule 5 and every pod has exactly one row. The CronJob exclusion in rule 1 likewise stops a pod carrying both `owner_kind=Job` and `owner_kind=CronJob`.
+Rules 1–4 end with `unless on(namespace, pod) kube_pod_annotations{annotation_k8s_sustain_io_owner_name=~"…"}`, so a pod with an override is mapped only by rule 5 and every pod has exactly one row. The CronJob exclusion in rule 1 likewise stops a pod carrying both `owner_kind=Job` and `owner_kind=CronJob`.
 
-Rule 5 needs the kube-state-metrics `metricLabelsAllowlist: pods=[k8s.sustain.io/owner-name]` setting (on by default in the bundled subchart); without it, override pods are not mapped at all.
+All five rules select the annotation with the same regex, `[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?`. PromQL anchors a regex matcher at both ends, so it matches exactly the non-empty values Kubernetes accepts as a label value (apimachinery's `IsValidLabelValue`: at most 63 characters, alphanumerics, `-`, `_` and `.`, starting and ending with an alphanumeric), which are the values the controller applies the override for (`workload.ApplyOwnerNameOverride`). A pod whose annotation is empty or invalid keeps its real owner in rules 1–4, as it does in the controller, and a bare pod with one is not mapped at all. `go test ./hack/signalcontract` fails when their regexes differ or stop matching exactly the values the controller accepts, or when the bundled kube-state-metrics stops exporting the annotation.
+
+Rule 5 needs the kube-state-metrics `metricAnnotationsAllowList: ["pods=[k8s.sustain.io/owner-name]"]` setting (the `--metric-annotations-allowlist` flag, on by default in the bundled subchart); without it, pods using the override are mapped to their real owner, and bare pods not at all.
 
 ### `k8s_sustain:pod_owner_kind_internal`
 

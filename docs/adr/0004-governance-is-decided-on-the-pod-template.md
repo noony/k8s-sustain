@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-05
+- **Refined by:** [ADR 0006](0006-owner-name-is-read-from-the-annotation.md) — the webhook no longer mirrors the owner-name annotation onto a pod label, so the Policy CRD no longer rejects `k8s.sustain.io/owner-name` as a selector key
 
 ## Context
 

@@ -13,20 +13,24 @@ from its `ownerReferences`. It covers two cases:
 ## How it works
 
 Setting `k8s.sustain.io/owner-name: <value>` on a pod (directly, for bare
-pods; or on a pod template, for owned workloads) does two things:
+pods; or on a pod template, for owned workloads) is read in two places, both
+from the annotation itself:
 
-- The admission webhook mirrors the annotation onto a pod **label** of the
-  same name, so the value must also be a valid label value (RFC 1123, 63
-  characters or fewer). It does so on every admission it sees, whatever it
-  decides about resources: a pod that opts out, that no Policy governs, or
-  whose admission fails a read is still labelled.
-- kube-state-metrics (configured via `metricLabelsAllowlist` in the chart's
-  `values.yaml`) exposes that label in `kube_pod_labels`, which a recording
-  rule folds into `k8s_sustain:pod_workload`. Without it the override has no
-  Prometheus data to query.
+- The controller, the dashboard and the webhook group the pod under the
+  override identity when they decide who governs it.
+- kube-state-metrics exposes the annotation in `kube_pod_annotations`
+  (`metricAnnotationsAllowList` in the chart's `values.yaml`), which a
+  recording rule folds into `k8s_sustain:pod_workload`, so the pod's usage is
+  aggregated under the same identity. Without the allowlist the override has
+  no Prometheus data to query; see
+  [Prerequisites](../getting-started/prerequisites.md#prometheus) when you
+  bring your own Prometheus.
 
-An invalid value is treated as absent: no label is set, no override applies,
-and the pod is never rejected.
+The value becomes the identity's `owner_name`, so it must be a valid label
+value (RFC 1123, 63 characters or fewer). An invalid or empty value is treated
+as absent by both readers: no override applies, and the pod is never
+rejected. Since both read the annotation, a pod created while the webhook was
+unreachable, or before k8s-sustain was installed, is grouped like any other.
 
 ## Bare pods (Airflow example)
 
@@ -81,8 +85,8 @@ controller `ownerReference` and a valid `owner-name`. It is governed by the
 policy it resolves to (pod or Namespace annotation — see
 [Resolution order](../reference/annotation.md#resolution-order)) when that
 policy manages `pod` and selects it, and only governed pods supply containers
-and are resized. A ReplicaSet-owned pod that merely carries the mirrored
-`owner-name` label is never a member.
+and are resized. A ReplicaSet-owned pod carrying the same `owner-name` is
+never a member of the `Pod` identity: it groups under its Deployment's kind.
 
 **One owner-name, one policy.** When the pods of one `(namespace, owner-name)`
 are governed by *different* policies, the identity is

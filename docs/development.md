@@ -312,6 +312,11 @@ cannot do. Add one whenever a rule's correctness depends on timing or on a
 join window, since that is exactly what a syntax check misses. Every rule a
 recommendation signal reads must have one: `hack/signalcontract` fails
 otherwise (see [Signal contracts](reference/recording-rules.md#signal-contracts)).
+It also fails when the regex `k8s_sustain:pod_workload` selects the
+owner-name annotation with stops matching exactly the values
+`workload.ApplyOwnerNameOverride` accepts, or when the bundled
+kube-state-metrics stops exporting the annotation
+(`pod_workload_owner_name_test.yaml` covers the mapping itself).
 
 ## Adding a new workload kind
 
@@ -769,9 +774,9 @@ The watcher's event predicate is local (no apiserver calls): a pod is queued whe
 
 `admit` (`internal/webhook/handler.go`) is decode → decide → run effects → respond. `decide` (`decide.go`) works out what admitting a pod does from reads alone; its only writes are the owner caches those reads fill, from `singleflight` leaders that can outlive it. It covers the governance decision, the `WorkloadRecommendation` read and its verdict, and [container injection](#container-injection). It returns an `admission`: the reason (one of a closed set: a `governance.Refusal`, the `source` label of a verdict that injects nothing, `no-container-matches`, `recommend-only`, `at-recommendation`, `injected`, `governance-failed`, `recommendation-unreadable`, `panic`, `undecodable`), the identity, the Policy and the mode it manages the kind in, the `source` label `admit` counts on `k8s_sustain_webhook_recommendation_source_total` and the read's verdict, the container writes to inject, and the one effect it can call for, a stub request. `admit` logs it once (`logAdmission`), with the reason, the opt-in and its level, the identity, the mode and the verdict, and the pod's container counts when nothing matches. A panic anywhere after decode (deciding, the stub claim, counting or logging) is recovered into the `panic` reason, counted under `admit`, and responded to like any other admission.
 
-`respond` is the only constructor of an admission response and always allows the pod. It adds the owner-name label patch whenever the pod carries a valid `k8s.sustain.io/owner-name` annotation, a pure function of the pod applied on every exit after decode, whatever was decided: the annotation is the user's explicit grouping request and the recording rules depend on the label. It sets resources only for an injected admission. The stub request runs on a detached goroutine that recovers its own panics (`stub/request`), since nothing above it would.
+`respond` is the only constructor of an admission response and always allows the pod. It patches only an injected admission, and only the resources of the containers it writes: the webhook writes nothing else to a pod. The `k8s.sustain.io/owner-name` annotation is read where the user set it, by `governance.Decide` and by the recording rules through kube-state-metrics' `kube_pod_annotations`, so nothing depends on the webhook having admitted a pod ([ADR 0006](adr/0006-owner-name-is-read-from-the-annotation.md)). The stub request runs on a detached goroutine that recovers its own panics (`stub/request`), since nothing above it would.
 
-A test asserts why a pod went unmutated through the reason: `TestDecide` (`decide_test.go`) is one table keyed on it, with the stub effect and the writes as columns; `respond`'s tests cover the label on every reason.
+A test asserts why a pod went unmutated through the reason: `TestDecide` (`decide_test.go`) is one table keyed on it, with the stub effect and the writes as columns; `TestAdmitPatchesOnlyTheResourcesItInjects` asserts an admission patches nothing else, governed or not.
 
 #### Informer cache and shutdown ordering
 

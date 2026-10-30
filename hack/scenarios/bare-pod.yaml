@@ -41,10 +41,9 @@
 # with kubectl, not a prediction:
 #
 #   09:36:41Z  pod admitted on the template's 500m / 256Mi (memory limit
-#              256Mi). The webhook mirrors k8s.sustain.io/owner-name to a pod
-#              label and creates "pod-etl-daily" with an empty status;
-#              the controller's first pass then records status.outcome
-#              TooYoung: the identity is live, just dataless.
+#              256Mi). The webhook creates "pod-etl-daily" with an empty
+#              status; the controller's first pass then records
+#              status.outcome TooYoung: the identity is live, just dataless.
 #   ..09:46:41Z  MinWorkloadAge holds for the full 10 minutes. Every cycle
 #              logs `skipping recommendation: workload too young` with
 #              kind=Pod, and recommendation_skipped_total{
@@ -73,8 +72,10 @@
 # Verify (status.sh's generic table assumes a Deployment named "stress" and
 # does not cover this case):
 #
-#   # the pod gets the webhook-mirrored label
-#   kubectl get pod -n scenario-bare-pod etl-daily-run-1 --show-labels | grep k8s.sustain.io/owner-name
+#   # Prometheus maps the pod to Pod/etl-daily, from its annotation
+#   # (make port-forward serves Prometheus on :9090)
+#   curl -s localhost:9090/api/v1/query \
+#     --data-urlencode 'query=k8s_sustain:pod_workload{namespace="scenario-bare-pod"}'
 #
 #   # the pod is resized in place: requests converge, UID never changes
 #   kubectl get pod -n scenario-bare-pod etl-daily-run-1 -o jsonpath='{.metadata.uid}{" "}{.spec.containers[0].resources.requests}{"\n"}'

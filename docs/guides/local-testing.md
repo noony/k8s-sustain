@@ -369,10 +369,14 @@ Deployment's own name is never used for Prometheus queries or the
 
 **Expected:**
 
-- The pod is admitted with the webhook-mirrored label. Confirm:
+- Prometheus maps the pod to the override identity, read from its
+  annotation through `kube_pod_annotations`: every row has
+  `owner_kind="Deployment"` and `owner_name="renamed-app"`. Confirm
+  (`make port-forward` serves Prometheus on `:9090`):
 
   ```bash
-  kubectl get pods -n scenario-custom-name --show-labels | grep k8s.sustain.io/owner-name
+  curl -s localhost:9090/api/v1/query \
+    --data-urlencode 'query=k8s_sustain:pod_workload{namespace="scenario-custom-name"}'
   ```
 
 - The `WorkloadRecommendation` is named by the override identity
@@ -402,7 +406,9 @@ annotations sit on the Pod itself, and the Policy sets
 
 **Expected:**
 
-- The pod carries the webhook-mirrored `k8s.sustain.io/owner-name` label.
+- Prometheus maps the pod to `owner_kind="Pod"`, `owner_name="etl-daily"`
+  in `k8s_sustain:pod_workload`, read from its annotation through
+  `kube_pod_annotations`.
 - After the 10-minute workload-age gate, the controller caches a
   `WorkloadRecommendation` (`pod-etl-daily`); a later pod with the same
   `owner-name` is injected from it at admission.
@@ -414,7 +420,8 @@ annotations sit on the Pod itself, and the Policy sets
   which resizes only from k8s 1.35.)
 
 ```bash
-kubectl get pod -n scenario-bare-pod etl-daily-run-1 --show-labels
+curl -s localhost:9090/api/v1/query \
+  --data-urlencode 'query=k8s_sustain:pod_workload{namespace="scenario-bare-pod"}'
 kubectl get pod -n scenario-bare-pod etl-daily-run-1 \
   -o jsonpath='{.metadata.uid}{" "}{.spec.containers[0].resources.requests}{"\n"}'
 kubectl get wlrec -n scenario-bare-pod pod-etl-daily -o yaml

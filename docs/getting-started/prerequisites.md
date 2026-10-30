@@ -25,13 +25,16 @@ If you bring your own Prometheus, make sure **kube-state-metrics** and **cAdviso
 From **kube-state-metrics**:
 
 - `kube_pod_owner` — maps pods to their workload owner
-- `kube_pod_labels` — carries the `k8s.sustain.io/owner-name` label for [identity grouping](../guides/standalone-pods-and-grouping.md). kube-state-metrics only exports it when allowlisted: set `metricLabelsAllowlist: ["pods=[k8s.sustain.io/owner-name]"]` (the `--metric-labels-allowlist` flag)
+- `kube_pod_annotations` — carries the `k8s.sustain.io/owner-name` annotation for [identity grouping](../guides/standalone-pods-and-grouping.md). kube-state-metrics only exports it when allowlisted: start it with `--metric-annotations-allowlist=pods=[k8s.sustain.io/owner-name]` (kube-state-metrics 2.2 or later; `metricAnnotationsAllowList: ["pods=[k8s.sustain.io/owner-name]"]` in its Helm chart). Without it, a pod using the override is mapped to its real owner, or not at all for a bare pod, and its usage never reaches the identity the controller groups it under
 - `kube_job_owner` — resolves Job → CronJob
 - `kube_replicaset_owner` — resolves ReplicaSet → Deployment (or Rollout)
 - `kube_pod_container_resource_requests` / `kube_pod_container_resource_limits` — current CPU/memory requests and limits
 - `kube_pod_init_container_resource_requests` / `kube_pod_init_container_resource_limits` — same, for init and sidecar containers (kube-state-metrics reports init containers under these separate metric names)
 - `kube_pod_container_status_restarts_total` / `kube_pod_container_status_last_terminated_reason` — OOMKill detection
 - `kube_node_status_allocatable` — cluster capacity for the headroom panels
+
+!!! warning "Breaking: the owner-name override moved from `kube_pod_labels` to `kube_pod_annotations`"
+    Earlier releases had the webhook copy the `k8s.sustain.io/owner-name` annotation onto a pod label, which the recording rules read from `kube_pod_labels` (`--metric-labels-allowlist`). The webhook no longer writes that label ([ADR 0006](../adr/0006-owner-name-is-read-from-the-annotation.md)). With your own Prometheus, add the annotation allowlist above and keep `kube_pod_annotations` in your scrape keep-list before upgrading; the `kube_pod_labels` allowlist entry and keep-list entry can go. The bundled Prometheus is configured for you.
 
 From **cAdvisor**:
 

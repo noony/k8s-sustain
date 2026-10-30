@@ -91,7 +91,7 @@ A standard Kubernetes [label selector](https://kubernetes.io/docs/concepts/overv
 
 It matches the **pod template's** labels — `spec.template.metadata.labels` (a CronJob's `spec.jobTemplate.spec.template.metadata.labels`, a bare Pod's own `metadata.labels`), the labels every pod of the workload carries — never the workload object's own `metadata.labels`. Labels that only the `Deployment` carries select nothing; put them on its pod template.
 
-The Policy CRD rejects a selector that names a label Kubernetes or k8s-sustain adds after the pod template is written, in `matchLabels` or as a `matchExpressions` key, whatever the operator:
+The Policy CRD rejects a selector that names a label a controller adds after the pod template is written, in `matchLabels` or as a `matchExpressions` key, whatever the operator:
 
 | Label | Added by |
 |-------|----------|
@@ -102,9 +102,8 @@ The Policy CRD rejects a selector that names a label Kubernetes or k8s-sustain a
 | `statefulset.kubernetes.io/pod-name`, `apps.kubernetes.io/pod-index` | the StatefulSet controller, to its pods |
 | `controller-uid`, `job-name`, `batch.kubernetes.io/controller-uid`, `batch.kubernetes.io/job-name` | the Job API, to a Job's own pod template |
 | `batch.kubernetes.io/job-completion-index` | the Job controller, to an Indexed Job's pods |
-| `k8s.sustain.io/owner-name` | the k8s-sustain webhook, to a pod it admits ([mirrored from the annotation](annotation.md#annotations-and-labels)) |
 
-Each is on some of the objects the controller, the webhook and the OOM watcher match and not on others: a Deployment's pod template has no `pod-template-hash` but its running pods do, and a standalone Job's pod template has `job-name` while a CronJob's job template does not. A selector on one would have the controller govern a workload whose pods the webhook refuses, or the other way round.
+Each is on some of the objects the controller, the webhook and the OOM watcher match and not on others: a Deployment's pod template has no `pod-template-hash` but its running pods do, and a standalone Job's pod template has `job-name` while a CronJob's job template does not. A selector on one would have the controller govern a workload whose pods the webhook refuses, or the other way round. k8s-sustain itself adds no label to pods: the [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation is read where you set it, never copied to a label ([ADR 0006](../adr/0006-owner-name-is-read-from-the-annotation.md)).
 
 !!! warning "Breaking"
     A Policy whose `labelSelector` names one of these labels is rejected when it is created or its selector is changed. Select on labels you put on the pod template yourself.
