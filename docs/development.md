@@ -512,6 +512,28 @@ The dev server proxies `/api` and `/healthz` to `localhost:8090`: run the
 backend with `go run main.go dashboard --bind-address=:8090`, or port-forward
 the in-cluster dashboard Service to `:8090`.
 
+### Domain vocabulary
+
+The SPA renders what the backend decided and holds each domain vocabulary in
+one module under `src/lib/`; views and components import from it and never
+spell a label, class or link of their own:
+
+- **`risk.ts`** — every Risk state's label, badge class and link to the
+  Workloads list filtered to it, in the backend's precedence; the non-Safe
+  states (`attentionStateMeta`) add what puts an identity there and the tone
+  of a non-zero count. The state itself always comes from the payload's
+  `riskState` and the counts from the payload: the SPA never derives either.
+- **`outcomes.ts`** — the label of each `status.outcome` a
+  `WorkloadRecommendation` or a Simulation reports (`outcomeLabel`).
+- **`limits.ts`** — the limit strategies in the recommender's precedence:
+  each one's label, help per resource, and the label the trace table gives the
+  stage it runs as; `limitModeOf` reads a Policy's strategy and `limitsPatch`
+  writes one as a merge patch.
+- **`patch.ts`** — typed key paths into settings and JSON merge patches:
+  reading a value at a path, whether a patch names it, and setting it. The
+  Simulator edits its override and fills its form from the server's effective
+  settings only through these.
+
 ### Styling
 
 The dashboard's look lives in one stylesheet,
