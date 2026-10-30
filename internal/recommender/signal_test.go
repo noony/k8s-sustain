@@ -7,10 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
-
-	corev1 "k8s.io/api/core/v1"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -20,40 +17,41 @@ const listedSignalRule = "k8s_sustain:listed_signal"
 
 // listedSignal is a signal that exists only in this file: a required memory
 // limit adjuster costing ten samples per container, raising a container's
-// memory limit to factor times the limit it was last killed at, read from
-// that identity's inputs. It keeps the samples PromInputs hands it.
-type listedSignal struct {
-	factor float64
+// memory limit to factor times the limit its rule says the container was
+// killed at. A signal defined in a test cannot add a field to WorkloadInputs,
+// so it keeps its values in the OOM floor's, and a test that fetches it lists
+// it instead of the OOM floor.
+type listedSignal struct{ factor float64 }
 
-	mu        sync.Mutex
-	collected []promclient.ShardSample
-}
+func (listedSignal) name() string   { return "listed" }
+func (listedSignal) required() bool { return true }
 
-func (*listedSignal) name() string   { return "listed" }
-func (*listedSignal) required() bool { return true }
+func (listedSignal) samplesPerContainer(sustainv1alpha1.ResourcesConfigs) int { return 10 }
 
-func (*listedSignal) samplesPerContainer(sustainv1alpha1.ResourcesConfigs) int { return 10 }
-
-func (*listedSignal) query(_ sustainv1alpha1.ResourcesConfigs, shard promclient.Shard) string {
+func (listedSignal) query(_ sustainv1alpha1.ResourcesConfigs, shard promclient.Shard) string {
 	return listedSignalRule + shard.Selector()
 }
 
-func (*listedSignal) contract() PromContract {
+func (listedSignal) contract() PromContract {
 	return PromContract{Rules: []string{listedSignalRule}, Labels: shardLabels}
 }
 
-func (l *listedSignal) collect(_ *WorkloadInputs, samples []promclient.ShardSample) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.collected = append(l.collected, samples...)
+func (listedSignal) collect(in *WorkloadInputs, samples []promclient.ShardSample) {
+	killedAt := make(map[string]OOM, len(samples))
+	for _, s := range samples {
+		if s.Metric == listedSignalRule {
+			killedAt[s.Container] = OOM{LimitBytes: s.Value}
+		}
+	}
+	in.OOM = killedAt
 }
 
-func (*listedSignal) observed(*WorkloadInputs) []string { return nil }
-func (*listedSignal) excusesAge(*WorkloadInputs) bool   { return false }
+func (listedSignal) observed(*WorkloadInputs) []string { return nil }
+func (listedSignal) excusesAge(*WorkloadInputs) bool   { return false }
 
-func (*listedSignal) slot() slot { return slot{role: limitAdjuster, resource: memoryResource} }
+func (listedSignal) slot() slot { return slot{role: limitAdjuster, resource: memoryResource} }
 
-func (l *listedSignal) contribute(in *WorkloadInputs, container string) (contribution, bool) {
+func (l listedSignal) contribute(in *WorkloadInputs, container string) (contribution, bool) {
 	o, ok := in.OOM[container]
 	if !ok || o.LimitBytes == 0 {
 		return contribution{}, false
@@ -61,7 +59,7 @@ func (l *listedSignal) contribute(in *WorkloadInputs, container string) (contrib
 	return contribution{value: o.LimitBytes * l.factor}, true
 }
 
-func (l *listedSignal) stage(_ *WorkloadInputs, _ string, value float64, determined bool) sustainv1alpha1.TraceStage {
+func (l listedSignal) stage(_ *WorkloadInputs, _ string, value float64, determined bool) sustainv1alpha1.TraceStage {
 	return sustainv1alpha1.TraceStage{
 		Stage: "listed",
 		Value: memoryResource.quantity(value),
@@ -69,31 +67,40 @@ func (l *listedSignal) stage(_ *WorkloadInputs, _ string, value float64, determi
 	}
 }
 
-// listSignal adds s to signals for the duration of the test, the one change a
-// new signal makes outside its own module.
-func listSignal(t *testing.T, s signal) {
+// withSignals makes list the signals for the duration of the test: listing a
+// signal is the one change a new signal makes outside its own module.
+func withSignals(t *testing.T, list ...signal) {
 	t.Helper()
 	listed := signals
-	signals = append(slices.Clone(signals), s)
+	signals = list
 	t.Cleanup(func() { signals = listed })
 }
 
-// Listing a signal is enough for PromInputs to fetch it: shards sized by its
-// own cost, its samples handed to it, its failure policy applied.
-func TestSignals_PromInputsFetchesAListedSignal(t *testing.T) {
-	listed := &listedSignal{}
-	listSignal(t, listed)
+// Listing a signal is enough for PromInputs to fetch it, in shards sized by
+// its own cost and under its failure policy, and for Compute to run its stage
+// in its slot from the inputs fetched, with its own trace entry and no CRD
+// change: as a memory limit adjuster it raises the limit the strategy set and
+// determines it, never lowers a limit already above, and never adds one to a
+// container without.
+func TestSignals_AListedSignalIsFetchedAndComputed(t *testing.T) {
+	withSignals(t, cpuUsage, memoryUsage, listedSignal{factor: 2})
 	prom, c := startFakeShardProm(t, func(q shardQuery) ([]string, bool) {
-		if q.signal != "listed" {
-			return nil, true
-		}
-		if slices.Contains(q.names, "bad") {
+		switch {
+		case q.signal == "memory" && slices.Equal(q.names, []string{"api"}):
+			return []string{
+				sample("", "api", "app", 100*mib), sample("", "api", "big", 400*mib), sample("", "api", "quiet", 100*mib),
+			}, true
+		case q.signal == "listed" && slices.Contains(q.names, "bad"):
 			return nil, false
+		case q.signal == "listed":
+			return []string{sample(listedSignalRule, "api", "app", 128*mib), sample(listedSignalRule, "api", "big", 128*mib)}, true
 		}
-		return []string{sample(listedSignalRule, "api", "app", 7)}, true
+		return nil, true
 	})
+	cfg := promInputsCfg()
+	cfg.Memory.Limits.EqualsToRequest = true
 
-	got := NewPromInputs(c, 100).FetchInputs(context.Background(), promInputsCfg(), reqsFor(1, "api", "bad", "web"))
+	got := NewPromInputs(c, 100).FetchInputs(context.Background(), cfg, reqsFor(1, "api", "bad", "web"))
 
 	if n := prom.count("cpu", 1); n != 3 {
 		t.Errorf("cpu: %d one-identity queries, want 3 at 60 samples each against a budget of 100", n)
@@ -101,35 +108,18 @@ func TestSignals_PromInputsFetchesAListedSignal(t *testing.T) {
 	if shards := prom.shardsFor("listed"); len(shards) == 0 || strings.Join(shards[0], ",") != "api,bad,web" {
 		t.Errorf("listed shards = %v, want all three in the first: it costs 10 samples each", shards)
 	}
-	if len(listed.collected) != 1 || listed.collected[0].Identity != prodID("api") || listed.collected[0].Value != 7 {
-		t.Errorf("collected = %+v, want api's one sample", listed.collected)
-	}
 	if r := got[prodID("bad")]; r.Err == nil || !strings.Contains(r.Err.Error(), "listed") {
 		t.Errorf("bad = %+v, want the listed signal's error: it is required", r)
 	}
-	for _, n := range []string{"api", "web"} {
-		if r := got[prodID(n)]; r.Err != nil {
-			t.Errorf("%s = %+v, want inputs", n, r)
-		}
+	if r := got[prodID("web")]; r.Err != nil {
+		t.Errorf("web = %+v, want inputs", r)
 	}
-}
-
-// Listing a signal is enough for Compute to run its stage in its slot and
-// record its own trace entry, with no CRD change: as a memory limit adjuster
-// it raises the limit the strategy set from each container's own inputs and
-// determines it, never raises a limit already above, and never adds one to a
-// container without.
-func TestSignals_ComputeRunsAListedLimitSignalsStage(t *testing.T) {
-	listSignal(t, &listedSignal{factor: 2})
-	equal := sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{
-		Limits: sustainv1alpha1.ResourceLimitsConfig{EqualsToRequest: true},
-	}}
-	in := &WorkloadInputs{
-		MemPerPod: promclient.ContainerValues{"app": 100 * mib, "big": 400 * mib, "quiet": 100 * mib},
-		OOM:       map[string]OOM{"app": {LimitBytes: 128 * mib}, "big": {LimitBytes: 128 * mib}},
+	api := got[prodID("api")]
+	if api.Err != nil {
+		t.Fatalf("api = %+v, want inputs", api)
 	}
 
-	res := Compute(Request{containers: containers("app", "big", "quiet"), inputs: in, resources: equal, now: now})
+	res := Compute(Request{containers: containers("app", "big", "quiet"), inputs: api.Inputs, resources: cfg, now: now})
 
 	assertQty(t, "app limit", res.Recs["app"].MemoryLimit, "256Mi")
 	app := res.Traces["app"].Memory
@@ -142,11 +132,7 @@ func TestSignals_ComputeRunsAListedLimitSignalsStage(t *testing.T) {
 
 	assertStages(t, "quiet limit", res.Traces["quiet"].Memory.Limit, "equalsToRequest")
 
-	unlimited := Compute(Request{
-		containers: []corev1.Container{{Name: "app"}},
-		inputs:     in,
-		now:        now,
-	})
+	unlimited := Compute(Request{containers: containers("app"), inputs: api.Inputs, now: now})
 	if rec := unlimited.Recs["app"]; rec.MemoryLimit != nil || rec.RemoveMemoryLimit {
 		t.Errorf("app without a limit = %+v, want it to keep having none", rec)
 	}
@@ -158,7 +144,7 @@ var ruleRef = regexp.MustCompile(`k8s_sustain:[a-z0-9_:]+`)
 // chart, and each contract declares exactly the rules its signal's query
 // reads.
 func TestSignals_ContractDeclaresTheRulesItsQueryReads(t *testing.T) {
-	listSignal(t, &listedSignal{})
+	withSignals(t, append(slices.Clone(signals), listedSignal{})...)
 
 	contracts := PromContracts()
 
