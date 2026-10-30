@@ -888,6 +888,7 @@ while the `values.yaml` side still passes.
 - `Record(ctx, client, known, Decision, now)` — the one status write per identity per cycle: the outcome, the Recommendation and trace for `Computed`, and the `departed` fact, into the object `Ensure` returned (or, for a departed or Conflicted identity, the one the inventory read). An unchanged decision costs no write, except the refresh of a `Computed` one's `observedAt` every `RefreshInterval`. A missing object is an error, never a silent no-op.
 - `Read(known, policy, now, Freshness)` — the [read verdict](#read-verdict).
 - `Expired(known, policy, Standing, now, retention)` — the sweep verdict: keep or delete, given where the identity stands in the reconcile's snapshot (governed, ungoverned, departed, Conflicted).
+- `Key(id)` and `WorkloadRef(id)` — the object key of an identity's `WorkloadRecommendation` and the `spec.workloadRef` that names it; the webhook reads by the one, and the controller's claim and the webhook's request name the identity by the other.
 
 Every writer runs against a cache-backed client, so nothing re-reads an object it just wrote: each write patches off the object the previous one returned, and a create that loses the race to another writer claims that writer's object with a patch, whose response carries it. The lifecycle suite (`internal/wlrcache/lifecycle_test.go`) runs every writer against a client whose cache lags behind every create.
 

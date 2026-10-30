@@ -155,8 +155,7 @@ func (r *PolicyReconciler) claim(ctx context.Context, policyName string, work []
 			out[i] = claimed{wlr: id.Recommendation}
 			continue
 		}
-		ref := sustainv1alpha1.WorkloadReference{Kind: id.Key.OwnerKind, Namespace: id.Key.Namespace, Name: id.Key.OwnerName}
-		wlr, err := wlrcache.Ensure(ctx, r.Client, ref, policyName, wlrcache.BuildObservedResources(id.Containers, id.InitContainers))
+		wlr, err := wlrcache.Ensure(ctx, r.Client, wlrcache.WorkloadRef(id.Key), policyName, wlrcache.BuildObservedResources(id.Containers, id.InitContainers))
 		out[i] = claimed{wlr: wlr, err: err}
 		if err != nil {
 			logger.Error(err, "failed to ensure the WorkloadRecommendation is current; "+

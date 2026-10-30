@@ -168,8 +168,7 @@ type stubRequest struct {
 // run's containers forever. Errors are logged and dropped; the next pod of the
 // same workload retries.
 func (h *Handler) requestRecommendation(logger logr.Logger, r stubRequest) {
-	id := r.identity
-	key := id.Namespace + "/" + wlrcache.Name(id.OwnerKind, id.OwnerName)
+	key := wlrcache.Key(r.identity).String()
 	parent, claimed, ok := h.beginStubRequest(key, time.Now())
 	if !ok {
 		return
@@ -196,7 +195,7 @@ func (h *Handler) requestRecommendation(logger logr.Logger, r stubRequest) {
 
 		ctx, cancel := context.WithTimeout(parent, stubWriteTimeout)
 		defer cancel()
-		ref := sustainv1alpha1.WorkloadReference{Kind: id.OwnerKind, Namespace: id.Namespace, Name: id.OwnerName}
+		ref := wlrcache.WorkloadRef(r.identity)
 		if err := wlrcache.Request(log.IntoContext(ctx, logger), h.Client, r.known, ref, r.policy, r.observed); err != nil {
 			logger.V(1).Info("failed to request a recommendation", "err", err)
 		}

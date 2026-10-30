@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -274,6 +275,26 @@ func cpuOf(t *testing.T, wlr *sustainv1alpha1.WorkloadRecommendation, container 
 		t.Fatalf("no CPU request stored for %s: %+v", container, wlr.Status.Containers)
 	}
 	return c.CPURequest.String()
+}
+
+// The webhook reads an identity's object by Key, and its writers name the
+// identity by WorkloadRef: both find the same object.
+func TestAnIdentitysObjectIsWrittenAtItsKey(t *testing.T) {
+	c := newCluster(t)
+	id := promclient.WorkloadIdentity{Namespace: task.Namespace, OwnerKind: task.Kind, OwnerName: task.Name}
+	if got := wlrcache.WorkloadRef(id); got != task {
+		t.Fatalf("WorkloadRef = %+v, want %+v", got, task)
+	}
+	if err := wlrcache.Request(context.Background(), c, nil, wlrcache.WorkloadRef(id), "p", snapshotOf("100m", "app")); err != nil {
+		t.Fatalf("Request: %v", err)
+	}
+	var got sustainv1alpha1.WorkloadRecommendation
+	if err := c.store.Get(context.Background(), wlrcache.Key(id), &got); err != nil {
+		t.Fatalf("reading the object at Key: %v", err)
+	}
+	if got.Spec.WorkloadRef != task {
+		t.Errorf("object at Key names %+v, want %+v", got.Spec.WorkloadRef, task)
+	}
 }
 
 // The webhook's stub is what gets an identity the controller never catches
