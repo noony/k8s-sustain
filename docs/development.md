@@ -50,9 +50,11 @@ inputs := recommendertest.NewStaticInputs().
     Fail(otherID, errors.New("prometheus down"))
 ```
 
-An identity with neither gets empty inputs, as Prometheus answers for one with
-no samples. `Calls()` and `Requested(id)` report what was fetched, so a test
-can assert that an identity was, or was not, part of the batch. Prefer driving
+An identity with neither gets empty inputs, whatever the settings it is
+fetched under, as Prometheus answers for one with no samples. `Calls()`
+reports every fetch, the settings it ran under and its requests, and
+`Requested(id)` whether an identity was part of any, so a test can assert
+what was fetched and how. Prefer driving
 `PolicyReconciler.Reconcile` end to end with the fake client and
 `StaticInputs`. The Prometheus adapter, `recommender.PromInputs`, is the only
 code tested against a fake PromQL server: sharding, retry, the one-identity
@@ -396,9 +398,11 @@ the inputs port (`WithLiveOOMs`), not through `Compute`. To add one:
    from `ShardSample`s, its failure policy, its contribution and trace stage.
    Test what it does to a whole recommendation through `Compute`, from a
    `Request` the test builds in the package at a fixed instant (`now`; outside
-   the package only `Assemble` builds one). `signal_test.go` shows that a signal defined only in a test
-   is fetched, and computed on the limit side with its own trace stage, from
-   its list entry alone, and checks that every listed signal's contract
+   the package only `Assemble` builds one). `signal_test.go` shows, in one
+   test, that a signal defined only in a test is fetched and then computed on
+   the limit side with its own trace stage from what was fetched, from its
+   list entry alone and with its values carried in `WorkloadInputs`, and
+   checks that every listed signal's contract
    declares exactly the rules its query reads and that its `collect` reads a
    sample of each of them, so no series its query returns is dropped for a
    metric name `collect` does not handle
@@ -468,13 +472,17 @@ the Policy's values and the recommender's defaults without holding either.
 `TestSimulationRecommendsWhatTheControllerStores` holds that parity end to
 end. It lives in `internal/controller` as the external `controller_test`
 package, which can import the dashboard and reach `Reconcile` through
-`ReconcilerForTest` (`export_test.go`): from one fake cluster and one
-`StaticInputs` it runs a reconcile, then `POST /api/simulate` and
-`GET /api/policies/{name}/batch-simulate` through `Server.Handler`, and
-compares their Recommendation, outcome and trace with the stored
-`WorkloadRecommendation`'s, for an owner-name group coordinated against one
-member's HPA, with init containers excluded and not. A change to how either
-side builds the identity or picks the spec fails it.
+`ReconcilerForTest` (`export_test.go`): from one fake cluster, one
+`StaticInputs` and one fake clock (`PolicyReconciler.Clock`, `Server.Clock`)
+at an instant far from the wall clock, it runs a reconcile, then
+`POST /api/simulate` and `GET /api/policies/{name}/batch-simulate` through
+`Server.Handler`, and compares their Recommendation, outcome and trace with
+the stored `WorkloadRecommendation`'s, for an owner-name group coordinated
+against one member's HPA and for an identity Too young at that instant, with
+init containers excluded and not. It also compares every fetch the dashboard
+made with the controller's: the settings (windows, percentiles, every default
+explicit) and each identity's container count. A change to how either side
+builds the identity, picks the spec or dates the computation fails it.
 
 The override is validated once, on the server, after the merge
 (`simulationSettings.violations`, `simulation_settings.go`): it is rejected
@@ -698,14 +706,14 @@ The computation unit is the identity, not the workload object: a group of worklo
 
 #### The Request assembly
 
-`recommender.Assemble(ctx, inputs, autoscalers, spec, identities)` is the one place an identity becomes what `recommender.Compute` takes, for the controller's pass, a [Simulation](#dashboard-simulations) and a batch simulation alike. In: a Policy's right-sizing spec, `inventory.Identity` values, the inputs port and an `Autoscalers` port (`autoscaler.NamespacedSnapshot`, which lists each namespace's HPAs and ScaledObjects once). Out, per identity: its `Request`, the `autoscaler.Group` of its members, or the error that made its inputs unreadable. Behind it:
+`recommender.Assemble(ctx, inputs, autoscalers, now, spec, identities)` is the one place an identity becomes what `recommender.Compute` takes, for the controller's pass, a [Simulation](#dashboard-simulations) and a batch simulation alike. In: a Policy's right-sizing spec, `inventory.Identity` values, the inputs port, an `Autoscalers` port (`autoscaler.NamespacedSnapshot`, which lists each namespace's HPAs and ScaledObjects once) and a clock. Out, per identity: its `Request`, the `autoscaler.Group` of its members, or the error that made its inputs unreadable. Behind it:
 
 - the containers recommended (`ContainersOf`, where the controller and Simulations apply `excludeInitContainers`): the identity's, its init containers too unless the spec excludes them, which also sizes the fetch; an identity with no containers at all (one the inventory has not seen) is recommended for every container its inputs report;
-- the autoscaler: each member the identity's containers come from (`Identity.Contributors`) is looked up under its own name, and the first in name order that has one shapes the Recommendation (`ForIdentity`); a departed identity has none. `NamespacedSnapshot` caches no failed read, so the assembly stops reading a namespace once a read of it failed: every identity of that namespace is recommended uncoordinated, at the cost of one failed read and one log line per namespace;
+- the autoscaler: each member the identity's containers come from (`Identity.Contributors`) is looked up under its own name, and the first in name order that has one shapes the Recommendation (`ForIdentity`); a departed identity has none. The reads run while the inputs are fetched, each namespace's in order in a goroutine of its own, a few namespaces at once (`autoscalerReadConcurrency`), and the assembly waits for them before it returns. `NamespacedSnapshot` caches no failed read, so the assembly stops reading a namespace once a read of it failed: every identity of that namespace is recommended uncoordinated, at the cost of one failed read and one log line per namespace;
 - the spec's resources with every default explicit (`WithDefaults`: the window, the percentile and headroom unless the request is kept, `keepLimit` when no strategy is set), which the fetch and the computation both use and a Simulation returns as its effective settings;
-- one batch fetch, and one instant per batch taken once it returns: kills the live decorator merged in never postdate it.
+- one batch fetch, and one instant per batch read from `now` once it returns: kills the live decorator merged in never postdate it. The caller owns the clock: the controller passes `PolicyReconciler.Clock`, the one `start` also gives `WithLiveOOMs`, so the age gate and the live OOM window are judged by one clock; the dashboard passes `Server.Clock`. Nil is the wall clock on both, and a test fixes the instant with a fake one.
 
-`Request` has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young). `Request.WithInputs` is the same Request computing from other inputs, and `Request.ForContainer` the same Request recommending one of its containers alone; a Simulation's recommendation chart computes each past percentile point with both, so a chart costs one container's computation per point (`recommendationSeries`).
+`Request` has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young). `Request.RequestAt` is the request a Request computes for one of its containers had its usage percentile of one resource been a given value, every other signal as observed: a Simulation's recommendation chart computes each past percentile point with it (`recommendationSeries`), so a point costs one resource of one container, and the dashboard never maps a resource to its fields itself.
 
 #### The Policy pass
 
