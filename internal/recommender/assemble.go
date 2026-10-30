@@ -43,16 +43,10 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 	resources := WithDefaults(spec.ResourcesConfigs)
 	out := make([]Assembled, len(ids))
 	reqs := make([]InputsRequest, len(ids))
-	// A failed read fails every identity of its namespace: logged once.
-	unread := map[string]bool{}
+	reads := readsOnce{autoscalers: autoscalers, failed: map[string]failedRead{}}
 	for i, id := range ids {
 		containers := ContainersOf(spec, id)
-		group, err := autoscalerOf(ctx, autoscalers, id)
-		if ns := id.Key.Namespace; err != nil && !unread[ns] {
-			unread[ns] = true
-			log.FromContext(ctx).Error(err, "reading the namespace's autoscalers failed; its identities are recommended uncoordinated",
-				"namespace", ns)
-		}
+		group, _ := autoscalerOf(ctx, reads, id)
 		out[i] = Assembled{
 			Request: Request{
 				containers:   containers,
@@ -83,6 +77,33 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 		}
 	}
 	return out
+}
+
+// readsOnce stops reading a namespace's autoscalers once a read of it failed,
+// answering its other identities with that failure: NamespacedSnapshot caches
+// no failure, so every identity of an unreadable namespace would List its
+// HPAs and ScaledObjects again. The failure is logged once.
+type readsOnce struct {
+	autoscalers Autoscalers
+	failed      map[string]failedRead
+}
+
+type failedRead struct {
+	group autoscaler.Group
+	err   error
+}
+
+func (r readsOnce) ForIdentity(ctx context.Context, namespace, kind string, members []string) (autoscaler.Group, error) {
+	if f, ok := r.failed[namespace]; ok {
+		return f.group, f.err
+	}
+	group, err := r.autoscalers.ForIdentity(ctx, namespace, kind, members)
+	if err != nil {
+		r.failed[namespace] = failedRead{group: group, err: err}
+		log.FromContext(ctx).Error(err, "reading the namespace's autoscalers failed; its identities are recommended uncoordinated",
+			"namespace", namespace)
+	}
+	return group, err
 }
 
 // ContainersOf is the containers spec recommends of id: its containers, and

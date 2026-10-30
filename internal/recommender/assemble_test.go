@@ -3,6 +3,7 @@ package recommender
 import (
 	"context"
 	"errors"
+	"maps"
 	"reflect"
 	"slices"
 	"testing"
@@ -49,21 +50,24 @@ func (f *recordedInputs) FetchInputs(_ context.Context, cfg sustainv1alpha1.Reso
 	return out
 }
 
-// memberAutoscalers answers every identity of a namespace with its group, and
-// records the members each read named.
+// memberAutoscalers answers every identity of a namespace with its group,
+// fails every read of the namespaces in failed, and records the members each
+// read named and how many reads each namespace took.
 type memberAutoscalers struct {
 	groups map[string]autoscaler.Group
-	err    error
+	failed map[string]error
 	asked  map[string][]string
+	reads  map[string]int
 }
 
 func (f *memberAutoscalers) ForIdentity(_ context.Context, namespace, _ string, members []string) (autoscaler.Group, error) {
 	if f.asked == nil {
-		f.asked = map[string][]string{}
+		f.asked, f.reads = map[string][]string{}, map[string]int{}
 	}
 	f.asked[namespace] = members
-	if f.err != nil {
-		return autoscaler.Group{Info: autoscaler.Info{Kind: autoscaler.KindNone}}, f.err
+	f.reads[namespace]++
+	if err := f.failed[namespace]; err != nil {
+		return autoscaler.Group{Info: autoscaler.Info{Kind: autoscaler.KindNone}}, err
 	}
 	if g, ok := f.groups[namespace]; ok {
 		return g, nil
@@ -169,7 +173,7 @@ func TestAssemble(t *testing.T) {
 		{
 			name:           "a failed autoscaler read leaves the identity uncoordinated",
 			id:             governed("prod", "api"),
-			autoscalers:    &memberAutoscalers{err: errors.New("forbidden")},
+			autoscalers:    &memberAutoscalers{failed: map[string]error{"prod": errors.New("forbidden")}},
 			wantContainers: []string{"app", "migrate"},
 			wantAsked:      []string{"api"},
 			wantAuto:       autoscaler.KindNone,
@@ -228,6 +232,28 @@ func TestAssemble(t *testing.T) {
 				t.Errorf("Now = %v, before the fetch returned at %v", req.now, tc.inputs.returned)
 			}
 		})
+	}
+}
+
+// A namespace whose autoscalers cannot be read is read once per assembly:
+// every identity of it is recommended uncoordinated without another List,
+// and another namespace is still read and coordinated.
+func TestAssemble_AnUnreadableNamespaceIsReadOnce(t *testing.T) {
+	autoscalers := &memberAutoscalers{
+		groups: map[string]autoscaler.Group{"staging": {Info: hpa}},
+		failed: map[string]error{"prod": errors.New("forbidden")},
+	}
+
+	got := Assemble(context.Background(), &recordedInputs{}, autoscalers, sustainv1alpha1.RightSizingSpec{},
+		[]*inventory.Identity{governed("prod", "api"), governed("prod", "web"), governed("staging", "db"), governed("prod", "worker")})
+
+	if want := map[string]int{"prod": 1, "staging": 1}; !maps.Equal(autoscalers.reads, want) {
+		t.Errorf("reads = %v, want %v", autoscalers.reads, want)
+	}
+	for i, want := range []autoscaler.Kind{autoscaler.KindNone, autoscaler.KindNone, autoscaler.KindHPA, autoscaler.KindNone} {
+		if a := got[i]; a.Err != nil || a.Autoscaler.Info.Kind != want || a.Request.autoInfo.Kind != want {
+			t.Errorf("identity %d = %+v, want a Request shaped against %s", i, a, want)
+		}
 	}
 }
 
