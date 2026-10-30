@@ -444,20 +444,6 @@ func TestDecide(t *testing.T) {
 	}
 }
 
-// everyReason is the closed set an admission ends in.
-func everyReason() []reason {
-	return []reason{
-		reason(governance.NoOwner), reason(governance.NoPolicySelects), reason(governance.NotOptedIn),
-		reason(governance.OptedOut), reason(governance.PolicyMissing), reason(governance.NamespaceExcluded),
-		reason(governance.NamespaceNotSelected), reason(governance.SelectorInvalid), reason(governance.LabelsNotSelected),
-		reason(governance.KindNotManaged),
-		reason(RecSourceMissing), reason(RecSourceUndecided), reason(RecSourceNoData), reason(RecSourceOtherPolicy),
-		reason(RecSourceStale),
-		reasonUndecodable, reasonPanic, reasonGovernanceFailed, reasonRecommendationUnreadable,
-		reasonNoContainerMatches, reasonRecommendOnly, reasonAtRecommendation, reasonInjected,
-	}
-}
-
 func patchesOf(t *testing.T, resp *admissionv1.AdmissionResponse) []jsonPatch {
 	t.Helper()
 	if !resp.Allowed {
@@ -476,42 +462,42 @@ func patchesOf(t *testing.T, resp *admissionv1.AdmissionResponse) []jsonPatch {
 	return patches
 }
 
-// The owner-name label is the user's own grouping request, mirrored whatever
-// the admission decided, and only for a value that is a valid label value.
-func TestRespondMirrorsTheOwnerNameOnEveryReason(t *testing.T) {
+// An admission patches only the resources it injects. The owner-name
+// annotation is read where the user set it, by the controller and through
+// kube-state-metrics, so it is never copied onto a label, whether the webhook
+// governs the pod or not.
+func TestAdmitPatchesOnlyTheResourcesItInjects(t *testing.T) {
+	recommendation := func() client.Object {
+		w := freshWLR("Pod", "default", "etl-daily", map[string]sustainv1alpha1.ContainerRecommendation{"app": wlrRec("100m", "64Mi")})
+		withSnapshot(w)
+		return w
+	}
 	for _, tc := range []struct {
-		name      string
-		ownerName string
-		labels    map[string]string
-		wantPath  string
+		name     string
+		objs     []client.Object
+		excluded []string
+		want     []string
 	}{
-		{name: "valid, pod without labels", ownerName: "etl-daily", wantPath: "/metadata/labels"},
-		{name: "valid, pod with labels", ownerName: "etl-daily", labels: map[string]string{"app": "etl"}, wantPath: "/metadata/labels/k8s.sustain.io~1owner-name"},
-		{name: "invalid label value", ownerName: "Invalid/Value"},
-		{name: "already mirrored", ownerName: "etl-daily", labels: map[string]string{sustainv1alpha1.OwnerNameAnnotation: "etl-daily"}},
+		{name: "injected", objs: []client.Object{podPolicy("p"), recommendation()}, want: []string{"/spec/containers/0/resources"}},
+		{name: "its Policy does not exist", objs: []client.Object{recommendation()}},
+		{name: "its namespace is excluded", objs: []client.Object{podPolicy("p"), recommendation()}, excluded: []string{"default"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, r := range everyReason() {
-				pod := barePod(map[string]string{sustainv1alpha1.OwnerNameAnnotation: tc.ownerName})
-				pod.Labels = tc.labels
-				var paths []string
-				for _, p := range patchesOf(t, respond(pod, admission{reason: r})) {
-					paths = append(paths, p.Path)
-				}
-				var want []string
-				if tc.wantPath != "" {
-					want = []string{tc.wantPath}
-				}
-				if !slices.Equal(paths, want) {
-					t.Errorf("%s: patch paths = %v, want %v", r, paths, want)
-				}
+			c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(tc.objs...).Build()
+			h := &Handler{Client: c, ExcludedNamespaces: tc.excluded}
+
+			var paths []string
+			for _, p := range patchesOf(t, h.admit(context.Background(), admissionRequestFor(t, etlPod("p")))) {
+				paths = append(paths, p.Path)
+			}
+			if !slices.Equal(paths, tc.want) {
+				t.Errorf("patch paths = %v, want %v", paths, tc.want)
 			}
 		})
 	}
 }
 
 func TestRespondSetsTheResourcesOfEveryWrittenContainer(t *testing.T) {
-	pod := barePod(nil)
 	writes := workload.Inject(
 		[]corev1.Container{{Name: "app"}},
 		[]corev1.Container{{Name: "migrate"}, {Name: "warm-cache"}},
@@ -519,7 +505,7 @@ func TestRespondSetsTheResourcesOfEveryWrittenContainer(t *testing.T) {
 		map[string]workload.ContainerRecommendation{"app": {CPURequest: qtyp("100m")}, "warm-cache": {CPURequest: qtyp("50m")}},
 	).Writes
 
-	patches := patchesOf(t, respond(pod, admission{reason: reasonInjected, writes: writes}))
+	patches := patchesOf(t, respond(admission{reason: reasonInjected, writes: writes}))
 	got := map[string]string{}
 	for _, p := range patches {
 		var res corev1.ResourceRequirements
@@ -561,8 +547,8 @@ func (s panicOnInfo) WithName(string) logr.LogSink   { return s }
 
 // A panic admitting a decoded pod, while deciding or after, must not reach the
 // HTTP middleware, which would answer 500 and leave the pod to the
-// failurePolicy without its label.
-func TestAdmitTurnsAPanicIntoAnAllowedPodWithItsLabel(t *testing.T) {
+// failurePolicy: the pod is admitted unmutated.
+func TestAdmitTurnsAPanicIntoAnUnmutatedPod(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		funcs  interceptor.Funcs
@@ -591,9 +577,8 @@ func TestAdmitTurnsAPanicIntoAnAllowedPodWithItsLabel(t *testing.T) {
 			if got := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelAdmit)) - before; got != 1 {
 				t.Errorf("panics counted = %v, want 1", got)
 			}
-			patches := patchesOf(t, resp)
-			if len(patches) != 1 || patches[0].Path != "/metadata/labels" || !strings.Contains(string(patches[0].Value), "etl-daily") {
-				t.Errorf("patches = %v, want the owner-name label only", patches)
+			if patches := patchesOf(t, resp); len(patches) != 0 {
+				t.Errorf("patches = %v, want none", patches)
 			}
 		})
 	}

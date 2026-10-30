@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,11 +15,9 @@ import (
 	"golang.org/x/sync/singleflight"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
-	apivalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
 )
@@ -137,19 +134,19 @@ func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) 
 	pod, err := decodePod(req)
 	if err != nil {
 		logger.Error(err, "failed to decode Pod; allowing it unmutated")
-		return respond(nil, admission{reason: reasonUndecodable})
+		return respond(admission{reason: reasonUndecodable})
 	}
 	return h.admitDecoded(ctx, logger, pod)
 }
 
 // admitDecoded turns a panic anywhere past decoding into an admission like
 // any other. Left to the HTTP middleware it would answer 500, which hands the
-// pod to the webhook's failurePolicy and drops its owner-name label.
+// pod to the webhook's failurePolicy: under Fail, the pod is rejected.
 func (h *Handler) admitDecoded(ctx context.Context, logger logr.Logger, pod *corev1.Pod) (resp *admissionv1.AdmissionResponse) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			reportPanic(logger, panicLabelAdmit, rec)
-			resp = respond(pod, admission{reason: reasonPanic})
+			resp = respond(admission{reason: reasonPanic})
 		}
 	}()
 	a := h.decide(ctx, pod)
@@ -160,7 +157,7 @@ func (h *Handler) admitDecoded(ctx context.Context, logger logr.Logger, pod *cor
 		h.requestRecommendation(logger, *a.stub)
 	}
 	h.logAdmission(logger, pod, a)
-	return respond(pod, a)
+	return respond(a)
 }
 
 func decodePod(req *admissionv1.AdmissionRequest) (*corev1.Pod, error) {
@@ -176,16 +173,10 @@ func decodePod(req *admissionv1.AdmissionRequest) (*corev1.Pod, error) {
 }
 
 // respond is the only constructor of an admission response, and it always
-// allows the pod. It mirrors a valid owner-name annotation onto the pod's
-// labels whatever the admission decided, because the annotation is the
-// user's own grouping request and kube-state-metrics only exposes labels; it
-// sets resources only on the containers an admission writes. pod is nil when
-// it could not be decoded.
-func respond(pod *corev1.Pod, a admission) *admissionv1.AdmissionResponse {
+// allows the pod. It patches nothing but the resources of the containers an
+// injected admission writes.
+func respond(a admission) *admissionv1.AdmissionResponse {
 	var patches []jsonPatch
-	if p := ownerNameLabelPatch(pod); p != nil {
-		patches = append(patches, *p)
-	}
 	for _, w := range a.writes {
 		path := "/spec/containers/"
 		if w.Init {
@@ -205,25 +196,6 @@ func respond(pod *corev1.Pod, a admission) *admissionv1.AdmissionResponse {
 	}
 	pt := admissionv1.PatchTypeJSONPatch
 	return &admissionv1.AdmissionResponse{Allowed: true, Patch: b, PatchType: &pt}
-}
-
-// ownerNameLabelPatch returns the patch mirroring a valid owner-name
-// annotation onto the pod's labels, or nil when there is nothing to mirror.
-// Marshalling a string or a string map cannot fail.
-func ownerNameLabelPatch(pod *corev1.Pod) *jsonPatch {
-	if pod == nil {
-		return nil
-	}
-	v, ok := pod.Annotations[sustainv1alpha1.OwnerNameAnnotation]
-	if !ok || len(apivalidation.IsValidLabelValue(v)) != 0 || pod.Labels[sustainv1alpha1.OwnerNameAnnotation] == v {
-		return nil
-	}
-	if pod.Labels == nil {
-		value, _ := json.Marshal(map[string]string{sustainv1alpha1.OwnerNameAnnotation: v})
-		return &jsonPatch{Op: "add", Path: "/metadata/labels", Value: value}
-	}
-	value, _ := json.Marshal(v)
-	return &jsonPatch{Op: "add", Path: "/metadata/labels/" + strings.ReplaceAll(sustainv1alpha1.OwnerNameAnnotation, "/", "~1"), Value: value}
 }
 
 // reportPanic logs a recovered panic with its stack and counts it on

@@ -266,8 +266,7 @@ func failedStep(t *workloadTarget, phase string, err error) applyResult {
 }
 
 // barePod builds a running bare pod opted into policy "p" under the
-// owner-name identity ownerName, with the owner-name label the webhook
-// mirrors at admission.
+// owner-name identity ownerName.
 func barePod(ns, name, ownerName string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -278,7 +277,6 @@ func barePod(ns, name, ownerName string) *corev1.Pod {
 				sustainv1alpha1.PolicyAnnotation:    "p",
 				sustainv1alpha1.OwnerNameAnnotation: ownerName,
 			},
-			Labels: map[string]string{sustainv1alpha1.OwnerNameAnnotation: ownerName},
 		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
 			Name: "worker",
