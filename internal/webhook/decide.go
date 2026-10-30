@@ -84,7 +84,7 @@ func (h *Handler) decide(ctx context.Context, pod *corev1.Pod) admission {
 	policy := g.Policy
 	a.policy, a.mode = policy.Name, g.Mode
 
-	readCtx, readCancel := context.WithTimeout(ctx, apiCallTimeout)
+	readCtx, readCancel := context.WithTimeout(ctx, recommendationReadTimeout)
 	known, err := h.storedRecommendation(readCtx, g.Identity)
 	readCancel()
 	if err != nil {

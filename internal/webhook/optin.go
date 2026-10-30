@@ -3,7 +3,6 @@ package webhook
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -14,11 +13,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
-
-// governanceTimeout is one shared budget for every read governance.Decide
-// makes for a pod. A shared budget keeps a slow path here from eating the
-// admission budget the WorkloadRecommendation read still needs.
-const governanceTimeout = 2 * time.Second
 
 // admissionReader is the governance.Reader of one admission: Policies and
 // Namespaces come from the informer cache, the owner chain through the TTL

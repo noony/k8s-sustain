@@ -25,14 +25,26 @@ import (
 // maxAdmissionBodyBytes caps the AdmissionReview payload the webhook decodes.
 const maxAdmissionBodyBytes = 1 << 20
 
-// apiCallTimeout bounds each Kubernetes API Get inside the admission path, so
-// one slow apiserver round-trip cannot eat the whole admission budget.
-const apiCallTimeout = 2 * time.Second
-
 // admissionTimeout caps the whole admit() handler. The apiserver's webhook
 // timeout is 5s by default; failing open inside that budget beats letting the
 // apiserver time out and fall back to failurePolicy.
 const admissionTimeout = 4 * time.Second
+
+// The admission budget is split by where its reads go. Only governance's
+// owner chain reaches the apiserver, up to two Gets one after the other (the
+// pod's ReplicaSet or Job, then its workload's own annotations); the Policies,
+// the Namespace and the WorkloadRecommendation are informer-cache reads. So
+// governance gets most of the budget, and the WorkloadRecommendation read
+// keeps a reserve a slow owner Get cannot eat into.
+const (
+	recommendationReadTimeout = 1 * time.Second
+	governanceTimeout         = admissionTimeout - recommendationReadTimeout
+)
+
+// apiCallTimeout bounds each owner-chain Get, which runs on a singleflight
+// leader detached from the admissions waiting on it, so a wedged apiserver
+// call cannot pin the leader.
+const apiCallTimeout = 2 * time.Second
 
 // Handler is the mutating admission handler. On Pod CREATE it injects the
 // resources cached in the controller-written WorkloadRecommendation; it never

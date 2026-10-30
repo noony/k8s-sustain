@@ -134,6 +134,8 @@ k8s-sustain webhook [flags]
 
 The webhook also honours each Policy's `spec.selector.namespaces` and `spec.selector.labelSelector` (see [Policy reference](./policy.md#specselector)). A pod is admitted unmutated if any of the following holds: its namespace is in `--excluded-namespaces`, its namespace is not in a non-empty `selector.namespaces`, or its pod labels — its pod template's, which the controller matches too — do not satisfy `selector.labelSelector`. A malformed `labelSelector` causes the webhook to fail open (admit without injection, log a warning with reason `selector-invalid`, whichever level the pod opts in at) rather than deny.
 
+Each admission is bounded by a fixed 4s deadline, under the 5s `timeoutSeconds` of the chart's `MutatingWebhookConfiguration`: 3s for the governance decision's reads (the owner chain's apiserver Gets, 2s each at most, and the informer-cache reads of Policies and the Namespace) and 1s for the `WorkloadRecommendation` read from the informer cache. A read that runs out of its share fails open. None of these is a flag; see [Latency budget](../concepts/architecture.md#admission-webhook-k8s-sustain-webhook).
+
 ### Health endpoints
 
 | Path | Port | Description |
