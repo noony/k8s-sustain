@@ -460,7 +460,7 @@ The `oom-kill` workload under a Policy that keeps the memory limit
 (`keepLimit`), with a smaller burst: above the 96Mi limit, but below the limit
 raised after the first kill (about 133Mi), so the container stops being
 killed once the limit follows the request. The OOM floor lifts the memory
-request above the limit the container keeps, so the limit has to follow it ([ADR 0005](../adr/0005-a-limit-never-falls-below-its-request.md)).
+request above the limit the container keeps, so the limit has to follow it.
 
 **Expected:**
 

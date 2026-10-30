@@ -40,7 +40,7 @@ The controller applies an identity's Recommendation only once its Record has lan
 
 ### A Recommendation is served only to its Policy
 
-The webhook injects a Recommendation only into pods whose resolved Policy both governs the object (`spec.policy`) and computed the values (`status.computedBy`) — [ADR 0003](../adr/0003-a-recommendation-is-served-only-to-its-policy.md). When another Policy adopts an identity, the previous Policy's values stay in the object but are withheld from every pod until the new Policy records a Recommendation of its own; until then pods start on their template resources, whatever the new Policy's first passes record (too young under its minimum age, no data under its window, a failed fetch).
+The webhook injects a Recommendation only into pods whose resolved Policy both governs the object (`spec.policy`) and computed the values (`status.computedBy`). When another Policy adopts an identity, the previous Policy's values stay in the object but are withheld from every pod until the new Policy records a Recommendation of its own; until then pods start on their template resources, whatever the new Policy's first passes record (too young under its minimum age, no data under its window, a failed fetch).
 
 An object written before `status.computedBy` existed carries none, and is withheld until its Policy records a Recommendation: a live identity with samples gets one on its next reconcile.
 
@@ -181,11 +181,11 @@ status:
 
 An identity is **Conflicted** when its members are governed by different Policies — `api-blue` opting into `p` and `api-green` into `q`, both grouped as `Deployment/api`, or two bare pods sharing an owner-name. A member that opts out, or whose Policy does not accept it (missing, kind not managed, selector not matching), is no party to a conflict.
 
-No Policy governs a Conflicted identity until its members agree again ([ADR 0002](../adr/0002-conflicted-identity-freezes-its-recommendation.md)):
+No Policy governs a Conflicted identity until its members agree again:
 
 - The controller does not rewrite its `WorkloadRecommendation`'s `spec.policy` or label, does not recompute it and applies nothing to its pods. It only records `status.outcome: Conflicted` (and, since its members are live, clears `status.departed`).
 - The stored Recommendation stays frozen, exempt from the staleness check like a departed one, and kept by the sweep for the same retention window. The webhook injects it only into pods of the Policy that computed it (counted as `retained`); pods of the other Policy are admitted unchanged (counted as `other-policy`).
-- When the conflict resolves, the Policy that governs again adopts the object. If that is the other Policy, the frozen values were never computed for its pods and stay withheld until it computes its own ([ADR 0003](../adr/0003-a-recommendation-is-served-only-to-its-policy.md)).
+- When the conflict resolves, the Policy that governs again adopts the object. If that is the other Policy, the frozen values were never computed for its pods and stay withheld until it computes its own.
 - It counts towards neither Policy's `k8s_sustain_policy_workload_count`, and loses the controller's health series (pods, stale pods, retry state). The dashboard lists it once, in the Conflicted state, under no Policy.
 - The controller logs every reconcile of a party Policy until the conflict is resolved. Fix it by aligning the members' policy annotations or giving them distinct `k8s.sustain.io/owner-name` values.
 

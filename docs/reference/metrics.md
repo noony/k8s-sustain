@@ -157,7 +157,7 @@ The outcome of every admission's `WorkloadRecommendation` read, by `source`: one
 | `missing` | No recommendation exists yet. The webhook creates a [stub](../concepts/workload-recommendations.md#cold-start-stub-recommendations) so the controller picks it up. Transient for new workloads; sustained for one identity means the controller never computes it. |
 | `undecided` | The object exists but the controller has decided nothing for it yet: a stub awaiting its first reconcile, or one the controller's claim just created. No stub is created. Sustained for one identity means its Policy's reconcile is not reaching it. |
 | `nodata` | The recommendation exists and has an outcome but holds no values yet (too young, quiet, unmatched by the recording rules, or its fetch failed). No stub is created. Takes precedence over `stale`. |
-| `other-policy` | The recommendation was withheld: the object, or the values it holds, belong to a Policy other than the one the pod opts into ([ADR 0003](../adr/0003-a-recommendation-is-served-only-to-its-policy.md)). The other side of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity, or an identity moving between Policies until the new one computes its own values. Admitted unchanged; no stub is created. |
+| `other-policy` | The recommendation was withheld: the object, or the values it holds, belong to a Policy other than the one the pod opts into. The other side of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity, or an identity moving between Policies until the new one computes its own values. Admitted unchanged; no stub is created. |
 | `error` | The read failed with an apiserver error other than NotFound. |
 
 #### About the `path` label

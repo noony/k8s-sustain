@@ -69,7 +69,7 @@ spec:
 
 ## `spec.selector`
 
-Restricts which namespaces and workloads this policy applies to. The selector only **narrows**: a workload must also opt in with the `k8s.sustain.io/policy` annotation (see [Resolution order](annotation.md#resolution-order)). The controller, webhook, dashboard and OOM watcher decide it in one place (`internal/governance`, see [ADR 0004](../adr/0004-governance-is-decided-on-the-pod-template.md)), so they all honour the same selector.
+Restricts which namespaces and workloads this policy applies to. The selector only **narrows**: a workload must also opt in with the `k8s.sustain.io/policy` annotation (see [Resolution order](annotation.md#resolution-order)). The controller, webhook, dashboard and OOM watcher decide it in one place (`internal/governance`), so they all honour the same selector.
 
 The controller, webhook and OOM watcher also honour their operator-level `--excluded-namespaces` flag (see [CLI reference](./cli.md)); a workload in an excluded namespace is never managed regardless of selector configuration. A malformed `spec.selector.labelSelector` (one the CRD admits but Kubernetes cannot parse, such as an unknown operator) matches no pod template, so the policy governs no workload, a Departed one included. The webhook fails open rather than denying a pod that opts into it: whichever level the pod opts in at, it is admitted without resources injected and the webhook logs a warning with reason `selector-invalid`.
 
@@ -103,7 +103,7 @@ The Policy CRD rejects a selector that names a label a controller adds after the
 | `controller-uid`, `job-name`, `batch.kubernetes.io/controller-uid`, `batch.kubernetes.io/job-name` | the Job API, to a Job's own pod template |
 | `batch.kubernetes.io/job-completion-index` | the Job controller, to an Indexed Job's pods |
 
-Each is on some of the objects the controller, the webhook and the OOM watcher match and not on others: a Deployment's pod template has no `pod-template-hash` but its running pods do, and a standalone Job's pod template has `job-name` while a CronJob's job template does not. A selector on one would have the controller govern a workload whose pods the webhook refuses, or the other way round. k8s-sustain itself adds no label to pods: the [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation is read where you set it, never copied to a label ([ADR 0006](../adr/0006-owner-name-is-read-from-the-annotation.md)).
+Each is on some of the objects the controller, the webhook and the OOM watcher match and not on others: a Deployment's pod template has no `pod-template-hash` but its running pods do, and a standalone Job's pod template has `job-name` while a CronJob's job template does not. A selector on one would have the controller govern a workload whose pods the webhook refuses, or the other way round. k8s-sustain itself adds no label to pods: the [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation is read where you set it, never copied to a label.
 
 A Policy whose `labelSelector` names one of these labels is rejected when it is created or its selector is changed. Select on labels you put on the pod template yourself.
 
@@ -215,7 +215,7 @@ At most one of the following fields may be set (enforced by CRD validation). If 
 | `noLimit` | bool | Remove the limit entirely |
 | `requestsLimitsRatio` | float64 | Set limit = request × ratio (e.g. `1.5` sets limit to 150% of request). Must be `>= 1`. |
 
-Whatever the strategy, a limit never ends below the request: the API server rejects such a pod and such a resize, so a kept limit the new request outgrows (an OOM floor, headroom, `minAllowed` or autoscaler coordination can each push it there) is raised to the request. The request is never lowered to fit the limit. The `WorkloadRecommendation`'s trace records the raise as its `guard` stage ([ADR 0005](../adr/0005-a-limit-never-falls-below-its-request.md)). The webhook and the in-place resize hold the same line when they write a container: when the limit it would end up with is below its request — a limit kept from a pod whose running limit differs from its template, or a limit decrease applied while the [downsize threshold](#cpudownsizethreshold-memorydownsizethreshold) withholds the request's — they raise that limit to the request.
+Whatever the strategy, a limit never ends below the request: the API server rejects such a pod and such a resize, so a kept limit the new request outgrows (an OOM floor, headroom, `minAllowed` or autoscaler coordination can each push it there) is raised to the request. The request is never lowered to fit the limit. The `WorkloadRecommendation`'s trace records the raise as its `guard` stage. The webhook and the in-place resize hold the same line when they write a container: when the limit it would end up with is below its request — a limit kept from a pod whose running limit differs from its template, or a limit decrease applied while the [downsize threshold](#cpudownsizethreshold-memorydownsizethreshold) withholds the request's — they raise that limit to the request.
 
 #### `cpu.downsizeThreshold` / `memory.downsizeThreshold`
 
