@@ -147,7 +147,7 @@ func WithDefaults(cfg sustainv1alpha1.ResourcesConfigs) sustainv1alpha1.Resource
 				rc.Requests.Headroom = ptr.To[int32](0)
 			}
 		}
-		if l := rc.Limits; !l.EqualsToRequest && !l.KeepLimit && !l.KeepLimitRequestRatio && !l.NoLimit && l.RequestsLimitsRatio == nil {
+		if strategyOf(rc.Limits).name == stageKeepLimit {
 			rc.Limits.KeepLimit = true
 		}
 	}

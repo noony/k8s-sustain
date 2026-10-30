@@ -340,9 +340,12 @@ container's request or limit, and its trace stage. `PromInputs` fetches every
 signal in the `signals` list, and `Compute` runs one chain per resource in a
 fixed order: on the request side base signals, adjusters, headroom, clamp and
 coordination; on the limit side the Policy's limit strategy, limit adjusters
-and the guard (`limit.go`). Neither has a line specific to any signal: the age
-gate asks every signal, and live OOM kills reach the OOM floor through the
-inputs port (`WithLiveOOMs`), not through `Compute`. To add one:
+and the guard (`limit.go`, whose `limitStrategies` is the one list of limit
+strategies, which `WithDefaults` reads too). Both sides run their signals
+alike (`contributionsTo`, then `stagesOf` for their trace stages) and differ
+only in which contribution wins. Neither has a line specific to any signal:
+the age gate asks every signal, and live OOM kills reach the OOM floor through
+the inputs port (`WithLiveOOMs`), not through `Compute`. To add one:
 
 1. Write `internal/recommender/signal_<name>.go`. Build its PromQL from the
    `internal/prometheus` primitives (`Shard.Selector`, `Shard.MetricsSelector`,

@@ -65,21 +65,17 @@ func limitChain(
 	in *WorkloadInputs,
 	cfg sustainv1alpha1.ResourceLimitsConfig,
 ) (limit, []sustainv1alpha1.TraceStage) {
-	l, strategyStage := strategy(res, request, c.Resources, cfg)
-	stages := []sustainv1alpha1.TraceStage{strategyStage}
+	s := strategyOf(cfg)
+	l, facts := s.limit(limitBasis{res: res, request: request, current: c.Resources, cfg: cfg})
+	stages := []sustainv1alpha1.TraceStage{l.stage(s.name, facts)}
 
-	var raised []contributed
+	raised := contributionsTo(in, c.Name, res, limitAdjuster)
 	winner := -1
-	for _, s := range inSlot(slot{role: limitAdjuster, resource: res}) {
-		ct, ok := s.contribute(in, c.Name)
-		if !ok {
-			continue
-		}
+	for i, ct := range raised {
 		// Rounded up to a whole millicore or MiB, as a request is.
 		if q := res.withHeadroom(ct.value, nil); l.value != nil && q.Cmp(*l.value) > 0 {
-			l, winner = limit{value: &q, set: true}, len(raised)
+			l, winner = limit{value: &q, set: true}, i
 		}
-		raised = append(raised, contributed{signal: s, value: ct.value})
 	}
 	guarded := l.value != nil && l.value.Cmp(request) < 0
 	if guarded {
@@ -87,48 +83,89 @@ func limitChain(
 		l, winner = limit{value: &q, set: true}, -1
 	}
 
-	for i, r := range raised {
-		stages = append(stages, r.signal.stage(in, c.Name, r.value, i == winner))
-	}
+	stages = append(stages, stagesOf(raised, in, c.Name, winner)...)
 	if guarded {
 		stages = append(stages, l.stage(stageGuard, nil))
 	}
 	return l, stages
 }
 
-// strategy applies the Policy's limit strategy to the final request. A
-// strategy that cannot derive a limit keeps the container's own.
-func strategy(
-	res resourceKind,
-	request resource.Quantity,
-	current corev1.ResourceRequirements,
-	cfg sustainv1alpha1.ResourceLimitsConfig,
-) (limit, sustainv1alpha1.TraceStage) {
-	own := limit{value: res.of(current.Limits)}
-	switch {
-	case cfg.KeepLimit:
-		return own, own.stage(stageKeepLimit, nil)
-	case cfg.NoLimit:
-		l := limit{removed: true}
-		return l, l.stage(stageNoLimit, nil)
-	case cfg.EqualsToRequest:
-		q := request.DeepCopy()
-		l := limit{value: &q, set: true}
-		return l, l.stage(stageEqualsToRequest, nil)
-	case cfg.RequestsLimitsRatio != nil:
-		return ratioLimit(stageRequestsLimitsRatio, request, *cfg.RequestsLimitsRatio)
-	case cfg.KeepLimitRequestRatio:
-		if req := res.of(current.Requests); req != nil && own.value != nil {
-			return ratioLimit(stageKeepLimitRequestRatio, request, float64(own.value.MilliValue())/float64(req.MilliValue()))
-		}
-		return own, own.stage(stageKeepLimitRequestRatio, nil)
-	}
-	return own, own.stage(stageKeepLimit, nil)
+// limitBasis is what a limit strategy derives a limit from: the final request
+// of res, and the container's current requests and limits.
+type limitBasis struct {
+	res     resourceKind
+	request resource.Quantity
+	current corev1.ResourceRequirements
+	cfg     sustainv1alpha1.ResourceLimitsConfig
 }
 
-func ratioLimit(name string, request resource.Quantity, ratio float64) (limit, sustainv1alpha1.TraceStage) {
-	l := limit{value: scaleByRatio(request, ratio), set: true}
-	return l, l.stage(name, map[string]string{factRatio: formatFactor(ratio)})
+// limitStrategy is one of the Policy's limit strategies, named after the
+// field that chooses it. limit is its limit and the facts its stage records.
+type limitStrategy struct {
+	name   string
+	chosen func(sustainv1alpha1.ResourceLimitsConfig) bool
+	limit  func(limitBasis) (limit, map[string]string)
+}
+
+// limitStrategies is every limit strategy. A Policy chooses at most one, so
+// their order only settles a Policy admitted before the CRD enforced that.
+// The first is the default.
+var limitStrategies = []limitStrategy{
+	{
+		name:   stageKeepLimit,
+		chosen: func(cfg sustainv1alpha1.ResourceLimitsConfig) bool { return cfg.KeepLimit },
+		limit:  ownLimit,
+	},
+	{
+		name:   stageNoLimit,
+		chosen: func(cfg sustainv1alpha1.ResourceLimitsConfig) bool { return cfg.NoLimit },
+		limit:  func(limitBasis) (limit, map[string]string) { return limit{removed: true}, nil },
+	},
+	{
+		name:   stageEqualsToRequest,
+		chosen: func(cfg sustainv1alpha1.ResourceLimitsConfig) bool { return cfg.EqualsToRequest },
+		limit: func(b limitBasis) (limit, map[string]string) {
+			q := b.request.DeepCopy()
+			return limit{value: &q, set: true}, nil
+		},
+	},
+	{
+		name:   stageRequestsLimitsRatio,
+		chosen: func(cfg sustainv1alpha1.ResourceLimitsConfig) bool { return cfg.RequestsLimitsRatio != nil },
+		limit: func(b limitBasis) (limit, map[string]string) {
+			return ratioLimit(b.request, *b.cfg.RequestsLimitsRatio)
+		},
+	},
+	{
+		name:   stageKeepLimitRequestRatio,
+		chosen: func(cfg sustainv1alpha1.ResourceLimitsConfig) bool { return cfg.KeepLimitRequestRatio },
+		limit: func(b limitBasis) (limit, map[string]string) {
+			own, req := b.res.of(b.current.Limits), b.res.of(b.current.Requests)
+			if own == nil || req == nil {
+				return ownLimit(b)
+			}
+			return ratioLimit(b.request, float64(own.MilliValue())/float64(req.MilliValue()))
+		},
+	},
+}
+
+// strategyOf is the limit strategy cfg chooses, the default when it chooses
+// none.
+func strategyOf(cfg sustainv1alpha1.ResourceLimitsConfig) limitStrategy {
+	for _, s := range limitStrategies {
+		if s.chosen(cfg) {
+			return s
+		}
+	}
+	return limitStrategies[0]
+}
+
+func ownLimit(b limitBasis) (limit, map[string]string) {
+	return limit{value: b.res.of(b.current.Limits)}, nil
+}
+
+func ratioLimit(request resource.Quantity, ratio float64) (limit, map[string]string) {
+	return limit{value: scaleByRatio(request, ratio), set: true}, map[string]string{factRatio: formatFactor(ratio)}
 }
 
 // scaleByRatio multiplies request by ratio, rounding up. Memory quantities

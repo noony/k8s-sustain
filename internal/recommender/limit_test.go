@@ -1,6 +1,8 @@
 package recommender
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -56,6 +58,37 @@ func TestLimit_Strategies(t *testing.T) {
 				}
 			} else {
 				assertQty(t, "recommended limit", rec.CPULimit, tc.wantRec)
+			}
+		})
+	}
+}
+
+// Every field of a Policy's limits chooses the strategy named after it, so a
+// field added to the API without its strategy fails here instead of falling
+// back to keepLimit, and WithDefaults makes keepLimit explicit only when no
+// field is set.
+func TestLimit_EveryLimitsFieldChoosesItsStrategy(t *testing.T) {
+	fields := reflect.TypeFor[sustainv1alpha1.ResourceLimitsConfig]()
+	for i := range fields.NumField() {
+		f := fields.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		t.Run(name, func(t *testing.T) {
+			var cfg sustainv1alpha1.ResourceLimitsConfig
+			v := reflect.ValueOf(&cfg).Elem().Field(i)
+			switch f.Type.Kind() {
+			case reflect.Bool:
+				v.SetBool(true)
+			case reflect.Pointer:
+				v.Set(reflect.New(f.Type.Elem()))
+			default:
+				t.Fatalf("field %s of kind %s: teach this test to set it", f.Name, f.Type.Kind())
+			}
+
+			if got := strategyOf(cfg).name; got != name {
+				t.Errorf("strategy = %s, want %s", got, name)
+			}
+			if got := WithDefaults(sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Limits: cfg}}).CPU.Limits; got.KeepLimit != (name == stageKeepLimit) {
+				t.Errorf("WithDefaults limits = %+v, want keepLimit set only for keepLimit itself", got)
 			}
 		})
 	}

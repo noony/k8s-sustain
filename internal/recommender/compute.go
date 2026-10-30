@@ -193,10 +193,36 @@ type sizing struct {
 	trace   sustainv1alpha1.ResourceTrace
 }
 
-// contributed is what one signal contributed to a container's resource.
+// contributed is what one signal in role contributed to a container's
+// resource.
 type contributed struct {
 	signal signal
-	value  float64
+	role   role
+	contribution
+}
+
+// contributionsTo runs, in order, the signals of res in each of roles for
+// container, keeping those with a value for it.
+func contributionsTo(in *WorkloadInputs, container string, res resourceKind, roles ...role) []contributed {
+	var out []contributed
+	for _, r := range roles {
+		for _, s := range inSlot(slot{role: r, resource: res}) {
+			if ct, ok := s.contribute(in, container); ok {
+				out = append(out, contributed{signal: s, role: r, contribution: ct})
+			}
+		}
+	}
+	return out
+}
+
+// stagesOf is the trace entry of each of cs, in order. Only cs[determined],
+// if any, reached the final request or limit.
+func stagesOf(cs []contributed, in *WorkloadInputs, container string, determined int) []sustainv1alpha1.TraceStage {
+	out := make([]sustainv1alpha1.TraceStage, 0, len(cs))
+	for i, c := range cs {
+		out = append(out, c.signal.stage(in, container, c.value, i == determined))
+	}
+	return out
 }
 
 // Stage names of the request side that are not a signal's.
@@ -211,20 +237,13 @@ const (
 // justified is false when no signal justified a request; the sizing is nil
 // then, and when the Policy keeps the request.
 func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justified bool) {
-	var stages []contributed
+	contributions := contributionsTo(req.inputs, c.Name, res, base, adjuster)
 	var value float64
 	winner := -1
-	for _, r := range []role{base, adjuster} {
-		for _, s := range inSlot(slot{role: r, resource: res}) {
-			ct, ok := s.contribute(req.inputs, c.Name)
-			if !ok {
-				continue
-			}
-			justified = justified || ct.anchors
-			if r == base || ct.value > value {
-				value, winner = ct.value, len(stages)
-			}
-			stages = append(stages, contributed{signal: s, value: ct.value})
+	for i, ct := range contributions {
+		justified = justified || ct.anchors
+		if ct.role == base || ct.value > value {
+			value, winner = ct.value, i
 		}
 	}
 	cfg := res.config(req.resources)
@@ -237,13 +256,13 @@ func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justifi
 	co := coordinate(clamped, res, req.coordination, req.autoInfo, cfg.Requests)
 	// Judged on the final request: a clamp on either side of coordination
 	// means an operator bound, not the winning signal, set it.
-	unbounded := clamped.Cmp(headroom) == 0 && (co == nil || co.value.Cmp(co.scaled) == 0)
+	if bounded := clamped.Cmp(headroom) != 0 || (co != nil && co.value.Cmp(co.scaled) != 0); bounded {
+		winner = -1
+	}
 
 	out := &sizing{request: clamped}
-	for i, st := range stages {
-		out.trace.Request = append(out.trace.Request, st.signal.stage(req.inputs, c.Name, st.value, unbounded && i == winner))
-	}
-	out.trace.Request = append(out.trace.Request, quantityStage(stageHeadroom, headroom), quantityStage(stageClamp, clamped))
+	out.trace.Request = append(stagesOf(contributions, req.inputs, c.Name, winner),
+		quantityStage(stageHeadroom, headroom), quantityStage(stageClamp, clamped))
 	if co != nil {
 		out.request = co.value
 		out.trace.Request = append(out.trace.Request, co.stage())
