@@ -124,7 +124,6 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&sustainv1alpha1.Policy{}, builder.WithPredicates(policyEvents)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.PolicyConcurrencyLimit})
 	if r.OOMTriggers != nil {
-		// An OOM event named after its policy enqueues that Policy immediately.
 		b = b.WatchesRawSource(
 			source.Channel(
 				r.OOMTriggers,

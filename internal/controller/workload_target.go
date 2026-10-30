@@ -31,7 +31,8 @@ type workloadTarget struct {
 	BarePodMembers []*corev1.Pod
 }
 
-// key returns a unique identifier for this workload target, used as the retry map key.
+// key names the member in the ledger and the health tracker, across passes
+// and Policies.
 func (w *workloadTarget) key() string {
 	return w.Kind + "/" + w.Namespace + "/" + w.Name
 }
