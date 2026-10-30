@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -476,6 +477,38 @@ func TestReconcile_RetryEventNamesTheScheduledPass(t *testing.T) {
 			t.Errorf("attempt %d: want a ReconciliationRetryScheduled event naming %s", attempt+1, due)
 		}
 		clk.SetTime(clk.Now().Add(res.RequeueAfter))
+	}
+}
+
+// A pass that cannot list its workloads still runs when the retry the last
+// pass's events named falls due, not a whole reconcile interval later.
+func TestReconcile_ListFailedRequeuesAtTheDueRetry(t *testing.T) {
+	var listFails atomic.Bool
+	scheme := testFullScheme(t)
+	c := fakeClientBuilder(scheme, ongoingDeployments("p"), establishedDeployment("default", "web", "p")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*appsv1.DeploymentList); ok && listFails.Load() {
+					return apierrors.NewServiceUnavailable("apiserver unavailable")
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+	r := reconcilerOn(c, scheme, recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), errors.New("prometheus down")), true)
+	reconcileOnce(t, r, "p")
+	listFails.Store(true)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readyCondition(t, r, "p").Reason; got != "ListFailed" {
+		t.Fatalf("Ready reason = %q, want ListFailed", got)
+	}
+	if res.RequeueAfter != baseRetryDelay {
+		t.Errorf("RequeueAfter = %v, want %v: the retry the first pass scheduled", res.RequeueAfter, baseRetryDelay)
 	}
 }
 

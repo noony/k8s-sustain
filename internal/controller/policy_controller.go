@@ -216,7 +216,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		_ = r.failCondition(ctx, policy, "ListFailed", listErr)
 		r.recorder.Eventf(policy, nil, corev1.EventTypeWarning, "ListFailed", "ListFailed", "%s", listErr.Error())
 		r.series.reconciled(policy.Name, "error", time.Since(start))
-		return ctrl.Result{RequeueAfter: r.ReconcileInterval}, nil
+		return ctrl.Result{RequeueAfter: r.requeueAfter(policy.Name)}, nil
 	}
 
 	report := r.runPass(ctx, policy, snap)
@@ -246,7 +246,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	r.recorder.Eventf(policy, nil, eventType, cond.Reason, cond.Reason, "%s", cond.Message)
 	r.series.reconciled(policy.Name, result, time.Since(start))
 
-	return ctrl.Result{RequeueAfter: r.requeueAfter(live)}, nil
+	return ctrl.Result{RequeueAfter: r.requeueAfter(policy.Name)}, nil
 }
 
 // forget drops every series and member state policy left behind.
@@ -314,15 +314,12 @@ func passCondition(processed, failed, blocked int) metav1.Condition {
 	}
 }
 
-// requeueAfter schedules the Policy's next pass at the reconcile interval, or
-// earlier when a retry of one of its live members falls due first, so the
-// time a retry event names is a time a pass runs.
-func (r *PolicyReconciler) requeueAfter(live map[promclient.WorkloadIdentity][]string) time.Duration {
-	var members []string
-	for _, keys := range live {
-		members = append(members, keys...)
-	}
-	due, ok := r.ledger.nextRetry(members)
+// requeueAfter schedules policy's next pass at the reconcile interval, or
+// earlier when a retry of a live member of its last pass falls due first, so
+// the time a retry event names is a time a pass runs, even after a pass that
+// could not list its workloads.
+func (r *PolicyReconciler) requeueAfter(policy string) time.Duration {
+	due, ok := r.ledger.nextRetry(r.health.members(policy))
 	if !ok {
 		return r.ReconcileInterval
 	}

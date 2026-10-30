@@ -62,6 +62,17 @@ func (h *healthTracker) dropUnclaimedLocked(prev map[promclient.WorkloadIdentity
 	}
 }
 
+// members is the key of every live member of policy's last pass.
+func (h *healthTracker) members(policy string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []string
+	for _, keys := range h.byPolicy[policy] {
+		out = append(out, keys...)
+	}
+	return out
+}
+
 // membersLocked returns every member any policy claims for id, sorted so the
 // member a choice falls on does not depend on map order.
 func (h *healthTracker) membersLocked(id promclient.WorkloadIdentity) []string {
