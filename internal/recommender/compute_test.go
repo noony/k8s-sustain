@@ -6,7 +6,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/ptr"
 
@@ -59,36 +58,45 @@ func TestCompute_DeclaredContainersBoundTheResult(t *testing.T) {
 	}
 }
 
-// A Request narrowed to one container recommends it exactly as the whole
-// Request does, a sibling's OOM kill excusing the identity's age included,
-// and recommends nothing for a container it does not hold. The Request it
-// narrows still recommends every container.
-func TestRequest_ForContainer(t *testing.T) {
+// At the usage a container was observed at, RequestAt is the request Compute
+// recommends it, for either resource, its own OOM floor included and a
+// sibling's left out. It is zero for a container the Request does not
+// recommend, a kept request, and a resource the recommender does not size.
+func TestRequest_RequestAt(t *testing.T) {
 	req := Request{
-		containers: containers("app", "side", "migrate"),
+		containers: containers("app", "side"),
+		resources: sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{
+			Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)},
+		}},
 		inputs: &WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"app": 1, "side": 0.2, "migrate": 0.5},
-			MemPerPod: promclient.ContainerValues{"app": 64 * mib, "side": 32 * mib, "migrate": 16 * mib},
-			OOM:       map[string]OOM{"app": {Kills: 1, LimitBytes: 128 * mib}},
+			CPUPerPod: promclient.ContainerValues{"app": 1, "side": 0.2},
+			MemPerPod: promclient.ContainerValues{"app": 64 * mib, "side": 32 * mib},
+			OOM:       map[string]OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}},
 		},
 		since: now.Add(-time.Minute),
 		now:   now,
 	}
 	whole := Compute(req)
+	kept := req
+	kept.resources.Memory.Requests.KeepRequest = true
 
-	side := Compute(req.ForContainer("side"))
-	absent := Compute(req.ForContainer("absent"))
-
-	if side.Outcome != Recommended || len(side.Recs) != 1 ||
-		!equality.Semantic.DeepEqual(side.Recs["side"], whole.Recs["side"]) ||
-		!equality.Semantic.DeepEqual(side.Traces["side"], whole.Traces["side"]) {
-		t.Errorf("side alone = %v %+v, want %+v as the whole Request computes it", side.Outcome, side.Recs, whole.Recs["side"])
+	for _, name := range []string{"app", "side"} {
+		rec := whole.Recs[name]
+		if got, want := req.RequestAt(name, corev1.ResourceCPU, req.inputs.CPUPerPod[name]), float64(rec.CPURequest.MilliValue())/1000; got != want {
+			t.Errorf("%s cpu = %v, want Compute's %v", name, got, want)
+		}
+		if got, want := req.RequestAt(name, corev1.ResourceMemory, req.inputs.MemPerPod[name]), float64(rec.MemoryRequest.Value()); got != want {
+			t.Errorf("%s memory = %v, want Compute's %v", name, got, want)
+		}
 	}
-	if absent.Outcome != NoData || len(absent.Recs) != 0 {
-		t.Errorf("absent = %v %+v, want nothing recommended", absent.Outcome, absent.Recs)
-	}
-	if got := Compute(req); len(got.Recs) != 3 {
-		t.Errorf("the narrowed Request recommends %v, want all three containers", got.Recs)
+	for what, got := range map[string]float64{
+		"an absent container": req.RequestAt("absent", corev1.ResourceCPU, 1),
+		"a kept request":      kept.RequestAt("app", corev1.ResourceMemory, 64*mib),
+		"an unsized resource": req.RequestAt("app", corev1.ResourceEphemeralStorage, 1),
+	} {
+		if got != 0 {
+			t.Errorf("%s = %v, want 0", what, got)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -123,25 +124,29 @@ func (r Request) Inputs() *WorkloadInputs { return r.inputs }
 // default explicit (WithDefaults).
 func (r Request) Resources() sustainv1alpha1.ResourcesConfigs { return r.resources }
 
-// WithInputs is the Request computing from in instead: what the identity
-// would be recommended had it observed in, such as one past percentile.
-func (r Request) WithInputs(in *WorkloadInputs) Request {
-	r.inputs = in
-	return r
-}
-
-// ForContainer is the Request recommending the container named name alone,
-// none when it does not recommend that container. Every container is
-// computed on its own, so its Recommendation is the one the whole Request
-// computes for it.
-func (r Request) ForContainer(name string) Request {
+// RequestAt is the request of res, in cores or bytes, that the Request
+// computes for the container named name had its usage percentile of res been
+// usage, every other signal as observed: one past point of a Simulation's
+// recommendation chart. Zero when the Request does not recommend that
+// container or res, or keeps its request. A point costs one resource of one
+// container, not a whole computation.
+func (r Request) RequestAt(name string, res corev1.ResourceName, usage float64) float64 {
+	kind := resourceKind(res)
 	i := slices.IndexFunc(r.containers, func(c corev1.Container) bool { return c.Name == name })
-	if i < 0 {
-		r.containers = nil
-		return r
+	if i < 0 || (kind != cpuResource && kind != memoryResource) {
+		return 0
 	}
-	r.containers = r.containers[i : i+1 : i+1]
-	return r
+	var point WorkloadInputs
+	if r.inputs != nil {
+		point = *r.inputs
+	}
+	*kind.usage(&point) = promclient.ContainerValues{name: usage}
+	r.inputs = &point
+	sized, _ := size(kind, r.containers[i], r)
+	if sized == nil {
+		return 0
+	}
+	return kind.value(sized.request)
 }
 
 // Result is Compute's answer for one identity.

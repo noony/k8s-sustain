@@ -16,7 +16,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 type simulationResult struct {
@@ -178,44 +177,19 @@ func simulationContainers(res recommender.Result, inputs *recommender.WorkloadIn
 
 // recommendationSeries computes, at each raw percentile point of res, the
 // request the identity's Request would have computed for the container had
-// the point been its percentile, with the container's OOM kills, so the chart
-// shows exactly what would be applied at each step. Each point computes the
-// one container: a chart costs its points, not its points times the
-// identity's containers.
+// the point been its percentile, so the chart shows exactly what would be
+// applied at each step.
 func recommendationSeries(series promclient.ContainerTimeSeries, req recommender.Request, res corev1.ResourceName) promclient.ContainerTimeSeries {
 	if series == nil {
 		return nil
 	}
 	out := make(promclient.ContainerTimeSeries, len(series))
 	for name, points := range series {
-		one := req.ForContainer(name)
 		recs := make([]promclient.TimeValue, len(points))
 		for i, p := range points {
-			point := recommender.WorkloadInputs{OOM: map[string]recommender.OOM{}}
-			if oom, ok := req.Inputs().OOM[name]; ok {
-				point.OOM[name] = oom
-			}
-			usage := promclient.ContainerValues{name: p.Value}
-			if res == corev1.ResourceMemory {
-				point.MemPerPod = usage
-			} else {
-				point.CPUPerPod = usage
-			}
-			rec := recommender.Compute(one.WithInputs(&point)).Recs[name]
-			recs[i] = promclient.TimeValue{Timestamp: p.Timestamp, Value: requestOf(rec, res)}
+			recs[i] = promclient.TimeValue{Timestamp: p.Timestamp, Value: req.RequestAt(name, res, p.Value)}
 		}
 		out[name] = recs
 	}
 	return out
-}
-
-// requestOf is rec's request of res in cores or bytes, zero when it has none.
-func requestOf(rec workload.ContainerRecommendation, res corev1.ResourceName) float64 {
-	switch {
-	case res == corev1.ResourceMemory && rec.MemoryRequest != nil:
-		return float64(rec.MemoryRequest.Value())
-	case res == corev1.ResourceCPU && rec.CPURequest != nil:
-		return float64(rec.CPURequest.MilliValue()) / 1000.0
-	}
-	return 0
 }

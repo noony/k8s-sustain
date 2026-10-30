@@ -78,11 +78,11 @@ func (u usage) collect(in *WorkloadInputs, samples []promclient.ShardSample) {
 	for _, s := range samples {
 		values[s.Container] = s.Value
 	}
-	*u.values(in) = values
+	*u.resource.usage(in) = values
 }
 
 func (u usage) observed(in *WorkloadInputs) []string {
-	return slices.Collect(maps.Keys(*u.values(in)))
+	return slices.Collect(maps.Keys(*u.resource.usage(in)))
 }
 
 func (u usage) excusesAge(*WorkloadInputs) bool { return false }
@@ -90,18 +90,11 @@ func (u usage) excusesAge(*WorkloadInputs) bool { return false }
 func (u usage) slot() slot { return slot{role: base, resource: u.resource} }
 
 func (u usage) contribute(in *WorkloadInputs, container string) (contribution, bool) {
-	v, ok := (*u.values(in))[container]
+	v, ok := (*u.resource.usage(in))[container]
 	return contribution{value: v, anchors: true}, ok
 }
 
 // stage records the percentile at full precision: nanocores or bytes.
 func (u usage) stage(_ *WorkloadInputs, _ string, value float64, _ bool) sustainv1alpha1.TraceStage {
 	return sustainv1alpha1.TraceStage{Stage: stagePercentile, Value: u.resource.quantity(value)}
-}
-
-func (u usage) values(in *WorkloadInputs) *promclient.ContainerValues {
-	if u.resource == cpuResource {
-		return &in.CPUPerPod
-	}
-	return &in.MemPerPod
 }
