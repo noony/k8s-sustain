@@ -204,7 +204,8 @@ func TestSeries_OptedOutWorkloadLosesEverySeries(t *testing.T) {
 }
 
 // Only the Policy now governing a moved workload publishes its member series;
-// its identity's series, which name no Policy, survive the move.
+// its identity's series, which name no Policy, survive the move when the new
+// Policy reconciles first.
 func TestSeries_MovedWorkloadIsPublishedOnlyByItsNewPolicy(t *testing.T) {
 	const ns = "series-moved"
 	dep := establishedDeployment(ns, "web", "p")
@@ -231,6 +232,38 @@ func TestSeries_MovedWorkloadIsPublishedOnlyByItsNewPolicy(t *testing.T) {
 		if got := len(seriesForWorkload(t, metric, ns, "Deployment", "web")); got != 1 {
 			t.Errorf("%s: want the identity's one series to survive the move, got %d", metric, got)
 		}
+	}
+}
+
+// In the other order, the old Policy's pass leaves the moved workload out
+// before the new one includes it, so no Policy includes its identity in
+// between: its series go, the new Policy's pass publishes its gauges again,
+// and its counters restart from zero.
+func TestSeries_WorkloadMovedBeforeItsNewPolicyReconcilesRestartsItsCounters(t *testing.T) {
+	const ns = "series-moved-late"
+	web := identityOf(ns, "Deployment", "web")
+	dep := establishedDeployment(ns, "web", "p")
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+		ongoingDeployments("p"), ongoingDeployments("q"), dep, runningPod(ns, "web-pod", "web"))
+	r.ObserveOOM(context.Background(), "p", web, "app")
+	reconcileOnce(t, r, "p")
+	identitySeries := []string{"k8s_sustain_workload_pods", "k8s_sustain_oom_observed_total"}
+
+	update(t, r, dep, optInto(dep, "q"))
+	reconcileOnce(t, r, "p")
+	for _, metric := range identitySeries {
+		if got := len(seriesForWorkload(t, metric, ns, "Deployment", "web")); got != 0 {
+			t.Errorf("%s: %d series of an identity no Policy's last pass includes", metric, got)
+		}
+	}
+	reconcileOnce(t, r, "q")
+
+	if got := len(seriesForWorkload(t, "k8s_sustain_workload_pods", ns, "Deployment", "web")); got != 1 {
+		t.Errorf("workload_pods: %d series, want the new Policy to publish the identity's gauge again", got)
+	}
+	r.ObserveOOM(context.Background(), "q", web, "app")
+	if got := testutilCounterValue(t, oomObservedTotal, ns, "Deployment", "web", "app"); got != 1 {
+		t.Errorf("oom_observed_total = %v, want 1: the counter restarts from zero", got)
 	}
 }
 

@@ -26,8 +26,8 @@ func (h healthReport) blocked() int {
 //
 // An identity is governed by at most one Policy at a time; members are still
 // unioned across policies so that an identity moving between two keeps one
-// aggregate, and its members are forgotten by the ledger only once no policy
-// claims them.
+// aggregate while both claim it, and its members are forgotten by the ledger
+// only once no policy claims them.
 type healthTracker struct {
 	mu       sync.Mutex
 	byPolicy map[string]map[promclient.WorkloadIdentity][]string

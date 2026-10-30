@@ -64,10 +64,13 @@ type containerSeries struct {
 //
 // A Policy's own series and its members' carry its name, and live while its
 // passes keep desiring them, or until it is forgotten. An identity's carry
-// no Policy, so one moving between Policies keeps them: its gauges are
-// replaced by every pass that includes it, its counters accumulate, and all
-// of them are deleted once the last pass of every Policy left it out. A
-// counter restarts from zero if the identity comes back.
+// no Policy: its gauges are replaced by every pass that includes it, its
+// counters accumulate, and all of them are deleted as soon as no Policy's
+// last pass includes it. A counter restarts from zero if the identity comes
+// back. Passes of different Policies run in any order, so an identity moving
+// between two keeps its series only when the new Policy's pass includes it
+// before the old one's leaves it out; in the other order its counters
+// restart from zero and the new Policy's pass publishes its gauges again.
 type publisher struct {
 	mu         sync.Mutex
 	policies   map[string]*policyPublished
@@ -188,9 +191,11 @@ func (p *publisher) reconciled(policy, result string, took time.Duration) {
 }
 
 // observedOOM counts an OOM kill of container, in a pod of id that policy
-// governs. Until policy's next pass, policy counts as including id, so a
-// kill of an identity that pass leaves out is deleted with the rest of its
-// series.
+// governs. Until policy's next pass publishes, policy counts as including id,
+// so a kill of an identity that pass leaves out is deleted with the rest of
+// its series. That pass may be one already in flight, whose snapshot predates
+// the kill: the kill of an identity it did not see is dropped with it, even
+// though the pass the kill triggers includes the identity.
 func (p *publisher) observedOOM(policy string, id promclient.WorkloadIdentity, container string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
