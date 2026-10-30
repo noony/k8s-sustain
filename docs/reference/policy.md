@@ -262,11 +262,12 @@ Every such failure counts once toward `PartialFailure` and leaves the identity
 cycle succeeds, whether the error is transient or permanent:
 
 - A **transient** error (Prometheus errors and timeouts, API 5xx, 404 Not
-  Found, 409 Conflict and 429) is
-  retried with exponential backoff, 30s doubling up to 5 minutes. Each
-  attempt records a `ReconciliationRetryScheduled` Warning event on the
-  workload object naming when the next one runs, and the policy's next cycle
-  is scheduled for that time when it comes before `--reconcile-interval`.
+  Found, 409 Conflict and 429) is retried with exponential backoff, 30s
+  doubling with each consecutive transient failure up to 5 minutes (a
+  permanent error in between starts it over). Each attempt records a
+  `ReconciliationRetryScheduled` Warning event on the workload object naming
+  when the next one runs, and the policy's next cycle is scheduled for that
+  time when it comes before `--reconcile-interval`.
 - A **permanent** error (an API rejection such as 403, 401 or Invalid, e.g.
   missing RBAC on `pods/eviction`, or a workload the controller refuses to
   apply to: one without a UID or a valid selector) records one `ReconciliationFailed`

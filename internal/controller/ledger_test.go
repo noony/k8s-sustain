@@ -171,6 +171,27 @@ func TestLedger_TransientBackoffGrowsToItsCap(t *testing.T) {
 	}
 }
 
+// The backoff grows with consecutive transient failures only: one after a run
+// of permanent ones is a first attempt.
+func TestLedger_PermanentFailuresDoNotGrowTheBackoff(t *testing.T) {
+	l, clk := ledgerOnFakeClock()
+	member := deploymentTarget("default", "web")
+	l.record(context.Background(), failedStep(member, phasePatch, unavailable))
+	for range 3 {
+		l.record(context.Background(), failedStep(member, phasePatch, forbidden))
+	}
+
+	ev, _ := l.record(context.Background(), failedStep(member, phasePatch, unavailable))
+
+	if got, ok := l.nextRetry([]string{member.key()}); !ok || got != baseRetryDelay {
+		t.Errorf("next retry in %v (%v), want %v", got, ok, baseRetryDelay)
+	}
+	due := clk.Now().Add(baseRetryDelay).Format(time.RFC3339)
+	if want := "Attempt 1 failed, retrying at " + due; ev == nil || !strings.Contains(ev.message, want) {
+		t.Errorf("event = %+v, want it to name %q", ev, want)
+	}
+}
+
 func TestLedger_NextRetryIsTheEarliestBackoff(t *testing.T) {
 	l, clk := ledgerOnFakeClock()
 	first, second := deploymentTarget("default", "first"), deploymentTarget("default", "second")

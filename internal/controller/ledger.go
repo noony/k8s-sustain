@@ -111,7 +111,10 @@ type memberEntry struct {
 type failure struct {
 	phase     string
 	permanent bool
-	attempts  int
+	// attempts counts the consecutive transient failures the backoff grows
+	// with, zero for a permanent one: a permanent failure in between restarts
+	// it.
+	attempts int
 	// due is when a transient failure may run again. A permanent one runs
 	// every pass, so a fixed cause (a missing RBAC rule) is picked up without
 	// a restart.
@@ -177,10 +180,7 @@ func (l *ledger) entryLocked(key string) *memberEntry {
 func (l *ledger) failLocked(key string, res applyResult) *ledgerEvent {
 	e := l.entryLocked(key)
 	prev := e.failure
-	f := &failure{phase: res.phase, permanent: permanentError(res.err), attempts: 1}
-	if prev != nil {
-		f.attempts = prev.attempts + 1
-	}
+	f := &failure{phase: res.phase, permanent: permanentError(res.err)}
 	e.failure = f
 	what := stepFailures[res.phase]
 	if f.permanent {
@@ -191,6 +191,10 @@ func (l *ledger) failLocked(key string, res applyResult) *ledgerEvent {
 			reason:  "ReconciliationFailed",
 			message: fmt.Sprintf("%s: %v. Permanent error, retried every reconcile without backoff", what, res.err),
 		}
+	}
+	f.attempts = 1
+	if prev != nil {
+		f.attempts += prev.attempts
 	}
 	// time.Duration is an int64 of nanoseconds, so `baseRetryDelay << shift`
 	// overflows for a large shift and wraps to zero once shift >= 64.
