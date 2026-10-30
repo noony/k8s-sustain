@@ -17,6 +17,7 @@ import (
 	clocktesting "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -181,7 +182,7 @@ func TestSeries_OptedOutWorkloadLosesEverySeries(t *testing.T) {
 	const ns = "series-optout"
 	dep := establishedDeployment(ns, "web", "p")
 	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true, ongoingDeployments("p"), dep, runningPod(ns, "web-pod", "web"))
-	r.ObserveOOM("p", identityOf(ns, "Deployment", "web"), "app")
+	r.ObserveOOM(context.Background(), "p", identityOf(ns, "Deployment", "web"), "app")
 
 	reconcileOnce(t, r, "p")
 	if len(memberSeriesFor(t, ns, "Deployment", "web", "app", "p")) == 0 ||
@@ -209,7 +210,7 @@ func TestSeries_MovedWorkloadIsPublishedOnlyByItsNewPolicy(t *testing.T) {
 	dep := establishedDeployment(ns, "web", "p")
 	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
 		ongoingDeployments("p"), ongoingDeployments("q"), dep, runningPod(ns, "web-pod", "web"))
-	r.ObserveOOM("p", identityOf(ns, "Deployment", "web"), "app")
+	r.ObserveOOM(context.Background(), "p", identityOf(ns, "Deployment", "web"), "app")
 
 	reconcileOnce(t, r, "p")
 	if len(memberSeriesFor(t, ns, "Deployment", "web", "app", "p")) == 0 {
@@ -266,7 +267,7 @@ func TestSeries_DepartedIdentityLosesItsCountersPastRetention(t *testing.T) {
 	dep, pod := establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web")
 	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true, ongoingDeployments("p"), dep, pod)
 	r.RecommendationRetention = time.Hour
-	r.ObserveOOM("p", identityOf(ns, "Deployment", "web"), "app")
+	r.ObserveOOM(context.Background(), "p", identityOf(ns, "Deployment", "web"), "app")
 	oomSeries := func() int {
 		return len(seriesForWorkload(t, "k8s_sustain_oom_observed_total", ns, "Deployment", "web"))
 	}
@@ -334,7 +335,7 @@ func TestSeries_PolicyDeletionRemovesEverything(t *testing.T) {
 		withMemoryRequest(establishedDeployment(ns, "web", doomed)), runningPod(ns, "web-pod", "web"),
 		establishedDeployment(ns, "broken", doomed),
 		establishedDeployment(ns, "kept", survivor), runningPod(ns, "kept-pod", "kept"))
-	r.ObserveOOM(doomed, web, "app")
+	r.ObserveOOM(context.Background(), doomed, web, "app")
 
 	reconcileOnce(t, r, doomed)
 	reconcileOnce(t, r, survivor)
@@ -392,6 +393,87 @@ func TestSeries_PolicyDeletionRemovesEverything(t *testing.T) {
 	if len(memberSeriesFor(t, ns, "Deployment", "kept", "app", survivor)) == 0 ||
 		len(seriesForWorkload(t, "k8s_sustain_workload_pods", ns, "Deployment", "kept")) != 1 {
 		t.Errorf("%s lost its series to another Policy's deletion", survivor)
+	}
+}
+
+// removeByHand deletes Policy name as a user who first strips its cleanup
+// finalizer does: it is gone before any deletion branch could run.
+func removeByHand(t *testing.T, r *PolicyReconciler, name string) {
+	t.Helper()
+	var live sustainv1alpha1.Policy
+	if err := r.Get(context.Background(), types.NamespacedName{Name: name}, &live); err != nil {
+		t.Fatal(err)
+	}
+	update(t, r, &live, func() { live.Finalizers = nil })
+	remove(t, r, &live)
+}
+
+func TestSeries_PolicyGoneWithoutItsFinalizerLosesEverySeries(t *testing.T) {
+	const ns, policy = "series-finalizer-removed", "series-finalizer-removed"
+	web := identityOf(ns, "Deployment", "web")
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+		ongoingDeployments(policy), withMemoryRequest(establishedDeployment(ns, "web", policy)), runningPod(ns, "web-pod", "web"))
+	r.ObserveOOM(context.Background(), policy, web, "app")
+	identitySeries := []string{"k8s_sustain_workload_pods", "k8s_sustain_oom_observed_total"}
+
+	reconcileOnce(t, r, policy)
+	if len(seriesMatching(t, "k8s_sustain_policy_workload_count", map[string]string{"policy": policy})) != 1 ||
+		len(memberSeriesFor(t, ns, "Deployment", "web", "app", policy)) != len(memberGauges) {
+		t.Fatal("pass 1 must publish the Policy's and its member's series")
+	}
+	for _, metric := range identitySeries {
+		if len(seriesForWorkload(t, metric, ns, "Deployment", "web")) != 1 {
+			t.Fatalf("pass 1 must publish %s", metric)
+		}
+	}
+
+	removeByHand(t, r, policy)
+	reconcileOnce(t, r, policy)
+
+	for _, metric := range []string{"k8s_sustain_policy_workload_count", "k8s_sustain_reconcile_total"} {
+		if got := len(seriesMatching(t, metric, map[string]string{"policy": policy})); got != 0 {
+			t.Errorf("%s keeps %d series of the Policy", metric, got)
+		}
+	}
+	if got := memberSeriesFor(t, ns, "Deployment", "web", "", policy); len(got) != 0 {
+		t.Errorf("the member keeps series %v of a Policy that is gone", got)
+	}
+	for _, metric := range identitySeries {
+		if got := len(seriesForWorkload(t, metric, ns, "Deployment", "web")); got != 0 {
+			t.Errorf("%s keeps %d series of an identity whose Policy is gone", metric, got)
+		}
+	}
+}
+
+// A kill counted once its Policy is gone and forgotten triggers a pass of that
+// Policy, which finds it gone and forgets the kill with it.
+func TestSeries_KillOfAGonePolicyGoesWithThePassItTriggers(t *testing.T) {
+	const ns, policy = "series-late-kill", "series-late-kill"
+	web := identityOf(ns, "Deployment", "web")
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+		ongoingDeployments(policy), establishedDeployment(ns, "web", policy), runningPod(ns, "web-pod", "web"))
+	triggers := make(chan event.GenericEvent, 1)
+	r.OOMTriggers = triggers
+	oomSeries := func() int {
+		return len(seriesForWorkload(t, "k8s_sustain_oom_observed_total", ns, "Deployment", "web"))
+	}
+	reconcileOnce(t, r, policy)
+	removeByHand(t, r, policy)
+	reconcileOnce(t, r, policy)
+
+	r.ObserveOOM(context.Background(), policy, web, "app")
+	if oomSeries() != 1 {
+		t.Fatal("the kill must be counted")
+	}
+	select {
+	case ev := <-triggers:
+		reconcileOnce(t, r, ev.Object.GetName())
+	default:
+		t.Fatal("the kill triggered no pass of its Policy")
+	}
+
+	if got := oomSeries(); got != 0 {
+		t.Errorf("a kill counted once its Policy was gone keeps %d series past the pass it triggered", got)
 	}
 }
 

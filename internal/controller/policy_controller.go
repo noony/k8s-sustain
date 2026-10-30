@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -79,9 +80,9 @@ type PolicyReconciler struct {
 	OrphanReapInterval time.Duration
 
 	// OOMTriggers carries a Policy as soon as the OOM Pod watcher sees one of
-	// its pods killed, so it reconciles without waiting for the interval. Nil
-	// disables it.
-	OOMTriggers <-chan event.GenericEvent
+	// its pods killed (ObserveOOM), so it reconciles without waiting for the
+	// interval. Nil disables it.
+	OOMTriggers chan event.GenericEvent
 
 	recorder events.EventRecorder
 	patcher  *workload.Patcher
@@ -92,9 +93,18 @@ type PolicyReconciler struct {
 }
 
 // ObserveOOM counts an OOM kill of container in a pod of id that policy
-// governs, among the identity's other series.
-func (r *PolicyReconciler) ObserveOOM(policy string, id promclient.WorkloadIdentity, container string) {
+// governs, among the identity's other series, and triggers a pass of policy.
+// That pass is also what forgets a policy deleted by the time the kill is
+// counted, so the trigger waits for room instead of being dropped.
+func (r *PolicyReconciler) ObserveOOM(ctx context.Context, policy string, id promclient.WorkloadIdentity, container string) {
 	r.series.observedOOM(policy, id, container)
+	if r.OOMTriggers == nil {
+		return
+	}
+	select {
+	case r.OOMTriggers <- event.GenericEvent{Object: &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: policy}}}:
+	case <-ctx.Done():
+	}
 }
 
 // SetupWithManager registers the PolicyReconciler with the given manager.
@@ -160,6 +170,12 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	policy := &sustainv1alpha1.Policy{}
 	if err := r.Get(ctx, req.NamespacedName, policy); err != nil {
+		if apierrors.IsNotFound(err) {
+			// A Policy whose finalizer was removed by hand never reaches the
+			// deletion branch, and a kill counted after it was forgotten
+			// brings it back into the publisher.
+			r.forget(req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	logger.V(1).Info("policy fetched", "generation", policy.Generation, "resourceVersion", policy.ResourceVersion)
@@ -174,8 +190,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				return ctrl.Result{}, err
 			}
 			// Ordered after cleanup so a retried deletion re-emits nothing.
-			r.series.forget(policy.Name)
-			r.health.forget(policy.Name, r.ledger)
+			r.forget(policy.Name)
 			r.recorder.Eventf(policy, nil, corev1.EventTypeNormal, "Cleanup", "Cleanup", "Policy deleted, removing finalizer.")
 			controllerutil.RemoveFinalizer(policy, finalizerName)
 			if err := r.Update(ctx, policy); err != nil {
@@ -232,6 +247,12 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	r.series.reconciled(policy.Name, result, time.Since(start))
 
 	return ctrl.Result{RequeueAfter: r.requeueAfter(live)}, nil
+}
+
+// forget drops every series and member state policy left behind.
+func (r *PolicyReconciler) forget(policy string) {
+	r.series.forget(policy)
+	r.health.forget(policy, r.ledger)
 }
 
 // settle hands every member's result in report to the ledger and emits the
