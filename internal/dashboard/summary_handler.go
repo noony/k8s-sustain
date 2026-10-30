@@ -315,15 +315,17 @@ func readHeadroom(ctx context.Context, p PromQuerier, expr string) (headroomBrea
 }
 
 // attentionSignals lists the non-Safe Risk states in precedence order, with
-// the signal an attention row of each shows.
+// the signal an attention row of each shows and the severity its identities
+// are ranked by, worst highest: most retry attempts, OOM kills or stale pods.
 var attentionSignals = []struct {
-	state  riskState
-	signal string
+	state    riskState
+	signal   string
+	severity func(identityStatus) int
 }{
-	{riskConflicted, "conflict"},
-	{riskBlocked, "blocked"},
-	{riskAtRisk, "OOM"},
-	{riskDrifted, "drift"},
+	{riskConflicted, "conflict", func(identityStatus) int { return 0 }},
+	{riskBlocked, "blocked", func(st identityStatus) int { return st.health.Blocked.Attempts }},
+	{riskAtRisk, "OOM", func(st identityStatus) int { return st.health.OOM24h }},
+	{riskDrifted, "drift", func(st identityStatus) int { return st.health.StalePods }},
 }
 
 const maxAttentionRows = 10
@@ -354,7 +356,7 @@ func (resp *summaryResponseV2) fillRisk(statuses []identityStatus) {
 	for _, a := range attentionSignals {
 		group := byState[a.state]
 		slices.SortFunc(group, func(x, y identityStatus) int {
-			return cmp.Or(cmp.Compare(severity(y), severity(x)), promclient.CompareIdentity(x.id.Key, y.id.Key))
+			return cmp.Or(cmp.Compare(a.severity(y), a.severity(x)), promclient.CompareIdentity(x.id.Key, y.id.Key))
 		})
 		rows := make([]attentionRow, 0, min(len(group), maxAttentionRows))
 		for _, st := range group[:min(len(group), maxAttentionRows)] {
@@ -368,18 +370,4 @@ func (resp *summaryResponseV2) fillRisk(statuses []identityStatus) {
 		}
 		resp.Attention[a.state] = attentionGroup{Total: len(group), Rows: rows}
 	}
-}
-
-// severity ranks the identities of one Risk state, worst highest: most retry
-// attempts, OOM kills or stale pods.
-func severity(st identityStatus) int {
-	switch st.risk {
-	case riskBlocked:
-		return st.health.Blocked.Attempts
-	case riskAtRisk:
-		return st.health.OOM24h
-	case riskDrifted:
-		return st.health.StalePods
-	}
-	return 0
 }
