@@ -121,9 +121,6 @@ helm upgrade k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
   --reuse-values
 ```
 
-!!! warning "Bring your own Prometheus? The owner-name override moved to `kube_pod_annotations`"
-    The recording rules read the `k8s.sustain.io/owner-name` annotation from `kube_pod_annotations`, no longer from a pod label the webhook wrote ([ADR 0006](../adr/0006-owner-name-is-read-from-the-annotation.md)). Before upgrading from a release that mirrored it, allowlist the annotation in kube-state-metrics and keep `kube_pod_annotations` in your scrape: see [Prerequisites](prerequisites.md#prometheus).
-
 ## Uninstalling
 
 ```bash

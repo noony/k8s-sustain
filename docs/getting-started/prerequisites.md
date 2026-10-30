@@ -33,9 +33,6 @@ From **kube-state-metrics**:
 - `kube_pod_container_status_restarts_total` / `kube_pod_container_status_last_terminated_reason` — OOMKill detection
 - `kube_node_status_allocatable` — cluster capacity for the headroom panels
 
-!!! warning "Breaking: the owner-name override moved from `kube_pod_labels` to `kube_pod_annotations`"
-    Earlier releases had the webhook copy the `k8s.sustain.io/owner-name` annotation onto a pod label, which the recording rules read from `kube_pod_labels` (`--metric-labels-allowlist`). The webhook no longer writes that label ([ADR 0006](../adr/0006-owner-name-is-read-from-the-annotation.md)). With your own Prometheus, add the annotation allowlist above and keep `kube_pod_annotations` in your scrape keep-list before upgrading; the `kube_pod_labels` allowlist entry and keep-list entry can go. The bundled Prometheus is configured for you.
-
 From **cAdvisor**:
 
 - `container_cpu_usage_seconds_total` — CPU usage per container

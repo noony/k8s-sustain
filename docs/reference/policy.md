@@ -105,8 +105,7 @@ The Policy CRD rejects a selector that names a label a controller adds after the
 
 Each is on some of the objects the controller, the webhook and the OOM watcher match and not on others: a Deployment's pod template has no `pod-template-hash` but its running pods do, and a standalone Job's pod template has `job-name` while a CronJob's job template does not. A selector on one would have the controller govern a workload whose pods the webhook refuses, or the other way round. k8s-sustain itself adds no label to pods: the [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation is read where you set it, never copied to a label ([ADR 0006](../adr/0006-owner-name-is-read-from-the-annotation.md)).
 
-!!! warning "Breaking"
-    A Policy whose `labelSelector` names one of these labels is rejected when it is created or its selector is changed. Select on labels you put on the pod template yourself.
+A Policy whose `labelSelector` names one of these labels is rejected when it is created or its selector is changed. Select on labels you put on the pod template yourself.
 
 ```yaml
 spec:
