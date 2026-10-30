@@ -1,0 +1,70 @@
+# Unit test for the owner-name override in k8s_sustain:pod_workload.
+#
+# The override is read from kube-state-metrics' kube_pod_annotations, and only
+# for a value the controller accepts too (a non-empty Kubernetes label value):
+# such a pod maps to the override alone, under its real owner kind or "Pod"
+# when it has none. Any other value leaves the pod to its real owner, and a
+# bare pod with one is not mapped at all. Every pod has at most one row.
+rule_files:
+  - rules-only.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'kube_replicaset_owner{namespace="shop",replicaset="web-7d4",owner_kind="Deployment",owner_name="web",owner_is_controller="true"}'
+        values: '1x5'
+      # Valid override on a Deployment's pod: grouped as Deployment/app.
+      - series: 'kube_pod_owner{namespace="shop",pod="web-7d4-a",owner_kind="ReplicaSet",owner_name="web-7d4",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="shop",pod="web-7d4-a",annotation_k8s_sustain_io_owner_name="app"}'
+        values: '1x5'
+      # 64 characters, one over the label-value limit: ignored.
+      - series: 'kube_pod_owner{namespace="shop",pod="web-7d4-b",owner_kind="ReplicaSet",owner_name="web-7d4",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="shop",pod="web-7d4-b",annotation_k8s_sustain_io_owner_name="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+        values: '1x5'
+      # A character no label value may hold: ignored.
+      - series: 'kube_pod_owner{namespace="shop",pod="web-7d4-c",owner_kind="ReplicaSet",owner_name="web-7d4",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="shop",pod="web-7d4-c",annotation_k8s_sustain_io_owner_name="Invalid/Value"}'
+        values: '1x5'
+      # Empty, and absent (kube-state-metrics still exports the pod's series).
+      - series: 'kube_pod_owner{namespace="shop",pod="web-7d4-d",owner_kind="ReplicaSet",owner_name="web-7d4",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="shop",pod="web-7d4-d",annotation_k8s_sustain_io_owner_name=""}'
+        values: '1x5'
+      - series: 'kube_pod_owner{namespace="shop",pod="web-7d4-e",owner_kind="ReplicaSet",owner_name="web-7d4",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="shop",pod="web-7d4-e"}'
+        values: '1x5'
+      # Valid override, 63 characters, on a StatefulSet's pod.
+      - series: 'kube_pod_owner{namespace="shop",pod="db-0",owner_kind="StatefulSet",owner_name="db",owner_is_controller="true"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="shop",pod="db-0",annotation_k8s_sustain_io_owner_name="d.b_0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaz"}'
+        values: '1x5'
+      # Bare pods: a valid override makes a Pod identity, an invalid one none.
+      - series: 'kube_pod_annotations{namespace="airflow",pod="etl-daily-run-1",annotation_k8s_sustain_io_owner_name="etl-daily"}'
+        values: '1x5'
+      - series: 'kube_pod_annotations{namespace="airflow",pod="scratch",annotation_k8s_sustain_io_owner_name="-scratch"}'
+        values: '1x5'
+
+    promql_expr_test:
+      - expr: k8s_sustain:pod_workload
+        eval_time: 2m
+        exp_samples:
+          - labels: 'k8s_sustain:pod_workload{namespace="shop",pod="web-7d4-a",annotation_k8s_sustain_io_owner_name="app",owner_kind="Deployment",owner_name="app"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="shop",pod="web-7d4-b",owner_kind="Deployment",owner_name="web"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="shop",pod="web-7d4-c",owner_kind="Deployment",owner_name="web"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="shop",pod="web-7d4-d",owner_kind="Deployment",owner_name="web"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="shop",pod="web-7d4-e",owner_kind="Deployment",owner_name="web"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="shop",pod="db-0",annotation_k8s_sustain_io_owner_name="d.b_0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaz",owner_kind="StatefulSet",owner_name="d.b_0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaz"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_workload{namespace="airflow",pod="etl-daily-run-1",annotation_k8s_sustain_io_owner_name="etl-daily",owner_kind="Pod",owner_name="etl-daily"}'
+            value: 1

@@ -211,8 +211,8 @@ func jobPods(ctx context.Context, c client.Client, m Member) (podSet, error) {
 }
 
 // barePods takes the pods the inventory found rather than a selector: the
-// mirrored owner-name label exists only on pods the webhook admitted, and the
-// inventory also leaves out pods the Policy does not govern.
+// owner-name grouping them is an annotation, which no selector can match, and
+// the inventory also leaves out pods the Policy does not govern.
 func barePods(ctx context.Context, _ client.Client, m Member) (podSet, error) {
 	pods := make([]*corev1.Pod, 0, len(m.Pods))
 	for _, pod := range m.Pods {

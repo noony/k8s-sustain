@@ -64,13 +64,13 @@ tests:
           value: k8s_sustain:pod_workload
       - matchRegex:
           path: spec.groups[0].rules[5].expr
-          pattern: 'kube_pod_labels\{label_k8s_sustain_io_owner_name!=""\}'
+          pattern: 'kube_pod_annotations\{annotation_k8s_sustain_io_owner_name=~"\[A-Za-z0-9\]\(\[-A-Za-z0-9_\.\]\{0,61\}\[A-Za-z0-9\]\)\?"\}'
       - matchRegex:
           path: spec.groups[0].rules[5].expr
           pattern: 'k8s_sustain:pod_owner_kind_internal'
       - matchRegex:
           path: spec.groups[0].rules[0].expr
-          pattern: 'unless on\(namespace, pod\) kube_pod_labels\{label_k8s_sustain_io_owner_name!=""\}'
+          pattern: 'unless on\(namespace, pod\) kube_pod_annotations\{annotation_k8s_sustain_io_owner_name=~"\[A-Za-z0-9\]\(\[-A-Za-z0-9_\.\]\{0,61\}\[A-Za-z0-9\]\)\?"\}'
 
   - it: adds additionalLabels
     set:

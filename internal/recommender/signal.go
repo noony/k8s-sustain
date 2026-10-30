@@ -101,7 +101,7 @@ var shardLabels = []string{"namespace", "owner_kind", "owner_name", "container"}
 
 // podWorkloadMetrics are the kube-state-metrics series k8s_sustain:pod_workload
 // maps a pod to its identity from. Every rule a signal reads joins it.
-var podWorkloadMetrics = []string{"kube_pod_owner", "kube_job_owner", "kube_replicaset_owner", "kube_pod_labels"}
+var podWorkloadMetrics = []string{"kube_pod_owner", "kube_job_owner", "kube_replicaset_owner", "kube_pod_annotations"}
 
 // role orders the stages of a resource: every base signal before every
 // adjuster on the request side, then every limit adjuster on the limit side.

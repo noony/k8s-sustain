@@ -50,6 +50,9 @@ type values struct {
 	Prometheus struct {
 		ScrapeConfigs      map[string]scrapeJob `json:"scrapeConfigs"`
 		ExtraScrapeConfigs string               `json:"extraScrapeConfigs"`
+		KubeStateMetrics   struct {
+			MetricAnnotationsAllowList []string `json:"metricAnnotationsAllowList"`
+		} `json:"kube-state-metrics"`
 	} `json:"prometheus"`
 }
 
@@ -101,12 +104,14 @@ func (s scrape) keeps(metric string) bool {
 }
 
 // chart is what the contracts are checked against: the recording rules by
-// name, the bundled scrape job of each exporter, and the rules a promtool
-// fixture evaluates with expected samples.
+// name, the bundled scrape job of each exporter, the pod annotations the
+// bundled kube-state-metrics exports, and the rules a promtool fixture
+// evaluates with expected samples.
 type chart struct {
 	rules            map[string][]rule
 	cAdvisor         scrape
 	kubeStateMetrics scrape
+	podAnnotations   []string
 	fixtured         map[string]bool
 }
 
@@ -131,6 +136,11 @@ func loadChart(t *testing.T) chart {
 	var extra []scrapeJob
 	if err := yaml.Unmarshal([]byte(v.Prometheus.ExtraScrapeConfigs), &extra); err != nil {
 		t.Fatalf("prometheus.extraScrapeConfigs: %v", err)
+	}
+	for _, entry := range v.Prometheus.KubeStateMetrics.MetricAnnotationsAllowList {
+		if keys, ok := strings.CutPrefix(entry, "pods=["); ok {
+			c.podAnnotations = append(c.podAnnotations, strings.Split(strings.TrimSuffix(keys, "]"), ",")...)
+		}
 	}
 	c.kubeStateMetrics = scrape{exporter: "kube-state-metrics", job: "the kube-state-metrics job in prometheus.extraScrapeConfigs"}
 	for _, job := range extra {
