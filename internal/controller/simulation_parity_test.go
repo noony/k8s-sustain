@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	clocktesting "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -33,12 +34,42 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
-var webKey = promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"}
+var (
+	webKey   = promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"}
+	freshKey = promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "fresh"}
+)
 
-// parityCluster holds Policy p, coordinating with autoscalers and excluding
-// init containers or not, and the owner-name identity Deployment/web of
-// members web-blue and web-green, an hour old. Only web-green runs the init
-// container migrate, and an HPA at 50% CPU targets web-green, never web.
+// parityInstant is what both sides compute as of, far from the wall clock: a
+// side that dates identities by the wall clock instead finds fresh old
+// enough.
+var parityInstant = time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+
+// parityDeployment is Deployment name opting into Policy p, created at
+// created, running container main at 500m and 128Mi; ownerName, when set,
+// groups it under that identity.
+func parityDeployment(name, ownerName string, created time.Time) *appsv1.Deployment {
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "default", Name: name, UID: types.UID(name + "-uid"),
+		CreationTimestamp: metav1.NewTime(created),
+	}}
+	d.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}}
+	d.Spec.Template.Labels = map[string]string{"app": name}
+	d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
+	if ownerName != "" {
+		d.Spec.Template.Annotations[sustainv1alpha1.OwnerNameAnnotation] = ownerName
+	}
+	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "main", Resources: corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
+	}}}
+	return d
+}
+
+// parityCluster holds Policy p, coordinating with autoscalers, excluding init
+// containers or not, and fetching at windows and percentiles of its own; the
+// owner-name identity Deployment/web of members web-blue and web-green, an
+// hour old; and Deployment/fresh, half the minimum age old, Too young. Only
+// web-green runs the init container migrate, and an HPA at 50% CPU targets
+// web-green, never web.
 func parityCluster(t *testing.T, excludeInit bool) client.Client {
 	t.Helper()
 	ongoing := sustainv1alpha1.UpdateModeOngoing
@@ -46,26 +77,19 @@ func parityCluster(t *testing.T, excludeInit bool) client.Client {
 	policy.Spec.RightSizing.Update.Types.Deployment = &ongoing
 	policy.Spec.RightSizing.AutoscalerCoordination.Enabled = true
 	policy.Spec.RightSizing.ExcludeInitContainers = excludeInit
-	policy.Spec.RightSizing.ResourcesConfigs.Memory.Requests.Headroom = ptr.To[int32](20)
+	resources := &policy.Spec.RightSizing.ResourcesConfigs
+	resources.CPU.Window, resources.CPU.Requests.Percentile = "24h", ptr.To[int32](90)
+	resources.Memory.Window, resources.Memory.Requests.Percentile = "72h", ptr.To[int32](99)
+	resources.Memory.Requests.Headroom = ptr.To[int32](20)
 
-	objs := []client.Object{policy}
-	for _, name := range []string{"web-blue", "web-green"} {
-		d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default", Name: name, UID: types.UID(name + "-uid"),
-			CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour)),
-		}}
-		d.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}}
-		d.Spec.Template.Labels = map[string]string{"app": name}
-		d.Spec.Template.Annotations = map[string]string{
-			sustainv1alpha1.PolicyAnnotation:    "p",
-			sustainv1alpha1.OwnerNameAnnotation: "web",
-		}
-		d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "main", Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
-		}}}
-		objs = append(objs, d)
+	green := parityDeployment("web-green", "web", parityInstant.Add(-time.Hour))
+	green.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "migrate"}}
+	objs := []client.Object{
+		policy,
+		parityDeployment("web-blue", "web", parityInstant.Add(-time.Hour)),
+		green,
+		parityDeployment("fresh", "", parityInstant.Add(-recommender.MinWorkloadAge/2)),
 	}
-	objs[2].(*appsv1.Deployment).Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "migrate"}}
 	objs = append(objs, &autoscalingv2.HorizontalPodAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web-green"},
 		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
@@ -148,6 +172,11 @@ func renderStored(recs map[string]sustainv1alpha1.ContainerRecommendation) map[s
 	return out
 }
 
+func jsonOf(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
 // serve runs one request against the dashboard's API and decodes the data of
 // its envelope into out.
 func serve(t *testing.T, srv *dashboard.Server, req *http.Request, out any) {
@@ -164,39 +193,63 @@ func serve(t *testing.T, srv *dashboard.Server, req *http.Request, out any) {
 	}
 }
 
+// simulation is a Simulation as the API renders it, as far as the
+// controller's WorkloadRecommendation can say what it should be.
+type simulation struct {
+	Outcome    sustainv1alpha1.RecommendationOutcome     `json:"outcome"`
+	Containers map[string]recommended                    `json:"containers"`
+	Trace      map[string]sustainv1alpha1.ContainerTrace `json:"trace"`
+}
+
+func simulate(t *testing.T, srv *dashboard.Server, name string) simulation {
+	t.Helper()
+	var sim simulation
+	serve(t, srv, httptest.NewRequest(http.MethodPost, "/api/simulate",
+		strings.NewReader(`{"namespace":"default","ownerKind":"Deployment","ownerName":"`+name+`"}`)), &sim)
+	return sim
+}
+
 // With no override, the dashboard's Simulation of an identity and its batch
 // simulate recommend what the controller's pass stores in the identity's
-// WorkloadRecommendation, from the same objects and inputs: with init
-// containers excluded or not, for an owner-name group coordinated against
-// the HPA of one of its members.
+// WorkloadRecommendation, from the same objects and inputs at the same
+// instant: with init containers excluded or not, for an owner-name group
+// coordinated against the HPA of one of its members, and for an identity Too
+// young at that instant. Every fetch either side makes is under the settings
+// and for the containers the controller's is.
 func TestSimulationRecommendsWhatTheControllerStores(t *testing.T) {
 	for _, excludeInit := range []bool{false, true} {
 		t.Run("excludeInitContainers="+strconv.FormatBool(excludeInit), func(t *testing.T) {
 			ctx := context.Background()
 			c := parityCluster(t, excludeInit)
-			inputs := recommendertest.NewStaticInputs().Set(webKey, &recommender.WorkloadInputs{
-				CPUPerPod: promclient.ContainerValues{"main": 1, "migrate": 0.5},
-				MemPerPod: promclient.ContainerValues{"main": 64 << 20, "migrate": 32 << 20},
-			})
+			clock := clocktesting.NewFakePassiveClock(parityInstant)
+			inputs := recommendertest.NewStaticInputs().
+				Set(webKey, &recommender.WorkloadInputs{
+					CPUPerPod: promclient.ContainerValues{"main": 1, "migrate": 0.5},
+					MemPerPod: promclient.ContainerValues{"main": 64 << 20, "migrate": 32 << 20},
+				}).
+				Set(freshKey, &recommender.WorkloadInputs{
+					CPUPerPod: promclient.ContainerValues{"main": 1},
+					MemPerPod: promclient.ContainerValues{"main": 64 << 20},
+				})
 
-			if _, err := controller.ReconcilerForTest(c, inputs).Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
+			r := controller.ReconcilerForTest(c, inputs)
+			r.Clock = clock
+			if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
 				t.Fatalf("reconcile: %v", err)
 			}
 			var wlrs sustainv1alpha1.WorkloadRecommendationList
-			if err := c.List(ctx, &wlrs, client.InNamespace("default")); err != nil || len(wlrs.Items) != 1 {
-				t.Fatalf("WorkloadRecommendations = %d (%v), want web's alone", len(wlrs.Items), err)
+			if err := c.List(ctx, &wlrs, client.InNamespace("default")); err != nil || len(wlrs.Items) != 2 {
+				t.Fatalf("WorkloadRecommendations = %d (%v), want web's and fresh's", len(wlrs.Items), err)
 			}
-			stored := wlrs.Items[0].Status
+			statuses := map[string]sustainv1alpha1.WorkloadRecommendationStatus{}
+			for _, w := range wlrs.Items {
+				statuses[w.Spec.WorkloadRef.Name] = w.Status
+			}
+			stored, storedFresh := statuses["web"], statuses["fresh"]
 			want := renderStored(stored.Containers)
 
-			srv := &dashboard.Server{K8sClient: c, PromClient: noCharts{}, Inputs: inputs, Logger: logr.Discard()}
-			var sim struct {
-				Outcome    sustainv1alpha1.RecommendationOutcome     `json:"outcome"`
-				Containers map[string]recommended                    `json:"containers"`
-				Trace      map[string]sustainv1alpha1.ContainerTrace `json:"trace"`
-			}
-			serve(t, srv, httptest.NewRequest(http.MethodPost, "/api/simulate",
-				strings.NewReader(`{"namespace":"default","ownerKind":"Deployment","ownerName":"web"}`)), &sim)
+			srv := &dashboard.Server{K8sClient: c, PromClient: noCharts{}, Inputs: inputs, Clock: clock, Logger: logr.Discard()}
+			sim, simFresh := simulate(t, srv, "web"), simulate(t, srv, "fresh")
 			var batch struct {
 				Workloads []struct {
 					Name       string                                `json:"name"`
@@ -219,16 +272,46 @@ func TestSimulationRecommendsWhatTheControllerStores(t *testing.T) {
 			if sim.Outcome != stored.Outcome || !maps.Equal(sim.Containers, want) || !equality.Semantic.DeepEqual(sim.Trace, stored.Trace) {
 				t.Errorf("simulation = %s %+v, want the stored %s %+v with its trace", sim.Outcome, sim.Containers, stored.Outcome, want)
 			}
-			if len(batch.Workloads) != 1 || batch.Workloads[0].Name != "web" || batch.Workloads[0].Outcome != stored.Outcome {
-				t.Fatalf("batch = %+v, want web alone, %s", batch.Workloads, stored.Outcome)
+			if storedFresh.Outcome != sustainv1alpha1.OutcomeTooYoung || simFresh.Outcome != storedFresh.Outcome {
+				t.Errorf("fresh: stored %s, simulated %s; want both Too young", storedFresh.Outcome, simFresh.Outcome)
 			}
-			got := batch.Workloads[0].Containers
+			batched := map[string]int{}
+			for i, w := range batch.Workloads {
+				batched[w.Name] = i
+			}
+			if i, ok := batched["fresh"]; len(batch.Workloads) != 2 || !ok || batch.Workloads[i].Outcome != storedFresh.Outcome {
+				t.Errorf("batch = %+v, want fresh %s next to web", batch.Workloads, storedFresh.Outcome)
+			}
+			i, ok := batched["web"]
+			if !ok || batch.Workloads[i].Outcome != stored.Outcome {
+				t.Fatalf("batch = %+v, want web %s", batch.Workloads, stored.Outcome)
+			}
+			got := batch.Workloads[i].Containers
 			if !slices.Equal(slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want))) {
 				t.Errorf("batch containers %v, want the stored %v", slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)))
 			}
 			for name, w := range want {
 				if g := got[name]; g.RecommendedCPU != w.CPURequest || g.RecommendedMemory != w.MemoryRequest {
 					t.Errorf("batch %s = %+v, want the stored %+v", name, g, w)
+				}
+			}
+
+			calls := inputs.Calls()
+			if len(calls) != 4 {
+				t.Fatalf("fetches = %+v, want the controller's, two Simulations' and the batch's", calls)
+			}
+			sized := map[promclient.WorkloadIdentity]int{}
+			for _, req := range calls[0].Requests {
+				sized[req.Identity] = req.Containers
+			}
+			for _, call := range calls[1:] {
+				if !equality.Semantic.DeepEqual(call.Resources, calls[0].Resources) {
+					t.Errorf("dashboard fetched under %s, the controller under %s", jsonOf(call.Resources), jsonOf(calls[0].Resources))
+				}
+				for _, req := range call.Requests {
+					if n, ok := sized[req.Identity]; !ok || req.Containers != n {
+						t.Errorf("dashboard fetched %v sized %d, the controller sized %d", req.Identity, req.Containers, n)
+					}
 				}
 			}
 		})

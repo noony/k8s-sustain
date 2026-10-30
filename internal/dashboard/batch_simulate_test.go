@@ -76,10 +76,10 @@ func TestBatchSimulateFetchesEveryWorkloadInOneCall(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("got %d fetch calls, want 1 batch for the whole policy", len(calls))
 	}
-	if len(calls[0]) != total {
-		t.Fatalf("batch requested %d identities, want %d", len(calls[0]), total)
+	if len(calls[0].Requests) != total {
+		t.Fatalf("batch requested %d identities, want %d", len(calls[0].Requests), total)
 	}
-	for _, r := range calls[0] {
+	for _, r := range calls[0].Requests {
 		if r.Containers != 1 {
 			t.Errorf("%v requested with size %d, want 1 (its container count)", r.Identity, r.Containers)
 		}

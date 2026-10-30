@@ -165,7 +165,7 @@ func TestReconcileAppliesToEveryMemberOfAnOwnerNameGroup(t *testing.T) {
 
 	// The group is one identity, fetched once. A second request would mean the
 	// fan-out re-fetched per member.
-	if calls := inputs.Calls(); len(calls) != 1 || len(calls[0]) != 1 {
+	if calls := inputs.Calls(); len(calls) != 1 || len(calls[0].Requests) != 1 {
 		t.Errorf("fetch calls = %v, want one call requesting the one identity: group members must share one computation", calls)
 	}
 }

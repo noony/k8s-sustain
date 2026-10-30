@@ -296,10 +296,10 @@ func TestReconcile_FetchesEveryIdentityInOneCall(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("got %d fetch calls, want 1 for the whole Policy", len(calls))
 	}
-	if len(calls[0]) != numWorkloads {
-		t.Errorf("the call requested %d identities, want %d", len(calls[0]), numWorkloads)
+	if len(calls[0].Requests) != numWorkloads {
+		t.Errorf("the call requested %d identities, want %d", len(calls[0].Requests), numWorkloads)
 	}
-	for _, req := range calls[0] {
+	for _, req := range calls[0].Requests {
 		if req.Containers != 1 {
 			t.Errorf("%v requested with size %d, want its 1 container", req.Identity, req.Containers)
 		}
