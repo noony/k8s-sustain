@@ -572,15 +572,15 @@ func drainEvents(rec *events.FakeRecorder) []string {
 	}
 }
 
-// slowInputs moves clk forward during every fetch, standing in for a batch
-// that takes minutes on a real cluster.
-type slowInputs struct {
+// clockAdvancingInputs moves clk forward by took during every fetch, as a
+// batch that takes minutes on a real cluster moves the ledger's clock.
+type clockAdvancingInputs struct {
 	*recommendertest.StaticInputs
 	clk  *clocktesting.FakePassiveClock
 	took time.Duration
 }
 
-func (s slowInputs) FetchInputs(
+func (s clockAdvancingInputs) FetchInputs(
 	ctx context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []recommender.InputsRequest,
 ) map[promclient.WorkloadIdentity]recommender.InputsResult {
 	s.clk.SetTime(s.clk.Now().Add(s.took))
@@ -596,7 +596,7 @@ func TestReconcile_BackedOffIdentityIsNotFetched(t *testing.T) {
 	static := recommendertest.NewStaticInputs()
 	clk := clocktesting.NewFakePassiveClock(time.Now())
 	expiring := annotatedDeployment("default", "expiring", "p")
-	r := reconcilerWithInputs(t, slowInputs{StaticInputs: static, clk: clk, took: 2 * baseRetryDelay}, true,
+	r := reconcilerWithInputs(t, clockAdvancingInputs{StaticInputs: static, clk: clk, took: 2 * baseRetryDelay}, true,
 		ongoingDeployments("p"), expiring, annotatedDeployment("default", "healthy", "p"))
 	r.ledger = newLedger(clk)
 	member := targetFromObject(expiring, "Deployment")

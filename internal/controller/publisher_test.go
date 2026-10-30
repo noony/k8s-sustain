@@ -529,10 +529,6 @@ func TestSeries_FailedMembersCountUnderTheirIdentity(t *testing.T) {
 	}
 }
 
-// A pass that cannot compute an identity leaves what its last computation
-// published: the Recommendation its members hold, so a Prometheus outage is
-// no drop in savings, and the autoscaler it was shaped against. One that
-// computes it without an autoscaler drops the autoscaler series.
 // A Recommendation kept from before the Policy excluded init containers
 // still names them; a member's series show only the containers the Policy
 // recommends now.
@@ -576,6 +572,10 @@ func TestSeries_KeptRecommendationOfAnExcludedInitContainerHasNoSeries(t *testin
 	}
 }
 
+// A pass that cannot compute an identity leaves what its last computation
+// published: the Recommendation its members hold, so a Prometheus outage is
+// no drop in savings, and the autoscaler it was shaped against. One that
+// computes it without an autoscaler drops the autoscaler series.
 func TestSeries_FollowTheLastComputation(t *testing.T) {
 	const ns = "series-last-computation"
 	web := identityOf(ns, "Deployment", "web")
