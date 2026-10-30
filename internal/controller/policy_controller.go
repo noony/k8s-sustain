@@ -66,6 +66,10 @@ type PolicyReconciler struct {
 	// Inputs fetches the recommendation inputs of a Policy's identities,
 	// live OOM kills included when it is decorated by recommender.WithLiveOOMs.
 	Inputs recommender.InputsFetcher
+	// Clock is what a pass's recommendations are computed as of: give the
+	// decorator of Inputs the same one, or a kill it merged in can postdate
+	// that instant. Nil is the wall clock.
+	Clock clock.PassiveClock
 
 	// RecycleReplacementTimeout caps how long the patcher waits for a replacement
 	// pod to become Ready; it must cover node-autoscaling latency. Zero uses the

@@ -37,8 +37,10 @@ type Assembled struct {
 // identity's inputs in one batch under spec's resources, defaults made
 // explicit (WithDefaults), and leaves init containers out when spec excludes
 // them. An identity with no containers at all, one the inventory has not seen,
-// is recommended for every container its inputs report.
-func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers, spec sustainv1alpha1.RightSizingSpec, ids []*inventory.Identity) []Assembled {
+// is recommended for every container its inputs report. Every Request
+// computes as of one instant read from now once the fetch returned; a caller
+// whose inputs are decorated with WithLiveOOMs passes the decorator's clock.
+func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers, now func() time.Time, spec sustainv1alpha1.RightSizingSpec, ids []*inventory.Identity) []Assembled {
 	resources := WithDefaults(spec.ResourcesConfigs)
 	out := make([]Assembled, len(ids))
 	reqs := make([]InputsRequest, len(ids))
@@ -62,7 +64,7 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 	fetched := inputs.FetchInputs(ctx, resources, reqs)
 	// Taken after the fetch, which can take minutes: kills it merged in must
 	// not postdate the instant they are computed as of.
-	now := time.Now()
+	at := now()
 	for i, id := range ids {
 		f := fetched[id.Key]
 		if f.Err != nil {
@@ -70,7 +72,7 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 			continue
 		}
 		req := &out[i].Request
-		req.inputs, req.now = f.Inputs, now
+		req.inputs, req.now = f.Inputs, at
 		if len(id.Containers) == 0 && len(id.InitContainers) == 0 {
 			req.containers = observedContainers(f.Inputs)
 		}

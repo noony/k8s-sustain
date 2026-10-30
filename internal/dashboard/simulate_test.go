@@ -109,7 +109,7 @@ func TestRecommendationSeries_ComputesEachPointWithTheIdentitysOOMs(t *testing.T
 		OOM:       map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}},
 	})
 	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
-	req := recommender.Assemble(context.Background(), inputs, autoscaler.NewNamespacedSnapshot(c), spec, []*inventory.Identity{{Key: key}})[0].Request
+	req := recommender.Assemble(context.Background(), inputs, autoscaler.NewNamespacedSnapshot(c), time.Now, spec, []*inventory.Identity{{Key: key}})[0].Request
 	at := time.Unix(1_700_000_000, 0)
 	points := func(v float64) []promclient.TimeValue { return []promclient.TimeValue{{Timestamp: at, Value: v}} }
 

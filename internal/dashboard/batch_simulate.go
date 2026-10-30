@@ -164,7 +164,7 @@ type recResult struct {
 // right-sizing spec and computes each, exactly as the controller would.
 func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1alpha1.Policy, workloads []*inventory.Identity) []recResult {
 	// One snapshot per request: it lists each namespace's autoscalers once.
-	assembled := recommender.Assemble(ctx, s.Inputs, autoscaler.NewNamespacedSnapshot(s.K8sClient), policy.Spec.RightSizing, workloads)
+	assembled := recommender.Assemble(ctx, s.Inputs, autoscaler.NewNamespacedSnapshot(s.K8sClient), s.now, policy.Spec.RightSizing, workloads)
 	out := make([]recResult, len(workloads))
 	for i, a := range assembled {
 		if a.Err != nil {

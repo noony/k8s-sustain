@@ -304,6 +304,7 @@ func TestCoordinationFactorsComeFromTheStoredTrace(t *testing.T) {
 			Kind: autoscaler.KindHPA, MinReplicas: 1, MaxReplicas: 10, CurrentReplicas: 1,
 			ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 80, autoscaler.ResourceMemory: 55},
 		}),
+		time.Now,
 		sustainv1alpha1.RightSizingSpec{AutoscalerCoordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true, ReplicaBudgetAnchor: &anchor}},
 		[]*inventory.Identity{{
 			Key:        api,

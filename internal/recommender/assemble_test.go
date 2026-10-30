@@ -12,6 +12,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clocktesting "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -21,13 +22,14 @@ import (
 )
 
 // recordedInputs serves canned inputs by identity, fails those in failed,
-// gives every other identity empty inputs, and records each call.
+// gives every other identity empty inputs, and records each call. A fetch
+// takes a minute of clock, when it is set.
 type recordedInputs struct {
-	inputs   map[promclient.WorkloadIdentity]*WorkloadInputs
-	failed   map[promclient.WorkloadIdentity]error
-	cfgs     []sustainv1alpha1.ResourcesConfigs
-	calls    [][]InputsRequest
-	returned time.Time
+	inputs map[promclient.WorkloadIdentity]*WorkloadInputs
+	failed map[promclient.WorkloadIdentity]error
+	cfgs   []sustainv1alpha1.ResourcesConfigs
+	calls  [][]InputsRequest
+	clock  *clocktesting.FakePassiveClock
 }
 
 func (f *recordedInputs) FetchInputs(_ context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
@@ -45,7 +47,9 @@ func (f *recordedInputs) FetchInputs(_ context.Context, cfg sustainv1alpha1.Reso
 		}
 		out[r.Identity] = InputsResult{Inputs: in}
 	}
-	f.returned = time.Now()
+	if f.clock != nil {
+		f.clock.SetTime(f.clock.Now().Add(time.Minute))
+	}
 	return out
 }
 
@@ -106,7 +110,8 @@ var hpa = autoscaler.Info{Kind: autoscaler.KindHPA, Name: "api-green", Configure
 
 // What the assembly makes of one identity: the containers it is recommended
 // for and the fetch is sized by, the autoscaler of the members its Policy
-// governs, its age, and why it has no Request.
+// governs, its age, the instant it computes as of, read from the clock once
+// the fetch returned, and why it has no Request.
 func TestAssemble(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -198,8 +203,9 @@ func TestAssemble(t *testing.T) {
 			if tc.autoscalers == nil {
 				tc.autoscalers = &memberAutoscalers{}
 			}
+			tc.inputs.clock = clocktesting.NewFakePassiveClock(now)
 
-			got := Assemble(context.Background(), tc.inputs, tc.autoscalers, tc.spec, []*inventory.Identity{tc.id})[0]
+			got := Assemble(context.Background(), tc.inputs, tc.autoscalers, tc.inputs.clock.Now, tc.spec, []*inventory.Identity{tc.id})[0]
 
 			if call := tc.inputs.calls; len(call) != 1 || len(call[0]) != 1 ||
 				call[0][0] != (InputsRequest{Identity: tc.id.Key, Containers: len(tc.wantContainers)}) {
@@ -227,8 +233,8 @@ func TestAssemble(t *testing.T) {
 			if req.autoInfo.Kind != tc.wantAuto || !req.since.Equal(tc.id.Since) || req.inputs == nil {
 				t.Errorf("request = %+v, want the %s autoscaler, the identity's age and its inputs", req, tc.wantAuto)
 			}
-			if req.now.Before(tc.inputs.returned) {
-				t.Errorf("Now = %v, before the fetch returned at %v", req.now, tc.inputs.returned)
+			if fetched := now.Add(time.Minute); !req.now.Equal(fetched) {
+				t.Errorf("Now = %v, want %v: the clock once the fetch returned", req.now, fetched)
 			}
 		})
 	}
@@ -243,7 +249,7 @@ func TestAssemble_AnUnreadableNamespaceIsReadOnce(t *testing.T) {
 		failed: map[string]error{"prod": errors.New("forbidden")},
 	}
 
-	got := Assemble(context.Background(), &recordedInputs{}, autoscalers, sustainv1alpha1.RightSizingSpec{},
+	got := Assemble(context.Background(), &recordedInputs{}, autoscalers, time.Now, sustainv1alpha1.RightSizingSpec{},
 		[]*inventory.Identity{governed("prod", "api"), governed("prod", "web"), governed("staging", "db"), governed("prod", "worker")})
 
 	if want := map[string]int{"prod": 1, "staging": 1}; !maps.Equal(autoscalers.reads, want) {
@@ -258,7 +264,7 @@ func TestAssemble_AnUnreadableNamespaceIsReadOnce(t *testing.T) {
 
 // Every identity is fetched in one batch, under the Policy's resources with
 // the recommender's defaults made explicit, which is also what each Request
-// computes with.
+// computes with, as of one instant.
 func TestAssemble_OneBatchUnderThePolicysResources(t *testing.T) {
 	inputs := &recordedInputs{}
 	spec := sustainv1alpha1.RightSizingSpec{
@@ -266,7 +272,13 @@ func TestAssemble_OneBatchUnderThePolicysResources(t *testing.T) {
 		AutoscalerCoordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true},
 	}
 
-	got := Assemble(context.Background(), inputs, &memberAutoscalers{}, spec,
+	clock := now
+	ticking := func() time.Time {
+		clock = clock.Add(time.Second)
+		return clock
+	}
+
+	got := Assemble(context.Background(), inputs, &memberAutoscalers{}, ticking, spec,
 		[]*inventory.Identity{governed("prod", "api"), governed("prod", "web"), governed("staging", "db")})
 
 	if len(inputs.calls) != 1 || len(inputs.calls[0]) != 3 {
@@ -281,7 +293,7 @@ func TestAssemble_OneBatchUnderThePolicysResources(t *testing.T) {
 			t.Errorf("identity %d computes with %+v, want the fetch's resources and the Policy's coordination", i, a.Request)
 		}
 	}
-	if !got[0].Request.now.Equal(got[2].Request.now) {
+	if !got[0].Request.now.Equal(got[1].Request.now) || !got[0].Request.now.Equal(got[2].Request.now) {
 		t.Error("one batch must be computed as of one instant")
 	}
 }
@@ -298,9 +310,9 @@ func TestAssemble_ContainersOfAnUnseenIdentityComeFromItsInputs(t *testing.T) {
 		OOM:       map[string]OOM{"crashy": {Kills: 1, PeakBytes: 300 * mib, HasPeak: true}},
 	}}}
 
-	unseen := Assemble(context.Background(), inputs, &memberAutoscalers{}, sustainv1alpha1.RightSizingSpec{},
+	unseen := Assemble(context.Background(), inputs, &memberAutoscalers{}, time.Now, sustainv1alpha1.RightSizingSpec{},
 		[]*inventory.Identity{{Key: key}})[0]
-	excluded := Assemble(context.Background(), inputs, &memberAutoscalers{},
+	excluded := Assemble(context.Background(), inputs, &memberAutoscalers{}, time.Now,
 		sustainv1alpha1.RightSizingSpec{ExcludeInitContainers: true},
 		[]*inventory.Identity{{Key: key, InitContainers: containers("app")}})[0]
 
@@ -334,7 +346,7 @@ func TestAssemble_KeptRequestIsNotRecommended(t *testing.T) {
 		Memory: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true}},
 	}}
 
-	res := Compute(Assemble(context.Background(), inputs, &memberAutoscalers{}, spec, []*inventory.Identity{id})[0].Request)
+	res := Compute(Assemble(context.Background(), inputs, &memberAutoscalers{}, time.Now, spec, []*inventory.Identity{id})[0].Request)
 
 	if rec := res.Recs["app"]; rec.CPURequest == nil || rec.MemoryRequest != nil {
 		t.Errorf("app = %+v, want a CPU request and the memory request kept", rec)

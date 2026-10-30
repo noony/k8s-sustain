@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
@@ -67,6 +68,8 @@ type Server struct {
 	// Inputs fetches recommendation inputs through the same port the
 	// controller uses, so a Simulation computes from what the controller sees.
 	Inputs recommender.InputsFetcher
+	// Clock is what a Simulation computes as of. Nil is the wall clock.
+	Clock  clock.PassiveClock
 	Logger logr.Logger
 	// CORSOrigins is the allowed origin allowlist: empty means same-origin
 	// only, ["*"] allows every origin.
@@ -149,6 +152,13 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+func (s *Server) now() time.Time {
+	if s.Clock == nil {
+		return time.Now()
+	}
+	return s.Clock.Now()
 }
 
 // NewHTTPServer creates an http.Server for the dashboard bound to addr.

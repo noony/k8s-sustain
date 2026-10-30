@@ -4,12 +4,12 @@ import (
 	"context"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -111,10 +111,12 @@ func runStart(_ *cobra.Command, _ []string) error {
 		shardMaxSamples = config.DefaultQueryShardMaxSamples
 	}
 
+	clk := clock.RealClock{}
 	reconciler := &controller.PolicyReconciler{
 		Client:                    mgr.GetClient(),
 		Scheme:                    mgr.GetScheme(),
-		Inputs:                    recommender.WithLiveOOMs(recommender.NewPromInputs(promClient, shardMaxSamples), oomCache, time.Now),
+		Inputs:                    recommender.WithLiveOOMs(recommender.NewPromInputs(promClient, shardMaxSamples), oomCache, clk.Now),
+		Clock:                     clk,
 		ReconcileInterval:         cfg.ReconcileInterval,
 		InPlaceUpdates:            inPlaceUpdates,
 		ExcludedNamespaces:        cfg.ExcludedNamespaces,
