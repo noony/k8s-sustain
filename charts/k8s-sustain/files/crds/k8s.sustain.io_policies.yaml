@@ -388,7 +388,9 @@ spec:
                   labelSelector:
                     description: |-
                       LabelSelector restricts the set of workloads targeted by this policy to those whose pod template
-                      labels (a bare Pod's own labels) it matches; an empty selector matches all.
+                      labels (a bare Pod's own labels) it matches; an empty selector matches all. It may not use a label
+                      Kubernetes or k8s-sustain adds to a workload's pods or its pod template, which the controller and
+                      the webhook would see on different objects.
                     properties:
                       matchExpressions:
                         description: matchExpressions is a list of label selector
@@ -433,6 +435,34 @@ spec:
                         type: object
                     type: object
                     x-kubernetes-map-type: atomic
+                    x-kubernetes-validations:
+                    - message: 'matchLabels may not use a label Kubernetes or k8s-sustain
+                        adds to pods (pod-template-hash, rollouts-pod-template-hash,
+                        controller-revision-hash, pod-template-generation, statefulset.kubernetes.io/pod-name,
+                        apps.kubernetes.io/pod-index, controller-uid, job-name, batch.kubernetes.io/controller-uid,
+                        batch.kubernetes.io/job-name, batch.kubernetes.io/job-completion-index,
+                        k8s.sustain.io/owner-name): the controller matches pod templates
+                        and the webhook pods, and they disagree on these labels'
+                      rule: '!has(self.matchLabels) || ![''pod-template-hash'', ''rollouts-pod-template-hash'',
+                        ''controller-revision-hash'', ''pod-template-generation'',
+                        ''statefulset.kubernetes.io/pod-name'', ''apps.kubernetes.io/pod-index'',
+                        ''controller-uid'', ''job-name'', ''batch.kubernetes.io/controller-uid'',
+                        ''batch.kubernetes.io/job-name'', ''batch.kubernetes.io/job-completion-index'',
+                        ''k8s.sustain.io/owner-name''].exists(k, k in self.matchLabels)'
+                    - message: 'matchExpressions may not use a label Kubernetes or
+                        k8s-sustain adds to pods (pod-template-hash, rollouts-pod-template-hash,
+                        controller-revision-hash, pod-template-generation, statefulset.kubernetes.io/pod-name,
+                        apps.kubernetes.io/pod-index, controller-uid, job-name, batch.kubernetes.io/controller-uid,
+                        batch.kubernetes.io/job-name, batch.kubernetes.io/job-completion-index,
+                        k8s.sustain.io/owner-name): the controller matches pod templates
+                        and the webhook pods, and they disagree on these labels'
+                      rule: '!has(self.matchExpressions) || self.matchExpressions.all(e,
+                        !(e.key in [''pod-template-hash'', ''rollouts-pod-template-hash'',
+                        ''controller-revision-hash'', ''pod-template-generation'',
+                        ''statefulset.kubernetes.io/pod-name'', ''apps.kubernetes.io/pod-index'',
+                        ''controller-uid'', ''job-name'', ''batch.kubernetes.io/controller-uid'',
+                        ''batch.kubernetes.io/job-name'', ''batch.kubernetes.io/job-completion-index'',
+                        ''k8s.sustain.io/owner-name'']))'
                   namespaces:
                     description: Namespaces is a list of namespaces to target; an
                       empty list targets all namespaces.
