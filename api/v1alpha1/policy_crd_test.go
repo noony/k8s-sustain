@@ -58,7 +58,6 @@ var controllerAddedLabels = []string{
 	"batch.kubernetes.io/controller-uid",
 	"batch.kubernetes.io/job-name",
 	"batch.kubernetes.io/job-completion-index",
-	"k8s.sustain.io/owner-name",
 }
 
 func validatePolicy(t *testing.T, crd *apiextensions.CustomResourceDefinition, policy string) field.ErrorList {
@@ -99,6 +98,7 @@ func TestPolicyLabelSelectorRejectsControllerAddedLabels(t *testing.T) {
 		"empty":                      `{}`,
 		"user labels":                `{matchLabels: {tier: web, app: api}, matchExpressions: [{key: track, operator: NotIn, values: [canary]}]}`,
 		"a prefix of a reserved key": `{matchLabels: {"job": x}, matchExpressions: [{key: "batch.kubernetes.io/job", operator: Exists}]}`,
+		"k8s-sustain's own keys":     `{matchLabels: {"k8s.sustain.io/owner-name": x}, matchExpressions: [{key: "k8s.sustain.io/policy", operator: Exists}]}`,
 	} {
 		t.Run("accepts "+name, func(t *testing.T) {
 			if errs := validatePolicy(t, crd, selector(s)); len(errs) > 0 {
