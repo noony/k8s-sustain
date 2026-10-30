@@ -126,8 +126,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		OOMTriggers:               triggerCh,
 	}
 	oomHandler := oomwatch.EventHandlerFunc(func(ctx context.Context, key oomwatch.Key, rec oomwatch.OOMRecord) {
-		reconciler.ObserveOOM(ctx, rec.PolicyName,
-			promclient.WorkloadIdentity{Namespace: key.Namespace, OwnerKind: key.OwnerKind, OwnerName: key.OwnerName}, key.Container)
+		reconciler.ObserveOOM(ctx, rec.PolicyName, key.WorkloadIdentity, key.Container)
 	})
 	watcher := &oomwatch.Watcher{
 		Client:             mgr.GetClient(),

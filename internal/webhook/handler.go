@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
 )
 
@@ -71,6 +72,9 @@ type Handler struct {
 
 	stubStopping bool
 	stubWG       sync.WaitGroup
+
+	// policies spares an admission recompiling the Policies it lists.
+	policies governance.PolicyLister
 
 	// ownerAnnCache and ownerRefCache bound the per-admission owner Gets on
 	// clusters where a selector-less Policy covers every pod.

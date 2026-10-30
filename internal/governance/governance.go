@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -20,7 +21,6 @@ import (
 type Level string
 
 const (
-	// LevelNone means the subject opted into nothing.
 	LevelNone Level = ""
 	// LevelPodTemplate is spec.template.metadata.annotations, or a pod's own
 	// annotations.
@@ -40,7 +40,9 @@ const (
 	// reports into no identity.
 	NoOwner Refusal = "no-owner"
 	// NoPolicySelects: no Policy accepts the subject's namespace and labels,
-	// so whatever it opts into cannot govern it and its opt-in is not read.
+	// so whatever it opts into cannot govern it and its opt-in is not read. A
+	// Policy whose selector does not parse counts as accepting them, so that
+	// opting into it is refused SelectorInvalid at every level.
 	NoPolicySelects Refusal = "no-policy-selects"
 	NotOptedIn      Refusal = "not-opted-in"
 	OptedOut        Refusal = "opted-out"
@@ -54,33 +56,26 @@ const (
 	KindNotManaged       Refusal = "kind-not-managed"
 )
 
-// Identity is the namespace, owner kind and owner name a pod reports into,
-// the owner-name override applied.
-type Identity struct {
-	Namespace string
-	OwnerKind string
-	OwnerName string
-}
-
-// Decision is what Decide found out about one subject.
 type Decision struct {
-	// Identity is what the subject reports into. It is set for a pod template
-	// and a Departed identity, and for a pod once the walk has needed its
-	// owner; it is zero for a pod refused before then.
-	Identity Identity
+	// Identity is what the subject reports into, the owner-name override
+	// applied. It is set for a pod template and a Departed identity, and for a
+	// pod once the walk has needed its owner; it is zero for a pod refused
+	// before then.
+	Identity promclient.WorkloadIdentity
 	// OptIn is the Policy the subject opts into and Level where; empty when it
 	// opts into none or was refused before its opt-in was read.
 	OptIn string
 	Level Level
-	// Policy is the governing Policy, nil when Refusal is set.
+	// Policy is the governing Policy and Mode the mode it manages the
+	// identity's kind in; nil and empty when Refusal is set. Policy may be
+	// shared with concurrent decisions: never modify it.
 	Policy  *sustainv1alpha1.Policy
+	Mode    sustainv1alpha1.UpdateMode
 	Refusal Refusal
 }
 
-// Governed reports whether a Policy governs the subject.
 func (d Decision) Governed() bool { return d.Policy != nil }
 
-// PolicyName is the governing Policy's name, empty when none governs.
 func (d Decision) PolicyName() string {
 	if d.Policy == nil {
 		return ""
@@ -106,7 +101,7 @@ type workloadMeta struct {
 }
 
 type departure struct {
-	identity Identity
+	identity promclient.WorkloadIdentity
 	policy   string
 }
 
@@ -132,7 +127,7 @@ func Pod(pod *corev1.Pod) Subject {
 // it is governed by the Policy its WorkloadRecommendation names while that
 // Policy exists, manages its kind and selects its namespace. It has no labels
 // for a label selector to match.
-func Departed(id Identity, policy string) Subject {
+func Departed(id promclient.WorkloadIdentity, policy string) Subject {
 	return Subject{namespace: id.Namespace, departed: &departure{identity: id, policy: policy}}
 }
 
@@ -205,7 +200,7 @@ func (w *walk) decide() (Decision, error) {
 	if err != nil {
 		return d, err
 	}
-	p, refusal := ps.consent(name, w.s.namespace, w.s.labels, true)
+	p, refusal := ps.consent(name, w.s.namespace, w.s.labels)
 	if refusal != "" {
 		d.Refusal = refusal
 		return d, nil
@@ -213,12 +208,7 @@ func (w *walk) decide() (Decision, error) {
 	if err := w.readOwner(); err != nil {
 		return d, err
 	}
-	if p.Spec.RightSizing.Update.Types.ModeForKind(w.identity().OwnerKind) == nil {
-		d.Refusal = KindNotManaged
-		return d, nil
-	}
-	d.Policy = p
-	return d, nil
+	return managedBy(d, p, w.identity().OwnerKind), nil
 }
 
 func (w *walk) departedDecision() (Decision, error) {
@@ -227,17 +217,23 @@ func (w *walk) departedDecision() (Decision, error) {
 	if err != nil {
 		return Decision{}, err
 	}
-	p, refusal := ps.consent(w.s.departed.policy, w.s.namespace, nil, false)
+	c, refusal := ps.namespaceConsent(w.s.departed.policy, w.s.namespace)
 	if refusal != "" {
 		d.Refusal = refusal
 		return d, nil
 	}
-	if p.Spec.RightSizing.Update.Types.ModeForKind(d.Identity.OwnerKind) == nil {
+	return managedBy(d, c.policy, d.Identity.OwnerKind), nil
+}
+
+// managedBy settles d on p, which consented: p governs when it manages kind.
+func managedBy(d Decision, p *sustainv1alpha1.Policy, kind string) Decision {
+	mode := p.Spec.RightSizing.Update.Types.ModeForKind(kind)
+	if mode == nil {
 		d.Refusal = KindNotManaged
-		return d, nil
+		return d
 	}
-	d.Policy = p
-	return d, nil
+	d.Policy, d.Mode = p, *mode
+	return d
 }
 
 // optIn returns the Policy the first deciding level names. A level decides
@@ -304,7 +300,7 @@ func (w *walk) gate() (Refusal, error) {
 		return "", err
 	}
 	w.gated = true
-	return ps.anySelects(w.s.namespace, w.s.labels), nil
+	return ps.gateRefusal(w.s.namespace, w.s.labels), nil
 }
 
 func (w *walk) readPolicies() (*Policies, error) {
@@ -333,7 +329,7 @@ func (w *walk) readOwner() error {
 
 // identity applies the owner-name override to the real owner; the workload
 // level is read from the real owner, never from the overridden name.
-func (w *walk) identity() Identity {
+func (w *walk) identity() promclient.WorkloadIdentity {
 	kind, name := workload.ApplyOwnerNameOverride(w.ownerKind, w.ownerName, w.s.annotations)
-	return Identity{Namespace: w.s.namespace, OwnerKind: kind, OwnerName: name}
+	return promclient.WorkloadIdentity{Namespace: w.s.namespace, OwnerKind: kind, OwnerName: name}
 }

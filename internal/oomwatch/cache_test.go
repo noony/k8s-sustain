@@ -8,14 +8,14 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
+
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 func makeKey(container string) Key {
 	return Key{
-		Namespace: "default",
-		OwnerKind: "Deployment",
-		OwnerName: "app",
-		Container: container,
+		WorkloadIdentity: promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "app"},
+		Container:        container,
 	}
 }
 
@@ -173,7 +173,7 @@ func TestSecondaryIndexCleanupOnEviction(t *testing.T) {
 	}
 	// Index for that workload should also be gone, so a second call still
 	// returns empty without scanning a stale set.
-	wk := workloadKey{Namespace: "default", OwnerKind: "Deployment", OwnerName: "app"}
+	wk := promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "app"}
 	c.mu.RLock()
 	_, present := c.byWorkload[wk]
 	c.mu.RUnlock()
@@ -203,15 +203,15 @@ func TestByWorkload(t *testing.T) {
 	c := NewCache(10 * time.Minute)
 	now := time.Now()
 
-	c.Record(Key{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "app", Container: "web"},
+	c.Record(Key{WorkloadIdentity: promclient.WorkloadIdentity{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "app"}, Container: "web"},
 		OOMRecord{Container: "web", ObservedAt: now, RestartCount: 1, TerminatedAt: now})
-	c.Record(Key{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "app", Container: "sidecar"},
+	c.Record(Key{WorkloadIdentity: promclient.WorkloadIdentity{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "app"}, Container: "sidecar"},
 		OOMRecord{Container: "sidecar", ObservedAt: now, RestartCount: 1, TerminatedAt: now})
 	// Older than the TTL.
-	c.Record(Key{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "app", Container: "old"},
+	c.Record(Key{WorkloadIdentity: promclient.WorkloadIdentity{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "app"}, Container: "old"},
 		OOMRecord{Container: "old", ObservedAt: now.Add(-30 * time.Minute), RestartCount: 1, TerminatedAt: now})
 	// Different workload entirely.
-	c.Record(Key{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "other", Container: "web"},
+	c.Record(Key{WorkloadIdentity: promclient.WorkloadIdentity{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "other"}, Container: "web"},
 		OOMRecord{Container: "web", ObservedAt: now, RestartCount: 1, TerminatedAt: now})
 
 	got := c.ByWorkload("ns", "Deployment", "app")
@@ -326,10 +326,8 @@ func TestConcurrentAccess(t *testing.T) {
 		wg.Go(func() {
 			for i := range perWorker {
 				key := Key{
-					Namespace: "ns",
-					OwnerKind: "Deployment",
-					OwnerName: fmt.Sprintf("app-%d", w%4),
-					Container: fmt.Sprintf("c-%d", i%8),
+					WorkloadIdentity: promclient.WorkloadIdentity{Namespace: "ns", OwnerKind: "Deployment", OwnerName: fmt.Sprintf("app-%d", w%4)},
+					Container:        fmt.Sprintf("c-%d", i%8),
 				}
 				c.Record(key, OOMRecord{
 					Container:    key.Container,

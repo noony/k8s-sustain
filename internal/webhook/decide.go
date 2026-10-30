@@ -7,8 +7,8 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/governance"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -41,7 +41,7 @@ type admission struct {
 	reason reason
 	// identity, optIn and level are the governance decision, as far as it
 	// got before it refused the pod.
-	identity governance.Identity
+	identity promclient.WorkloadIdentity
 	optIn    string
 	level    governance.Level
 	// policy is the governing Policy, empty when none governs.
@@ -82,7 +82,7 @@ func (h *Handler) decide(ctx context.Context, pod *corev1.Pod) admission {
 	a.policy = policy.Name
 
 	readCtx, readCancel := context.WithTimeout(ctx, apiCallTimeout)
-	known, err := h.storedRecommendation(readCtx, pod.Namespace, g.Identity.OwnerKind, g.Identity.OwnerName)
+	known, err := h.storedRecommendation(readCtx, g.Identity)
 	readCancel()
 	if err != nil {
 		a.reason, a.source, a.err = reasonRecommendationUnreadable, RecSourceError, err
@@ -92,12 +92,7 @@ func (h *Handler) decide(ctx context.Context, pod *corev1.Pod) admission {
 	a.source = recommendationSource(reading.Verdict)
 	observed := wlrcache.BuildObservedResources(pod.Spec.Containers, pod.Spec.InitContainers)
 	if wlrcache.ShouldRequest(known, policy.Name, observed) {
-		a.stub = &stubRequest{
-			known:    known,
-			ref:      sustainv1alpha1.WorkloadReference{Kind: g.Identity.OwnerKind, Namespace: pod.Namespace, Name: g.Identity.OwnerName},
-			policy:   policy.Name,
-			observed: observed,
-		}
+		a.stub = &stubRequest{known: known, identity: g.Identity, policy: policy.Name, observed: observed}
 	}
 	if !reading.Verdict.Injects() {
 		a.reason = reason(a.source)

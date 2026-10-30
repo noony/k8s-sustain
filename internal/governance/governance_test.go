@@ -13,6 +13,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/governance"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 var errBoom = errors.New("boom")
@@ -68,7 +69,7 @@ func (s *source) NamespaceAnnotations(context.Context, string) (map[string]strin
 }
 
 func fixturePolicies() []sustainv1alpha1.Policy {
-	mode := sustainv1alpha1.UpdateModeOngoing
+	mode, onCreate := sustainv1alpha1.UpdateModeOngoing, sustainv1alpha1.UpdateModeOnCreate
 	every := sustainv1alpha1.UpdateTypes{
 		Deployment: &mode, StatefulSet: &mode, DaemonSet: &mode, ArgoRollout: &mode,
 		CronJob: &mode, Job: &mode, Pod: &mode,
@@ -89,7 +90,7 @@ func fixturePolicies() []sustainv1alpha1.Policy {
 			LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"tier": "web"}},
 		}),
 		policy("elsewhere", every, sustainv1alpha1.PolicySelector{Namespaces: []string{"other-ns"}}),
-		policy("jobs-only", sustainv1alpha1.UpdateTypes{Job: &mode}, sustainv1alpha1.PolicySelector{}),
+		policy("jobs-only", sustainv1alpha1.UpdateTypes{Job: &onCreate}, sustainv1alpha1.PolicySelector{}),
 		policy("broken", every, sustainv1alpha1.PolicySelector{
 			LabelSelector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "tier", Operator: "BogusOp"}}},
 		}),
@@ -110,7 +111,7 @@ const (
 func TestDecide(t *testing.T) {
 	pol := func(name string) map[string]string { return map[string]string{sustainv1alpha1.PolicyAnnotation: name} }
 	out := map[string]string{sustainv1alpha1.OptOutAnnotation: "true"}
-	web := governance.Identity{Namespace: "team-a", OwnerKind: "Deployment", OwnerName: "web"}
+	web := promclient.WorkloadIdentity{Namespace: "team-a", OwnerKind: "Deployment", OwnerName: "web"}
 	tierWeb := map[string]string{"tier": "web"}
 
 	cases := []struct {
@@ -127,11 +128,13 @@ func TestDecide(t *testing.T) {
 		departedKind              string
 		fail                      string
 
-		governs  string
+		governs string
+		// mode is the governing Policy's mode, Ongoing unless set.
+		mode     sustainv1alpha1.UpdateMode
 		refusal  governance.Refusal
 		optIn    string
 		level    governance.Level
-		identity governance.Identity
+		identity promclient.WorkloadIdentity
 		reads    []string
 		wantErr  bool
 	}{
@@ -152,10 +155,13 @@ func TestDecide(t *testing.T) {
 		{name: "policy missing", tmpl: pol("ghost"), refusal: governance.PolicyMissing, optIn: "ghost", level: governance.LevelPodTemplate, identity: web, reads: []string{"policies"}},
 		{name: "kind not managed", tmpl: pol("jobs-only"), refusal: governance.KindNotManaged, optIn: "jobs-only", level: governance.LevelPodTemplate, identity: web, reads: []string{"policies"}},
 		{name: "namespace not selected", tmpl: pol("elsewhere"), refusal: governance.NamespaceNotSelected, optIn: "elsewhere", level: governance.LevelPodTemplate, identity: web, reads: []string{"policies"}},
-		{name: "excluded namespace", ns: "kube-system", tmpl: pol("p"), refusal: governance.NamespaceExcluded, optIn: "p", level: governance.LevelPodTemplate, identity: governance.Identity{Namespace: "kube-system", OwnerKind: "Deployment", OwnerName: "web"}, reads: []string{"policies"}},
+		{name: "excluded namespace", ns: "kube-system", tmpl: pol("p"), refusal: governance.NamespaceExcluded, optIn: "p", level: governance.LevelPodTemplate, identity: promclient.WorkloadIdentity{Namespace: "kube-system", OwnerKind: "Deployment", OwnerName: "web"}, reads: []string{"policies"}},
 		{name: "selector matches pod-template labels", tmpl: pol("web-only"), labels: tierWeb, governs: "web-only", optIn: "web-only", level: governance.LevelPodTemplate, identity: web, reads: []string{"policies"}},
 		{name: "selector ignores the workload's own labels", tmpl: pol("web-only"), objLabels: tierWeb, refusal: governance.LabelsNotSelected, optIn: "web-only", level: governance.LevelPodTemplate, identity: web, reads: []string{"policies"}},
 		{name: "invalid selector", tmpl: pol("broken"), labels: tierWeb, refusal: governance.SelectorInvalid, optIn: "broken", level: governance.LevelPodTemplate, identity: web, reads: []string{"policies"}},
+		{name: "invalid selector named by the namespace", policies: []string{"broken"}, namespace: pol("broken"), refusal: governance.SelectorInvalid, optIn: "broken", level: governance.LevelNamespace, identity: web, reads: []string{"policies", "namespace"}},
+		{name: "pod: invalid selector named by the workload", subject: pod, policies: []string{"broken"}, workload: pol("broken"), refusal: governance.SelectorInvalid, optIn: "broken", level: governance.LevelWorkload, identity: web, reads: []string{"policies", "owner", "workload"}},
+		{name: "pod: invalid selector named by the namespace", subject: pod, policies: []string{"broken"}, namespace: pol("broken"), refusal: governance.SelectorInvalid, optIn: "broken", level: governance.LevelNamespace, identity: web, reads: []string{"policies", "owner", "workload", "namespace"}},
 
 		{name: "pre-gate: a pod no Policy selects reads nothing more", subject: pod, policies: []string{"web-only"}, namespace: pol("web-only"), refusal: governance.NoPolicySelects, reads: []string{"policies"}},
 		{name: "pre-gate: excluded namespace", subject: pod, ns: "kube-system", namespace: pol("p"), refusal: governance.NamespaceExcluded, reads: []string{"policies"}},
@@ -167,21 +173,21 @@ func TestDecide(t *testing.T) {
 		{name: "pod: opt-out reads nothing", subject: pod, tmpl: out, namespace: pol("p"), refusal: governance.OptedOut},
 		{name: "pod: the workload level skips the Namespace", subject: pod, workload: pol("p"), governs: "p", optIn: "p", level: governance.LevelWorkload, identity: web, reads: []string{"policies", "owner", "workload"}},
 		{name: "pod: namespace level", subject: pod, namespace: pol("p"), governs: "p", optIn: "p", level: governance.LevelNamespace, identity: web, reads: []string{"policies", "owner", "workload", "namespace"}},
-		{name: "pod: owner-name names the identity, the real owner the workload level", subject: pod, ownerName: "api", workload: pol("p"), governs: "p", optIn: "p", level: governance.LevelWorkload, identity: governance.Identity{Namespace: "team-a", OwnerKind: "Deployment", OwnerName: "api"}, reads: []string{"policies", "owner", "workload"}},
-		{name: "template: owner-name names the identity", ownerName: "api", tmpl: pol("p"), governs: "p", optIn: "p", level: governance.LevelPodTemplate, identity: governance.Identity{Namespace: "team-a", OwnerKind: "Deployment", OwnerName: "api"}, reads: []string{"policies"}},
+		{name: "pod: owner-name names the identity, the real owner the workload level", subject: pod, ownerName: "api", workload: pol("p"), governs: "p", optIn: "p", level: governance.LevelWorkload, identity: promclient.WorkloadIdentity{Namespace: "team-a", OwnerKind: "Deployment", OwnerName: "api"}, reads: []string{"policies", "owner", "workload"}},
+		{name: "template: owner-name names the identity", ownerName: "api", tmpl: pol("p"), governs: "p", optIn: "p", level: governance.LevelPodTemplate, identity: promclient.WorkloadIdentity{Namespace: "team-a", OwnerKind: "Deployment", OwnerName: "api"}, reads: []string{"policies"}},
 		{name: "an invalid owner-name is ignored", ownerName: "Not/Valid", tmpl: pol("p"), governs: "p", optIn: "p", level: governance.LevelPodTemplate, identity: web, reads: []string{"policies"}},
-		{name: "bare pod: owner-name makes a Pod identity", subject: barePod, ownerName: "etl", tmpl: pol("p"), governs: "p", optIn: "p", level: governance.LevelPodTemplate, identity: governance.Identity{Namespace: "team-a", OwnerKind: "Pod", OwnerName: "etl"}, reads: []string{"policies"}},
-		{name: "bare pod: no workload level", subject: barePod, ownerName: "etl", namespace: pol("p"), governs: "p", optIn: "p", level: governance.LevelNamespace, identity: governance.Identity{Namespace: "team-a", OwnerKind: "Pod", OwnerName: "etl"}, reads: []string{"policies", "namespace"}},
+		{name: "bare pod: owner-name makes a Pod identity", subject: barePod, ownerName: "etl", tmpl: pol("p"), governs: "p", optIn: "p", level: governance.LevelPodTemplate, identity: promclient.WorkloadIdentity{Namespace: "team-a", OwnerKind: "Pod", OwnerName: "etl"}, reads: []string{"policies"}},
+		{name: "bare pod: no workload level", subject: barePod, ownerName: "etl", namespace: pol("p"), governs: "p", optIn: "p", level: governance.LevelNamespace, identity: promclient.WorkloadIdentity{Namespace: "team-a", OwnerKind: "Pod", OwnerName: "etl"}, reads: []string{"policies", "namespace"}},
 		{name: "bare pod without owner-name", subject: barePod, tmpl: pol("p"), refusal: governance.NoOwner},
 		{name: "bare pod with an invalid owner-name", subject: barePod, ownerName: "Not/Valid", tmpl: pol("p"), refusal: governance.NoOwner},
 
 		{name: "departed: governed by its WorkloadRecommendation's Policy", subject: departed, departedPolicy: "p", governs: "p", identity: web, reads: []string{"policies"}},
 		{name: "departed: no labels to select", subject: departed, departedPolicy: "web-only", governs: "web-only", identity: web, reads: []string{"policies"}},
 		{name: "departed: namespace not selected", subject: departed, departedPolicy: "elsewhere", refusal: governance.NamespaceNotSelected, identity: web, reads: []string{"policies"}},
-		{name: "departed: excluded namespace", subject: departed, ns: "kube-system", departedPolicy: "p", refusal: governance.NamespaceExcluded, identity: governance.Identity{Namespace: "kube-system", OwnerKind: "Deployment", OwnerName: "web"}, reads: []string{"policies"}},
+		{name: "departed: excluded namespace", subject: departed, ns: "kube-system", departedPolicy: "p", refusal: governance.NamespaceExcluded, identity: promclient.WorkloadIdentity{Namespace: "kube-system", OwnerKind: "Deployment", OwnerName: "web"}, reads: []string{"policies"}},
 		{name: "departed: policy missing", subject: departed, departedPolicy: "ghost", refusal: governance.PolicyMissing, identity: web, reads: []string{"policies"}},
 		{name: "departed: kind not managed", subject: departed, departedPolicy: "jobs-only", refusal: governance.KindNotManaged, identity: web, reads: []string{"policies"}},
-		{name: "departed: a managed kind", subject: departed, departedKind: "Job", departedPolicy: "jobs-only", governs: "jobs-only", identity: governance.Identity{Namespace: "team-a", OwnerKind: "Job", OwnerName: "web"}, reads: []string{"policies"}},
+		{name: "departed: a managed kind", subject: departed, departedKind: "Job", departedPolicy: "jobs-only", governs: "jobs-only", mode: sustainv1alpha1.UpdateModeOnCreate, identity: promclient.WorkloadIdentity{Namespace: "team-a", OwnerKind: "Job", OwnerName: "web"}, reads: []string{"policies"}},
 
 		{name: "error: Policies", tmpl: pol("p"), fail: "policies", wantErr: true},
 		{name: "error: owner on the workload level", subject: pod, namespace: pol("p"), fail: "owner", wantErr: true},
@@ -226,7 +232,7 @@ func TestDecide(t *testing.T) {
 				if kind == "" {
 					kind = "Deployment"
 				}
-				subject = governance.Departed(governance.Identity{Namespace: ns, OwnerKind: kind, OwnerName: "web"}, tc.departedPolicy)
+				subject = governance.Departed(promclient.WorkloadIdentity{Namespace: ns, OwnerKind: kind, OwnerName: "web"}, tc.departedPolicy)
 			}
 
 			d, err := governance.Decide(context.Background(), subject, src)
@@ -241,6 +247,13 @@ func TestDecide(t *testing.T) {
 			}
 			if d.PolicyName() != tc.governs || d.Governed() != (tc.governs != "") || d.Refusal != tc.refusal {
 				t.Errorf("governs/refusal = %q/%q, want %q/%q", d.PolicyName(), d.Refusal, tc.governs, tc.refusal)
+			}
+			wantMode := tc.mode
+			if wantMode == "" && tc.governs != "" {
+				wantMode = sustainv1alpha1.UpdateModeOngoing
+			}
+			if d.Mode != wantMode {
+				t.Errorf("mode = %q, want %q", d.Mode, wantMode)
 			}
 			if d.OptIn != tc.optIn || d.Level != tc.level {
 				t.Errorf("opt-in = %q at %q, want %q at %q", d.OptIn, d.Level, tc.optIn, tc.level)

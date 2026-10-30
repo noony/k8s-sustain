@@ -15,6 +15,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
@@ -68,7 +69,7 @@ func TestRequestRecommendationRecoversAPanickingWrite(t *testing.T) {
 	}()
 
 	before := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelStub))
-	h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef("etl"), policy: "p1"})
+	h.requestRecommendation(logr.Discard(), stubRequest{identity: jobIdentity("etl"), policy: "p1"})
 
 	deadline := time.Now().Add(5 * time.Second)
 	for testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelStub)) == before {
@@ -79,9 +80,9 @@ func TestRequestRecommendationRecoversAPanickingWrite(t *testing.T) {
 	}
 }
 
-// jobRef is the identity of the standalone Job name in namespace prod.
-func jobRef(name string) sustainv1alpha1.WorkloadReference {
-	return sustainv1alpha1.WorkloadReference{Kind: "Job", Namespace: "prod", Name: name}
+// jobIdentity is the identity of the standalone Job name in namespace prod.
+func jobIdentity(name string) promclient.WorkloadIdentity {
+	return promclient.WorkloadIdentity{Namespace: "prod", OwnerKind: "Job", OwnerName: name}
 }
 
 // countingCreateClient counts Create calls so a test can assert on apiserver
@@ -124,7 +125,7 @@ func TestRequestRecommendation_DeduplicatesBurstForSameIdentity(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef("etl"), policy: "p1"})
+			h.requestRecommendation(logr.Discard(), stubRequest{identity: jobIdentity("etl"), policy: "p1"})
 		}()
 	}
 	wg.Wait()
@@ -162,7 +163,7 @@ func TestRequestRecommendation_DoesNotDropDistinctIdentities(t *testing.T) {
 
 	const identities = 50
 	for i := range identities {
-		h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef(fmt.Sprintf("etl-%03d", i)), policy: "p1"})
+		h.requestRecommendation(logr.Discard(), stubRequest{identity: jobIdentity(fmt.Sprintf("etl-%03d", i)), policy: "p1"})
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -258,7 +259,7 @@ func TestHandlerShutdownWaitsForAnInFlightStubWrite(t *testing.T) {
 	release := func() { releaseOnce.Do(func() { close(blocking.release) }) }
 	defer release() // never leave the goroutine parked, whatever the test does.
 
-	h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef("etl"), policy: "p1"})
+	h.requestRecommendation(logr.Discard(), stubRequest{identity: jobIdentity("etl"), policy: "p1"})
 	select {
 	case <-blocking.entered:
 	case <-time.After(5 * time.Second):
@@ -311,7 +312,7 @@ func TestHandlerShutdownReleasesAStubRequestParkedOnAWriteSlot(t *testing.T) {
 		releases = append(releases, rel)
 	}
 
-	h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef("etl"), policy: "p1"})
+	h.requestRecommendation(logr.Discard(), stubRequest{identity: jobIdentity("etl"), policy: "p1"})
 
 	start := time.Now()
 	if err := h.Shutdown(context.Background()); err != nil {
@@ -339,7 +340,7 @@ func TestRequestRecommendationIsRefusedAfterShutdown(t *testing.T) {
 	if err := h.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown on an idle handler: %v", err)
 	}
-	h.requestRecommendation(logr.Discard(), stubRequest{ref: jobRef("etl"), policy: "p1"})
+	h.requestRecommendation(logr.Discard(), stubRequest{identity: jobIdentity("etl"), policy: "p1"})
 
 	// beginStubRequest refuses under stubMu, so "no claim recorded" is a
 	// synchronous fact, not a race with a goroutine that may or may not exist.

@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
+
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// Key identifies an OOM record by workload + container.
+// Key identifies an OOM record by identity and container.
 type Key struct {
-	Namespace string
-	OwnerKind string
-	OwnerName string
+	promclient.WorkloadIdentity
 	Container string
 }
 

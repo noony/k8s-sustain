@@ -2,7 +2,6 @@ package oomwatch
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -45,6 +44,8 @@ type Watcher struct {
 	// Now is injectable so tests get stable ObservedAt values. Defaults to
 	// time.Now when nil.
 	Now func() time.Time
+
+	policies governance.PolicyLister
 }
 
 // SetupWithManager registers the Watcher as a Pod controller. The predicate is
@@ -136,7 +137,7 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 	// un-manage the workload for as long as the read keeps failing (RBAC gap,
 	// apiserver outage). Returning makes controller-runtime requeue with
 	// backoff instead.
-	reader := &podReader{client: w.Client, excluded: w.ExcludedNamespaces, logger: logger}
+	reader := &podReader{client: w.Client, policies: &w.policies, excluded: w.ExcludedNamespaces, logger: logger}
 	decision, err := governance.Decide(ctx, governance.Pod(pod), reader)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -163,7 +164,7 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 	// The identity is the one the controller and the webhook key the
 	// WorkloadRecommendation and its Prometheus series by; a live OOM cached
 	// under any other is never found by ByWorkload.
-	ownerKind, ownerName, policyName := decision.Identity.OwnerKind, decision.Identity.OwnerName, decision.PolicyName()
+	id, policyName := decision.Identity, decision.PolicyName()
 
 	now := w.now()
 
@@ -174,12 +175,7 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 			continue
 		}
 
-		key := Key{
-			Namespace: pod.Namespace,
-			OwnerKind: ownerKind,
-			OwnerName: ownerName,
-			Container: cs.Name,
-		}
+		key := Key{WorkloadIdentity: id, Container: cs.Name}
 
 		record := OOMRecord{
 			Container:     cs.Name,
@@ -198,8 +194,8 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 		if w.Sink.Record(key, record) {
 			logger.V(1).Info(
 				"OOM detected",
-				"ownerKind", ownerKind,
-				"ownerName", ownerName,
+				"ownerKind", id.OwnerKind,
+				"ownerName", id.OwnerName,
 				"container", cs.Name,
 				"restartCount", cs.RestartCount,
 				"limitBytes", record.OOMLimitBytes,
@@ -217,6 +213,7 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 // through the manager's client.
 type podReader struct {
 	client   client.Client
+	policies *governance.PolicyLister
 	excluded []string
 	logger   logr.Logger
 	// degraded records that the owner fell back to the pod's immediate
@@ -225,11 +222,7 @@ type podReader struct {
 }
 
 func (r *podReader) Policies(ctx context.Context) (*governance.Policies, error) {
-	var list sustainv1alpha1.PolicyList
-	if err := r.client.List(ctx, &list); err != nil {
-		return nil, fmt.Errorf("listing policies: %w", err)
-	}
-	return governance.NewPolicies(list.Items, r.excluded), nil
+	return r.policies.List(ctx, r.client, r.excluded)
 }
 
 // PodOwner falls back to the immediate controller ref so a transient RS/Job
@@ -253,10 +246,11 @@ func (r *podReader) PodOwner(ctx context.Context, pod *corev1.Pod) (string, stri
 // the level a pod does not inherit.
 //
 // A Get here is only free when the manager already caches that kind, which it
-// does only for kinds some Policy enables (collectTargets skips the rest), and
-// never for ReplicaSet. So an OOM on, say, a CronJob pod can stand up a
-// cluster-wide informer for one object. Those kinds are few, so the cost is
-// small — but it is not the blanket "no new informer" guarantee it looks like.
+// does only for kinds some Policy manages (inventory.TakeForPolicy lists no
+// other), and never for ReplicaSet. So an OOM on, say, a CronJob pod can stand
+// up a cluster-wide informer for one object. Those kinds are few, so the cost
+// is small — but it is not the blanket "no new informer" guarantee it looks
+// like.
 func (r *podReader) WorkloadAnnotations(ctx context.Context, namespace, kind, name string) (map[string]string, error) {
 	return workload.OwnerAnnotations(ctx, r.client, namespace, kind, name)
 }

@@ -8,6 +8,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
@@ -150,11 +151,11 @@ func (h *Handler) pruneStubRequestsLocked(now time.Time) {
 }
 
 // stubRequest is the one effect an admission can call for: wlrcache.Request
-// for the identity ref, whose object the admission read as known, the pod
-// opting into policy and running observed.
+// for identity, whose object the admission read as known, the pod opting into
+// policy and running observed.
 type stubRequest struct {
 	known    *sustainv1alpha1.WorkloadRecommendation
-	ref      sustainv1alpha1.WorkloadReference
+	identity promclient.WorkloadIdentity
 	policy   string
 	observed map[string]sustainv1alpha1.ObservedContainerResources
 }
@@ -167,7 +168,8 @@ type stubRequest struct {
 // run's containers forever. Errors are logged and dropped; the next pod of the
 // same workload retries.
 func (h *Handler) requestRecommendation(logger logr.Logger, r stubRequest) {
-	key := r.ref.Namespace + "/" + wlrcache.Name(r.ref.Kind, r.ref.Name)
+	id := r.identity
+	key := id.Namespace + "/" + wlrcache.Name(id.OwnerKind, id.OwnerName)
 	parent, claimed, ok := h.beginStubRequest(key, time.Now())
 	if !ok {
 		return
@@ -194,7 +196,8 @@ func (h *Handler) requestRecommendation(logger logr.Logger, r stubRequest) {
 
 		ctx, cancel := context.WithTimeout(parent, stubWriteTimeout)
 		defer cancel()
-		if err := wlrcache.Request(log.IntoContext(ctx, logger), h.Client, r.known, r.ref, r.policy, r.observed); err != nil {
+		ref := sustainv1alpha1.WorkloadReference{Kind: id.OwnerKind, Namespace: id.Namespace, Name: id.OwnerName}
+		if err := wlrcache.Request(log.IntoContext(ctx, logger), h.Client, r.known, ref, r.policy, r.observed); err != nil {
 			logger.V(1).Info("failed to request a recommendation", "err", err)
 		}
 	}()

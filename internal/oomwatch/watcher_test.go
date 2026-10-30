@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 // stubSink captures the calls the Watcher makes against the Sink interface
@@ -291,7 +292,7 @@ func TestReconcile_OOMKilledRecorded(t *testing.T) {
 		t.Fatalf("sink calls = %d, want 1", len(calls))
 	}
 	gotKey := calls[0].Key
-	wantKey := Key{Namespace: "default", OwnerKind: "StatefulSet", OwnerName: "app", Container: "main"}
+	wantKey := Key{WorkloadIdentity: promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "StatefulSet", OwnerName: "app"}, Container: "main"}
 	if gotKey != wantKey {
 		t.Errorf("key = %#v, want %#v", gotKey, wantKey)
 	}
@@ -698,7 +699,7 @@ func TestReconcile_OwnerNameOverride_BarePod(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("sink calls = %d, want 1", len(calls))
 	}
-	wantKey := Key{Namespace: "default", OwnerKind: "Pod", OwnerName: "etl-daily", Container: "main"}
+	wantKey := Key{WorkloadIdentity: promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Pod", OwnerName: "etl-daily"}, Container: "main"}
 	if calls[0].Key != wantKey {
 		t.Errorf("key = %#v, want %#v", calls[0].Key, wantKey)
 	}
@@ -725,7 +726,7 @@ func TestReconcile_OwnerNameOverride_OwnedPod(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("sink calls = %d, want 1", len(calls))
 	}
-	wantKey := Key{Namespace: "default", OwnerKind: "StatefulSet", OwnerName: "app", Container: "main"}
+	wantKey := Key{WorkloadIdentity: promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "StatefulSet", OwnerName: "app"}, Container: "main"}
 	if calls[0].Key != wantKey {
 		t.Errorf("key = %#v, want %#v", calls[0].Key, wantKey)
 	}
@@ -875,7 +876,7 @@ func TestReconcile_NamespaceLevelOptIn_RecordsOOM(t *testing.T) {
 	if calls[0].Record.PolicyName != "ns-policy" {
 		t.Errorf("PolicyName = %q, want %q", calls[0].Record.PolicyName, "ns-policy")
 	}
-	wantKey := Key{Namespace: "default", OwnerKind: "StatefulSet", OwnerName: "app", Container: "main"}
+	wantKey := Key{WorkloadIdentity: promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "StatefulSet", OwnerName: "app"}, Container: "main"}
 	if calls[0].Key != wantKey {
 		t.Errorf("key = %#v, want %#v", calls[0].Key, wantKey)
 	}

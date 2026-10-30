@@ -211,12 +211,9 @@ func (b *builder) inScope(kind string) bool {
 }
 
 func (b *builder) listPolicies(ctx context.Context) error {
-	var list sustainv1alpha1.PolicyList
-	if err := b.reader.List(ctx, &list); err != nil {
-		return fmt.Errorf("listing policies: %w", err)
-	}
-	b.policies = governance.NewPolicies(list.Items, b.opts.ExcludedNamespaces)
-	return nil
+	ps, err := new(governance.PolicyLister).List(ctx, b.reader, b.opts.ExcludedNamespaces)
+	b.policies = ps
+	return err
 }
 
 // list runs one List per namespace in scope, or one cluster-wide.
@@ -258,7 +255,7 @@ func (b *builder) addWorkloads(ctx context.Context, kind string) error {
 		if err != nil {
 			return err
 		}
-		b.addMember(promclient.WorkloadIdentity(d.Identity), Member{
+		b.addMember(d.Identity, Member{
 			Object:         obj,
 			Policy:         d.PolicyName(),
 			Containers:     tmpl.Spec.Containers,
@@ -284,7 +281,7 @@ func (b *builder) addBarePods(ctx context.Context) error {
 		if d.Refusal == governance.NoOwner {
 			return nil
 		}
-		b.addMember(promclient.WorkloadIdentity(d.Identity), Member{
+		b.addMember(d.Identity, Member{
 			Object:         pod,
 			Policy:         d.PolicyName(),
 			Containers:     pod.Spec.Containers,
@@ -309,7 +306,7 @@ func (b *builder) addRecommendations(ctx context.Context) error {
 		if !id.Departed() {
 			return nil
 		}
-		d, err := governance.Decide(ctx, governance.Departed(governance.Identity(key), wlr.Spec.Policy), b)
+		d, err := governance.Decide(ctx, governance.Departed(key, wlr.Spec.Policy), b)
 		if err != nil {
 			return err
 		}
@@ -332,19 +329,19 @@ func (b *builder) addMember(key promclient.WorkloadIdentity, m Member) {
 	id.Members = append(id.Members, m)
 }
 
-// Policies is governance.Reader's: the Policies listed when the snapshot began.
+// Policies serves the Policies listed when the snapshot began.
 func (b *builder) Policies(context.Context) (*governance.Policies, error) {
 	return b.policies, nil
 }
 
-// PodOwner is governance.Reader's. The only pods the inventory decides are
-// bare pods, which have no controller to resolve.
+// PodOwner is never called: the only pods the inventory decides are bare
+// pods, which have no controller to resolve.
 func (b *builder) PodOwner(_ context.Context, pod *corev1.Pod) (string, string, error) {
 	return "", "", fmt.Errorf("pod %s/%s: the inventory resolves no controller owner", pod.Namespace, pod.Name)
 }
 
-// WorkloadAnnotations is governance.Reader's. A pod template carries its
-// workload's annotations, and a bare pod has no workload.
+// WorkloadAnnotations is never called: a pod template carries its workload's
+// annotations, and a bare pod has no workload.
 func (b *builder) WorkloadAnnotations(_ context.Context, namespace, kind, name string) (map[string]string, error) {
 	return nil, fmt.Errorf("%s %s/%s: the inventory reads no workload annotations", kind, namespace, name)
 }

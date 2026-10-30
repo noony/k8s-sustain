@@ -208,7 +208,7 @@ kubectl annotate deployment my-app -n production \
 
 ## How the annotation is consumed
 
-Each component hands `governance.Decide` the pod template or pod it is deciding for, and a reader for the levels that subject does not carry. `Decide` reads a level only when every more specific one is silent, and before its first read it checks that some Policy's selector could accept the subject's namespace and labels at all — when none can, it reads nothing more.
+Each component hands `governance.Decide` the pod template or pod it is deciding for, and a reader for the levels that subject does not carry. `Decide` reads a level only when every more specific one is silent, and before its first read it checks that some Policy's selector could accept the subject's namespace and labels at all — when none can, it reads nothing more. A selector that does not parse counts as accepting, so a pod opting into its Policy at any level is refused for the invalid selector, and the webhook logs it.
 
 | Component | Subject | How it reads the other levels |
 |-----------|---------|-------------------------------|

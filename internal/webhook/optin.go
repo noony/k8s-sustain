@@ -26,11 +26,7 @@ const governanceTimeout = 2 * time.Second
 type admissionReader struct{ h *Handler }
 
 func (r admissionReader) Policies(ctx context.Context) (*governance.Policies, error) {
-	var list sustainv1alpha1.PolicyList
-	if err := r.h.Client.List(ctx, &list); err != nil {
-		return nil, fmt.Errorf("listing policies: %w", err)
-	}
-	return governance.NewPolicies(list.Items, r.h.ExcludedNamespaces), nil
+	return r.h.policies.List(ctx, r.h.Client, r.h.ExcludedNamespaces)
 }
 
 func (r admissionReader) PodOwner(ctx context.Context, pod *corev1.Pod) (string, string, error) {
