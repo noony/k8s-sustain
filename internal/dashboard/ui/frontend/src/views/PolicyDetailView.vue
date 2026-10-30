@@ -6,7 +6,8 @@ import { api, type PolicySpec, type PolicyWorkloadsData, type BatchSimulateData 
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useTimeRange } from '../composables/useTimeRange'
 import { useListQuery } from '../composables/useListQuery'
-import { formatBytes, outcomeLabels, timeAgo } from '../lib/format'
+import { formatBytes, timeAgo } from '../lib/format'
+import { outcomeLabel } from '../lib/outcomes'
 import { rangeQueryParams, resolveRange } from '../lib/timerange'
 import StatusBadge from '../components/StatusBadge.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
@@ -618,7 +619,7 @@ function renderYaml(p: typeof policy.value): string {
                       class="badge"
                       data-test="batch-outcome"
                       title="Not counted in the savings: the controller would not apply it"
-                      >{{ outcomeLabels[w.outcome] }}</span
+                      >{{ outcomeLabel(w.outcome) }}</span
                     >
                   </td>
                   <td style="color: var(--accent-light); font-family: monospace; font-size: 12px">

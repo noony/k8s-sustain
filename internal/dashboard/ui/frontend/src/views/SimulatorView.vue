@@ -15,13 +15,13 @@ import {
   type WorkloadListData,
 } from '../lib/api'
 import {
-  outcomeLabels,
   parseCPUQuantity,
   parseMemoryQuantity,
   parseStepToMs,
   formatBytes,
   formatSeconds,
 } from '../lib/format'
+import { outcomeLabel } from '../lib/outcomes'
 import { limitModeOf, limitModeOrder, limitModes, limitsPatch, type LimitMode } from '../lib/limits'
 import { patches, setPatch, valueAt, type KeyPath, type ValueAt } from '../lib/patch'
 import type { Chart } from 'chart.js'
@@ -818,7 +818,7 @@ onUnmounted(() => {
       <div class="card">
         <div class="card-header"><h2>Savings impact</h2></div>
         <p v-if="simData.outcome !== 'Computed'" class="form-helper" data-test="sim-outcome">
-          {{ outcomeLabels[simData.outcome] }}: the controller would not apply this yet.
+          {{ outcomeLabel(simData.outcome) }}: the controller would not apply this yet.
         </p>
         <div class="stats-row">
           <KpiCard label="CPU change" :value="cpuDeltaSummary()" :tone="cpuDeltaTone()" />

@@ -7,13 +7,8 @@ import {
   type WorkloadDetailSnapshot,
   type CoordinationFactors,
 } from '../lib/api'
-import {
-  outcomeLabels,
-  parseCPUQuantity,
-  parseMemoryQuantity,
-  parseStepToMs,
-  timeAgo,
-} from '../lib/format'
+import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs, timeAgo } from '../lib/format'
+import { outcomeLabel } from '../lib/outcomes'
 import { attentionStateMetaOf } from '../lib/risk'
 import type { Chart } from 'chart.js'
 import {
@@ -406,7 +401,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       <div class="card-header">
         <h2>Recommendation</h2>
         <span v-if="stored.outcome" class="badge" data-test="outcome">{{
-          outcomeLabels[stored.outcome] ?? stored.outcome
+          outcomeLabel(stored.outcome)
         }}</span>
         <span v-if="stored.observedAt" class="text-dim" :title="stored.observedAt"
           >computed {{ timeAgo(stored.observedAt) }}</span
