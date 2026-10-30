@@ -126,8 +126,8 @@ func Pod(pod *corev1.Pod) Subject {
 
 // Departed is an identity with no live member left, which opts into nothing:
 // it is governed by the Policy its WorkloadRecommendation names while that
-// Policy exists, manages its kind and selects its namespace. It has no labels
-// for a label selector to match.
+// Policy exists, manages its kind and selects its namespace, and its label
+// selector parses. It has no labels for the selector to match.
 func Departed(id promclient.WorkloadIdentity, policy string) Subject {
 	return Subject{namespace: id.Namespace, departed: &departure{identity: id, policy: policy}}
 }
@@ -218,12 +218,12 @@ func (w *walk) departedDecision() (Decision, error) {
 	if err != nil {
 		return Decision{}, err
 	}
-	c, refusal := ps.namespaceConsent(w.s.departed.policy, w.s.namespace)
+	p, refusal := ps.departedConsent(w.s.departed.policy, w.s.namespace)
 	if refusal != "" {
 		d.Refusal = refusal
 		return d, nil
 	}
-	return managedBy(d, c.policy, d.Identity.OwnerKind), nil
+	return managedBy(d, p, d.Identity.OwnerKind), nil
 }
 
 // managedBy settles d on p, which consented: p governs when it manages kind.

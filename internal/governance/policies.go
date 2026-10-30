@@ -88,8 +88,22 @@ func (ps *Policies) consent(name, namespace string, podLabels map[string]string)
 	return c.policy, ""
 }
 
-// namespaceConsent is consent for a subject without labels, a Departed
-// identity, which only its namespace can disqualify.
+// departedConsent is consent for a Departed identity, which has no labels to
+// match: a selector that does not parse still refuses it, as it refuses every
+// live member.
+func (ps *Policies) departedConsent(name, namespace string) (*sustainv1alpha1.Policy, Refusal) {
+	c, refusal := ps.namespaceConsent(name, namespace)
+	switch {
+	case refusal != "":
+		return nil, refusal
+	case c.invalid:
+		return nil, SelectorInvalid
+	}
+	return c.policy, ""
+}
+
+// namespaceConsent returns the Policy called name when it exists and accepts
+// namespace; otherwise why not.
 func (ps *Policies) namespaceConsent(name, namespace string) (*compiled, Refusal) {
 	c, ok := ps.byName[name]
 	if !ok {

@@ -183,6 +183,7 @@ func TestDecide(t *testing.T) {
 
 		{name: "departed: governed by its WorkloadRecommendation's Policy", subject: departed, departedPolicy: "p", governs: "p", identity: web, reads: []string{"policies"}},
 		{name: "departed: no labels to select", subject: departed, departedPolicy: "web-only", governs: "web-only", identity: web, reads: []string{"policies"}},
+		{name: "departed: invalid selector", subject: departed, departedPolicy: "broken", refusal: governance.SelectorInvalid, identity: web, reads: []string{"policies"}},
 		{name: "departed: namespace not selected", subject: departed, departedPolicy: "elsewhere", refusal: governance.NamespaceNotSelected, identity: web, reads: []string{"policies"}},
 		{name: "departed: excluded namespace", subject: departed, ns: "kube-system", departedPolicy: "p", refusal: governance.NamespaceExcluded, identity: promclient.WorkloadIdentity{Namespace: "kube-system", OwnerKind: "Deployment", OwnerName: "web"}, reads: []string{"policies"}},
 		{name: "departed: policy missing", subject: departed, departedPolicy: "ghost", refusal: governance.PolicyMissing, identity: web, reads: []string{"policies"}},

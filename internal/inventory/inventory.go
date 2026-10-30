@@ -88,7 +88,8 @@ type Identity struct {
 	Since time.Time
 	// Policy is the Policy governing the identity, empty when none does. A
 	// Departed identity is governed by its WorkloadRecommendation's Policy
-	// while that Policy still covers its namespace and kind.
+	// while that Policy still covers its namespace and kind and its selector
+	// parses.
 	Policy string
 	// Conflicted is set when members are governed by different Policies; no
 	// Policy governs the identity then.
