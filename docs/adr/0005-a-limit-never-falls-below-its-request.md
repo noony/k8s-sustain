@@ -19,9 +19,10 @@ The apiserver rejects such a pod. An in-place resize is refused as invalid; the 
 - The limit gives way, never the request. The request is what the signals asked for, the OOM floor included; capping it at an old limit would put an OOM-killed container straight back under the limit it was killed at.
 - A removed limit (`noLimit`), or a container without a limit that keeps having none, needs no guard: no limit is above every request.
 - The trace records the raise as its own `guard` stage, exactly when it changed the limit, so a raised limit is never mistaken for one the Policy's strategy chose.
+- Where pods are written, container injection (`workload.Inject`, which the patcher and the webhook share) applies the same rule to the pair it finally writes, so a Recommendation stored before the guard, or a request decrease the downsize tolerance withholds while letting the limit's through, still never leaves a request above its limit.
 
 ## Consequences
 
 - A Policy that keeps limits no longer produces Recommendations the apiserver rejects. A workload whose request outgrows its limit gets its limit raised to the request, which for that resource makes request and limit equal until the request falls back below the container's own limit.
 - `keepLimit` no longer means "never touch the limit": it means "keep the limit unless it is below the request". The Policy reference says so.
-- Only the recommender guards the pair. Where pods are written nothing re-checks it: a Recommendation stored before the guard, or the downsize tolerance withholding a request decrease while letting the limit's through, can still put a request above its limit. A last-line check in the webhook and the patcher is separate work.
+- Two places enforce the rule: the recommender, for every Recommendation it computes, and container injection, for every pair written to a pod. Neither rejects anything; both raise the limit, and injection logs each limit it raised.

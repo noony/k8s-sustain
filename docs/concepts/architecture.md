@@ -32,7 +32,7 @@ flowchart LR
 
 The controller is a standard [controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) reconciler that watches `Policy` objects.
 
-**Reconcile loop:** a `Policy` event (create, spec change, deletion, periodic requeue) takes an **inventory** of the identities the policy can govern, then runs one pass over them in three phases in order — **discovery**, **computation**, **application** — which reports, per identity, its outcome and what happened to each of its workloads. The policy's health series, `Ready` condition and next requeue are derived from that report. Only computation talks to Prometheus. Independent `Policy` objects reconcile in parallel, bounded by `--policy-concurrency-limit` (default 10) — a separate knob from the per-workload fan-out inside the computation phase.
+**Reconcile loop:** a `Policy` event (create, spec change, deletion, periodic requeue) takes an **inventory** of the identities the policy can govern, then runs one pass over them in three phases in order — **claim**, **computation**, **application** — which reports, per identity, its outcome and what happened to each of its workloads. The policy's health series, `Ready` condition and next requeue are derived from that report. Only computation talks to Prometheus. Independent `Policy` objects reconcile in parallel, bounded by `--policy-concurrency-limit` (default 10) — a separate knob from the per-workload fan-out inside the computation phase.
 
 The controller requeues after `--reconcile-interval` (default `5m`), or sooner when a workload's retry falls due first (see [Application](#application)).
 
@@ -48,11 +48,11 @@ The controller requeues after `--reconcile-interval` (default `5m`), or sooner w
 
 A reconcile reads only the namespaces in `selector.namespaces` (all when empty) and the kinds the policy manages. Every member of an identity shares its namespace and kind, so the narrowed read still sees whole identities. Reads go through the controller's informer cache.
 
-### Discovery
+### Claim
 
 For every live identity the policy governs, claim its `WorkloadRecommendation`: create it when missing, or adopt it (its `spec.policy` and policy label become this Policy's), replace its `status.observedResources` snapshot when it differs from the members' containers, and clear `status.departed`. Only the governing Policy claims it, so two Policies never rewrite the same object back and forth. An adopted object keeps the previous Policy's Recommendation, which the webhook withholds until this Policy computes its own ([ADR 0003](../adr/0003-a-recommendation-is-served-only-to-its-policy.md)).
 
-Discovery issues **no Prometheus queries**, so expect one `WorkloadRecommendation` per governed identity from the first reconcile onward, most of them briefly empty.
+The claim issues **no Prometheus queries**, so expect one `WorkloadRecommendation` per governed identity from the first reconcile onward, most of them briefly empty.
 
 ### Computation
 
@@ -97,7 +97,7 @@ When a container's `LastTerminationState.Terminated.Reason == "OOMKilled"` is ob
 - Records the memory limit the kubelet had actually applied to the container (`ContainerStatus.Resources`, falling back to the pod spec), so the recommender has a bump anchor before Prometheus surfaces the OOM-time limit
 - Enqueues the governing Policy for immediate reconcile via a `source.Channel` wired into the Policy reconciler's work queue, and counts the kill in `k8s_sustain_oom_observed_total`. A kill of a pod no Policy governs — one whose Policy does not select it, say — is neither recorded, nor counted, nor triggers anything.
 
-The recommender reads the cache when it computes an identity, and its [OOM floor signal](recommendation-pipeline.md#signals) merges what it finds with the Prometheus 24h window: a kill the watcher saw in the last 30 minutes counts as a recent OOM for that container only — equivalent to the per-container `workload_oom_24h` recency signal — and feeds the OOM-floor stage of the [Recommendation Pipeline](recommendation-pipeline.md#stages). The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.
+The controller's recommendation inputs merge the cache's kills into each identity's OOM inputs after the Prometheus fetch, and the [OOM floor signal](recommendation-pipeline.md#signals) reads them together with the Prometheus 24h window: a kill the watcher saw in the last 30 minutes counts as a recent OOM for that container only — equivalent to the per-container `workload_oom_24h` recency signal — and feeds the OOM-floor stage of the [Recommendation Pipeline](recommendation-pipeline.md#stages). The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.
 
 **Operational notes.** The cache is in-memory and lives only for the lifetime of the controller process; it keeps a kill for the same 30 minutes the OOM floor counts it as recent. On restart, the 24h Prometheus history (`k8s_sustain:workload_oom_24h`, `k8s_sustain:container_oom_limit_24h:bytes`) repopulates the floor on the next reconcile. The watcher is leader-elected like other controllers — non-leaders idle.
 
