@@ -266,7 +266,7 @@ These three reasons are the complete set the controller writes to
 |--------|--------|---------|
 | `ReconciliationSucceeded` | True | Every matching workload was processed, and no workload identity is Blocked |
 | `PartialFailure` | False | Some workloads failed this cycle and/or some workload identities are Blocked (including those whose workloads this cycle skipped in retry backoff); see `message`, which names only what actually happened |
-| `ListFailed` | False | The cycle could not even build its work list — listing the matching workloads failed, or listing the policy's `WorkloadRecommendation` objects did. No workload was processed; the next cycle still runs at the earliest retry an earlier cycle scheduled |
+| `ListFailed` | False | The cycle could not even build its work list — listing the matching workloads failed, or listing the policy's `WorkloadRecommendation` objects did. No workload was processed. The next cycle runs at the earliest retry an earlier cycle scheduled, but no sooner than 30s: a retry already due cannot run until a cycle lists again. It never waits longer than `--reconcile-interval` |
 
 A workload fails when its Prometheus inputs cannot be read, when evicting or
 resizing its pods fails, or when it is left alone because its identity's

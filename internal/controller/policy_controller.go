@@ -216,7 +216,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		_ = r.failCondition(ctx, policy, "ListFailed", listErr)
 		r.recorder.Eventf(policy, nil, corev1.EventTypeWarning, "ListFailed", "ListFailed", "%s", listErr.Error())
 		r.series.reconciled(policy.Name, "error", time.Since(start))
-		return ctrl.Result{RequeueAfter: r.requeueAfter(r.health.members(policy.Name))}, nil
+		// A retry already due cannot run until a pass lists again, so it
+		// would otherwise requeue at once, pass after pass.
+		return ctrl.Result{RequeueAfter: r.requeueAfter(r.health.members(policy.Name), baseRetryDelay)}, nil
 	}
 
 	report := r.runPass(ctx, policy, snap)
@@ -246,7 +248,8 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	r.recorder.Eventf(policy, nil, eventType, cond.Reason, cond.Reason, "%s", cond.Message)
 	r.series.reconciled(policy.Name, result, time.Since(start))
 
-	return ctrl.Result{RequeueAfter: r.requeueAfter(memberKeys(live))}, nil
+	// A zero RequeueAfter means no requeue at all.
+	return ctrl.Result{RequeueAfter: r.requeueAfter(memberKeys(live), time.Second)}, nil
 }
 
 func (r *PolicyReconciler) forget(policy string) {
@@ -313,15 +316,13 @@ func passCondition(processed, failed, blocked int) metav1.Condition {
 	}
 }
 
-// requeueAfter schedules the next pass at the reconcile interval, or earlier
-// when the retry of one of members falls due first, so the time a retry event
-// names is a time a pass runs, even after a pass that could not list its
-// workloads.
-func (r *PolicyReconciler) requeueAfter(members []string) time.Duration {
+// requeueAfter is the reconcile interval, or the time until the earliest
+// retry among members falls due when that comes first, so the time a retry
+// event names is a time a pass runs. A retry brings it no lower than floor.
+func (r *PolicyReconciler) requeueAfter(members []string, floor time.Duration) time.Duration {
 	due, ok := r.ledger.nextRetry(members)
 	if !ok {
 		return r.ReconcileInterval
 	}
-	// A zero RequeueAfter means no requeue at all.
-	return min(r.ReconcileInterval, max(due, time.Second))
+	return min(r.ReconcileInterval, max(due, floor))
 }

@@ -478,10 +478,12 @@ func TestReconcile_RetryEventNamesTheScheduledPass(t *testing.T) {
 	}
 }
 
-// A pass that cannot list its workloads still runs when the retry the last
-// pass's events named falls due, not a whole reconcile interval later.
-func TestReconcile_ListFailedRequeuesAtTheDueRetry(t *testing.T) {
-	var listFails atomic.Bool
+// reconcilerWithFailingRetry is a reconciler for Policy "p" over one
+// Deployment whose fetch always fails, so its first pass leaves a transient
+// retry due after baseRetryDelay. Listing Deployments fails once listFails is
+// set.
+func reconcilerWithFailingRetry(t *testing.T, listFails *atomic.Bool) *PolicyReconciler {
+	t.Helper()
 	scheme := testFullScheme(t)
 	c := fakeClientBuilder(scheme, ongoingDeployments("p"), establishedDeployment("default", "web", "p")).
 		WithInterceptorFuncs(interceptor.Funcs{
@@ -493,7 +495,14 @@ func TestReconcile_ListFailedRequeuesAtTheDueRetry(t *testing.T) {
 			},
 		}).
 		Build()
-	r := reconcilerOn(c, scheme, recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), errors.New("prometheus down")), true)
+	return reconcilerOn(c, scheme, recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), errors.New("prometheus down")), true)
+}
+
+// A pass that cannot list its workloads still runs when the retry the last
+// pass's events named falls due, not a whole reconcile interval later.
+func TestReconcile_ListFailedRequeuesAtTheDueRetry(t *testing.T) {
+	var listFails atomic.Bool
+	r := reconcilerWithFailingRetry(t, &listFails)
 	reconcileOnce(t, r, "p")
 	listFails.Store(true)
 
@@ -507,6 +516,45 @@ func TestReconcile_ListFailedRequeuesAtTheDueRetry(t *testing.T) {
 	}
 	if res.RequeueAfter != baseRetryDelay {
 		t.Errorf("RequeueAfter = %v, want %v: the retry the first pass scheduled", res.RequeueAfter, baseRetryDelay)
+	}
+}
+
+// A retry already due cannot run while the workloads cannot be listed: it
+// waits for the next pass that can list, and the failing passes meanwhile
+// come no sooner than a first retry would, nor later than the interval.
+func TestReconcile_ListFailedWithADueRetryRequeuesNoSoonerThanAFirstRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		interval time.Duration
+		want     time.Duration
+	}{
+		{"after the base retry delay", time.Hour, baseRetryDelay},
+		{"capped at a shorter interval", baseRetryDelay / 3, baseRetryDelay / 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var listFails atomic.Bool
+			r := reconcilerWithFailingRetry(t, &listFails)
+			r.ReconcileInterval = tc.interval
+			clk := clocktesting.NewFakePassiveClock(time.Now())
+			r.ledger = newLedger(clk)
+			reconcileOnce(t, r, "p")
+			listFails.Store(true)
+			clk.SetTime(clk.Now().Add(2 * baseRetryDelay))
+
+			for pass := range 3 {
+				res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := readyCondition(t, r, "p").Reason; got != "ListFailed" {
+					t.Fatalf("pass %d: Ready reason = %q, want ListFailed", pass, got)
+				}
+				if res.RequeueAfter != tc.want {
+					t.Errorf("pass %d: RequeueAfter = %v, want %v", pass, res.RequeueAfter, tc.want)
+				}
+				clk.SetTime(clk.Now().Add(res.RequeueAfter))
+			}
+		})
 	}
 }
 
