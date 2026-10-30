@@ -131,7 +131,9 @@ describe('SimulatorView', () => {
     await flushPromises()
 
     expect(w.find('#cpu-limit-help').text()).toBe('Strips the CPU limit from the pod.')
-    expect(w.find('#memory-limit-help').text()).toBe('Existing pod limits stay unchanged.')
+    expect(w.find('#memory-limit-help').text()).toBe(
+      'Each pod keeps its limit, raised to the request when below it.',
+    )
     await w.find('#memory-limit-mode').setValue('equalsToRequest')
     expect(w.find('#memory-limit-help').text()).toContain('triggers OOM-kill')
   })

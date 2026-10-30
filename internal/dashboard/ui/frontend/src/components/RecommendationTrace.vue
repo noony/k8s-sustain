@@ -19,13 +19,13 @@ const mem: Format = (q) => `${round(parseMemoryQuantity(q) / 2 ** 20, 1)}Mi`
 
 // A stage missing here is shown under its own name: a new stage needs no
 // change to render.
-const stageNames: Record<string, string> = {
+const stageLabels: Record<string, string> = {
   percentile: 'Usage percentile',
   oomFloor: 'OOM floor',
   headroom: 'With headroom',
   clamp: 'Min/max clamp',
   coordination: 'Autoscaler coordination',
-  ...Object.fromEntries(limitModeOrder.map((m) => [m, limitModes[m].stage])),
+  ...Object.fromEntries(limitModeOrder.map((m) => [m, limitModes[m].stageLabel])),
   guard: 'Limit raised to the request',
 }
 
@@ -65,7 +65,7 @@ function side(key: 'request' | 'limit') {
     m.map((s) => s.stage),
   ).map((name) => ({
     key: `${key}:${name}`,
-    stage: stageNames[name] ?? name,
+    label: stageLabels[name] ?? name,
     cpu: cell(
       c.find((s) => s.stage === name),
       cpu,
@@ -93,7 +93,7 @@ const rows = computed(() => [...side('request'), ...side('limit')])
       </thead>
       <tbody>
         <tr v-for="r in rows" :key="r.key" :data-stage="r.key">
-          <td>{{ r.stage }}</td>
+          <td>{{ r.label }}</td>
           <td>{{ r.cpu ?? '–' }}</td>
           <td>{{ r.memory ?? '–' }}</td>
         </tr>

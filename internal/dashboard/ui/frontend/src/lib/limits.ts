@@ -5,8 +5,8 @@ export type LimitMode = keyof ResourceLimitsConfig
 
 export interface LimitModeMeta {
   label: string
-  /** How a trace names the stage the strategy runs as. */
-  stage: string
+  /** How the trace table labels the stage the strategy runs as. */
+  stageLabel: string
   help: Record<Resource, string>
 }
 
@@ -16,12 +16,12 @@ const both = (text: string): Record<Resource, string> => ({ cpu: text, memory: t
 export const limitModes = {
   keepLimit: {
     label: 'Keep existing limit',
-    stage: 'Limit kept',
-    help: both('Existing pod limits stay unchanged.'),
+    stageLabel: 'Limit kept',
+    help: both('Each pod keeps its limit, raised to the request when below it.'),
   },
   noLimit: {
     label: 'Remove limit',
-    stage: 'Limit removed',
+    stageLabel: 'Limit removed',
     help: {
       cpu: 'Strips the CPU limit from the pod.',
       memory: 'Strips the memory limit from the pod.',
@@ -29,7 +29,7 @@ export const limitModes = {
   },
   equalsToRequest: {
     label: 'Equal to request',
-    stage: 'Limit equal to request',
+    stageLabel: 'Limit equal to request',
     help: {
       cpu: 'Limit = request. Note: CPU is throttled at the request value.',
       memory: 'Limit = request. Memory above the request value triggers OOM-kill.',
@@ -37,12 +37,12 @@ export const limitModes = {
   },
   requestsLimitsRatio: {
     label: 'Multiple of request',
-    stage: 'Limit at a ratio of the request',
+    stageLabel: 'Limit at a ratio of the request',
     help: both('Limit = request × ratio.'),
   },
   keepLimitRequestRatio: {
     label: 'Preserve current limit/request ratio',
-    stage: 'Limit at the kept ratio',
+    stageLabel: 'Limit at the kept ratio',
     help: both('Limit = request × (current limit ÷ current request), per container.'),
   },
 } satisfies Record<LimitMode, LimitModeMeta>
