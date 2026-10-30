@@ -20,6 +20,7 @@ const simulation = (): api.SimulationResult => ({
   trace: { app: { cpu: { request: [{ stage: 'percentile', value: '90m' }] } } },
   cpuSeries: {},
   memorySeries: {},
+  liveOOMWindowSeconds: 1800,
 })
 
 function serveSimulator(simulate: (body: api.SimulateRequest) => Promise<unknown>) {
@@ -133,6 +134,14 @@ describe('SimulatorView', () => {
     expect(w.find('#memory-limit-help').text()).toBe('Existing pod limits stay unchanged.')
     await w.find('#memory-limit-mode').setValue('equalsToRequest')
     expect(w.find('#memory-limit-help').text()).toContain('triggers OOM-kill')
+  })
+
+  it('names the live OOM window the server sends', async () => {
+    serveSimulator(async () => ({ ...simulation(), liveOOMWindowSeconds: 3600 }))
+    const w = mountOpened()
+    await flushPromises()
+
+    expect(w.text()).toContain("the controller's watcher saw in the last 1 hour,")
   })
 
   it("shows the server's rejection of an override and keeps the last results", async () => {

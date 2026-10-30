@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/noony/k8s-sustain/internal/recommender"
 )
 
 // windowPattern mirrors the CRD validator on Policy.Spec.RightSizing.ResourcesConfigs.*.Window
@@ -41,6 +43,15 @@ type simulateRequest struct {
 	// Override is a JSON merge patch (RFC 7386) of simulationSettings onto the
 	// starting Policy's. Absent, the Simulation runs what the controller does.
 	Override json.RawMessage `json:"override,omitempty"`
+}
+
+// simulateResponse is a Simulation as POST /api/simulate answers it.
+type simulateResponse struct {
+	simulationResult
+	// LiveOOMWindowSeconds is how long a kill the controller's OOM watcher saw
+	// counts as recent: a kill Prometheus does not hold yet is one the
+	// Simulation cannot see.
+	LiveOOMWindowSeconds int64 `json:"liveOOMWindowSeconds"`
 }
 
 func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +119,9 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("simulation failed: %v", err))
 	default:
-		writeJSON(w, http.StatusOK, result)
+		writeJSON(w, http.StatusOK, simulateResponse{
+			simulationResult:     *result,
+			LiveOOMWindowSeconds: int64(recommender.LiveOOMWindow / time.Second),
+		})
 	}
 }

@@ -20,6 +20,7 @@ import {
   parseMemoryQuantity,
   parseStepToMs,
   formatBytes,
+  formatSeconds,
 } from '../lib/format'
 import { limitModeOf, limitModeOrder, limitModes, limitsPatch, type LimitMode } from '../lib/limits'
 import { patches, setPatch, valueAt, type KeyPath, type ValueAt } from '../lib/patch'
@@ -829,8 +830,9 @@ onUnmounted(() => {
           <h2>Simulation Results</h2>
         </div>
         <p class="form-helper">
-          Computed from Prometheus alone: an OOM kill the controller's watcher saw in the last 30
-          minutes, not yet in Prometheus, raises the controller's memory floor but not this one.
+          Computed from Prometheus alone: an OOM kill the controller's watcher saw in the last
+          {{ formatSeconds(simData.liveOOMWindowSeconds) }}, not yet in Prometheus, raises the
+          controller's memory floor but not this one.
         </p>
         <div v-if="simAllContainers().length > 0" class="rec-grid">
           <div

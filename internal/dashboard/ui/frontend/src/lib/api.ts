@@ -343,6 +343,8 @@ export interface SimulationResult {
   memoryRequests?: Record<string, TimeValue[]>
   cpuRecommendations?: Record<string, TimeValue[]>
   memoryRecommendations?: Record<string, TimeValue[]>
+  /** How long a kill the controller's OOM watcher saw counts, which a Simulation cannot see. */
+  liveOOMWindowSeconds: number
 }
 
 export interface BatchSimulateData {

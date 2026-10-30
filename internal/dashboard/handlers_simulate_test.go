@@ -10,6 +10,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
@@ -150,6 +151,35 @@ func TestHandleSimulate_AcceptsPod(t *testing.T) {
 	srv.handleSimulate(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandleSimulate_SendsTheLiveOOMWindow pins the window the Simulator says
+// it cannot see to the one the controller's OOM floor counts a live kill for.
+func TestHandleSimulate_SendsTheLiveOOMWindow(t *testing.T) {
+	srv := &Server{
+		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		PromClient: &fakePromClient{},
+		Inputs:     recommendertest.NewStaticInputs(),
+		Logger:     testLogger(t),
+	}
+	body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"})
+	req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
+	rec := httptest.NewRecorder()
+	srv.handleSimulate(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Outcome              string `json:"outcome"`
+		LiveOOMWindowSeconds int64  `json:"liveOOMWindowSeconds"`
+	}
+	decodeEnvelopeData(t, rec.Body, &got)
+	if want := int64(recommender.LiveOOMWindow.Seconds()); got.LiveOOMWindowSeconds != want {
+		t.Errorf("liveOOMWindowSeconds = %d, want %d", got.LiveOOMWindowSeconds, want)
+	}
+	if got.Outcome == "" {
+		t.Error("outcome missing: the Simulation's own fields must stay at the top level")
 	}
 }
 
