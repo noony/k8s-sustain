@@ -222,7 +222,10 @@ spec:
                           description: 'Limit lists the stages that shaped the limit:
                             the Policy''s limit strategy, each signal that may raise
                             the limit, then the guard that raises a limit below the
-                            request to the request. The last stage holds the limit.'
+                            request to the request. Unlike the request''s, the last
+                            stage need not hold the limit: a signal''s stage holds
+                            what it contributed even when that did not raise the limit.
+                            The Recommendation holds the limit.'
                           items:
                             description: |-
                               TraceStage is one stage of a resource's computation. A stage that did not
@@ -251,9 +254,9 @@ spec:
                                 - type: integer
                                 - type: string
                                 description: Value is what a signal contributed, before
-                                  headroom; for any other stage, the request or the
-                                  limit after it. Unset on a limit stage that leaves
-                                  the container without a limit.
+                                  headroom or rounding; for any other stage, the request
+                                  or the limit after it. Unset on a limit stage that
+                                  leaves the container without a limit.
                                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                 x-kubernetes-int-or-string: true
                             required:
@@ -293,9 +296,9 @@ spec:
                                 - type: integer
                                 - type: string
                                 description: Value is what a signal contributed, before
-                                  headroom; for any other stage, the request or the
-                                  limit after it. Unset on a limit stage that leaves
-                                  the container without a limit.
+                                  headroom or rounding; for any other stage, the request
+                                  or the limit after it. Unset on a limit stage that
+                                  leaves the container without a limit.
                                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                 x-kubernetes-int-or-string: true
                             required:
@@ -312,7 +315,10 @@ spec:
                           description: 'Limit lists the stages that shaped the limit:
                             the Policy''s limit strategy, each signal that may raise
                             the limit, then the guard that raises a limit below the
-                            request to the request. The last stage holds the limit.'
+                            request to the request. Unlike the request''s, the last
+                            stage need not hold the limit: a signal''s stage holds
+                            what it contributed even when that did not raise the limit.
+                            The Recommendation holds the limit.'
                           items:
                             description: |-
                               TraceStage is one stage of a resource's computation. A stage that did not
@@ -341,9 +347,9 @@ spec:
                                 - type: integer
                                 - type: string
                                 description: Value is what a signal contributed, before
-                                  headroom; for any other stage, the request or the
-                                  limit after it. Unset on a limit stage that leaves
-                                  the container without a limit.
+                                  headroom or rounding; for any other stage, the request
+                                  or the limit after it. Unset on a limit stage that
+                                  leaves the container without a limit.
                                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                 x-kubernetes-int-or-string: true
                             required:
@@ -383,9 +389,9 @@ spec:
                                 - type: integer
                                 - type: string
                                 description: Value is what a signal contributed, before
-                                  headroom; for any other stage, the request or the
-                                  limit after it. Unset on a limit stage that leaves
-                                  the container without a limit.
+                                  headroom or rounding; for any other stage, the request
+                                  or the limit after it. Unset on a limit stage that
+                                  leaves the container without a limit.
                                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                                 x-kubernetes-int-or-string: true
                             required:

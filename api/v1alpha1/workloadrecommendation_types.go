@@ -117,7 +117,7 @@ type ResourceTrace struct {
 	// +optional
 	Request []TraceStage `json:"request,omitempty"`
 
-	// Limit lists the stages that shaped the limit: the Policy's limit strategy, each signal that may raise the limit, then the guard that raises a limit below the request to the request. The last stage holds the limit.
+	// Limit lists the stages that shaped the limit: the Policy's limit strategy, each signal that may raise the limit, then the guard that raises a limit below the request to the request. Unlike the request's, the last stage need not hold the limit: a signal's stage holds what it contributed even when that did not raise the limit. The Recommendation holds the limit.
 	// +optional
 	Limit []TraceStage `json:"limit,omitempty"`
 }
@@ -128,7 +128,7 @@ type TraceStage struct {
 	// Stage names the stage: percentile, oomFloor, headroom, clamp, coordination, the limit strategy (keepLimit, noLimit, equalsToRequest, requestsLimitsRatio, keepLimitRequestRatio), guard, or another signal's name.
 	Stage string `json:"stage"`
 
-	// Value is what a signal contributed, before headroom; for any other stage, the request or the limit after it. Unset on a limit stage that leaves the container without a limit.
+	// Value is what a signal contributed, before headroom or rounding; for any other stage, the request or the limit after it. Unset on a limit stage that leaves the container without a limit.
 	// +optional
 	Value *resource.Quantity `json:"value,omitempty"`
 

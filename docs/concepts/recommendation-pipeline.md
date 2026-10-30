@@ -153,10 +153,10 @@ The trace is the record of how a Recommendation was derived. `recommender.Comput
 | `clamp` | request | after `minAllowed`/`maxAllowed` | — |
 | `coordination` | request | after the factors and the second clamp: the request | `overheadFactor`, `replicaFactor` (CPU with a `replicaBudgetAnchor`), `scaled` (what the factors produced, when the clamp replaced it) |
 | `keepLimit`, `noLimit`, `equalsToRequest`, `requestsLimitsRatio`, `keepLimitRequestRatio` | limit | the limit the strategy set; for a kept limit the container's own, absent when it has none | `ratio` |
-| a limit-side signal's name | limit | what it contributed | its own |
+| a limit-side signal's name | limit | what it contributed, before rounding up to a whole millicore or MiB, whether or not that raised the limit | its own |
 | `guard` | limit | the request the limit was raised to | — |
 
-The `guard` stage appears exactly when it changed the limit. A new signal brings its own stage and facts, with no change to the `WorkloadRecommendation` schema or the dashboard, which shows a stage it does not know under its own name.
+The last `request` stage holds the request. The last `limit` stage need not hold the limit: a limit-side signal's stage records what it contributed even when that stayed below the limit the strategy set. The Recommendation holds both. The `guard` stage appears exactly when it changed the limit. A new signal brings its own stage and facts, with no change to the `WorkloadRecommendation` schema or the dashboard, which shows a stage it does not know under its own name.
 
 The controller stores the trace in `status.trace` of the identity's `WorkloadRecommendation` together with the values, never on its own (see [Schema](workload-recommendations.md#schema)), and reads the `oomFloor` stage for its own metrics, so nothing re-derives a stage after the fact. The dashboard shows it per container on the workload detail page and reads the **Coordinated** factors of its list rows from the `coordination` stage.
 
