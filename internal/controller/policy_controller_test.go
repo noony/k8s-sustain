@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.uber.org/goleak"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -602,6 +603,82 @@ func TestPolicyEvents_OnlyGenerationChangesTriggerAPass(t *testing.T) {
 	}
 	if !policyEvents.Create(event.CreateEvent{Object: old}) || !policyEvents.Delete(event.DeleteEvent{Object: old}) {
 		t.Error("creating or deleting a Policy must trigger a pass")
+	}
+}
+
+// observeOOMAsync runs r.ObserveOOM for a kill of web's container "app"
+// under Policy "p" in a goroutine, and returns once the kill is counted, so
+// ObserveOOM is at its trigger send. done closes when it returns.
+func observeOOMAsync(ctx context.Context, t *testing.T, r *PolicyReconciler, web promclient.WorkloadIdentity) (done <-chan struct{}) {
+	t.Helper()
+	t.Cleanup(func() { r.forget("p") })
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		r.ObserveOOM(ctx, "p", web, "app")
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for testutilCounterValue(t, oomObservedTotal, web.Namespace, web.OwnerKind, web.OwnerName, "app") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the kill was never counted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return returned
+}
+
+func returnsSoon(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	case <-time.After(5 * time.Second):
+		return false
+	}
+}
+
+// A full trigger channel delays the trigger, never drops it: the pass it
+// triggers is what forgets a Policy deleted by the time its kill is counted.
+func TestObserveOOM_WaitsForRoomOnTheTriggerChannel(t *testing.T) {
+	triggers := make(chan event.GenericEvent, 1)
+	triggers <- event.GenericEvent{Object: &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "earlier"}}}
+	r := &PolicyReconciler{OOMTriggers: triggers}
+
+	done := observeOOMAsync(context.Background(), t, r, identityOf("oom-trigger-full", "Deployment", "web"))
+
+	select {
+	case <-done:
+		t.Fatal("ObserveOOM returned while the trigger channel was full")
+	default:
+	}
+	if got := (<-triggers).Object.GetName(); got != "earlier" {
+		t.Fatalf("first trigger = %q, want the one already queued", got)
+	}
+	select {
+	case ev := <-triggers:
+		if got := ev.Object.GetName(); got != "p" {
+			t.Errorf("trigger = %q, want p", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no trigger sent once the channel had room")
+	}
+	if !returnsSoon(done) {
+		t.Error("ObserveOOM did not return after sending its trigger")
+	}
+}
+
+// A shutdown while the trigger channel stays full ends the wait: ObserveOOM
+// returns, and leaves no goroutine behind.
+func TestObserveOOM_ReturnsWhenItsContextEndsWhileWaiting(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	r := &PolicyReconciler{OOMTriggers: make(chan event.GenericEvent)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := observeOOMAsync(ctx, t, r, identityOf("oom-trigger-shutdown", "Deployment", "web"))
+	cancel()
+
+	if !returnsSoon(done) {
+		t.Fatal("ObserveOOM still waits for room after its context ended")
 	}
 }
 
