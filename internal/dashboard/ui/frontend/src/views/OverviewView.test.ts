@@ -10,7 +10,11 @@ vi.mock('../lib/api', async (orig) => ({
 
 const emptyGroup = { total: 0, rows: [] }
 
-function summary(kpi: Partial<api.SummaryV2['kpi']> = {}, policies: api.PolicyRollup[] = []) {
+function summary(
+  kpi: Partial<api.SummaryV2['kpi']> = {},
+  policies: api.PolicyRollup[] = [],
+  attention: Partial<api.SummaryV2['attention']> = {},
+) {
   return {
     kpi: {
       cpuSavedCores: 0,
@@ -19,10 +23,6 @@ function summary(kpi: Partial<api.SummaryV2['kpi']> = {}, policies: api.PolicyRo
       memSavedBytes: 0,
       memSavedRatio: 0,
       memSpark7d: [],
-      conflictedCount: 0,
-      blockedCount: 0,
-      atRiskCount: 0,
-      driftedCount: 0,
       coordinatedCount: 0,
       ...kpi,
     },
@@ -35,6 +35,7 @@ function summary(kpi: Partial<api.SummaryV2['kpi']> = {}, policies: api.PolicyRo
       blocked: emptyGroup,
       'at-risk': emptyGroup,
       drifted: emptyGroup,
+      ...attention,
     },
     policies,
   }
@@ -78,18 +79,23 @@ describe('OverviewView', () => {
 
   it('renders every Risk-state and Coordinated count from the backend', async () => {
     const apiMock = serve(
-      summary({
-        conflictedCount: 3,
-        blockedCount: 4,
-        atRiskCount: 1,
-        driftedCount: 2,
-        coordinatedCount: 7,
+      summary({ coordinatedCount: 7 }, [], {
+        conflicted: { total: 3, rows: [] },
+        blocked: { total: 4, rows: [] },
+        'at-risk': { total: 1, rows: [] },
+        drifted: { total: 2, rows: [] },
       }),
     )
     const w = mount(OverviewView, { global: { stubs: ['router-link', 'TrendChart'] } })
     await flushPromises()
     const cards = w.findAllComponents({ name: 'KpiCard' })
     const byLabel = (label: string) => cards.find((c) => c.props('label') === label)
+    expect(cards.map((c) => c.props('label')).slice(2, 6)).toEqual([
+      'Conflicted',
+      'Blocked',
+      'At risk',
+      'Drifted',
+    ])
     for (const [label, value, to] of [
       ['Conflicted', '3', '/workloads?risk=conflicted'],
       ['Blocked', '4', '/workloads?risk=blocked'],
@@ -99,6 +105,7 @@ describe('OverviewView', () => {
       expect(byLabel(label)?.props('value')).toBe(value)
       expect(byLabel(label)?.props('to')).toBe(to)
     }
+    expect(byLabel('Blocked')?.props('detail')).toBe('last apply failed')
     expect(byLabel('Coordinated')?.props('value')).toBe('7')
     const paths = apiMock.mock.calls.map(([path]) => path as string)
     expect(paths.some((p) => p.startsWith('/api/workloads'))).toBe(false)

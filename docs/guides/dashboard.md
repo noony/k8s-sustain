@@ -73,10 +73,10 @@ Every row, badge, KPI and attention list shows one **Risk state** per workload i
 1. **Conflicted** — the identity's members opt into different Policies, so no Policy governs it and its recommendation is frozen (see [Conflicted identities](../concepts/workload-recommendations.md#conflicted-identities)).
 2. **Blocked** — the controller's last attempt to apply the identity's recommendation to a member failed, transiently (retried with backoff) or permanently (retried every reconcile, e.g. missing RBAC), and none has succeeded since.
 3. **At risk** — an OOM kill in the last 24 hours.
-4. **Drift** — pods whose running resources still differ from the recommendation beyond the policy's `downsizeThreshold`; a decrease the policy suppresses is not drift.
+4. **Drifted** — pods whose running resources still differ from the recommendation beyond the policy's `downsizeThreshold`; a decrease the policy suppresses is not drift.
 5. **Safe** — none of the above.
 
-An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. Blocked, At risk and Drift come from the controller's identity-keyed metrics and the `k8s_sustain:workload_oom_24h` rule (see [Metrics](../reference/metrics.md#what-owner_kind-and-owner_name-name)), so an owner-name group shows its members' combined state under the group's name. Conflicted comes from the identity inventory the dashboard shares with the controller.
+An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. Blocked, At risk and Drifted come from the controller's identity-keyed metrics and the `k8s_sustain:workload_oom_24h` rule (see [Metrics](../reference/metrics.md#what-owner_kind-and-owner_name-name)), so an owner-name group shows its members' combined state under the group's name. Conflicted comes from the identity inventory the dashboard shares with the controller.
 
 Every view counts the same identities: those of the inventory, so a signal left behind by a deleted workload counts nowhere. Each Risk-state count on the Overview equals the Workloads list filtered by that state.
 
@@ -98,7 +98,7 @@ The overview is a vertical flow of six bands:
 
 1. **KPI strip** — seven cards:
     - **CPU saved** and **Memory saved** — absolute saving, share of cluster requests, and a 7-day sparkline.
-    - **Conflicted**, **Blocked**, **At risk** and **Drifted** — how many identities are in each [Risk state](#risk-state); each identity counts once, under its state. Click one to open the Workloads list filtered to that state, which lists exactly that many.
+    - **Conflicted**, **Blocked**, **At risk** and **Drifted** — how many identities are in each [Risk state](#risk-state), under what puts an identity there (`policies disagree`, `last apply failed`, `OOM in 24h`, `pods not on rec`); each identity counts once, under its state, and each count is its Needs attention total. Click one to open the Workloads list filtered to that state, which lists exactly that many.
     - **Coordinated** — identities whose stored recommendation was adjusted for an HPA or KEDA ScaledObject, according to its [trace](../concepts/recommendation-pipeline.md#trace) (see [Autoscaler coordination](../concepts/autoscaler-coordination.md)), counted across every identity.
 2. **Savings** — CPU and memory side by side, each plotting three lines over the selected range:
     - **Usage** — measured CPU rate or memory working set, summed across containers in policy-managed workloads.
@@ -107,7 +107,7 @@ The overview is a vertical flow of six bands:
 
     All three are scoped to managed workloads (usage and current-request queries are joined `and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*`). The gap between *original* and *current request* is the realised saving; the gap between *current request* and *usage* is the remaining headroom.
 3. **Cluster headroom** — a stacked bar for CPU and memory split into `used`, `idle` and `free`, from the `k8s_sustain:cluster_cpu_headroom_breakdown` and `..._memory_headroom_breakdown` recording rules.
-4. **Needs attention** — four lists, one per non-Safe [Risk state](#risk-state) in precedence order, each identity in exactly one: **Conflicted** (with the policies its members opt into), **Blocked** (most retry attempts first), **Risk** (At risk, most OOM kills first) and **Drift** (most stale pods first). Each header shows how many identities are in that state; each list shows the worst ten, links each row to the identity's detail page, and links to the filtered Workloads list for the rest.
+4. **Needs attention** — four lists, one per non-Safe [Risk state](#risk-state) in precedence order, each identity in exactly one: **Conflicted** (with the policies its members opt into), **Blocked** (most retry attempts first), **At risk** (most OOM kills first) and **Drifted** (most stale pods first). Each header shows how many identities are in that state and collapses its list; each list shows the worst ten, links each row to the identity's detail page, and links to the filtered Workloads list for the rest.
 5. **Policy effectiveness** — per-policy identity count, CPU/memory saved, and the number of Blocked identities it governs.
 6. **Recent activity** — the latest reconcile and pod-recycle events from the controller.
 
@@ -118,9 +118,9 @@ Lists every workload identity (Deployments, StatefulSets, DaemonSets, Argo Rollo
 The rows come from the same identity inventory the controller reconciles from (`internal/inventory`), so membership, containers, age, Departed and the governing Policy agree with what the controller does.
 
 - **Stat strip** — Total, Automated (governed by a policy) and Manual counts, plus **Conflicted** when any identity is.
-- **Filters** — namespace, kind, status (Automated / Manual), lifecycle (Live / Departed, default any), risk (Safe / Drifted / At risk / Blocked / Conflicted), autoscaler (Has / No autoscaler), and a name search. **Reset filters** clears them all and returns to page 1, keeping the sort order. Filters, sort order and page are kept in the URL query string (e.g. `/workloads?namespace=prod&risk=at-risk&sort=-stalePods`), so browser Back from a workload restores the list and a filtered view can be bookmarked or shared.
+- **Filters** — namespace, kind, status (Automated / Manual), lifecycle (Live / Departed, default any), risk (Conflicted / Blocked / At risk / Drifted / Safe), autoscaler (Has / No autoscaler), and a name search. **Reset filters** clears them all and returns to page 1, keeping the sort order. Filters, sort order and page are kept in the URL query string (e.g. `/workloads?namespace=prod&risk=at-risk&sort=-stalePods`), so browser Back from a workload restores the list and a filtered view can be bookmarked or shared.
 - **Columns** — Namespace, Kind, Name, **Risk**, **Drift** (stale/total pods, e.g. `2/5`), **Policy** (links to the governing policy; a Conflicted identity names the policies its members opt into, in red) and container count. Sorted by name by default; click Namespace, Kind, Name, Drift or Policy to sort across all pages, click again to reverse.
-- **Risk** — the identity's [Risk state](#risk-state): `Conflicted`, then `Blocked`, then `At risk`, then `Drift`, otherwise `Safe`.
+- **Risk** — the identity's [Risk state](#risk-state): `Conflicted`, then `Blocked`, then `At risk`, then `Drifted`, otherwise `Safe`.
 - **Name badges** — **Autoscaler** when an HPA or KEDA ScaledObject targets the workload; **Coordinated** when autoscaler coordination adjusted its stored recommendation, followed by the non-trivial factors (`×1.15 CPU`, `×1.10 mem` overhead, `· replica ×0.80`) read from the recommendation's [trace](../concepts/recommendation-pipeline.md#trace); **Departed · last seen X ago** for an identity with no live member.
 
 Departed rows come from a retained `WorkloadRecommendation` whose identity has no live member left (completed bare pods, a deleted or finished standalone Job). They stay listed for the retention window (`--recommendation-retention`, default `168h`); see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads).

@@ -43,8 +43,8 @@ describe('AttentionQueue', () => {
     expect(w.findAll('.aq-title').map((t) => t.text())).toEqual([
       'Conflicted',
       'Blocked',
-      'Risk',
-      'Drift',
+      'At risk',
+      'Drifted',
     ])
     expect(w.findAll('.aq-row').length).toBe(2)
   })
@@ -69,5 +69,17 @@ describe('AttentionQueue', () => {
     expect(link.exists()).toBe(true)
     expect(link.attributes('href')).toBe('/workloads/a/Deployment/web')
     expect(w.find('a.aq-more').exists()).toBe(false)
+  })
+
+  it('collapses and reopens a group from its header', async () => {
+    const w = mount(AttentionQueue, {
+      props: { groups: groups({ 'at-risk': { total: 1, rows: [row('web', 'OOM')] } }) },
+      global: { plugins: [testRouter()] },
+    })
+    const header = w.findAll('.aq-header')[2]
+    await header.trigger('click')
+    expect(w.find('a.aq-row').exists()).toBe(false)
+    await header.trigger('click')
+    expect(w.find('a.aq-row').exists()).toBe(true)
   })
 })

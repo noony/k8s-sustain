@@ -1641,11 +1641,11 @@ a.kpi-card {
   background: var(--green-soft);
   color: var(--green);
 }
-.risk-drift {
+.risk-drifted {
   background: var(--yellow-soft);
   color: var(--yellow);
 }
-.risk-risk {
+.risk-at-risk {
   background: var(--red-soft);
   color: var(--red);
 }
@@ -1966,12 +1966,12 @@ a.kpi-card {
 .aq-header:hover {
   background: var(--bg-hover);
 }
-.aq-header.risk-risk {
+.aq-header.risk-at-risk {
   background: transparent;
   color: var(--text);
   border-left-color: var(--red);
 }
-.aq-header.risk-drift {
+.aq-header.risk-drifted {
   background: transparent;
   color: var(--text);
   border-left-color: var(--yellow);

@@ -372,10 +372,6 @@ export interface SummaryV2 {
     memSavedBytes: number
     memSavedRatio: number
     memSpark7d: number[]
-    conflictedCount: number
-    blockedCount: number
-    atRiskCount: number
-    driftedCount: number
     coordinatedCount: number
   }
   headroom: { cpu: HeadroomBreakdown; memory: HeadroomBreakdown }

@@ -13,6 +13,7 @@ import ErrorState from '../components/ErrorState.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Combobox from '../components/Combobox.vue'
 import { timeAgo } from '../lib/format'
+import { riskStateMeta } from '../lib/risk'
 
 const { openRow } = useRowLink()
 const {
@@ -126,11 +127,9 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
           </select>
           <select v-model="riskFilter">
             <option value="">Any risk</option>
-            <option value="safe">Safe</option>
-            <option value="drifted">Drifted</option>
-            <option value="at-risk">At risk</option>
-            <option value="blocked">Blocked</option>
-            <option value="conflicted">Conflicted</option>
+            <option v-for="m in riskStateMeta" :key="m.state" :value="m.state">
+              {{ m.label }}
+            </option>
           </select>
           <select v-model="autoscalerFilter">
             <option value="">Any autoscaler</option>
