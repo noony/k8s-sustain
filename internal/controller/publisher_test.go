@@ -595,3 +595,26 @@ func TestSeries_FollowTheLastComputation(t *testing.T) {
 		t.Errorf("an identity computed without an autoscaler keeps %d autoscaler series", got)
 	}
 }
+
+// A departed identity is computed against no autoscaler, so its first
+// computation as departed drops the autoscaler series it had while live.
+func TestSeries_DepartedIdentityIsComputedWithoutItsAutoscaler(t *testing.T) {
+	const ns = "series-departed-autoscaler"
+	dep, pod := establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web")
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true, ongoingDeployments("p"), dep, pod, cpuHPA(ns, "web", 70))
+	r.RecommendationRetention = time.Hour
+	autoscalerSeries := func() int {
+		return len(seriesForWorkload(t, "k8s_sustain_autoscaler_present", ns, "Deployment", "web"))
+	}
+
+	reconcileOnce(t, r, "p")
+	if autoscalerSeries() != 1 {
+		t.Fatal("pass 1 must publish the HPA's present series")
+	}
+	remove(t, r, dep, pod)
+	reconcileOnce(t, r, "p")
+
+	if got := autoscalerSeries(); got != 0 {
+		t.Errorf("a departed identity keeps %d autoscaler series", got)
+	}
+}

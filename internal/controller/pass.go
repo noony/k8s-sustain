@@ -11,7 +11,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
@@ -278,11 +277,7 @@ func (p passReport) publication(health healthReport, attempts map[promclient.Wor
 			attempts: attempts[rep.key],
 			tooYoung: rep.outcome == sustainv1alpha1.OutcomeTooYoung,
 		}
-		if rep.departed {
-			// Even when its fetch failed: no member is left for an
-			// autoscaler to scale.
-			s.autoscaler = &autoscaler.Info{Kind: autoscaler.KindNone}
-		} else {
+		if !rep.departed {
 			pub.live++
 		}
 		for _, res := range rep.members {

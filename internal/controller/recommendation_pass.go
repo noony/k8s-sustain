@@ -112,7 +112,6 @@ func (r *PolicyReconciler) recommend(ctx context.Context, policy *sustainv1alpha
 // answers.
 func computeIdentity(ctx context.Context, id *inventory.Identity, a recommender.Assembled) recommendation {
 	key := id.Key
-	// A departed identity's Group holds no autoscaler: no member is left to scale.
 	info := a.Autoscaler.Info
 	res := recommendation{
 		inputs:      a.Request.Inputs(),
