@@ -3,13 +3,15 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from
 import {
   api,
   ApiError,
+  type MergePatch,
   type PolicySummary,
   type SimulationResult,
   type SimulateRequest,
   type SimulationOverride,
   type SimulationSettings,
   type RecommendationContainer,
-  type ResourceLimitsConfig,
+  type Resource,
+  type ResourceConfig,
   type WorkloadListData,
 } from '../lib/api'
 import {
@@ -19,6 +21,8 @@ import {
   parseStepToMs,
   formatBytes,
 } from '../lib/format'
+import { limitModeOf, limitModeOrder, limitModes, limitsPatch, type LimitMode } from '../lib/limits'
+import { patches, setPatch, valueAt, type KeyPath, type ValueAt } from '../lib/patch'
 import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
@@ -50,14 +54,10 @@ const simKind = ref(props.kind || 'Deployment')
 const simName = ref(props.name || '')
 const { range } = useTimeRange()
 
-type Resource = 'cpu' | 'memory'
 const resources: { key: Resource; label: string; tag: string }[] = [
   { key: 'cpu', label: 'CPU', tag: 'sim-tag-cpu' },
   { key: 'memory', label: 'Memory', tag: 'sim-tag-mem' },
 ]
-
-type LimitMode =
-  'keepLimit' | 'noLimit' | 'equalsToRequest' | 'requestsLimitsRatio' | 'keepLimitRequestRatio'
 
 // Filled from the server's effective settings, never from defaults of its
 // own: the server alone knows the Policy and the recommender's defaults.
@@ -105,130 +105,114 @@ const simulating = ref(false)
 const liveMessage = ref('')
 const workloadList = ref<WorkloadListData['items']>([])
 
-function limitHelpText(mode: LimitMode, kind: Resource): string {
-  switch (mode) {
-    case 'keepLimit':
-      return 'Existing pod limits stay unchanged.'
-    case 'noLimit':
-      return kind === 'cpu'
-        ? 'Strips the CPU limit from the pod.'
-        : 'Strips the memory limit from the pod.'
-    case 'equalsToRequest':
-      return kind === 'cpu'
-        ? 'Limit = request. Note: CPU is throttled at the request value.'
-        : 'Limit = request. Memory above the request value triggers OOM-kill.'
-    case 'requestsLimitsRatio':
-      return 'Limit = request × ratio.'
-    case 'keepLimitRequestRatio':
-      return 'Limit = request × (current limit ÷ current request), per container.'
-  }
-}
+type ResourcePath = KeyPath<ResourceConfig>
+type SettingPath = KeyPath<SimulationSettings>
 
-type Path = string[]
+const resourceSetting = {
+  window: ['window'],
+  requests: ['requests'],
+  keepRequest: ['requests', 'keepRequest'],
+  percentile: ['requests', 'percentile'],
+  headroom: ['requests', 'headroom'],
+  minAllowed: ['requests', 'minAllowed'],
+  maxAllowed: ['requests', 'maxAllowed'],
+  limits: ['limits'],
+} as const satisfies Record<string, ResourcePath>
 
-function valueAt(obj: unknown, path: Path): unknown {
-  return path.reduce<unknown>(
-    (o, k) => (o != null && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined),
-    obj,
-  )
-}
+const workloadSetting = {
+  coordination: ['autoscalerCoordination', 'enabled'],
+  anchor: ['autoscalerCoordination', 'replicaBudgetAnchor'],
+  excludeInit: ['excludeInitContainers'],
+} as const satisfies Record<string, SettingPath>
 
-function edited(path: Path): boolean {
-  return valueAt(override.value, path) !== undefined
-}
-
-function edit(path: Path, value: unknown) {
-  let o = override.value as Record<string, unknown>
-  for (const k of path.slice(0, -1)) {
-    if (o[k] == null || typeof o[k] !== 'object') o[k] = {}
-    o = o[k] as Record<string, unknown>
-  }
-  o[path[path.length - 1]] = value
+function editResource<P extends ResourcePath>(
+  r: Resource,
+  path: P,
+  value: ValueAt<MergePatch<ResourceConfig>, P>,
+) {
+  const configs = (override.value.resourcesConfigs ??= {})
+  setPatch<ResourceConfig, P>((configs[r] ??= {}), path, value)
   scheduleSimulation()
 }
 
-const resourcePath = (r: Resource, ...p: string[]): Path => ['resourcesConfigs', r, ...p]
+function editWorkload<P extends SettingPath>(path: P, value: ValueAt<SimulationOverride, P>) {
+  setPatch<SimulationSettings, P>(override.value, path, value)
+  scheduleSimulation()
+}
 
 function setWindow(r: Resource, v: string) {
   form[r].window = v
-  edit(resourcePath(r, 'window'), v || null)
+  editResource(r, resourceSetting.window, v || null)
 }
 function setRequest(r: Resource, key: 'percentile' | 'headroom', v: number) {
   form[r][key] = v
-  edit(resourcePath(r, 'requests', key), v)
+  editResource(r, resourceSetting[key], v)
 }
 function setBound(r: Resource, key: 'minAllowed' | 'maxAllowed', v: string) {
   form[r][key] = v
-  edit(resourcePath(r, 'requests', key), v || null)
+  editResource(r, resourceSetting[key], v || null)
 }
 // A kept request takes no percentile, headroom or bounds; letting it go
 // again hands them back to the Policy.
 function setKeepRequest(r: Resource, keep: boolean) {
   form[r].keepRequest = keep
-  edit(
-    resourcePath(r, 'requests'),
+  editResource(
+    r,
+    resourceSetting.requests,
     keep
       ? { keepRequest: true, percentile: null, headroom: null, minAllowed: null, maxAllowed: null }
       : { keepRequest: false },
   )
 }
-// The limit strategy is one choice: every other one is cleared.
 function setLimit(r: Resource, mode: LimitMode, ratio: number) {
   form[r].limitMode = mode
   form[r].limitRatio = ratio
-  edit(resourcePath(r, 'limits'), {
-    equalsToRequest: mode === 'equalsToRequest',
-    keepLimit: mode === 'keepLimit',
-    keepLimitRequestRatio: mode === 'keepLimitRequestRatio',
-    noLimit: mode === 'noLimit',
-    requestsLimitsRatio: mode === 'requestsLimitsRatio' ? ratio : null,
-  })
+  editResource(r, resourceSetting.limits, limitsPatch(mode, ratio))
 }
 function setCoordination(enabled: boolean) {
   form.coordination = enabled
-  edit(['autoscalerCoordination', 'enabled'], enabled)
+  editWorkload(workloadSetting.coordination, enabled)
 }
 function setAnchor(v: string) {
   form.anchor = v
-  edit(['autoscalerCoordination', 'replicaBudgetAnchor'], v === '' ? null : Number(v))
+  editWorkload(workloadSetting.anchor, v === '' ? null : Number(v))
 }
 function setExcludeInit(v: boolean) {
   form.excludeInit = v
-  edit(['excludeInitContainers'], v)
-}
-
-function limitModeOf(lim: ResourceLimitsConfig | undefined): LimitMode {
-  if (lim?.noLimit) return 'noLimit'
-  if (lim?.equalsToRequest) return 'equalsToRequest'
-  if (lim?.keepLimitRequestRatio) return 'keepLimitRequestRatio'
-  if (typeof lim?.requestsLimitsRatio === 'number') return 'requestsLimitsRatio'
-  return 'keepLimit'
+  editWorkload(workloadSetting.excludeInit, v)
 }
 
 // Never over a control the user edited: the response may predate the edit.
 function fill(eff: SimulationSettings) {
   for (const { key: r } of resources) {
-    const c = eff.resourcesConfigs[r] ?? {}
     const f = form[r]
-    const fresh = (...p: string[]) => !edited(resourcePath(r, ...p))
-    if (fresh('window')) f.window = c.window ?? ''
-    if (fresh('requests', 'keepRequest')) f.keepRequest = !!c.requests?.keepRequest
-    if (fresh('requests', 'percentile')) f.percentile = c.requests?.percentile ?? f.percentile
-    if (fresh('requests', 'headroom')) f.headroom = c.requests?.headroom ?? f.headroom
-    if (fresh('requests', 'minAllowed')) f.minAllowed = c.requests?.minAllowed ?? ''
-    if (fresh('requests', 'maxAllowed')) f.maxAllowed = c.requests?.maxAllowed ?? ''
-    if (fresh('limits')) {
-      f.limitMode = limitModeOf(c.limits)
-      f.limitRatio = c.limits?.requestsLimitsRatio ?? f.limitRatio
+    const take = <P extends ResourcePath>(
+      p: P,
+      set: (v: ValueAt<ResourceConfig, P> | undefined) => void,
+    ) => {
+      if (!patches<ResourceConfig, P>(override.value.resourcesConfigs?.[r], p))
+        set(valueAt(eff.resourcesConfigs[r], p))
     }
+    take(resourceSetting.window, (v) => (f.window = v ?? ''))
+    take(resourceSetting.keepRequest, (v) => (f.keepRequest = !!v))
+    take(resourceSetting.percentile, (v) => (f.percentile = v ?? f.percentile))
+    take(resourceSetting.headroom, (v) => (f.headroom = v ?? f.headroom))
+    take(resourceSetting.minAllowed, (v) => (f.minAllowed = v ?? ''))
+    take(resourceSetting.maxAllowed, (v) => (f.maxAllowed = v ?? ''))
+    take(resourceSetting.limits, (v) => {
+      f.limitMode = limitModeOf(v)
+      f.limitRatio = v?.requestsLimitsRatio ?? f.limitRatio
+    })
   }
-  if (!edited(['autoscalerCoordination', 'enabled']))
-    form.coordination = !!eff.autoscalerCoordination.enabled
-  if (!edited(['autoscalerCoordination', 'replicaBudgetAnchor'])) {
-    const a = eff.autoscalerCoordination.replicaBudgetAnchor
-    form.anchor = a == null ? '' : String(a)
+  const take = <P extends SettingPath>(
+    p: P,
+    set: (v: ValueAt<SimulationSettings, P> | undefined) => void,
+  ) => {
+    if (!patches<SimulationSettings, P>(override.value, p)) set(valueAt(eff, p))
   }
-  if (!edited(['excludeInitContainers'])) form.excludeInit = !!eff.excludeInitContainers
+  take(workloadSetting.coordination, (v) => (form.coordination = !!v))
+  take(workloadSetting.anchor, (v) => (form.anchor = v == null ? '' : String(v)))
+  take(workloadSetting.excludeInit, (v) => (form.excludeInit = !!v))
 }
 
 const startingPoint = computed(() => {
@@ -371,7 +355,6 @@ async function runSimulation() {
     if (id !== requestId) return
     simulating.value = false
     liveMessage.value = `Simulation failed: ${e.message}`
-    // An override the server rejects leaves the last results up.
     if (e instanceof ApiError && e.status === 400 && simData.value) {
       overrideError.value = e.message
       return
@@ -745,14 +728,12 @@ onUnmounted(() => {
                 )
               "
             >
-              <option value="keepLimit">Keep existing limit</option>
-              <option value="noLimit">Remove limit</option>
-              <option value="equalsToRequest">Equal to request</option>
-              <option value="requestsLimitsRatio">Multiple of request</option>
-              <option value="keepLimitRequestRatio">Preserve current limit/request ratio</option>
+              <option v-for="m in limitModeOrder" :key="m" :value="m">
+                {{ limitModes[m].label }}
+              </option>
             </select>
             <p :id="r.key + '-limit-help'" class="form-helper">
-              {{ limitHelpText(form[r.key].limitMode, r.key) }}
+              {{ limitModes[form[r.key].limitMode].help[r.key] }}
             </p>
           </div>
           <div v-if="form[r.key].limitMode === 'requestsLimitsRatio'" class="form-group">

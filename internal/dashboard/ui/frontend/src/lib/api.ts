@@ -295,6 +295,8 @@ export interface SimulationSettings {
   excludeInitContainers?: boolean
 }
 
+export type Resource = keyof SimulationSettings['resourcesConfigs']
+
 /** A JSON merge patch (RFC 7386): a key set replaces the base's, null removes it. */
 export type MergePatch<T> = {
   [K in keyof T]?: NonNullable<T[K]> extends object
@@ -321,12 +323,15 @@ export interface SimulateRequest {
   override?: SimulationOverride
 }
 
+/** What a Simulation's computation can decide; a failed fetch is an error, and Conflicted the controller's alone. */
+export type SimulationOutcome = Exclude<RecommendationOutcome, 'FetchFailed' | 'Conflicted'>
+
 export interface SimulationResult {
   /** The Policy the Simulation started from; absent when none governs the identity and none was chosen. */
   policy?: string
   /** What it ran with: the Policy's settings, the override merged in, every default explicit. */
   effective: SimulationSettings
-  outcome: Exclude<RecommendationOutcome, 'FetchFailed' | 'Conflicted'>
+  outcome: SimulationOutcome
   containers: Record<string, RecommendationContainer>
   /** How each container's values were derived, stage by stage. */
   trace?: Record<string, ContainerTrace>
@@ -351,7 +356,7 @@ export interface BatchWorkloadResult {
   kind: string
   name: string
   /** Only a Computed identity counts toward the savings. */
-  outcome?: Exclude<RecommendationOutcome, 'FetchFailed' | 'Conflicted'>
+  outcome?: SimulationOutcome
   error?: string
   containers?: Record<
     string,

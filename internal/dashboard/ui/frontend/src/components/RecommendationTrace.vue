@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { ContainerTrace, TraceStage } from '../lib/api'
 import { parseCPUQuantity, parseMemoryQuantity } from '../lib/format'
+import { limitModeOrder, limitModes } from '../lib/limits'
 
 const props = defineProps<{ trace: ContainerTrace }>()
 
@@ -24,11 +25,7 @@ const stageNames: Record<string, string> = {
   headroom: 'With headroom',
   clamp: 'Min/max clamp',
   coordination: 'Autoscaler coordination',
-  keepLimit: 'Limit kept',
-  noLimit: 'Limit removed',
-  equalsToRequest: 'Limit equal to request',
-  requestsLimitsRatio: 'Limit at a ratio of the request',
-  keepLimitRequestRatio: 'Limit at the kept ratio',
+  ...Object.fromEntries(limitModeOrder.map((m) => [m, limitModes[m].stage])),
   guard: 'Limit raised to the request',
 }
 
@@ -41,8 +38,8 @@ function cell(st: TraceStage | undefined, fmt: Format): string | undefined {
   return [value, ...facts].join(' · ')
 }
 
-// The stage names of every list, each list's in its own order; a name only
-// one list has goes right after the name it follows there, or last.
+// CPU and memory need not run the same stages (the OOM floor is memory's), so
+// each row goes where its stage ran in the trace that has it.
 function mergeOrder(...lists: string[][]): string[] {
   const out: string[] = []
   for (const list of lists) {

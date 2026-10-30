@@ -22,8 +22,6 @@ const simulation = (): api.SimulationResult => ({
   memorySeries: {},
 })
 
-// serveSimulator answers the simulator's reads, and every POST /api/simulate
-// with simulate(body), recording each body.
 function serveSimulator(simulate: (body: api.SimulateRequest) => Promise<unknown>) {
   const bodies: api.SimulateRequest[] = []
   ;(api.api as any).mockReset()
@@ -95,6 +93,46 @@ describe('SimulatorView', () => {
       },
     })
     expect((w.find('[data-test="cpu-percentile"]').element as HTMLInputElement).value).toBe('80')
+  })
+
+  it('sends the workload settings and a kept request, and keeps them over the response', async () => {
+    vi.useFakeTimers()
+    const bodies = serveSimulator(async () => simulation())
+    const w = mountOpened()
+    await flushPromises()
+
+    await w.find('[data-test="coordination"]').setValue(false)
+    await w.find('[data-test="cpu-keep-request"]').setValue(true)
+    vi.advanceTimersByTime(400)
+    await flushPromises()
+
+    expect(bodies[1].override).toEqual({
+      autoscalerCoordination: { enabled: false },
+      resourcesConfigs: {
+        cpu: {
+          requests: {
+            keepRequest: true,
+            percentile: null,
+            headroom: null,
+            minAllowed: null,
+            maxAllowed: null,
+          },
+        },
+      },
+    })
+    expect((w.find('[data-test="coordination"]').element as HTMLInputElement).checked).toBe(false)
+    expect(w.find('[data-test="cpu-percentile"]').exists()).toBe(false)
+  })
+
+  it("explains each resource's limit strategy", async () => {
+    serveSimulator(async () => simulation())
+    const w = mountOpened()
+    await flushPromises()
+
+    expect(w.find('#cpu-limit-help').text()).toBe('Strips the CPU limit from the pod.')
+    expect(w.find('#memory-limit-help').text()).toBe('Existing pod limits stay unchanged.')
+    await w.find('#memory-limit-mode').setValue('equalsToRequest')
+    expect(w.find('#memory-limit-help').text()).toContain('triggers OOM-kill')
   })
 
   it("shows the server's rejection of an override and keeps the last results", async () => {
