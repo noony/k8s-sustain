@@ -68,7 +68,8 @@ type Decision struct {
 	Level Level
 	// Policy is the governing Policy and Mode the mode it manages the
 	// identity's kind in; nil and empty when Refusal is set. Policy may be
-	// shared with concurrent decisions: never modify it.
+	// shared with concurrent decisions and with an informer cache: never
+	// modify it.
 	Policy  *sustainv1alpha1.Policy
 	Mode    sustainv1alpha1.UpdateMode
 	Refusal Refusal

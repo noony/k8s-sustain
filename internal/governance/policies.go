@@ -43,11 +43,13 @@ type PolicyLister struct {
 	last map[string]*compiled
 }
 
-// List lists every Policy through r. A governing Policy it returns is shared
-// with every other call that saw the same version of it: never modify it.
+// List lists every Policy through r. It lists without deep copies, since the
+// webhook lists on every admission: from an informer cache, a Policy it
+// returns shares its fields with the cache's own object, and with every other
+// call that saw the same version of it. Never modify it.
 func (l *PolicyLister) List(ctx context.Context, r client.Reader, excludedNamespaces []string) (*Policies, error) {
 	var list sustainv1alpha1.PolicyList
-	if err := r.List(ctx, &list); err != nil {
+	if err := r.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
 		return nil, fmt.Errorf("listing policies: %w", err)
 	}
 	l.mu.Lock()

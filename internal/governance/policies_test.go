@@ -105,10 +105,13 @@ func TestPolicyListerFollowsEveryChangeToAPolicy(t *testing.T) {
 // they carry, which a fake client would assign itself.
 type storedPolicies struct {
 	client.Reader
-	items []sustainv1alpha1.Policy
+	items  []sustainv1alpha1.Policy
+	listed client.ListOptions
 }
 
-func (s *storedPolicies) List(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+func (s *storedPolicies) List(_ context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	s.listed = client.ListOptions{}
+	s.listed.ApplyOptions(opts)
 	l := list.(*sustainv1alpha1.PolicyList)
 	for i := range s.items {
 		l.Items = append(l.Items, *s.items[i].DeepCopy())
@@ -138,6 +141,18 @@ func TestPolicyListerRecompilesARecreatedPolicy(t *testing.T) {
 	d, _ := governance.Decide(ctx, webOptingInto("team-a", "p", map[string]string{"tier": "api"}), r)
 	if !d.Governed() || d.Policy.UID != recreated.UID {
 		t.Errorf("after the recreate: api decision = %+v, want the recreated p governing", d)
+	}
+}
+
+// The webhook lists every Policy on every admission, through an informer
+// cache that would otherwise deep-copy each one.
+func TestPolicyListerListsWithoutDeepCopies(t *testing.T) {
+	src := &storedPolicies{items: []sustainv1alpha1.Policy{*selecting("web")}}
+	if _, err := new(governance.PolicyLister).List(context.Background(), src, nil); err != nil {
+		t.Fatal(err)
+	}
+	if noCopy := src.listed.UnsafeDisableDeepCopy; noCopy == nil || !*noCopy {
+		t.Error("the List asks the cache for deep copies")
 	}
 }
 
