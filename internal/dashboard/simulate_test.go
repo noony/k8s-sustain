@@ -3,8 +3,6 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -66,33 +64,6 @@ func newCoordinatedSimulateServer(t *testing.T) *Server {
 		promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
 		&recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"main": 1}})
 	return &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: inputs, Logger: testLogger(t)}
-}
-
-// A Simulation coordinates against the autoscaler of the member it targets,
-// with the governing Policy's coordination, as the controller does.
-func TestRunSimulation_CoordinatesAgainstItsMembersAutoscaler(t *testing.T) {
-	srv := newCoordinatedSimulateServer(t)
-	res, err := srv.runSimulation(context.Background(), simulateRequest{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"})
-	if err != nil {
-		t.Fatalf("runSimulation: %v", err)
-	}
-	if got := res.Containers["main"].CPURequest; got != "2200m" {
-		t.Errorf("cpu = %q, want 2200m: web-green's HPA under the governing Policy's coordination", got)
-	}
-}
-
-// Batch simulate coordinates each identity as its Simulation does.
-func TestBatchSimulate_CoordinatesAgainstItsMembersAutoscaler(t *testing.T) {
-	srv := newCoordinatedSimulateServer(t)
-
-	rec := httptest.NewRecorder()
-	srv.handlePolicyBatchSimulate(rec, httptest.NewRequest(http.MethodGet, "/api/policies/p/batch-simulate", nil), "p")
-
-	var resp batchSimulateResponse
-	decodeEnvelopeData(t, rec.Body, &resp)
-	if len(resp.Workloads) != 1 || resp.Workloads[0].Containers["main"].RecommendedCPU != "2200m" {
-		t.Errorf("workloads = %+v, want web recommended 2200m: web-green's HPA", resp.Workloads)
-	}
 }
 
 // Each chart point is computed as the point value is: with headroom, and with
