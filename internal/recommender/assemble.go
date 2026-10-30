@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -30,49 +31,53 @@ type Assembled struct {
 	Err        error
 }
 
+// autoscalerReadConcurrency bounds how many namespaces Assemble reads the
+// autoscalers of at once. It is a goroutine bound only: a namespace's first
+// read Lists its HPAs and ScaledObjects, later ones read that snapshot.
+const autoscalerReadConcurrency = 4
+
 // Assemble turns each identity into the Request spec makes of it, in order:
 // the controller and the dashboard's Simulations both go through here, so they
-// hand Compute the same Request. It reads the autoscaler of every member whose
-// containers make the identity's (a departed identity has none), fetches every
-// identity's inputs in one batch under spec's resources, defaults made
-// explicit (WithDefaults), and leaves init containers out when spec excludes
-// them. An identity with no containers at all, one the inventory has not seen,
-// is recommended for every container its inputs report. Every Request
-// computes as of one instant read from now once the fetch returned; a caller
-// whose inputs are decorated with WithLiveOOMs passes the decorator's clock.
+// hand Compute the same Request. It fetches every identity's inputs in one
+// batch under spec's resources, defaults made explicit (WithDefaults), while
+// it reads the autoscaler of every member whose containers make the identity's
+// (a departed identity has none), and leaves init containers out when spec
+// excludes them. An identity with no containers at all, one the inventory has
+// not seen, is recommended for every container its inputs report. Every
+// Request computes as of one instant read from now once the fetch returned;
+// a caller whose inputs are decorated with WithLiveOOMs passes the decorator's
+// clock.
 func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers, now func() time.Time, spec sustainv1alpha1.RightSizingSpec, ids []*inventory.Identity) []Assembled {
 	resources := WithDefaults(spec.ResourcesConfigs)
 	out := make([]Assembled, len(ids))
 	reqs := make([]InputsRequest, len(ids))
-	reads := readsOnce{autoscalers: autoscalers, failed: map[string]failedRead{}}
 	for i, id := range ids {
 		containers := ContainersOf(spec, id)
-		group, _ := autoscalerOf(ctx, reads, id)
-		out[i] = Assembled{
-			Request: Request{
-				containers:   containers,
-				resources:    resources,
-				coordination: spec.AutoscalerCoordination,
-				autoInfo:     group.Info,
-				since:        id.Since,
-			},
-			Autoscaler: group,
+		out[i].Request = Request{
+			containers:   containers,
+			resources:    resources,
+			coordination: spec.AutoscalerCoordination,
+			since:        id.Since,
 		}
 		reqs[i] = InputsRequest{Identity: id.Key, Containers: len(containers)}
 	}
 
+	read := readAutoscalers(ctx, autoscalers, ids)
 	fetched := inputs.FetchInputs(ctx, resources, reqs)
 	// Taken after the fetch, which can take minutes: kills it merged in must
 	// not postdate the instant they are computed as of.
 	at := now()
+	groups := read()
 	for i, id := range ids {
+		group := groups[i]
 		f := fetched[id.Key]
 		if f.Err != nil {
-			out[i] = Assembled{Autoscaler: out[i].Autoscaler, Err: f.Err}
+			out[i] = Assembled{Autoscaler: group, Err: f.Err}
 			continue
 		}
+		out[i].Autoscaler = group
 		req := &out[i].Request
-		req.inputs, req.now = f.Inputs, at
+		req.autoInfo, req.inputs, req.now = group.Info, f.Inputs, at
 		if len(id.Containers) == 0 && len(id.InitContainers) == 0 {
 			req.containers = observedContainers(f.Inputs)
 		}
@@ -80,31 +85,60 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 	return out
 }
 
-// readsOnce stops reading a namespace's autoscalers once a read of it failed,
-// answering its other identities with that failure: NamespacedSnapshot caches
-// no failure, so every identity of an unreadable namespace would List its
-// HPAs and ScaledObjects again. The failure is logged once.
-type readsOnce struct {
-	autoscalers Autoscalers
-	failed      map[string]failedRead
+// readAutoscalers starts reading the autoscaler of each identity, every
+// namespace's in a goroutine of its own, at most autoscalerReadConcurrency at
+// once, and returns what waits for them all and answers them in ids' order.
+func readAutoscalers(ctx context.Context, autoscalers Autoscalers, ids []*inventory.Identity) (wait func() []autoscaler.Group) {
+	groups := make([]autoscaler.Group, len(ids))
+	byNamespace := map[string][]int{}
+	var namespaces []string
+	for i, id := range ids {
+		ns := id.Key.Namespace
+		if _, ok := byNamespace[ns]; !ok {
+			namespaces = append(namespaces, ns)
+		}
+		byNamespace[ns] = append(byNamespace[ns], i)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var g errgroup.Group
+		g.SetLimit(autoscalerReadConcurrency)
+		for _, ns := range namespaces {
+			g.Go(func() error {
+				readNamespace(ctx, autoscalers, ns, ids, byNamespace[ns], groups)
+				return nil
+			})
+		}
+		_ = g.Wait()
+	}()
+	return func() []autoscaler.Group {
+		<-done
+		return groups
+	}
 }
 
-type failedRead struct {
-	group autoscaler.Group
-	err   error
-}
-
-func (r readsOnce) ForIdentity(ctx context.Context, namespace, kind string, members []string) (autoscaler.Group, error) {
-	if f, ok := r.failed[namespace]; ok {
-		return f.group, f.err
+// readNamespace reads, in order, the autoscaler of the identities of ids at
+// the indexes at, all of namespace ns, into the same indexes of groups. It
+// stops reading the namespace once a read failed, answering its other
+// identities with that failure: NamespacedSnapshot caches no failure, so
+// every identity of an unreadable namespace would List its HPAs and
+// ScaledObjects again. The failure is logged once.
+func readNamespace(ctx context.Context, autoscalers Autoscalers, ns string, ids []*inventory.Identity, at []int, groups []autoscaler.Group) {
+	var failed *autoscaler.Group
+	for _, i := range at {
+		if failed != nil {
+			groups[i] = *failed
+			continue
+		}
+		group, err := autoscalerOf(ctx, autoscalers, ids[i])
+		groups[i] = group
+		if err != nil {
+			failed = &group
+			log.FromContext(ctx).Error(err, "reading the namespace's autoscalers failed; its identities are recommended uncoordinated",
+				"namespace", ns)
+		}
 	}
-	group, err := r.autoscalers.ForIdentity(ctx, namespace, kind, members)
-	if err != nil {
-		r.failed[namespace] = failedRead{group: group, err: err}
-		log.FromContext(ctx).Error(err, "reading the namespace's autoscalers failed; its identities are recommended uncoordinated",
-			"namespace", namespace)
-	}
-	return group, err
 }
 
 // ContainersOf is the containers spec recommends of id: its containers, and

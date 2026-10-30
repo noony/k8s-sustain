@@ -6,9 +6,11 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
+	"go.uber.org/goleak"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -59,11 +61,15 @@ func (f *recordedInputs) FetchInputs(_ context.Context, cfg sustainv1alpha1.Reso
 type memberAutoscalers struct {
 	groups map[string]autoscaler.Group
 	failed map[string]error
-	asked  map[string][]string
-	reads  map[string]int
+
+	mu    sync.Mutex
+	asked map[string][]string
+	reads map[string]int
 }
 
 func (f *memberAutoscalers) ForIdentity(_ context.Context, namespace, _ string, members []string) (autoscaler.Group, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.asked == nil {
 		f.asked, f.reads = map[string][]string{}, map[string]int{}
 	}
@@ -258,6 +264,69 @@ func TestAssemble_AnUnreadableNamespaceIsReadOnce(t *testing.T) {
 	for i, want := range []autoscaler.Kind{autoscaler.KindNone, autoscaler.KindNone, autoscaler.KindHPA, autoscaler.KindNone} {
 		if a := got[i]; a.Err != nil || a.Autoscaler.Info.Kind != want || a.Request.autoInfo.Kind != want {
 			t.Errorf("identity %d = %+v, want a Request shaped against %s", i, a, want)
+		}
+	}
+}
+
+// concurrentAutoscalers answers every member with hpa, but only once the
+// fetch has started and a read of every namespace in pending has too: a read
+// that waits longer than a few seconds for either fails.
+type concurrentAutoscalers struct {
+	fetching chan struct{}
+	reading  chan struct{}
+
+	mu      sync.Mutex
+	pending map[string]bool
+}
+
+func (f *concurrentAutoscalers) ForIdentity(_ context.Context, namespace, _ string, _ []string) (autoscaler.Group, error) {
+	f.mu.Lock()
+	if f.pending[namespace] {
+		delete(f.pending, namespace)
+		if len(f.pending) == 0 {
+			close(f.reading)
+		}
+	}
+	f.mu.Unlock()
+	for _, ch := range []chan struct{}{f.fetching, f.reading} {
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			return autoscaler.Group{Info: autoscaler.Info{Kind: autoscaler.KindNone}}, errors.New("read alone")
+		}
+	}
+	return autoscaler.Group{Info: hpa}, nil
+}
+
+// startingInputs closes fetching as its fetch starts.
+type startingInputs struct {
+	recordedInputs
+	fetching chan struct{}
+}
+
+func (f *startingInputs) FetchInputs(ctx context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
+	close(f.fetching)
+	return f.recordedInputs.FetchInputs(ctx, cfg, reqs)
+}
+
+// The autoscalers of every namespace are read at once, while the inputs are
+// fetched, and none is still being read once Assemble returns.
+func TestAssemble_ReadsAutoscalersWhileItFetches(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	fetching := make(chan struct{})
+	autoscalers := &concurrentAutoscalers{
+		fetching: fetching,
+		reading:  make(chan struct{}),
+		pending:  map[string]bool{"prod": true, "staging": true},
+	}
+
+	got := Assemble(context.Background(), &startingInputs{fetching: fetching}, autoscalers, time.Now, sustainv1alpha1.RightSizingSpec{},
+		[]*inventory.Identity{governed("prod", "api"), governed("staging", "db"), governed("prod", "web")})
+
+	for i, a := range got {
+		if a.Err != nil || a.Autoscaler.Info.Kind != autoscaler.KindHPA || a.Request.autoInfo.Kind != autoscaler.KindHPA {
+			t.Errorf("identity %d: autoscaler %s, Request shaped against %s, err %v; want its HPA: its namespace was read alone, or before the fetch",
+				i, a.Autoscaler.Info.Kind, a.Request.autoInfo.Kind, a.Err)
 		}
 	}
 }
