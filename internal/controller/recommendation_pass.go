@@ -15,13 +15,10 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// outcomeNotFetched is the outcome of an identity the pass left out of the
-// fetch, which records nothing.
-const outcomeNotFetched sustainv1alpha1.RecommendationOutcome = ""
-
-// recommendation is the recommendation pass's verdict on one identity.
+// recommendation is the recommendation pass's verdict on one identity, the
+// zero value for one the pass left out of the fetch.
 type recommendation struct {
-	// outcome is what the pass records for the identity, or outcomeNotFetched.
+	// outcome is what the pass records for the identity.
 	outcome sustainv1alpha1.RecommendationOutcome
 	// recs is the identity's Recommendation and traces how it was derived,
 	// both set only for a Computed outcome.
@@ -58,12 +55,9 @@ type oomFloor struct {
 }
 
 // decision is what the verdict records in the identity's
-// WorkloadRecommendation; false for an identity that was not fetched.
-func (rec recommendation) decision(departed bool) (wlrcache.Decision, bool) {
-	if rec.outcome == outcomeNotFetched {
-		return wlrcache.Decision{}, false
-	}
-	return wlrcache.Decision{Departed: departed, Outcome: rec.outcome, Recs: rec.recs, Traces: rec.traces}, true
+// WorkloadRecommendation.
+func (rec recommendation) decision(departed bool) wlrcache.Decision {
+	return wlrcache.Decision{Departed: departed, Outcome: rec.outcome, Recs: rec.recs, Traces: rec.traces}
 }
 
 // recommend is the recommendation pass: one verdict per identity on the
@@ -77,7 +71,6 @@ func (r *PolicyReconciler) recommend(ctx context.Context, policy *sustainv1alpha
 	var at []int
 	for i, w := range work {
 		if !w.fetched() {
-			out[i].outcome = outcomeNotFetched
 			continue
 		}
 		ids = append(ids, w.id)

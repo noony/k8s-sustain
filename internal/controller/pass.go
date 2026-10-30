@@ -25,6 +25,9 @@ type passReport []identityReport
 type identityReport struct {
 	key      promclient.WorkloadIdentity
 	departed bool
+	// fetched is false for an identity the pass left out of the fetch, which
+	// records nothing and has no outcome.
+	fetched  bool
 	outcome  sustainv1alpha1.RecommendationOutcome
 	resolved bool
 	// err is why a departed identity failed: its inputs could not be read or
@@ -80,7 +83,8 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 	report := make(passReport, len(work))
 	for i, w := range work {
 		rep := identityReport{
-			key: w.id.Key, departed: w.id.Departed(), outcome: recs[i].outcome, members: applied[i], computed: recs[i].computed,
+			key: w.id.Key, departed: w.id.Departed(), fetched: w.fetched(), outcome: recs[i].outcome,
+			members: applied[i], computed: recs[i].computed,
 		}
 		if in := recs[i].inputs; in != nil {
 			rep.resolved = len(in.CPUPerPod) > 0 || len(in.MemPerPod) > 0
@@ -168,12 +172,12 @@ func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, clai
 	var g errgroup.Group
 	g.SetLimit(r.WorkloadConcurrencyLimit)
 	for i, w := range work {
-		d, ok := recs[i].decision(w.id.Departed())
 		switch {
-		case !ok:
+		case !w.fetched():
 		case claims[i].err != nil:
 			errs[i] = claims[i].err
 		default:
+			d := recs[i].decision(w.id.Departed())
 			g.Go(func() error {
 				errs[i] = wlrcache.Record(ctx, r.Client, claims[i].wlr, d, time.Now())
 				return nil
@@ -190,7 +194,7 @@ func emitDepartedRefresh(ctx context.Context, id *inventory.Identity, rep identi
 	ns, kind := id.Key.Namespace, id.Key.OwnerKind
 	refresh := WLRRefreshNoData
 	switch {
-	case rep.outcome == outcomeNotFetched:
+	case !rep.fetched:
 		// Never silent: this state once hid a read-after-write bug that
 		// stranded every new identity.
 		refresh = WLRRefreshNoSnapshot
@@ -214,7 +218,7 @@ func emitDepartedRefresh(ctx context.Context, id *inventory.Identity, rep identi
 func (p passReport) processed() int {
 	n := 0
 	for _, rep := range p {
-		if rep.departed && rep.outcome != outcomeNotFetched ||
+		if rep.departed && rep.fetched ||
 			slices.ContainsFunc(rep.members, func(res applyResult) bool { return res.kind != applySkipped }) {
 			n++
 		}
@@ -243,7 +247,7 @@ func (p passReport) liveMembers() map[promclient.WorkloadIdentity][]string {
 func (p passReport) coverage() (requested, resolved, failed int) {
 	for _, rep := range p {
 		switch {
-		case rep.outcome == outcomeNotFetched:
+		case !rep.fetched:
 			continue
 		case rep.outcome == sustainv1alpha1.OutcomeFetchFailed:
 			failed++
