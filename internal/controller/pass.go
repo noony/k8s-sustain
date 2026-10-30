@@ -19,8 +19,7 @@ import (
 )
 
 // passReport is what one pass did with each identity its Policy governs, in
-// identity order. A departed identity with no observed-resources snapshot has
-// no container set to compute against and is not in it.
+// identity order.
 type passReport []identityReport
 
 // identityReport is what one pass did with one identity.
@@ -53,8 +52,14 @@ type passIdentity struct {
 }
 
 // fetched reports whether the pass fetches the identity's inputs: not when
-// every live member is backed off.
-func (w passIdentity) fetched() bool { return w.id.Departed() || len(w.run) > 0 }
+// every live member is backed off, nor for a departed identity without an
+// observed-resources snapshot, which has no container set to compute against.
+func (w passIdentity) fetched() bool {
+	if w.id.Departed() {
+		return len(w.id.Containers) > 0 || len(w.id.InitContainers) > 0
+	}
+	return len(w.run) > 0
+}
 
 // claimed is the WorkloadRecommendation an identity's decision is recorded
 // into, or why the governing Policy could not claim it.
@@ -71,7 +76,7 @@ type claimed struct {
 // party to only has its outcome recorded (ADR 0002).
 func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.Policy, snap *inventory.Snapshot) passReport {
 	r.recordConflicted(ctx, policy.Name, snap)
-	work := r.workList(ctx, policy, snap.GovernedBy(policy.Name))
+	work := r.workList(policy, snap.GovernedBy(policy.Name))
 	claims := r.claim(ctx, policy.Name, work)
 	recs := r.recommend(ctx, policy, work)
 	stored := r.record(ctx, work, claims, recs)
@@ -106,30 +111,19 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 
 // workList turns the identities policy governs into the pass's work-list,
 // taking the backoff split of every live member.
-func (r *PolicyReconciler) workList(ctx context.Context, policy *sustainv1alpha1.Policy, governed []*inventory.Identity) []passIdentity {
-	logger := log.FromContext(ctx)
+func (r *PolicyReconciler) workList(policy *sustainv1alpha1.Policy, governed []*inventory.Identity) []passIdentity {
 	work := make([]passIdentity, 0, len(governed))
 	for _, id := range governed {
 		w := passIdentity{id: id}
-		if id.Departed() {
-			if len(id.Containers) == 0 && len(id.InitContainers) == 0 {
-				// Never silent: this state once hid a read-after-write bug that
-				// stranded every new identity.
-				EmitWLRRefresh(id.Key.Namespace, id.Key.OwnerKind, WLRRefreshNoSnapshot)
-				logger.V(1).Info("departed identity has no observed-resources snapshot; skipping computation",
-					"kind", id.Key.OwnerKind, "name", id.Key.OwnerName, "namespace", id.Key.Namespace)
-				continue
-			}
-			work = append(work, w)
-			continue
-		}
-		// inventory.TakeForPolicy reads only the kinds policy manages.
-		mode := policy.Spec.RightSizing.Update.Types.ModeForKind(id.Key.OwnerKind)
-		for _, t := range targetsOf(id, policy.Name, *mode) {
-			if r.ledger.mayRun(t.key()) {
-				w.run = append(w.run, t)
-			} else {
-				w.backedOff = append(w.backedOff, t)
+		if !id.Departed() {
+			// inventory.TakeForPolicy reads only the kinds policy manages.
+			mode := policy.Spec.RightSizing.Update.Types.ModeForKind(id.Key.OwnerKind)
+			for _, t := range targetsOf(id, policy.Name, *mode) {
+				if r.ledger.mayRun(t.key()) {
+					w.run = append(w.run, t)
+				} else {
+					w.backedOff = append(w.backedOff, t)
+				}
 			}
 		}
 		work = append(work, w)
@@ -203,6 +197,12 @@ func emitDepartedRefresh(ctx context.Context, id *inventory.Identity, rep identi
 	ns, kind := id.Key.Namespace, id.Key.OwnerKind
 	refresh := WLRRefreshNoData
 	switch {
+	case rep.outcome == outcomeNotFetched:
+		// Never silent: this state once hid a read-after-write bug that
+		// stranded every new identity.
+		refresh = WLRRefreshNoSnapshot
+		log.FromContext(ctx).V(1).Info("departed identity has no observed-resources snapshot; skipping computation",
+			"kind", kind, "name", id.Key.OwnerName, "namespace", ns)
 	case rep.err != nil:
 		refresh = WLRRefreshError
 	case rep.outcome == sustainv1alpha1.OutcomeComputed:
@@ -218,12 +218,13 @@ func emitDepartedRefresh(ctx context.Context, id *inventory.Identity, rep identi
 	EmitWLRRefresh(ns, kind, refresh)
 }
 
-// processed counts the identities the pass worked on: every departed one,
-// and every live one with a member it did not skip.
+// processed counts the identities the pass worked on: every departed one it
+// fetched, and every live one with a member it did not skip.
 func (p passReport) processed() int {
 	n := 0
 	for _, rep := range p {
-		if rep.departed || slices.ContainsFunc(rep.members, func(res applyResult) bool { return res.kind != applySkipped }) {
+		if rep.departed && rep.outcome != outcomeNotFetched ||
+			slices.ContainsFunc(rep.members, func(res applyResult) bool { return res.kind != applySkipped }) {
 			n++
 		}
 	}

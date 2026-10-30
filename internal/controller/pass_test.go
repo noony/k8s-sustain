@@ -121,6 +121,9 @@ func TestReconcileSkipsDepartedIdentityWithoutSnapshot(t *testing.T) {
 	if after := testutil.ToFloat64(wlrRefreshTotal.WithLabelValues(ns, "Pod", WLRRefreshNoSnapshot)); after-before != 1 {
 		t.Errorf("no-snapshot refresh delta = %v, want 1", after-before)
 	}
+	if got := readyCondition(t, r, "pol").Message; got != "All 0 workloads have been processed." {
+		t.Errorf("Ready message = %q: an identity the pass did not compute was not processed", got)
+	}
 }
 
 // Pins the guarantee in docs/guides/standalone-pods-and-grouping.md: owner-name

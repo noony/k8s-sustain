@@ -294,6 +294,37 @@ func TestSeries_DepartedIdentityLosesItsCountersPastRetention(t *testing.T) {
 	}
 }
 
+// A departed identity without an observed-resources snapshot is not computed,
+// yet its Policy still governs it: it keeps its counters until its
+// WorkloadRecommendation is swept, as any departed identity does.
+func TestSeries_DepartedIdentityWithoutSnapshotKeepsItsCountersUntilTheSweep(t *testing.T) {
+	const ns = "series-nosnapshot"
+	bare := departedWLR(ns)
+	bare.Status.ObservedResources = nil
+	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), false, barePodPolicy("pol"), bare)
+	r.RecommendationRetention = 72 * time.Hour
+	r.ObserveOOM(context.Background(), "pol", identityOf(ns, "Pod", "dag-task"), "app")
+	oomSeries := func() int {
+		return len(seriesForWorkload(t, "k8s_sustain_oom_observed_total", ns, "Pod", "dag-task"))
+	}
+
+	reconcileOnce(t, r, "pol")
+	if oomSeries() != 1 {
+		t.Fatal("a departed identity within retention must keep its counters")
+	}
+
+	r.RecommendationRetention = time.Nanosecond
+	reconcileOnce(t, r, "pol")
+	if wlrExists(t, r, ns, "Pod", "dag-task") {
+		t.Fatal("past retention, the sweep must delete the WorkloadRecommendation")
+	}
+	reconcileOnce(t, r, "pol")
+
+	if got := oomSeries(); got != 0 {
+		t.Errorf("an identity whose WorkloadRecommendation was swept keeps %d counter series", got)
+	}
+}
+
 // A Conflicted identity is governed by no Policy (ADR 0002), so none
 // publishes it.
 func TestSeries_ConflictedIdentityLosesEverySeries(t *testing.T) {
