@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
@@ -87,6 +88,9 @@ type PolicyReconciler struct {
 	recorder events.EventRecorder
 	patcher  *workload.Patcher
 	ledger   *ledger
+	// policies is shared by every pass, so a Policy's selector is compiled
+	// once per version of it.
+	policies governance.PolicyLister
 
 	health healthTracker
 	series publisher
@@ -209,7 +213,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	start := time.Now()
 	logger.Info("starting reconcile cycle")
 
-	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, r.ExcludedNamespaces)
+	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, r.ExcludedNamespaces, &r.policies)
 	if listErr != nil {
 		logger.Error(listErr, "failed to list workloads")
 		_ = r.failCondition(ctx, policy, "ListFailed", listErr)

@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
@@ -372,6 +373,34 @@ func TestOptionsNarrowTheSnapshot(t *testing.T) {
 	}
 }
 
+// A snapshot decides with the lister it is handed, so a caller holding one
+// lister compiles a version of a Policy once, not once per snapshot. The same
+// version listed with other content tells the two apart.
+func TestTakeDecidesWithTheListerItIsHanded(t *testing.T) {
+	objs := func(tier string) []client.Object {
+		p := everyKind("p")
+		p.UID, p.ResourceVersion = "uid-p", "7"
+		p.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"tier": tier}}
+		web := deployment("a", "web", base, optIn("p"))
+		web.Spec.Template.Labels = map[string]string{"tier": "web"}
+		return []client.Object{p, web}
+	}
+	policyOfWeb := func(opts inventory.Options, tier string) string {
+		return lookup(t, take(t, opts, objs(tier)...), key("a", "Deployment", "web")).Policy
+	}
+	lister := &governance.PolicyLister{}
+
+	if got := policyOfWeb(inventory.Options{Policies: lister}, "web"); got != "p" {
+		t.Fatalf("first snapshot: policy = %q, want p", got)
+	}
+	if got := policyOfWeb(inventory.Options{Policies: lister}, "api"); got != "p" {
+		t.Errorf("with the lister that compiled this version: policy = %q, want p", got)
+	}
+	if got := policyOfWeb(inventory.Options{}, "api"); got != "" {
+		t.Errorf("with a lister of its own: policy = %q, want none", got)
+	}
+}
+
 // A Policy's snapshot reads only its selector's namespaces and the kinds it
 // manages, governs nothing in an excluded namespace, and is empty for a
 // Policy managing no kind rather than reading every kind.
@@ -388,7 +417,7 @@ func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
 		deployment("a", "idle", base, optIn("none")),
 	).Build()
 
-	snap, err := inventory.TakeForPolicy(context.Background(), c, p, []string{"excluded"})
+	snap, err := inventory.TakeForPolicy(context.Background(), c, p, []string{"excluded"}, nil)
 	if err != nil {
 		t.Fatalf("TakeForPolicy: %v", err)
 	}
@@ -405,7 +434,7 @@ func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
 		}
 	}
 
-	snap, err = inventory.TakeForPolicy(context.Background(), c, none, nil)
+	snap, err = inventory.TakeForPolicy(context.Background(), c, none, nil, nil)
 	if err != nil {
 		t.Fatalf("TakeForPolicy: %v", err)
 	}

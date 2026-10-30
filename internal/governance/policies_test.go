@@ -22,7 +22,7 @@ import (
 // way the webhook and the OOM watcher do.
 type listingReader struct {
 	lister *governance.PolicyLister
-	client client.Client
+	client client.Reader
 }
 
 func (r listingReader) Policies(ctx context.Context) (*governance.Policies, error) {
@@ -98,6 +98,46 @@ func TestPolicyListerFollowsEveryChangeToAPolicy(t *testing.T) {
 	}
 	if d, _ := governance.Decide(ctx, web, r); d.Refusal != governance.PolicyMissing {
 		t.Errorf("after the Policy went: refusal = %q, want %q", d.Refusal, governance.PolicyMissing)
+	}
+}
+
+// storedPolicies lists the Policies it holds with the UID and resourceVersion
+// they carry, which a fake client would assign itself.
+type storedPolicies struct {
+	client.Reader
+	items []sustainv1alpha1.Policy
+}
+
+func (s *storedPolicies) List(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+	l := list.(*sustainv1alpha1.PolicyList)
+	for i := range s.items {
+		l.Items = append(l.Items, *s.items[i].DeepCopy())
+	}
+	return nil
+}
+
+// A Policy deleted and recreated under its name is another Policy: it is
+// compiled again even at the resourceVersion the deleted one had, where only
+// its UID tells them apart.
+func TestPolicyListerRecompilesARecreatedPolicy(t *testing.T) {
+	ctx := context.Background()
+	deleted, recreated := selecting("web"), selecting("api")
+	deleted.UID, deleted.ResourceVersion = "deleted", "7"
+	recreated.UID, recreated.ResourceVersion = "recreated", "7"
+	src := &storedPolicies{items: []sustainv1alpha1.Policy{*deleted}}
+	r := listingReader{lister: &governance.PolicyLister{}, client: src}
+	web := webOptingInto("team-a", "p", map[string]string{"tier": "web"})
+
+	if d, err := governance.Decide(ctx, web, r); err != nil || !d.Governed() {
+		t.Fatalf("before the recreate: decision = %+v, %v; want p governing", d, err)
+	}
+	src.items = []sustainv1alpha1.Policy{*recreated}
+	if d, _ := governance.Decide(ctx, web, r); d.Refusal != governance.LabelsNotSelected {
+		t.Errorf("after the recreate: web refusal = %q, want %q", d.Refusal, governance.LabelsNotSelected)
+	}
+	d, _ := governance.Decide(ctx, webOptingInto("team-a", "p", map[string]string{"tier": "api"}), r)
+	if !d.Governed() || d.Policy.UID != recreated.UID {
+		t.Errorf("after the recreate: api decision = %+v, want the recreated p governing", d)
 	}
 }
 

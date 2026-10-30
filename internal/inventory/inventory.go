@@ -37,6 +37,11 @@ type Options struct {
 	Kinds []string
 	// ExcludedNamespaces are governed by no Policy, whatever they opt into.
 	ExcludedNamespaces []string
+	// Policies lists the Policies the snapshot decides with. A caller taking
+	// snapshots for the life of the process keeps one, so a Policy's selector
+	// is compiled once per version of it rather than once per snapshot; nil
+	// lists through a lister of the snapshot's own.
+	Policies *governance.PolicyLister
 }
 
 // Snapshot is the identities in scope when it was taken, sorted by key.
@@ -170,11 +175,12 @@ func Take(ctx context.Context, r client.Reader, opts Options) (*Snapshot, error)
 }
 
 // TakeForPolicy reads the identities policy can govern: those in its
-// selector's namespaces whose kind it manages, outside excludedNamespaces.
-// Every identity it returns has a kind policy manages, and is whole: its
-// members share its namespace and kind, so the narrowed read also sees what
-// makes one Conflicted. A Policy managing no kind reads nothing.
-func TakeForPolicy(ctx context.Context, r client.Reader, policy *sustainv1alpha1.Policy, excludedNamespaces []string) (*Snapshot, error) {
+// selector's namespaces whose kind it manages, outside excludedNamespaces,
+// decided with the Policies lister lists (see Options.Policies). Every
+// identity it returns has a kind policy manages, and is whole: its members
+// share its namespace and kind, so the narrowed read also sees what makes one
+// Conflicted. A Policy managing no kind reads nothing.
+func TakeForPolicy(ctx context.Context, r client.Reader, policy *sustainv1alpha1.Policy, excludedNamespaces []string, lister *governance.PolicyLister) (*Snapshot, error) {
 	var kinds []string
 	for _, kind := range workload.SupportedKinds {
 		if policy.Spec.RightSizing.Update.Types.ModeForKind(kind) != nil {
@@ -189,6 +195,7 @@ func TakeForPolicy(ctx context.Context, r client.Reader, policy *sustainv1alpha1
 		Namespaces:         policy.Spec.Selector.Namespaces,
 		Kinds:              kinds,
 		ExcludedNamespaces: excludedNamespaces,
+		Policies:           lister,
 	})
 }
 
@@ -211,7 +218,11 @@ func (b *builder) inScope(kind string) bool {
 }
 
 func (b *builder) listPolicies(ctx context.Context) error {
-	ps, err := new(governance.PolicyLister).List(ctx, b.reader, b.opts.ExcludedNamespaces)
+	lister := b.opts.Policies
+	if lister == nil {
+		lister = new(governance.PolicyLister)
+	}
+	ps, err := lister.List(ctx, b.reader, b.opts.ExcludedNamespaces)
 	b.policies = ps
 	return err
 }

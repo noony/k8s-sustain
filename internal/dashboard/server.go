@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
@@ -74,6 +75,10 @@ type Server struct {
 	// ExcludedNamespaces mirrors the controller's --excluded-namespaces flag,
 	// a hard deny applied ahead of a Policy's own selector.
 	ExcludedNamespaces []string
+
+	// policies is shared by every snapshot the views take, so a Policy's
+	// selector is compiled once per version of it.
+	policies governance.PolicyLister
 
 	cacheInit    sync.Once
 	summaryCache *Cache

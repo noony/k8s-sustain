@@ -40,7 +40,7 @@ type coordinationFactors struct {
 // every view sees the identities the controller governs by the same rules.
 // The client is uncached: callers narrow opts to what the view shows.
 func (s *Server) identities(ctx context.Context, opts inventory.Options) (*inventory.Snapshot, error) {
-	opts.ExcludedNamespaces = s.ExcludedNamespaces
+	opts.ExcludedNamespaces, opts.Policies = s.ExcludedNamespaces, &s.policies
 	return inventory.Take(ctx, s.K8sClient, opts)
 }
 
