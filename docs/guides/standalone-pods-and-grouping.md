@@ -16,8 +16,8 @@ Setting `k8s.sustain.io/owner-name: <value>` on a pod (directly, for bare
 pods; or on a pod template, for owned workloads) is read in two places, both
 from the annotation itself:
 
-- The controller, the dashboard and the webhook group the pod under the
-  override identity when they decide who governs it.
+- The controller, the dashboard, the webhook and the OOM watcher group the
+  pod under the override identity when they decide who governs it.
 - kube-state-metrics exposes the annotation in `kube_pod_annotations`
   (`metricAnnotationsAllowList` in the chart's `values.yaml`), which a
   recording rule folds into `k8s_sustain:pod_workload`, so the pod's usage is
