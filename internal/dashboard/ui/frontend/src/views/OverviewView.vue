@@ -108,7 +108,7 @@ function memTrendSeries() {
         :value="String(summary.data.value.attention[m.state].total)"
         :tone="summary.data.value.attention[m.state].total > 0 ? m.tone : 'neutral'"
         :detail="m.detail"
-        :to="m.to"
+        :to="m.workloadsLink"
       />
       <KpiCard
         label="Coordinated"

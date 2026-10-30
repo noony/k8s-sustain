@@ -3,36 +3,42 @@ import type { AttentionState, RiskState } from './api'
 export interface RiskStateMeta {
   state: RiskState
   label: string
+  cls: string
+  workloadsLink: string
+}
+
+export interface AttentionStateMeta extends RiskStateMeta {
+  state: AttentionState
   /** What puts an identity in the state, in a few words. */
   detail: string
   /** How a count of identities in the state reads when it is not zero. */
-  tone: 'danger' | 'warn' | 'positive'
-  cls: string
-  /** The Workloads list filtered to the state. */
-  to: string
+  tone: 'danger' | 'warn'
 }
 
 // In the backend's precedence (riskStateOf), so lists read most actionable first.
-const byState = {
+const attention = {
   conflicted: { label: 'Conflicted', detail: 'policies disagree', tone: 'danger' },
   blocked: { label: 'Blocked', detail: 'last apply failed', tone: 'danger' },
   'at-risk': { label: 'At risk', detail: 'OOM in 24h', tone: 'danger' },
   drifted: { label: 'Drifted', detail: 'pods not on rec', tone: 'warn' },
-  safe: { label: 'Safe', detail: 'nothing to act on', tone: 'positive' },
-} as const satisfies Record<RiskState, Pick<RiskStateMeta, 'label' | 'detail' | 'tone'>>
+} as const satisfies Record<AttentionState, Pick<AttentionStateMeta, 'label' | 'detail' | 'tone'>>
 
-export const riskStateMeta: readonly RiskStateMeta[] = (Object.keys(byState) as RiskState[]).map(
-  (state) => ({
-    state,
-    ...byState[state],
-    cls: `risk-${state}`,
-    to: `/workloads?risk=${state}`,
-  }),
-)
+function derivedFrom<S extends RiskState>(state: S) {
+  return { state, cls: `risk-${state}`, workloadsLink: `/workloads?risk=${state}` }
+}
 
-export const attentionStateMeta = riskStateMeta.filter(
-  (m): m is RiskStateMeta & { state: AttentionState } => m.state !== 'safe',
-)
+export function attentionStateMetaOf(state: AttentionState): AttentionStateMeta {
+  return { ...derivedFrom(state), ...attention[state] }
+}
+
+export const attentionStateMeta: readonly AttentionStateMeta[] = (
+  Object.keys(attention) as AttentionState[]
+).map(attentionStateMetaOf)
+
+export const riskStateMeta: readonly RiskStateMeta[] = [
+  ...attentionStateMeta,
+  { ...derivedFrom('safe'), label: 'Safe' },
+]
 
 export function riskStateMetaOf(state: string | undefined): RiskStateMeta | undefined {
   return riskStateMeta.find((m) => m.state === state)

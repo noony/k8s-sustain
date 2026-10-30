@@ -32,7 +32,7 @@ const collapsed = ref<Partial<Record<AttentionState, boolean>>>({})
         <RouterLink
           v-if="groups[g.state].total > groups[g.state].rows.length"
           class="aq-more"
-          :to="g.to"
+          :to="g.workloadsLink"
           >View all {{ groups[g.state].total }}</RouterLink
         >
       </div>

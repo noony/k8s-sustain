@@ -14,6 +14,7 @@ import {
   parseStepToMs,
   timeAgo,
 } from '../lib/format'
+import { attentionStateMetaOf } from '../lib/risk'
 import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
@@ -55,6 +56,9 @@ const snapshot = useApi<WorkloadDetailSnapshot>(() =>
 // The Recommendation the controller stored; the detail page never recomputes
 // one (that is the Simulator's job).
 const stored = computed(() => snapshot.data.value?.recommendation)
+
+const conflictedState = attentionStateMetaOf('conflicted')
+const blockedState = attentionStateMetaOf('blocked')
 
 async function load() {
   const p = new URLSearchParams(rangeQueryParams(range.value, Date.now()))
@@ -332,7 +336,8 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
             v-else-if="snapshot.data.value.conflictingPolicies?.length"
             class="badge badge-red"
             :title="'Members opt into ' + snapshot.data.value.conflictingPolicies.join(', ')"
-            >Conflicted: {{ snapshot.data.value.conflictingPolicies.join(' / ') }}</span
+            >{{ conflictedState.label }}:
+            {{ snapshot.data.value.conflictingPolicies.join(' / ') }}</span
           >
           <span v-else class="badge badge-dim">Manual</span>
           <span v-if="snapshot.data.value.departed" class="badge badge-dim">Departed</span>
@@ -384,7 +389,9 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
 
     <!-- Blocked band -->
     <div v-if="snapshot.data.value?.blocked" class="card card-danger">
-      <div class="card-header"><h2 class="text-error">Currently blocked</h2></div>
+      <div class="card-header">
+        <h2 class="text-error">{{ blockedState.label }}</h2>
+      </div>
       <p>
         Reason: <code>{{ snapshot.data.value.blocked.reason }}</code> ·
         {{ snapshot.data.value.blocked.attempts }} attempts

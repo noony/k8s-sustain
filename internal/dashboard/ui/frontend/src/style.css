@@ -963,6 +963,12 @@ tbody tr:last-child td {
   letter-spacing: -0.03em;
   line-height: 1.2;
 }
+.stat-card.tone-warn .stat-value {
+  color: var(--yellow);
+}
+.stat-card.tone-danger .stat-value {
+  color: var(--red);
+}
 .stat-card .stat-detail {
   font-size: 13px;
   color: var(--text-dim);

@@ -13,9 +13,10 @@ import ErrorState from '../components/ErrorState.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Combobox from '../components/Combobox.vue'
 import { timeAgo } from '../lib/format'
-import { riskStateMeta } from '../lib/risk'
+import { attentionStateMetaOf, riskStateMeta } from '../lib/risk'
 
 const { openRow } = useRowLink()
+const conflictedState = attentionStateMetaOf('conflicted')
 const {
   filterRef,
   page,
@@ -92,9 +93,13 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         <div class="stat-label">Manual</div>
         <div class="stat-value text-dim">{{ list.data.value.counts.manual }}</div>
       </div>
-      <div v-if="list.data.value.counts.conflicted" class="stat-card">
-        <div class="stat-label">Conflicted</div>
-        <div class="stat-value text-error">{{ list.data.value.counts.conflicted }}</div>
+      <div
+        v-if="list.data.value.counts.conflicted"
+        class="stat-card"
+        :class="'tone-' + conflictedState.tone"
+      >
+        <div class="stat-label">{{ conflictedState.label }}</div>
+        <div class="stat-value">{{ list.data.value.counts.conflicted }}</div>
       </div>
     </div>
 
