@@ -164,36 +164,30 @@ func TestClusterScopeSettingsAreSetOnceForEverySubcommand(t *testing.T) {
 
 	controllerCfg, webhookCfg, dashboardCfg := mustLoadController(t), LoadWebhookConfig(), mustLoadDashboard(t)
 
-	wantNamespaces := []string{"kube-system", "monitoring"}
-	for name, got := range map[string][]string{
-		"start":     controllerCfg.ExcludedNamespaces,
-		"webhook":   webhookCfg.ExcludedNamespaces,
-		"dashboard": dashboardCfg.ExcludedNamespaces,
+	wantScope := ClusterScope{RecommendOnly: true, ExcludedNamespaces: []string{"kube-system", "monitoring"}}
+	for name, got := range map[string]ClusterScope{
+		"start":     controllerCfg.ClusterScope,
+		"webhook":   webhookCfg.ClusterScope,
+		"dashboard": dashboardCfg.ClusterScope,
 	} {
-		if !reflect.DeepEqual(got, wantNamespaces) {
-			t.Errorf("%s: ExcludedNamespaces = %v, want %v", name, got, wantNamespaces)
+		if !reflect.DeepEqual(got, wantScope) {
+			t.Errorf("%s: cluster scope = %+v, want %+v", name, got, wantScope)
 		}
 	}
-	if !controllerCfg.RecommendOnly || !webhookCfg.RecommendOnly {
-		t.Errorf("RecommendOnly = %v (start), %v (webhook), want true for both", controllerCfg.RecommendOnly, webhookCfg.RecommendOnly)
+	wantPrometheus := PrometheusConnection{
+		Address: "https://thanos.example:10902",
+		Transport: promclient.TransportConfig{
+			BearerTokenFile: "/var/run/secrets/token",
+			Headers:         map[string]string{"X-Scope-OrgID": "tenant-a"},
+			TLS:             promclient.TLSConfig{InsecureSkipVerify: true},
+		},
 	}
-	wantTransport := promclient.TransportConfig{
-		BearerTokenFile: "/var/run/secrets/token",
-		Headers:         map[string]string{"X-Scope-OrgID": "tenant-a"},
-		TLS:             promclient.TLSConfig{InsecureSkipVerify: true},
-	}
-	for name, got := range map[string]struct {
-		address   string
-		transport promclient.TransportConfig
-	}{
-		"start":     {controllerCfg.PrometheusAddress, controllerCfg.PrometheusTransport},
-		"dashboard": {dashboardCfg.PrometheusAddress, dashboardCfg.PrometheusTransport},
+	for name, got := range map[string]PrometheusConnection{
+		"start":     controllerCfg.Prometheus,
+		"dashboard": dashboardCfg.Prometheus,
 	} {
-		if got.address != "https://thanos.example:10902" {
-			t.Errorf("%s: PrometheusAddress = %q, want https://thanos.example:10902", name, got.address)
-		}
-		if !reflect.DeepEqual(got.transport, wantTransport) {
-			t.Errorf("%s: PrometheusTransport = %+v, want %+v", name, got.transport, wantTransport)
+		if !reflect.DeepEqual(got, wantPrometheus) {
+			t.Errorf("%s: Prometheus = %+v, want %+v", name, got, wantPrometheus)
 		}
 	}
 }
@@ -422,7 +416,7 @@ func TestControllerConfig_PrometheusTransportEnvOverrides(t *testing.T) {
 	t.Setenv("K8SSUSTAIN_PROMETHEUS_TLS_INSECURE_SKIP_VERIFY", "true")
 	InitViper()
 
-	got := mustLoadController(t).PrometheusTransport
+	got := mustLoadController(t).Prometheus.Transport
 	want := promclient.TransportConfig{
 		BearerTokenFile: "/var/run/secrets/token",
 		Headers:         map[string]string{"X-Scope-OrgID": "tenant-a", "X-Extra": "v"},
@@ -450,7 +444,7 @@ func TestControllerConfig_PrometheusBasicAuthEnvOverrides(t *testing.T) {
 	t.Setenv("K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_PASSWORD_FILE", "/etc/password")
 	InitViper()
 
-	got := mustLoadController(t).PrometheusTransport
+	got := mustLoadController(t).Prometheus.Transport
 	if got.BearerToken != "inline-token" {
 		t.Errorf("BearerToken = %q, want inline-token", got.BearerToken)
 	}
@@ -465,7 +459,7 @@ func TestControllerConfig_PrometheusBasicAuthEnvOverrides(t *testing.T) {
 func TestControllerConfig_PrometheusTransportDefaultIsEmpty(t *testing.T) {
 	newRoot(t)
 
-	if got := mustLoadController(t).PrometheusTransport; !reflect.DeepEqual(got, promclient.TransportConfig{}) {
+	if got := mustLoadController(t).Prometheus.Transport; !reflect.DeepEqual(got, promclient.TransportConfig{}) {
 		t.Fatalf("PrometheusTransport = %+v, want the zero value", got)
 	}
 }
@@ -530,7 +524,7 @@ func TestPrometheusHeadersFlagIsRepeatableAndCommaSafe(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	got := mustLoadController(t).PrometheusTransport.Headers
+	got := mustLoadController(t).Prometheus.Transport.Headers
 	want := map[string]string{
 		"Accept":   "application/json,text/plain",
 		"X-Quoted": `say "hi"`,

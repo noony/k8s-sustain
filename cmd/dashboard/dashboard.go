@@ -48,16 +48,16 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 	}
 	log := logging.Setup(cfg.LogLevel, "dashboard")
 
-	promClient, err := promclient.New(cfg.PrometheusAddress,
-		promclient.WithTransportConfig(cfg.PrometheusTransport))
+	promClient, err := promclient.New(cfg.Prometheus.Address,
+		promclient.WithTransportConfig(cfg.Prometheus.Transport))
 	if err != nil {
 		return fmt.Errorf("creating prometheus client: %w", err)
 	}
 
 	if err := promClient.Ping(context.Background()); err != nil {
-		log.Error(err, "Prometheus is not reachable at startup — metrics queries will fail until it becomes available", "address", cfg.PrometheusAddress)
+		log.Error(err, "Prometheus is not reachable at startup — metrics queries will fail until it becomes available", "address", cfg.Prometheus.Address)
 	} else {
-		log.Info("Prometheus connectivity verified", "address", cfg.PrometheusAddress)
+		log.Info("Prometheus connectivity verified", "address", cfg.Prometheus.Address)
 	}
 
 	k8sClient, err := k8sclient.New(config.Scheme())

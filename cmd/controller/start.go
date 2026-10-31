@@ -52,7 +52,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		"healthAddr", cfg.HealthProbeBindAddress,
 		"leaderElect", cfg.LeaderElect,
 		"leaderElectionID", cfg.LeaderElectionID,
-		"prometheusAddr", cfg.PrometheusAddress,
+		"prometheusAddr", cfg.Prometheus.Address,
 		"reconcileInterval", cfg.ReconcileInterval,
 		"workloadConcurrencyLimit", cfg.WorkloadConcurrencyLimit,
 		"policyConcurrencyLimit", cfg.PolicyConcurrencyLimit,
@@ -62,9 +62,9 @@ func runStart(_ *cobra.Command, _ []string) error {
 		"queryShardMaxSamples", cfg.QueryShardMaxSamples,
 	)
 
-	promClient, err := promclient.New(cfg.PrometheusAddress,
+	promClient, err := promclient.New(cfg.Prometheus.Address,
 		promclient.WithMaxInflight(cfg.PrometheusMaxInflight),
-		promclient.WithTransportConfig(cfg.PrometheusTransport))
+		promclient.WithTransportConfig(cfg.Prometheus.Transport))
 	if err != nil {
 		log.Error(err, "Unable to create Prometheus client")
 		return err

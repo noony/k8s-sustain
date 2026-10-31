@@ -734,10 +734,13 @@ The settings every component must read alike — `--recommend-only`,
 `--excluded-namespaces` and the Prometheus connection (`--prometheus-address`
 and the transport flags) — are root persistent flags, bound once by
 `config.BindGlobalFlags` to one viper key and one environment variable each,
-which every subcommand's `Load*Config` reads. A subcommand that has no use for
-one ignores it: the webhook accepts the Prometheus flags. A new setting the
-components must agree on goes there, never in a subcommand's `Bind*Flags`,
-where its key would be the subcommand's own.
+and loaded once into one type each: `config.ClusterScope` (recommend-only,
+excluded namespaces), embedded in every subcommand's config, and
+`config.PrometheusConnection` (address, transport), held by the controller's
+and the dashboard's. A subcommand that has no use for one ignores it: the
+webhook accepts the Prometheus flags, and its config has no connection. A new
+setting the components must agree on goes there, never in a subcommand's
+`Bind*Flags`, where its key would be the subcommand's own.
 
 The chart renders them through one helper, `k8s-sustain.clusterScopeArgs` in
 `_helpers.tpl`, which every Deployment includes; the Prometheus connection only
@@ -795,7 +798,7 @@ Before touching `internal/prometheus/transport.go`:
   splits on commas.
 - A new transport flag goes in `bindPrometheusTransportFlags` (registered once,
   as a root persistent flag, by `BindGlobalFlags`, so the controller and the
-  dashboard read one key and one env var) and `loadPrometheusTransport` in
+  dashboard read one key and one env var) and `loadPrometheusConnection` in
   `internal/config/config.go`, plus the field on `promclient.TransportConfig`.
   Mirror it in `charts/k8s-sustain/templates/_helpers.tpl`
   (`k8s-sustain.prometheusAuthArgs` / `…Env` / `…AuthSecretVolumes`),
