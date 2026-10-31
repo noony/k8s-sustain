@@ -85,9 +85,9 @@ type fetchHook struct {
 	hook func()
 }
 
-func (f fetchHook) FetchInputs(ctx context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []recommender.InputsRequest) map[promclient.WorkloadIdentity]recommender.InputsResult {
+func (f fetchHook) FetchInputs(ctx context.Context, at time.Time, cfg sustainv1alpha1.ResourcesConfigs, reqs []recommender.InputsRequest) map[promclient.WorkloadIdentity]recommender.InputsResult {
 	f.hook()
-	return f.InputsFetcher.FetchInputs(ctx, cfg, reqs)
+	return f.InputsFetcher.FetchInputs(ctx, at, cfg, reqs)
 }
 
 // The pass sweeps the Policy's objects by where their identities stand in the
