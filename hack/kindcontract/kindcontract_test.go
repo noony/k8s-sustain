@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -88,7 +89,7 @@ func loadPlaces(t *testing.T) places {
 // inventoryMembers lists the objects of kind that an inventory of r takes as
 // members.
 func inventoryMembers(ctx context.Context, r client.Reader, kind string) ([]client.Object, error) {
-	snap, err := inventory.Take(ctx, r, inventory.Options{Kinds: []string{kind}, Policies: governance.NewPolicyLister(nil)})
+	snap, err := inventory.Take(ctx, r, inventory.Options{Kinds: []string{kind}, Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}})
 	if err != nil {
 		return nil, err
 	}
