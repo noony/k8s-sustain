@@ -42,14 +42,9 @@ func (o *orphanReaper) Start(ctx context.Context) error {
 }
 
 func (o *orphanReaper) reap(ctx context.Context) {
-	logger := log.FromContext(ctx).WithName("orphan-reaper")
-	deleted, err := wlrcache.Reap(ctx, o.client)
-	if err != nil {
-		logger.V(1).Info("failed to reap orphan WorkloadRecommendations", "err", err)
-	}
-	if deleted > 0 {
-		logger.Info("reaped orphan WorkloadRecommendations", "deleted", deleted)
-	}
+	_ = deleteRecommendations(log.FromContext(ctx).WithName("orphan-reaper"), "reap", func() (int, error) {
+		return wlrcache.Reap(ctx, o.client)
+	})
 }
 
 // NeedLeaderElection ensures only the leader runs the orphan reaper, so

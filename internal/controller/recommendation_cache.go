@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -17,18 +18,19 @@ func (r *PolicyReconciler) lifetimes() wlrcache.Lifetimes {
 	return wlrcache.Lifetimes{ReconcileInterval: r.ReconcileInterval, Retention: r.RecommendationRetention}
 }
 
-// sweep deletes the policy's WorkloadRecommendations that snap says are
-// expired at the instant it was taken (wlrcache.Sweep). Best-effort: what it
-// leaves is judged again next pass.
-func (r *PolicyReconciler) sweep(ctx context.Context, policyName string, snap *inventory.Snapshot) {
-	logger := log.FromContext(ctx).WithValues("policy", policyName)
-	deleted, err := wlrcache.Sweep(ctx, r.Client, policyName, standingIn(snap), snap.TakenAt, r.lifetimes())
+// deleteRecommendations runs del, one of wlrcache's delete paths, and logs
+// what it did. Every path judges what it could not delete afresh on its next
+// run, so only the release, which must keep its Policy's finalizer meanwhile,
+// acts on the error.
+func deleteRecommendations(logger logr.Logger, path string, del func() (int, error)) error {
+	deleted, err := del()
 	if err != nil {
-		logger.V(1).Info("failed to sweep WorkloadRecommendations", "err", err)
+		logger.V(1).Info("deleting WorkloadRecommendations failed", "path", path, "err", err)
 	}
 	if deleted > 0 {
-		logger.V(1).Info("swept stale WorkloadRecommendations", "deleted", deleted)
+		logger.Info("deleted WorkloadRecommendations", "path", path, "deleted", deleted)
 	}
+	return err
 }
 
 // standingIn is where each identity stands in snap.
@@ -48,17 +50,6 @@ func standingIn(snap *inventory.Snapshot) wlrcache.Standings {
 			return wlrcache.Ungoverned
 		}
 	}
-}
-
-// release deletes the WorkloadRecommendations of policyName, which is being
-// deleted (wlrcache.Release). A failure keeps the finalizer, so a retry lists
-// and judges afresh.
-func (r *PolicyReconciler) release(ctx context.Context, policyName string) error {
-	deleted, err := wlrcache.Release(ctx, r.Client, policyName)
-	if deleted > 0 {
-		log.FromContext(ctx).Info("deleted WorkloadRecommendations for removed policy", "policy", policyName, "deleted", deleted)
-	}
-	return err
 }
 
 // recordConflicted records the Conflicted outcome on the stored

@@ -30,6 +30,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -192,8 +193,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	const finalizerName = "k8s.sustain.io/cleanup"
 	if !policy.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(policy, finalizerName) {
-			if err := r.release(ctx, policy.Name); err != nil {
-				logger.Error(err, "failed to delete WorkloadRecommendations for policy; will retry")
+			if err := deleteRecommendations(logger, "release", func() (int, error) {
+				return wlrcache.Release(ctx, r.Client, policy.Name)
+			}); err != nil {
 				return ctrl.Result{}, err
 			}
 			// Ordered after cleanup so a retried deletion re-emits nothing.
@@ -239,7 +241,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	blocked := health.blocked()
 	r.series.publish(policy.Name, report.publication(health, attempts))
 
-	r.sweep(ctx, policy.Name, snap)
+	_ = deleteRecommendations(logger, "sweep", func() (int, error) {
+		return wlrcache.Sweep(ctx, r.Client, policy.Name, standingIn(snap), snap.TakenAt, r.lifetimes())
+	})
 
 	processed := report.processed()
 	logger.Info("reconcile cycle complete",
