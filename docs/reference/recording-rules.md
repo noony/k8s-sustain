@@ -15,7 +15,7 @@ Computing percentiles over multi-day windows from raw `container_cpu_usage_secon
 | `pod_workload`, `pod_owner_kind_internal` | Pod → workload mapping (foundational); the second is a helper for the owner-name override |
 | `container_cpu_usage:rate1m`, `container_memory_working_set:bytes` | Per-container usage (foundational) |
 | `container_cpu_usage_by_workload:rate1m`, `container_memory_by_workload:bytes` | Per-container usage with workload labels (feeds the max-pod rules) |
-| `workload_max_pod_cpu:cores`, `workload_max_pod_memory:bytes` | Busiest-replica per-pod usage — the recommender's percentile input |
+| `workload_max_pod_cpu:cores`, `workload_max_pod_memory:bytes` | Busiest-replica per-pod usage — the recommender's percentile input, at an instant and over a Simulation's chart range |
 | `container_*_requests_by_workload:*`, `container_*_limits_by_workload:*` | Configured requests and limits (dashboard) |
 | `cluster_*_savings_*`, `policy_*_savings_*` | Savings aggregates (dashboard) |
 | `cluster_*_headroom_breakdown` | Used/idle/free split (dashboard) |
