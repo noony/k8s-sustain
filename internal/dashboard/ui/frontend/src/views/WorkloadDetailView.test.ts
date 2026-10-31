@@ -245,14 +245,16 @@ describe('WorkloadDetailView', () => {
       )
     }
 
-    function notes(w: ReturnType<typeof mountDetail>) {
-      return w.findAll('[data-test="signal-note"]').map((n) => n.text())
+    function notes() {
+      return (chart.createTimeSeriesChart as any).mock.calls.flatMap(
+        ([, , opts]: [string, unknown, chart.ChartOpts]) => opts.notes ?? [],
+      )
     }
 
     it('draws the replica average and what the usage signal reads on each chart', async () => {
       ;(chart.createTimeSeriesChart as any).mockClear()
       serve(governed, { cpu: { app: average }, memory: { app: average }, signal })
-      const w = mountDetail()
+      mountDetail()
       await flushPromises()
 
       expect(drawn()).toEqual({
@@ -267,7 +269,7 @@ describe('WorkloadDetailView', () => {
       })
       const signalSeries = (chart.createTimeSeriesChart as any).mock.calls[0][2].extraSeries[0]
       expect(signalSeries.stepMs).toBe(2400 * 1000)
-      expect(notes(w)).toEqual([])
+      expect(notes()).toEqual([])
     })
 
     it.each([
@@ -281,8 +283,8 @@ describe('WorkloadDetailView', () => {
         ],
       },
       {
-        why: 'no Policy governs a Conflicted identity',
-        snapshot: { conflictingPolicies: ['p', 'q'], riskState: 'conflicted' },
+        why: 'no Policy governs an identity the backend classified Conflicted',
+        snapshot: { riskState: 'conflicted' },
         metrics: { signal: null },
         want: [
           'No signal line: Conflicted, no Policy governs this workload.',
@@ -310,17 +312,20 @@ describe('WorkloadDetailView', () => {
         },
         want: ['No signal line: the Policy keeps the memory request.'],
       },
-    ])('says why a chart has no signal line when $why', async ({ snapshot, metrics, want }) => {
-      ;(chart.createTimeSeriesChart as any).mockClear()
-      serve(
-        { oom24h: 0, stalePods: 0, totalPods: 1, ...snapshot },
-        { cpu: { app: average }, memory: { app: average }, ...metrics },
-      )
-      const w = mountDetail()
-      await flushPromises()
+    ])(
+      'says in the chart why it has no signal line when $why',
+      async ({ snapshot, metrics, want }) => {
+        ;(chart.createTimeSeriesChart as any).mockClear()
+        serve(
+          { oom24h: 0, stalePods: 0, totalPods: 1, ...snapshot },
+          { cpu: { app: average }, memory: { app: average }, ...metrics },
+        )
+        mountDetail()
+        await flushPromises()
 
-      expect(notes(w)).toEqual(want)
-      expect(drawn()['mem-app']).toEqual([['Usage (replica average)', average]])
-    })
+        expect(notes()).toEqual(want)
+        expect(drawn()['mem-app']).toEqual([['Usage (replica average)', average]])
+      },
+    )
   })
 })

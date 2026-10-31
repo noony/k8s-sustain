@@ -22,9 +22,8 @@ import {
   destroyAllCharts,
   groupOOMKillsByContainer,
   zoomedRangeSeconds,
-  type ExtraSeries,
-  type ChartAnnotation,
 } from '../lib/chart'
+import { chartResources, recommendedSeries, runningLines } from '../lib/resourceCharts'
 import TimeRangePicker from '../components/TimeRangePicker.vue'
 import { useTimeRange } from '../composables/useTimeRange'
 import { simulateRangeBody, resolveRange, DEFAULT_RANGE, type TimeRange } from '../lib/timerange'
@@ -341,31 +340,13 @@ async function runSimulation() {
   }
 }
 
-// One chart per resource: what the usage signal read, what the Simulation
-// computes from it at each instant, and what the pods ran with.
-const chartResources = [
-  {
-    key: 'cpu',
-    canvas: 'simcpu-',
-    color: 'cpu',
-    unit: 'cores',
-    yFormat: (v: number) => v.toFixed(3),
-    parse: parseCPUQuantity,
-    request: 'cpuRequest',
-    limit: 'cpuLimit',
-  },
-  {
-    key: 'memory',
-    canvas: 'simmem-',
-    color: 'mem',
-    unit: 'MiB',
-    transform: (v: number) => v / (1024 * 1024),
-    yFormat: (v: number) => v.toFixed(0),
-    parse: parseMemoryQuantity,
-    request: 'memoryRequest',
-    limit: 'memoryLimit',
-  },
-] as const
+function historyNotes(data: SimulationResult): string[] {
+  const notes = ['Recommended as of each instant, the OOM floor as it stood then included.']
+  if (data.effective.autoscalerCoordination.enabled) {
+    notes.push("Coordinated with today's autoscaler at every instant: it has no history.")
+  }
+  return notes
+}
 
 function renderCharts(data: SimulationResult) {
   destroyAllCharts()
@@ -376,70 +357,38 @@ function renderCharts(data: SimulationResult) {
   const kills = groupOOMKillsByContainer(history.oomKills)
   const stepMs = history.stepSeconds * 1000
   const chartWindow = resolveRange(range.value, Date.now())
+  const notes = historyNotes(data)
 
-  Object.keys(data.containers || {}).forEach((cname) => {
+  for (const cname of Object.keys(data.containers || {})) {
     const containerHistory = history.containers[cname]
-    if (!containerHistory) return
-    const current = simResources[cname] || {}
+    if (!containerHistory) continue
     for (const r of chartResources) {
       const series = containerHistory[r.key]
-      const annotations: ChartAnnotation[] = []
-      const extra: ExtraSeries[] = []
-      const running = current[r.request]
-      if (series.runningRequest?.length) {
-        extra.push({ data: series.runningRequest, label: 'Request', color: 'config', dash: [4, 4] })
-      } else if (running) {
-        annotations.push({
-          value: r.parse(running),
-          label: 'Request: ' + running,
-          color: 'config',
-          dash: [4, 4],
-        })
-      }
-      const runningLimit = current[r.limit]
-      if (series.runningLimit?.length) {
-        extra.push({ data: series.runningLimit, label: 'Limit', color: 'config', dash: [1, 4] })
-      } else if (runningLimit) {
-        annotations.push({
-          value: r.parse(runningLimit),
-          label: 'Limit: ' + runningLimit,
-          color: 'config',
-          dash: [1, 4],
-        })
-      }
-      if (series.recommendedRequest?.length) {
-        extra.push({
-          data: series.recommendedRequest,
-          label: 'Recommended request',
-          color: 'rec',
-          dash: [8, 4],
-          stepped: false,
-        })
-      }
-      if (series.recommendedLimit?.length) {
-        extra.push({
-          data: series.recommendedLimit,
-          label: 'Recommended limit',
-          color: 'rec',
-          dash: [2, 3],
-          stepped: false,
-        })
-      }
-      createTimeSeriesChart(r.canvas + cname, series.usage ?? [], {
+      const { extra, annotations } = runningLines(
+        r,
+        series.runningRequest,
+        series.runningLimit,
+        simResources[cname] || {},
+      )
+      createTimeSeriesChart('sim' + r.canvas + '-' + cname, series.usage ?? [], {
         label: 'Usage percentile (busiest replica)',
         color: r.color,
         unit: r.unit,
-        transform: 'transform' in r ? r.transform : undefined,
+        transform: r.transform,
         yFormat: r.yFormat,
         annotations,
-        extraSeries: extra,
-        oomKills: r.key === 'memory' ? kills[cname] || [] : undefined,
+        extraSeries: [
+          ...extra,
+          ...recommendedSeries(series.recommendedRequest, series.recommendedLimit),
+        ],
+        oomKills: r.marksOOMKills ? kills[cname] || [] : undefined,
+        notes,
         onZoomComplete: onChartZoom,
         stepMs,
         window: chartWindow,
       })
     }
-  })
+  }
 }
 
 // Counts only containers with both a current and a recommended request: a
@@ -530,7 +479,6 @@ onUnmounted(() => {
     subtitle="Simulate policy parameter changes and preview their effect on historical metrics"
   />
 
-  <!-- Workload Target -->
   <div class="card">
     <div class="card-header"><h2>Workload Target</h2></div>
     <div class="workload-selector">
@@ -572,7 +520,6 @@ onUnmounted(() => {
     </div>
   </div>
 
-  <!-- Configuration -->
   <div v-if="simData" class="card">
     <div class="card-header">
       <h2>Configuration</h2>
@@ -765,7 +712,6 @@ onUnmounted(() => {
     </div>
   </div>
 
-  <!-- Empty state: no workload selected -->
   <EmptyState
     v-if="!simNs || !simName"
     icon="search"
@@ -779,7 +725,6 @@ onUnmounted(() => {
     </template>
   </EmptyState>
 
-  <!-- Results -->
   <div v-if="firstRun && !simData && !simError"></div>
   <ErrorState v-else-if="simError" :message="simError" @retry="runSimulation" />
   <template v-else-if="simData">
@@ -872,12 +817,6 @@ onUnmounted(() => {
       <p v-if="simData.historyError" class="form-error" role="alert" data-test="history-error">
         History unavailable: {{ simData.historyError }}
       </p>
-      <p v-else class="form-helper" data-test="history-legend">
-        Each point is the recommendation computed from what every signal read as of that instant,
-        the OOM floor included.<template v-if="simData.effective.autoscalerCoordination.enabled">
-          Autoscaler coordination uses today's autoscaler: it has no history.</template
-        >
-      </p>
       <div
         v-for="cname in simData.history ? simRegularContainerNames() : []"
         :key="cname"
@@ -889,30 +828,19 @@ onUnmounted(() => {
           </h2>
         </div>
         <div class="chart-grid">
-          <div>
+          <div v-for="r in chartResources" :key="r.key">
             <div class="chart-head">
               <h3 style="font-size: 13px; color: var(--text-dim); margin: 0">
-                CPU Usage + Recommendation
+                {{ r.label }} Usage + Recommendation
               </h3>
               <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
                 Reset zoom
               </button>
             </div>
             <div class="chart-wrapper">
-              <div class="chart-container"><canvas :id="'simcpu-' + cname"></canvas></div>
-            </div>
-          </div>
-          <div>
-            <div class="chart-head">
-              <h3 style="font-size: 13px; color: var(--text-dim); margin: 0">
-                Memory Usage + Recommendation
-              </h3>
-              <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
-                Reset zoom
-              </button>
-            </div>
-            <div class="chart-wrapper">
-              <div class="chart-container"><canvas :id="'simmem-' + cname"></canvas></div>
+              <div class="chart-container">
+                <canvas :id="'sim' + r.canvas + '-' + cname"></canvas>
+              </div>
             </div>
           </div>
         </div>
@@ -928,30 +856,19 @@ onUnmounted(() => {
             <span class="badge">init</span>
           </div>
           <div class="chart-grid">
-            <div>
+            <div v-for="r in chartResources" :key="r.key">
               <div class="chart-head">
                 <h3 style="font-size: 13px; color: var(--text-dim); margin: 0">
-                  CPU Usage + Recommendation
+                  {{ r.label }} Usage + Recommendation
                 </h3>
                 <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
                   Reset zoom
                 </button>
               </div>
               <div class="chart-wrapper">
-                <div class="chart-container"><canvas :id="'simcpu-' + cname"></canvas></div>
-              </div>
-            </div>
-            <div>
-              <div class="chart-head">
-                <h3 style="font-size: 13px; color: var(--text-dim); margin: 0">
-                  Memory Usage + Recommendation
-                </h3>
-                <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
-                  Reset zoom
-                </button>
-              </div>
-              <div class="chart-wrapper">
-                <div class="chart-container"><canvas :id="'simmem-' + cname"></canvas></div>
+                <div class="chart-container">
+                  <canvas :id="'sim' + r.canvas + '-' + cname"></canvas>
+                </div>
               </div>
             </div>
           </div>

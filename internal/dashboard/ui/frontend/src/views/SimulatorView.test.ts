@@ -134,12 +134,37 @@ describe('SimulatorView', () => {
     })
   })
 
-  it("says coordination uses today's autoscaler", async () => {
+  it("notes in each chart what a point is, and that coordination uses today's autoscaler", async () => {
     serveSimulator(async () => withHistory())
-    const w = mountOpened()
+    mountOpened()
     await flushPromises()
 
-    expect(w.find('[data-test="history-legend"]').text()).toContain("today's autoscaler")
+    const notes = (chart.createTimeSeriesChart as any).mock.calls.map(
+      ([, , opts]: [string, unknown, chart.ChartOpts]) => opts.notes,
+    )
+    expect(notes).toEqual([
+      [
+        'Recommended as of each instant, the OOM floor as it stood then included.',
+        "Coordinated with today's autoscaler at every instant: it has no history.",
+      ],
+      [
+        'Recommended as of each instant, the OOM floor as it stood then included.',
+        "Coordinated with today's autoscaler at every instant: it has no history.",
+      ],
+    ])
+  })
+
+  it('says nothing of the autoscaler when the Simulation does not coordinate with it', async () => {
+    const uncoordinated = withHistory()
+    uncoordinated.effective.autoscalerCoordination.enabled = false
+    serveSimulator(async () => uncoordinated)
+    mountOpened()
+    await flushPromises()
+
+    const notes = (chart.createTimeSeriesChart as any).mock.calls[0][2].notes
+    expect(notes).toEqual([
+      'Recommended as of each instant, the OOM floor as it stood then included.',
+    ])
   })
 
   it('keeps the numbers and shows why when the history is unavailable', async () => {

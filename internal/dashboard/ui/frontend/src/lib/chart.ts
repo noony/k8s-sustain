@@ -7,6 +7,7 @@ import {
   TimeScale,
   Filler,
   Legend,
+  SubTitle,
   Tooltip,
   type Plugin,
   type ChartConfiguration,
@@ -23,6 +24,7 @@ Chart.register(
   TimeScale,
   Filler,
   Legend,
+  SubTitle,
   Tooltip,
   zoomPlugin,
 )
@@ -216,6 +218,9 @@ export interface ChartOpts {
   // background under the baseline series adds noise rather than meaning.
   fill?: boolean
   oomKills?: { timestamp: string }[]
+  // What the chart's reader needs to know about what it draws, or why a line
+  // is missing, drawn in the chart as its subtitle.
+  notes?: string[]
   onZoomComplete?: (chart: Chart) => void
   // When set, breaks the line at gaps wider than ~1.5× this step. Used to
   // avoid drawing a continuous line across periods where the workload had no
@@ -273,6 +278,22 @@ function withGaps(
     prevT = t
   }
   return out
+}
+
+// Chart.js draws a subtitle line as it is, however narrow the chart.
+function wrapped(note: string, width = 72): string[] {
+  const lines: string[] = []
+  let line = ''
+  for (const word of note.split(' ')) {
+    if (line && line.length + 1 + word.length > width) {
+      lines.push(line)
+      line = word
+    } else {
+      line = line ? line + ' ' + word : word
+    }
+  }
+  if (line) lines.push(line)
+  return lines
 }
 
 const chartInstances: Record<string, Chart> = {}
@@ -382,6 +403,14 @@ export function createTimeSeriesChart(
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
+        subtitle: {
+          display: !!opts.notes?.length,
+          text: (opts.notes ?? []).flatMap((note) => wrapped(note)),
+          align: 'start',
+          color: colors.tick,
+          font: { size: 11 },
+          padding: { bottom: 6 },
+        },
         legend: {
           display: datasets.length > 1,
           align: 'end',
@@ -509,6 +538,9 @@ export function applyThemeToAllCharts() {
     }
     if (plugins.legend?.labels) {
       plugins.legend.labels.color = colors.tick
+    }
+    if (plugins.subtitle) {
+      plugins.subtitle.color = colors.tick
     }
     if (plugins.zoom?.zoom?.drag) {
       plugins.zoom.zoom.drag.backgroundColor = colors.accentSoft
