@@ -197,8 +197,8 @@ func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, clai
 // keep their state.
 func leftAlone(results []applyResult) []applyResult {
 	for i, res := range results {
-		if res.kind == ledger.Failed {
-			results[i] = applyResult{member: res.member, kind: ledger.Skipped}
+		if res.Kind == ledger.Failed {
+			results[i] = applied(res.member, ledger.Result{Kind: ledger.Skipped})
 		}
 	}
 	return results
@@ -233,7 +233,7 @@ func (p passReport) processed() int {
 	n := 0
 	for _, rep := range p {
 		if rep.departed && rep.fetched ||
-			slices.ContainsFunc(rep.members, func(res applyResult) bool { return res.kind != ledger.Skipped }) {
+			slices.ContainsFunc(rep.members, func(res applyResult) bool { return res.Kind != ledger.Skipped }) {
 			n++
 		}
 	}
@@ -250,7 +250,7 @@ func (p passReport) results() map[promclient.WorkloadIdentity][]ledger.Result {
 		}
 		results := make([]ledger.Result, len(rep.members))
 		for i, res := range rep.members {
-			results[i] = res.ledgerResult()
+			results[i] = res.Result
 		}
 		out[rep.key] = results
 	}

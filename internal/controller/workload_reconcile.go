@@ -17,20 +17,17 @@ import (
 // only output: the result the ledger settles, and the decreases the downsize
 // threshold held back on its pods.
 type applyResult struct {
+	ledger.Result
 	member *workloadTarget
-	kind   ledger.ResultKind
-	// pods is the member's pod counts, set for ledger.Done.
-	pods workload.PodCounts
-	// step and err are the step that failed and why, set for ledger.Failed.
-	step workload.Step
-	err  error
 	// suppressed counts, per resource, the member's pods on which the
 	// downsize threshold held back a decrease.
 	suppressed map[string]int
 }
 
-func (res applyResult) ledgerResult() ledger.Result {
-	return ledger.Result{Member: res.member.key(), Kind: res.kind, Pods: res.pods, Step: res.step, Err: res.err}
+// applied is res, what the pass did with member t, keyed for the ledger.
+func applied(t *workloadTarget, res ledger.Result) applyResult {
+	res.Member = t.key()
+	return applyResult{Result: res, member: t}
 }
 
 // apply applies every identity's verdict to its live members not in backoff,
@@ -58,7 +55,7 @@ func (r *PolicyReconciler) apply(
 		out[i] = make([]applyResult, len(w.backedOff)+len(w.run))
 		for j, t := range w.backedOff {
 			logger.V(1).Info("skipping workload in retry backoff", "target", t.key().String())
-			out[i][j] = applyResult{member: t, kind: ledger.Skipped}
+			out[i][j] = applied(t, ledger.Result{Kind: ledger.Skipped})
 		}
 		run := out[i][len(w.backedOff):]
 		if stored[i] != nil && len(w.run) > 0 {
@@ -67,7 +64,7 @@ func (r *PolicyReconciler) apply(
 				"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
 				"members", len(w.run), "err", stored[i].Error())
 			for j, t := range w.run {
-				run[j] = applyResult{member: t, kind: ledger.Failed, step: workload.StepStore, err: stored[i]}
+				run[j] = applied(t, ledger.Result{Kind: ledger.Failed, Step: workload.StepStore, Err: stored[i]})
 			}
 			continue
 		}
@@ -102,7 +99,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 	// still start pod reads and writes that will each fail through their own
 	// timeout path, slowing graceful shutdown.
 	if ctx.Err() != nil {
-		return applyResult{member: t, kind: ledger.Skipped}
+		return applied(t, ledger.Result{Kind: ledger.Skipped})
 	}
 
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
@@ -115,7 +112,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 	}
 
 	if rec.err != nil {
-		return applyResult{member: t, kind: ledger.Failed, step: workload.StepPrometheus, err: rec.err}
+		return applied(t, ledger.Result{Kind: ledger.Failed, Step: workload.StepPrometheus, Err: rec.err})
 	}
 
 	res := r.patcher.Apply(ctx, t.Member, rec.recs, workload.ApplySettingsFor(policy, t.Kind, r.RecommendOnly))
@@ -130,13 +127,16 @@ func (r *PolicyReconciler) reconcileWorkload(
 
 // resultOf is the ledger's view of what Apply did with member t.
 func resultOf(t *workloadTarget, res workload.Result) applyResult {
+	settled := ledger.Result{Kind: ledger.Done, Pods: res.Pods}
 	switch {
 	case res.Kind == workload.ResultFailed:
-		return applyResult{member: t, kind: ledger.Failed, step: res.Step, err: res.Err, suppressed: res.Suppressed}
+		settled = ledger.Result{Kind: ledger.Failed, Step: res.Step, Err: res.Err}
 	case res.Kind == workload.ResultIdle:
-		return applyResult{member: t, kind: ledger.Idle}
+		settled = ledger.Result{Kind: ledger.Idle}
 	case !res.Counted:
-		return applyResult{member: t, kind: ledger.Uncounted, suppressed: res.Suppressed}
+		settled = ledger.Result{Kind: ledger.Uncounted}
 	}
-	return applyResult{member: t, kind: ledger.Done, pods: res.Pods, suppressed: res.Suppressed}
+	out := applied(t, settled)
+	out.suppressed = res.Suppressed
+	return out
 }

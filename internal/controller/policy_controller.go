@@ -272,12 +272,12 @@ func (r *PolicyReconciler) warn(ctx context.Context, report passReport, events m
 	logger := log.FromContext(ctx)
 	for _, rep := range report {
 		for _, res := range rep.members {
-			if res.kind != ledger.Failed {
+			if res.Kind != ledger.Failed {
 				continue
 			}
 			t := res.member
-			logger.Error(res.err, "applying the recommendation failed",
-				"kind", t.Kind, "name", t.Name, "namespace", t.Namespace, "step", res.step)
+			logger.Error(res.Err, "applying the recommendation failed",
+				"kind", t.Kind, "name", t.Name, "namespace", t.Namespace, "step", res.Step)
 			if ev, ok := events[t.key()]; ok {
 				r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, ev.Reason, ev.Reason, "%s", ev.Message)
 			}
