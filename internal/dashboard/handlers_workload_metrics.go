@@ -9,8 +9,13 @@ import (
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/recommender"
 )
 
 func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, namespace, kind, name string) {
@@ -36,6 +41,9 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		running              runningSeries
 		oomEvents            []promclient.OOMKill
 		cpuErr, memErr       error
+		id                   *inventory.Identity
+		signal               *usageSignal
+		signalErr            error
 	)
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -48,6 +56,19 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	})
 	wg.Go(func() { oomEvents = s.oomKills(ctx, key, tr, step) })
 	wg.Go(func() { running = s.running(ctx, key, tr, step) })
+	wg.Go(func() {
+		// A failed read is tolerated: resources and init containers come back
+		// nil, and the signal line gives way to the reason.
+		var err error
+		switch id, err = s.identity(ctx, key); {
+		case apierrors.IsNotFound(err):
+		case err != nil:
+			s.Logger.Error(err, "failed to read the workload identity", "namespace", namespace, "kind", kind, "name", name)
+			signalErr = fmt.Errorf("reading the workload identity: %w", err)
+		default:
+			signal, signalErr = s.usageSignal(ctx, id, tr, step)
+		}
+	})
 	wg.Wait()
 
 	if cpuErr != nil {
@@ -59,26 +80,102 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		return
 	}
 
-	// A failed read is tolerated: resources and init containers come back nil.
-	id, err := s.identity(ctx, key)
-	if err != nil {
-		s.Logger.Error(err, "failed to read the workload identity", "namespace", namespace, "kind", kind, "name", name)
-	}
-	resources := containerResourcesOf(id)
-	initContainers := initContainerNamesOf(id)
-
-	w.Header().Set("Cache-Control", "public, max-age=60")
-	writeJSON(w, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"cpu":            cpuSeries,
 		"memory":         memSeries,
-		"resources":      resources,
+		"resources":      containerResourcesOf(id),
 		"cpuRequests":    running.cpuRequests,
 		"memoryRequests": running.memoryRequests,
 		"cpuLimits":      running.cpuLimits,
 		"memoryLimits":   running.memoryLimits,
 		"oomEvents":      oomEvents,
-		"initContainers": initContainers,
-	})
+		"initContainers": initContainerNamesOf(id),
+		"signal":         signal,
+	}
+	if signalErr != nil {
+		payload["signalError"] = signalErr.Error()
+	}
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	writeJSON(w, http.StatusOK, payload)
+}
+
+// usageSignal is what an identity's usage signals read over a chart range,
+// under its governing Policy's settings: the value the recommender sizes each
+// request from, at each instant, which the detail page charts next to the
+// replica average. It is only read, never computed from: the page shows the
+// stored Recommendation and nothing else.
+type usageSignal struct {
+	// Policy names the governing Policy the signals read under.
+	Policy string `json:"policy"`
+	// StepSeconds is the step between its instants, derived from the range:
+	// the step a request asks for is only the finest it gets.
+	StepSeconds int64               `json:"stepSeconds"`
+	CPU         usageSignalSettings `json:"cpu"`
+	Memory      usageSignalSettings `json:"memory"`
+	// ExcludeInitContainers is set when the Policy recommends no init
+	// container, so none has a series.
+	ExcludeInitContainers bool `json:"excludeInitContainers,omitempty"`
+	// Containers holds, per container the Policy recommends, each resource's
+	// series in cores or bytes.
+	Containers map[string]usageSignalSeries `json:"containers"`
+}
+
+// usageSignalSettings are what one resource's usage signal read under, every
+// default explicit. A kept request has no percentile and no series: no signal
+// sizes it.
+type usageSignalSettings struct {
+	Percentile  int32  `json:"percentile,omitempty"`
+	Window      string `json:"window"`
+	KeepRequest bool   `json:"keepRequest,omitempty"`
+}
+
+type usageSignalSeries struct {
+	CPU    []promclient.TimeValue `json:"cpu,omitempty"`
+	Memory []promclient.TimeValue `json:"memory,omitempty"`
+}
+
+// usageSignal reads what id's usage signals read over r under its governing
+// Policy's settings, through the inputs port a Simulation's history is read
+// through, over the span a Simulation charting r would read. It is nil, with
+// no error, when no Policy governs id: a Conflicted or ungoverned identity has
+// no signal line.
+func (s *Server) usageSignal(ctx context.Context, id *inventory.Identity, r promclient.TimeRange, step string) (*usageSignal, error) {
+	if id.Policy == "" {
+		return nil, nil
+	}
+	var policy sustainv1alpha1.Policy
+	if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: id.Policy}, &policy); err != nil {
+		return nil, fmt.Errorf("reading Policy %q: %w", id.Policy, err)
+	}
+	spec := policy.Spec.RightSizing
+	// The handler validated the step; one it still cannot read is no hint.
+	hint, _ := promclient.ParseStep(step)
+	span := recommender.SpanOf(r.Start.UTC(), r.End.UTC(), hint)
+	series, err := recommender.UsageRange(ctx, s.Inputs, spec, id, span)
+	if err != nil {
+		return nil, err
+	}
+	resources := recommender.WithDefaults(spec.ResourcesConfigs)
+	out := &usageSignal{
+		Policy:                id.Policy,
+		StepSeconds:           int64(span.Step / time.Second),
+		CPU:                   usageSignalSettingsOf(resources.CPU),
+		Memory:                usageSignalSettingsOf(resources.Memory),
+		ExcludeInitContainers: spec.ExcludeInitContainers,
+		Containers:            make(map[string]usageSignalSeries, len(series)),
+	}
+	for name, c := range series {
+		out.Containers[name] = usageSignalSeries{CPU: c.CPU, Memory: c.Memory}
+	}
+	return out, nil
+}
+
+func usageSignalSettingsOf(rc sustainv1alpha1.ResourceConfig) usageSignalSettings {
+	out := usageSignalSettings{Window: rc.Window, KeepRequest: rc.Requests.KeepRequest}
+	if p := rc.Requests.Percentile; p != nil {
+		out.Percentile = *p
+	}
+	return out
 }
 
 // perContainer renders rule for the identity key, aggregated per container by

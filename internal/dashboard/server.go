@@ -29,7 +29,8 @@ import (
 
 // PromQuerier is the subset of the Prometheus client the dashboard reads
 // series through; tests inject fakes. What a recommendation is computed from,
-// a Simulation's history included, is read through Inputs instead.
+// a Simulation's history and the detail page's signal line included, is
+// read through Inputs instead.
 type PromQuerier interface {
 	Ping(ctx context.Context) error
 
@@ -38,7 +39,8 @@ type PromQuerier interface {
 	QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error)
 	// QueryRangeByLabel is QueryRange for an expression with one series per
 	// value of label, keyed by it: an identity's running requests and limits,
-	// and the usage and OOM kills its detail page charts, per container.
+	// and the replica-averaged usage and OOM kills its detail page charts, per
+	// container.
 	QueryRangeByLabel(ctx context.Context, expr, label string, r promclient.TimeRange, step string) (map[string][]promclient.TimeValue, error)
 }
 
@@ -61,7 +63,8 @@ type Server struct {
 	// wires NewPrometheusHealthSignals.
 	Health HealthSignals
 	// Inputs fetches recommendation inputs through the same port the
-	// controller uses, so a Simulation computes from what the controller sees.
+	// controller uses, so a Simulation computes from what the controller sees
+	// and the detail page charts what its usage signals read.
 	Inputs recommender.InputsFetcher
 	// Clock is what a Simulation computes as of. Nil is the wall clock.
 	Clock  clock.PassiveClock
