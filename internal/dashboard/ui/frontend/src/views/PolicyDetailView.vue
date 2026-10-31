@@ -8,6 +8,7 @@ import { useTimeRange } from '../composables/useTimeRange'
 import { useListQuery } from '../composables/useListQuery'
 import { formatBytes, timeAgo } from '../lib/format'
 import { outcomeLabel } from '../lib/outcomes'
+import { limitsLabel } from '../lib/limits'
 import { rangeQueryParams, resolveRange } from '../lib/timerange'
 import StatusBadge from '../components/StatusBadge.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
@@ -125,17 +126,6 @@ function excludeInit(): boolean {
 
 function updateTypes() {
   return policy.value?.spec?.rightSizing?.update?.types || policy.value?.update || {}
-}
-
-function limitsLabel(l?: { [k: string]: any }): string {
-  if (!l) return 'default'
-  if (l.equalsToRequest) return 'equalsToRequest'
-  if (l.keepLimit) return 'keepLimit'
-  if (l.keepLimitRequestRatio) return 'keepLimitRequestRatio'
-  if (l.noLimit) return 'noLimit'
-  if (typeof l.requestsLimitsRatio === 'number')
-    return `requestsLimitsRatio: ${l.requestsLimitsRatio}`
-  return 'default'
 }
 
 function matchExprs(): string[] {

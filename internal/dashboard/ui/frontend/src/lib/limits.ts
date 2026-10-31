@@ -53,6 +53,13 @@ export function limitModeOf(limits: ResourceLimitsConfig | undefined): LimitMode
   return limitModeOrder.find((m) => limits?.[m] != null && limits[m] !== false) ?? 'keepLimit'
 }
 
+/** The label of the strategy the recommender runs for limits, with its ratio. */
+export function limitsLabel(limits: ResourceLimitsConfig | undefined): string {
+  const mode = limitModeOf(limits)
+  const label = limitModes[mode].label
+  return mode === 'requestsLimitsRatio' ? `${label} (×${limits?.requestsLimitsRatio})` : label
+}
+
 // A merge patch keeps the Policy's own strategy unless it is turned off, and
 // the CRD admits only one.
 export function limitsPatch(mode: LimitMode, ratio: number): MergePatch<ResourceLimitsConfig> {

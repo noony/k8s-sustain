@@ -33,6 +33,39 @@ describe('PolicyDetailView', () => {
     expect(w.text()).toContain('View as YAML')
   })
 
+  it("labels each resource's limits by the strategy the recommender runs", async () => {
+    ;(api.api as any).mockImplementation((path: string) => {
+      if (path.startsWith('/api/policies/p/workloads'))
+        return Promise.resolve({ items: [], total: 0, pageSize: 50 })
+      if (path.startsWith('/api/policies/p'))
+        return Promise.resolve({
+          name: 'p',
+          conditions: [],
+          spec: {
+            rightSizing: {
+              resourcesConfigs: { cpu: {}, memory: { limits: { requestsLimitsRatio: 1.5 } } },
+            },
+          },
+          effectivenessSeries: { cpu: [], memory: [] },
+        })
+      return Promise.resolve({})
+    })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/:catchAll(.*)', component: { template: '<div/>' } }],
+    })
+    const w = mount(PolicyDetailView, {
+      props: { name: 'p' },
+      global: { plugins: [router], stubs: ['router-link', 'StatusBadge', 'TrendChart'] },
+    })
+    await flushPromises()
+    const limits = w
+      .findAll('.rec-row')
+      .filter((r) => r.find('.label').text() === 'Limits')
+      .map((r) => r.find('.value').text())
+    expect(limits).toEqual(['Keep existing limit', 'Multiple of request (×1.5)'])
+  })
+
   it('flags a batch row whose outcome keeps it out of the savings', async () => {
     const savings = {
       savingsMillis: 0,
