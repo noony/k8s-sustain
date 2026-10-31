@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/hack/recordingrules"
 	"github.com/noony/k8s-sustain/internal/config"
 	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -34,7 +35,7 @@ const (
 	repoRoot   = "../.."
 	typesFile  = "api/v1alpha1/policy_types.go"
 	rbacFile   = "charts/k8s-sustain/templates/rbac.yaml"
-	valuesFile = "charts/k8s-sustain/values.yaml"
+	valuesFile = recordingrules.ValuesFile
 	// ownerKindRule has no constant in internal/prometheus: no Go code
 	// queries it.
 	ownerKindRule = "k8s_sustain:pod_owner_kind_internal"
@@ -53,18 +54,22 @@ type places struct {
 	disableFor []client.Object
 	scheme     *runtime.Scheme
 	roles      map[string][]rbacv1.PolicyRule
-	rules      map[string][]string
+	rules      map[string][]recordingrules.Rule
 }
 
 func loadPlaces(t *testing.T) places {
 	t.Helper()
+	rules, err := recordingrules.Load(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return places{
 		kinds:      slices.Clone(workload.SupportedKinds),
 		ownerKinds: workload.OwnerChainKinds(),
 		disableFor: k8sclient.OwnerChainDisableFor(),
 		scheme:     config.Scheme(),
 		roles:      loadRoles(t),
-		rules:      loadRules(t),
+		rules:      rules,
 	}
 }
 
@@ -103,36 +108,6 @@ func loadRoles(t *testing.T) map[string][]rbacv1.PolicyRule {
 		}
 	}
 	return roles
-}
-
-func loadRules(t *testing.T) map[string][]string {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(repoRoot, valuesFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var v struct {
-		PrometheusRule struct {
-			Groups []struct {
-				Rules []struct {
-					Record string `json:"record"`
-					Expr   string `json:"expr"`
-				} `json:"rules"`
-			} `json:"groups"`
-		} `json:"prometheusRule"`
-	}
-	if err := yaml.Unmarshal(b, &v); err != nil {
-		t.Fatalf("%s: %v", valuesFile, err)
-	}
-	rules := map[string][]string{}
-	for _, g := range v.PrometheusRule.Groups {
-		for _, r := range g.Rules {
-			if r.Record != "" {
-				rules[r.Record] = append(rules[r.Record], r.Expr)
-			}
-		}
-	}
-	return rules
 }
 
 // barePodKind is the kind of the identity a pod without a controller forms:
@@ -395,14 +370,14 @@ func checkRecordingRules(p places) []string {
 	isPod := func(s selection) bool { return s.series == "kube_pod_owner" }
 
 	for _, rule := range []string{promclient.MetricPodWorkload, ownerKindRule} {
-		exprs := p.rules[rule]
-		if len(exprs) == 0 {
+		defs := p.rules[rule]
+		if len(defs) == 0 {
 			problems = append(problems, fmt.Sprintf("prometheusRule.groups in %s records no %s", valuesFile, rule))
 			continue
 		}
 		var sels []selection
-		for _, expr := range exprs {
-			s, unreadable := selections(rule, expr)
+		for _, d := range defs {
+			s, unreadable := selections(rule, d.Expr)
 			sels = append(sels, s...)
 			problems = append(problems, unreadable...)
 		}
@@ -462,11 +437,11 @@ func without[T any](s []T, drop func(T) bool) []T {
 }
 
 func editRule(p *places, rule, old, replacement string) {
-	exprs := slices.Clone(p.rules[rule])
-	for i := range exprs {
-		exprs[i] = strings.ReplaceAll(exprs[i], old, replacement)
+	defs := slices.Clone(p.rules[rule])
+	for i := range defs {
+		defs[i].Expr = strings.ReplaceAll(defs[i].Expr, old, replacement)
 	}
-	p.rules[rule] = exprs
+	p.rules[rule] = defs
 }
 
 // Each way a place can disagree with the kinds is reported, naming the
