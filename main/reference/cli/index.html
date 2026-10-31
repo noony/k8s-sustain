@@ -378,26 +378,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1947,177 +1927,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2688,7 +2497,7 @@ line, since a public-CA ingress on the same address would then fail with
 <tr>
 <td><code>--excluded-namespaces</code></td>
 <td>—</td>
-<td>Comma-separated list of namespaces the webhook must never mutate. Pods in these namespaces are admitted unchanged. Mirrors the controller flag so both components stay in lockstep.</td>
+<td>Comma-separated list of namespaces no Policy governs: the webhook injects no resources into their pods, whatever they opt into, and never mutates them. Mirrors the controller flag so both components stay in lockstep. The chart also drops these namespaces from the <code>MutatingWebhookConfiguration</code>'s <code>namespaceSelector</code>, so the webhook never sees their pods.</td>
 </tr>
 <tr>
 <td><code>--recommendation-retention</code></td>
@@ -2697,7 +2506,8 @@ line, since a public-CA ingress on the same address would then fail with
 </tr>
 </tbody>
 </table>
-<p>The webhook also honours each Policy's <code>spec.selector.namespaces</code> and <code>spec.selector.labelSelector</code> (see <a href="../policy/#specselector">Policy reference</a>). A pod is admitted without mutation if any of the following holds: its namespace is in <code>--excluded-namespaces</code>, its namespace is not in a non-empty <code>selector.namespaces</code>, or its pod labels do not satisfy <code>selector.labelSelector</code>. A malformed <code>labelSelector</code> causes the webhook to fail open (admit without mutation, log a warning) rather than deny.</p>
+<p>The webhook also honours each Policy's <code>spec.selector.namespaces</code> and <code>spec.selector.labelSelector</code> (see <a href="../policy/#specselector">Policy reference</a>). A pod is admitted unmutated if any of the following holds: its namespace is in <code>--excluded-namespaces</code>, its namespace is not in a non-empty <code>selector.namespaces</code>, or its pod labels — its pod template's, which the controller matches too — do not satisfy <code>selector.labelSelector</code>. A malformed <code>labelSelector</code> causes the webhook to fail open (admit without injection, log a warning with reason <code>selector-invalid</code>, whichever level the pod opts in at) rather than deny.</p>
+<p>Each admission is bounded by a fixed 4s deadline, under the 5s <code>timeoutSeconds</code> of the chart's <code>MutatingWebhookConfiguration</code>: 3s for the governance decision's reads (the owner chain's apiserver Gets, 2s each at most, and the informer-cache reads of Policies and the Namespace) and 1s for the <code>WorkloadRecommendation</code> read from the informer cache. A read that runs out of its share fails open. None of these is a flag; see <a href="../../concepts/architecture/#admission-webhook-k8s-sustain-webhook">Latency budget</a>.</p>
 <h3 id="health-endpoints_1">Health endpoints<a class="headerlink" href="#health-endpoints_1" title="Permanent link">&para;</a></h3>
 <table>
 <thead>

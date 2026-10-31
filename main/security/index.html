@@ -378,26 +378,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1987,177 +1967,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2539,8 +2348,8 @@
 <h3 id="admission-webhook">Admission webhook<a class="headerlink" href="#admission-webhook" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Fails open.</strong> <code>failurePolicy: Ignore</code> by default (<code>webhook.failurePolicy</code>): if the webhook is unreachable, errors or times out, the pod is admitted unmodified. Setting <code>Fail</code> makes pod creation in every covered namespace depend on the webhook's availability.</li>
-<li><strong>Bounded latency.</strong> The apiserver timeout is 5s; the handler enforces its own 4s deadline and 2s per API call.</li>
-<li><strong>Narrow scope.</strong> It fires only on Pod <code>CREATE</code>, has <code>sideEffects: None</code>, and only ever patches container resources and the <code>k8s.sustain.io/owner-name</code> pod label. The release namespace, <code>kube-system</code>, <code>kube-public</code> and <code>excludedNamespaces</code> are excluded by the <code>namespaceSelector</code>.</li>
+<li><strong>Bounded latency.</strong> The apiserver timeout is 5s; the handler enforces its own 4s deadline: 3s for the governance decision's reads, 2s per apiserver Get among them, and 1s for the <code>WorkloadRecommendation</code> read from its informer cache.</li>
+<li><strong>Narrow scope.</strong> It fires only on Pod <code>CREATE</code>, has <code>sideEffects: None</code>, and only ever patches container resources. The release namespace, <code>kube-system</code>, <code>kube-public</code> and <code>excludedNamespaces</code> are excluded by the <code>namespaceSelector</code>.</li>
 <li><strong>TLS.</strong> The API server must trust the webhook's certificate: either cert-manager issues it and injects the CA bundle (<code>webhook.certManager.enabled=true</code>, the default), or you set it to <code>false</code> and supply a TLS Secret (<code>webhook.tlsSecretName</code>) and its CA (<code>webhook.caBundle</code>). Rotated certificates are reloaded without a restart. See the <a href="../guides/cert-manager/">cert-manager guide</a>.</li>
 </ul>
 <h3 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h3>

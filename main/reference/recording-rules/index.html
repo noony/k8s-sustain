@@ -378,26 +378,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1706,6 +1686,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#signal-contracts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signal contracts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#rules" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2100,177 +2091,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2313,6 +2133,17 @@
     <span class="md-ellipsis">
       
         Rules at a glance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signal-contracts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signal contracts
       
     </span>
   </a>
@@ -2769,6 +2600,53 @@
 </tr>
 </tbody>
 </table>
+<h2 id="signal-contracts">Signal contracts<a class="headerlink" href="#signal-contracts" title="Permanent link">&para;</a></h2>
+<p>Each <a href="../../concepts/recommendation-pipeline/#signals">recommendation signal</a> declares what it needs from Prometheus next to its query, as a <code>PromContract</code> (<code>internal/recommender</code>): the rules it reads, the labels they aggregate by, the evaluation interval its query cost assumes, and the raw series those rules compute from, through every rule they read in turn.</p>
+<table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Rules it reads</th>
+<th>Aggregated by</th>
+<th>Interval</th>
+<th>cAdvisor series</th>
+<th>kube-state-metrics series</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CPU usage</td>
+<td><code>workload_max_pod_cpu:cores</code></td>
+<td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code></td>
+<td>1m</td>
+<td><code>container_cpu_usage_seconds_total</code></td>
+<td><code>kube_pod_owner</code>, <code>kube_job_owner</code>, <code>kube_replicaset_owner</code>, <code>kube_pod_annotations</code></td>
+</tr>
+<tr>
+<td>Memory usage</td>
+<td><code>workload_max_pod_memory:bytes</code></td>
+<td>the same</td>
+<td>1m</td>
+<td><code>container_memory_working_set_bytes</code></td>
+<td>the same four</td>
+</tr>
+<tr>
+<td>OOM floor</td>
+<td><code>workload_oom_24h</code>, <code>container_peak_memory_24h:bytes</code>, <code>container_oom_limit_24h:bytes</code></td>
+<td>the same</td>
+<td>none assumed</td>
+<td><code>container_memory_max_usage_bytes</code>, <code>container_memory_peak_working_set_bytes</code>, <code>container_memory_working_set_bytes</code>, <code>container_spec_memory_limit_bytes</code></td>
+<td><code>kube_pod_container_status_restarts_total</code>, <code>kube_pod_container_status_last_terminated_reason</code> and the same four</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Labels.</strong> A query reads a whole shard of identities at once and attributes each series by these four labels. A series missing one is dropped; a rule keeping one more, such as <code>pod</code>, would hand a container several series, and the usage signals keep only one of them.</li>
+<li><strong>Interval.</strong> The usage signals read their rule as a plain range vector, so its 1m interval is the percentile's sample resolution and what the shard sample budget counts. The OOM floor reads its rules as an instant vector, one sample per rule, whatever their interval.</li>
+<li><strong>Series.</strong> The four kube-state-metrics series shared by every signal are what <code>pod_workload</code> maps a pod to its identity from; <code>kube_pod_annotations</code> carries the owner-name override.</li>
+</ul>
+<p><code>go test ./hack/signalcontract</code>, part of <code>make test</code>, checks the chart against every contract. Each rule a signal reads must be recorded in <code>prometheusRule.groups</code>, be one aggregation <code>by</code> exactly the declared labels over its whole expression, evaluate at the declared interval, and be evaluated with expected samples by a promtool fixture in <code>charts/k8s-sustain/tests/promtool/</code> (run by <code>make helm-promtool</code>). Following the rules they read down to raw series, those series must be exactly the declared ones, and each must be kept by its exporter's keep-list in the bundled Prometheus: the <code>metric_relabel_configs</code> of <code>prometheus.scrapeConfigs.kubernetes-nodes-cadvisor</code>, or of the <code>kube-state-metrics</code> job in <code>prometheus.extraScrapeConfigs</code>. A signal that needs a series the chart does not keep yet, such as cAdvisor's CFS throttling counters, fails the test until the keep-list keeps it. Expressions are read textually, without the PromQL parser, so a rule a signal reads has to stay a single <code>&lt;aggregation&gt; by (…) (…)</code>.</p>
+<p>If you bring your own Prometheus, it must scrape every series in the table.</p>
 <h2 id="rules">Rules<a class="headerlink" href="#rules" title="Permanent link">&para;</a></h2>
 <h3 id="k8s_sustainpod_workload"><code>k8s_sustain:pod_workload</code><a class="headerlink" href="#k8s_sustainpod_workload" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="o">(</span>
@@ -2787,20 +2665,22 @@
 <a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="o">)</span>
 <a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">  </span><span class="o">)</span>
 <a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="o">)</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="ow">unless</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">namespace</span><span class="p">,</span><span class="w"> </span><span class="nv">pod</span><span class="o">)</span><span class="w"> </span><span class="nv">kube_pod_labels</span><span class="p">{</span><span class="nl">label_k8s_sustain_io_owner_name</span><span class="o">!=</span><span class="p">""}</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="ow">unless</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">namespace</span><span class="p">,</span><span class="w"> </span><span class="nv">pod</span><span class="o">)</span><span class="w"> </span><span class="nv">kube_pod_annotations</span><span class="p">{</span><span class="nl">annotation_k8s_sustain_io_owner_name</span><span class="o">=~</span><span class="p">"</span><span class="s">[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?</span><span class="p">"}</span>
 </code></pre></div>
-<p>Five rules share this name and map every pod to its top-level workload:</p>
+<p>Five rules share this name and map each pod to the identity the controller groups it under (<code>workload.ResolveControllerOwner</code>, then <code>workload.ApplyOwnerNameOverride</code>):</p>
 <ol>
 <li>Direct owners (StatefulSet, DaemonSet, Job), excluding CronJob-owned Jobs — shown above.</li>
 <li>Pod → Job → CronJob via <code>kube_job_owner</code>.</li>
 <li>Pod → ReplicaSet → Deployment.</li>
 <li>Pod → ReplicaSet → Argo Rollout.</li>
-<li>Owner-name override: pods whose <code>kube_pod_labels</code> carry a non-empty <code>label_k8s_sustain_io_owner_name</code> (the label the webhook mirrors from the <a href="../annotation/#annotations-and-labels"><code>k8s.sustain.io/owner-name</code></a> annotation). <code>owner_name</code> becomes the label value; <code>owner_kind</code> is the pod's real owner kind, or <code>Pod</code> when it has none.</li>
+<li>Owner-name override: pods whose <code>kube_pod_annotations</code> carry an <code>annotation_k8s_sustain_io_owner_name</code> (the pod's own <a href="../annotation/#annotations-and-labels"><code>k8s.sustain.io/owner-name</code></a> annotation) that is a valid, non-empty Kubernetes label value. <code>owner_name</code> becomes the annotation value; <code>owner_kind</code> is the kind of the pod's controller as the controller resolves it (the Deployment or Rollout of its ReplicaSet, the CronJob of its Job, otherwise the controller's own kind, whatever it is), or <code>Pod</code> when the pod has no controller.</li>
 </ol>
-<p>Rules 1–4 end with <code>unless on(namespace, pod) kube_pod_labels{label_k8s_sustain_io_owner_name!=""}</code>, so a pod with an override is mapped only by rule 5 and every pod has exactly one row. The CronJob exclusion in rule 1 likewise stops a pod carrying both <code>owner_kind=Job</code> and <code>owner_kind=CronJob</code>.</p>
-<p>Rule 5 needs the kube-state-metrics <code>metricLabelsAllowlist: pods=[k8s.sustain.io/owner-name]</code> setting (on by default in the bundled subchart); without it, override pods are not mapped at all.</p>
+<p>Rules 1–4 end with <code>unless on(namespace, pod) kube_pod_annotations{annotation_k8s_sustain_io_owner_name=~"…"}</code>, so a pod with an override is mapped only by rule 5 and every pod has at most one row. The CronJob exclusion in rule 1 likewise stops a pod carrying both <code>owner_kind=Job</code> and <code>owner_kind=CronJob</code>.</p>
+<p>Rules 1–4 map only the kinds a Policy can manage. A pod whose controller is of another kind (an orphan ReplicaSet, a ReplicationController, a custom controller) has no row without an override: the controller resolves it to an identity of that kind, which no Policy manages and nothing queries. With an override, rule 5 maps it under that kind, as the controller groups it, never under <code>Pod</code>, so its usage stays out of a bare-pod identity of the same name.</p>
+<p>All five rules select the annotation with the same regex, <code>[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?</code>. PromQL anchors a regex matcher at both ends, so it matches exactly the non-empty values Kubernetes accepts as a label value (apimachinery's <code>IsValidLabelValue</code>: at most 63 characters, alphanumerics, <code>-</code>, <code>_</code> and <code>.</code>, starting and ending with an alphanumeric), which are the values the controller applies the override for (<code>workload.ApplyOwnerNameOverride</code>). A pod whose annotation is empty or invalid keeps its real owner in rules 1–4, as it does in the controller, and a bare pod with one is not mapped at all. <code>go test ./hack/signalcontract</code> fails when their regexes differ or stop matching exactly the values the controller accepts, when rule 5 gives a pod without a controller another kind than the controller does, or when the bundled kube-state-metrics stops exporting the annotation. <code>pod_workload_owner_name_test.yaml</code> pins the kind rule 5 gives a pod of each controller kind.</p>
+<p>Rule 5 needs the kube-state-metrics <code>metricAnnotationsAllowList: ["pods=[k8s.sustain.io/owner-name]"]</code> setting (the <code>--metric-annotations-allowlist</code> flag, on by default in the bundled subchart); without it, pods using the override are mapped to their real owner, and bare pods not at all.</p>
 <h3 id="k8s_sustainpod_owner_kind_internal"><code>k8s_sustain:pod_owner_kind_internal</code><a class="headerlink" href="#k8s_sustainpod_owner_kind_internal" title="Permanent link">&para;</a></h3>
-<p>Helper for rule 5: the pod's real <code>owner_kind</code> via the same four resolution paths as rules 1–4, but without their owner-name exclusion. Not meant to be queried directly.</p>
+<p>Helper for rule 5: the kind of each pod's controller as <code>workload.ResolveControllerOwner</code> resolves it (the CronJob of a CronJob's Job, the Deployment or Rollout of a ReplicaSet, otherwise the controller's own kind), with no owner-name exclusion, so it has a row for every pod with a controller, overridden or not. Its last alternative selects every controller kind: filtering it would make rule 5 map the pods of a kind it leaves out as <code>Pod</code>. Not meant to be queried directly.</p>
 <h3 id="k8s_sustaincontainer_cpu_usagerate1m"><code>k8s_sustain:container_cpu_usage:rate1m</code><a class="headerlink" href="#k8s_sustaincontainer_cpu_usagerate1m" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">max</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">namespace</span><span class="p">,</span><span class="w"> </span><span class="nv">pod</span><span class="p">,</span><span class="w"> </span><span class="nv">container</span><span class="o">)</span><span class="w"> </span><span class="o">(</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="kr">rate</span><span class="o">(</span><span class="nv">container_cpu_usage_seconds_total</span><span class="p">{</span>
@@ -2913,6 +2793,7 @@ cAdvisor series that briefly lose the node label.</p>
 <a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="o">)</span>
 </code></pre></div>
 <p>Cluster-total CPU savings: sum of <code>template_request - recommendation</code>. Uses <code>k8s_sustain_workload_template_cpu_cores</code> (the original pod-template request, stable across webhook injection) so savings reflect the gap from the user's original spec, not the injected pod's already-rightsized value.</p>
+<p>Both gauges exist only for the live members of the identities a Policy governs, under that Policy, so the savings rules count each member once: a member that is deleted, opts out or becomes part of a Conflicted identity drops out at its Policy's next reconcile, and one that moves to another Policy counts under the new one only, once both have reconciled (see <a href="../metrics/#series-lifecycle">Series lifecycle</a>).</p>
 <h3 id="k8s_sustaincluster_memory_savings_bytes"><code>k8s_sustain:cluster_memory_savings_bytes</code><a class="headerlink" href="#k8s_sustaincluster_memory_savings_bytes" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">sum</span><span class="o">(</span>
 <a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nv">k8s_sustain_workload_template_memory_bytes</span>
@@ -2940,7 +2821,7 @@ cAdvisor series that briefly lose the node label.</p>
 <a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="nv">k8s_sustain_recommended_cpu_cores</span>
 <a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="o">)</span>
 </code></pre></div>
-<p>Per-policy CPU savings. Carries a static <code>resource="cpu"</code> label.</p>
+<p>Per-policy CPU savings: the members of the identities the policy governs. Carries a static <code>resource="cpu"</code> label.</p>
 <h3 id="k8s_sustainpolicy_memory_savings_bytes"><code>k8s_sustain:policy_memory_savings_bytes</code><a class="headerlink" href="#k8s_sustainpolicy_memory_savings_bytes" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">sum</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">policy</span><span class="o">)</span><span class="w"> </span><span class="o">(</span>
 <a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nv">k8s_sustain_workload_template_memory_bytes</span>
@@ -3083,7 +2964,7 @@ cAdvisor series that briefly lose the node label.</p>
 </code></pre></div>
 <p>Busiest-replica CPU rate, per container, per workload: at each instant this is the hottest live pod. The recommender runs <code>quantile_over_time(p, …)</code> over this to get a true per-pod percentile that covers the busiest replica — so it needs no replica division and no separate per-pod floor.</p>
 <p>Collapsing across pods <strong>here</strong> (in the recording rule) rather than at query time is deliberate: it keeps the recommender's <code>quantile_over_time(p, …[window])</code> range-vector scan cheap (one series per workload×container instead of one per historical pod) and immune to pod-name churn — a pod that briefly ran hot then died is the <code>max</code> for only those instants and drops out afterward, so its partial-lifetime samples can't distort the percentile.</p>
-<p>This rule (and <code>workload_max_pod_memory:bytes</code> below) lives in the <code>k8s_sustain.workload_max_pod</code> group, which evaluates at <code>interval: 1m</code>. The recommender reads it as a plain range vector rather than a <code>[window:1m]</code> subquery, so that <code>interval</code> <strong>is</strong> the percentile's effective sample resolution — there is no subquery step left to resample it. Raising the group's interval to cut Prometheus load would silently coarsen every recommendation percentile in the product; it is not a free knob.</p>
+<p>This rule (and <code>workload_max_pod_memory:bytes</code> below) lives in the <code>k8s_sustain.workload_max_pod</code> group, which evaluates at <code>interval: 1m</code>. The recommender reads it as a plain range vector rather than a <code>[window:1m]</code> subquery, so that <code>interval</code> <strong>is</strong> the percentile's effective sample resolution — there is no subquery step left to resample it. Raising the group's interval to cut Prometheus load would coarsen every recommendation percentile in the product; it is not a free knob, and the usage signals' <a href="#signal-contracts">contract</a> fails the build when it changes.</p>
 <h3 id="k8s_sustainworkload_max_pod_memorybytes"><code>k8s_sustain:workload_max_pod_memory:bytes</code><a class="headerlink" href="#k8s_sustainworkload_max_pod_memorybytes" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="k">max</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">namespace</span><span class="p">,</span><span class="w"> </span><span class="nv">owner_kind</span><span class="p">,</span><span class="w"> </span><span class="nv">owner_name</span><span class="p">,</span><span class="w"> </span><span class="nv">container</span><span class="o">)</span><span class="w"> </span><span class="o">(</span>
 <a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="w">  </span><span class="nv">k8s_sustain</span><span class="err">:</span><span class="nv">container_memory_by_workload</span><span class="err">:</span><span class="nv">bytes</span>
@@ -3091,7 +2972,7 @@ cAdvisor series that briefly lose the node label.</p>
 </code></pre></div>
 <p>Busiest-replica memory working set, per container, per workload. Same rationale and percentile usage as <code>workload_max_pod_cpu:cores</code> above.</p>
 <h2 id="customising">Customising<a class="headerlink" href="#customising" title="Permanent link">&para;</a></h2>
-<p>The chart exposes the rules via <code>prometheusRule.groups</code> in <code>values.yaml</code>. Override individual rules to adapt to your environment, but keep names stable — the recommender queries by name.</p>
+<p>The chart exposes the rules via <code>prometheusRule.groups</code> in <code>values.yaml</code>. Override individual rules to adapt to your environment, but keep names stable — the recommender queries by name — and keep each rule a signal reads to its <a href="#signal-contracts">contract</a>: the same labels, interval and source series.</p>
 <h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../metrics/">Metrics</a> — controller self-metrics (distinct from these recording rules).</li>

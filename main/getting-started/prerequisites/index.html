@@ -378,26 +378,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1814,177 +1794,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2143,7 +1952,7 @@
 <h1 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h1>
 <p>Cluster, tooling, and metrics requirements before installing k8s-sustain.</p>
 <h2 id="kubernetes">Kubernetes<a class="headerlink" href="#kubernetes" title="Permanent link">&para;</a></h2>
-<p>Kubernetes <strong>1.29 or later</strong>. The CRDs' CEL validation rules use the Kubernetes <code>quantity()</code> library, which older API servers reject when the CRD is applied.</p>
+<p>Kubernetes <strong>1.30 or later</strong>. The CRDs' CEL validation rules use the Kubernetes <code>quantity()</code> library, which older API servers reject when the CRD is applied. The Policy CRD's rules also rely on CRD validation ratcheting (<code>CRDValidationRatcheting</code>, on by default from 1.30): an update that leaves a field a rule rejects unchanged is still admitted, so a stored Policy can always be updated, its finalizer removed included.</p>
 <p>Running pods are resized in place from 1.33; older clusters fall back to eviction. See the <a href="../../concepts/in-place-updates/#version-matrix">version matrix</a>.</p>
 <h2 id="helm">Helm<a class="headerlink" href="#helm" title="Permanent link">&para;</a></h2>
 <p>Helm 3.10+ is required to deploy the chart.</p>
@@ -2151,11 +1960,11 @@
 </code></pre></div>
 <h2 id="prometheus">Prometheus<a class="headerlink" href="#prometheus" title="Permanent link">&para;</a></h2>
 <p>k8s-sustain queries Prometheus for historical usage data. The chart bundles a <a href="https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus">Prometheus</a> instance by default, or you can point it at an existing Prometheus.</p>
-<p>If you bring your own Prometheus, make sure <strong>kube-state-metrics</strong> and <strong>cAdvisor</strong> metrics are scraped. The bundled Prometheus subchart restricts both jobs to an allowlist via <code>metric_relabel_configs</code> to keep TSDB cardinality low; bring-your-own deployments can do the same.</p>
+<p>If you bring your own Prometheus, make sure <strong>kube-state-metrics</strong> and <strong>cAdvisor</strong> metrics are scraped. The bundled Prometheus subchart restricts both jobs to an allowlist via <code>metric_relabel_configs</code> to keep TSDB cardinality low; bring-your-own deployments can do the same. <a href="../../reference/recording-rules/#signal-contracts">Signal contracts</a> lists the series each recommendation signal computes from; the others below feed the dashboard.</p>
 <p>From <strong>kube-state-metrics</strong>:</p>
 <ul>
 <li><code>kube_pod_owner</code> — maps pods to their workload owner</li>
-<li><code>kube_pod_labels</code> — carries the <code>k8s.sustain.io/owner-name</code> label for <a href="../../guides/standalone-pods-and-grouping/">identity grouping</a>. kube-state-metrics only exports it when allowlisted: set <code>metricLabelsAllowlist: ["pods=[k8s.sustain.io/owner-name]"]</code> (the <code>--metric-labels-allowlist</code> flag)</li>
+<li><code>kube_pod_annotations</code> — carries the <code>k8s.sustain.io/owner-name</code> annotation for <a href="../../guides/standalone-pods-and-grouping/">identity grouping</a>. kube-state-metrics only exports it when allowlisted: start it with <code>--metric-annotations-allowlist=pods=[k8s.sustain.io/owner-name]</code> (kube-state-metrics 2.2 or later; <code>metricAnnotationsAllowList: ["pods=[k8s.sustain.io/owner-name]"]</code> in its Helm chart). Without it, a pod using the override is mapped to its real owner, or not at all for a bare pod, and its usage never reaches the identity the controller groups it under</li>
 <li><code>kube_job_owner</code> — resolves Job → CronJob</li>
 <li><code>kube_replicaset_owner</code> — resolves ReplicaSet → Deployment (or Rollout)</li>
 <li><code>kube_pod_container_resource_requests</code> / <code>kube_pod_container_resource_limits</code> — current CPU/memory requests and limits</li>

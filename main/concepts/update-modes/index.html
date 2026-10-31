@@ -378,26 +378,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1841,177 +1821,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2319,7 +2128,7 @@
 <li>Setting both <code>percent</code> and <code>minDecrease</code> to <code>0</code> acts on every decrease.</li>
 <li>The threshold only gates resizing and eviction of running pods; new pods still receive the exact recommendation from the webhook.</li>
 </ul>
-<p>See the <a href="../../reference/policy/#cpudownsizethreshold-memorydownsizethreshold">Policy reference</a>.</p>
+<p>See the <a href="../../reference/policy/#downsize-threshold">Policy reference</a>.</p>
 <hr />
 <h2 id="eviction-safeguards">Eviction safeguards<a class="headerlink" href="#eviction-safeguards" title="Permanent link">&para;</a></h2>
 <p>Whenever the controller evicts a pod — on k8s &lt; 1.33, or on newer clusters as the fallback for a failed in-place resize or for a pod not Running yet — it applies these guards:</p>
@@ -2354,7 +2163,7 @@
 <p>In this mode:</p>
 <ul>
 <li>The controller still reconciles, computes and caches recommendations in <code>WorkloadRecommendation</code> objects, but <strong>never resizes or evicts pods</strong></li>
-<li>The webhook still resolves pods and reads the cache, but <strong>never injects resources</strong> (only the owner-name label mirror is still applied)</li>
+<li>The webhook still resolves pods and reads the cache, but <strong>never injects resources</strong>: every pod is admitted unmutated</li>
 <li>The controller logs each recommendation at <code>info</code> level — the chart's default <code>controller.logLevel: error</code> hides these, so read <code>kubectl get wlrec</code> or the dashboard instead, or raise the log level</li>
 </ul>
 <hr />

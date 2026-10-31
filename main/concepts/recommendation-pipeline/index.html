@@ -378,26 +378,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1852,177 +1832,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2232,12 +2041,12 @@ requests apply on next pod creation via webhook injection.</p>
 <p>Before running the stages below, the controller fetches every identity's Prometheus inputs for a policy in <strong>one batched call per policy</strong>, not one query set per workload. A policy matching 2,000 workloads issues a handful of queries rather than several thousand.</p>
 <p>The batch covers the policy's whole work-list, including identities with no live workload object — see <a href="../architecture/#computation">Computation</a>.</p>
 <p>Each <a href="#signals">signal</a> is read one after the other, its identities split into shards of one query each. Shards are sized by a projected sample budget — containers × the signal's samples per container, summed across the workloads packed into a shard — capped by <code>--query-shard-max-samples</code> (default <code>10,000,000</code>). The CPU and memory usage queries load one sample per minute of their window; the OOM query reads three 24h rules as an instant vector, one sample per rule, so its shards are bounded by the 1,000-workload cap on a shard instead. The cap exists because Prometheus's own <code>--query.max-samples</code> (default <code>50,000,000</code>) <em>rejects</em> an over-budget query outright, which would fail every workload sharing that shard rather than just the excess ones; the default leaves a 5× margin. Independently, <code>--prometheus-max-inflight</code> (default 8) caps concurrent queries across the whole controller process so k8s-sustain cannot saturate a Prometheus shared with dashboards and alerting.</p>
-<p>A shard query that fails is retried once. If it fails again, its identities are re-queried one shard each, with the same query narrowed to one name, so a shard Prometheus rejects as a whole does not cost its healthy members their inputs — a single identity is just a batch of one (<a href="../../adr/0001-single-identity-is-a-batch-of-one/">ADR 0001</a>). An identity whose CPU or memory query still fails on its own has failed its fetch: each of its workloads is retried with backoff (see <a href="../architecture/#application">Application</a>). The OOM signal is best-effort: when it cannot be read, the identity is computed without an OOM floor.</p>
+<p>A shard query that fails is retried once. If it fails again, its identities are re-queried one shard each, with the same query narrowed to one name, so a shard Prometheus rejects as a whole does not cost its healthy members their inputs — a single identity is just a batch of one. An identity whose CPU or memory query still fails on its own has failed its fetch: each of its workloads is retried with backoff (see <a href="../architecture/#application">Application</a>). The OOM signal is best-effort: when it cannot be read, the identity is computed without an OOM floor.</p>
 <p>Every kind batches identically, including <code>Job</code> and <code>Pod</code>. An identity whose container count is unknown (no observed-resources snapshot to size it by) gets a shard of its own; a departed identity with no snapshot at all is skipped, since there is no container set to compute against. An identity whose every workload is in retry backoff is not fetched.</p>
 <p>The dashboard's simulations read their inputs the same way, one workload or a whole policy per call.</p>
 <p>Coverage and health are observed separately and must not be derived from one another — see <a href="../../reference/metrics/#batch-fetch-coverage-vs-failures">Batch fetch coverage vs. failures</a>.</p>
 <h2 id="signals">Signals<a class="headerlink" href="#signals" title="Permanent link">&para;</a></h2>
-<p>A signal is an observed input that contributes one stage to a recommendation. Each one is a module of <code>internal/recommender</code> that owns everything about its input — the Policy settings it reads, its query, how it is parsed, what a shard of it costs, whether an identity can be recommended without it, its stage and its trace entry:</p>
+<p>A signal is an observed input that contributes one stage to a recommendation. Each one is a module of <code>internal/recommender</code> that owns everything about its input — the Policy settings it reads, its query and what that query needs from Prometheus (its <a href="../../reference/recording-rules/#signal-contracts">contract</a>), how it is parsed, what a shard of it costs, whether an identity can be recommended without it, whether it excuses an identity's age, its stage and its trace stage:</p>
 <table>
 <thead>
 <tr>
@@ -2245,7 +2054,7 @@ requests apply on next pod creation via webhook injection.</p>
 <th>Role</th>
 <th>Resource</th>
 <th>If it cannot be read</th>
-<th>Trace entry</th>
+<th>Trace stage</th>
 </tr>
 </thead>
 <tbody>
@@ -2272,7 +2081,8 @@ requests apply on next pod creation via webhook injection.</p>
 </tr>
 </tbody>
 </table>
-<p>Every resource goes through the same fixed order: base signals, then adjusters, then headroom and the min/max clamp, autoscaler coordination, and the limit. The order is not configurable.</p>
+<p>A signal's stage sits on the request side (base or adjuster) or on the limit side (limit adjuster: can only raise the limit the strategy set). No built-in signal is a limit adjuster yet.</p>
+<p>Every resource goes through the same fixed chain. Request side: base signals, adjusters, headroom, the min/max clamp, autoscaler coordination. Limit side: the Policy's limit strategy applied to the final request, limit adjusters, then the guard. The order is not configurable.</p>
 <h2 id="stages">Stages<a class="headerlink" href="#stages" title="Permanent link">&para;</a></h2>
 <p>The recommender runs each container through the following stages, in order:</p>
 <ol>
@@ -2280,22 +2090,25 @@ requests apply on next pod creation via webhook injection.</p>
 <li>Age is the <em>earliest</em> of the identity's members' <code>creationTimestamp</code>s and its <code>WorkloadRecommendation</code>'s, which records when k8s-sustain first saw the identity. A new member of an owner-name group, or a new pod of a bare-pod group, does not reset it.</li>
 <li>The <code>WorkloadRecommendation</code> is what lets ephemeral kinds pass: a standalone Job is re-created each run and a bare pod lives for one run, but their cache object persists across runs.</li>
 <li>All kinds are gated, bare pods included. The controller and the dashboard's simulations date the identity the same way.</li>
-<li>A recent OOM in any container of the workload (in the Prometheus 24h window, or seen by the live <a href="../architecture/#pod-oom-watcher">OOM watcher</a> in the last 30 minutes) bypasses the gate so a crash-looping container still gets a memory recommendation. The OOM floor decides what counts as recent, once, for both the gate and the floor.</li>
+<li>The gate asks every signal whether its values excuse the identity's age. Only the OOM floor does: a recent OOM in any container of the workload (in the Prometheus 24h window, or seen by the live <a href="../architecture/#pod-oom-watcher">OOM watcher</a> in the last 30 minutes) bypasses the gate so a crash-looping container still gets a memory recommendation. The OOM floor decides what counts as recent, once, for both the gate and the floor.</li>
+<li>Age is measured against one instant per reconcile pass, taken once the pass's Prometheus fetch has returned, from the clock the live OOM watcher's 30 minutes are measured against.</li>
 <li>Losing Prometheus data (retention loss, reinstall) while the cache object survives lets an identity pass on only minutes of samples.</li>
 </ul>
 </li>
 <li><strong>Keep request.</strong> When <code>requests.keepRequest: true</code> is set for a resource, its request and limit are left unchanged and the remaining stages are skipped for that resource.</li>
 <li><strong>Query.</strong> Read the percentile-of-usage from a recording rule over the configured window (<code>spec.rightSizing.resourcesConfigs.&lt;cpu|memory&gt;.window</code>). The signal is a genuine per-pod percentile: <code>quantile_over_time(p, …[window])</code> over the <code>k8s_sustain:workload_max_pod_&lt;cpu|memory&gt;</code> recording rule, which at each instant is the <strong>busiest replica</strong> (<code>max by</code> across pods, per container). The query reads that rule as a plain range vector at the rule's own 1m evaluation interval; raising that interval to cut Prometheus load would coarsen every recommendation percentile. Collapsing across pods in the recording rule (rather than at query time) keeps this scan cheap — one series per workload×container — and immune to pod-name churn, since dead pods drop out of the <code>max</code>. Because the percentile already covers the hottest replica, there is <strong>no replica division and no separate per-pod floor</strong>.</li>
 <li>
-<p><strong>OOM floor (memory only, per container).</strong> When THIS container OOM'd in the last 24 h (<code>k8s_sustain:workload_oom_24h</code> keeps the <code>container</code> label, so the recency check is per-container), its memory recommendation is floored at <code>max(peak_working_set_24h, oom_time_limit × 1.20)</code> before headroom. The floor never applies to innocent siblings: if container A OOMs, a sidecar B in the same pod keeps its pure percentile recommendation — even though the (non-OOM-scoped) peak rule reports a 24h high-water mark for B — and B gets no memory recommendation via the OOM bypass if it has no usage data. Two anchors are combined so the floor degrades gracefully: the peak working-set is precise when cAdvisor observes it, while the OOM-time limit bump is the safety net when peak is unreliable (cgroup v2 / sub-scrape OOM kills can hide the real high-water). The bump factor (<code>1.20</code>, matching VPA's <code>MemoryBumpUpRatio</code>) lifts the recommendation above the limit the kernel killed at, breaking the OOM loop. The OOM-time-limit anchor only refreshes when a NEW OOM event fires, so once the workload fits after a bump, the recorded limit stays at its pre-bump value and stops growing. The metric <code>k8s_sustain_oom_floor_applied_total{container}</code> increments when the floor determined the final request: it beat the percentile and no min/max clamp, before or after coordination, replaced the value (the trace's <code>oomFloor.determined</code>).</p>
-<p>The floor also fires when the in-memory <a href="../architecture/#pod-oom-watcher">Pod OOM watcher</a> saw this container killed in the last 30 minutes, before the recording rule surfaces it; that kill also bypasses the age gate. Its anchor is the memory limit the kubelet had actually applied at the kill (<code>ContainerStatus.Resources</code>), combined with the Prometheus anchor by <code>max()</code>: Prometheus survives a controller restart but lags a cycle behind a resize, while the live record is exact but in-memory only. Reading the <em>applied</em> limit rather than the spec keeps the anchor from compounding on the pipeline's own previous output.
+<p><strong>OOM floor (memory only, per container).</strong> When THIS container OOM'd in the last 24 h (<code>k8s_sustain:workload_oom_24h</code> keeps the <code>container</code> label, so the recency check is per-container), its memory recommendation is floored at <code>max(peak_working_set_24h, oom_time_limit × 1.20)</code> before headroom. The floor never applies to innocent siblings: if container A OOMs, a sidecar B in the same pod keeps its pure percentile recommendation — even though the (non-OOM-scoped) peak rule reports a 24h high-water mark for B — and B gets no memory recommendation via the OOM bypass if it has no usage data. Two anchors are combined so the floor degrades gracefully: the peak working-set is precise when cAdvisor observes it, while the OOM-time limit bump is the safety net when peak is unreliable (cgroup v2 / sub-scrape OOM kills can hide the real high-water). The bump factor (<code>1.20</code>, matching VPA's <code>MemoryBumpUpRatio</code>) lifts the recommendation above the limit the kernel killed at, breaking the OOM loop. The OOM-time-limit anchor only refreshes when a NEW OOM event fires, so once the workload fits after a bump, the recorded limit stays at its pre-bump value and stops growing. The metric <code>k8s_sustain_oom_floor_applied_total{container}</code> increments when the floor determined the final request: it beat the percentile and no min/max clamp, before or after coordination, replaced the value (the <code>determined</code> fact of the trace's <code>oomFloor</code> stage).</p>
+<p>The floor also fires when the in-memory <a href="../architecture/#pod-oom-watcher">Pod OOM watcher</a> saw this container killed in the last 30 minutes, before the recording rule surfaces it; that kill also bypasses the age gate. The controller's inputs fetcher merges the watcher's kills into each identity's OOM inputs right after the Prometheus fetch, so the floor treats both sources alike; the dashboard's simulations have no watcher and see the Prometheus kills only. Its anchor is the memory limit the kubelet had actually applied at the kill (<code>ContainerStatus.Resources</code>), combined with the Prometheus anchor by <code>max()</code>: Prometheus survives a controller restart but lags a cycle behind a resize, while the live record is exact but in-memory only. Reading the <em>applied</em> limit rather than the spec keeps the anchor from compounding on the pipeline's own previous output.
 5. <strong>Headroom.</strong> Multiply by <code>(1 + headroom/100)</code> to add a safety buffer.
 6. <strong>Clamp.</strong> Floor to <code>minAllowed</code>, cap at <code>maxAllowed</code> (when set). <code>maxAllowed</code> always wins, including over the OOM floor.
 7. <strong>Autoscaler coordination.</strong> When <code>autoscalerCoordination.enabled</code> and the workload is targeted by an HPA or KEDA <code>ScaledObject</code>:
 - <strong>Overhead.</strong> Multiply by <code>(100 / hpa_target_pct) × 1.10</code>, or by 1 for a resource the autoscaler has no <code>averageUtilization</code> target on.
 - <strong>Replica-budget correction (CPU only).</strong> When <code>autoscalerCoordination.replicaBudgetAnchor</code> is set, multiply the CPU request by <code>clamp(current_replicas / target_replicas, 0.5, 2.0)</code>, where <code>target_replicas = round(min + anchor × (max - min))</code> — see <a href="../autoscaler-coordination/#replica-budget-correction-opt-in">Autoscaler Coordination</a>.
 - <strong>Clamp again.</strong> The clamps from step 6 are re-applied so explicit policy caps survive coordination.
-8. <strong>Limits derivation.</strong> Apply the <code>limits</code> strategy (<code>keepLimit</code> / <code>keepLimitRequestRatio</code> / <code>equalsToRequest</code> / <code>noLimit</code> / <code>requestsLimitsRatio</code>) to the final request.</p>
+8. <strong>Limit strategy.</strong> Apply the <code>limits</code> strategy to the final request: <code>equalsToRequest</code>, <code>requestsLimitsRatio</code> (request × ratio) and <code>keepLimitRequestRatio</code> (request × the container's current limit-to-request ratio) derive a limit; <code>noLimit</code> removes it; <code>keepLimit</code>, the default, keeps the container's own limit. <code>keepLimitRequestRatio</code> keeps the container's limit when it has no request or no limit to take a ratio from.
+9. <strong>Limit adjusters.</strong> Each limit-side signal may raise the limit, never remove it or give one to a container without. No built-in signal runs here yet.
+10. <strong>Guard.</strong> When a limit results, derived or kept, and it is below the final request, it is raised to the request: the apiserver rejects a pod whose limit is below its request, and the request may carry the OOM floor, so the limit gives way, never the request. In practice this concerns kept limits (<code>keepLimit</code> or no strategy, and <code>keepLimitRequestRatio</code> without a ratio): the OOM floor, headroom, <code>minAllowed</code> or coordination can each push a request above the limit the container runs. A removed limit needs no guard.</p>
 </li>
 </ol>
 <p>Every stage that runs is recorded in the identity's <code>WorkloadRecommendation</code> as the <a href="#trace">trace</a>.</p>
@@ -2308,8 +2121,10 @@ requests apply on next pod creation via webhook injection.</p>
     C --&gt; O[HPA overhead]
     O --&gt; R[replica anchor&lt;br/&gt;CPU only]
     R --&gt; C2[clamp min/max again]
-    C2 --&gt; L[derive limits]
-    L --&gt; OUT[ContainerRecommendation]</code></pre>
+    C2 --&gt; L[limit strategy]
+    L --&gt; LA[limit adjusters]
+    LA --&gt; GU[guard&lt;br/&gt;limit ≥ request]
+    GU --&gt; OUT[ContainerRecommendation]</code></pre>
 <h2 id="worked-example">Worked example<a class="headerlink" href="#worked-example" title="Permanent link">&para;</a></h2>
 <p>Configuration:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
@@ -2336,18 +2151,88 @@ requests apply on next pod creation via webhook injection.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">trace</span><span class="p">:</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">app</span><span class="p">:</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="nt">cpu</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">      </span><span class="nt">percentile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">      </span><span class="nt">withHeadroom</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">110m</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">      </span><span class="nt">clamped</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">110m</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">      </span><span class="nt">coordination</span><span class="p">:</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">        </span><span class="nt">overheadFactor</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1.5714285714285714</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">        </span><span class="nt">scaled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">173m</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">173m</span>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">      </span><span class="nt">limit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">346m</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">      </span><span class="nt">request</span><span class="p">:</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">percentile</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">headroom</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">110m</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">clamp</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">110m</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">coordination</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">173m</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">        </span><span class="nt">facts</span><span class="p">:</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">          </span><span class="nt">overheadFactor</span><span class="p">:</span><span class="w"> </span><span class="s">"1.571"</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">      </span><span class="nt">limit</span><span class="p">:</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">keepLimitRequestRatio</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">346m</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="w">        </span><span class="nt">facts</span><span class="p">:</span>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="w">          </span><span class="nt">ratio</span><span class="p">:</span><span class="w"> </span><span class="s">"2"</span>
 </code></pre></div>
 <h2 id="trace">Trace<a class="headerlink" href="#trace" title="Permanent link">&para;</a></h2>
-<p>The trace is the record of how a Recommendation was derived. <code>recommender.Compute</code> returns it alongside the values, for every container: per resource, the value after each stage that actually ran (percentile, OOM floor, headroom, clamp, coordination with its overhead and replica factors, limit). The controller stores it in <code>status.trace</code> of the identity's <code>WorkloadRecommendation</code> together with the values, never on its own (see <a href="../workload-recommendations/#schema">Schema</a>), and reads it for its own metrics, so nothing re-derives a stage after the fact. The dashboard shows it per container on the workload detail page and reads the <strong>Coordinated</strong> factors of its list rows from it.</p>
-<p>A Simulation computes a trace too, but the dashboard only shows the stored one: what explains the applied values is what the controller stored.</p>
+<p>The trace is the record of how a Recommendation was derived. <code>recommender.Compute</code> returns it alongside the values, for every container: per resource, two ordered lists of the stages that actually ran, <code>request</code> then <code>limit</code>. Each entry names its stage and holds its value — what a signal contributed, or the request or limit after any other stage — or <code>removed: true</code> for a stripped limit, plus the stage's own facts as key/values:</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Side</th>
+<th>Value</th>
+<th>Facts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>percentile</code></td>
+<td>request</td>
+<td>the usage percentile, at full precision</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>oomFloor</code></td>
+<td>request</td>
+<td>the floor, before headroom</td>
+<td><code>determined</code> (the floor set the final request), <code>anchor</code> (<code>peak</code> or <code>killedAtLimit</code>), <code>killedAtLimit</code>, <code>liveKillAt</code> (a kill the OOM watcher saw)</td>
+</tr>
+<tr>
+<td><code>headroom</code></td>
+<td>request</td>
+<td>after headroom, rounded up</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>clamp</code></td>
+<td>request</td>
+<td>after <code>minAllowed</code>/<code>maxAllowed</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>coordination</code></td>
+<td>request</td>
+<td>after the factors and the second clamp: the request</td>
+<td><code>overheadFactor</code>, <code>replicaFactor</code> (CPU with a <code>replicaBudgetAnchor</code>), <code>scaled</code> (what the factors produced, when the clamp replaced it)</td>
+</tr>
+<tr>
+<td><code>keepLimit</code>, <code>noLimit</code>, <code>equalsToRequest</code>, <code>requestsLimitsRatio</code>, <code>keepLimitRequestRatio</code></td>
+<td>limit</td>
+<td>the limit the strategy set; for a kept limit the container's own, absent when it has none</td>
+<td><code>ratio</code></td>
+</tr>
+<tr>
+<td>a limit-side signal's name</td>
+<td>limit</td>
+<td>what it contributed, before rounding up to a whole millicore or MiB, whether or not that raised the limit</td>
+<td>its own</td>
+</tr>
+<tr>
+<td><code>guard</code></td>
+<td>limit</td>
+<td>the request the limit was raised to</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>The last <code>request</code> stage holds the request. The last <code>limit</code> stage need not hold the limit: a limit-side signal's stage records what it contributed even when that stayed below the limit the strategy set. The Recommendation holds both. The <code>guard</code> stage appears exactly when it changed the limit. A new signal brings its own stage and facts, with no change to the <code>WorkloadRecommendation</code> schema or the dashboard, which shows a stage it does not know under its own name.</p>
+<p>The controller stores the trace in <code>status.trace</code> of the identity's <code>WorkloadRecommendation</code> together with the values, never on its own (see <a href="../workload-recommendations/#schema">Schema</a>), and reads the <code>oomFloor</code> stage for its own metrics, so nothing re-derives a stage after the fact. The dashboard shows it per container on the workload detail page and reads the <strong>Coordinated</strong> factors of its list rows from the <code>coordination</code> stage.</p>
+<p>A <a href="../../guides/dashboard/#policy-simulator">Simulation</a> computes a trace of its own, which the Simulator shows with its values; the workload detail page shows only the stored one, since what explains the applied values is what the controller stored.</p>
 <h2 id="choosing-a-percentile">Choosing a percentile<a class="headerlink" href="#choosing-a-percentile" title="Permanent link">&para;</a></h2>
 <p>The percentile knob (<code>spec.rightSizing.resourcesConfigs.&lt;cpu|memory&gt;.requests.percentile</code>) maps directly to a <code>quantile_over_time(p, …)</code> against the recording rule. Pick by intent, not by gut feel:</p>
 <table>

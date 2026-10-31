@@ -380,26 +380,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1525,6 +1505,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Policy Simulator">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#post-apisimulate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /api/simulate
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
       </ul>
@@ -2043,177 +2040,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2387,6 +2213,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Policy Simulator">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#post-apisimulate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST /api/simulate
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -2696,13 +2539,14 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <h3 id="risk-state">Risk state<a class="headerlink" href="#risk-state" title="Permanent link">&para;</a></h3>
 <p>Every row, badge, KPI and attention list shows one <strong>Risk state</strong> per workload identity (an owner-name group or bare-pod group is one identity), classified once by the backend in this precedence:</p>
 <ol>
-<li><strong>Conflicted</strong> — the identity's members opt into different Policies, so no Policy governs it and its recommendation is frozen (see <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted identities</a>). Shown on the Workloads list and detail pages; the Overview does not count it yet.</li>
-<li><strong>Blocked</strong> — the controller keeps failing to apply the identity's recommendation and is backing off (any member in retry backoff).</li>
+<li><strong>Conflicted</strong> — the identity's members opt into different Policies, so no Policy governs it and its recommendation is frozen (see <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted identities</a>).</li>
+<li><strong>Blocked</strong> — the controller's last attempt to apply the identity's recommendation to a member failed, transiently (retried with backoff) or permanently (retried every reconcile, e.g. missing RBAC), and none has succeeded since.</li>
 <li><strong>At risk</strong> — an OOM kill in the last 24 hours.</li>
-<li><strong>Drift</strong> — pods whose running resources still differ from the recommendation beyond the policy's <code>downsizeThreshold</code>; a decrease the policy suppresses is not drift.</li>
+<li><strong>Drifted</strong> — pods whose running resources still differ from the recommendation beyond the policy's <code>downsizeThreshold</code>; a decrease the policy suppresses is not drift.</li>
 <li><strong>Safe</strong> — none of the above.</li>
 </ol>
-<p>An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. Blocked, At risk and Drift come from the controller's identity-keyed metrics and the <code>k8s_sustain:workload_oom_24h</code> rule (see <a href="../../reference/metrics/#what-owner_kind-and-owner_name-name">Metrics</a>), so an owner-name group shows its members' combined state under the group's name. Conflicted comes from the identity inventory the dashboard shares with the controller.</p>
+<p>An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. Blocked, At risk and Drifted come from the controller's identity-keyed metrics and the <code>k8s_sustain:workload_oom_24h</code> rule (see <a href="../../reference/metrics/#what-owner_kind-and-owner_name-name">Metrics</a>), so an owner-name group shows its members' combined state under the group's name. Conflicted comes from the identity inventory the dashboard shares with the controller.</p>
+<p>Every view counts the same identities: those of the inventory, so a signal left behind by a deleted workload counts nowhere. Each Risk-state count on the Overview equals the Workloads list filtered by that state.</p>
 <h3 id="time-range-and-auto-refresh">Time range and auto-refresh<a class="headerlink" href="#time-range-and-auto-refresh" title="Permanent link">&para;</a></h3>
 <p>Overview, Workload Detail, Policy Detail and Simulator share one <strong>time range picker</strong>.</p>
 <ul>
@@ -2716,10 +2560,10 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <h3 id="overview-page">Overview Page<a class="headerlink" href="#overview-page" title="Permanent link">&para;</a></h3>
 <p>The overview is a vertical flow of six bands:</p>
 <ol>
-<li><strong>KPI strip</strong> — six cards:<ul>
+<li><strong>KPI strip</strong> — seven cards:<ul>
 <li><strong>CPU saved</strong> and <strong>Memory saved</strong> — absolute saving, share of cluster requests, and a 7-day sparkline.</li>
-<li><strong>Blocked</strong>, <strong>At risk</strong> and <strong>Drifted</strong> — how many identities are in each <a href="#risk-state">Risk state</a>; each identity counts once, under its state. Click one to open the Workloads list filtered to that state.</li>
-<li><strong>Coordinated</strong> — workloads whose stored recommendation was adjusted for an HPA or KEDA ScaledObject, according to its <a href="../../concepts/recommendation-pipeline/#trace">trace</a> (see <a href="../../concepts/autoscaler-coordination/">Autoscaler coordination</a>).</li>
+<li><strong>Conflicted</strong>, <strong>Blocked</strong>, <strong>At risk</strong> and <strong>Drifted</strong> — how many identities are in each <a href="#risk-state">Risk state</a>, under what puts an identity there (<code>policies disagree</code>, <code>last apply failed</code>, <code>OOM in 24h</code>, <code>pods not on rec</code>); each identity counts once, under its state, and each count is its Needs attention total. Click one to open the Workloads list filtered to that state, which lists exactly that many.</li>
+<li><strong>Coordinated</strong> — identities whose stored recommendation was adjusted for an HPA or KEDA ScaledObject, according to its <a href="../../concepts/recommendation-pipeline/#trace">trace</a> (see <a href="../../concepts/autoscaler-coordination/">Autoscaler coordination</a>), counted across every identity.</li>
 </ul>
 </li>
 <li>
@@ -2731,8 +2575,8 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 </ul>
 <p>All three are scoped to managed workloads (usage and current-request queries are joined <code>and on(namespace, owner_kind, owner_name, container) k8s_sustain_workload_template_*</code>). The gap between <em>original</em> and <em>current request</em> is the realised saving; the gap between <em>current request</em> and <em>usage</em> is the remaining headroom.
 3. <strong>Cluster headroom</strong> — a stacked bar for CPU and memory split into <code>used</code>, <code>idle</code> and <code>free</code>, from the <code>k8s_sustain:cluster_cpu_headroom_breakdown</code> and <code>..._memory_headroom_breakdown</code> recording rules.
-4. <strong>Needs attention</strong> — three lists, one per non-Safe <a href="#risk-state">Risk state</a>, each identity in exactly one: <strong>Risk</strong> (At risk, most OOM kills first), <strong>Drift</strong> (most stale pods first) and <strong>Blocked</strong> (most retry attempts first), ten rows each. Each row links to the identity's detail page.
-5. <strong>Policy effectiveness</strong> — per-policy identity count, CPU/memory saved, and the number of Blocked identities.
+4. <strong>Needs attention</strong> — four lists, one per non-Safe <a href="#risk-state">Risk state</a> in precedence order, each identity in exactly one: <strong>Conflicted</strong> (with the policies its members opt into), <strong>Blocked</strong> (most retry attempts first), <strong>At risk</strong> (most OOM kills first) and <strong>Drifted</strong> (most stale pods first). Each header shows how many identities are in that state and collapses its list; each list shows the worst ten, links each row to the identity's detail page, and links to the filtered Workloads list for the rest.
+5. <strong>Policy effectiveness</strong> — per-policy identity count, CPU/memory saved, and the number of Blocked identities it governs.
 6. <strong>Recent activity</strong> — the latest reconcile and pod-recycle events from the controller.</p>
 </li>
 </ol>
@@ -2741,9 +2585,9 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <p>The rows come from the same identity inventory the controller reconciles from (<code>internal/inventory</code>), so membership, containers, age, Departed and the governing Policy agree with what the controller does.</p>
 <ul>
 <li><strong>Stat strip</strong> — Total, Automated (governed by a policy) and Manual counts, plus <strong>Conflicted</strong> when any identity is.</li>
-<li><strong>Filters</strong> — namespace, kind, status (Automated / Manual), lifecycle (Live / Departed, default any), risk (Safe / Drifted / At risk / Blocked / Conflicted), autoscaler (Has / No autoscaler), and a name search. <strong>Reset filters</strong> clears them all and returns to page 1, keeping the sort order. Filters, sort order and page are kept in the URL query string (e.g. <code>/workloads?namespace=prod&amp;risk=at-risk&amp;sort=-stalePods</code>), so browser Back from a workload restores the list and a filtered view can be bookmarked or shared.</li>
+<li><strong>Filters</strong> — namespace, kind, status (Automated / Manual), lifecycle (Live / Departed, default any), risk (Conflicted / Blocked / At risk / Drifted / Safe), autoscaler (Has / No autoscaler), and a name search. <strong>Reset filters</strong> clears them all and returns to page 1, keeping the sort order. Filters, sort order and page are kept in the URL query string (e.g. <code>/workloads?namespace=prod&amp;risk=at-risk&amp;sort=-stalePods</code>), so browser Back from a workload restores the list and a filtered view can be bookmarked or shared.</li>
 <li><strong>Columns</strong> — Namespace, Kind, Name, <strong>Risk</strong>, <strong>Drift</strong> (stale/total pods, e.g. <code>2/5</code>), <strong>Policy</strong> (links to the governing policy; a Conflicted identity names the policies its members opt into, in red) and container count. Sorted by name by default; click Namespace, Kind, Name, Drift or Policy to sort across all pages, click again to reverse.</li>
-<li><strong>Risk</strong> — the identity's <a href="#risk-state">Risk state</a>: <code>Conflicted</code>, then <code>Blocked</code>, then <code>At risk</code>, then <code>Drift</code>, otherwise <code>Safe</code>.</li>
+<li><strong>Risk</strong> — the identity's <a href="#risk-state">Risk state</a>: <code>Conflicted</code>, then <code>Blocked</code>, then <code>At risk</code>, then <code>Drifted</code>, otherwise <code>Safe</code>.</li>
 <li><strong>Name badges</strong> — <strong>Autoscaler</strong> when an HPA or KEDA ScaledObject targets the workload; <strong>Coordinated</strong> when autoscaler coordination adjusted its stored recommendation, followed by the non-trivial factors (<code>×1.15 CPU</code>, <code>×1.10 mem</code> overhead, <code>· replica ×0.80</code>) read from the recommendation's <a href="../../concepts/recommendation-pipeline/#trace">trace</a>; <strong>Departed · last seen X ago</strong> for an identity with no live member.</li>
 </ul>
 <p>Departed rows come from a retained <code>WorkloadRecommendation</code> whose identity has no live member left (completed bare pods, a deleted or finished standalone Job). They stay listed for the retention window (<code>--recommendation-retention</code>, default <code>168h</code>); see <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</p>
@@ -2751,15 +2595,15 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <ul>
 <li><strong>Header</strong> — kind, namespace, container count, <strong>Automated</strong> + policy link, <strong>Conflicted</strong> with the policies its members opt into, or <strong>Manual</strong>; <strong>Departed</strong> when no member is live; the <a href="#risk-state">Risk state</a> badge, and the <strong>Coordinated</strong> badge with its factors when autoscaler coordination shaped the stored recommendation.</li>
 <li><strong>Status</strong> — three cards: <strong>Mode</strong> (<code>OnCreate</code> / <code>Ongoing</code>), <strong>Drift</strong> (stale/total pods), <strong>OOM 24h</strong>.</li>
-<li><strong>Currently blocked</strong> — shown only while a member of the identity is in retry backoff: the failed step (<code>prometheus</code>, <code>patch</code> or <code>resize</code>) and the attempt count across members.</li>
-<li><strong>Recommendation</strong> — the Recommendation stored in the identity's <code>WorkloadRecommendation</code>, current vs. recommended CPU and memory request per container (init containers flagged), with the outcome of the controller's last pass (<code>Computed</code>, <code>No data</code>, <code>Too young</code>, <code>Fetch failed</code>, <code>Conflicted (frozen)</code>) and when it was last computed. <strong>How this was computed</strong> expands each container's stored <a href="../../concepts/recommendation-pipeline/#trace">trace</a> into a table: CPU and memory after each stage that ran (usage percentile, OOM floor, headroom, min/max clamp, autoscaler coordination with its factors, limit), noting when the OOM floor set the request and when a clamp capped the coordinated value. Nothing is recomputed here; use the Simulator for that.</li>
+<li><strong>Blocked</strong> — a band shown only while a member of the identity is Blocked: the failed step (<code>prometheus</code>, <code>patch</code>, <code>resize</code> or <code>store</code>) and the attempt count across members.</li>
+<li><strong>Recommendation</strong> — the Recommendation stored in the identity's <code>WorkloadRecommendation</code>, current vs. recommended CPU and memory request per container (init containers flagged), with the outcome of the controller's last pass (<code>Computed</code>, <code>No data</code>, <code>Too young</code>, <code>Fetch failed</code>, <code>Conflicted (frozen)</code>) and when it was last computed. <strong>How this was computed</strong> expands each container's stored <a href="../../concepts/recommendation-pipeline/#trace">trace</a> into a table: CPU and memory after each stage that ran, request stages (usage percentile, OOM floor, headroom, min/max clamp, autoscaler coordination) then limit stages (the limit strategy, any limit-side signal, the guard that raised a limit below the request), each with its facts as recorded (<code>determined: true</code> when the OOM floor set the request, coordination's factors, <code>scaled</code> when a clamp capped the coordinated value). A stage the dashboard has no name for is shown under its own. Nothing is recomputed here; use the Simulator for that.</li>
 <li><strong>Charts</strong> — per container, CPU and memory usage with the workload's <strong>historical request</strong> (amber dashed, stepped) and <strong>limit</strong> (amber dotted), plus the <strong>stored recommendation</strong> (green long-dashed line). Without historical request data in Prometheus, the request line falls back to the current spec. Lines break across gaps longer than ~1.5× the query step (between CronJob runs, scaled to zero). Memory charts show <strong>OOM kills</strong> as red markers with a count, from kube-state-metrics; without kube-state-metrics the markers are omitted.</li>
 <li><strong>Recent events</strong> — k8s-sustain events about every member of the identity (the controller attributes each event to the member it acted on, so an owner-name group's or bare-pod group's events sit on several objects).</li>
 <li><strong>Open in Simulator</strong> — jumps to the simulator with the workload pre-filled.</li>
 </ul>
 <p>A <strong>Departed</strong> identity's detail page resolves from the retained <code>WorkloadRecommendation</code>, so the recommendation and the usage history for the time it ran remain visible.</p>
 <h3 id="policies-page">Policies Page<a class="headerlink" href="#policies-page" title="Permanent link">&para;</a></h3>
-<p>A stat strip shows <strong>Total policies</strong>, <strong>Workloads covered</strong>, <strong>Cluster CPU saved</strong> and <strong>Cluster Mem saved</strong>. The table lists each policy's Name, <strong>Status</strong> (Ready condition), <strong>Mode</strong> (per-kind update modes), <strong>Workloads</strong>, <strong>CPU saved</strong>, <strong>Mem saved</strong>, <strong>Blocked</strong> (identities in retry backoff) and <strong>Last applied</strong>. Click a row for the policy detail page.</p>
+<p>A stat strip shows <strong>Total policies</strong>, <strong>Workloads covered</strong>, <strong>Cluster CPU saved</strong> and <strong>Cluster Mem saved</strong>. The table lists each policy's Name, <strong>Status</strong> (Ready condition), <strong>Mode</strong> (per-kind update modes), <strong>Workloads</strong>, <strong>CPU saved</strong>, <strong>Mem saved</strong>, <strong>Blocked</strong> (Blocked identities) and <strong>Last applied</strong>. Click a row for the policy detail page.</p>
 <h3 id="policy-detail">Policy Detail<a class="headerlink" href="#policy-detail" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Stat strip</strong> — Status, Matched Workloads (every identity the policy governs, Departed ones included, unaffected by the table filters), CPU saved, Memory saved.</li>
@@ -2767,29 +2611,47 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <li><strong>Selector</strong> — target namespaces (or "all namespaces"), <code>matchLabels</code> and <code>matchExpressions</code>.</li>
 <li><strong>Effectiveness over time</strong> — CPU and memory savings for this policy over the selected range.</li>
 <li><strong>Matched Workloads</strong> — the identities the policy governs: Namespace, Kind, Name (with Departed badge), Risk, Drift, containers and their current CPU/memory requests; namespace filter, name search, <strong>Reset filters</strong>, and pagination (50 per page). Sorted by name by default; click Namespace, Kind, Name or Drift to sort across all pages. Filters, sort and page live in the URL alongside the time range, so Back from a workload restores the list.</li>
-<li><strong>Simulate All</strong> — runs the recommender with this policy's configuration over every matched workload (<code>GET /api/policies/{name}/batch-simulate</code>) and shows a <strong>Batch Simulation Results</strong> card: aggregate CPU and memory savings (current → recommended) and a per-container table. "Current" is the container's measured usage from Prometheus, not its configured request. A workload that fails to compute shows its error on its own row.</li>
+<li><strong>Simulate All</strong> — runs a <a href="#policy-simulator">Simulation</a> with no override of every live identity the policy governs (<code>GET /api/policies/{name}/batch-simulate</code>) and shows a <strong>Batch Simulation Results</strong> card: aggregate CPU and memory savings (current → recommended) and a per-container table. "Current" is the request the container runs with; a container without one shows its recommendation but stays out of the totals. An identity whose outcome is <strong>Too young</strong> shows its numbers flagged as such and is left out of the totals, since the controller would not apply them; a <strong>No data</strong> one has none. A workload that fails to compute shows its error on its own row.</li>
 </ul>
 <h3 id="policy-simulator">Policy Simulator<a class="headerlink" href="#policy-simulator" title="Permanent link">&para;</a></h3>
+<p>A Simulation is the Recommendation the controller would compute for an identity, under what-if changes to its Policy's settings. With no change it is exactly the controller's: the same identity (members, containers, age), the same Policy settings, and the same autoscaler, read for each member the Policy governs — the one difference is that the dashboard has no live OOM watcher, so a kill the controller saw in the last 30 minutes but Prometheus does not hold yet raises the controller's memory floor and not the Simulation's.</p>
 <ol>
-<li>Select a <strong>workload</strong> (namespace, kind, name). Kinds: Deployment, StatefulSet, DaemonSet, CronJob, Job, Rollout, Pod.</li>
-<li>Optionally <strong>Load from policy</strong> to pre-fill every field from an existing policy.</li>
-<li>Adjust <strong>CPU and memory</strong> independently:<ul>
+<li>Select a <strong>workload</strong> (namespace, kind, name). Kinds: Deployment, StatefulSet, DaemonSet, CronJob, Job, Rollout, Pod. <strong>Open in Simulator</strong> on a workload page fills it in.</li>
+<li>The Simulation <strong>starts from</strong> the workload's governing policy, and every control shows that policy's settings with the recommender's defaults filled in (<code>168h</code> window, 95th percentile, no headroom, the existing limit kept, raised to the request when below it). Start from another policy instead with the <strong>Start from</strong> selector, which drops your changes; when no policy governs the workload, the defaults apply. <strong>Reset</strong> drops every change.</li>
+<li>
+<p>Change any of, per resource:</p>
+<ul>
 <li>Window — the recommendation lookback (e.g. <code>168h</code>), independent of the chart time range</li>
-<li>Percentile (50–100)</li>
-<li>Headroom (0–100%)</li>
-<li>Min/Max allowed</li>
-<li><strong>Limits strategy</strong> — <code>keepLimit</code> (default), <code>noLimit</code>, <code>equalsToRequest</code>, <code>requestsLimitsRatio</code> (with a multiplier), or <code>keepLimitRequestRatio</code>. Mirrors <code>spec.rightSizing.resourcesConfigs.&lt;resource&gt;.limits</code>.</li>
+<li><strong>Keep the current request</strong> (<code>keepRequest</code>), or the percentile (50–100), headroom (0–100%) and min/max allowed it computes from</li>
+<li><strong>Limits strategy</strong> — <code>keepLimit</code>, <code>noLimit</code>, <code>equalsToRequest</code>, <code>requestsLimitsRatio</code> (with a multiplier), or <code>keepLimitRequestRatio</code>. Mirrors <code>spec.rightSizing.resourcesConfigs.&lt;resource&gt;.limits</code>.</li>
 </ul>
+<p>and for the workload: <strong>autoscaler coordination</strong> (with its replica budget anchor) and <strong>exclude init containers</strong>.</p>
 </li>
 </ol>
-<p>The simulation re-runs automatically (debounced) whenever a parameter changes. Results show:</p>
+<p>Only what you change is sent; everything else stays the starting policy's. The simulation re-runs automatically (debounced). The server checks the result against the Policy CRD's rules (ranges, minAllowed ≤ maxAllowed, at most one limit strategy, <code>keepRequest</code> alone, …) and shows a change it rejects above the form, keeping the last results; a rule the starting policy itself already breaks (admitted before the CRD gained it) is left to it. Results show:</p>
 <ul>
-<li>A <strong>Savings impact</strong> band — projected CPU and memory change.</li>
-<li>Per container: CPU/memory request and limit, current vs. recommended (<code>— removed —</code> under <code>noLimit</code>).</li>
+<li>A <strong>Savings impact</strong> band — projected CPU and memory change, with a note when the outcome is <strong>Too young</strong> (the controller would not apply it yet).</li>
+<li>Per container: CPU/memory request and limit, current vs. recommended (<code>— removed —</code> under <code>noLimit</code>), and <strong>How this was computed</strong>: the Simulation's own <a href="../../concepts/recommendation-pipeline/#trace">trace</a>. A note above them names the window of live OOM kills the Simulation cannot see, as the server sends it.</li>
 <li>Charts with the sliding-window recommendation, historical request and current limit over usage.</li>
 </ul>
-<p>The simulator, the batch simulation and the controller share one algorithm (<code>internal/recommender</code>): percentile over the busiest replica, OOM-aware memory floor, limits derived from the real containers, and <strong>autoscaler coordination</strong> when an HPA or KEDA ScaledObject targets the workload. A Simulation is the only place the dashboard computes a recommendation; what is applied is what the controller stored. The simulator inherits the coordination setting of the workload's governing policy; the <code>autoscalerCoordination</code> field of the <code>POST /api/simulate</code> body overrides it. It dates the identity as the controller does (its earliest member or its <code>WorkloadRecommendation</code>, whichever is older) and reports a Too young identity as <code>tooYoung</code> instead of hiding the number; it skips only the live OOM watcher.</p>
+<p>The simulator, the batch simulation and the controller build each identity's computation in one place (<code>recommender.Assemble</code>) and run one algorithm (<code>internal/recommender</code>): percentile over the busiest replica, OOM-aware memory floor, limits derived from the real containers, and <strong>autoscaler coordination</strong> when an HPA or KEDA ScaledObject targets one of the identity's members. A Simulation is the only place the dashboard computes a recommendation; what is applied is what the controller stored. It dates the identity as the controller does (its earliest member or its <code>WorkloadRecommendation</code>, whichever is older) and reports a Too young identity's numbers with its outcome instead of hiding them.</p>
 <p>When a container OOM'd in the last 24h, its simulated memory recommendation is floored at <code>max(kernel high-water peak, OOM-time cgroup limit × 1.20)</code>, exactly as the controller applies it (see <a href="../../concepts/recommendation-pipeline/">Recommendation pipeline</a>). Sibling containers that did not OOM keep their plain percentile.</p>
+<h4 id="post-apisimulate"><code>POST /api/simulate</code><a class="headerlink" href="#post-apisimulate" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">"namespace"</span><span class="p">:</span><span class="w"> </span><span class="s2">"prod"</span><span class="p">,</span><span class="w"> </span><span class="nt">"ownerKind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Deployment"</span><span class="p">,</span><span class="w"> </span><span class="nt">"ownerName"</span><span class="p">:</span><span class="w"> </span><span class="s2">"web"</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">"window"</span><span class="p">:</span><span class="w"> </span><span class="s2">"168h"</span><span class="p">,</span><span class="w"> </span><span class="nt">"step"</span><span class="p">:</span><span class="w"> </span><span class="s2">"10m"</span><span class="p">,</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">"policy"</span><span class="p">:</span><span class="w"> </span><span class="s2">"other-policy"</span><span class="p">,</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">"override"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">"resourcesConfigs"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">      </span><span class="nt">"cpu"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"requests"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"percentile"</span><span class="p">:</span><span class="w"> </span><span class="mi">90</span><span class="p">}},</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">      </span><span class="nt">"memory"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"requests"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"minAllowed"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">},</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">                 </span><span class="nt">"limits"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"keepLimit"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="nt">"noLimit"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}}</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span><span class="nt">"autoscalerCoordination"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"enabled"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>window</code>/<code>step</code> (or <code>fromTs</code>/<code>toTs</code>) shape the charts only. <code>policy</code> names the Policy to start from; omitted, the identity's governing Policy. <code>override</code> is a <a href="https://datatracker.ietf.org/doc/html/rfc7386">JSON merge patch</a> of <code>resourcesConfigs</code>, <code>autoscalerCoordination</code> and <code>excludeInitContainers</code> onto that Policy's: a key replaces the Policy's, <code>null</code> removes it, and a limit strategy is changed by setting the old one to <code>false</code>. An override the Policy CRD would reject is a <code>400</code> whose <code>field</code> names the setting (e.g. <code>resourcesConfigs.memory.requests</code>); an unknown <code>policy</code> is a <code>404</code>. The response carries the <code>policy</code> it started from, the <code>effective</code> settings it ran with (override merged, every default explicit), the <code>outcome</code> (<code>Computed</code>, <code>TooYoung</code> or <code>NoData</code>), and per container the values and their <code>trace</code>, next to the usage, request and recommendation series. <code>liveOOMWindowSeconds</code> is how long a kill the controller's OOM watcher saw counts as recent (<code>recommender.LiveOOMWindow</code>): a kill that recent and not yet in Prometheus raises the controller's memory floor and not the Simulation's.</p>
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
 <h3 id="no-metrics-data-available">"No metrics data available"<a class="headerlink" href="#no-metrics-data-available" title="Permanent link">&para;</a></h3>
 <p>This message appears when Prometheus returns no time-series data for the workload. Common causes:</p>
@@ -2829,7 +2691,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <tr>
 <td><code>GET</code></td>
 <td><code>/api/policies/{name}/batch-simulate</code></td>
-<td>Recommendations for every matched workload with aggregate savings</td>
+<td>A Simulation of every live identity the policy governs, each with its <code>outcome</code>, and the savings of the <code>Computed</code> ones against the requests their containers run with</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
@@ -2849,12 +2711,12 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <tr>
 <td><code>POST</code></td>
 <td><code>/api/simulate</code></td>
-<td>What-if recommendation for one workload</td>
+<td>A <a href="#post-apisimulate">Simulation</a> of one identity: its governing (or a chosen) Policy with a what-if <code>override</code></td>
 </tr>
 <tr>
 <td><code>GET</code></td>
 <td><code>/api/summary</code></td>
-<td>Overview snapshot (savings and Risk-state KPIs, headroom, attention, policy rollups)</td>
+<td>Overview snapshot: savings KPIs and <code>coordinatedCount</code>; headroom; <code>attention</code> keyed by Risk state (<code>conflicted</code>, <code>blocked</code>, <code>at-risk</code>, <code>drifted</code>), each <code>{total, rows}</code> with the worst ten rows, where <code>total</code> counts the same identities as <code>/api/workloads</code> filtered by that state; policy rollups</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
@@ -2886,20 +2748,20 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <p>Any other path serves the SPA.</p>
 <h3 id="response-envelope">Response envelope<a class="headerlink" href="#response-envelope" title="Permanent link">&para;</a></h3>
 <p>Every successful response is wrapped:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">"data"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"..."</span><span class="p">:</span><span class="w"> </span><span class="s2">"endpoint-specific payload"</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">"meta"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"requestId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a1b2c3d4e5f60718293a4b5c"</span><span class="w"> </span><span class="p">}</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">"data"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"..."</span><span class="p">:</span><span class="w"> </span><span class="s2">"endpoint-specific payload"</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">"meta"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">"requestId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a1b2c3d4e5f60718293a4b5c"</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="p">}</span>
 </code></pre></div>
 <p>Errors use a parallel shape:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">"code"</span><span class="p">:</span><span class="w"> </span><span class="s2">"BAD_REQUEST"</span><span class="p">,</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"invalid pageSize \"-1\": must be 1..200"</span><span class="p">,</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="nt">"field"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pageSize"</span><span class="p">,</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="nt">"requestId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a1b2c3d4e5f60718293a4b5c"</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">"error"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="nt">"code"</span><span class="p">:</span><span class="w"> </span><span class="s2">"BAD_REQUEST"</span><span class="p">,</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="nt">"message"</span><span class="p">:</span><span class="w"> </span><span class="s2">"invalid pageSize \"-1\": must be 1..200"</span><span class="p">,</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="nt">"field"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pageSize"</span><span class="p">,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span><span class="nt">"requestId"</span><span class="p">:</span><span class="w"> </span><span class="s2">"a1b2c3d4e5f60718293a4b5c"</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="p">}</span>
 </code></pre></div>
 <p>Error <code>code</code> values are stable: <code>BAD_REQUEST</code>, <code>NOT_FOUND</code>, <code>METHOD_NOT_ALLOWED</code>, <code>SERVICE_UNAVAILABLE</code>, <code>INTERNAL</code>. The <code>field</code> key is only present on 400 responses that can be attributed to a single request input (page, pageSize, kind, risk, autoscaler, automated, window, step, limit, …).</p>
 <h3 id="request-correlation">Request correlation<a class="headerlink" href="#request-correlation" title="Permanent link">&para;</a></h3>

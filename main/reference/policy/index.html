@@ -378,26 +378,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1723,7 +1703,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#cpudownsizethreshold-memorydownsizethreshold" class="md-nav__link">
+  <a href="#downsize-threshold" class="md-nav__link">
     <span class="md-ellipsis">
       
         cpu.downsizeThreshold / memory.downsizeThreshold
@@ -1975,177 +1955,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2352,7 +2161,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#cpudownsizethreshold-memorydownsizethreshold" class="md-nav__link">
+  <a href="#downsize-threshold" class="md-nav__link">
     <span class="md-ellipsis">
       
         cpu.downsizeThreshold / memory.downsizeThreshold
@@ -2523,8 +2332,8 @@
 </code></pre></div>
 <hr />
 <h2 id="specselector"><code>spec.selector</code><a class="headerlink" href="#specselector" title="Permanent link">&para;</a></h2>
-<p>Restricts which namespaces and workloads this policy applies to. The selector only <strong>narrows</strong>: a workload must also opt in with the <code>k8s.sustain.io/policy</code> annotation (see <a href="../annotation/#resolution-order">Resolution order</a>). The controller, webhook and dashboard all honour the same selector.</p>
-<p>The controller and webhook also honour their operator-level <code>--excluded-namespaces</code> flag (see <a href="../cli/">CLI reference</a>); a workload in an excluded namespace is never managed regardless of selector configuration. If <code>spec.selector.labelSelector</code> is malformed, the webhook fails open (admits the pod without mutation and logs a warning) rather than denying it.</p>
+<p>Restricts which namespaces and workloads this policy applies to. The selector only <strong>narrows</strong>: a workload must also opt in with the <code>k8s.sustain.io/policy</code> annotation (see <a href="../annotation/#resolution-order">Resolution order</a>). The controller, webhook, dashboard and OOM watcher decide it in one place (<code>internal/governance</code>), so they all honour the same selector.</p>
+<p>The controller, webhook and OOM watcher also honour their operator-level <code>--excluded-namespaces</code> flag (see <a href="../cli/">CLI reference</a>); a workload in an excluded namespace is never managed regardless of selector configuration. A malformed <code>spec.selector.labelSelector</code> (one the CRD admits but Kubernetes cannot parse, such as an unknown operator) matches no pod template, so the policy governs no workload, a Departed one included. The webhook fails open rather than denying a pod that opts into it: whichever level the pod opts in at, it is admitted without resources injected and the webhook logs a warning with reason <code>selector-invalid</code>.</p>
 <h3 id="specselectornamespaces"><code>spec.selector.namespaces</code><a class="headerlink" href="#specselectornamespaces" title="Permanent link">&para;</a></h3>
 <p>A list of namespace names to target. An empty list matches all namespaces. Duplicate entries are collapsed — naming a namespace twice targets it once, not twice.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">spec</span><span class="p">:</span>
@@ -2535,7 +2344,48 @@
 </code></pre></div>
 <h3 id="specselectorlabelselector"><code>spec.selector.labelSelector</code><a class="headerlink" href="#specselectorlabelselector" title="Permanent link">&para;</a></h3>
 <p>A standard Kubernetes <a href="https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors">label selector</a> that restricts which workloads are governed by this policy. An empty selector matches all workloads in the targeted namespaces.</p>
-<p>The controller matches against the workload object's <code>metadata.labels</code> (e.g. the <code>Deployment</code>'s own labels). The webhook matches against the <em>pod</em>'s labels (the pod template's <code>metadata.labels</code>, which become the labels of every replica).</p>
+<p>It matches the <strong>pod template's</strong> labels — <code>spec.template.metadata.labels</code> (a CronJob's <code>spec.jobTemplate.spec.template.metadata.labels</code>, a bare Pod's own <code>metadata.labels</code>), the labels every pod of the workload carries — never the workload object's own <code>metadata.labels</code>. Labels that only the <code>Deployment</code> carries select nothing; put them on its pod template.</p>
+<p>The Policy CRD rejects a selector that names a label a controller adds after the pod template is written, in <code>matchLabels</code> or as a <code>matchExpressions</code> key, whatever the operator:</p>
+<table>
+<thead>
+<tr>
+<th>Label</th>
+<th>Added by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pod-template-hash</code></td>
+<td>the Deployment controller, to its ReplicaSets' pods</td>
+</tr>
+<tr>
+<td><code>rollouts-pod-template-hash</code></td>
+<td>Argo Rollouts, to its ReplicaSets' pods</td>
+</tr>
+<tr>
+<td><code>controller-revision-hash</code></td>
+<td>the StatefulSet and DaemonSet controllers, to their pods</td>
+</tr>
+<tr>
+<td><code>pod-template-generation</code></td>
+<td>the DaemonSet controller, to its pods</td>
+</tr>
+<tr>
+<td><code>statefulset.kubernetes.io/pod-name</code>, <code>apps.kubernetes.io/pod-index</code></td>
+<td>the StatefulSet controller, to its pods</td>
+</tr>
+<tr>
+<td><code>controller-uid</code>, <code>job-name</code>, <code>batch.kubernetes.io/controller-uid</code>, <code>batch.kubernetes.io/job-name</code></td>
+<td>the Job API, to a Job's own pod template</td>
+</tr>
+<tr>
+<td><code>batch.kubernetes.io/job-completion-index</code></td>
+<td>the Job controller, to an Indexed Job's pods</td>
+</tr>
+</tbody>
+</table>
+<p>Each is on some of the objects the controller, the webhook and the OOM watcher match and not on others: a Deployment's pod template has no <code>pod-template-hash</code> but its running pods do, and a standalone Job's pod template has <code>job-name</code> while a CronJob's job template does not. A selector on one would have the controller govern a workload whose pods the webhook refuses, or the other way round. k8s-sustain itself adds no label to pods: the <a href="../annotation/#annotations-and-labels"><code>k8s.sustain.io/owner-name</code></a> annotation is read where you set it, never copied to a label.</p>
+<p>A Policy whose <code>labelSelector</code> names one of these labels is rejected when it is created or its selector is changed. Select on labels you put on the pod template yourself.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">spec</span><span class="p">:</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">labelSelector</span><span class="p">:</span>
@@ -2759,7 +2609,7 @@ actively right-size. Inspect the resulting recommendations with
 </tbody>
 </table>
 <h4 id="cpulimits-memorylimits"><code>cpu.limits</code> / <code>memory.limits</code><a class="headerlink" href="#cpulimits-memorylimits" title="Permanent link">&para;</a></h4>
-<p>At most one of the following fields may be set (enforced by CRD validation). If none is set, the existing limit is kept unchanged.</p>
+<p>At most one of the following fields may be set (enforced by CRD validation). If none is set, the existing limit is kept, as with <code>keepLimit</code>.</p>
 <table>
 <thead>
 <tr>
@@ -2772,12 +2622,12 @@ actively right-size. Inspect the resulting recommendations with
 <tr>
 <td><code>keepLimit</code></td>
 <td>bool</td>
-<td>Leave the existing limit unchanged</td>
+<td>Keep the existing limit, unless it is below the new request: then it is raised to the request</td>
 </tr>
 <tr>
 <td><code>keepLimitRequestRatio</code></td>
 <td>bool</td>
-<td>Preserve the current limit-to-request ratio (e.g. if limit was 2× request, it stays 2× the new request)</td>
+<td>Preserve the current limit-to-request ratio (e.g. if limit was 2× request, it stays 2× the new request). A container without a request or a limit has no ratio and keeps its limit, or keeps having none</td>
 </tr>
 <tr>
 <td><code>equalsToRequest</code></td>
@@ -2796,7 +2646,8 @@ actively right-size. Inspect the resulting recommendations with
 </tr>
 </tbody>
 </table>
-<h4 id="cpudownsizethreshold-memorydownsizethreshold"><code>cpu.downsizeThreshold</code> / <code>memory.downsizeThreshold</code><a class="headerlink" href="#cpudownsizethreshold-memorydownsizethreshold" title="Permanent link">&para;</a></h4>
+<p>Whatever the strategy, a limit never ends below the request: the API server rejects such a pod and such a resize, so a kept limit the new request outgrows (an OOM floor, headroom, <code>minAllowed</code> or autoscaler coordination can each push it there) is raised to the request. The request is never lowered to fit the limit. The <code>WorkloadRecommendation</code>'s trace records the raise as its <code>guard</code> stage. The webhook and the in-place resize hold the same line when they write a container: when the limit it would end up with is below its request — a limit kept from a pod whose running limit differs from its template, or a limit decrease applied while the <a href="#downsize-threshold">downsize threshold</a> withholds the request's — they raise that limit to the request.</p>
+<h4 id="downsize-threshold"><code>cpu.downsizeThreshold</code> / <code>memory.downsizeThreshold</code><a class="headerlink" href="#downsize-threshold" title="Permanent link">&para;</a></h4>
 <p>Suppresses pod recycling for resource <strong>decreases</strong> that are too small to be
 worth the disruption. <strong>Increases always apply immediately</strong> (under-provisioning
 risks OOM kills and CPU throttling). A decrease is applied only when it meets or
@@ -2841,11 +2692,11 @@ new pod has nothing to disrupt.</p>
 <a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="nt">message</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">All 3 workloads have been processed.</span>
 <a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">      </span><span class="nt">lastTransitionTime</span><span class="p">:</span><span class="w"> </span><span class="s">"2024-01-01T00:00:00Z"</span>
 </code></pre></div>
-<p>The count covers every workload object the policy processed, plus each
-retained recommendation whose workload object no longer exists. Workloads
-grouped under a shared <code>k8s.sustain.io/owner-name</code> are counted individually,
-because each one's pods are applied to separately even though they share a
-single recommendation.</p>
+<p>Every count in the message is a count of workload identities: workloads
+grouped under a shared <code>k8s.sustain.io/owner-name</code> count once, together, and
+so does each departed identity whose retained recommendation the cycle
+recomputed. An identity counts as processed when the cycle worked on at
+least one of its workloads, and as failed when at least one of them failed.</p>
 <p>These three reasons are the complete set the controller writes to
 <code>Policy.status.conditions</code>:</p>
 <table>
@@ -2860,31 +2711,42 @@ single recommendation.</p>
 <tr>
 <td><code>ReconciliationSucceeded</code></td>
 <td>True</td>
-<td>Every matching workload was processed, and every workload identity was registered for computation</td>
+<td>Every matching workload was processed, and no workload identity is Blocked</td>
 </tr>
 <tr>
 <td><code>PartialFailure</code></td>
 <td>False</td>
-<td>Some workloads failed, and/or some workload identities could not be registered for computation; see <code>message</code>, which names only whichever of the two actually happened</td>
+<td>Some workloads failed this cycle and/or some workload identities are Blocked (including those whose workloads this cycle skipped in retry backoff); see <code>message</code>, which names only what actually happened</td>
 </tr>
 <tr>
 <td><code>ListFailed</code></td>
 <td>False</td>
-<td>The cycle could not even build its work list — listing the matching workloads failed, or listing the policy's <code>WorkloadRecommendation</code> objects did. No workload was processed</td>
+<td>The cycle could not even build its work list — listing the matching workloads failed, or listing the policy's <code>WorkloadRecommendation</code> objects did. No workload was processed. The next cycle runs at the earliest retry an earlier cycle scheduled, but no sooner than 30s: a retry already due cannot run until a cycle lists again. It never waits longer than <code>--reconcile-interval</code></td>
 </tr>
 </tbody>
 </table>
-<p><code>ReconciliationFailed</code> is <strong>not</strong> a condition reason. It is an Event reason,
-recorded as a <code>Warning</code> on the <em>workload object</em> (not on the <code>Policy</code>) when
-that individual workload hits a permanent, non-retried error. A permanent
-error is dropped from the retry tracker and does not count toward the
-cycle's failure total, so a cycle in which every emitted event is
-<code>ReconciliationFailed</code> still leaves the policy at <code>ReconciliationSucceeded</code>.
-<code>PartialFailure</code> is driven instead by transient errors — which emit
-<code>ReconciliationRetryScheduled</code>, not <code>ReconciliationFailed</code> — and by
-workload identities that could not be registered for computation. That
-second count is per <strong>identity</strong>, not per workload object: workloads grouped
-under a shared <code>k8s.sustain.io/owner-name</code> register once, together.</p>
+<p>A workload fails when its Prometheus inputs cannot be read, when evicting or
+resizing its pods fails, or when it is left alone because its identity's
+recommendation could not be stored for the webhook (its
+<code>WorkloadRecommendation</code> could not be claimed, or the write was rejected).
+Every such failure counts once toward <code>PartialFailure</code> and leaves the identity
+<a href="../metrics/#drift-retry-autoscaler">Blocked</a> until a later
+cycle succeeds, whether the error is transient or permanent:</p>
+<ul>
+<li>A <strong>transient</strong> error (Prometheus errors and timeouts, API 5xx, 404 Not
+  Found, 409 Conflict and 429) is retried with exponential backoff, 30s
+  doubling with each consecutive transient failure up to 5 minutes (a
+  permanent error in between starts it over). Each attempt records a
+  <code>ReconciliationRetryScheduled</code> Warning event on the workload object naming
+  when the next one runs, and the policy's next cycle is scheduled for that
+  time when it comes before <code>--reconcile-interval</code>.</li>
+<li>A <strong>permanent</strong> error (an API rejection such as 403, 401 or Invalid, e.g.
+  missing RBAC on <code>pods/eviction</code>, or a workload the controller refuses to
+  apply to: one without a UID or a valid selector) records one <code>ReconciliationFailed</code>
+  Warning event on the workload object when the workload enters the failure,
+  and is retried on every cycle without backoff, so fixing its cause takes
+  effect at the next cycle.</li>
+</ul>
 <hr />
 <h2 id="rbac">RBAC<a class="headerlink" href="#rbac" title="Permanent link">&para;</a></h2>
 <p><code>Policy</code> is a cluster-scoped resource. Users who create or modify policies need:</p>

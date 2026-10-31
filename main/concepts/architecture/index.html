@@ -378,26 +378,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -765,10 +745,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#discovery" class="md-nav__link">
+  <a href="#claim" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Discovery
+        Claim
       
     </span>
   </a>
@@ -1891,177 +1871,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2112,10 +1921,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#discovery" class="md-nav__link">
+  <a href="#claim" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Discovery
+        Claim
       
     </span>
   </a>
@@ -2321,27 +2130,27 @@
     API --- WL</code></pre>
 <h2 id="controller-k8s-sustain-start">Controller (<code>k8s-sustain start</code>)<a class="headerlink" href="#controller-k8s-sustain-start" title="Permanent link">&para;</a></h2>
 <p>The controller is a standard <a href="https://github.com/kubernetes-sigs/controller-runtime">controller-runtime</a> reconciler that watches <code>Policy</code> objects.</p>
-<p><strong>Reconcile loop:</strong> a <code>Policy</code> event (create / update / periodic requeue) takes an <strong>inventory</strong> of the identities the policy can govern, then runs three phases in order — <strong>discovery</strong>, <strong>computation</strong>, <strong>application</strong>. Only computation talks to Prometheus. Independent <code>Policy</code> objects reconcile in parallel, bounded by <code>--policy-concurrency-limit</code> (default 10) — a separate knob from the per-workload fan-out inside the computation phase.</p>
-<p>The controller requeues after <code>--reconcile-interval</code> (default <code>5m</code>).</p>
+<p><strong>Reconcile loop:</strong> a <code>Policy</code> event (create, spec change, deletion, periodic requeue) takes an <strong>inventory</strong> of the identities the policy can govern, then runs one pass over them in three phases in order — <strong>claim</strong>, <strong>computation</strong>, <strong>application</strong> — which reports, per identity, its outcome and what happened to each of its workloads. The policy's health series, <code>Ready</code> condition and next requeue are derived from that report. Only computation talks to Prometheus. Independent <code>Policy</code> objects reconcile in parallel, bounded by <code>--policy-concurrency-limit</code> (default 10) — a separate knob from the per-workload fan-out inside the computation phase.</p>
+<p>The controller requeues after <code>--reconcile-interval</code> (default <code>5m</code>), or sooner when a workload's retry falls due first (see <a href="#application">Application</a>).</p>
 <h3 id="inventory">Inventory<a class="headerlink" href="#inventory" title="Permanent link">&para;</a></h3>
 <p><code>internal/inventory</code> turns workload objects into <strong>identities</strong> — one namespace, kind and name, possibly spanning several objects under <a href="../../guides/standalone-pods-and-grouping/">owner-name grouping</a> — and is the only place that does. The dashboard reads identities from it too, so both apply the same rules:</p>
 <ul>
 <li><strong>Members</strong> are the live objects of an identity. A finished standalone Job and a CronJob's Jobs are never members; a bare pod is one when it has no controller owner and a valid <code>k8s.sustain.io/owner-name</code></li>
-<li>Each member is <strong>governed</strong> by the Policy it opts into (see <a href="../../reference/annotation/#resolution-order">resolution order</a>) when that Policy exists, manages its kind and its selector matches it</li>
+<li>Each member is <strong>governed</strong> by the Policy it opts into (see <a href="../../reference/annotation/#resolution-order">resolution order</a>) when that Policy exists, manages its kind and its selector matches it — its namespace and its pod template's labels. <code>internal/governance</code> makes that decision, for the webhook and the OOM watcher too</li>
 <li>An identity is governed by its members' Policy when they agree, and is <strong>Conflicted</strong> when they name different Policies — then no Policy governs it (see <a href="../workload-recommendations/#conflicted-identities">Conflicted identities</a>)</li>
 <li>An identity with no member left but a <code>WorkloadRecommendation</code> is <strong>Departed</strong>; its Policy is the one its <code>WorkloadRecommendation</code> names, while that Policy still covers its namespace and kind</li>
 <li>Its containers are the union of its governed members' containers (the newest member's declaration wins for a name several declare), and its age runs from its earliest member or from its <code>WorkloadRecommendation</code>'s creation, whichever is older</li>
 </ul>
 <p>A reconcile reads only the namespaces in <code>selector.namespaces</code> (all when empty) and the kinds the policy manages. Every member of an identity shares its namespace and kind, so the narrowed read still sees whole identities. Reads go through the controller's informer cache.</p>
-<h3 id="discovery">Discovery<a class="headerlink" href="#discovery" title="Permanent link">&para;</a></h3>
-<p>For every live identity the policy governs, claim its <code>WorkloadRecommendation</code>: create it when missing, or adopt it (its <code>spec.policy</code> and policy label become this Policy's), replace its <code>status.observedResources</code> snapshot when it differs from the members' containers, and clear <code>status.departed</code>. Only the governing Policy claims it, so two Policies never rewrite the same object back and forth. An adopted object keeps the previous Policy's Recommendation, which the webhook withholds until this Policy computes its own (<a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/">ADR 0003</a>).</p>
-<p>Discovery issues <strong>no Prometheus queries</strong>, so expect one <code>WorkloadRecommendation</code> per governed identity from the first reconcile onward, most of them briefly empty.</p>
+<h3 id="claim">Claim<a class="headerlink" href="#claim" title="Permanent link">&para;</a></h3>
+<p>For every live identity the policy governs, claim its <code>WorkloadRecommendation</code>: create it when missing, or adopt it (its <code>spec.policy</code> and policy label become this Policy's), replace its <code>status.observedResources</code> snapshot when it differs from the members' containers, and clear <code>status.departed</code>. Only the governing Policy claims it, so two Policies never rewrite the same object back and forth. An adopted object keeps the previous Policy's Recommendation, which the webhook withholds until this Policy computes its own.</p>
+<p>The claim issues <strong>no Prometheus queries</strong>, so expect one <code>WorkloadRecommendation</code> per governed identity from the first reconcile onward, most of them briefly empty.</p>
 <h3 id="computation">Computation<a class="headerlink" href="#computation" title="Permanent link">&para;</a></h3>
 <p>The work-list is <strong>every identity the policy governs</strong>, Departed ones included, so an identity with no live member — a completed Job, a bare-pod group between runs — is still recomputed on every cycle. A Conflicted identity is not on it.</p>
 <ul>
 <li>Set aside workloads in retry backoff from a previous transient failure. The decision is taken once, before the fetch, and holds until the application phase; an identity whose every workload is set aside is not fetched</li>
-<li>Fetch every other identity's Prometheus inputs in <strong>one batched call per policy</strong> (see <a href="../recommendation-pipeline/#how-the-data-is-fetched">Recommendation Pipeline</a>) — a handful of queries for the whole policy instead of several per workload. Every kind batches identically, including <code>Job</code> and <code>Pod</code></li>
-<li>Compute the fetched identities in parallel (bounded by <code>--workload-concurrency-limit</code>, default 5): detect autoscalers (HPA / KEDA <code>ScaledObject</code>) targeting the workload — read-only, no patches — and compute a per-container recommendation with its <a href="../recommendation-pipeline/#trace">trace</a> (see <a href="../recommendation-pipeline/">Recommendation Pipeline</a>)</li>
+<li>Fetch every other identity's Prometheus inputs in <strong>one batched call per policy</strong> (see <a href="../recommendation-pipeline/#how-the-data-is-fetched">Recommendation Pipeline</a>) — a handful of queries for the whole policy instead of several per workload. Every kind batches identically, including <code>Job</code> and <code>Pod</code>. While it runs, detect the autoscalers (HPA / KEDA <code>ScaledObject</code>) targeting each member — read-only, no patches — a few namespaces at once</li>
+<li>Compute the fetched identities in parallel (bounded by <code>--workload-concurrency-limit</code>, default 5): a per-container recommendation with its <a href="../recommendation-pipeline/#trace">trace</a> (see <a href="../recommendation-pipeline/">Recommendation Pipeline</a>)</li>
 <li>Each identity leaves this pass with one outcome: a recommendation, too young, no data, fetch failed, or not fetched</li>
 <li>The unit is the <strong>identity</strong>, not the workload object: a group of workloads sharing an owner-name produces one computation and one write, against the union of the members' containers</li>
 <li>Record the result in the <code>WorkloadRecommendation</code> in one status write, regardless of update mode and before any pod is touched — this keeps <code>OnCreate</code> workloads visible on the dashboard and is the webhook's only source of recommendations at admission (it never queries Prometheus itself). An unchanged result costs no write</li>
@@ -2358,18 +2167,21 @@
 <li>CronJob, Job and bare-pod pods are resized in place only, never evicted — see <a href="../in-place-updates/#kinds-that-are-never-evicted">Kinds that are never evicted</a></li>
 <li>Under owner-name grouping, every member is applied independently against the identity's one shared recommendation, narrowed to the containers that member actually declares</li>
 <li>Emit a <code>ResourcesUpdated</code> event on the workload object <strong>only when at least one pod was actually resized in place or evicted</strong> in that reconcile. The workload's pod template is never patched, so it permanently differs from the recommendation — a reconcile that finds every pod already at target stays silent. The message names the pod count and the containers (e.g. <code>Updated resources on 2 pod(s) for containers: [app]</code>); the applied values are on each pod's own <code>ResizeStarted</code> event. The events API groups events by object and reason, so updates of the same workload less than ~6 minutes apart are folded into one Event whose <code>series.count</code> and <code>lastObservedTime</code> advance</li>
-<li>On transient failure (Prometheus timeout, API 5xx), schedule retry with exponential backoff (30s base, 5min cap) and emit a <code>ReconciliationRetryScheduled</code> warning event on the workload</li>
+<li>On transient failure (Prometheus error or timeout, API 5xx, 404 Not Found, 409 Conflict or 429), back the workload off exponentially (30s base, doubling with each consecutive transient failure, 5min cap) and emit a <code>ReconciliationRetryScheduled</code> warning event on the workload naming when it is retried. The policy's next reconcile is scheduled for the earliest such retry when it comes before <code>--reconcile-interval</code>, so that time is when the retry runs</li>
+<li>On permanent failure (an API rejection such as 403, 401 or Invalid, typically missing RBAC on <code>pods/eviction</code> or <code>pods/resize</code>, or a workload the controller refuses to apply to, such as one without a UID or a valid selector), emit a <code>ReconciliationFailed</code> warning event once, when the workload enters the failure, and retry it on every reconcile without backoff, so a fix is picked up without a restart</li>
+<li>A workload whose last failure, transient or permanent, has not been followed by a success is <strong>Blocked</strong>, and so is its identity. A workload left alone because its identity's recommendation could not be stored counts as a failure of the <code>store</code> step. Only shutdown, never a timeout of a single call, ends a reconcile without counting its failures</li>
+<li>The policy is <code>Ready</code> only when no workload failed this reconcile and none of its identities is Blocked, including those whose workloads this reconcile set aside in backoff (see <a href="../../reference/policy/#status">Policy status</a>). The controller's own status writes do not trigger a reconcile; only a new <code>generation</code> (a spec change or a deletion), the interval, a due retry or a live OOM kill does</li>
 </ul>
 <p>Up to <code>--policy-concurrency-limit</code> policies (10 by default) fetch at once, each running up to 8 shard queries concurrently, more while a failed shard is re-queried one identity at a time — enough to burst well past Prometheus's own <code>--query.max-concurrency</code> (default 20, shared with every other consumer of that server: Grafana dashboards, alerting rules). <code>--prometheus-max-inflight</code> (default 8) is a separate, global cap on concurrent Prometheus queries across the whole controller process — it throttles the client itself rather than the fan-out, so it protects Prometheus even if the concurrency limits are turned up.</p>
 <h3 id="pod-oom-watcher">Pod OOM watcher<a class="headerlink" href="#pod-oom-watcher" title="Permanent link">&para;</a></h3>
 <p>A second controller-runtime reconciler runs alongside the Policy reconciler and watches <code>Pod</code> objects cluster-wide, filtered by a local event predicate to those carrying the <code>k8s.sustain.io/policy</code> annotation OR a fresh <code>OOMKilled</code> container status. It exists to close the multi-minute latency window between an OOM kill and the next recording-rule-driven reconcile (kube-state-metrics scrape → Prometheus scrape → 1m rule evaluation → 5–10m reconcile interval).</p>
-<p>When a container's <code>LastTerminationState.Terminated.Reason == "OOMKilled"</code> is observed for a kill not already handled, the watcher resolves the pod's policy the same way every other reader does and, if the pod is managed by some policy:</p>
+<p>When a container's <code>LastTerminationState.Terminated.Reason == "OOMKilled"</code> is observed for a kill not already handled, the watcher decides which Policy governs the pod, through the same <code>internal/governance</code> decision as every other reader, and, if one does:</p>
 <ul>
 <li>Resolves the pod's top-level workload owner and records the kill in an in-memory cache keyed by <code>(namespace, ownerKind, ownerName, container)</code>, deduplicated by restart count and termination time</li>
 <li>Records the memory limit the kubelet had actually applied to the container (<code>ContainerStatus.Resources</code>, falling back to the pod spec), so the recommender has a bump anchor before Prometheus surfaces the OOM-time limit</li>
-<li>Enqueues the owning Policy for immediate reconcile via a <code>source.Channel</code> wired into the Policy reconciler's work queue.</li>
+<li>Enqueues the governing Policy for immediate reconcile via a <code>source.Channel</code> wired into the Policy reconciler's work queue, and counts the kill in <code>k8s_sustain_oom_observed_total</code>. A kill of a pod no Policy governs — one whose Policy does not select it, say — is neither recorded, nor counted, nor triggers anything.</li>
 </ul>
-<p>The recommender reads the cache when it computes an identity, and its <a href="../recommendation-pipeline/#signals">OOM floor signal</a> merges what it finds with the Prometheus 24h window: a kill the watcher saw in the last 30 minutes counts as a recent OOM for that container only — equivalent to the per-container <code>workload_oom_24h</code> recency signal — and feeds the OOM-floor stage of the <a href="../recommendation-pipeline/#stages">Recommendation Pipeline</a>. The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.</p>
+<p>The controller's recommendation inputs merge the cache's kills into each identity's OOM inputs after the Prometheus fetch, and the <a href="../recommendation-pipeline/#signals">OOM floor signal</a> reads them together with the Prometheus 24h window: a kill the watcher saw in the last 30 minutes counts as a recent OOM for that container only — equivalent to the per-container <code>workload_oom_24h</code> recency signal — and feeds the OOM-floor stage of the <a href="../recommendation-pipeline/#stages">Recommendation Pipeline</a>. The math and bump factor are unchanged — the watcher only makes the trigger and the signal source fresher.</p>
 <p><strong>Operational notes.</strong> The cache is in-memory and lives only for the lifetime of the controller process; it keeps a kill for the same 30 minutes the OOM floor counts it as recent. On restart, the 24h Prometheus history (<code>k8s_sustain:workload_oom_24h</code>, <code>k8s_sustain:container_oom_limit_24h:bytes</code>) repopulates the floor on the next reconcile. The watcher is leader-elected like other controllers — non-leaders idle.</p>
 <h2 id="admission-webhook-k8s-sustain-webhook">Admission Webhook (<code>k8s-sustain webhook</code>)<a class="headerlink" href="#admission-webhook-k8s-sustain-webhook" title="Permanent link">&para;</a></h2>
 <p>The webhook is a <a href="https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/#mutatingadmissionwebhook">mutating admission webhook</a> that intercepts <code>pods/CREATE</code> requests.</p>
@@ -2377,22 +2189,19 @@
 <ol>
 <li>Pod creation request arrives at the API server</li>
 <li>API server calls <code>POST /mutate</code> on the webhook service</li>
-<li>Webhook resolves the pod's policy — see <a href="../../reference/annotation/#resolution-order">resolution order</a></li>
-<li>Fetches the named Policy and checks the pod matches its selector</li>
-<li>Resolves the pod's owner chain to determine the workload kind:</li>
-<li><code>Pod → ReplicaSet → Deployment</code> or <code>Argo Rollout</code></li>
-<li><code>Pod → Job → CronJob</code>, or <code>Pod → Job</code> for a standalone Job</li>
-<li><code>Pod → StatefulSet / DaemonSet</code></li>
-<li>a <code>k8s.sustain.io/owner-name</code> annotation replaces the resolved name; on a pod with no controller owner it makes the pod a <code>Pod</code>-kind identity (see <a href="../../guides/standalone-pods-and-grouping/">Standalone Pods &amp; Identity Grouping</a>)</li>
-<li>Checks that the policy manages that workload kind at all. Both <code>OnCreate</code> <strong>and</strong> <code>Ongoing</code> inject — otherwise an <code>Ongoing</code> pod would start on template resources and wait for a resize it does not need</li>
-<li>Reads the <code>WorkloadRecommendation</code> the controller already cached for that workload — the webhook itself never queries Prometheus — and takes <code>wlrcache.Read</code>'s <a href="../workload-recommendations/#admission-behaviour">verdict</a> on it: inject, or why not. A Recommendation is injected only into pods of the Policy that computed it, and only while it is fresh (30 min) or, for a departed or Conflicted identity, retained</li>
-<li>If the verdict injects nothing, allows the pod through with its template resources unchanged. If there is <strong>no object at all</strong>, additionally creates a stub <code>WorkloadRecommendation</code> so the controller computes one for the next pod of this workload</li>
-<li>Narrows the cached recommendation to the containers present in this pod, matched by name. A container that already has resources set is <em>not</em> skipped — the patch replaces whatever the template specified</li>
-<li>If recommend-only is in effect, allows the pod through unchanged; otherwise returns an RFC 6902 JSON Patch with the recommended resources</li>
+<li>The webhook first <strong>decides</strong>, from reads alone, what admitting the pod does. The decision ends in one reason from a closed set (a governance refusal, a verdict that injects nothing, <code>no-container-matches</code>, <code>recommend-only</code>, <code>at-recommendation</code>, <code>injected</code>, or a failed read), logged with the admission:<ul>
+<li>which Policy governs the pod, as the controller decides it (<code>internal/governance</code>): it resolves the pod's policy (see <a href="../../reference/annotation/#resolution-order">resolution order</a>), checks the Policy exists and its selector accepts the pod's namespace and labels, resolves the pod's owner chain to determine the workload kind (<code>Pod → ReplicaSet → Deployment</code> or <code>Argo Rollout</code>, <code>Pod → Job → CronJob</code> or <code>Pod → Job</code> for a standalone Job, <code>Pod → StatefulSet / DaemonSet</code>; a <code>k8s.sustain.io/owner-name</code> annotation replaces the resolved name, and on a pod with no controller owner makes it a <code>Pod</code>-kind identity, see <a href="../../guides/standalone-pods-and-grouping/">Standalone Pods &amp; Identity Grouping</a>), and checks that the Policy manages that kind at all. Both <code>OnCreate</code> <strong>and</strong> <code>Ongoing</code> inject — otherwise an <code>Ongoing</code> pod would start on template resources and wait for a resize it does not need</li>
+<li>reads the <code>WorkloadRecommendation</code> the controller already cached for that workload — the webhook itself never queries Prometheus — and takes <code>wlrcache.Read</code>'s <a href="../workload-recommendations/#admission-behaviour">verdict</a> on it: inject, or why not. A Recommendation is injected only into pods of the Policy that computed it, and only while it is fresh (30 min) or, for a departed or Conflicted identity, retained</li>
+<li>narrows the Recommendation to the containers present in this pod, matched by name (its init containers too unless <code>excludeInitContainers</code>), and works out the resources to set on each. A container that already has resources set is <em>not</em> skipped — the patch replaces whatever the template specified — and a request is never written above its limit: where the pod's limit is below the recommended request, the limit is raised to the request</li>
+<li>withholds the injection under recommend-only</li>
+</ul>
+</li>
+<li>It runs the one effect a decision can call for: when there is <strong>no object at all</strong>, or a departed identity's snapshot lacks one of the pod's containers, it asks for a stub <code>WorkloadRecommendation</code> on a detached goroutine, so the controller computes one for the next pod of this workload</li>
+<li>It responds through one responder, which always allows the pod: an RFC 6902 JSON Patch carrying the resources of an injected admission, and no patch at all otherwise. The webhook never writes anything but container resources; the <code>k8s.sustain.io/owner-name</code> annotation is read from the pod, by every reader and by the recording rules through kube-state-metrics, never copied to a label</li>
 <li>The API server applies the patch before persisting the pod</li>
 </ol>
-<p>The webhook <strong>fails open</strong> (<code>failurePolicy: Ignore</code> by default) — if it is unreachable or returns an error, the pod is admitted unchanged. See <a href="../workload-recommendations/#admission-behaviour">Admission behaviour</a> for each outcome.</p>
-<p><strong>Latency budget.</strong> The handler is bounded by a hard 4s deadline on the admission context (under the apiserver's 5s <code>MutatingWebhookConfiguration</code> timeout). The only outbound work in the admission path is a handful of Kubernetes API reads (Policy lookup, owner resolution, the <code>WorkloadRecommendation</code> read), each bounded by a 2s per-call timeout. <code>Policy</code>, <code>WorkloadRecommendation</code> and <code>Namespace</code> reads are served from an informer cache.</p>
+<p>The webhook <strong>fails open</strong> on every path. A failed read, an undecodable pod, even a panic anywhere once the pod is decoded, while deciding or while running and logging what was decided (recovered and counted on <a href="../../reference/metrics/#k8s_sustain_webhook_panic_total"><code>k8s_sustain_webhook_panic_total</code></a>), ends in a pod allowed unmutated rather than a 500, which a <code>failurePolicy: Fail</code> would turn into a rejection; if the webhook is unreachable, <code>failurePolicy: Ignore</code> (the default) admits the pod unchanged. See <a href="../workload-recommendations/#admission-behaviour">Admission behaviour</a> for each outcome.</p>
+<p><strong>Latency budget.</strong> The handler is bounded by a hard 4s deadline on the admission context (under the apiserver's 5s <code>MutatingWebhookConfiguration</code> timeout). The only outbound work in the admission path is a handful of Kubernetes API reads, and the 4s are split by where they go. <code>Policy</code>, <code>WorkloadRecommendation</code> and <code>Namespace</code> reads are served from an informer cache; only the owner chain reaches the apiserver, up to two Gets one after the other (the pod's ReplicaSet or Job, then its workload's own annotations), each bounded at 2s. So the governance decision's reads (Policies, owner resolution, the owner's and the Namespace's annotations) share 3s, and the <code>WorkloadRecommendation</code> read keeps a 1s reserve that a slow owner Get cannot eat into. Policies are listed without deep copies, and a Policy's label selector is compiled once per version of the Policy rather than on every admission.</p>
 <p><strong>Stub writes (the webhook's only write).</strong> The webhook computes nothing, so it never writes a recommendation. It does write one thing, the container snapshot of identities the controller cannot see. When a pod is admitted for a workload identity that has no <code>WorkloadRecommendation</code> at all, it creates an empty-status <strong>stub</strong> — recording the admitted pod's container set in <code>status.observedResources</code> — and admits the pod unchanged. Creating the object is what puts the identity into the controller's work-list; the <a href="#computation">computation phase</a> fills in the recommendation on its next cycle, so the next pod of that workload is injected. For a departed identity, or one that never got a snapshot, it replaces the snapshot when the admitted pod's containers differ, so a short-lived identity is computed against its latest run rather than its first.</p>
 <p>This is how identities no reconcile ever sees alive — bare pods and standalone Jobs created and deleted between two reconciles — get discovered. See <a href="../workload-recommendations/#cold-start-stub-recommendations">Cold start</a> for the full lifecycle.</p>
 <p>Every <code>WorkloadRecommendation</code> write, the controller's and the webhook's, goes through <code>internal/wlrcache</code>; so does every judgement on a stored object (what the webhook injects, what the sweep deletes). See <a href="../workload-recommendations/#lifecycle">Lifecycle</a>.</p>
@@ -2401,7 +2210,7 @@
 <ul>
 <li><strong>Policy overview</strong> — list all policies with status, namespaces, workload types</li>
 <li><strong>Workload metrics</strong> — interactive CPU and memory time-series charts</li>
-<li><strong>Policy simulator</strong> — test "what-if" scenarios with different percentiles, headroom, and min/max values, computed by the same <code>internal/recommender</code> pipeline the controller applies</li>
+<li><strong>Policy simulator</strong> — test "what-if" changes to a workload's governing policy (percentiles, headroom, min/max, limits, coordination), assembled and computed exactly as the controller does</li>
 </ul>
 <p>It is read-only: it queries the Kubernetes API and Prometheus but never modifies any resources. See the <a href="../../guides/dashboard/">Dashboard guide</a> for details.</p>
 <h2 id="recommend-only-mode">Recommend-only mode<a class="headerlink" href="#recommend-only-mode" title="Permanent link">&para;</a></h2>
@@ -2411,7 +2220,7 @@
 <h2 id="prometheus-recording-rules">Prometheus recording rules<a class="headerlink" href="#prometheus-recording-rules" title="Permanent link">&para;</a></h2>
 <p>k8s-sustain ships recording rules that the controller and dashboard query. See <a href="../../reference/recording-rules/">Recording Rules</a> for the full catalogue.</p>
 <h2 id="policy-selection">Policy selection<a class="headerlink" href="#policy-selection" title="Permanent link">&para;</a></h2>
-<p>Each workload explicitly opts into one policy through the <code>k8s.sustain.io/policy</code> annotation; the controller, webhook and dashboard resolve it through the same function. See <a href="../../reference/annotation/#resolution-order">resolution order</a>.</p>
+<p>Each workload explicitly opts into one policy through the <code>k8s.sustain.io/policy</code> annotation; the controller, webhook, dashboard and OOM watcher decide which Policy governs it through the same module, <code>internal/governance</code>. See <a href="../../reference/annotation/#resolution-order">resolution order</a>.</p>
 
 
 

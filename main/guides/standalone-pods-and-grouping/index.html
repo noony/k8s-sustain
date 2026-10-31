@@ -380,26 +380,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1827,177 +1807,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2192,18 +2001,24 @@ from its <code>ownerReferences</code>. It covers two cases:</p>
 </ol>
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <p>Setting <code>k8s.sustain.io/owner-name: &lt;value&gt;</code> on a pod (directly, for bare
-pods; or on a pod template, for owned workloads) does two things:</p>
+pods; or on a pod template, for owned workloads) is read in two places, both
+from the annotation itself:</p>
 <ul>
-<li>The admission webhook mirrors the annotation onto a pod <strong>label</strong> of the
-  same name, so the value must also be a valid label value (RFC 1123, 63
-  characters or fewer).</li>
-<li>kube-state-metrics (configured via <code>metricLabelsAllowlist</code> in the chart's
-  <code>values.yaml</code>) exposes that label in <code>kube_pod_labels</code>, which a recording
-  rule folds into <code>k8s_sustain:pod_workload</code>. Without it the override has no
-  Prometheus data to query.</li>
+<li>The controller, the dashboard, the webhook and the OOM watcher group the
+  pod under the override identity when they decide who governs it.</li>
+<li>kube-state-metrics exposes the annotation in <code>kube_pod_annotations</code>
+  (<code>metricAnnotationsAllowList</code> in the chart's <code>values.yaml</code>), which a
+  recording rule folds into <code>k8s_sustain:pod_workload</code>, so the pod's usage is
+  aggregated under the same identity. Without the allowlist the override has
+  no Prometheus data to query; see
+  <a href="../../getting-started/prerequisites/#prometheus">Prerequisites</a> when you
+  bring your own Prometheus.</li>
 </ul>
-<p>An invalid value is treated as absent: no label is set, no override applies,
-and the pod is never rejected.</p>
+<p>The value becomes the identity's <code>owner_name</code>, so it must be a valid label
+value (RFC 1123, 63 characters or fewer). An invalid or empty value is treated
+as absent by both readers: no override applies, and the pod is never
+rejected. Since both read the annotation, a pod created while the webhook was
+unreachable, or before k8s-sustain was installed, is grouped like any other.</p>
 <h2 id="bare-pods-airflow-example">Bare pods (Airflow example)<a class="headerlink" href="#bare-pods-airflow-example" title="Permanent link">&para;</a></h2>
 <p>A Policy opts bare pods in via <code>rightSizing.update.types.pod</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">k8s.sustain.io/v1alpha1</span>
@@ -2247,8 +2062,8 @@ controller <code>ownerReference</code> and a valid <code>owner-name</code>. It i
 policy it resolves to (pod or Namespace annotation — see
 <a href="../../reference/annotation/#resolution-order">Resolution order</a>) when that
 policy manages <code>pod</code> and selects it, and only governed pods supply containers
-and are resized. A ReplicaSet-owned pod that merely carries the mirrored
-<code>owner-name</code> label is never a member.</p>
+and are resized. A ReplicaSet-owned pod carrying the same <code>owner-name</code> is
+never a member of the <code>Pod</code> identity: it groups under its Deployment's kind.</p>
 <p><strong>One owner-name, one policy.</strong> When the pods of one <code>(namespace, owner-name)</code>
 are governed by <em>different</em> policies, the identity is
 <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted</a>: no

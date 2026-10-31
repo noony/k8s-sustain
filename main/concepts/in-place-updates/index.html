@@ -378,26 +378,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1847,177 +1827,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2208,7 +2017,7 @@
 
 <h1 id="in-place-updates">In-Place Updates<a class="headerlink" href="#in-place-updates" title="Permanent link">&para;</a></h1>
 <p>Kubernetes 1.33 enables in-place pod resize (<code>InPlacePodVerticalScaling</code>, beta and on by default) with the <code>pods/resize</code> subresource. It changes a pod's requests and limits <strong>without recreating the pod</strong>.</p>
-<p>k8s-sustain detects support at startup and picks the code path. Clusters below 1.33 (k8s-sustain itself needs <a href="../../getting-started/prerequisites/#kubernetes">1.29 or later</a>) fall back to PDB-respecting eviction.</p>
+<p>k8s-sustain detects support at startup and picks the code path. Clusters below 1.33 (k8s-sustain itself needs <a href="../../getting-started/prerequisites/#kubernetes">1.30 or later</a>) fall back to PDB-respecting eviction.</p>
 <h2 id="version-matrix">Version matrix<a class="headerlink" href="#version-matrix" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -2219,7 +2028,7 @@
 </thead>
 <tbody>
 <tr>
-<td><strong>1.29 – 1.32</strong></td>
+<td><strong>1.30 – 1.32</strong></td>
 <td><code>inPlace=false</code> → eviction path. Stale pods are evicted via the Eviction API; the webhook injects the recommendation into the replacement. CronJob, Job and bare-pod pods are not touched.</td>
 </tr>
 <tr>
@@ -2269,7 +2078,7 @@
 <p>The controller never mutates the CronJob or Job spec and never evicts a job pod (which would kill the run). Job pods are found via the <code>batch.kubernetes.io/job-name</code> label and confirmed by controller ownerRef back to the Job (itself ownerRef-checked against the CronJob). Running job pods are resized in place when the cluster supports it (see the <a href="#version-matrix">version matrix</a>); otherwise they finish on their original resources and, for a CronJob, the next run gets the new values from the webhook. A standalone Job (<code>job: Ongoing</code>) has no next run, so in-place resize is its only correction.</p>
 <h3 id="bare-pods">Bare pods<a class="headerlink" href="#bare-pods" title="Permanent link">&para;</a></h3>
 <p>Bare pods opted in via <code>k8s.sustain.io/owner-name</code> (kind <code>Pod</code>) are the third member of that family, and the strongest case of it: no controller exists that could recreate an evicted bare pod, so eviction would not disrupt the workload — it would delete it. Under <code>pod: Ongoing</code> their running pods <strong>are</strong> resized in place, through the same <code>pods/resize</code> machinery; an in-place resize needs no controller behind it, and without it a long-running Airflow task would keep whatever it was admitted with for its entire life. Under <code>pod: OnCreate</code>, nothing is applied to a running pod at all and the recommendation reaches the identity's next pod through the webhook.</p>
-<p>Membership is decided when the identity is built rather than by a label selector: a pod with no controller <code>ownerReference</code> and a valid <code>k8s.sustain.io/owner-name</code> is a member, and only the members the policy governs are resized. A ReplicaSet-owned pod that carries the mirrored <code>owner-name</code> label is therefore never a member. A pod of the group opted into another policy that accepts it makes the identity <a href="../workload-recommendations/#conflicted-identities">Conflicted</a>, and then no pod of it is resized; one whose policy does not exist or does not select it is simply left alone — see <a href="../../guides/standalone-pods-and-grouping/">Group membership</a>.</p>
+<p>Membership is decided when the identity is built rather than by a label selector: a pod with no controller <code>ownerReference</code> and a valid <code>k8s.sustain.io/owner-name</code> is a member, and only the members the policy governs are resized. A ReplicaSet-owned pod carrying the same <code>owner-name</code> annotation is therefore never a member: it groups under its Deployment. A pod of the group opted into another policy that accepts it makes the identity <a href="../workload-recommendations/#conflicted-identities">Conflicted</a>, and then no pod of it is resized; one whose policy does not exist or does not select it is simply left alone — see <a href="../../guides/standalone-pods-and-grouping/">Group membership</a>.</p>
 <p>A container with <code>resizePolicy: RestartContainer</code> for memory restarts on a memory resize, which for a task means losing in-flight work (see <a href="#caveats">Caveats</a>). Use <code>pod: OnCreate</code> if that is not acceptable. See <a href="../../guides/standalone-pods-and-grouping/">Standalone Pods &amp; Identity Grouping</a>.</p>
 <h2 id="caveats">Caveats<a class="headerlink" href="#caveats" title="Permanent link">&para;</a></h2>
 <ul>

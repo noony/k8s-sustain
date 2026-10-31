@@ -378,26 +378,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1864,177 +1844,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2240,7 +2049,7 @@
   
 
 
-<!-- Source of truth: api/v1alpha1/policy_types.go (annotation and label constants) and internal/policymatch/resolve.go (ResolvePolicy) -->
+<!-- Source of truth: api/v1alpha1/policy_types.go (annotation and label constants) and internal/governance/governance.go (Decide) -->
 
 <h1 id="annotation-reference">Annotation Reference<a class="headerlink" href="#annotation-reference" title="Permanent link">&para;</a></h1>
 <h2 id="k8ssustainiopolicy"><code>k8s.sustain.io/policy</code><a class="headerlink" href="#k8ssustainiopolicy" title="Permanent link">&para;</a></h2>
@@ -2250,7 +2059,7 @@
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">k8s.sustain.io/policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;policy-name&gt;</span>
 </code></pre></div>
 <h2 id="resolution-order">Resolution order<a class="headerlink" href="#resolution-order" title="Permanent link">&para;</a></h2>
-<p>The controller, webhook, dashboard and OOM watcher all resolve the policy through <code>internal/policymatch.ResolvePolicy</code>, which reads three levels, most specific first:</p>
+<p>The controller, webhook, dashboard and OOM watcher all resolve the policy through <code>internal/governance.Decide</code>, which reads three levels, most specific first:</p>
 <table>
 <thead>
 <tr>
@@ -2278,7 +2087,7 @@
 </tbody>
 </table>
 <p>The first level that carries either a non-empty <code>k8s.sustain.io/policy</code> or <code>k8s.sustain.io/opt-out: "true"</code> decides; less specific levels are not read. An <strong>empty</strong> <code>k8s.sustain.io/policy</code> value falls through to the next level, so a Helm value that renders empty is not an opt-out.</p>
-<p>The annotation opts the workload in; the Policy must <strong>also</strong> accept it. A resolved policy applies only when its <code>spec.selector</code> (<code>namespaces</code> and <code>labelSelector</code>) matches the workload and the namespace is not in the operator's <code>--excluded-namespaces</code>. The annotation names the policy, the selector narrows it. This also makes Namespace opt-in delegated rather than sovereign: namespace owners choose among the policies whose selector already reaches them; they cannot grant themselves one.</p>
+<p>The annotation opts the workload in; the Policy must <strong>also</strong> accept it. A resolved policy applies only when it manages the workload's kind, its <code>spec.selector</code> matches the workload (<code>namespaces</code>, and <code>labelSelector</code> against the <a href="../policy/#specselectorlabelselector">pod template's labels</a>) and the namespace is not in the operator's <code>--excluded-namespaces</code>. The annotation names the policy, the selector narrows it. This also makes Namespace opt-in delegated rather than sovereign: namespace owners choose among the policies whose selector already reaches them; they cannot grant themselves one.</p>
 <h3 id="opting-out">Opting out<a class="headerlink" href="#opting-out" title="Permanent link">&para;</a></h3>
 <p><code>k8s.sustain.io/opt-out: "true"</code> at a level ends resolution with no policy, so a more specific opt-out beats a less specific opt-in:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">metadata</span><span class="p">:</span>
@@ -2319,14 +2128,7 @@
 <td>annotation</td>
 <td>pod template, bare Pod</td>
 <td>you</td>
-<td>Overrides the workload identity: a bare Pod becomes kind <code>Pod</code> with this name; pods with a real owner are grouped under this name. Must be a valid label value (RFC 1123, ≤ 63 chars); invalid or empty values are ignored. Read from the pod template only, never from workload metadata. See <a href="../../guides/standalone-pods-and-grouping/">Standalone Pods &amp; Identity Grouping</a>.</td>
-</tr>
-<tr>
-<td><code>k8s.sustain.io/owner-name</code></td>
-<td>label</td>
-<td>Pod</td>
-<td>webhook</td>
-<td>Mirror of the annotation, added at admission so kube-state-metrics (<code>kube_pod_labels</code>) exposes it to the recording rules.</td>
+<td>Overrides the workload identity: a bare Pod becomes kind <code>Pod</code> with this name; pods with a real owner are grouped under this name. Must be a valid label value (RFC 1123, ≤ 63 chars), since it becomes the identity's <code>owner_name</code>; invalid or empty values are ignored, by the controller and the recording rules alike. Read from the pod template only, never from workload metadata. The recording rules read it from the pod through kube-state-metrics' <code>kube_pod_annotations</code>, so it is never copied to a label. See <a href="../../guides/standalone-pods-and-grouping/">Standalone Pods &amp; Identity Grouping</a>.</td>
 </tr>
 <tr>
 <td><code>k8s.sustain.io/policy</code></td>
@@ -2486,35 +2288,35 @@
 </div>
 <hr />
 <h2 id="how-the-annotation-is-consumed">How the annotation is consumed<a class="headerlink" href="#how-the-annotation-is-consumed" title="Permanent link">&para;</a></h2>
-<p>Each component passes these levels to <code>ResolvePolicy</code>:</p>
+<p>Each component hands <code>governance.Decide</code> the pod template or pod it is deciding for, and a reader for the levels that subject does not carry. <code>Decide</code> reads a level only when every more specific one is silent, and before its first read it checks that some Policy's selector could accept the subject's namespace and labels at all — when none can, it reads nothing more. A selector that does not parse counts as accepting, so a pod opting into its Policy at any level is refused for the invalid selector, and the webhook logs it.</p>
 <table>
 <thead>
 <tr>
 <th>Component</th>
-<th>What it passes as the three levels</th>
+<th>Subject</th>
+<th>How it reads the other levels</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>Controller</strong></td>
-<td><code>workload.spec.template.metadata.annotations</code> (or <code>cronJob.spec.jobTemplate.spec.template.metadata.annotations</code>) as the pod-template level, the workload object's own <code>metadata.annotations</code>, and the Namespace's <code>metadata.annotations</code></td>
+<td><strong>Controller</strong> and <strong>dashboard</strong> (through the inventory)</td>
+<td>each workload's pod template (<code>spec.template</code>, or a CronJob's <code>spec.jobTemplate.spec.template</code>), carrying the workload object's own <code>metadata.annotations</code>; a bare Pod itself</td>
+<td>the Namespace's <code>metadata.annotations</code>, read once per snapshot</td>
 </tr>
 <tr>
 <td><strong>Webhook</strong></td>
-<td><code>pod.metadata.annotations</code> as the pod-template level (pods inherit it automatically, so this is usually all it needs); when the pod itself carries neither the policy nor the opt-out annotation, it also reads the owning workload's <code>metadata.annotations</code> and the Namespace's <code>metadata.annotations</code> before giving up</td>
-</tr>
-<tr>
-<td><strong>Dashboard</strong></td>
-<td>the same three levels as the controller, read directly from the Kubernetes API for display and simulation</td>
+<td>the pod being admitted (pods inherit the pod-template annotations, so this is usually all it needs)</td>
+<td>the owning workload and its <code>metadata.annotations</code> through ~30s TTL caches, the Namespace and the Policies from an informer cache</td>
 </tr>
 <tr>
 <td><strong>OOM watcher</strong></td>
-<td><code>pod.metadata.annotations</code>, the owning workload's <code>metadata.annotations</code>, and the Namespace's <code>metadata.annotations</code> — resolved lazily (the pod template first, since it costs nothing; the owner and Namespace reads are only paid for if it does not decide) on every fresh OOM kill, since a pod opted in above the pod-template level carries no annotation of its own for the watcher's event predicate to see (see <a href="../../concepts/architecture/#pod-oom-watcher">Pod OOM watcher</a>)</td>
+<td>the OOM-killed pod, on every fresh kill — a pod opted in above the pod-template level carries no annotation of its own for the watcher's event predicate to see (see <a href="../../concepts/architecture/#pod-oom-watcher">Pod OOM watcher</a>)</td>
+<td>straight through the controller's client</td>
 </tr>
 </tbody>
 </table>
 <h3 id="the-webhooks-cost-control-does-not-fully-bound-itself">The webhook's cost control does not fully bound itself<a class="headerlink" href="#the-webhooks-cost-control-does-not-fully-bound-itself" title="Permanent link">&para;</a></h3>
-<p>When a Policy has an empty <code>selector</code>, every pod CREATE pays for up to two owner Gets (top-level owner, then its annotations for unannotated pods). Two ~30s TTL caches with <code>singleflight</code> collapse a rolling restart's burst to at most two Gets per owner, so a workload-level annotation change can take up to 30s to reach admission.</p>
+<p>When a Policy has an empty <code>selector</code>, the pre-check always passes, so every pod CREATE pays for up to two owner Gets (top-level owner, then its annotations for unannotated pods). Two ~30s TTL caches with <code>singleflight</code> collapse a rolling restart's burst to at most two Gets per owner, so a workload-level annotation change can take up to 30s to reach admission.</p>
 
 
 

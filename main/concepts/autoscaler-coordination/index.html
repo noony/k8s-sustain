@@ -378,26 +378,6 @@
   
 
       
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../adr/" class="md-tabs__link">
-          
-  
-  
-  Architecture Decisions
-
-        </a>
-      </li>
-    
-  
-
-      
     </ul>
   </div>
 </nav>
@@ -1836,177 +1816,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Architecture Decisions
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Architecture Decisions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0001-single-identity-is-a-batch-of-one/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A single identity is a batch of one
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0002-conflicted-identity-freezes-its-recommendation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Conflicted identity freezes its recommendation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../adr/0003-a-recommendation-is-served-only-to-its-policy/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    A Recommendation is served only to its Policy
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -2274,6 +2083,15 @@ anchor=0.10</code>:</p>
 <h2 id="detection-rules">Detection rules<a class="headerlink" href="#detection-rules" title="Permanent link">&para;</a></h2>
 <ul>
 <li>HPA matched by <code>scaleTargetRef</code>; <code>ScaledObject</code> by <code>spec.scaleTargetRef</code>.</li>
+<li>Each member of an identity is looked up under its own kind and name, never
+  under the identity's: an <a href="../../guides/standalone-pods-and-grouping/">owner-name group</a>
+  <code>api</code> of Deployments <code>api-blue</code> and <code>api-green</code> is coordinated by an HPA
+  targeting <code>api-green</code>. The group's one Recommendation is shaped by the
+  autoscaler of its first member, in name order, that has one; members that
+  disagree count <code>k8s_sustain_group_autoscaler_mismatch_total</code>. A departed
+  identity has no member, and no autoscaler.</li>
+<li>The dashboard's <a href="../../guides/dashboard/#policy-simulator">Simulations</a> read
+  the autoscalers the same way, through the same code.</li>
 <li>Both objects targeting one workload → <code>ScaledObject</code> wins (KEDA owns the
   HPA).</li>
 <li>Only HPA <code>Resource</code> metrics with <code>averageUtilization</code> count. Other metric
@@ -2301,12 +2119,14 @@ anchor=0.10</code>:</p>
 </code></pre></div>
 <h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
 <p>The factors applied are recorded per container in the identity's
-<code>WorkloadRecommendation</code>, in <code>status.trace.&lt;container&gt;.&lt;cpu|memory&gt;.coordination</code>:
-<code>overheadFactor</code>, <code>replicaFactor</code> (CPU, with a <code>replicaBudgetAnchor</code>), the
-request they <code>scaled</code> to and the <code>value</code> after the min/max clamp is applied
-again (see <a href="../recommendation-pipeline/#trace">Trace</a>). The dashboard shows them
-as the <strong>Coordinated</strong> badge on the workload list and detail page.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>example<span class="w"> </span>deployment-web<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.trace.app.cpu.coordination}'</span>
+<code>WorkloadRecommendation</code>, as the <code>coordination</code> stage of
+<code>status.trace.&lt;container&gt;.&lt;cpu|memory&gt;.request</code>: its <code>value</code> is the request
+after the min/max clamp is applied again, and its facts are <code>overheadFactor</code>,
+<code>replicaFactor</code> (CPU, with a <code>replicaBudgetAnchor</code>) and, when that clamp
+capped it, the request the factors <code>scaled</code> to (see
+<a href="../recommendation-pipeline/#trace">Trace</a>). The dashboard shows them as the
+<strong>Coordinated</strong> badge on the workload list and detail page.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>wlrec<span class="w"> </span>-n<span class="w"> </span>example<span class="w"> </span>deployment-web<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.trace.app.cpu.request[?(@.stage=="coordination")]}'</span>
 </code></pre></div>
 <p><code>k8s_sustain_autoscaler_present</code> and <code>k8s_sustain_autoscaler_target_configured</code>
 report which autoscaler and targets were detected.</p>
