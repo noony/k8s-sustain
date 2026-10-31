@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/common/model"
 	"sigs.k8s.io/yaml"
 
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 )
 
@@ -181,10 +182,11 @@ func readYAML(t *testing.T, path string, into any) {
 	}
 }
 
-// rawMetrics lists the metrics rules compute from, following every rule they
-// read down to the series no rule records.
-func (c chart) rawMetrics(rules []string) map[string]bool {
-	raw := map[string]bool{}
+// through lists what rules compute from, following every rule they read down
+// to the series no rule records: the recorded rules they read in turn, and
+// those raw metrics.
+func (c chart) through(rules []string) (recorded, raw map[string]bool) {
+	recorded, raw = map[string]bool{}, map[string]bool{}
 	seen := map[string]bool{}
 	var walk func(string)
 	walk = func(name string) {
@@ -194,7 +196,8 @@ func (c chart) rawMetrics(rules []string) map[string]bool {
 		seen[name] = true
 		for _, d := range c.rules[name] {
 			for _, m := range metricNames(d.expr) {
-				if _, recorded := c.rules[m]; recorded {
+				if _, ok := c.rules[m]; ok {
+					recorded[m] = true
 					walk(m)
 				} else {
 					raw[m] = true
@@ -205,7 +208,7 @@ func (c chart) rawMetrics(rules []string) map[string]bool {
 	for _, r := range rules {
 		walk(r)
 	}
-	return raw
+	return recorded, raw
 }
 
 // check lists every way the chart fails the contracts.
@@ -252,7 +255,13 @@ func check(c chart, contracts []recommender.PromContract) []string {
 			declared[m] = true
 		}
 		if allRecorded {
-			raw := c.rawMetrics(k.Rules)
+			recorded, raw := c.through(k.Rules)
+			for _, name := range slices.Sorted(maps.Keys(recorded)) {
+				if !slices.Contains(k.Rules, name) && !c.fixtured[name] {
+					report("signal %s's rules compute from %s, which no promtool fixture in %s evaluates with expected samples",
+						k.Signal, name, fixturesDir)
+				}
+			}
 			for _, m := range slices.Sorted(maps.Keys(raw)) {
 				if !declared[m] {
 					report("signal %s's rules compute from %s, which its PromContract does not declare", k.Signal, m)
@@ -283,8 +292,9 @@ func check(c chart, contracts []recommender.PromContract) []string {
 }
 
 // The chart provides every signal's contract: its rules, aggregated by its
-// labels at its interval and covered by a promtool fixture, computed from the
-// raw metrics it declares, all of them kept by their exporter's keep-list.
+// labels at its interval, computed from the raw metrics it declares, all of
+// them kept by their exporter's keep-list, and every rule they compute
+// through, theirs included, covered by a promtool fixture.
 func TestChartProvidesEverySignalsContract(t *testing.T) {
 	contracts := recommender.PromContracts()
 	if len(contracts) == 0 {
@@ -380,6 +390,13 @@ func TestCheckReportsEachBreach(t *testing.T) {
 			"a rule no promtool fixture evaluates",
 			func(c *chart, _ *recommender.PromContract) { delete(c.fixtured, usageRule) },
 			"which no promtool fixture in " + fixturesDir + " evaluates with expected samples",
+		},
+		{
+			"a rule computed through that no promtool fixture evaluates",
+			func(c *chart, _ *recommender.PromContract) {
+				delete(c.fixtured, promclient.MetricContainerCPUUsageByWorkloadRate1m)
+			},
+			"rules compute from " + promclient.MetricContainerCPUUsageByWorkloadRate1m + ", which no promtool fixture",
 		},
 		{
 			"a raw metric the contract does not declare",

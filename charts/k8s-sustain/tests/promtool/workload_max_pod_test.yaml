@@ -41,6 +41,50 @@ tests:
         values: '20971520x60'
 
     promql_expr_test:
+      - expr: k8s_sustain:container_cpu_usage:rate1m
+        eval_time: 5m
+        exp_samples:
+          - labels: 'k8s_sustain:container_cpu_usage:rate1m{container="app",namespace="shop",pod="web-7d4-a"}'
+            value: 0.5
+          - labels: 'k8s_sustain:container_cpu_usage:rate1m{container="app",namespace="shop",pod="web-7d4-b"}'
+            value: 0.25
+          - labels: 'k8s_sustain:container_cpu_usage:rate1m{container="proxy",namespace="shop",pod="web-7d4-a"}'
+            value: 0.1
+          - labels: 'k8s_sustain:container_cpu_usage:rate1m{container="proxy",namespace="shop",pod="web-7d4-b"}'
+            value: 0.2
+      - expr: k8s_sustain:container_cpu_usage_by_workload:rate1m
+        eval_time: 5m
+        exp_samples:
+          - labels: 'k8s_sustain:container_cpu_usage_by_workload:rate1m{container="app",namespace="shop",owner_kind="Deployment",owner_name="web",pod="web-7d4-a"}'
+            value: 0.5
+          - labels: 'k8s_sustain:container_cpu_usage_by_workload:rate1m{container="app",namespace="shop",owner_kind="Deployment",owner_name="web",pod="web-7d4-b"}'
+            value: 0.25
+          - labels: 'k8s_sustain:container_cpu_usage_by_workload:rate1m{container="proxy",namespace="shop",owner_kind="Deployment",owner_name="web",pod="web-7d4-a"}'
+            value: 0.1
+          - labels: 'k8s_sustain:container_cpu_usage_by_workload:rate1m{container="proxy",namespace="shop",owner_kind="Deployment",owner_name="web",pod="web-7d4-b"}'
+            value: 0.2
+      - expr: k8s_sustain:container_memory_working_set:bytes
+        eval_time: 5m
+        exp_samples:
+          - labels: 'k8s_sustain:container_memory_working_set:bytes{container="app",namespace="shop",pod="web-7d4-a"}'
+            value: 209715200
+          - labels: 'k8s_sustain:container_memory_working_set:bytes{container="app",namespace="shop",pod="web-7d4-b"}'
+            value: 314572800
+          - labels: 'k8s_sustain:container_memory_working_set:bytes{container="proxy",namespace="shop",pod="web-7d4-a"}'
+            value: 10485760
+          - labels: 'k8s_sustain:container_memory_working_set:bytes{container="proxy",namespace="shop",pod="web-7d4-b"}'
+            value: 20971520
+      - expr: k8s_sustain:container_memory_by_workload:bytes
+        eval_time: 5m
+        exp_samples:
+          - labels: 'k8s_sustain:container_memory_by_workload:bytes{container="app",namespace="shop",owner_kind="Deployment",owner_name="web",pod="web-7d4-a"}'
+            value: 209715200
+          - labels: 'k8s_sustain:container_memory_by_workload:bytes{container="app",namespace="shop",owner_kind="Deployment",owner_name="web",pod="web-7d4-b"}'
+            value: 314572800
+          - labels: 'k8s_sustain:container_memory_by_workload:bytes{container="proxy",namespace="shop",owner_kind="Deployment",owner_name="web",pod="web-7d4-a"}'
+            value: 10485760
+          - labels: 'k8s_sustain:container_memory_by_workload:bytes{container="proxy",namespace="shop",owner_kind="Deployment",owner_name="web",pod="web-7d4-b"}'
+            value: 20971520
       - expr: k8s_sustain:workload_max_pod_cpu:cores
         eval_time: 5m
         exp_samples:

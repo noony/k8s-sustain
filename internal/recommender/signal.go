@@ -59,8 +59,9 @@ var signals = []signal{cpuUsage, memoryUsage, oomFloor{}}
 
 // PromContract is what one signal needs from Prometheus. The chart must
 // provide it: hack/signalcontract fails when a rule is missing, aggregates by
-// other labels, evaluates at another interval or has no promtool fixture, and
-// when a raw metric it rests on is dropped by the bundled scrape keep-lists.
+// other labels or evaluates at another interval, when it or a rule it computes
+// through has no promtool fixture, and when a raw metric it rests on is
+// dropped by the bundled scrape keep-lists.
 type PromContract struct {
 	Signal string
 	// Rules are the recording rules the signal's query reads.
