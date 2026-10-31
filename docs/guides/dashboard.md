@@ -151,12 +151,12 @@ A chart without a signal line says why in a short note at its top:
 
 ### Policies Page
 
-A stat strip shows **Total policies**, **Workloads covered**, **Cluster CPU saved** and **Cluster Mem saved**. The table lists each policy's Name, **Status** (Ready condition), **Mode** (per-kind update modes), **Workloads**, **CPU saved**, **Mem saved**, **Blocked** (Blocked identities) and **Last applied**. Click a row for the policy detail page.
+A stat strip shows **Total policies**, **Workloads covered**, **Cluster CPU saved** and **Cluster Mem saved**. The table lists each policy's Name, **Status** (Ready condition), **Mode** (the update mode of each kind it manages), **Workloads**, **CPU saved**, **Mem saved**, **Blocked** (Blocked identities) and **Last applied**. Click a row for the policy detail page.
 
 ### Policy Detail
 
 - **Stat strip** — Status, Matched Workloads (every identity the policy governs, Departed ones included, unaffected by the table filters), CPU saved, Memory saved.
-- **Configuration** — per resource: window, percentile, headroom, min, max, keep request, and limits strategy. Below: update mode per kind (Deploy, STS, DS, CJ, Job, Rollout), ignore safe-to-evict annotations, exclude init containers, and autoscaler coordination (with `replicaBudgetAnchor` when set). **View as YAML** opens the Policy spec in a modal.
+- **Configuration** — per resource: window, percentile, headroom, min, max, keep request, and limits strategy. Below: the update mode of each kind the policy manages, `(in place)` marking `Ongoing` on a kind whose pods are only ever resized in place (CronJob, Job, Pod), ignore safe-to-evict annotations, exclude init containers, and autoscaler coordination (with `replicaBudgetAnchor` when set). **View as YAML** opens the Policy spec in a modal.
 - **Selector** — target namespaces (or "all namespaces"), `matchLabels` and `matchExpressions`.
 - **Effectiveness over time** — CPU and memory savings for this policy over the selected range.
 - **Matched Workloads** — the identities the policy governs: Namespace, Kind, Name (with Departed badge), Risk, Drift, containers and their current CPU/memory requests; namespace filter, name search, **Reset filters**, and pagination (50 per page). Sorted by name by default; click Namespace, Kind, Name or Drift to sort across all pages. Filters, sort and page live in the URL alongside the time range, so Back from a workload restores the list.
@@ -166,7 +166,7 @@ A stat strip shows **Total policies**, **Workloads covered**, **Cluster CPU save
 
 A Simulation is the Recommendation the controller would compute for an identity, under what-if changes to its Policy's settings. With no change it is exactly the controller's: the same identity (members, containers, age), the same Policy settings, and the same autoscaler, read for each member the Policy governs — the one difference is that the dashboard has no live OOM watcher, so a kill the controller saw in the last 30 minutes but Prometheus does not hold yet raises the controller's memory floor and not the Simulation's.
 
-1. Select a **workload** (namespace, kind, name). Kinds: Deployment, StatefulSet, DaemonSet, CronJob, Job, Rollout, Pod. **Open in Simulator** on a workload page fills it in.
+1. Select a **workload** (namespace, kind, name). The kinds offered are those a Policy can manage (`GET /api/kinds`). **Open in Simulator** on a workload page fills it in.
 2. The Simulation **starts from** the workload's governing policy, and every control shows that policy's settings with the recommender's defaults filled in (`168h` window, 95th percentile, no headroom, the existing limit kept, raised to the request when below it). Start from another policy instead with the **Start from** selector, which drops your changes; when no policy governs the workload, the defaults apply. **Reset** drops every change.
 3. Change any of, per resource:
     - Window — the recommendation lookback (e.g. `168h`), independent of the chart time range

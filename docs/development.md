@@ -632,6 +632,12 @@ spell a label, class or link of their own:
   `riskState` and the counts from the payload: the SPA never derives either.
 - **`outcomes.ts`** — the label of each `status.outcome` a
   `WorkloadRecommendation` or a Simulation reports (`outcomeLabel`).
+- **`kinds.ts`** — the workload kinds a Policy can manage, fetched from
+  `GET /api/kinds` (`fetchKinds`): each one's name, the
+  `spec.rightSizing.update.types` field that manages it and whether it is
+  in-place-only. `updateModes` summarises a Policy's update modes from them.
+  The SPA holds no kind list of its own: a kind the backend adds reaches the
+  Policies pages and the Simulator without a frontend change.
 - **`limits.ts`** — the limit strategies in the recommender's precedence:
   each one's label, help per resource, and the label the trace table gives the
   stage it runs as; `limitModeOf` reads a Policy's strategy and `limitsPatch`

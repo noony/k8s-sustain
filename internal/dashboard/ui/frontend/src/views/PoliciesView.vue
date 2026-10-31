@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRowLink } from '../composables/useRowLink'
 import { api, type PolicySummary } from '../lib/api'
+import { fetchKinds, updateModes, type WorkloadKind } from '../lib/kinds'
 import { timeAgo, formatBytes } from '../lib/format'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useSorting } from '../composables/useSorting'
@@ -15,12 +16,18 @@ const { openRow } = useRowLink()
 const loading = ref(true)
 const error = ref('')
 const policies = ref<PolicySummary[]>([])
+const kinds = ref<WorkloadKind[] | null>(null)
 
 const { sort, sortArrow, applySorting } = useSorting('policies')
 
 async function load() {
   try {
-    policies.value = await api<PolicySummary[]>('/api/policies')
+    const [list, served] = await Promise.all([
+      api<PolicySummary[]>('/api/policies'),
+      kinds.value ?? fetchKinds(),
+    ])
+    policies.value = list
+    kinds.value = served
     error.value = ''
   } catch (e: any) {
     error.value = e.message
@@ -40,17 +47,6 @@ const totalWorkloads = computed(() =>
 )
 const totalCpu = computed(() => policies.value.reduce((a, p) => a + (p.cpuSavingsCores || 0), 0))
 const totalMem = computed(() => policies.value.reduce((a, p) => a + (p.memSavingsBytes || 0), 0))
-
-function updateTypeBadges(update?: Record<string, string>): string {
-  if (!update) return ''
-  const types: string[] = []
-  if (update.deployment) types.push(`Deploy:${update.deployment}`)
-  if (update.statefulSet) types.push(`STS:${update.statefulSet}`)
-  if (update.daemonSet) types.push(`DS:${update.daemonSet}`)
-  if (update.argoRollout) types.push(`Rollout:${update.argoRollout}`)
-  if (update.cronJob) types.push(`CJ:${update.cronJob}`)
-  return types.join(', ') || '-'
-}
 </script>
 
 <template>
@@ -128,7 +124,7 @@ function updateTypeBadges(update?: Record<string, string>): string {
                   >
                 </td>
                 <td data-label="Status"><StatusBadge :conditions="p.conditions" /></td>
-                <td data-label="Mode">{{ updateTypeBadges(p.update) }}</td>
+                <td data-label="Mode">{{ updateModes(kinds ?? [], p.update) }}</td>
                 <td data-label="Workloads">{{ p.workloadCount || 0 }}</td>
                 <td data-label="CPU saved">
                   <code>{{ (p.cpuSavingsCores || 0).toFixed(2) }}c</code>

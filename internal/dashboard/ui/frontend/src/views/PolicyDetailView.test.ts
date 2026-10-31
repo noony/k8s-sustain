@@ -6,9 +6,16 @@ import { createRouter, createMemoryHistory, createWebHistory, type Router } from
 
 vi.mock('../lib/api', async (o) => ({ ...((await o()) as object), api: vi.fn() }))
 
+const kinds = [
+  { name: 'Deployment', updateField: 'deployment', inPlaceOnly: false },
+  { name: 'CronJob', updateField: 'cronJob', inPlaceOnly: true },
+  { name: 'Widget', updateField: 'widget', inPlaceOnly: false },
+]
+
 describe('PolicyDetailView', () => {
   it('renders effectiveness chart band and view-as-yaml button', async () => {
     ;(api.api as any).mockImplementation((path: string) => {
+      if (path === '/api/kinds') return Promise.resolve(kinds)
       if (path === '/api/policies/p')
         return Promise.resolve({
           name: 'p',
@@ -35,6 +42,7 @@ describe('PolicyDetailView', () => {
 
   it("labels each resource's limits by the strategy the recommender runs", async () => {
     ;(api.api as any).mockImplementation((path: string) => {
+      if (path === '/api/kinds') return Promise.resolve(kinds)
       if (path.startsWith('/api/policies/p/workloads'))
         return Promise.resolve({ items: [], total: 0, pageSize: 50 })
       if (path.startsWith('/api/policies/p'))
@@ -66,6 +74,33 @@ describe('PolicyDetailView', () => {
     expect(limits).toEqual(['Keep existing limit', 'Multiple of request (×1.5)'])
   })
 
+  it('shows the update mode of every kind the server serves', async () => {
+    ;(api.api as any).mockImplementation((path: string) => {
+      if (path === '/api/kinds') return Promise.resolve(kinds)
+      if (path.startsWith('/api/policies/p/workloads'))
+        return Promise.resolve({ items: [], total: 0, pageSize: 50 })
+      if (path.startsWith('/api/policies/p'))
+        return Promise.resolve({
+          name: 'p',
+          conditions: [],
+          spec: { rightSizing: { update: { types: { widget: 'OnCreate', cronJob: 'Ongoing' } } } },
+          effectivenessSeries: { cpu: [], memory: [] },
+        })
+      return Promise.resolve({})
+    })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/:catchAll(.*)', component: { template: '<div/>' } }],
+    })
+    const w = mount(PolicyDetailView, {
+      props: { name: 'p' },
+      global: { plugins: [router], stubs: ['router-link', 'StatusBadge', 'TrendChart'] },
+    })
+    await flushPromises()
+    const mode = w.findAll('.rec-row').find((r) => r.find('.label').text() === 'Update mode')!
+    expect(mode.find('.value').text()).toBe('CronJob: Ongoing (in place), Widget: OnCreate')
+  })
+
   it('flags a batch row whose outcome keeps it out of the savings', async () => {
     const savings = {
       savingsMillis: 0,
@@ -74,6 +109,7 @@ describe('PolicyDetailView', () => {
       recommendedFormatted: '0m',
     }
     ;(api.api as any).mockImplementation((path: string) => {
+      if (path === '/api/kinds') return Promise.resolve(kinds)
       if (path === '/api/policies/p')
         return Promise.resolve({
           name: 'p',
@@ -153,6 +189,7 @@ describe('PolicyDetailView', () => {
       })
       ;(api.api as any).mockReset()
       ;(api.api as any).mockImplementation(async (path: string) => {
+        if (path === '/api/kinds') return kinds
         if (path.startsWith('/api/policies/p/workloads?'))
           return workloadsResponse(new URLSearchParams(path.split('?')[1]))
         if (path.startsWith('/api/policies/p')) return policyBody
