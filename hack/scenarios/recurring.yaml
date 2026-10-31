@@ -67,7 +67,7 @@
 #        out of every 120s has contributed only ~2.5 minutes of container
 #        runtime by the time the 10-minute gate opens, so the CPU percentile
 #        is computed over a mostly-empty series and floors out.
-#        downsizeThreshold suppression (internal/controller/tolerance.go) does
+#        downsizeThreshold suppression (internal/workload/match.go) does
 #        NOT catch it: that rule suppresses SMALL decreases to avoid churn, so
 #        the larger the drop the more readily it goes through — the opposite
 #        of what would have helped.
