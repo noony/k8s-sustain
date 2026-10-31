@@ -819,7 +819,10 @@ place:
   (`k8s.io/utils/clock`). Expiry is lazy, with no sweeper goroutine. An
   expired entry is a miss for `Get` but stays until a `Set` overwrites it or
   LRU pressure evicts it, so `LastGoodWithin(key, maxAge)` can still serve it
-  as a bounded stale-but-good fallback.
+  as a bounded stale-but-good fallback. `SetIfAbsent` stores only when no
+  fresh entry is there, in one step, so of callers racing on a key exactly one
+  stores; `DeleteIf` removes an entry only while its value still matches, so a
+  caller can withdraw what it stored without erasing a later store.
 - `cache.ReadThrough[K, V]` is an `LRU` and one fetch. `Get` serves a fresh
   entry, or else joins the fetch running for its key, starting one when none
   is: concurrent misses on a key cost one fetch. The fetch runs on a context
@@ -841,8 +844,10 @@ cached in the last 10 minutes (`LastGoodWithin`) in preference to that partial
 result, and also when the request gives up before the recompute finishes;
 with none, it serves the partial result, or a 503 for a request that gave up.
 A recovered panic is re-raised on the request goroutine for the recovery
-middleware. A new cached read is a key, a fetch, a size and a TTL, not a new
-mechanism.
+middleware. The webhook's [stub dedup](#stub-writes-dedup-bounds-and-shutdown)
+is an `LRU` of claims: an admission claims its identity with `SetIfAbsent`,
+and a claim that never reached the apiserver is withdrawn with `DeleteIf`. A
+new cached read is a key, a fetch, a size and a TTL, not a new mechanism.
 
 ### Governance
 
@@ -1003,7 +1008,7 @@ The trade-off: a workload that gains its opt-in annotation at the workload level
 
 #### Stub writes: dedup, bounds and shutdown
 
-A stub becomes visible to the webhook's informer only after the create and watch propagation, so inside that window every pod of a scaling workload reads `missing` and would fire its own create (a 500-replica scale-out means 500 creates of one name, 499 rejected). Stub requests are therefore deduplicated per identity for 30s and bounded to 16 concurrent writes. Over-capacity requests queue rather than drop: a run-once Job has no later admission to retry on.
+A stub becomes visible to the webhook's informer only after the create and watch propagation, so inside that window every pod of a scaling workload reads `missing` and would fire its own create (a 500-replica scale-out means 500 creates of one name, 499 rejected). Stub requests are therefore deduplicated per identity for 30s, in a [shared](#shared-caches) LRU of up to 4096 claims, and bounded to 16 concurrent writes. A failed create keeps its claim for the 30s; only a request that gave up waiting for a write slot withdraws it, and only if no later admission has claimed the identity since. Over-capacity requests queue rather than drop: a run-once Job has no later admission to retry on.
 
 Stub goroutines outlive the admission that started them (up to 30s queued plus 5s for the write), so on shutdown SIGTERM cancels in-flight stub writes and the process waits, bounded, for them to unwind before stopping the informer cache they read through. An abandoned request is re-issued by the next admission for the same identity.
 

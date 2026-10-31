@@ -1,6 +1,8 @@
 package cache
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -147,6 +149,102 @@ func TestLRUExpiredEntryIsReclaimedByLRUPressure(t *testing.T) {
 	c.Set("new", 2)
 	if _, ok := c.LastGoodWithin("old", 10*time.Minute); ok {
 		t.Fatal("expected the expired entry evicted by the insert that overflowed the cache")
+	}
+}
+
+func TestLRUSetIfAbsentStoresOnlyWithoutAFreshEntry(t *testing.T) {
+	clk := clocktesting.NewFakePassiveClock(epoch)
+	c := NewLRU[string, int](10, 30*time.Second, clk)
+	if !c.SetIfAbsent("k", 1) {
+		t.Fatal("expected a store on an absent key")
+	}
+	clk.SetTime(epoch.Add(30 * time.Second))
+	if c.SetIfAbsent("k", 2) {
+		t.Fatal("expected no store over a fresh entry")
+	}
+	if v, ok := c.Get("k"); !ok || v != 1 {
+		t.Fatalf("expected the first value 1 kept, got ok=%v v=%v", ok, v)
+	}
+	clk.SetTime(epoch.Add(31 * time.Second))
+	if !c.SetIfAbsent("k", 3) {
+		t.Fatal("expected a store over an expired entry")
+	}
+	if v, ok := c.Get("k"); !ok || v != 3 {
+		t.Fatalf("expected 3, fresh from its own store, got ok=%v v=%v", ok, v)
+	}
+}
+
+func TestLRUSetIfAbsentStoresForExactlyOneOfRacingCallers(t *testing.T) {
+	const n = 50
+	c := NewLRU[string, int](10, time.Minute, nil)
+	var stored atomic.Int32
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			if c.SetIfAbsent("k", i) {
+				stored.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if got := stored.Load(); got != 1 {
+		t.Errorf("%d of %d racing callers stored, want exactly 1", got, n)
+	}
+}
+
+// A refused store is a use: the entry it found outlives colder ones under LRU
+// pressure.
+func TestLRUSetIfAbsentRefusalMakesKeyMostRecentlyUsed(t *testing.T) {
+	c := NewLRU[string, int](2, time.Minute, nil)
+	c.Set("a", 1)
+	c.Set("b", 2)
+	c.SetIfAbsent("a", 11)
+	c.Set("c", 3)
+	if _, ok := c.Get("b"); ok {
+		t.Fatal("expected b evicted")
+	}
+	if v, ok := c.Get("a"); !ok || v != 1 {
+		t.Fatalf("expected a=1 present, got ok=%v v=%v", ok, v)
+	}
+}
+
+func TestLRUDeleteIfRemovesOnlyAMatchingValue(t *testing.T) {
+	c := NewLRU[string, int](10, time.Minute, nil)
+	c.Set("k", 2)
+	if c.DeleteIf("k", func(v int) bool { return v == 1 }) {
+		t.Fatal("expected no delete of a value that does not match")
+	}
+	if v, ok := c.Get("k"); !ok || v != 2 {
+		t.Fatalf("expected k=2 kept, got ok=%v v=%v", ok, v)
+	}
+	if !c.DeleteIf("k", func(v int) bool { return v == 2 }) {
+		t.Fatal("expected the matching value deleted")
+	}
+	if _, ok := c.LastGoodWithin("k", time.Hour); ok {
+		t.Fatal("expected the entry gone, not merely expired")
+	}
+	if !c.SetIfAbsent("k", 3) {
+		t.Fatal("expected a store once the entry is deleted")
+	}
+}
+
+func TestLRUDeleteIfRemovesAnExpiredMatch(t *testing.T) {
+	clk := clocktesting.NewFakePassiveClock(epoch)
+	c := NewLRU[string, int](10, time.Minute, clk)
+	c.Set("k", 1)
+	clk.SetTime(epoch.Add(2 * time.Minute))
+	if !c.DeleteIf("k", func(v int) bool { return v == 1 }) {
+		t.Fatal("expected an expired matching entry deleted")
+	}
+	if _, ok := c.LastGoodWithin("k", time.Hour); ok {
+		t.Fatal("expected the entry gone")
+	}
+}
+
+func TestLRUDeleteIfMissOnAbsentKey(t *testing.T) {
+	c := NewLRU[string, int](10, time.Minute, nil)
+	if c.DeleteIf("nope", func(int) bool { return true }) {
+		t.Fatal("expected no delete of an absent key")
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/noony/k8s-sustain/internal/cache"
 	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
 )
@@ -61,10 +62,10 @@ type Handler struct {
 	// stubMu guards every stub field below, including stubWG.Add and
 	// stubStopping: registering a goroutine and deciding no more may start must
 	// be one atomic step or Shutdown can wait on a WaitGroup about to grow.
-	stubMu        sync.Mutex
-	stubRequested map[string]time.Time
-	stubInflight  chan struct{}
-	stubLastPrune time.Time
+	stubMu       sync.Mutex
+	stubClaims   *cache.LRU[string, uint64]
+	stubClaimSeq uint64
+	stubInflight chan struct{}
 
 	// stubCtx is the parent of every detached stub goroutine; stubStop cancels it.
 	stubCtx  context.Context

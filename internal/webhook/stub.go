@@ -5,9 +5,11 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/cache"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
@@ -23,6 +25,11 @@ const stubWriteTimeout = 5 * time.Second
 // create too, so retry latency stays bounded.
 const stubRequestDedupTTL = 30 * time.Second
 
+// stubRequestDedupMaxEntries bounds the dedup like the owner caches, sized for
+// the identities admitted within one TTL; past it an evicted claim costs only
+// a duplicate create, which AlreadyExists absorbs.
+const stubRequestDedupMaxEntries = 4096
+
 // stubRequestMaxInflight bounds concurrent stub creates. Over capacity,
 // requests queue rather than drop: a run-once Job that loses the race has no
 // guaranteed retry.
@@ -32,9 +39,6 @@ const stubRequestMaxInflight = 16
 // slot. Shutdown cancels parked goroutines outright, so it never delays a drain.
 const stubRequestQueueTimeout = 30 * time.Second
 
-// stubRequestPruneInterval throttles the lazy sweep of expired dedup entries.
-const stubRequestPruneInterval = 5 * time.Minute
-
 // stubDrainTimeout bounds Shutdown's wait for the detached stub goroutines.
 // They are cancelled first, so this is only unwind time, and blocking longer
 // would eat into terminationGracePeriodSeconds.
@@ -43,8 +47,8 @@ const stubDrainTimeout = 2 * time.Second
 // initStubStateLocked lazily builds the stub state so the zero Handler is
 // usable. Caller must hold stubMu.
 func (h *Handler) initStubStateLocked() {
-	if h.stubRequested == nil {
-		h.stubRequested = make(map[string]time.Time)
+	if h.stubClaims == nil {
+		h.stubClaims = newStubClaims(nil)
 	}
 	if h.stubInflight == nil {
 		h.stubInflight = make(chan struct{}, stubRequestMaxInflight)
@@ -54,41 +58,41 @@ func (h *Handler) initStubStateLocked() {
 	}
 }
 
+// newStubClaims returns the stub dedup, one claim per identity key, read on
+// clk; a nil clk is the wall clock.
+func newStubClaims(clk clock.PassiveClock) *cache.LRU[string, uint64] {
+	return cache.NewLRU[string, uint64](stubRequestDedupMaxEntries, stubRequestDedupTTL, clk)
+}
+
 // beginStubRequest claims the right to issue a stub create for key and, when
 // granted, registers the detached goroutine with stubWG. It returns the parent
-// context, the dedup expiry written for this claim, and whether to proceed.
+// context, the claim, and whether to proceed.
 //
 // The claim, the shutdown check and the stubWG.Add are one critical section:
 // splitting them lets a stub goroutine start after Shutdown concluded there
 // were none left.
-func (h *Handler) beginStubRequest(key string, now time.Time) (parent context.Context, until time.Time, ok bool) {
+func (h *Handler) beginStubRequest(key string) (parent context.Context, claim uint64, ok bool) {
 	h.stubMu.Lock()
 	defer h.stubMu.Unlock()
 	h.initStubStateLocked()
 
 	if h.stubStopping {
-		return nil, time.Time{}, false
+		return nil, 0, false
 	}
-	if existing, exists := h.stubRequested[key]; exists && now.Before(existing) {
-		return nil, time.Time{}, false
+	h.stubClaimSeq++
+	if !h.stubClaims.SetIfAbsent(key, h.stubClaimSeq) {
+		return nil, 0, false
 	}
-	h.pruneStubRequestsLocked(now)
-	until = now.Add(stubRequestDedupTTL)
-	h.stubRequested[key] = until
 	h.stubWG.Add(1)
-	return h.stubCtx, until, true
+	return h.stubCtx, h.stubClaimSeq, true
 }
 
 // dropStubClaim forgets a claim that never reached the apiserver so the next
-// admission can retry at once. It is a compare-and-delete on the expiry: a
-// claim can expire while its owner is still queued, and a later admission may
-// already hold a fresh claim for the same key.
-func (h *Handler) dropStubClaim(key string, claimed time.Time) {
-	h.stubMu.Lock()
-	defer h.stubMu.Unlock()
-	if until, exists := h.stubRequested[key]; exists && until.Equal(claimed) {
-		delete(h.stubRequested, key)
-	}
+// admission can retry at once. It deletes only this claim: a claim can expire
+// while its owner is still queued, and a later admission may already hold a
+// fresh claim for the same key.
+func (h *Handler) dropStubClaim(key string, claim uint64) {
+	h.stubClaims.DeleteIf(key, func(held uint64) bool { return held == claim })
 }
 
 // Shutdown stops accepting new stub requests, cancels the detached stub
@@ -137,19 +141,6 @@ func (h *Handler) acquireStubSlot(ctx context.Context) (release func(), err erro
 	}
 }
 
-// pruneStubRequestsLocked drops expired dedup entries. Caller must hold stubMu.
-func (h *Handler) pruneStubRequestsLocked(now time.Time) {
-	if now.Sub(h.stubLastPrune) < stubRequestPruneInterval {
-		return
-	}
-	h.stubLastPrune = now
-	for k, until := range h.stubRequested {
-		if now.After(until) {
-			delete(h.stubRequested, k)
-		}
-	}
-}
-
 // stubRequest is the one effect an admission can call for: wlrcache.Request
 // for identity, whose object the admission read as known, the pod opting into
 // policy and running observed.
@@ -169,7 +160,7 @@ type stubRequest struct {
 // same workload retries.
 func (h *Handler) requestRecommendation(logger logr.Logger, r stubRequest) {
 	key := wlrcache.Key(r.identity).String()
-	parent, claimed, ok := h.beginStubRequest(key, time.Now())
+	parent, claim, ok := h.beginStubRequest(key)
 	if !ok {
 		return
 	}
@@ -187,7 +178,7 @@ func (h *Handler) requestRecommendation(logger logr.Logger, r stubRequest) {
 		defer queueCancel()
 		release, err := h.acquireStubSlot(queueCtx)
 		if err != nil {
-			h.dropStubClaim(key, claimed)
+			h.dropStubClaim(key, claim)
 			logger.V(1).Info("gave up waiting for a stub write slot", "err", err)
 			return
 		}

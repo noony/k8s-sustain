@@ -97,6 +97,41 @@ func (c *LRU[K, V]) LastGoodWithin(key K, maxAge time.Duration) (V, bool) {
 func (c *LRU[K, V]) Set(key K, value V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.setLocked(key, value)
+}
+
+// SetIfAbsent stores value at key as Set does unless a fresh entry is there,
+// and reports whether it stored it. Either way the entry becomes the most
+// recently used. The check and the store are one step, so of callers racing
+// on one key exactly one stores.
+func (c *LRU[K, V]) SetIfAbsent(key K, value V) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el, ok := c.entries[key]; ok && c.clock.Since(el.Value.(*entry[K, V]).storedAt) <= c.ttl {
+		c.order.MoveToFront(el)
+		return false
+	}
+	c.setLocked(key, value)
+	return true
+}
+
+// DeleteIf removes the entry at key, fresh or expired, when match reports
+// true for its value, and reports whether it removed it. match runs under the
+// cache's lock, so a caller can delete only the value it stored without a
+// later store racing in between; it must not call back into the cache.
+func (c *LRU[K, V]) DeleteIf(key K, match func(V) bool) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.entries[key]
+	if !ok || !match(el.Value.(*entry[K, V]).value) {
+		return false
+	}
+	c.order.Remove(el)
+	delete(c.entries, key)
+	return true
+}
+
+func (c *LRU[K, V]) setLocked(key K, value V) {
 	now := c.clock.Now()
 	if el, ok := c.entries[key]; ok {
 		e := el.Value.(*entry[K, V])
