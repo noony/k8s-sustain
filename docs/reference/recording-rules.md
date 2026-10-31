@@ -20,6 +20,7 @@ Computing percentiles over multi-day windows from raw `container_cpu_usage_secon
 | `cluster_*_savings_*`, `policy_*_savings_*` | Savings aggregates (dashboard) |
 | `cluster_*_headroom_breakdown` | Used/idle/free split (dashboard) |
 | `container_oom_kills` | OOM kills, each recorded once when first seen: the one definition every OOM rule derives from, and the dashboard's chart markers |
+| `container_oom_kill_limit:bytes` | The memory limit each OOM kill happened at, recorded once per kill |
 | `container_peak_memory_24h:bytes`, `container_oom_limit_24h:bytes` | OOM floor anchors (recommender) |
 | `workload_oom_24h`, `workload_drifted` | Risk signals: the OOM count feeds the recommender's OOM floor and the dashboard's At risk state; `workload_drifted` is for your own alerts and dashboards |
 | `workload_*_usage:*` | Per-workload usage totals (dashboard trend) |
@@ -37,10 +38,11 @@ Each [recommendation signal](../concepts/recommendation-pipeline.md#signals) dec
 - **Labels.** A query reads a whole shard of identities at once and attributes each series by these four labels. A series missing one is dropped; a rule keeping one more, such as `pod`, would hand a container several series, and the usage signals keep only one of them.
 - **Interval.** The usage signals read their rule as a plain range vector, so its 1m interval is the percentile's sample resolution and what the shard sample budget counts. The OOM floor reads its rules as an instant vector, one sample per rule, whatever their interval.
 - **Series.** The four kube-state-metrics series shared by every signal are what `pod_workload` maps a pod to its identity from; `kube_pod_annotations` carries the owner-name override. The OOM floor's other four are what [`container_oom_kills`](#k8s_sustaincontainer_oom_kills) detects a kill from.
+- **Per container instance.** The OOM floor reads `container_spec_memory_limit_bytes` per container instance: a restarted container runs in a new cgroup, and [`container_oom_kill_limit:bytes`](#k8s_sustaincontainer_oom_kill_limitbytes) tells the instance a kill ended from the one replacing it only while each is a series of its own. cAdvisor names an instance in its `id` label (the cgroup path) and its `name` label (the runtime's container ID); the bundled scrape drops both from every metric to save series, and keeps the last segment of `id` as `cgroup` for this one metric.
 
-`go test ./hack/signalcontract`, part of `make test`, checks the chart against every contract. Each rule a signal reads must be recorded in `prometheusRule.groups`, be one aggregation `by` exactly the declared labels over its whole expression, and evaluate at the declared interval. It and every rule it reads in turn, such as `container_oom_kills` or `pod_workload`, must be evaluated with expected samples by a promtool fixture in `charts/k8s-sustain/tests/promtool/` (run by `make helm-promtool`). Following the rules they read down to raw series, those series must be exactly the declared ones, and each must be kept by its exporter's keep-list in the bundled Prometheus: the `metric_relabel_configs` of `prometheus.scrapeConfigs.kubernetes-nodes-cadvisor`, or of the `kube-state-metrics` job in `prometheus.extraScrapeConfigs`. A signal that needs a series the chart does not keep yet, such as cAdvisor's CFS throttling counters, fails the test until the keep-list keeps it. Expressions are read textually, without the PromQL parser, so a rule a signal reads has to stay a single `<aggregation> by (…) (…)`.
+`go test ./hack/signalcontract`, part of `make test`, checks the chart against every contract. Each rule a signal reads must be recorded in `prometheusRule.groups`, be one aggregation `by` exactly the declared labels over its whole expression, and evaluate at the declared interval. It and every rule it reads in turn, such as `container_oom_kills` or `pod_workload`, must be evaluated with expected samples by a promtool fixture in `charts/k8s-sustain/tests/promtool/` (run by `make helm-promtool`). Following the rules they read down to raw series, those series must be exactly the declared ones, and each must be kept by its exporter's keep-list in the bundled Prometheus: the `metric_relabel_configs` of `prometheus.scrapeConfigs.kubernetes-nodes-cadvisor`, or of the `kube-state-metrics` job in `prometheus.extraScrapeConfigs`. A series read per container instance must come out of the cAdvisor job's `metric_relabel_configs` as two series for two instances of one container: the test applies them to two such samples, and fails on an action it cannot apply. A signal that needs a series the chart does not keep yet, such as cAdvisor's CFS throttling counters, fails the test until the keep-list keeps it. Expressions are read textually, without the PromQL parser, so a rule a signal reads has to stay a single `<aggregation> by (…) (…)`.
 
-If you bring your own Prometheus, it must scrape every series in the table.
+If you bring your own Prometheus, it must scrape every series in the table, and keep a label telling a container's instances apart on `container_spec_memory_limit_bytes`, such as cAdvisor's `id`, which kube-prometheus-stack keeps.
 
 ## Rules
 
@@ -367,12 +369,12 @@ Same `used`/`idle`/`free` split, for memory. Same rationale as CPU: raw inputs s
 k8s_sustain:pod_workload
 ```
 
-OOM kills per (namespace, pod, container), labelled with the identity's `owner_kind` and `owner_name`, each recorded once, at the evaluation that first sees it. A sample's value is the number of kills first seen at that evaluation; between kills the series has no sample at all, so a container never killed costs nothing. This is the one definition of an OOM kill: [`workload_oom_24h`](#k8s_sustainworkload_oom_24h) counts its samples, [`container_oom_limit_24h:bytes`](#k8s_sustaincontainer_oom_limit_24hbytes) samples the memory limit at them, the dashboard's chart markers read it, and the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher) applies the same definition to the pods it sees. A kill is one of:
+OOM kills per (namespace, pod, container), labelled with the identity's `owner_kind` and `owner_name`, each recorded once, at the evaluation that first sees it. A sample's value is the number of kills first seen at that evaluation; between kills the series has no sample at all, so a container never killed costs nothing. This is the one definition of an OOM kill: [`workload_oom_24h`](#k8s_sustainworkload_oom_24h) counts its samples, [`container_oom_kill_limit:bytes`](#k8s_sustaincontainer_oom_kill_limitbytes) records the memory limit each happened at, the dashboard's chart markers read it, and the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher) applies the same definition to the pods it sees. A kill is one of:
 
 - **A restart whose last termination is `OOMKilled`.** The kubelet restarts the container in place: a Deployment's, StatefulSet's, DaemonSet's or Rollout's, or a Job's with `restartPolicy: OnFailure`. The restart count is compared with the previous evaluation, one group interval (1m) earlier, so consecutive evaluations count each restart once; `last_over_time` skips the staleness markers a failed scrape writes, so a kube-state-metrics gap of up to 10 minutes delays its restarts instead of losing them. `last_terminated_reason` only gates the restart: kube-state-metrics keeps it at 1 for as long as that kill is the container's last termination, the rest of the pod's life if it never fails again. Under `Always` or `OnFailure` only the restart counts a kill, even when a scrape catches the container's brief terminated state before it.
 - **A container that will not restart turning `OOMKilled`.** In a pod whose `restartPolicy` is `Never`, such as a Job's, a CronJob's or a bare pod, the kill stays the container's current termination until the pod is deleted and never becomes a last termination. It counts the first time it is seen, and not while it was already seen in the previous 24h, so a scrape gap does not count it twice.
 
-The rule is the last of the `k8s_sustain.workload_mapping` group: rules of one group run in order at the same instant, so a pod killed before kube-state-metrics first scraped it is already mapped by `pod_workload` when this rule first sees the kill. Each kill carries its identity, so it keeps counting after its pod is deleted. `charts/k8s-sustain/tests/promtool/container_oom_kills_test.yaml` pins each case.
+The rule follows `pod_workload` in the `k8s_sustain.workload_mapping` group: rules of one group run in order at the same instant, so a pod killed before kube-state-metrics first scraped it is already mapped by `pod_workload` when this rule first sees the kill. Each kill carries its identity, so it keeps counting after its pod is deleted. `charts/k8s-sustain/tests/promtool/container_oom_kills_test.yaml` pins each case.
 
 **Caveats:**
 
@@ -405,29 +407,46 @@ max by (namespace, owner_kind, owner_name, container) (
 )
 ```
 
-True 24h memory peak per (workload, container): the kernel high-water mark (cgroup v1 `max_usage_bytes`, cgroup v2 `peak_working_set_bytes`) or the working-set max, whichever is higher. It catches sub-scrape spikes that working set alone misses. The recommender uses it as the peak anchor of the OOM floor. The cgroup limit is deliberately excluded — see the next rule.
+True 24h memory peak per (workload, container): the kernel high-water mark (cgroup v1 `max_usage_bytes`, cgroup v2 `peak_working_set_bytes`) or the working-set max, whichever is higher. It catches sub-scrape spikes that working set alone misses. The recommender uses it as the peak anchor of the OOM floor. The cgroup limit is deliberately excluded — see [`container_oom_limit_24h:bytes`](#k8s_sustaincontainer_oom_limit_24hbytes).
+
+### `k8s_sustain:container_oom_kill_limit:bytes`
+
+```promql
+max by (namespace, pod, container) (
+  last_over_time(container_spec_memory_limit_bytes{container!="", container!="POD", image!="", node!=""}[15m])
+  unless
+  last_over_time(container_spec_memory_limit_bytes{container!="", container!="POD", image!="", node!=""}[3m])
+)
+* on(namespace, pod, container) group_left(owner_kind, owner_name)
+(k8s_sustain:container_oom_kills offset 3m > bool 0)
+```
+
+The memory limit each OOM kill happened at, per (namespace, pod, container), labelled with the identity's `owner_kind` and `owner_name`: one sample per kill [`container_oom_kills`](#k8s_sustaincontainer_oom_kills) records, three minutes after it, and none otherwise.
+
+A restarted container runs in a new cgroup, which cAdvisor reports as a series of its own as long as the scrape keeps a label telling the instances apart (see [Signal contracts](#signal-contracts)). The kill ends one instance, and that instance's last sample is the limit the kernel killed it at: a raise that reached the container in place before the kill is in it, and k8s-sustain's response to the kill is not. The [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher) triggers a reconcile within seconds of a kill, and the raise lands on the next instance, which the rule leaves out. Reading the container's merged series instead, the anchor would be the raised limit, held for 24h as though the kernel had killed at it, or the limit from before a raise that came shortly before the kill.
+
+The kill is read 3 minutes after it was recorded, and the instances it ended are those with no sample in those 3 minutes: the kubelet restarts a container, and kube-state-metrics reports the restart, only once the old cgroup is gone, while the next instance is scraped in the meantime. The window starts exactly at the kill because the rule shares the kill rule's group, `k8s_sustain.workload_mapping`, whose evaluations are one interval apart. The 15-minute window reaches back past a crash-loop back-off of up to 5 minutes between the kill and the restart that reveals it.
+
+**Caveats:**
+
+- Instances of a fast crash loop ending within the window give the highest of their limits, which is the last one unless the limit was lowered in between.
+- An instance killed before cAdvisor first scraped it has no sample: its kill is anchored by an earlier instance ending in the window, or not at all.
+- The next instance counts too when it ends before cAdvisor scrapes it after the kill was recorded: unless it was OOM-killed itself, a raise k8s-sustain applied to it inflates the anchor.
+- Without a label telling instances apart, the killed instance and the next one are one series that has not ended, and only a kill whose container never restarts, such as a `restartPolicy: Never` pod's, is anchored.
+
+`charts/k8s-sustain/tests/promtool/oom_limit_anchor_test.yaml` pins a raise after the kill, before or after the new instance's first sample, a second kill shortly after an in-place raise, a next instance killed within a minute, a genuine kill at the raised limit, an in-place downsize before the kill, a crash-loop back-off and a `Never` pod.
 
 ### `k8s_sustain:container_oom_limit_24h:bytes`
 
 ```promql
 max by (namespace, owner_kind, owner_name, container) (
-  max_over_time(
-    (
-      max by (namespace, pod, container) (
-        min_over_time(container_spec_memory_limit_bytes{container!="", container!="POD", image!="", node!=""}[5m])
-      )
-      * on(namespace, pod, container) group_left(owner_kind, owner_name)
-      (k8s_sustain:container_oom_kills > bool 0)
-    )[24h:1m]
-  )
+  max_over_time(k8s_sustain:container_oom_kill_limit:bytes[24h])
 )
 ```
 
-The memory limit each OOM kill of a container happened at, per (workload, container), the highest over 24h. The recommender uses it as a bump anchor — when a container OOM'd recently, its memory recommendation floor is `max(peak_working_set_24h, killed_at_limit × 1.20)` — to push the request above the limit the kernel killed at.
+The highest limit a container's OOM kills happened at in the last 24h, per (workload, container), as [`container_oom_kill_limit:bytes`](#k8s_sustaincontainer_oom_kill_limitbytes) recorded them. The recommender uses it as a bump anchor — when a container OOM'd recently, its memory recommendation floor is `max(peak_working_set_24h, killed_at_limit × 1.20)` — to push the request above the limit the kernel killed at.
 
-The limit is sampled only at the kills [`container_oom_kills`](#k8s_sustaincontainer_oom_kills) records, never while the workload sits at the raised limit afterward. This is what prevents the feedback loop the `container_peak_memory_24h:bytes` rule avoids: once the workload fits after a bump, no new kill samples the raised limit, so the anchor stays at the limit the container was killed at and drains 24h after the last kill, when the recommender falls back to the percentile. A kill carries its identity, so a deleted pod's kill stays in the anchor.
-
-`min_over_time(...[5m])` keeps k8s-sustain's own response out of the anchor. The [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher) triggers a reconcile within seconds of a kill, which raises the limit, while the kill reaches this rule up to a few minutes later: the restart, the kube-state-metrics scrape, the kill rule's evaluation and this rule's 1m subquery step each add a delay. Sampling the limit at that moment would record the raised limit as though the kernel had killed at it, and `max_over_time` would hold that inflated value for 24h — the recommendation deriving its next anchor from its own previous output. An OOM response only ever *raises* a limit, so the minimum over a window reaching back past the kill is the limit the container was actually killed at. A downsize landing in the window makes the anchor conservative rather than inflated, and the peak anchor covers that direction. `charts/k8s-sustain/tests/promtool/oom_limit_anchor_test.yaml` pins both, and that a genuine kill at the raised limit still raises the anchor.
+A limit is recorded only at a kill, never while the workload sits at the raised limit afterward. This is what prevents the feedback loop the `container_peak_memory_24h:bytes` rule avoids: once the workload fits after a bump, no new kill records the raised limit, so the anchor stays at the limit the container was killed at and drains 24h after the last kill, when the recommender falls back to the percentile. A kill carries its identity, so a deleted pod's kill stays in the anchor.
 
 ### `k8s_sustain:workload_oom_24h`
 

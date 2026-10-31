@@ -1,6 +1,7 @@
 package signalcontract
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -28,7 +29,10 @@ const (
 type relabel struct {
 	Action       string   `json:"action"`
 	SourceLabels []string `json:"source_labels"`
+	Separator    string   `json:"separator"`
 	Regex        string   `json:"regex"`
+	TargetLabel  string   `json:"target_label"`
+	Replacement  *string  `json:"replacement"`
 }
 
 type scrapeJob struct {
@@ -102,6 +106,76 @@ func (s scrape) keeps(metric string) bool {
 		}
 	}
 	return true
+}
+
+// relabel applies the job's metric_relabel_configs to series as Prometheus
+// does, and reports whether it keeps the series. An action it cannot apply is
+// an error rather than a guess.
+func (s scrape) relabel(series map[string]string) (map[string]string, bool, error) {
+	out := maps.Clone(series)
+	for _, r := range s.relabels {
+		re, err := regexp.Compile(`^(?:` + cmp.Or(r.Regex, "(.*)") + `)$`)
+		if err != nil {
+			return nil, false, err
+		}
+		values := make([]string, len(r.SourceLabels))
+		for i, l := range r.SourceLabels {
+			values[i] = out[l]
+		}
+		value := strings.Join(values, cmp.Or(r.Separator, ";"))
+		switch action := strings.ToLower(cmp.Or(r.Action, "replace")); action {
+		case "keep", "drop":
+			if re.MatchString(value) != (action == "keep") {
+				return nil, false, nil
+			}
+		case "replace":
+			match := re.FindStringSubmatchIndex(value)
+			if match == nil {
+				continue
+			}
+			replacement := "$1"
+			if r.Replacement != nil {
+				replacement = *r.Replacement
+			}
+			if v := string(re.ExpandString(nil, replacement, value, match)); v != "" {
+				out[r.TargetLabel] = v
+			} else {
+				delete(out, r.TargetLabel)
+			}
+		case "labeldrop", "labelkeep":
+			for l := range out {
+				if re.MatchString(l) == (action == "labeldrop") {
+					delete(out, l)
+				}
+			}
+		default:
+			return nil, false, fmt.Errorf("cannot apply relabel action %q", r.Action)
+		}
+	}
+	return out, true, nil
+}
+
+// instancesApart reports whether the job keeps two instances of one container
+// apart in metric. A restarted container is a new cgroup: cAdvisor names each
+// instance in id, its cgroup path, and name, its runtime container ID.
+func (s scrape) instancesApart(metric string) (bool, error) {
+	var kept []map[string]string
+	for _, container := range []string{"0a1b2c", "3d4e5f"} {
+		out, ok, err := s.relabel(map[string]string{
+			model.MetricNameLabel: metric,
+			"namespace":           "shop",
+			"pod":                 "api-0",
+			"container":           "app",
+			"image":               "app:v1",
+			"id":                  "/kubepods.slice/kubepods-pod1.slice/cri-containerd-" + container + ".scope",
+			"name":                container,
+		})
+		if err != nil || !ok {
+			return false, err
+		}
+		kept = append(kept, out)
+	}
+	return !maps.Equal(kept[0], kept[1]), nil
 }
 
 // chart is what the contracts are checked against: the recording rules by
@@ -287,14 +361,29 @@ func check(c chart, contracts []recommender.PromContract) []string {
 				}
 			}
 		}
+		for _, m := range k.CAdvisorPerInstance {
+			s := c.cAdvisor
+			if !s.found || !s.keeps(m) {
+				continue
+			}
+			switch apart, err := s.instancesApart(m); {
+			case err != nil:
+				report("signal %s reads cAdvisor metric %s per container instance, but the metric_relabel_configs of %s in %s cannot be read: %v",
+					k.Signal, m, s.job, valuesFile, err)
+			case !apart:
+				report("signal %s reads cAdvisor metric %s per container instance, but the metric_relabel_configs of %s in %s merge a restarted container's instances",
+					k.Signal, m, s.job, valuesFile)
+			}
+		}
 	}
 	return problems
 }
 
 // The chart provides every signal's contract: its rules, aggregated by its
 // labels at its interval, computed from the raw metrics it declares, all of
-// them kept by their exporter's keep-list, and every rule they compute
-// through, theirs included, covered by a promtool fixture.
+// them kept by their exporter's keep-list, those read per container instance
+// kept apart per instance, and every rule they compute through, theirs
+// included, covered by a promtool fixture.
 func TestChartProvidesEverySignalsContract(t *testing.T) {
 	contracts := recommender.PromContracts()
 	if len(contracts) == 0 {
@@ -420,6 +509,72 @@ func TestCheckReportsEachBreach(t *testing.T) {
 			problems := check(c, []recommender.PromContract{k})
 
 			if len(problems) != 1 || !strings.Contains(problems[0], tc.want) {
+				t.Errorf("problems = %q, want one containing %q", problems, tc.want)
+			}
+		})
+	}
+}
+
+// The OOM floor's killed-at limit reads the memory limit per container
+// instance: a cAdvisor scrape merging a restarted container's instances fails
+// the OOM floor's contract, and one keeping cAdvisor's own id provides it.
+func TestCheckReportsMergedInstances(t *testing.T) {
+	var oom recommender.PromContract
+	for _, k := range recommender.PromContracts() {
+		if k.Signal == "oom" {
+			oom = k
+		}
+	}
+	if len(oom.CAdvisorPerInstance) == 0 {
+		t.Fatalf("oom contract = %+v, want a cAdvisor metric read per container instance", oom)
+	}
+	withoutReplace := func(c *chart) {
+		c.cAdvisor.relabels = slices.DeleteFunc(slices.Clone(c.cAdvisor.relabels), func(r relabel) bool {
+			return r.Action == "replace"
+		})
+	}
+
+	cases := []struct {
+		name string
+		edit func(*chart)
+		want string
+	}{
+		{
+			"a scrape dropping every label of the instance",
+			withoutReplace,
+			"per container instance, but the metric_relabel_configs of prometheus.scrapeConfigs.kubernetes-nodes-cadvisor in " + valuesFile + " merge a restarted container's instances",
+		},
+		{
+			"a scrape keeping cAdvisor's id",
+			func(c *chart) {
+				withoutReplace(c)
+				for i, r := range c.cAdvisor.relabels {
+					if r.Action == "labeldrop" {
+						c.cAdvisor.relabels[i].Regex = "container_id|name|uid"
+					}
+				}
+			},
+			"",
+		},
+		{
+			"a relabel action the check cannot apply",
+			func(c *chart) {
+				c.cAdvisor.relabels = append(slices.Clone(c.cAdvisor.relabels), relabel{Action: "hashmod", SourceLabels: []string{"id"}})
+			},
+			`cannot be read: cannot apply relabel action "hashmod"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := loadChart(t)
+			tc.edit(&c)
+
+			problems := check(c, []recommender.PromContract{oom})
+
+			switch {
+			case tc.want == "" && len(problems) != 0:
+				t.Errorf("problems = %q, want none", problems)
+			case tc.want != "" && (len(problems) != 1 || !strings.Contains(problems[0], tc.want)):
 				t.Errorf("problems = %q, want one containing %q", problems, tc.want)
 			}
 		})

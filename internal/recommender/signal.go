@@ -60,8 +60,9 @@ var signals = []signal{cpuUsage, memoryUsage, oomFloor{}}
 // PromContract is what one signal needs from Prometheus. The chart must
 // provide it: hack/signalcontract fails when a rule is missing, aggregates by
 // other labels or evaluates at another interval, when it or a rule it computes
-// through has no promtool fixture, and when a raw metric it rests on is
-// dropped by the bundled scrape keep-lists.
+// through has no promtool fixture, when a raw metric it rests on is dropped
+// by the bundled scrape keep-lists, and when the bundled cAdvisor scrape
+// merges the instances of a container in a metric read per instance.
 type PromContract struct {
 	Signal string
 	// Rules are the recording rules the signal's query reads.
@@ -75,6 +76,11 @@ type PromContract struct {
 	// through every rule they read in turn.
 	CAdvisor         []string
 	KubeStateMetrics []string
+	// CAdvisorPerInstance are the CAdvisor metrics a rule reads per container
+	// instance. A restarted container runs in a new cgroup, and the scrape
+	// must keep a label telling its instances apart for the rule to tell the
+	// instance a kill ended from the one replacing it.
+	CAdvisorPerInstance []string
 }
 
 // PromContracts lists every signal's PromContract, in signals' order. The
@@ -84,12 +90,13 @@ func PromContracts() []PromContract {
 	for _, s := range signals {
 		c := s.contract()
 		out = append(out, PromContract{
-			Signal:           s.name(),
-			Rules:            slices.Clone(c.Rules),
-			Labels:           slices.Clone(c.Labels),
-			Interval:         c.Interval,
-			CAdvisor:         slices.Clone(c.CAdvisor),
-			KubeStateMetrics: slices.Clone(c.KubeStateMetrics),
+			Signal:              s.name(),
+			Rules:               slices.Clone(c.Rules),
+			Labels:              slices.Clone(c.Labels),
+			Interval:            c.Interval,
+			CAdvisor:            slices.Clone(c.CAdvisor),
+			KubeStateMetrics:    slices.Clone(c.KubeStateMetrics),
+			CAdvisorPerInstance: slices.Clone(c.CAdvisorPerInstance),
 		})
 	}
 	return out

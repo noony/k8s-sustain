@@ -378,13 +378,16 @@ the inputs port (`WithLiveOOMs`), not through `Compute`. To add one:
 4. Declare its Prometheus contract next to its query, in its `contract`
    method: the recording rules the query reads, the labels each aggregates by
    (`shardLabels`, the identity and the container), the evaluation interval
-   its shard cost assumes (zero if none), and the cAdvisor and
+   its shard cost assumes (zero if none), the cAdvisor and
    kube-state-metrics series those rules compute from, through every rule
-   they read in turn. Then run `go test ./hack/signalcontract`: it names each
-   rule missing from `prometheusRule.groups` in `charts/k8s-sustain/values.yaml`,
-   aggregating by other labels or evaluated at another interval, each rule no
-   promtool fixture evaluates, and each series the contract leaves out or the
-   bundled scrape keep-lists drop. Fix them in turn: the rule name in
+   they read in turn, and the cAdvisor series a rule reads per container
+   instance (`CAdvisorPerInstance`, as the OOM floor's memory limit). Then run
+   `go test ./hack/signalcontract`: it names each rule missing from
+   `prometheusRule.groups` in `charts/k8s-sustain/values.yaml`, aggregating by
+   other labels or evaluated at another interval, each rule no promtool
+   fixture evaluates, each series the contract leaves out or the bundled
+   scrape keep-lists drop, and each series read per instance whose instances
+   the bundled cAdvisor scrape merges. Fix them in turn: the rule name in
    `internal/prometheus/metricnames.go`, the rule in `prometheusRule.groups`, a
    fixture in `charts/k8s-sustain/tests/promtool/` (run `make helm-promtool`),
    the series in the cAdvisor or kube-state-metrics keep-list of the bundled

@@ -39,7 +39,7 @@ From **cAdvisor**:
 - `container_cpu_usage_seconds_total` — CPU usage per container
 - `container_memory_working_set_bytes` — memory usage per container
 - `container_memory_max_usage_bytes` (cgroup v1) / `container_memory_peak_working_set_bytes` (cgroup v2) — peak memory between scrapes
-- `container_spec_memory_limit_bytes` — the limit that was in effect when an OOMKill fired
+- `container_spec_memory_limit_bytes` — the memory limit of each container instance, whose last sample is the limit an OOM kill ended it at. Keep a label telling a restarted container's instances apart on it, such as cAdvisor's `id` (kube-prometheus-stack keeps it): a restarted container is a new cgroup, and without that label the [killed-at limit](../reference/recording-rules.md#k8s_sustaincontainer_oom_kill_limitbytes) is recorded only for containers that never restart
 
 The recording rules filter cAdvisor series by `node!=""`, so your scrape config must inject a `node` label onto cAdvisor metrics:
 

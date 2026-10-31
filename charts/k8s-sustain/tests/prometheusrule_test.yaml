@@ -52,7 +52,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.groups[0].rules
-          count: 7
+          count: 8
       - equal:
           path: spec.groups[0].rules[4].record
           value: k8s_sustain:pod_owner_kind_internal
@@ -84,6 +84,23 @@ tests:
       - matchRegex:
           path: spec.groups[0].rules[6].expr
           pattern: 'k8s_sustain:pod_workload\s*$'
+
+  - it: records the killed-at limit in the kill rule's group, reading the kill as far back as its window of running instances
+    set:
+      prometheusRule.enabled: true
+    asserts:
+      # The kill rule's evaluations are one interval apart, so the instances
+      # with no sample in the last 3m are exactly those with none since the
+      # kill read 3m back.
+      - equal:
+          path: spec.groups[0].rules[7].record
+          value: k8s_sustain:container_oom_kill_limit:bytes
+      - matchRegex:
+          path: spec.groups[0].rules[7].expr
+          pattern: 'unless\s+last_over_time\(container_spec_memory_limit_bytes\{[^}]*\}\[3m\]\)'
+      - matchRegex:
+          path: spec.groups[0].rules[7].expr
+          pattern: 'k8s_sustain:container_oom_kills offset 3m'
 
   - it: adds additionalLabels
     set:
