@@ -136,11 +136,11 @@ function themeColors() {
 }
 
 const OOM_MARKER_LIMIT = 50
-const oomEventPlugin: Plugin = {
-  id: 'oomEvents',
+const oomKillPlugin: Plugin = {
+  id: 'oomKills',
   afterDraw(chart) {
-    const events = (chart.options.plugins as any)?.oomEvents
-    if (!events || events.length === 0) return
+    const kills = (chart.options.plugins as any)?.oomKills
+    if (!kills || kills.length === 0) return
     const ctx = chart.ctx
     const xScale = chart.scales.x
     const yScale = chart.scales.y
@@ -150,10 +150,10 @@ const oomEventPlugin: Plugin = {
     // Defensive cap: if dedup at the API layer fails for some reason, stop
     // drawing markers past the limit to keep the chart legible. The badge in
     // the UI shows the true count.
-    const limited = events.length > OOM_MARKER_LIMIT ? events.slice(0, OOM_MARKER_LIMIT) : events
+    const limited = kills.length > OOM_MARKER_LIMIT ? kills.slice(0, OOM_MARKER_LIMIT) : kills
 
-    limited.forEach((ev: { x: Date }) => {
-      const x = xScale.getPixelForValue(ev.x as any)
+    limited.forEach((kill: { x: Date }) => {
+      const x = xScale.getPixelForValue(kill.x as any)
       if (!Number.isFinite(x) || x < xScale.left || x > xScale.right) return
 
       ctx.save()
@@ -183,7 +183,7 @@ const oomEventPlugin: Plugin = {
     })
   },
 }
-Chart.register(oomEventPlugin)
+Chart.register(oomKillPlugin)
 
 export interface ExtraSeries {
   data: TimeValue[]
@@ -215,7 +215,7 @@ export interface ChartOpts {
   // comparison charts (e.g. the overview Savings trend) where a shaded
   // background under the baseline series adds noise rather than meaning.
   fill?: boolean
-  oomEvents?: { timestamp: string }[]
+  oomKills?: { timestamp: string }[]
   onZoomComplete?: (chart: Chart) => void
   // When set, breaks the line at gaps wider than ~1.5× this step. Used to
   // avoid drawing a continuous line across periods where the workload had no
@@ -371,7 +371,7 @@ export function createTimeSeriesChart(
     })
   })
 
-  const oomMarkers = (opts.oomEvents || []).map((ev) => ({ x: new Date(ev.timestamp) }))
+  const oomMarkers = (opts.oomKills || []).map((kill) => ({ x: new Date(kill.timestamp) }))
 
   const colors = themeColors()
   const config: ChartConfiguration = {
@@ -452,7 +452,7 @@ export function createTimeSeriesChart(
             },
           },
         } as any,
-        oomEvents: oomMarkers,
+        oomKills: oomMarkers,
       } as any,
       scales: {
         x: {
@@ -568,14 +568,14 @@ export function resetZoom(canvasId: string) {
   }
 }
 
-export function groupOOMEventsByContainer(
-  events?: { container: string; timestamp: string }[],
+export function groupOOMKillsByContainer(
+  kills?: { container: string; timestamp: string }[],
 ): Record<string, { timestamp: string }[]> {
   const byContainer: Record<string, { timestamp: string }[]> = {}
-  if (!events || !events.length) return byContainer
-  events.forEach((ev) => {
-    if (!byContainer[ev.container]) byContainer[ev.container] = []
-    byContainer[ev.container].push(ev)
+  if (!kills || !kills.length) return byContainer
+  kills.forEach((kill) => {
+    if (!byContainer[kill.container]) byContainer[kill.container] = []
+    byContainer[kill.container].push(kill)
   })
   return byContainer
 }

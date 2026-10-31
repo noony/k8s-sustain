@@ -39,7 +39,7 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	var (
 		cpuSeries, memSeries promclient.ContainerTimeSeries
 		running              runningSeries
-		oomEvents            []promclient.OOMKill
+		oomKills             []promclient.OOMKill
 		cpuErr, memErr       error
 		id                   *inventory.Identity
 		signal               *usageSignal
@@ -54,7 +54,7 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		memSeries, memErr = s.PromClient.QueryRangeByLabel(ctx,
 			perContainer("avg", promclient.MetricContainerMemoryByWorkloadBytes, key), "container", tr, step)
 	})
-	wg.Go(func() { oomEvents = s.oomKills(ctx, key, tr, step) })
+	wg.Go(func() { oomKills = s.oomKills(ctx, key, tr, step) })
 	wg.Go(func() { running = s.running(ctx, key, tr, step) })
 	wg.Go(func() {
 		// A failed read is tolerated: resources and init containers come back
@@ -88,7 +88,7 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		"memoryRequests": running.memoryRequests,
 		"cpuLimits":      running.cpuLimits,
 		"memoryLimits":   running.memoryLimits,
-		"oomEvents":      oomEvents,
+		"oomKills":       oomKills,
 		"initContainers": initContainerNamesOf(id),
 		"signal":         signal,
 	}
@@ -225,7 +225,7 @@ func (s *Server) oomKills(ctx context.Context, key promclient.WorkloadIdentity, 
 	}
 	var out []promclient.OOMKill
 	for _, container := range slices.Sorted(maps.Keys(perStep)) {
-		out = append(out, promclient.OOMEventsOf(container, perStep[container])...)
+		out = append(out, promclient.OOMKillsOf(container, perStep[container])...)
 	}
 	return out
 }

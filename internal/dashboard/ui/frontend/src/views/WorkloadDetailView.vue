@@ -15,7 +15,7 @@ import {
   createTimeSeriesChart,
   destroyAllCharts,
   zoomedRangeSeconds,
-  groupOOMEventsByContainer,
+  groupOOMKillsByContainer,
   type ExtraSeries,
   type ChartAnnotation,
 } from '../lib/chart'
@@ -149,7 +149,7 @@ function allRecContainers(): { name: string; rec: RecommendationContainer; isIni
 }
 
 function oomByContainer() {
-  return groupOOMEventsByContainer(metrics.value?.oomEvents)
+  return groupOOMKillsByContainer(metrics.value?.oomKills)
 }
 
 type SignalResource = 'cpu' | 'memory'
@@ -340,7 +340,7 @@ function renderCharts() {
         yFormat: (v) => v.toFixed(0),
         annotations: memAnnotations,
         extraSeries: memExtra,
-        oomEvents: ooms[cname] || [],
+        oomKills: ooms[cname] || [],
         onZoomComplete: onChartZoom,
         stepMs,
         window: chartWindow,

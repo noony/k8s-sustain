@@ -189,7 +189,7 @@ func (p *PromInputs) fetchKills(ctx context.Context, span Span, reqs []InputsReq
 			}
 			return func() {
 				for _, sr := range series {
-					kills[sr.Identity] = append(kills[sr.Identity], promclient.OOMEventsOf(sr.Container, sr.Points)...)
+					kills[sr.Identity] = append(kills[sr.Identity], promclient.OOMKillsOf(sr.Container, sr.Points)...)
 				}
 			}, nil
 		})

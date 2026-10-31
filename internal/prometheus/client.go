@@ -263,9 +263,9 @@ func OOMKillsPerStep(selector string, step time.Duration) string {
 		MetricContainerOOMKills, selector, model.Duration(step))
 }
 
-// OOMEventsOf turns one container's OOMKillsPerStep series into one event per
-// kill, dated at the end of the step it fell in.
-func OOMEventsOf(container string, perStep []TimeValue) []OOMKill {
+// OOMKillsOf turns one container's OOMKillsPerStep series into its kills,
+// each dated at the end of the step it fell in.
+func OOMKillsOf(container string, perStep []TimeValue) []OOMKill {
 	var out []OOMKill
 	for _, p := range perStep {
 		for range int(math.Round(p.Value)) {

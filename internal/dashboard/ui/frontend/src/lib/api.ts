@@ -220,7 +220,7 @@ export interface TimeValue {
 }
 
 /** One OOM kill, dated at the end of the chart step it fell in. */
-export interface OOMEvent {
+export interface OOMKill {
   timestamp: string
   container: string
 }
@@ -241,7 +241,7 @@ export interface MetricsData {
   memoryRequests?: Record<string, TimeValue[]>
   cpuLimits?: Record<string, TimeValue[]>
   memoryLimits?: Record<string, TimeValue[]>
-  oomEvents?: OOMEvent[]
+  oomKills?: OOMKill[]
   initContainers?: string[]
   /** What the usage signals read; null when no Policy governs the identity or it could not be read. */
   signal?: UsageSignal | null
@@ -378,7 +378,7 @@ export interface SimulationHistory {
   /** The step between its instants: the server derives it from the range, the requested step is only the finest. */
   stepSeconds: number
   containers: Record<string, { cpu: ResourceHistory; memory: ResourceHistory }>
-  oomKills?: OOMEvent[]
+  oomKills?: OOMKill[]
 }
 
 /** One resource of one container at each instant, in cores or bytes; a series has no point where it has no value. */

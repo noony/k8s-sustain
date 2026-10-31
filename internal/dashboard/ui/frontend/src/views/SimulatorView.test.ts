@@ -67,7 +67,7 @@ function drawn() {
           usage,
           lines: Object.fromEntries((opts.extraSeries ?? []).map((s) => [s.label, s.data])),
           annotations: (opts.annotations ?? []).map((a) => a.label),
-          oomEvents: opts.oomEvents,
+          oomKills: opts.oomKills,
           stepMs: opts.stepMs,
         },
       ],
@@ -118,7 +118,7 @@ describe('SimulatorView', () => {
         'Recommended request': [at(t0, 0.088), at(t1, 0.099)],
       },
       annotations: [],
-      oomEvents: undefined,
+      oomKills: undefined,
       stepMs: 3600_000,
     })
     expect(charts['simmem-app']).toEqual({
@@ -129,7 +129,7 @@ describe('SimulatorView', () => {
         'Recommended limit': [at(t1, 400)],
       },
       annotations: ['Limit: 256Mi'],
-      oomEvents: [{ timestamp: t1, container: 'app' }],
+      oomKills: [{ timestamp: t1, container: 'app' }],
       stepMs: 3600_000,
     })
   })

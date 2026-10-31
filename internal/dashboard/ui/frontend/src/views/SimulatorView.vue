@@ -20,7 +20,7 @@ import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
   destroyAllCharts,
-  groupOOMEventsByContainer,
+  groupOOMKillsByContainer,
   zoomedRangeSeconds,
   type ExtraSeries,
   type ChartAnnotation,
@@ -373,7 +373,7 @@ function renderCharts(data: SimulationResult) {
   if (!history) return
 
   const simResources = data.resources || {}
-  const kills = groupOOMEventsByContainer(history.oomKills)
+  const kills = groupOOMKillsByContainer(history.oomKills)
   const stepMs = history.stepSeconds * 1000
   const chartWindow = resolveRange(range.value, Date.now())
 
@@ -433,7 +433,7 @@ function renderCharts(data: SimulationResult) {
         yFormat: r.yFormat,
         annotations,
         extraSeries: extra,
-        oomEvents: r.key === 'memory' ? kills[cname] || [] : undefined,
+        oomKills: r.key === 'memory' ? kills[cname] || [] : undefined,
         onZoomComplete: onChartZoom,
         stepMs,
         window: chartWindow,
