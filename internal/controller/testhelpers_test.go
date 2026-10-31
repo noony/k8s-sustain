@@ -9,6 +9,7 @@ import (
 	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
@@ -28,6 +29,7 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/inventory"
+	"github.com/noony/k8s-sustain/internal/ledger"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
@@ -112,7 +114,7 @@ func reconcilerOn(c client.Client, scheme *runtime.Scheme, inputs recommender.In
 		InPlaceUpdates:           inPlace,
 		recorder:                 events.NewFakeRecorder(100),
 		patcher:                  workload.New(c, inPlace),
-		ledger:                   newLedger(clocktesting.NewFakePassiveClock(time.Now())),
+		ledger:                   ledger.New(clocktesting.NewFakePassiveClock(time.Now())),
 	}
 }
 
@@ -158,29 +160,6 @@ func appUsage() []recommender.InputsOption {
 // recommendation for it deterministically.
 func usageFor(ns, kind, name string) *recommendertest.StaticInputs {
 	return recommendertest.NewStaticInputs().Set(identityOf(ns, kind, name), appUsage()...)
-}
-
-// deploymentTarget is the apply target of Deployment ns/name, whose pods are
-// labelled app=name and carry controllerRef("Deployment", name).
-func deploymentTarget(ns, name string) *workloadTarget {
-	return &workloadTarget{
-		Kind:      "Deployment",
-		Name:      name,
-		Namespace: ns,
-		Containers: []corev1.Container{{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("500m"),
-					corev1.ResourceMemory: resource.MustParse("256Mi"),
-				},
-			},
-		}},
-		Object: &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: types.UID(name + "-uid")},
-			Spec:       appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}}},
-		},
-	}
 }
 
 // reconcilerWithLaggingWLRList builds a reconciler whose FIRST
@@ -233,21 +212,70 @@ func reconcilerCountingWLRStatusWrites(
 	return r
 }
 
-// targetFromObject builds the apply target of the single-member identity obj
-// forms, as the inventory and targetsOf would.
-func targetFromObject(obj client.Object, kind string) workloadTarget {
-	m := inventory.Member{Object: obj}
-	name := obj.GetName()
-	if tmpl, ok := workload.PodTemplateOf(obj); ok {
-		m.Containers, m.InitContainers = tmpl.Spec.Containers, tmpl.Spec.InitContainers
-		_, name = workload.ApplyOwnerNameOverride(kind, name, tmpl.Annotations)
-	}
-	return *targetFromMember(identityOf(obj.GetNamespace(), kind, name), m)
+func groupedDeployment(ns, name, ownerName, policy string) *appsv1.Deployment {
+	d := annotatedDeployment(ns, name, policy)
+	d.CreationTimestamp = metav1.NewTime(time.Now().Add(-24 * time.Hour))
+	d.Spec.Template.Annotations[sustainv1alpha1.OwnerNameAnnotation] = ownerName
+	return d
 }
 
-// failedStep is the result of a member whose step failed with err.
-func failedStep(t *workloadTarget, phase workload.Step, err error) applyResult {
-	return applyResult{member: t, kind: applyFailed, phase: phase, err: err}
+func identityPod(ns, name string, labels, annotations map[string]string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns, Name: name, UID: types.UID(name + "-uid"), Labels: labels, Annotations: annotations,
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-24 * time.Hour)),
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name:      "app",
+			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")}},
+		}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// deploymentPod is an identityPod of the Deployment the helpers name dep.
+func deploymentPod(ns, name, dep string) *corev1.Pod {
+	pod := identityPod(ns, name, map[string]string{"app": dep}, nil)
+	pod.OwnerReferences = controllerRef("Deployment", dep)
+	return pod
+}
+
+func gaugeOf(t *testing.T, metric, ns, kind, name string) float64 {
+	t.Helper()
+	series := seriesForWorkload(t, metric, ns, kind, name)
+	if len(series) != 1 {
+		t.Fatalf("%s{%s/%s/%s}: want exactly one series, got %d", metric, ns, kind, name, len(series))
+	}
+	return series[0].GetGauge().GetValue()
+}
+
+func labelOf(m *dto.Metric, name string) string {
+	for _, l := range m.Label {
+		if l.GetName() == name {
+			return l.GetValue()
+		}
+	}
+	return ""
+}
+
+func policyGauge(t *testing.T, metric, policy string) float64 {
+	t.Helper()
+	return gaugeValue(t, metric, map[string]string{"policy": policy})
+}
+
+// blockedOn is the step the identity ns/kind/name is Blocked on, as its
+// retry_state series reports it, empty when it is not Blocked.
+func blockedOn(t *testing.T, ns, kind, name string) string {
+	t.Helper()
+	state := seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, kind, name)
+	switch len(state) {
+	case 0:
+		return ""
+	case 1:
+		return labelOf(state[0], "reason")
+	}
+	t.Fatalf("retry_state{%s/%s/%s}: want at most one series, got %d", ns, kind, name, len(state))
+	return ""
 }
 
 // barePod builds a running bare pod opted into policy "p" under the

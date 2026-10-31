@@ -27,19 +27,11 @@ const (
 	MaxRetryDelay  = 5 * time.Minute
 )
 
-// The step a member failed on: the reason its Blocked identity reports.
-const (
-	PhasePrometheus = "prometheus"
-	PhasePatch      = "patch"
-	PhaseResize     = "resize"
-	PhaseStore      = "store"
-)
-
-var stepFailures = map[string]string{
-	PhasePrometheus: "Prometheus query failed",
-	PhasePatch:      "Pod recycle failed",
-	PhaseResize:     "In-place pod resize failed",
-	PhaseStore:      "Recommendation could not be stored for the webhook",
+var stepFailures = map[workload.Step]string{
+	workload.StepPrometheus: "Prometheus query failed",
+	workload.StepPatch:      "Pod recycle failed",
+	workload.StepResize:     "In-place pod resize failed",
+	workload.StepStore:      "Recommendation could not be stored for the webhook",
 }
 
 // MemberKey names a member across passes and Policies.
@@ -80,9 +72,9 @@ type Result struct {
 	Kind   Kind
 	// Pods is the member's pod counts, set for Done.
 	Pods workload.PodCounts
-	// Phase and Err are the step that failed and why, set for Failed.
-	Phase string
-	Err   error
+	// Step and Err are the step that failed and why, set for Failed.
+	Step workload.Step
+	Err  error
 }
 
 // Event is the Warning a member's result calls for.
@@ -99,7 +91,7 @@ type Health struct {
 	Measured bool
 	// BlockedOn is the step its first Blocked member, in key order, keeps
 	// failing on, empty unless one is Blocked.
-	BlockedOn string
+	BlockedOn workload.Step
 	// Attempts is how many of its members failed in the pass settled.
 	Attempts int
 }
@@ -155,7 +147,7 @@ type memberEntry struct {
 
 // failure is a member's run of consecutive failed passes.
 type failure struct {
-	phase     string
+	step      workload.Step
 	permanent bool
 	// attempts counts the consecutive transient failures the backoff grows
 	// with, zero for a permanent one: a permanent failure in between restarts
@@ -305,9 +297,9 @@ func (l *Ledger) entryLocked(key MemberKey) *memberEntry {
 func (l *Ledger) failLocked(res Result) *Event {
 	e := l.entryLocked(res.Member)
 	prev := e.failure
-	f := &failure{phase: res.Phase, permanent: permanentError(res.Err)}
+	f := &failure{step: res.Step, permanent: permanentError(res.Err)}
 	e.failure = f
-	what := stepFailures[res.Phase]
+	what := stepFailures[res.Step]
 	if f.permanent {
 		if prev != nil && prev.permanent {
 			return nil

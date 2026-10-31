@@ -36,8 +36,8 @@ func deployment(name string) ledger.MemberKey {
 	return ledger.MemberKey{Kind: "Deployment", Namespace: "default", Name: name}
 }
 
-func failedOn(m ledger.MemberKey, phase string, err error) ledger.Result {
-	return ledger.Result{Member: m, Kind: ledger.Failed, Phase: phase, Err: err}
+func failedOn(m ledger.MemberKey, step workload.Step, err error) ledger.Result {
+	return ledger.Result{Member: m, Kind: ledger.Failed, Step: step, Err: err}
 }
 
 func resultOf(m ledger.MemberKey, kind ledger.Kind) ledger.Result {
@@ -55,7 +55,7 @@ func settle(l *ledger.Ledger, id promclient.WorkloadIdentity, results ...ledger.
 
 func TestSettle_Result(t *testing.T) {
 	member := deployment("web")
-	failed := func(phase string, err error) ledger.Result { return failedOn(member, phase, err) }
+	failed := func(step workload.Step, err error) ledger.Result { return failedOn(member, step, err) }
 	succeeded := func(kind ledger.Kind) ledger.Result { return resultOf(member, kind) }
 	cases := []struct {
 		name        string
@@ -63,69 +63,69 @@ func TestSettle_Result(t *testing.T) {
 		res         ledger.Result
 		wantFailed  bool
 		wantEvent   string
-		wantBlocked string
+		wantBlocked workload.Step
 		wantMayRun  bool
 	}{
 		{
-			name: "transient failure backs off", res: failed(ledger.PhasePatch, unavailable),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: ledger.PhasePatch,
+			name: "transient failure backs off", res: failed(workload.StepPatch, unavailable),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepPatch,
 		},
 		{
-			name: "query timeout is a transient failure", res: failed(ledger.PhasePrometheus, fmt.Errorf("querying cpu: %w", context.DeadlineExceeded)),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: ledger.PhasePrometheus,
+			name: "query timeout is a transient failure", res: failed(workload.StepPrometheus, fmt.Errorf("querying cpu: %w", context.DeadlineExceeded)),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepPrometheus,
 		},
 		{
-			name: "every transient attempt is warned about", before: []ledger.Result{failed(ledger.PhasePatch, unavailable)}, res: failed(ledger.PhasePatch, unavailable),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: ledger.PhasePatch,
+			name: "every transient attempt is warned about", before: []ledger.Result{failed(workload.StepPatch, unavailable)}, res: failed(workload.StepPatch, unavailable),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepPatch,
 		},
 		{
-			name: "permanent failure blocks without backoff", res: failed(ledger.PhasePatch, forbidden),
-			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: ledger.PhasePatch, wantMayRun: true,
+			name: "permanent failure blocks without backoff", res: failed(workload.StepPatch, forbidden),
+			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: workload.StepPatch, wantMayRun: true,
 		},
 		{
-			name: "permanent failure is warned about once", before: []ledger.Result{failed(ledger.PhasePatch, forbidden)}, res: failed(ledger.PhasePatch, forbidden),
-			wantFailed: true, wantBlocked: ledger.PhasePatch, wantMayRun: true,
+			name: "permanent failure is warned about once", before: []ledger.Result{failed(workload.StepPatch, forbidden)}, res: failed(workload.StepPatch, forbidden),
+			wantFailed: true, wantBlocked: workload.StepPatch, wantMayRun: true,
 		},
 		{
-			name: "transient failure turning permanent is warned about", before: []ledger.Result{failed(ledger.PhasePatch, unavailable)}, res: failed(ledger.PhasePatch, forbidden),
-			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: ledger.PhasePatch, wantMayRun: true,
+			name: "transient failure turning permanent is warned about", before: []ledger.Result{failed(workload.StepPatch, unavailable)}, res: failed(workload.StepPatch, forbidden),
+			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: workload.StepPatch, wantMayRun: true,
 		},
 		{
-			name: "a conflict is retried with backoff", res: failed(ledger.PhaseResize, apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, "web-1", errors.New("modified"))),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: ledger.PhaseResize,
+			name: "a conflict is retried with backoff", res: failed(workload.StepResize, apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, "web-1", errors.New("modified"))),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepResize,
 		},
 		{
-			name: "a refused member blocks without backoff", res: failed(ledger.PhasePatch, fmt.Errorf("%w: Deployment default/web has no selector", workload.ErrRefused)),
-			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: ledger.PhasePatch, wantMayRun: true,
+			name: "a refused member blocks without backoff", res: failed(workload.StepPatch, fmt.Errorf("%w: Deployment default/web has no selector", workload.ErrRefused)),
+			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: workload.StepPatch, wantMayRun: true,
 		},
 		{
-			name: "member withheld for a failed write counts", res: failed(ledger.PhaseStore, unavailable),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: ledger.PhaseStore,
+			name: "member withheld for a failed write counts", res: failed(workload.StepStore, unavailable),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepStore,
 		},
 		{
-			name: "member withheld for a record whose object was deleted since its claim backs off", res: failed(ledger.PhaseStore,
+			name: "member withheld for a record whose object was deleted since its claim backs off", res: failed(workload.StepStore,
 				apierrors.NewNotFound(schema.GroupResource{Resource: "workloadrecommendations"}, "deployment-web")),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: ledger.PhaseStore,
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepStore,
 		},
 		{
-			name: "member withheld for a forbidden Ensure counts", res: failed(ledger.PhaseStore, forbidden),
-			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: ledger.PhaseStore, wantMayRun: true,
+			name: "member withheld for a forbidden Ensure counts", res: failed(workload.StepStore, forbidden),
+			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: workload.StepStore, wantMayRun: true,
 		},
 		{
-			name: "applying clears a failure", before: []ledger.Result{failed(ledger.PhasePatch, forbidden)}, res: succeeded(ledger.Done),
+			name: "applying clears a failure", before: []ledger.Result{failed(workload.StepPatch, forbidden)}, res: succeeded(ledger.Done),
 			wantMayRun: true,
 		},
 		{
-			name: "nothing to apply clears a failure", before: []ledger.Result{failed(ledger.PhasePatch, unavailable)}, res: succeeded(ledger.Idle),
+			name: "nothing to apply clears a failure", before: []ledger.Result{failed(workload.StepPatch, unavailable)}, res: succeeded(ledger.Idle),
 			wantMayRun: true,
 		},
 		{
-			name: "a failed OnCreate count clears a failure", before: []ledger.Result{failed(ledger.PhasePatch, unavailable)}, res: succeeded(ledger.Uncounted),
+			name: "a failed OnCreate count clears a failure", before: []ledger.Result{failed(workload.StepPatch, unavailable)}, res: succeeded(ledger.Uncounted),
 			wantMayRun: true,
 		},
 		{
-			name: "a skipped member stays Blocked", before: []ledger.Result{failed(ledger.PhasePatch, unavailable)}, res: succeeded(ledger.Skipped),
-			wantBlocked: ledger.PhasePatch,
+			name: "a skipped member stays Blocked", before: []ledger.Result{failed(workload.StepPatch, unavailable)}, res: succeeded(ledger.Skipped),
+			wantBlocked: workload.StepPatch,
 		},
 	}
 	for _, tc := range cases {
@@ -189,7 +189,7 @@ func TestSettle_ClassifiesTheError(t *testing.T) {
 			l, _ := onFakeClock()
 			member := deployment("web")
 
-			v := settle(l, web, failedOn(member, ledger.PhasePatch, tc.err))
+			v := settle(l, web, failedOn(member, workload.StepPatch, tc.err))
 
 			wantReason := "ReconciliationRetryScheduled"
 			if tc.wantPermanent {
@@ -216,7 +216,7 @@ func TestSettle_TransientBackoffGrowsToItsCap(t *testing.T) {
 		want = append(want, ledger.MaxRetryDelay)
 	}
 	for i, delay := range want {
-		v := settle(l, web, failedOn(member, ledger.PhasePatch, unavailable))
+		v := settle(l, web, failedOn(member, workload.StepPatch, unavailable))
 		if got := l.RequeueAfter("p", time.Hour); got != delay {
 			t.Fatalf("attempt %d: requeue after %v, want %v", i+1, got, delay)
 		}
@@ -239,12 +239,12 @@ func TestSettle_TransientBackoffGrowsToItsCap(t *testing.T) {
 func TestSettle_PermanentFailuresDoNotGrowTheBackoff(t *testing.T) {
 	l, clk := onFakeClock()
 	member := deployment("web")
-	settle(l, web, failedOn(member, ledger.PhasePatch, unavailable))
+	settle(l, web, failedOn(member, workload.StepPatch, unavailable))
 	for range 3 {
-		settle(l, web, failedOn(member, ledger.PhasePatch, forbidden))
+		settle(l, web, failedOn(member, workload.StepPatch, forbidden))
 	}
 
-	v := settle(l, web, failedOn(member, ledger.PhasePatch, unavailable))
+	v := settle(l, web, failedOn(member, workload.StepPatch, unavailable))
 
 	if got := l.RequeueAfter("p", time.Hour); got != ledger.BaseRetryDelay {
 		t.Errorf("requeue after %v, want %v", got, ledger.BaseRetryDelay)
@@ -259,7 +259,7 @@ func TestSettle_PermanentFailureEvent(t *testing.T) {
 	l, _ := onFakeClock()
 	member := deployment("web")
 
-	v := settle(l, web, failedOn(member, ledger.PhaseStore, forbidden))
+	v := settle(l, web, failedOn(member, workload.StepStore, forbidden))
 
 	want := "Recommendation could not be stored for the webhook: " + forbidden.Error() + ". Permanent error, retried every reconcile without backoff"
 	if got := v.Events[member].Message; got != want {
@@ -273,11 +273,11 @@ func TestRequeueAfter_TheEarliestRetry(t *testing.T) {
 	l, clk := onFakeClock()
 	first, second := deployment("first"), deployment("second")
 	denied, healthy := deployment("denied"), deployment("healthy")
-	settle(l, web, failedOn(second, ledger.PhasePatch, unavailable))
+	settle(l, web, failedOn(second, workload.StepPatch, unavailable))
 	clk.SetTime(clk.Now().Add(10 * time.Second))
 	settle(l, web,
-		failedOn(first, ledger.PhasePatch, unavailable), resultOf(second, ledger.Skipped),
-		failedOn(denied, ledger.PhasePatch, forbidden), measured(healthy, 1, 0))
+		failedOn(first, workload.StepPatch, unavailable), resultOf(second, ledger.Skipped),
+		failedOn(denied, workload.StepPatch, forbidden), measured(healthy, 1, 0))
 
 	if got := l.RequeueAfter("p", time.Hour); got != 20*time.Second {
 		t.Errorf("requeue after %v, want 20s: second's, which failed first", got)
@@ -314,8 +314,8 @@ func TestRequeueAfterListFailure(t *testing.T) {
 	if got := l.RequeueAfterListFailure("p", time.Hour); got != time.Hour {
 		t.Errorf("requeue after %v with nothing claimed, want the interval", got)
 	}
-	settle(l, web, failedOn(member, ledger.PhasePatch, unavailable))
-	settle(l, web, failedOn(member, ledger.PhasePatch, unavailable))
+	settle(l, web, failedOn(member, workload.StepPatch, unavailable))
+	settle(l, web, failedOn(member, workload.StepPatch, unavailable))
 
 	if got := l.RequeueAfterListFailure("p", time.Hour); got != 2*ledger.BaseRetryDelay {
 		t.Errorf("requeue after %v, want the scheduled retry %v", got, 2*ledger.BaseRetryDelay)
@@ -342,7 +342,7 @@ func TestSettle_PodCounts(t *testing.T) {
 		{"nothing to apply drops them", resultOf(member, ledger.Idle), false, workload.PodCounts{}},
 		{"a failed OnCreate count keeps them", resultOf(member, ledger.Uncounted), true, before},
 		{"a skipped member keeps them", resultOf(member, ledger.Skipped), true, before},
-		{"a failed member keeps them", failedOn(member, ledger.PhasePatch, unavailable), true, before},
+		{"a failed member keeps them", failedOn(member, workload.StepPatch, unavailable), true, before},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l, _ := onFakeClock()
@@ -376,9 +376,9 @@ func TestSettle_IdentityHealthAggregatesItsMembers(t *testing.T) {
 		t.Errorf("health = %+v, want 3 pods (2 blue + 1 green), all stale", got)
 	}
 
-	v = pass(failedOn(blue, ledger.PhasePatch, unavailable), failedOn(green, ledger.PhasePrometheus, unavailable))
+	v = pass(failedOn(blue, workload.StepPatch, unavailable), failedOn(green, workload.StepPrometheus, unavailable))
 	got := v.Identities[api]
-	if got.BlockedOn != ledger.PhasePatch {
+	if got.BlockedOn != workload.StepPatch {
 		t.Errorf("blocked on %q, want the first blocked member's step (api-blue: patch)", got.BlockedOn)
 	}
 	if got.Pods.Total != 3 || got.Pods.Stale != 3 || got.Attempts != 2 {
@@ -392,7 +392,7 @@ func TestSettle_IdentityHealthAggregatesItsMembers(t *testing.T) {
 	}
 
 	v = pass(resultOf(blue, ledger.Skipped), resultOf(green, ledger.Skipped))
-	if got := v.Identities[api]; got.BlockedOn != ledger.PhasePatch || got.Pods.Total != 3 || got.Attempts != 0 || len(v.Events) != 0 {
+	if got := v.Identities[api]; got.BlockedOn != workload.StepPatch || got.Pods.Total != 3 || got.Attempts != 0 || len(v.Events) != 0 {
 		t.Errorf("health = %+v, events %v: skipped members keep their state, and fail nothing this pass", got, v.Events)
 	}
 }
@@ -402,7 +402,7 @@ func TestSettle_IdentityHealthAggregatesItsMembers(t *testing.T) {
 func TestSettle_ForgetsTheMembersNoPolicyClaims(t *testing.T) {
 	l, _ := onFakeClock()
 	kept, gone := deployment("kept"), deployment("gone")
-	settle(l, web, measured(kept, 1, 0), failedOn(gone, ledger.PhasePatch, unavailable))
+	settle(l, web, measured(kept, 1, 0), failedOn(gone, workload.StepPatch, unavailable))
 
 	settle(l, web, measured(kept, 1, 0))
 
@@ -437,11 +437,11 @@ func TestSettle_UnionsTheMembersEveryPolicyClaims(t *testing.T) {
 				web: {measured(stuck, 2, 0)},
 			})
 			l.Settle("old", map[promclient.WorkloadIdentity][]ledger.Result{
-				web: {failedOn(stuck, ledger.PhasePatch, forbidden)},
+				web: {failedOn(stuck, workload.StepPatch, forbidden)},
 			})
 
 			v := l.Settle("new", map[promclient.WorkloadIdentity][]ledger.Result{web: {measured(moved, 1, 1)}})
-			want := ledger.Health{Pods: workload.PodCounts{Total: 3, Stale: 1}, Measured: true, BlockedOn: ledger.PhasePatch}
+			want := ledger.Health{Pods: workload.PodCounts{Total: 3, Stale: 1}, Measured: true, BlockedOn: workload.StepPatch}
 			if got := v.Identities[web]; got != want {
 				t.Errorf("health while both claim it = %+v, want %+v", got, want)
 			}

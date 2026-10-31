@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/ledger"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -68,7 +69,7 @@ func TestReconcile_RecommendOnlyStoresButTouchesNoPod(t *testing.T) {
 			r.RecommendOnly = tc.flag
 			r.series.publish("p", publication{identities: []identitySeries{{
 				key:    identityOf(ns, "Deployment", "web"),
-				health: healthState{pods: workload.PodCounts{Total: 3, Stale: 3}, measured: true},
+				health: ledger.Health{Pods: workload.PodCounts{Total: 3, Stale: 3}, Measured: true},
 			}}})
 
 			reconcileOnce(t, r, "p")
@@ -137,14 +138,14 @@ func TestReconcile_NothingToApplyClearsAPastFailure(t *testing.T) {
 	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs().Fail(web, errors.New("prometheus down")), true,
 		ongoingDeployments("p"), establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web"))
 	clk := clocktesting.NewFakePassiveClock(time.Now())
-	r.ledger = newLedger(clk)
+	r.ledger = ledger.New(clk)
 	reconcileOnce(t, r, "p")
 	if ready := readyCondition(t, r, "p"); ready.Status != metav1.ConditionFalse {
 		t.Fatalf("Ready = %s after the failed fetch, want False", ready.Status)
 	}
 
 	r.Inputs = recommendertest.NewStaticInputs()
-	clk.SetTime(clk.Now().Add(baseRetryDelay))
+	clk.SetTime(clk.Now().Add(ledger.BaseRetryDelay))
 	reconcileOnce(t, r, "p")
 
 	if ready := readyCondition(t, r, "p"); ready.Message != "All 1 workloads have been processed." {

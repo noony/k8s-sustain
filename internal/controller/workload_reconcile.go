@@ -9,13 +9,34 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/ledger"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
+
+// applyResult is what one pass did with one live member, the apply step's
+// only output: the result the ledger settles, and the decreases the downsize
+// threshold held back on its pods.
+type applyResult struct {
+	member *workloadTarget
+	kind   ledger.Kind
+	// pods is the member's pod counts, set for ledger.Done.
+	pods workload.PodCounts
+	// step and err are the step that failed and why, set for ledger.Failed.
+	step workload.Step
+	err  error
+	// suppressed counts, per resource, the member's pods on which the
+	// downsize threshold held back a decrease.
+	suppressed map[string]int
+}
+
+func (res applyResult) ledgerResult() ledger.Result {
+	return ledger.Result{Member: res.member.key(), Kind: res.kind, Pods: res.pods, Step: res.step, Err: res.err}
+}
 
 // apply applies every identity's verdict to its live members not in backoff,
 // one task per member so a large owner-name group spreads across the slots,
 // and returns, per identity, exactly one result per live member, backed-off
-// ones included. It keeps no retry or health state: the ledger records the
+// ones included. It keeps no retry or health state: the ledger settles the
 // results from the pass's report.
 //
 // An identity whose decision could not be stored is not applied: the
@@ -36,8 +57,8 @@ func (r *PolicyReconciler) apply(
 	for i, w := range work {
 		out[i] = make([]applyResult, len(w.backedOff)+len(w.run))
 		for j, t := range w.backedOff {
-			logger.V(1).Info("skipping workload in retry backoff", "target", t.key())
-			out[i][j] = applyResult{member: t, kind: applySkipped}
+			logger.V(1).Info("skipping workload in retry backoff", "target", t.key().String())
+			out[i][j] = applyResult{member: t, kind: ledger.Skipped}
 		}
 		run := out[i][len(w.backedOff):]
 		if stored[i] != nil && len(w.run) > 0 {
@@ -46,7 +67,7 @@ func (r *PolicyReconciler) apply(
 				"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
 				"members", len(w.run), "err", stored[i].Error())
 			for j, t := range w.run {
-				run[j] = applyResult{member: t, kind: applyFailed, phase: workload.StepStore, err: stored[i]}
+				run[j] = applyResult{member: t, kind: ledger.Failed, step: workload.StepStore, err: stored[i]}
 			}
 			continue
 		}
@@ -81,7 +102,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 	// still start pod reads and writes that will each fail through their own
 	// timeout path, slowing graceful shutdown.
 	if ctx.Err() != nil {
-		return applyResult{member: t, kind: applySkipped}
+		return applyResult{member: t, kind: ledger.Skipped}
 	}
 
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
@@ -94,7 +115,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 	}
 
 	if rec.err != nil {
-		return applyResult{member: t, kind: applyFailed, phase: workload.StepPrometheus, err: rec.err}
+		return applyResult{member: t, kind: ledger.Failed, step: workload.StepPrometheus, err: rec.err}
 	}
 
 	res := r.patcher.Apply(ctx, t.Member, rec.recs, workload.ApplySettingsFor(policy, t.Kind, r.RecommendOnly))
@@ -111,11 +132,11 @@ func (r *PolicyReconciler) reconcileWorkload(
 func resultOf(t *workloadTarget, res workload.Result) applyResult {
 	switch {
 	case res.Kind == workload.ResultFailed:
-		return applyResult{member: t, kind: applyFailed, phase: res.Step, err: res.Err, suppressed: res.Suppressed}
+		return applyResult{member: t, kind: ledger.Failed, step: res.Step, err: res.Err, suppressed: res.Suppressed}
 	case res.Kind == workload.ResultIdle:
-		return applyResult{member: t, kind: applyIdle}
+		return applyResult{member: t, kind: ledger.Idle}
 	case !res.Counted:
-		return applyResult{member: t, kind: applyUncounted, suppressed: res.Suppressed}
+		return applyResult{member: t, kind: ledger.Uncounted, suppressed: res.Suppressed}
 	}
-	return applyResult{member: t, kind: applyDone, pods: res.Pods, suppressed: res.Suppressed}
+	return applyResult{member: t, kind: ledger.Done, pods: res.Pods, suppressed: res.Suppressed}
 }

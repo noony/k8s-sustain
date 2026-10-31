@@ -6,6 +6,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/noony/k8s-sustain/internal/inventory"
+	"github.com/noony/k8s-sustain/internal/ledger"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -19,10 +20,9 @@ type workloadTarget struct {
 	Name, Namespace string
 }
 
-// key names the member in the ledger and the health tracker, across passes
-// and Policies.
-func (w *workloadTarget) key() string {
-	return w.Kind + "/" + w.Namespace + "/" + w.Name
+// key names the member in the ledger, across passes and Policies.
+func (w *workloadTarget) key() ledger.MemberKey {
+	return ledger.MemberKey{Kind: w.Kind, Namespace: w.Namespace, Name: w.Name}
 }
 
 // targetsOf returns the apply targets of an identity policy governs: one per

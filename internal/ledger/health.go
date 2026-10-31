@@ -47,7 +47,7 @@ func (l *Ledger) healthLocked(id promclient.WorkloadIdentity) Health {
 			h.Measured = true
 		}
 		if h.BlockedOn == "" && e.failure != nil {
-			h.BlockedOn = e.failure.phase
+			h.BlockedOn = e.failure.step
 		}
 	}
 	return h
