@@ -10,7 +10,6 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/inventory"
@@ -143,14 +142,11 @@ func (s *Server) usageSignal(ctx context.Context, id *inventory.Identity, r prom
 	if id.Policy == "" {
 		return nil, nil
 	}
-	var policy sustainv1alpha1.Policy
-	if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: id.Policy}, &policy); err != nil {
-		return nil, fmt.Errorf("reading Policy %q: %w", id.Policy, err)
+	spec, err := s.rightSizing(ctx, id.Policy)
+	if err != nil {
+		return nil, err
 	}
-	spec := policy.Spec.RightSizing
-	// The handler validated the step; one it still cannot read is no hint.
-	hint, _ := promclient.ParseStep(step)
-	span := recommender.SpanOf(r.Start.UTC(), r.End.UTC(), hint)
+	span := chartSpan(r, step)
 	series, err := recommender.UsageRange(ctx, s.Inputs, spec, id, span)
 	if err != nil {
 		return nil, err
@@ -158,7 +154,7 @@ func (s *Server) usageSignal(ctx context.Context, id *inventory.Identity, r prom
 	resources := recommender.WithDefaults(spec.ResourcesConfigs)
 	out := &usageSignal{
 		Policy:                id.Policy,
-		StepSeconds:           int64(span.Step / time.Second),
+		StepSeconds:           stepSeconds(span),
 		CPU:                   usageSignalSettingsOf(resources.CPU),
 		Memory:                usageSignalSettingsOf(resources.Memory),
 		ExcludeInitContainers: spec.ExcludeInitContainers,

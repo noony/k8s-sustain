@@ -83,7 +83,7 @@ type resourceHistory struct {
 	RunningLimit   []promclient.TimeValue `json:"runningLimit,omitempty"`
 }
 
-var errBasePolicy = errors.New("reading the Policy to simulate")
+var errBasePolicy = errors.New("the Policy to simulate")
 
 // runSimulation computes the Request the controller would make of the
 // identity, under the starting Policy's settings with the override merged in:
@@ -127,10 +127,11 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		Resources:      containerResourcesOf(id),
 	}
 
-	span, err := chartSpan(req, a.Request.Now())
+	tr, err := simulationRange(req, a.Request.Now())
 	if err != nil {
 		return nil, err
 	}
+	span := chartSpan(tr, cmp.Or(req.Step, "5m"))
 	if history, err := recommender.ComputeRange(ctx, s.Inputs, a.Request, span); err != nil {
 		out.HistoryError = err.Error()
 	} else {
@@ -139,31 +140,40 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	return out, nil
 }
 
-// chartSpan is the span a Simulation's history is read over: the request's
-// absolute range, or its window back from now, the instant the Simulation
-// computes as of, so the history's last instant is the Simulation itself.
-func chartSpan(req simulateRequest, now time.Time) (recommender.Span, error) {
-	var tr promclient.TimeRange
+// simulationRange is the range a Simulation's history is read over: the
+// request's absolute range, or its window back from now, the instant the
+// Simulation computes as of, so the history's last instant is the Simulation
+// itself.
+func simulationRange(req simulateRequest, now time.Time) (promclient.TimeRange, error) {
 	if req.FromTs > 0 && req.ToTs > 0 {
-		tr = promclient.TimeRange{Start: time.Unix(req.FromTs, 0), End: time.Unix(req.ToTs, 0)}
-	} else {
-		var err error
-		if tr, err = promclient.TimeRangeFromWindow(recommender.ResourceWindow(req.Window), now); err != nil {
-			return recommender.Span{}, fmt.Errorf("resolve chart window: %w", err)
-		}
+		return promclient.TimeRange{Start: time.Unix(req.FromTs, 0), End: time.Unix(req.ToTs, 0)}, nil
 	}
+	tr, err := promclient.TimeRangeFromWindow(recommender.ResourceWindow(req.Window), now)
+	if err != nil {
+		return promclient.TimeRange{}, fmt.Errorf("resolve chart window: %w", err)
+	}
+	return tr, nil
+}
+
+// chartSpan is the span a chart of r reads a history at, step as its finest.
+func chartSpan(r promclient.TimeRange, step string) recommender.Span {
 	// The handler validated the step; one it still cannot read is no hint.
-	hint, _ := promclient.ParseStep(cmp.Or(req.Step, "5m"))
-	return recommender.SpanOf(tr.Start.UTC(), tr.End.UTC(), hint), nil
+	hint, _ := promclient.ParseStep(step)
+	return recommender.SpanOf(r.Start.UTC(), r.End.UTC(), hint)
+}
+
+// stepSeconds is span's step in seconds, as a chart reads it.
+func stepSeconds(span recommender.Span) int64 {
+	return int64(span.Step / time.Second)
 }
 
 // simulationHistory renders what the Simulation computed over span next to
 // the requests and limits the identity's pods ran with then.
 func (s *Server) simulationHistory(ctx context.Context, key promclient.WorkloadIdentity, span recommender.Span, r recommender.RangeResult) *simulationHistory {
-	step := strconv.FormatInt(int64(span.Step/time.Second), 10) + "s"
+	step := strconv.FormatInt(stepSeconds(span), 10) + "s"
 	running := s.running(ctx, key, promclient.TimeRange{Start: span.Start, End: span.End}, step)
 	out := &simulationHistory{
-		StepSeconds: int64(span.Step / time.Second),
+		StepSeconds: stepSeconds(span),
 		Containers:  make(map[string]containerHistory, len(r.Containers)),
 		OOMKills:    recommender.OOMKills(r),
 	}
@@ -191,14 +201,24 @@ func (s *Server) simulationHistory(ctx context.Context, key promclient.WorkloadI
 // policySettings reads the settings of the Policy named name; none for an
 // empty name, which leaves every setting to its default.
 func (s *Server) policySettings(ctx context.Context, name string) (simulationSettings, error) {
+	spec, err := s.rightSizing(ctx, name)
+	if err != nil {
+		return simulationSettings{}, fmt.Errorf("%w: %w", errBasePolicy, err)
+	}
+	return settingsOf(spec), nil
+}
+
+// rightSizing reads the right-sizing spec of the Policy named name; the zero
+// spec, every setting left to its default, for an empty name.
+func (s *Server) rightSizing(ctx context.Context, name string) (sustainv1alpha1.RightSizingSpec, error) {
 	if name == "" {
-		return simulationSettings{}, nil
+		return sustainv1alpha1.RightSizingSpec{}, nil
 	}
 	var policy sustainv1alpha1.Policy
 	if err := s.K8sClient.Get(ctx, client.ObjectKey{Name: name}, &policy); err != nil {
-		return simulationSettings{}, fmt.Errorf("%w %q: %w", errBasePolicy, name, err)
+		return sustainv1alpha1.RightSizingSpec{}, fmt.Errorf("reading Policy %q: %w", name, err)
 	}
-	return settingsOf(policy.Spec.RightSizing), nil
+	return policy.Spec.RightSizing, nil
 }
 
 // simulationContainers renders the computed recommendations next to the raw
