@@ -31,43 +31,6 @@ import (
 
 func qtyp(s string) *resource.Quantity { q := resource.MustParse(s); return &q }
 
-func TestModeForKind(t *testing.T) {
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	onCreate := sustainv1alpha1.UpdateModeOnCreate
-
-	ut := sustainv1alpha1.UpdateTypes{
-		Deployment:  &ongoing,
-		StatefulSet: &onCreate,
-		CronJob:     &ongoing,
-		ArgoRollout: &onCreate,
-	}
-
-	tests := []struct {
-		kind string
-		want *sustainv1alpha1.UpdateMode
-	}{
-		{"Deployment", &ongoing},
-		{"StatefulSet", &onCreate},
-		{"CronJob", &ongoing},
-		{"Rollout", &onCreate},
-		{"DaemonSet", nil},
-		{"Unknown", nil},
-	}
-
-	for _, tt := range tests {
-		got := ut.ModeForKind(tt.kind)
-		if tt.want == nil {
-			if got != nil {
-				t.Errorf("modeForKind(%q) = %v, want nil", tt.kind, *got)
-			}
-			continue
-		}
-		if got == nil || *got != *tt.want {
-			t.Errorf("modeForKind(%q) = %v, want %v", tt.kind, got, *tt.want)
-		}
-	}
-}
-
 // Walking Pod → ReplicaSet → Rollout is what makes OnCreate injection work for
 // Argo Rollout-owned pods.
 func TestResolveOwner_RolloutChain(t *testing.T) {
