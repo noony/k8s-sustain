@@ -403,13 +403,12 @@ keeps them in its own values, at the instant ending their step, and a chart
 reads them back through `OOMKills`, so no shared type holds them.
 `ComputeRange` then runs the whole chain at each instant on that
 instant's values, the instant in the `stageContext`, without reading anything
-else; it is what a Simulation's charts draw, and `Request.RequestAt` no longer
-exists. `ReadRange` makes the same read for an identity under a Policy's spec,
-every default explicit, and computes nothing: it returns, for each container
-the assembly would size, what the usage signals read at each instant, and its
-kills come through `OOMKills` as a Simulation's do. It is what the workload
-detail page draws next to the replica average: the signal line and the OOM
-markers. To add a signal:
+else; it is what a Simulation's charts draw. `ReadRange` makes the same read
+for an identity under a Policy's spec, every default explicit, and computes
+nothing: it returns, for each container the assembly would size, what the
+usage signals read at each instant, and its kills come through `OOMKills` as a
+Simulation's do. It is what the workload detail page draws next to the replica
+average: the signal line and the OOM markers. To add a signal:
 
 1. Write `internal/recommender/signal_<name>.go`. Build its PromQL from the
    `internal/prometheus` primitives (`Shard.Selector`, `Shard.MetricsSelector`,
