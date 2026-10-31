@@ -109,10 +109,10 @@ func (h *Handler) ownerCaches() ownerCaches {
 		h.owners = ownerCaches{
 			podOwners: cache.NewReadThrough(
 				cache.NewLRU[controllerRef, resolvedOwner](ownerRefCacheMaxEntries, ownerRefCacheTTL, nil),
-				apiCallTimeout, h.fetchPodOwner, reportFetchPanic[controllerRef](panicLabelOwnerRef)),
+				apiCallTimeout, h.fetchPodOwner, reportFetchPanic[controllerRef](panicLabelPodOwner)),
 			annotations: cache.NewReadThrough(
 				cache.NewLRU[workloadRef, map[string]string](ownerAnnotationsCacheMaxEntries, ownerAnnotationsCacheTTL, nil),
-				apiCallTimeout, h.fetchOwnerAnnotations, reportFetchPanic[workloadRef](panicLabelOwnerAnnotations)),
+				apiCallTimeout, h.fetchOwnerAnnotations, reportFetchPanic[workloadRef](panicLabelWorkloadAnnotations)),
 		}
 	})
 	return h.owners

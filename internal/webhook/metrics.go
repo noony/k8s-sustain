@@ -69,10 +69,10 @@ const (
 // failurePolicy of Fail turns into a rejection. Constants, so they add
 // exactly four bounded series.
 const (
-	panicLabelOwnerRef         = "singleflight/ownerRef"
-	panicLabelOwnerAnnotations = "singleflight/ownerAnnotations"
-	panicLabelAdmit            = "admit"
-	panicLabelStub             = "stub/request"
+	panicLabelPodOwner            = "podOwner/resolve"
+	panicLabelWorkloadAnnotations = "workloadAnnotations/read"
+	panicLabelAdmit               = "admit"
+	panicLabelStub                = "stub/request"
 )
 
 // RecommendationSourceTotal is the only place the health of the
