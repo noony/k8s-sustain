@@ -99,14 +99,14 @@ func TestComputeRange_TheFullChainAtEachInstant(t *testing.T) {
 		}
 		return out
 	}
-	c := got.Containers["app"]
+	cpu, memory := got.Containers["app"][corev1.ResourceCPU], got.Containers["app"][corev1.ResourceMemory]
 	for what, tc := range map[string]struct{ got, want []promclient.TimeValue }{
-		"cpu usage":      {c.CPU.Usage, points(0.1, 0.2, 0.2)},
-		"cpu request":    {c.CPU.Request, points(0.1, 0.2, 0.2)},
-		"cpu limit":      {c.CPU.Limit, points(1, 1, 1)},
-		"memory usage":   {c.Memory.Usage, points(100*mib, 100*mib, 100*mib)},
-		"memory request": {c.Memory.Request, points(100*mib, 100*mib, 200*mib)},
-		"memory limit":   {c.Memory.Limit, points(100*mib, 256*mib, 200*mib)},
+		"cpu usage":      {cpu.Usage, points(0.1, 0.2, 0.2)},
+		"cpu request":    {cpu.Request, points(0.1, 0.2, 0.2)},
+		"cpu limit":      {cpu.Limit, points(1, 1, 1)},
+		"memory usage":   {memory.Usage, points(100*mib, 100*mib, 100*mib)},
+		"memory request": {memory.Request, points(100*mib, 100*mib, 200*mib)},
+		"memory limit":   {memory.Limit, points(100*mib, 256*mib, 200*mib)},
 	} {
 		if !reflect.DeepEqual(tc.got, tc.want) {
 			t.Errorf("%s = %v, want %v", what, tc.got, tc.want)
@@ -123,9 +123,9 @@ func TestComputeRange_TheFullChainAtEachInstant(t *testing.T) {
 		t.Errorf("stages ran as of %v, want each instant in turn", instants)
 	}
 	last := Compute(a.Request).Recs["app"]
-	if float64(last.MemoryRequest.Value()) != c.Memory.Request[2].Value || float64(last.MemoryLimit.Value()) != c.Memory.Limit[2].Value {
+	if float64(last.MemoryRequest.Value()) != memory.Request[2].Value || float64(last.MemoryLimit.Value()) != memory.Limit[2].Value {
 		t.Errorf("last instant = %v / %v, want what Compute recommends as of it: %s / %s",
-			c.Memory.Request[2].Value, c.Memory.Limit[2].Value, last.MemoryRequest, last.MemoryLimit)
+			memory.Request[2].Value, memory.Limit[2].Value, last.MemoryRequest, last.MemoryLimit)
 	}
 }
 
@@ -147,8 +147,8 @@ func TestComputeRange_AKeptRequestHasNoSeries(t *testing.T) {
 		t.Fatalf("ComputeRange: %v", err)
 	}
 
-	mem := got.Containers["app"].Memory
-	if len(mem.Usage) != 1 || mem.Request != nil || mem.Limit != nil || len(got.Containers["app"].CPU.Request) != 1 {
+	mem := got.Containers["app"][corev1.ResourceMemory]
+	if len(mem.Usage) != 1 || mem.Request != nil || mem.Limit != nil || len(got.Containers["app"][corev1.ResourceCPU].Request) != 1 {
 		t.Errorf("app = %+v, want memory usage only and a CPU request", got.Containers["app"])
 	}
 }
@@ -167,22 +167,23 @@ func TestComputeRange_AnUnreadableHistoryIsItsError(t *testing.T) {
 	}
 }
 
-// UsageRange reads the history once, under the spec's resources with every
-// default explicit, and returns what the usage signals read at each instant
-// for each container the spec recommends: none for an init container it
-// excludes, none for a resource whose request it keeps, and nothing computed.
-func TestUsageRange_WhatTheUsageSignalsReadAtEachInstant(t *testing.T) {
+// ReadRange reads the history once, under the spec's resources with every
+// default explicit, and returns what the signals read at each instant: the
+// usage of each container the spec recommends, none for an init container it
+// excludes, none for a resource whose request it keeps, and nothing computed,
+// with the kills.
+func TestReadRange_WhatTheSignalsReadAtEachInstant(t *testing.T) {
 	key := prodID("api")
 	t0, t1 := now.Add(-time.Hour), now
-	read := func(cores float64) *WorkloadInputs {
-		return NewInputs(
+	read := func(cores float64, opts ...InputsOption) *WorkloadInputs {
+		return NewInputs(append(opts,
 			WithCPUUsage(promclient.ContainerValues{"app": cores, "migrate": 2}),
 			WithMemoryUsage(promclient.ContainerValues{"app": 64 * mib, "migrate": 32 * mib}),
-		)
+		)...)
 	}
 	inputs := &recordedInputs{histories: map[promclient.WorkloadIdentity]*History{key: NewHistory([]HistoryPoint{
 		{At: t0, Inputs: read(0.1)},
-		{At: t1, Inputs: read(0.3)},
+		{At: t1, Inputs: read(0.3, WithOOMKills(map[string]OOM{"app": {Kills: 1, KillsInStep: 1}}))},
 	})}}
 	spec := sustainv1alpha1.RightSizingSpec{
 		ExcludeInitContainers: true,
@@ -194,9 +195,9 @@ func TestUsageRange_WhatTheUsageSignalsReadAtEachInstant(t *testing.T) {
 	id := &inventory.Identity{Key: key, Containers: containers("app"), InitContainers: containers("migrate"), Since: old}
 	span := SpanOf(t0, t1, time.Hour)
 
-	got, err := UsageRange(context.Background(), inputs, spec, id, span)
+	got, err := ReadRange(context.Background(), inputs, spec, id, span)
 	if err != nil {
-		t.Fatalf("UsageRange: %v", err)
+		t.Fatalf("ReadRange: %v", err)
 	}
 
 	if len(inputs.spans) != 1 || inputs.spans[0] != span || !reflect.DeepEqual(inputs.cfgs, []sustainv1alpha1.ResourcesConfigs{WithDefaults(spec.ResourcesConfigs)}) ||
@@ -204,15 +205,18 @@ func TestUsageRange_WhatTheUsageSignalsReadAtEachInstant(t *testing.T) {
 		t.Errorf("reads %v under %+v for %v, instant reads %v; want one history over %v under the defaulted resources, for the containers recommended",
 			inputs.spans, inputs.cfgs, inputs.calls, inputs.ats, span)
 	}
-	want := map[string]UsageSeries{"app": {CPU: []promclient.TimeValue{{Timestamp: t0, Value: 0.1}, {Timestamp: t1, Value: 0.3}}}}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("usage = %+v, want %+v", got, want)
+	want := map[string]ContainerRange{"app": {corev1.ResourceCPU: {Usage: []promclient.TimeValue{{Timestamp: t0, Value: 0.1}, {Timestamp: t1, Value: 0.3}}}}}
+	if !reflect.DeepEqual(got.Containers, want) {
+		t.Errorf("containers = %+v, want %+v", got.Containers, want)
+	}
+	if kills, want := OOMKills(got), []promclient.OOMKill{{Timestamp: t1, Container: "app"}}; !reflect.DeepEqual(kills, want) {
+		t.Errorf("kills = %v, want %v", kills, want)
 	}
 }
 
 // An identity with no containers at all has a series for every container its
 // history reports, and a history that cannot be read is the error.
-func TestUsageRange_AnUnseenIdentityAndAnUnreadableHistory(t *testing.T) {
+func TestReadRange_AnUnseenIdentityAndAnUnreadableHistory(t *testing.T) {
 	seen, down := prodID("seen"), prodID("down")
 	failure := errors.New("prometheus down")
 	inputs := &recordedInputs{
@@ -223,11 +227,12 @@ func TestUsageRange_AnUnseenIdentityAndAnUnreadableHistory(t *testing.T) {
 	}
 	span := SpanOf(now, now, time.Minute)
 
-	got, err := UsageRange(context.Background(), inputs, sustainv1alpha1.RightSizingSpec{}, &inventory.Identity{Key: seen}, span)
-	if err != nil || len(got) != 2 || len(got["app"].Memory) != 1 || len(got["sidecar"].Memory) != 1 {
-		t.Errorf("usage = %+v, %v; want app's and sidecar's memory", got, err)
+	got, err := ReadRange(context.Background(), inputs, sustainv1alpha1.RightSizingSpec{}, &inventory.Identity{Key: seen}, span)
+	if err != nil || len(got.Containers) != 2 ||
+		len(got.Containers["app"][corev1.ResourceMemory].Usage) != 1 || len(got.Containers["sidecar"][corev1.ResourceMemory].Usage) != 1 {
+		t.Errorf("containers = %+v, %v; want app's and sidecar's memory", got.Containers, err)
 	}
-	if _, err := UsageRange(context.Background(), inputs, sustainv1alpha1.RightSizingSpec{}, &inventory.Identity{Key: down}, span); !errors.Is(err, failure) {
+	if _, err := ReadRange(context.Background(), inputs, sustainv1alpha1.RightSizingSpec{}, &inventory.Identity{Key: down}, span); !errors.Is(err, failure) {
 		t.Errorf("err = %v, want %v", err, failure)
 	}
 }

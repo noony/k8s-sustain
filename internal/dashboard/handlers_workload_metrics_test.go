@@ -138,6 +138,7 @@ type metricsPayload struct {
 	CPU         map[string][]promclient.TimeValue `json:"cpu"`
 	Signal      *usageSignal                      `json:"signal"`
 	SignalError string                            `json:"signalError"`
+	OOMKills    []promclient.OOMKill              `json:"oomKills"`
 }
 
 func getMetrics(t *testing.T, srv *Server, query string) metricsPayload {
@@ -157,18 +158,19 @@ func getMetrics(t *testing.T, srv *Server, query string) metricsPayload {
 // The detail payload carries both usage lines of each resource: the replica
 // average, and what the usage signals read under the governing Policy's
 // settings, read through the inputs port over the span a Simulation would
-// chart, with the percentile and window they read at.
-func TestHandleWorkloadMetrics_CarriesTheAverageAndTheSignal(t *testing.T) {
+// chart, with the percentile and window they read at. The OOM kills come
+// from that same read.
+func TestHandleWorkloadMetrics_CarriesTheAverageTheSignalAndTheKills(t *testing.T) {
 	from, to := time.Unix(1718000000, 0).UTC(), time.Unix(1718003600, 0).UTC()
 	average := []promclient.TimeValue{{Timestamp: from, Value: 0.2}}
-	read := func(cores, bytes float64) *recommender.WorkloadInputs {
-		return recommender.NewInputs(
+	read := func(cores, bytes float64, opts ...recommender.InputsOption) *recommender.WorkloadInputs {
+		return recommender.NewInputs(append(opts,
 			recommender.WithCPUUsage(promclient.ContainerValues{"app": cores}),
-			recommender.WithMemoryUsage(promclient.ContainerValues{"app": bytes}))
+			recommender.WithMemoryUsage(promclient.ContainerValues{"app": bytes}))...)
 	}
 	inputs := recommendertest.NewStaticInputs().SetHistory(webKey, recommender.NewHistory([]recommender.HistoryPoint{
 		{At: from, Inputs: read(0.5, 64)},
-		{At: to, Inputs: read(0.7, 96)},
+		{At: to, Inputs: read(0.7, 96, recommender.WithOOMKills(map[string]recommender.OOM{"app": {Kills: 1, KillsInStep: 1}}))},
 	}))
 	policy, d := governedWeb()
 	srv := &Server{
@@ -191,12 +193,15 @@ func TestHandleWorkloadMetrics_CarriesTheAverageAndTheSignal(t *testing.T) {
 		CPU:         usageSignalSettings{Percentile: 90, Window: "24h"},
 		Memory:      usageSignalSettings{Percentile: 95, Window: "168h"},
 		Containers: map[string]usageSignalSeries{"app": {
-			CPU:    []promclient.TimeValue{{Timestamp: from, Value: 0.5}, {Timestamp: to, Value: 0.7}},
-			Memory: []promclient.TimeValue{{Timestamp: from, Value: 64}, {Timestamp: to, Value: 96}},
+			corev1.ResourceCPU:    []promclient.TimeValue{{Timestamp: from, Value: 0.5}, {Timestamp: to, Value: 0.7}},
+			corev1.ResourceMemory: []promclient.TimeValue{{Timestamp: from, Value: 64}, {Timestamp: to, Value: 96}},
 		}},
 	}
 	if !reflect.DeepEqual(got.Signal, want) || got.SignalError != "" {
 		t.Errorf("signal = %+v, error %q; want %+v", got.Signal, got.SignalError, want)
+	}
+	if want := []promclient.OOMKill{{Timestamp: to, Container: "app"}}; !reflect.DeepEqual(got.OOMKills, want) {
+		t.Errorf("kills = %v, want %v", got.OOMKills, want)
 	}
 	calls := inputs.HistoryCalls()
 	if len(calls) != 1 || calls[0].Span != recommender.SpanOf(from, to, 30*time.Minute) ||
@@ -229,8 +234,9 @@ func TestHandleWorkloadMetrics_AnUnreadableSignalKeepsTheAverage(t *testing.T) {
 	}
 }
 
-// An identity no Policy governs, Conflicted or ungoverned, has no signal line,
-// and nothing is read for it: there are no settings to read it under.
+// An identity no Policy governs, Conflicted or ungoverned, has no signal line:
+// no Policy sizes from its usage. Its history is read under the recommender
+// defaults for its kills alone.
 func TestHandleWorkloadMetrics_NoSignalWithoutAGoverningPolicy(t *testing.T) {
 	mode := sustainv1alpha1.UpdateModeOngoing
 	policy := func(name string) client.Object {
@@ -252,7 +258,13 @@ func TestHandleWorkloadMetrics_NoSignalWithoutAGoverningPolicy(t *testing.T) {
 		"conflicted": {policy("p"), policy("q"), member("web-blue", "p"), member("web-green", "q")},
 	} {
 		t.Run(name, func(t *testing.T) {
-			inputs := recommendertest.NewStaticInputs()
+			at := time.Unix(1718000000, 0).UTC()
+			inputs := recommendertest.NewStaticInputs().SetHistory(webKey, recommender.NewHistory([]recommender.HistoryPoint{{
+				At: at,
+				Inputs: recommender.NewInputs(
+					recommender.WithCPUUsage(promclient.ContainerValues{"app": 0.5}),
+					recommender.WithOOMKills(map[string]recommender.OOM{"app": {Kills: 1, KillsInStep: 1}})),
+			}}))
 			srv := &Server{
 				K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build(),
 				PromClient: &fakePromClient{},
@@ -262,8 +274,15 @@ func TestHandleWorkloadMetrics_NoSignalWithoutAGoverningPolicy(t *testing.T) {
 
 			got := getMetrics(t, srv, "")
 
-			if got.Signal != nil || got.SignalError != "" || len(inputs.HistoryCalls()) != 0 {
-				t.Errorf("signal %+v, error %q, history calls %+v; want none", got.Signal, got.SignalError, inputs.HistoryCalls())
+			if got.Signal != nil || got.SignalError != "" {
+				t.Errorf("signal %+v, error %q; want none", got.Signal, got.SignalError)
+			}
+			if want := []promclient.OOMKill{{Timestamp: at, Container: "app"}}; !reflect.DeepEqual(got.OOMKills, want) {
+				t.Errorf("kills = %v, want %v", got.OOMKills, want)
+			}
+			calls := inputs.HistoryCalls()
+			if len(calls) != 1 || !reflect.DeepEqual(calls[0].Resources, recommender.WithDefaults(sustainv1alpha1.ResourcesConfigs{})) {
+				t.Errorf("history calls = %+v, want one under the recommender defaults", calls)
 			}
 		})
 	}

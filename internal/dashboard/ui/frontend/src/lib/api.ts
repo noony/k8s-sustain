@@ -241,6 +241,7 @@ export interface MetricsData {
   memoryRequests?: Record<string, TimeValue[]>
   cpuLimits?: Record<string, TimeValue[]>
   memoryLimits?: Record<string, TimeValue[]>
+  /** Read with the signal's history, under the recommender defaults when no Policy governs the identity; absent when it could not be read. */
   oomKills?: OOMKill[]
   initContainers?: string[]
   /** What the usage signals read; null when no Policy governs the identity or it could not be read. */

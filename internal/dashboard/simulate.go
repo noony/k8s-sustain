@@ -178,18 +178,19 @@ func (s *Server) simulationHistory(ctx context.Context, key promclient.WorkloadI
 		OOMKills:    recommender.OOMKills(r),
 	}
 	for name, c := range r.Containers {
+		cpu, memory := c[corev1.ResourceCPU], c[corev1.ResourceMemory]
 		out.Containers[name] = containerHistory{
 			CPU: resourceHistory{
-				Usage:              c.CPU.Usage,
-				RecommendedRequest: c.CPU.Request,
-				RecommendedLimit:   c.CPU.Limit,
+				Usage:              cpu.Usage,
+				RecommendedRequest: cpu.Request,
+				RecommendedLimit:   cpu.Limit,
 				RunningRequest:     running.cpuRequests[name],
 				RunningLimit:       running.cpuLimits[name],
 			},
 			Memory: resourceHistory{
-				Usage:              c.Memory.Usage,
-				RecommendedRequest: c.Memory.Request,
-				RecommendedLimit:   c.Memory.Limit,
+				Usage:              memory.Usage,
+				RecommendedRequest: memory.Request,
+				RecommendedLimit:   memory.Limit,
 				RunningRequest:     running.memoryRequests[name],
 				RunningLimit:       running.memoryLimits[name],
 			},

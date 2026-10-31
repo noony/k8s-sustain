@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -263,18 +262,6 @@ type OOMKill struct {
 func OOMKillsPerStep(selector string, step time.Duration) string {
 	return fmt.Sprintf(`label_replace(sum by (namespace, owner_kind, owner_name, container) (sum_over_time(%s%s[%s])), "__name__", %q, "", "")`,
 		MetricContainerOOMKills, selector, model.Duration(step), MetricContainerOOMKills)
-}
-
-// OOMKillsOf turns one container's OOMKillsPerStep series into its kills,
-// each dated at the end of the step it fell in.
-func OOMKillsOf(container string, perStep []TimeValue) []OOMKill {
-	var out []OOMKill
-	for _, p := range perStep {
-		for range int(math.Round(p.Value)) {
-			out = append(out, OOMKill{Timestamp: p.Timestamp, Container: container})
-		}
-	}
-	return out
 }
 
 func timeValues(pairs []model.SamplePair) []TimeValue {

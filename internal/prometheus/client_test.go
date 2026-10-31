@@ -193,22 +193,6 @@ func TestOOMKillsPerStep_ReadsTheKillRuleOverOneStep(t *testing.T) {
 	}
 }
 
-// Each kill counted in a step is one kill at that step.
-func TestOOMKillsOf_OnePerKill(t *testing.T) {
-	at := func(sec int64) time.Time { return time.Unix(sec, 0).UTC() }
-
-	got := OOMKillsOf("app", []TimeValue{{Timestamp: at(1700000000), Value: 0}, {Timestamp: at(1700000300), Value: 2}, {Timestamp: at(1700000600), Value: 1}})
-
-	want := []OOMKill{
-		{Timestamp: at(1700000300), Container: "app"},
-		{Timestamp: at(1700000300), Container: "app"},
-		{Timestamp: at(1700000600), Container: "app"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("kills = %+v, want %+v", got, want)
-	}
-}
-
 // webShardQuery is a one-workload shard query, the smallest one that runs
 // through execInstant with the client's query timeout.
 const webShardQuery = `k8s_sustain:workload_max_pod_cpu:cores{namespace="ns",owner_kind="Deployment",owner_name=~"web"}`

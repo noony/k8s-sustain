@@ -3,12 +3,12 @@ package dashboard
 import (
 	"context"
 	"fmt"
-	"maps"
 	"net/http"
 	"slices"
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -38,10 +38,10 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	var (
 		cpuSeries, memSeries promclient.ContainerTimeSeries
 		running              runningSeries
-		oomKills             []promclient.OOMKill
 		cpuErr, memErr       error
 		id                   *inventory.Identity
 		signal               *usageSignal
+		oomKills             []promclient.OOMKill
 		signalErr            error
 	)
 	var wg sync.WaitGroup
@@ -53,20 +53,20 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		memSeries, memErr = s.PromClient.QueryRangeByLabel(ctx,
 			perContainer("avg", promclient.MetricContainerMemoryByWorkloadBytes, key), "container", tr, step)
 	})
-	wg.Go(func() { oomKills = s.oomKills(ctx, key, tr, step) })
 	wg.Go(func() { running = s.running(ctx, key, tr, step) })
 	wg.Go(func() {
 		// A failed read is tolerated: resources and init containers come back
-		// nil, and the signal line gives way to the reason.
+		// nil, and the signal line and the kills give way to the reason.
 		var err error
 		switch id, err = s.identity(ctx, key); {
 		case apierrors.IsNotFound(err):
+			id = &inventory.Identity{Key: key}
 		case err != nil:
 			s.Logger.Error(err, "failed to read the workload identity", "namespace", namespace, "kind", kind, "name", name)
 			signalErr = fmt.Errorf("reading the workload identity: %w", err)
-		default:
-			signal, signalErr = s.usageSignal(ctx, id, tr, step)
+			return
 		}
+		signal, oomKills, signalErr = s.readHistory(ctx, id, tr, step)
 	})
 	wg.Wait()
 
@@ -128,42 +128,48 @@ type usageSignalSettings struct {
 	KeepRequest bool   `json:"keepRequest,omitempty"`
 }
 
-type usageSignalSeries struct {
-	CPU    []promclient.TimeValue `json:"cpu,omitempty"`
-	Memory []promclient.TimeValue `json:"memory,omitempty"`
-}
+// usageSignalSeries is one container's usage signal series, per resource it
+// read a value of.
+type usageSignalSeries map[corev1.ResourceName][]promclient.TimeValue
 
-// usageSignal reads what id's usage signals read over r under its governing
-// Policy's settings, through the inputs port a Simulation's history is read
-// through, over the span a Simulation charting r would read. It is nil, with
-// no error, when no Policy governs id: a Conflicted or ungoverned identity has
-// no signal line.
-func (s *Server) usageSignal(ctx context.Context, id *inventory.Identity, r promclient.TimeRange, step string) (*usageSignal, error) {
-	if id.Policy == "" {
-		return nil, nil
-	}
+// readHistory reads id's history over r under its governing Policy's
+// settings, through the inputs port a Simulation's history is read through,
+// over the span a Simulation charting r would read: what its usage signals
+// read, and its OOM kills. The usage signal line is nil when no Policy
+// governs id: a Conflicted or ungoverned identity is read under the
+// recommender defaults for its kills alone, as no Policy sizes from its
+// usage.
+func (s *Server) readHistory(ctx context.Context, id *inventory.Identity, r promclient.TimeRange, step string) (*usageSignal, []promclient.OOMKill, error) {
 	spec, err := s.rightSizing(ctx, id.Policy)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	span := chartSpan(r, step)
-	series, err := recommender.UsageRange(ctx, s.Inputs, spec, id, span)
+	read, err := recommender.ReadRange(ctx, s.Inputs, spec, id, span)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	kills := recommender.OOMKills(read)
+	if id.Policy == "" {
+		return nil, kills, nil
 	}
 	resources := recommender.WithDefaults(spec.ResourcesConfigs)
-	out := &usageSignal{
+	signal := &usageSignal{
 		Policy:                id.Policy,
 		StepSeconds:           stepSeconds(span),
 		CPU:                   usageSignalSettingsOf(resources.CPU),
 		Memory:                usageSignalSettingsOf(resources.Memory),
 		ExcludeInitContainers: spec.ExcludeInitContainers,
-		Containers:            make(map[string]usageSignalSeries, len(series)),
+		Containers:            make(map[string]usageSignalSeries, len(read.Containers)),
 	}
-	for name, c := range series {
-		out.Containers[name] = usageSignalSeries{CPU: c.CPU, Memory: c.Memory}
+	for name, c := range read.Containers {
+		series := make(usageSignalSeries, len(c))
+		for res, rr := range c {
+			series[res] = rr.Usage
+		}
+		signal.Containers[name] = series
 	}
-	return out, nil
+	return signal, kills, nil
 }
 
 func usageSignalSettingsOf(rc sustainv1alpha1.ResourceConfig) usageSignalSettings {
@@ -203,26 +209,6 @@ func (s *Server) running(ctx context.Context, key promclient.WorkloadIdentity, r
 		})
 	}
 	wg.Wait()
-	return out
-}
-
-// oomKills reads key's OOM kills over r, each dated at the end of the step it
-// fell in, none when they cannot be read: kube-state-metrics may be missing,
-// and the page renders without them.
-func (s *Server) oomKills(ctx context.Context, key promclient.WorkloadIdentity, r promclient.TimeRange, step string) []promclient.OOMKill {
-	stepDur, err := promclient.ParseStep(step)
-	if err != nil {
-		return nil
-	}
-	selector := promclient.WorkloadSelector(key.Namespace, key.OwnerKind, key.OwnerName)
-	perStep, err := s.PromClient.QueryRangeByLabel(ctx, promclient.OOMKillsPerStep(selector, stepDur), "container", r, step)
-	if err != nil {
-		return nil
-	}
-	var out []promclient.OOMKill
-	for _, container := range slices.Sorted(maps.Keys(perStep)) {
-		out = append(out, promclient.OOMKillsOf(container, perStep[container])...)
-	}
 	return out
 }
 

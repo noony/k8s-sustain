@@ -39,8 +39,7 @@ type PromQuerier interface {
 	QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error)
 	// QueryRangeByLabel is QueryRange for an expression with one series per
 	// value of label, keyed by it: an identity's running requests and limits,
-	// and the replica-averaged usage and OOM kills its detail page charts, per
-	// container.
+	// and the replica-averaged usage its detail page charts, per container.
 	QueryRangeByLabel(ctx context.Context, expr, label string, r promclient.TimeRange, step string) (map[string][]promclient.TimeValue, error)
 }
 
@@ -64,7 +63,8 @@ type Server struct {
 	Health HealthSignals
 	// Inputs fetches recommendation inputs through the same port the
 	// controller uses, so a Simulation computes from what the controller sees
-	// and the detail page charts what its usage signals read.
+	// and the detail page charts what its signals read, the OOM kills
+	// included.
 	Inputs recommender.InputsFetcher
 	// Clock is what a Simulation computes as of. Nil is the wall clock.
 	Clock  clock.PassiveClock

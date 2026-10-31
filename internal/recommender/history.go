@@ -85,18 +85,18 @@ type HistoryResult struct {
 	Err     error
 }
 
-// RangeResult is what a Request computes at each instant of a span. It keeps
-// the history it was computed from, which a signal's own accessor reads
-// (OOMKills).
+// RangeResult is one identity's series over a span, per container and
+// resource: what its signals read at each instant and, from ComputeRange,
+// what the chain computed there. It keeps the history it was read from,
+// which a signal's own accessor reads (OOMKills).
 type RangeResult struct {
 	Containers map[string]ContainerRange
 	history    *History
 }
 
-// ContainerRange is one container's CPU and memory at each instant of a span.
-type ContainerRange struct {
-	CPU, Memory ResourceRange
-}
+// ContainerRange is one container's resources at each instant of a span,
+// keyed by resource.
+type ContainerRange map[corev1.ResourceName]ResourceRange
 
 // ResourceRange is one resource of one container at each instant of a span,
 // in cores or bytes: the usage its signal read, and the request and limit the
@@ -124,45 +124,33 @@ func ComputeRange(ctx context.Context, inputs InputsFetcher, req Request, span S
 	return computeRange(req, h.History), nil
 }
 
-// UsageSeries is one container's usage at each instant of a span, in cores and
-// bytes: what its usage signals read. A series has a point only at the
-// instants its signal read a value.
-type UsageSeries struct {
-	CPU, Memory []promclient.TimeValue
-}
-
-// UsageRange is what the usage signals read of id at each instant of span,
-// under spec's resources with every default explicit, as Assemble fetches
-// them: for each container spec recommends, the busiest replica's usage
-// percentile over the resource's window. A resource whose request spec keeps
-// has no series, as no signal sizes it, and an identity with no containers at
-// all has a series for every container its history reports. The history is
-// read through inputs in the one range read ComputeRange makes, and nothing is
-// computed from it: it charts what the recommender reads without recomputing
-// a Recommendation.
-func UsageRange(ctx context.Context, inputs InputsFetcher, spec sustainv1alpha1.RightSizingSpec, id *inventory.Identity, span Span) (map[string]UsageSeries, error) {
+// ReadRange is what id's signals read at each instant of span, under spec's
+// resources with every default explicit, as Assemble fetches them, and
+// computes nothing from it: each resource's Usage, the busiest replica's
+// usage percentile over the resource's window, of every container Assemble
+// would size, and no Request or Limit; the kills come through OOMKills. A
+// resource whose request spec keeps has no series, as no signal sizes it.
+// The history is read through inputs in the one range read ComputeRange
+// makes: it charts what the recommender reads without recomputing a
+// Recommendation.
+func ReadRange(ctx context.Context, inputs InputsFetcher, spec sustainv1alpha1.RightSizingSpec, id *inventory.Identity, span Span) (RangeResult, error) {
 	resources := WithDefaults(spec.ResourcesConfigs)
 	req := InputsRequest{Identity: id.Key, Containers: len(ContainersOf(spec, id))}
 	h := inputs.FetchHistory(ctx, span, resources, []InputsRequest{req})[id.Key]
 	if h.Err != nil {
-		return nil, h.Err
+		return RangeResult{}, h.Err
 	}
-	out := map[string]UsageSeries{}
+	out := RangeResult{Containers: map[string]ContainerRange{}, history: h.History}
 	for _, p := range h.History.points {
 		for _, c := range sizedContainers(spec, id, p.Inputs) {
-			for _, u := range []usage{cpuUsage, memoryUsage} {
-				v, ok := valuesOf[usageValues](p.Inputs, u)[c.Name]
-				if !ok || u.resource.config(resources).Requests.KeepRequest {
+			for _, res := range resourceKinds {
+				v, ok := p.Inputs.usage(c.Name, res)
+				if !ok || res.config(resources).Requests.KeepRequest {
 					continue
 				}
-				s := out[c.Name]
-				point := promclient.TimeValue{Timestamp: p.At, Value: v}
-				if u.resource == cpuResource {
-					s.CPU = append(s.CPU, point)
-				} else {
-					s.Memory = append(s.Memory, point)
-				}
-				out[c.Name] = s
+				out.update(c.Name, res, func(rr *ResourceRange) {
+					rr.Usage = append(rr.Usage, promclient.TimeValue{Timestamp: p.At, Value: v})
+				})
 			}
 		}
 	}
@@ -178,13 +166,25 @@ func computeRange(req Request, h *History) RangeResult {
 		at := req
 		at.inputs, at.now = p.Inputs, p.At
 		for _, c := range req.containers {
-			cr := out.Containers[c.Name]
-			cr.CPU.add(cpuResource, c, at)
-			cr.Memory.add(memoryResource, c, at)
-			out.Containers[c.Name] = cr
+			for _, res := range resourceKinds {
+				out.update(c.Name, res, func(rr *ResourceRange) { rr.add(res, c, at) })
+			}
 		}
 	}
 	return out
+}
+
+// update applies f to res's series of the container named name, creating
+// them empty.
+func (r RangeResult) update(name string, res resourceKind, f func(*ResourceRange)) {
+	c, ok := r.Containers[name]
+	if !ok {
+		c = make(ContainerRange, len(resourceKinds))
+		r.Containers[name] = c
+	}
+	rr := c[corev1.ResourceName(res)]
+	f(&rr)
+	c[corev1.ResourceName(res)] = rr
 }
 
 // add appends what req computes for res of c as of req.now.
