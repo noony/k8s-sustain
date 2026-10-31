@@ -210,13 +210,13 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 	})
 	wg.Go(func() {
 		sparkTR, _ := promclient.TimeRangeFromWindow("168h", time.Now())
-		v, err := sparklinePoints(ctx, s.PromClient, promclient.MetricClusterCPUSavingsCores, sparkTR, "30m")
+		v, err := sparklinePoints(ctx, s.PromClient, promclient.MetricClusterCPUSavingsCores, sparkTR, 30*time.Minute)
 		resp.KPI.CPUSpark7d = v
 		recordErr(err)
 	})
 	wg.Go(func() {
 		sparkTR, _ := promclient.TimeRangeFromWindow("168h", time.Now())
-		v, err := sparklinePoints(ctx, s.PromClient, promclient.MetricClusterMemorySavingsBytes, sparkTR, "30m")
+		v, err := sparklinePoints(ctx, s.PromClient, promclient.MetricClusterMemorySavingsBytes, sparkTR, 30*time.Minute)
 		resp.KPI.MemSpark7d = v
 		recordErr(err)
 	})
@@ -285,7 +285,7 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 	return resp, failedReads
 }
 
-func sparklinePoints(ctx context.Context, p PromQuerier, expr string, r promclient.TimeRange, step string) ([]float64, error) {
+func sparklinePoints(ctx context.Context, p PromQuerier, expr string, r promclient.TimeRange, step time.Duration) ([]float64, error) {
 	pts, err := p.QueryRange(ctx, expr, r, step)
 	if err != nil {
 		return []float64{}, err

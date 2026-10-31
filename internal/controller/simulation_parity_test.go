@@ -117,7 +117,7 @@ func parityCluster(t *testing.T, excludeInit bool) client.Client {
 // Simulation's numbers and history come from its Inputs alone.
 type noRunning struct{ dashboard.PromQuerier }
 
-func (noRunning) QueryRangeByLabel(context.Context, string, string, promclient.TimeRange, string) (map[string][]promclient.TimeValue, error) {
+func (noRunning) QueryRangeByLabel(context.Context, string, string, promclient.TimeRange, time.Duration) (map[string][]promclient.TimeValue, error) {
 	return nil, nil
 }
 

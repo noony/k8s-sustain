@@ -55,7 +55,7 @@ func (f *fakePromClient) QueryByLabel(_ context.Context, expr, _ string) (map[st
 	return map[string]float64{}, nil
 }
 
-func (f *fakePromClient) QueryRange(_ context.Context, _ string, tr promclient.TimeRange, _ string) ([]promclient.TimeValue, error) {
+func (f *fakePromClient) QueryRange(_ context.Context, _ string, tr promclient.TimeRange, _ time.Duration) ([]promclient.TimeValue, error) {
 	f.mu.Lock()
 	f.capturedRange = tr
 	f.mu.Unlock()
@@ -64,7 +64,7 @@ func (f *fakePromClient) QueryRange(_ context.Context, _ string, tr promclient.T
 
 func (f *fakePromClient) Ping(_ context.Context) error { return nil }
 
-func (f *fakePromClient) QueryRangeByLabel(_ context.Context, expr, _ string, r promclient.TimeRange, _ string) (map[string][]promclient.TimeValue, error) {
+func (f *fakePromClient) QueryRangeByLabel(_ context.Context, expr, _ string, r promclient.TimeRange, _ time.Duration) (map[string][]promclient.TimeValue, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.capturedRanges = append(f.capturedRanges, r)

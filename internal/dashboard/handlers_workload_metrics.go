@@ -24,7 +24,7 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return
 	}
-	step, perr := parseStepParam(q, "5m")
+	step, perr := parseStepParam(q, 5*time.Minute)
 	if perr != nil {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return
@@ -33,26 +33,22 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	ctx := r.Context()
 	key := promclient.WorkloadIdentity{Namespace: namespace, OwnerKind: kind, OwnerName: name}
 
-	// Only cpu/memory usage failures abort the response; the rest are
-	// best-effort.
+	// Only usage failures abort the response; the rest are best-effort.
 	var (
-		cpuSeries, memSeries promclient.ContainerTimeSeries
-		running              runningSeries
-		cpuErr, memErr       error
-		id                   *inventory.Identity
-		signal               *usageSignal
-		oomKills             []promclient.OOMKill
-		signalErr            error
+		average    = make([]promclient.ContainerTimeSeries, len(chartResources))
+		averageErr = make([]error, len(chartResources))
+		running    runningSeries
+		id         *inventory.Identity
+		signal     *usageSignal
+		oomKills   []promclient.OOMKill
+		signalErr  error
 	)
 	var wg sync.WaitGroup
-	wg.Go(func() {
-		cpuSeries, cpuErr = s.PromClient.QueryRangeByLabel(ctx,
-			perContainer("avg", promclient.MetricContainerCPUUsageByWorkloadRate1m, key), "container", tr, step)
-	})
-	wg.Go(func() {
-		memSeries, memErr = s.PromClient.QueryRangeByLabel(ctx,
-			perContainer("avg", promclient.MetricContainerMemoryByWorkloadBytes, key), "container", tr, step)
-	})
+	for i, res := range chartResources {
+		wg.Go(func() {
+			average[i], averageErr[i] = s.PromClient.QueryRangeByLabel(ctx, perContainer("avg", res.usage, key), "container", tr, step)
+		})
+	}
 	wg.Go(func() { running = s.running(ctx, key, tr, step) })
 	wg.Go(func() {
 		// A failed read is tolerated: resources and init containers come back
@@ -70,26 +66,19 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	})
 	wg.Wait()
 
-	if cpuErr != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("cpu range query: %v", cpuErr))
-		return
-	}
-	if memErr != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("memory range query: %v", memErr))
-		return
-	}
-
 	payload := map[string]any{
-		"cpu":            cpuSeries,
-		"memory":         memSeries,
 		"resources":      containerResourcesOf(id),
-		"cpuRequests":    running.cpuRequests,
-		"memoryRequests": running.memoryRequests,
-		"cpuLimits":      running.cpuLimits,
-		"memoryLimits":   running.memoryLimits,
+		"running":        running,
 		"oomKills":       oomKills,
 		"initContainers": initContainerNamesOf(id),
 		"signal":         signal,
+	}
+	for i, res := range chartResources {
+		if err := averageErr[i]; err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("%s range query: %v", res.name, err))
+			return
+		}
+		payload[string(res.name)] = average[i]
 	}
 	if signalErr != nil {
 		payload["signalError"] = signalErr.Error()
@@ -132,6 +121,29 @@ type usageSignalSettings struct {
 // read a value of.
 type usageSignalSeries map[corev1.ResourceName][]promclient.TimeValue
 
+// chartResource is one resource the detail page and a Simulation's history
+// chart, with the rules its replica-averaged usage and its running request
+// and limit are read from.
+type chartResource struct {
+	name                  corev1.ResourceName
+	usage, request, limit string
+}
+
+var chartResources = []chartResource{
+	{
+		name:    corev1.ResourceCPU,
+		usage:   promclient.MetricContainerCPUUsageByWorkloadRate1m,
+		request: promclient.MetricContainerCPURequestsByWorkloadCores,
+		limit:   promclient.MetricContainerCPULimitsByWorkloadCores,
+	},
+	{
+		name:    corev1.ResourceMemory,
+		usage:   promclient.MetricContainerMemoryByWorkloadBytes,
+		request: promclient.MetricContainerMemoryRequestsByWorkloadBytes,
+		limit:   promclient.MetricContainerMemoryLimitsByWorkloadBytes,
+	},
+}
+
 // readHistory reads id's history over r under its governing Policy's
 // settings, through the inputs port a Simulation's history is read through,
 // over the span a Simulation charting r would read: what its usage signals
@@ -139,7 +151,7 @@ type usageSignalSeries map[corev1.ResourceName][]promclient.TimeValue
 // governs id: a Conflicted or ungoverned identity is read under the
 // recommender defaults for its kills alone, as no Policy sizes from its
 // usage.
-func (s *Server) readHistory(ctx context.Context, id *inventory.Identity, r promclient.TimeRange, step string) (*usageSignal, []promclient.OOMKill, error) {
+func (s *Server) readHistory(ctx context.Context, id *inventory.Identity, r promclient.TimeRange, step time.Duration) (*usageSignal, []promclient.OOMKill, error) {
 	spec, err := s.rightSizing(ctx, id.Policy)
 	if err != nil {
 		return nil, nil, err
@@ -187,28 +199,34 @@ func perContainer(agg, rule string, key promclient.WorkloadIdentity) string {
 }
 
 // runningSeries are the requests and limits an identity's containers ran
-// with over a range, per container.
-type runningSeries struct {
-	cpuRequests, memoryRequests, cpuLimits, memoryLimits promclient.ContainerTimeSeries
+// with over a range, per resource.
+type runningSeries map[corev1.ResourceName]runningResource
+
+// runningResource is one resource's requests and limits, per container.
+type runningResource struct {
+	Requests promclient.ContainerTimeSeries `json:"requests,omitempty"`
+	Limits   promclient.ContainerTimeSeries `json:"limits,omitempty"`
 }
 
 // running reads the requests and limits key's containers ran with over r,
 // the highest of its pods' at each step. A series that cannot be read is
 // left nil.
-func (s *Server) running(ctx context.Context, key promclient.WorkloadIdentity, r promclient.TimeRange, step string) runningSeries {
-	var out runningSeries
+func (s *Server) running(ctx context.Context, key promclient.WorkloadIdentity, r promclient.TimeRange, step time.Duration) runningSeries {
+	read := make([]runningResource, len(chartResources))
 	var wg sync.WaitGroup
-	for rule, into := range map[string]*promclient.ContainerTimeSeries{
-		promclient.MetricContainerCPURequestsByWorkloadCores:    &out.cpuRequests,
-		promclient.MetricContainerMemoryRequestsByWorkloadBytes: &out.memoryRequests,
-		promclient.MetricContainerCPULimitsByWorkloadCores:      &out.cpuLimits,
-		promclient.MetricContainerMemoryLimitsByWorkloadBytes:   &out.memoryLimits,
-	} {
+	for i, res := range chartResources {
 		wg.Go(func() {
-			*into, _ = s.PromClient.QueryRangeByLabel(ctx, perContainer("max", rule, key), "container", r, step)
+			read[i].Requests, _ = s.PromClient.QueryRangeByLabel(ctx, perContainer("max", res.request, key), "container", r, step)
+		})
+		wg.Go(func() {
+			read[i].Limits, _ = s.PromClient.QueryRangeByLabel(ctx, perContainer("max", res.limit, key), "container", r, step)
 		})
 	}
 	wg.Wait()
+	out := make(runningSeries, len(chartResources))
+	for i, res := range chartResources {
+		out[res.name] = read[i]
+	}
 	return out
 }
 

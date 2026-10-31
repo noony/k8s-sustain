@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -61,10 +60,8 @@ type simulationHistory struct {
 	OOMKills []promclient.OOMKill `json:"oomKills,omitempty"`
 }
 
-type containerHistory struct {
-	CPU    resourceHistory `json:"cpu"`
-	Memory resourceHistory `json:"memory"`
-}
+// containerHistory is one container's history, per resource.
+type containerHistory map[corev1.ResourceName]resourceHistory
 
 // resourceHistory is one resource of one container at each instant, in cores
 // or bytes. A series has no point where it has no value: no recommended
@@ -131,7 +128,11 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 	if err != nil {
 		return nil, err
 	}
-	span := chartSpan(tr, cmp.Or(req.Step, "5m"))
+	step, err := promclient.ParseStep(cmp.Or(req.Step, "5m"))
+	if err != nil {
+		return nil, err
+	}
+	span := chartSpan(tr, step)
 	if history, err := recommender.ComputeRange(ctx, s.Inputs, a.Request, span); err != nil {
 		out.HistoryError = err.Error()
 	} else {
@@ -156,10 +157,8 @@ func simulationRange(req simulateRequest, now time.Time) (promclient.TimeRange, 
 }
 
 // chartSpan is the span a chart of r reads a history at, step as its finest.
-func chartSpan(r promclient.TimeRange, step string) recommender.Span {
-	// The handler validated the step; one it still cannot read is no hint.
-	hint, _ := promclient.ParseStep(step)
-	return recommender.SpanOf(r.Start.UTC(), r.End.UTC(), hint)
+func chartSpan(r promclient.TimeRange, step time.Duration) recommender.Span {
+	return recommender.SpanOf(r.Start.UTC(), r.End.UTC(), step)
 }
 
 // stepSeconds is span's step in seconds, as a chart reads it.
@@ -170,31 +169,25 @@ func stepSeconds(span recommender.Span) int64 {
 // simulationHistory renders what the Simulation computed over span next to
 // the requests and limits the identity's pods ran with then.
 func (s *Server) simulationHistory(ctx context.Context, key promclient.WorkloadIdentity, span recommender.Span, r recommender.RangeResult) *simulationHistory {
-	step := strconv.FormatInt(stepSeconds(span), 10) + "s"
-	running := s.running(ctx, key, promclient.TimeRange{Start: span.Start, End: span.End}, step)
+	running := s.running(ctx, key, promclient.TimeRange{Start: span.Start, End: span.End}, span.Step)
 	out := &simulationHistory{
 		StepSeconds: stepSeconds(span),
 		Containers:  make(map[string]containerHistory, len(r.Containers)),
 		OOMKills:    recommender.OOMKills(r),
 	}
 	for name, c := range r.Containers {
-		cpu, memory := c[corev1.ResourceCPU], c[corev1.ResourceMemory]
-		out.Containers[name] = containerHistory{
-			CPU: resourceHistory{
-				Usage:              cpu.Usage,
-				RecommendedRequest: cpu.Request,
-				RecommendedLimit:   cpu.Limit,
-				RunningRequest:     running.cpuRequests[name],
-				RunningLimit:       running.cpuLimits[name],
-			},
-			Memory: resourceHistory{
-				Usage:              memory.Usage,
-				RecommendedRequest: memory.Request,
-				RecommendedLimit:   memory.Limit,
-				RunningRequest:     running.memoryRequests[name],
-				RunningLimit:       running.memoryLimits[name],
-			},
+		history := make(containerHistory, len(chartResources))
+		for _, res := range chartResources {
+			computed, ran := c[res.name], running[res.name]
+			history[res.name] = resourceHistory{
+				Usage:              computed.Usage,
+				RecommendedRequest: computed.Request,
+				RecommendedLimit:   computed.Limit,
+				RunningRequest:     ran.Requests[name],
+				RunningLimit:       ran.Limits[name],
+			}
 		}
+		out.Containers[name] = history
 	}
 	return out
 }

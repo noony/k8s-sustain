@@ -177,14 +177,14 @@ func TestRunSimulation_HistoryIsTheComputationAtEachInstant(t *testing.T) {
 	}
 	main := res.History.Containers["main"]
 	for what, tc := range map[string]struct{ got, want []promclient.TimeValue }{
-		"cpu usage":                  {main.CPU.Usage, points(0.5, 1, 1)},
-		"cpu recommended request":    {main.CPU.RecommendedRequest, points(1.1, 2.2, 2.2)},
-		"cpu recommended limit":      {main.CPU.RecommendedLimit, nil},
-		"cpu running request":        {main.CPU.RunningRequest, running},
-		"cpu running limit":          {main.CPU.RunningLimit, running},
-		"memory usage":               {main.Memory.Usage, points(64*mib, 64*mib, 64*mib)},
-		"memory recommended request": {main.Memory.RecommendedRequest, points(64*mib, 64*mib, 200*mib)},
-		"memory recommended limit":   {main.Memory.RecommendedLimit, points(128*mib, 128*mib, 400*mib)},
+		"cpu usage":                  {main[corev1.ResourceCPU].Usage, points(0.5, 1, 1)},
+		"cpu recommended request":    {main[corev1.ResourceCPU].RecommendedRequest, points(1.1, 2.2, 2.2)},
+		"cpu recommended limit":      {main[corev1.ResourceCPU].RecommendedLimit, nil},
+		"cpu running request":        {main[corev1.ResourceCPU].RunningRequest, running},
+		"cpu running limit":          {main[corev1.ResourceCPU].RunningLimit, running},
+		"memory usage":               {main[corev1.ResourceMemory].Usage, points(64*mib, 64*mib, 64*mib)},
+		"memory recommended request": {main[corev1.ResourceMemory].RecommendedRequest, points(64*mib, 64*mib, 200*mib)},
+		"memory recommended limit":   {main[corev1.ResourceMemory].RecommendedLimit, points(128*mib, 128*mib, 400*mib)},
 	} {
 		if !reflect.DeepEqual(tc.got, tc.want) {
 			t.Errorf("%s = %v, want %v", what, tc.got, tc.want)

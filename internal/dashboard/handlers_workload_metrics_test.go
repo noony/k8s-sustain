@@ -75,7 +75,7 @@ func TestHandleWorkloadMetrics_ReturnsAllKeys(t *testing.T) {
 	}
 	var got map[string]any
 	decodeEnvelopeData(t, rec.Body, &got)
-	for _, k := range []string{"cpu", "memory", "resources", "cpuRequests", "memoryRequests", "oomKills", "initContainers"} {
+	for _, k := range []string{"cpu", "memory", "resources", "running", "oomKills", "initContainers"} {
 		if _, ok := got[k]; !ok {
 			t.Errorf("response missing %q key; got keys = %v", k, mapKeys(got))
 		}

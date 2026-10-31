@@ -109,18 +109,19 @@ func parseDurationParam(q url.Values, def string) (string, *paramError) {
 	return v, nil
 }
 
-// parseStepParam validates a chart resolution string. Sub-minute units are
-// allowed here because chart resolution is a rendering concern, not a
-// recommendation window.
-func parseStepParam(q url.Values, def string) (string, *paramError) {
+// parseStepParam reads a chart resolution. Sub-minute units are allowed here
+// because chart resolution is a rendering concern, not a recommendation
+// window.
+func parseStepParam(q url.Values, def time.Duration) (time.Duration, *paramError) {
 	v := q.Get("step")
 	if v == "" {
 		return def, nil
 	}
-	if !stepPattern.MatchString(v) {
-		return "", badParam("step", "invalid step %q: must be a Prometheus duration (e.g. 30s, 5m, 1h)", v)
+	step, err := promclient.ParseStep(v)
+	if !stepPattern.MatchString(v) || err != nil {
+		return 0, badParam("step", "invalid step %q: must be a Prometheus duration (e.g. 30s, 5m, 1h)", v)
 	}
-	return v, nil
+	return step, nil
 }
 
 const maxSpanSeconds = int64(366 * 24 * 60 * 60)

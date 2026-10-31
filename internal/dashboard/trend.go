@@ -30,7 +30,7 @@ func (s *Server) handleSummaryTrend(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return
 	}
-	step, perr := parseStepParam(q, "1h")
+	step, perr := parseStepParam(q, time.Hour)
 	if perr != nil {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return

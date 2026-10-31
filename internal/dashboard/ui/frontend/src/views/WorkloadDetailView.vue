@@ -225,10 +225,11 @@ function renderCharts() {
   if (!metrics.value) return
 
   const resources = metrics.value.resources || {}
-  const cpuRequests = metrics.value.cpuRequests || {}
-  const memoryRequests = metrics.value.memoryRequests || {}
-  const cpuLimits = metrics.value.cpuLimits || {}
-  const memoryLimits = metrics.value.memoryLimits || {}
+  const running = metrics.value.running || {}
+  const cpuRequests = running.cpu?.requests || {}
+  const memoryRequests = running.memory?.requests || {}
+  const cpuLimits = running.cpu?.limits || {}
+  const memoryLimits = running.memory?.limits || {}
   const storedRecs = stored.value?.containers || {}
   const ooms = oomByContainer()
   const stepMs = parseStepToMs(rangeQueryParams(range.value, Date.now()).step)

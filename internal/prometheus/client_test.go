@@ -93,7 +93,7 @@ func TestQueryRangeReturnsTimeValues(t *testing.T) {
 	now := time.Now()
 	tr := TimeRange{Start: now.Add(-5 * time.Minute), End: now}
 	c, _ := New(server.URL)
-	out, err := c.QueryRange(context.Background(), "anything", tr, "1m")
+	out, err := c.QueryRange(context.Background(), "anything", tr, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestQueryRangeByLabel_KeysEachSeriesByTheLabel(t *testing.T) {
 
 	now := time.Now()
 	c, _ := New(server.URL)
-	got, err := c.QueryRangeByLabel(context.Background(), "max by (container) (x)", "container", TimeRange{Start: now.Add(-5 * time.Minute), End: now}, "1m")
+	got, err := c.QueryRangeByLabel(context.Background(), "max by (container) (x)", "container", TimeRange{Start: now.Add(-5 * time.Minute), End: now}, time.Minute)
 	if err != nil {
 		t.Fatalf("QueryRangeByLabel: %v", err)
 	}
@@ -170,14 +170,6 @@ func TestQueryRangeByLabel_KeysEachSeriesByTheLabel(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
-	}
-}
-
-func TestQueryRangeByLabel_BadStep(t *testing.T) {
-	c, _ := New("http://127.0.0.1:1")
-	now := time.Now()
-	if _, err := c.QueryRangeByLabel(context.Background(), "x", "container", TimeRange{Start: now.Add(-time.Minute), End: now}, "nope"); err == nil {
-		t.Fatal("expected an error for an invalid step")
 	}
 }
 

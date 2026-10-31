@@ -325,12 +325,8 @@ func (c *Client) QueryInstant(ctx context.Context, expr string) (float64, error)
 
 // QueryRange runs a range query for a single series and returns its time-stamped
 // values. If the query produces multiple series, only the first is returned.
-func (c *Client) QueryRange(ctx context.Context, expr string, r TimeRange, step string) ([]TimeValue, error) {
-	stepDur, err := ParseStep(step)
-	if err != nil {
-		return nil, err
-	}
-	matrix, err := c.execRange(ctx, expr, r, stepDur, dashboardQueryTimeout)
+func (c *Client) QueryRange(ctx context.Context, expr string, r TimeRange, step time.Duration) ([]TimeValue, error) {
+	matrix, err := c.execRange(ctx, expr, r, step, dashboardQueryTimeout)
 	if err != nil {
 		return nil, wrapQueryErr("range query", expr, err)
 	}
@@ -350,12 +346,8 @@ func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[stri
 // A series missing the label is skipped. It gets the client's query timeout,
 // not the dashboard's shorter one: a workload's per-container series over a
 // month is a heavier read than an Overview aggregate.
-func (c *Client) QueryRangeByLabel(ctx context.Context, expr, label string, r TimeRange, step string) (map[string][]TimeValue, error) {
-	stepDur, err := ParseStep(step)
-	if err != nil {
-		return nil, err
-	}
-	matrix, err := c.execRange(ctx, expr, r, stepDur, c.queryTimeout)
+func (c *Client) QueryRangeByLabel(ctx context.Context, expr, label string, r TimeRange, step time.Duration) (map[string][]TimeValue, error) {
+	matrix, err := c.execRange(ctx, expr, r, step, c.queryTimeout)
 	if err != nil {
 		return nil, wrapQueryErr("range query", expr, err)
 	}

@@ -237,10 +237,8 @@ export interface MetricsData {
   cpu: Record<string, TimeValue[]>
   memory: Record<string, TimeValue[]>
   resources?: Record<string, ContainerResources>
-  cpuRequests?: Record<string, TimeValue[]>
-  memoryRequests?: Record<string, TimeValue[]>
-  cpuLimits?: Record<string, TimeValue[]>
-  memoryLimits?: Record<string, TimeValue[]>
+  /** What the pods ran with, per resource. */
+  running?: Partial<Record<Resource, RunningSeries>>
   /** Read with the signal's history, under the recommender defaults when no Policy governs the identity; absent when it could not be read. */
   oomKills?: OOMKill[]
   initContainers?: string[]
@@ -248,6 +246,12 @@ export interface MetricsData {
   signal?: UsageSignal | null
   /** Why the signal could not be read; the rest of the page stands without it. */
   signalError?: string
+}
+
+/** One resource's requests and limits the pods ran with, per container. */
+export interface RunningSeries {
+  requests?: Record<string, TimeValue[]>
+  limits?: Record<string, TimeValue[]>
 }
 
 /** What an identity's usage signals read over the chart range under its governing Policy's settings: what the recommender sizes each request from. */

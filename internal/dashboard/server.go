@@ -35,12 +35,12 @@ type PromQuerier interface {
 	Ping(ctx context.Context) error
 
 	QueryInstant(ctx context.Context, expr string) (float64, error)
-	QueryRange(ctx context.Context, expr string, r promclient.TimeRange, step string) ([]promclient.TimeValue, error)
+	QueryRange(ctx context.Context, expr string, r promclient.TimeRange, step time.Duration) ([]promclient.TimeValue, error)
 	QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error)
 	// QueryRangeByLabel is QueryRange for an expression with one series per
 	// value of label, keyed by it: an identity's running requests and limits,
 	// and the replica-averaged usage its detail page charts, per container.
-	QueryRangeByLabel(ctx context.Context, expr, label string, r promclient.TimeRange, step string) (map[string][]promclient.TimeValue, error)
+	QueryRangeByLabel(ctx context.Context, expr, label string, r promclient.TimeRange, step time.Duration) (map[string][]promclient.TimeValue, error)
 }
 
 var dashboardScheme = runtime.NewScheme()
