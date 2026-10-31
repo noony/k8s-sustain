@@ -43,13 +43,13 @@ func (k MemberKey) String() string {
 	return k.Kind + "/" + k.Namespace + "/" + k.Name
 }
 
-// Kind is what one pass did with one live member.
-type Kind int
+// ResultKind is what one pass did with one live member.
+type ResultKind int
 
 const (
 	// Done: the member's pods were driven toward the Recommendation, or
 	// counted under OnCreate.
-	Done Kind = iota
+	Done ResultKind = iota
 	// Idle: there was nothing to apply, no Recommendation for the member's
 	// containers or recommend-only. Its pod counts are dropped.
 	Idle
@@ -69,7 +69,7 @@ const (
 // Result is what one pass did with one live member.
 type Result struct {
 	Member MemberKey
-	Kind   Kind
+	Kind   ResultKind
 	// Pods is the member's pod counts, set for Done.
 	Pods workload.PodCounts
 	// Step and Err are the step that failed and why, set for Failed.

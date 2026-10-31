@@ -18,7 +18,7 @@ import (
 // threshold held back on its pods.
 type applyResult struct {
 	member *workloadTarget
-	kind   ledger.Kind
+	kind   ledger.ResultKind
 	// pods is the member's pod counts, set for ledger.Done.
 	pods workload.PodCounts
 	// step and err are the step that failed and why, set for ledger.Failed.

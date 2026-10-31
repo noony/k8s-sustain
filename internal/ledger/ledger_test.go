@@ -40,7 +40,7 @@ func failedOn(m ledger.MemberKey, step workload.Step, err error) ledger.Result {
 	return ledger.Result{Member: m, Kind: ledger.Failed, Step: step, Err: err}
 }
 
-func resultOf(m ledger.MemberKey, kind ledger.Kind) ledger.Result {
+func resultOf(m ledger.MemberKey, kind ledger.ResultKind) ledger.Result {
 	return ledger.Result{Member: m, Kind: kind}
 }
 
@@ -56,7 +56,7 @@ func settle(l *ledger.Ledger, id promclient.WorkloadIdentity, results ...ledger.
 func TestSettle_Result(t *testing.T) {
 	member := deployment("web")
 	failed := func(step workload.Step, err error) ledger.Result { return failedOn(member, step, err) }
-	succeeded := func(kind ledger.Kind) ledger.Result { return resultOf(member, kind) }
+	succeeded := func(kind ledger.ResultKind) ledger.Result { return resultOf(member, kind) }
 	cases := []struct {
 		name        string
 		before      []ledger.Result
