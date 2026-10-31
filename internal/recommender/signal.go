@@ -124,12 +124,14 @@ var shardLabels = []string{"namespace", "owner_kind", "owner_name", "container"}
 // maps a pod to its identity from. Every rule a signal reads joins it.
 var podWorkloadMetrics = []string{"kube_pod_owner", "kube_job_owner", "kube_replicaset_owner", "kube_pod_annotations"}
 
-// role orders the stages of a resource: every base signal before every
-// adjuster on the request side, then every limit adjuster on the limit side.
+// role orders the stages of a resource and says how their contributions
+// combine: every base signal before every adjuster on the request side, then
+// every limit adjuster on the limit side.
 type role int
 
 const (
-	// base signals set a request from observed usage.
+	// base signals set a request from observed usage. The highest
+	// contribution sets it, a tie going to the first in signals' order.
 	base role = iota
 	// adjusters raise the value the base signals set, never lower it.
 	adjuster

@@ -220,6 +220,68 @@ func TestSignals_StagesSizeWithTheirContext(t *testing.T) {
 	}
 }
 
+// fixedBase is a CPU base signal that exists only in this file, contributing
+// value to every container, with a trace entry saying whether it determined
+// the request.
+type fixedBase struct {
+	label string
+	value float64
+}
+
+func (f fixedBase) name() string                                                  { return f.label }
+func (fixedBase) required() bool                                                  { return false }
+func (fixedBase) samplesPerContainer(sustainv1alpha1.ResourcesConfigs) int        { return 0 }
+func (fixedBase) query(sustainv1alpha1.ResourcesConfigs, promclient.Shard) string { return "" }
+func (fixedBase) contract() PromContract                                          { return PromContract{} }
+
+func (fixedBase) collect([]promclient.ShardSample) signalValues { return noValues{} }
+
+func (fixedBase) slot() slot { return slot{role: base, resource: cpuResource} }
+
+func (f fixedBase) contribute(stageContext) (contribution, bool) {
+	return contribution{value: f.value, anchors: true}, true
+}
+
+func (f fixedBase) stage(_ stageContext, value float64, determined bool) sustainv1alpha1.TraceStage {
+	return sustainv1alpha1.TraceStage{
+		Stage: f.label,
+		Value: cpuResource.quantity(value),
+		Facts: map[string]string{"determined": strconv.FormatBool(determined)},
+	}
+}
+
+// Base signals combine by max: the highest contribution sets the request
+// whatever order they are listed in, a tie goes to the first listed, and the
+// trace marks the winner, and only it, as the determining stage.
+func TestSignals_BaseSignalsCombineByMax(t *testing.T) {
+	low, high := fixedBase{"low", 0.1}, fixedBase{"high", 0.3}
+	cases := []struct {
+		name        string
+		listed      []signal
+		wantRequest string
+		wantWinner  string
+	}{
+		{"low listed first", []signal{low, high}, "300m", "high"},
+		{"high listed first", []signal{high, low}, "300m", "high"},
+		{"tie", []signal{fixedBase{"first", 0.2}, fixedBase{"second", 0.2}}, "200m", "first"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withSignals(t, tc.listed...)
+
+			res := Compute(Request{containers: containers("app"), inputs: NewInputs(), now: now})
+
+			assertQty(t, "request", res.Recs["app"].CPURequest, tc.wantRequest)
+			stages := res.Traces["app"].CPU.Request[:len(tc.listed)]
+			for _, st := range stages {
+				if want := strconv.FormatBool(st.Stage == tc.wantWinner); st.Facts["determined"] != want {
+					t.Errorf("%s determined = %s, want %s: %s won", st.Stage, st.Facts["determined"], want, tc.wantWinner)
+				}
+			}
+		})
+	}
+}
+
 var ruleRef = regexp.MustCompile(`k8s_sustain:[a-z0-9_:]+`)
 
 // Listing a signal is enough for its contract to be checked against the

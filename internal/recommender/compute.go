@@ -258,14 +258,8 @@ func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justifi
 	cfg := res.config(req.resources)
 	sc := stageContext{inputs: req.inputs, config: cfg, container: c, now: req.now}
 	contributions := contributionsTo(sc, res, base, adjuster)
-	var value float64
-	winner := -1
-	for i, ct := range contributions {
-		justified = justified || ct.anchors
-		if ct.role == base || ct.value > value {
-			value, winner = ct.value, i
-		}
-	}
+	value, winner := requestOf(contributions)
+	justified = slices.ContainsFunc(contributions, func(ct contributed) bool { return ct.anchors })
 	if !justified || cfg.Requests.KeepRequest {
 		return nil, justified
 	}
@@ -289,6 +283,22 @@ func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justifi
 	sc.request = &out.request
 	out.limit, out.trace.Limit = limitChain(res, sc)
 	return out, true
+}
+
+// requestOf combines the request side's contributions, every base one before
+// every adjuster's: the highest base contribution, a tie going to the first,
+// then any adjuster's above it. winner is the one that set the value, -1 for
+// none.
+func requestOf(cs []contributed) (value float64, winner int) {
+	winner = -1
+	for i, ct := range cs {
+		// A base contribution finding no winner yet is the first base one,
+		// so it sets the value whatever its size.
+		if ct.value > value || (ct.role == base && winner < 0) {
+			value, winner = ct.value, i
+		}
+	}
+	return value, winner
 }
 
 func quantityStage(name string, q resource.Quantity) sustainv1alpha1.TraceStage {
