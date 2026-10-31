@@ -217,6 +217,8 @@ At most one of the following fields may be set (enforced by CRD validation). If 
 
 Whatever the strategy, a limit never ends below the request: the API server rejects such a pod and such a resize, so a kept limit the new request outgrows (an OOM floor, headroom, `minAllowed` or autoscaler coordination can each push it there) is raised to the request. The request is never lowered to fit the limit. The `WorkloadRecommendation`'s trace records the raise as its `guard` stage. The webhook and the in-place resize hold the same line when they write a container: when the limit it would end up with is below its request — a limit kept from a pod whose running limit differs from its template, or a limit decrease applied while the [downsize threshold](#downsize-threshold) withholds the request's — they raise that limit to the request.
 
+A change to a container's limits alone, its requests already matching within the [downsize threshold](#downsize-threshold), never evicts a pod: it is resized in place where the cluster supports it, and otherwise waits for the pod's replacement, which the webhook gives the new limits. Such a pod is not counted as drift. A limit raised because the request rose is part of that request change. See [Changes to limits alone](../concepts/in-place-updates.md#changes-to-limits-alone).
+
 #### `cpu.downsizeThreshold` / `memory.downsizeThreshold` {#downsize-threshold}
 
 Suppresses pod recycling for resource **decreases** that are too small to be
@@ -234,7 +236,8 @@ resource (every decrease is applied).
 
 The threshold gates only the controller's recycling of **running** pods. The
 admission webhook always injects the exact recommendation at pod creation — a
-new pod has nothing to disrupt.
+new pod has nothing to disrupt. A pod whose requests are within the threshold
+and whose limits alone differ is not evicted either; see above.
 
 ---
 

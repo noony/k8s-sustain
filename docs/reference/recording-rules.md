@@ -465,7 +465,7 @@ OOM kills in the last 24h, per (workload, container): the kills [`container_oom_
 max by (namespace, owner_kind, owner_name) (k8s_sustain_workload_stale_pods > bool 0)
 ```
 
-Boolean (0/1) per workload identity: 1 when at least one live pod of the identity's members is not yet running the recommendation (`k8s_sustain_workload_stale_pods > 0`). The k8s-sustain dashboard reads `k8s_sustain_workload_stale_pods` directly; this rule is for alerts and external dashboards.
+Boolean (0/1) per workload identity: 1 when at least one live pod of the identity's members is not yet running the recommendation's requests (`k8s_sustain_workload_stale_pods > 0`); limits alone never count. The k8s-sustain dashboard reads `k8s_sustain_workload_stale_pods` directly; this rule is for alerts and external dashboards.
 
 ### `k8s_sustain:workload_cpu_usage:cores`
 

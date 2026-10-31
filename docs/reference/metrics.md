@@ -118,7 +118,7 @@ Live pods (not terminating, not `Succeeded`/`Failed`) owned by the identity's me
 
 #### `k8s_sustain_workload_stale_pods`
 
-Subset of `workload_pods` whose resources still differ from the recommendation beyond `downsizeThreshold` after the apply pass. Zero means every pod runs the recommendation. Same lifecycle as `workload_pods`; the dashboard shows it as **Drift** (`stale/total`).
+Subset of `workload_pods` whose requests still differ from the recommendation beyond `downsizeThreshold` after the apply pass. A pod whose limits alone differ is not counted: a change to limits alone is resized in place or waits for the pod's replacement (see [Changes to limits alone](../concepts/in-place-updates.md#changes-to-limits-alone)). Zero means every pod runs the recommendation's requests. Same lifecycle as `workload_pods`; the dashboard shows it as **Drift** (`stale/total`).
 
 #### `k8s_sustain_autoscaler_target_configured`
 

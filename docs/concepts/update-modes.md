@@ -21,7 +21,7 @@ spec:
 - Existing running pods are **not** affected — only newly created pods receive the recommendation
 - If the webhook is unavailable, the pod is admitted without resource injection (`failurePolicy: Ignore`)
 - The controller still computes a recommendation for `OnCreate` workloads on its regular reconcile cycle and caches it in a `WorkloadRecommendation` object — this keeps the workload visible on the dashboard and is what the webhook injects at admission (the webhook has no other source of recommendations), but the controller **never** recycles, resizes, or otherwise mutates the workload in this mode
-- The dashboard reports pods still waiting for a rollout to pick up the recommendation as drift (stale pods)
+- The dashboard reports pods still waiting for a rollout to pick up a request change as drift (stale pods); pods whose limits alone differ are not drift
 
 **Best for:**
 
@@ -53,7 +53,7 @@ spec:
 
 **Ongoing reconciliation (controller) on clusters without in-place update support (k8s < 1.33):**
 
-1. Each non-terminal pod (Running or Pending) with stale resources is evicted via the Eviction API, one at a time (see [Eviction safeguards](#eviction-safeguards)). Staleness is detected on both requests and limits. Evicting Pending pods unblocks workloads stuck unschedulable because their original request was too large.
+1. Each non-terminal pod (Running or Pending) with stale resources is evicted via the Eviction API, one at a time (see [Eviction safeguards](#eviction-safeguards)). A pod is stale when a request differs from the recommendation; a pod whose limits alone differ is never evicted and keeps them until it is replaced (see [Changes to limits alone](in-place-updates.md#changes-to-limits-alone)). Evicting Pending pods unblocks workloads stuck unschedulable because their original request was too large.
 2. The workload controller (Deployment/StatefulSet/DaemonSet) creates replacement pods
 3. The webhook injects the latest recommendations into the new pods at creation time
 4. PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle
@@ -62,7 +62,7 @@ spec:
 
 1. Controller resizes each running, non-terminating pod through the `pods/resize` subresource. A stale Pending pod cannot be resized, so it is evicted as on older clusters
 2. The kubelet applies the new resources, without restarting the container unless its `resizePolicy` requires it
-3. If the kubelet reports `Infeasible` or `Error`, or the API server rejects the resize as invalid, the pod is evicted as a fallback; `Deferred` resizes are left to the kubelet
+3. If the kubelet reports `Infeasible` or `Error`, or the API server rejects the resize as invalid, the pod is evicted as a fallback, unless the resize changes limits alone; `Deferred` resizes are left to the kubelet
 
 See [In-Place Updates](in-place-updates.md) for details.
 
@@ -98,7 +98,7 @@ The controller never patches workload templates (Deployment, StatefulSet, CronJo
 
 To avoid churning pods over noise, the controller ignores small **decreases**. A decrease is acted on only when it is at least `max(percent% of the current value, minDecrease)`, set per resource with `resourcesConfigs.<cpu|memory>.downsizeThreshold` (defaults: 5%, with `minDecrease` 10m for CPU and 15Mi for memory). The check is per container and per value (request and limit).
 
-- **Increases always apply**, however small.
+- **Increases always apply**, however small. A change to limits alone, increase or decrease, never evicts a pod: it is resized in place or waits for the pod's replacement (see [Changes to limits alone](in-place-updates.md#changes-to-limits-alone)).
 - Setting both `percent` and `minDecrease` to `0` acts on every decrease.
 - The threshold only gates resizing and eviction of running pods; new pods still receive the exact recommendation from the webhook.
 
