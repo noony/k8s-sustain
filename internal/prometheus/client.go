@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -320,38 +321,19 @@ type OOMEvent struct {
 	Pod       string    `json:"pod"`
 }
 
-// QueryOOMKillEvents returns OOM kill events for a workload over r, from
-// restart increases gated on last_terminated_reason="OOMKilled".
+// QueryOOMKillEvents returns a workload's OOM kills over r, one event per kill
+// the MetricContainerOOMKills rule recorded, dated at the end of the step it
+// falls in.
 func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) ([]OOMEvent, error) {
 	stepDur, err := model.ParseDuration(step)
 	if err != nil {
 		return nil, fmt.Errorf("parsing step %q: %w", step, err)
 	}
 
-	// increase() needs at least two samples in its lookback; kube-state-metrics
-	// scrapes every 30-60s, so floor the lookback at 5m regardless of step.
-	lookback := max(time.Duration(stepDur), 5*time.Minute)
-	lookbackExpr := model.Duration(lookback).String()
-
-	// Both sides are aggregated with max by (namespace, pod, container) to drop
-	// KSM scrape-target labels; otherwise a KSM rollout inside the window makes
-	// the group_left join fail with many-to-many matching.
-	expr := fmt.Sprintf(
-		`max by (namespace, pod, container, owner_kind, owner_name) (
-		   max by (namespace, pod, container) (
-		     increase(kube_pod_container_status_restarts_total{namespace=%q, container!="", container!="POD"}[%s])
-		   )
-		   * on(namespace, pod, container) group_left()
-		     max by (namespace, pod, container) (
-		       kube_pod_container_status_last_terminated_reason{namespace=%q, reason="OOMKilled", container!="", container!="POD"} == 1
-		     )
-		   * on(namespace, pod) group_left(owner_kind, owner_name)
-		     %s{namespace=%q, owner_kind=%q, owner_name=%q}
-		 )`,
-		namespace, lookbackExpr,
-		namespace,
-		MetricPodWorkload, namespace, ownerKind, ownerName,
-	)
+	// A window of exactly one step tiles the range: every kill sample falls in
+	// one step's window, so it is counted once.
+	expr := fmt.Sprintf("sum by (pod, container) (sum_over_time(%s%s[%s]))",
+		MetricContainerOOMKills, WorkloadSelector(namespace, ownerKind, ownerName), stepDur)
 
 	matrix, err := c.execRange(ctx, expr, r, step, c.queryTimeout)
 	if err != nil {
@@ -361,32 +343,20 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		return nil, nil //nolint:nilerr // intentional non-fatal swallow, see comment above
 	}
 
-	// increase() smears each restart flat across the lookback; a second OOM
-	// bumps the value by ~1. Emit on each upward step above 0.5 to absorb
-	// extrapolation noise.
-	const valueBumpThreshold = 0.5
 	var events []OOMEvent
 	for _, stream := range matrix {
 		container := string(stream.Metric["container"])
-		pod := string(stream.Metric["pod"])
 		if container == "" {
 			continue
 		}
-		var lastValue float64
 		for _, v := range stream.Values {
-			cur := float64(v.Value)
-			if cur <= 0 {
-				lastValue = 0
-				continue
-			}
-			if cur > lastValue+valueBumpThreshold {
+			for range int(math.Round(float64(v.Value))) {
 				events = append(events, OOMEvent{
 					Timestamp: v.Timestamp.Time(),
 					Container: container,
-					Pod:       pod,
+					Pod:       string(stream.Metric["pod"]),
 				})
 			}
-			lastValue = cur
 		}
 	}
 	return events, nil
