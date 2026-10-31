@@ -68,11 +68,11 @@ func (p *PromInputs) FetchInputs(
 		if err != nil {
 			return nil, err
 		}
+		byIdentity := make(map[promclient.WorkloadIdentity][]promclient.ShardSample, len(shard.Names))
+		for _, smp := range samples {
+			byIdentity[smp.Identity] = append(byIdentity[smp.Identity], smp)
+		}
 		return func() {
-			byIdentity := make(map[promclient.WorkloadIdentity][]promclient.ShardSample, len(shard.Names))
-			for _, smp := range samples {
-				byIdentity[smp.Identity] = append(byIdentity[smp.Identity], smp)
-			}
 			for _, id := range shard.Identities() {
 				inputs[id].set(s, s.collect(byIdentity[id]))
 			}
@@ -119,20 +119,20 @@ func (p *PromInputs) FetchHistory(
 		if err != nil {
 			return nil, err
 		}
-		return func() {
-			byInstant := make(map[promclient.WorkloadIdentity][][]promclient.ShardSample, len(shard.Names))
-			for _, sr := range series {
-				at := byInstant[sr.Identity]
-				if at == nil {
-					at = make([][]promclient.ShardSample, instants)
-					byInstant[sr.Identity] = at
-				}
-				for _, pt := range sr.Points {
-					if i, ok := span.index(pt.Timestamp); ok {
-						at[i] = append(at[i], promclient.ShardSample{Identity: sr.Identity, Container: sr.Container, Metric: sr.Metric, Value: pt.Value})
-					}
+		byInstant := make(map[promclient.WorkloadIdentity][][]promclient.ShardSample, len(shard.Names))
+		for _, sr := range series {
+			at := byInstant[sr.Identity]
+			if at == nil {
+				at = make([][]promclient.ShardSample, instants)
+				byInstant[sr.Identity] = at
+			}
+			for _, pt := range sr.Points {
+				if i, ok := span.index(pt.Timestamp); ok {
+					at[i] = append(at[i], promclient.ShardSample{Identity: sr.Identity, Container: sr.Container, Metric: sr.Metric, Value: pt.Value})
 				}
 			}
+		}
+		return func() {
 			for _, id := range shard.Identities() {
 				samples := byInstant[id]
 				for i, in := range points[id] {

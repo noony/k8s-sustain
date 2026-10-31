@@ -364,13 +364,15 @@ func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[stri
 
 // QueryRangeByLabel runs a range query and returns each series' values keyed
 // by the value of label, for an expression with one series per value of it.
-// A series missing the label is skipped.
+// A series missing the label is skipped. It gets the client's query timeout,
+// not the dashboard's shorter one: a workload's per-container series over a
+// month is a heavier read than an Overview aggregate.
 func (c *Client) QueryRangeByLabel(ctx context.Context, expr, label string, r TimeRange, step string) (map[string][]TimeValue, error) {
 	stepDur, err := ParseStep(step)
 	if err != nil {
 		return nil, err
 	}
-	matrix, err := c.execRange(ctx, expr, r, stepDur, dashboardQueryTimeout)
+	matrix, err := c.execRange(ctx, expr, r, stepDur, c.queryTimeout)
 	if err != nil {
 		return nil, wrapQueryErr("range query", expr, err)
 	}

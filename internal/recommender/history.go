@@ -112,8 +112,8 @@ type ResourceRange struct {
 // with the instant in its stages' context, so the OOM floor at an instant is
 // the floor as it stood then. What is not a signal is today's: the
 // autoscaler req was assembled with coordinates every instant, as an
-// autoscaler has no history, and the containers' own limits are those the
-// identity holds now. The history is read through inputs in one range read,
+// autoscaler has no history, and the containers' own requests and limits are
+// those the identity holds now. The history is read through inputs in one range read,
 // under req's resources; the chain then runs at each instant without reading
 // anything else. The error is the one that made the history unavailable.
 func ComputeRange(ctx context.Context, inputs InputsFetcher, req Request, span Span) (RangeResult, error) {

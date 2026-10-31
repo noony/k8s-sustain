@@ -316,6 +316,7 @@ export interface SimulateRequest {
   window?: string
   fromTs?: number
   toTs?: number
+  /** The finest step the history may use; the server coarsens it to fit the range. */
   step: string
   /** The Policy to start from; omit for the identity's governing Policy. */
   policy?: string

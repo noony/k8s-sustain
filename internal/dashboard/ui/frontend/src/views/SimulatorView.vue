@@ -3,7 +3,6 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from
 import {
   api,
   ApiError,
-  type ContainerResources,
   type PolicySummary,
   type SimulationResult,
   type SimulateRequest,
@@ -366,12 +365,7 @@ const chartResources = [
     request: 'memoryRequest',
     limit: 'memoryLimit',
   },
-] as const satisfies {
-  key: Resource
-  request: keyof ContainerResources
-  limit: keyof ContainerResources
-  [k: string]: unknown
-}[]
+] as const
 
 function renderCharts(data: SimulationResult) {
   destroyAllCharts()
