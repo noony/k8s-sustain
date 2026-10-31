@@ -152,6 +152,33 @@ function oomByContainer() {
   return groupOOMEventsByContainer(metrics.value?.oomEvents)
 }
 
+// The stored Recommendation's request and limit as flat lines: the detail page
+// never recomputes one at past instants (that is the Simulator's job).
+function storedAnnotations(
+  request: string | undefined,
+  limit: string | undefined,
+  parse: (q: string) => number,
+): ChartAnnotation[] {
+  const out: ChartAnnotation[] = []
+  if (request) {
+    out.push({
+      value: parse(request),
+      label: 'Recommended request: ' + request,
+      color: 'rec',
+      dash: [8, 4],
+    })
+  }
+  if (limit) {
+    out.push({
+      value: parse(limit),
+      label: 'Recommended limit: ' + limit,
+      color: 'rec',
+      dash: [2, 3],
+    })
+  }
+  return out
+}
+
 function renderCharts() {
   destroyAllCharts()
   if (!metrics.value) return
@@ -202,15 +229,13 @@ function renderCharts() {
           dash: [1, 4],
         })
       }
-      const cpuRec = storedRecs[cname]?.cpuRequest
-      if (cpuRec) {
-        cpuAnnotations.push({
-          value: parseCPUQuantity(cpuRec),
-          label: 'Recommendation: ' + cpuRec,
-          color: 'rec',
-          dash: [8, 4],
-        })
-      }
+      cpuAnnotations.push(
+        ...storedAnnotations(
+          storedRecs[cname]?.cpuRequest,
+          storedRecs[cname]?.cpuLimit,
+          parseCPUQuantity,
+        ),
+      )
       createTimeSeriesChart('cpu-' + cname, metrics.value!.cpu[cname], {
         label: 'CPU Usage',
         color: 'cpu',
@@ -257,15 +282,13 @@ function renderCharts() {
           dash: [1, 4],
         })
       }
-      const memRec = storedRecs[cname]?.memoryRequest
-      if (memRec) {
-        memAnnotations.push({
-          value: parseMemoryQuantity(memRec),
-          label: 'Recommendation: ' + memRec,
-          color: 'rec',
-          dash: [8, 4],
-        })
-      }
+      memAnnotations.push(
+        ...storedAnnotations(
+          storedRecs[cname]?.memoryRequest,
+          storedRecs[cname]?.memoryLimit,
+          parseMemoryQuantity,
+        ),
+      )
       createTimeSeriesChart('mem-' + cname, metrics.value!.memory[cname], {
         label: 'Memory Usage',
         color: 'mem',
@@ -427,10 +450,30 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
             />
           </div>
           <div class="resource-row">
+            <span class="label">CPU Limit</span>
+            <span v-if="rec.cpuLimitRemoved" class="recommended">— removed —</span>
+            <ResourceDiff
+              v-else
+              :current="(metrics.resources || {})[cname]?.cpuLimit"
+              :recommended="rec.cpuLimit"
+              resource-type="cpu"
+            />
+          </div>
+          <div class="resource-row">
             <span class="label">Memory Request</span>
             <ResourceDiff
               :current="(metrics.resources || {})[cname]?.memoryRequest"
               :recommended="rec.memoryRequest"
+              resource-type="memory"
+            />
+          </div>
+          <div class="resource-row">
+            <span class="label">Memory Limit</span>
+            <span v-if="rec.memoryLimitRemoved" class="recommended">— removed —</span>
+            <ResourceDiff
+              v-else
+              :current="(metrics.resources || {})[cname]?.memoryLimit"
+              :recommended="rec.memoryLimit"
               resource-type="memory"
             />
           </div>

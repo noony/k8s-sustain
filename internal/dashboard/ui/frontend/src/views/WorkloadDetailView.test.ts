@@ -3,17 +3,22 @@ import { describe, it, expect, vi } from 'vitest'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import WorkloadDetailView from './WorkloadDetailView.vue'
 import * as api from '../lib/api'
+import * as chart from '../lib/chart'
 vi.mock('../lib/api', async (o) => ({ ...((await o()) as object), api: vi.fn() }))
+vi.mock('../lib/chart', async (o) => ({
+  ...((await o()) as object),
+  createTimeSeriesChart: vi.fn(),
+}))
 
 const router = createRouter({
   history: createMemoryHistory(),
   routes: [{ path: '/', component: WorkloadDetailView }],
 })
 
-function serve(snapshot: object) {
+function serve(snapshot: object, metrics: object = {}) {
   ;(api.api as any).mockImplementation((path: string) => {
     if (path.endsWith('/metrics?window=1w&step=20m'))
-      return Promise.resolve({ cpu: {}, memory: {}, initContainers: ['migrate'] })
+      return Promise.resolve({ cpu: {}, memory: {}, initContainers: ['migrate'], ...metrics })
     if (path.match(/\/api\/workloads\/[^/]+\/[^/]+\/[^/]+$/))
       return Promise.resolve({ automated: false, departed: false, recentEvents: [], ...snapshot })
     return Promise.reject(new Error('unexpected ' + path))
@@ -85,6 +90,61 @@ describe('WorkloadDetailView', () => {
     expect(w.text()).toContain('computed')
     const paths = (api.api as any).mock.calls.map((c: unknown[]) => c[0] as string)
     expect(paths.some((p: string) => p.includes('/recommendations'))).toBe(false)
+  })
+
+  it('draws the stored request and limit, and shows them next to what the pods run with', async () => {
+    ;(chart.createTimeSeriesChart as any).mockClear()
+    const usage = [{ timestamp: '2026-10-05T12:00:00Z', value: 1 }]
+    serve(
+      {
+        automated: true,
+        policyName: 'p',
+        riskState: 'safe',
+        oom24h: 0,
+        stalePods: 0,
+        totalPods: 1,
+        recommendation: {
+          outcome: 'Computed',
+          containers: {
+            app: {
+              cpuRequest: '250m',
+              cpuLimitRemoved: true,
+              memoryRequest: '128Mi',
+              memoryLimit: '256Mi',
+            },
+          },
+        },
+      },
+      {
+        cpu: { app: usage },
+        memory: { app: usage },
+        resources: { app: { cpuLimit: '1', memoryLimit: '192Mi' } },
+      },
+    )
+    const w = mountDetail()
+    await flushPromises()
+
+    const annotations = Object.fromEntries(
+      (chart.createTimeSeriesChart as any).mock.calls.map(
+        ([id, , opts]: [string, unknown, chart.ChartOpts]) => [
+          id,
+          (opts.annotations ?? []).filter((a) => a.color === 'rec').map((a) => [a.label, a.value]),
+        ],
+      ),
+    )
+    expect(annotations).toEqual({
+      'cpu-app': [['Recommended request: 250m', 0.25]],
+      'mem-app': [
+        ['Recommended request: 128Mi', 128 * 1024 * 1024],
+        ['Recommended limit: 256Mi', 256 * 1024 * 1024],
+      ],
+    })
+    const rows = Object.fromEntries(
+      w.findAll('.resource-row').map((r) => [r.find('.label').text(), r.text()]),
+    )
+    expect(rows['CPU Limit']).toContain('removed')
+    expect(rows['Memory Limit']).toContain('192Mi')
+    expect(rows['Memory Limit']).toContain('256Mi')
   })
 
   it('shows how each container was computed from the stored trace', async () => {
