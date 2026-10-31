@@ -401,7 +401,11 @@ rule), which no instant of its 24h rules can
 date. `ComputeRange` then runs the whole chain at each instant on that
 instant's values, the instant in the `stageContext`, without reading anything
 else; it is what a Simulation's charts draw, and `Request.RequestAt` no longer
-exists. To add a signal:
+exists. `UsageRange` makes the same read for an identity under a Policy's spec
+(the containers `ContainersOf` recommends, every default explicit) and
+returns only what the usage signals read at each instant, computing nothing:
+it is the line the workload detail page draws next to the replica average. To
+add a signal:
 
 1. Write `internal/recommender/signal_<name>.go`. Build its PromQL from the
    `internal/prometheus` primitives (`Shard.Selector`, `Shard.MetricsSelector`,
@@ -501,7 +505,13 @@ Every endpoint builds its identities from `internal/inventory`
 count and the controller agree on members, containers, age, Departed and the
 governing Policy. The detail page shows the Recommendation stored in the
 identity's `WorkloadRecommendation`, its `status.outcome` and its
-`status.trace`; only the Simulator recomputes. Coordination factors are not a
+`status.trace`; only the Simulator recomputes. Its charts draw two usage lines
+per resource: the replica average, read through `PromQuerier`, and what the
+usage signals read over the chart range under the governing Policy's spec,
+read through the `Inputs` port with `recommender.UsageRange` (no PromQL in the
+dashboard, nothing computed from it). An identity no Policy governs has no
+signal line, and a read that fails leaves the page standing with a
+`signalError`. Coordination factors are not a
 health signal: the board reads them from the coordination stage of the stored
 trace (`coordinationFactorsOf`, through `recommender.TracedCoordination`).
 

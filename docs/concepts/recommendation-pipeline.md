@@ -174,6 +174,8 @@ The history is read in one range read per signal: each signal's own shard query,
 
 A history that cannot be read, for instance a range that loads more samples than Prometheus allows, costs the Simulation its charts, never its values.
 
+The workload detail page reads the same history, under the governing policy's settings, for one line only: what the usage signal read at each instant, drawn next to the replica average (see [Two usage lines](../guides/dashboard.md#two-usage-lines)). Nothing is computed from it there; the page shows the stored recommendation.
+
 ## Choosing a percentile
 
 The percentile knob (`spec.rightSizing.resourcesConfigs.<cpu|memory>.requests.percentile`) maps directly to a `quantile_over_time(p, …)` against the recording rule. Pick by intent, not by gut feel:
