@@ -9,16 +9,32 @@ export interface WorkloadKind {
   inPlaceOnly: boolean
 }
 
-export function fetchKinds(): Promise<WorkloadKind[]> {
-  return api<WorkloadKind[]>('/api/kinds')
+let served: Promise<WorkloadKind[]> | undefined
+
+/**
+ * The kinds `/api/kinds` serves. They change only with the server binary, so
+ * every view shares one fetch; a failed fetch is not kept, so the next call
+ * retries.
+ */
+export function getKinds(): Promise<WorkloadKind[]> {
+  served ??= api<WorkloadKind[]>('/api/kinds').catch((e: unknown) => {
+    served = undefined
+    throw e
+  })
+  return served
 }
 
-/** A Policy's update mode per kind it manages, in the server's kind order. */
-export function updateModes(kinds: WorkloadKind[], types?: Record<string, string>): string {
-  const modes = kinds.flatMap((k) => {
-    const mode = types?.[k.updateField]
-    if (!mode) return []
-    return [`${k.name}: ${mode}${k.inPlaceOnly && mode === 'Ongoing' ? ' (in place)' : ''}`]
-  })
+/**
+ * A Policy's update mode per kind it manages, in the server's kind order.
+ * Without the kinds it names each by its raw `update.types` key.
+ */
+export function updateModes(kinds: WorkloadKind[] | null, types?: Record<string, string>): string {
+  const modes = kinds
+    ? kinds.flatMap((k) => {
+        const mode = types?.[k.updateField]
+        if (!mode) return []
+        return [`${k.name}: ${mode}${k.inPlaceOnly && mode === 'Ongoing' ? ' (in place)' : ''}`]
+      })
+    : Object.entries(types ?? {}).flatMap(([field, mode]) => (mode ? [`${field}: ${mode}`] : []))
   return modes.join(', ') || '-'
 }

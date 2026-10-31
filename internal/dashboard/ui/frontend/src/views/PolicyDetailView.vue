@@ -9,7 +9,7 @@ import { useListQuery } from '../composables/useListQuery'
 import { formatBytes, timeAgo } from '../lib/format'
 import { outcomeLabel } from '../lib/outcomes'
 import { limitsLabel } from '../lib/limits'
-import { fetchKinds, updateModes, type WorkloadKind } from '../lib/kinds'
+import { getKinds, updateModes, type WorkloadKind } from '../lib/kinds'
 import { rangeQueryParams, resolveRange } from '../lib/timerange'
 import StatusBadge from '../components/StatusBadge.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
@@ -89,8 +89,9 @@ async function loadWorkloads() {
 }
 
 function load() {
+  // Without the kinds the page still renders, naming each by its raw key.
   return track(
-    Promise.all([fetchPolicy(), fetchWorkloads(), kinds.value ?? fetchKinds()]).then(
+    Promise.all([fetchPolicy(), fetchWorkloads(), getKinds().catch(() => null)]).then(
       ([pol, w, served]) => {
         policy.value = pol
         kinds.value = served
@@ -294,7 +295,7 @@ function renderYaml(p: typeof policy.value): string {
       <div class="mt-3">
         <div class="rec-row">
           <span class="label">Update mode</span>
-          <span class="value">{{ updateModes(kinds ?? [], updateTypes()) }}</span>
+          <span class="value">{{ updateModes(kinds, updateTypes()) }}</span>
         </div>
         <div class="rec-row">
           <span class="label">Ignore safe-to-evict annotations</span>

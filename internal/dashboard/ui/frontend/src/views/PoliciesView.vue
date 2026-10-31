@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRowLink } from '../composables/useRowLink'
 import { api, type PolicySummary } from '../lib/api'
-import { fetchKinds, updateModes, type WorkloadKind } from '../lib/kinds'
+import { getKinds, updateModes, type WorkloadKind } from '../lib/kinds'
 import { timeAgo, formatBytes } from '../lib/format'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useSorting } from '../composables/useSorting'
@@ -24,7 +24,8 @@ async function load() {
   try {
     const [list, served] = await Promise.all([
       api<PolicySummary[]>('/api/policies'),
-      kinds.value ?? fetchKinds(),
+      // Without the kinds the page still renders, naming each by its raw key.
+      getKinds().catch(() => null),
     ])
     policies.value = list
     kinds.value = served
@@ -124,7 +125,7 @@ const totalMem = computed(() => policies.value.reduce((a, p) => a + (p.memSaving
                   >
                 </td>
                 <td data-label="Status"><StatusBadge :conditions="p.conditions" /></td>
-                <td data-label="Mode">{{ updateModes(kinds ?? [], p.update) }}</td>
+                <td data-label="Mode">{{ updateModes(kinds, p.update) }}</td>
                 <td data-label="Workloads">{{ p.workloadCount || 0 }}</td>
                 <td data-label="CPU saved">
                   <code>{{ (p.cpuSavingsCores || 0).toFixed(2) }}c</code>

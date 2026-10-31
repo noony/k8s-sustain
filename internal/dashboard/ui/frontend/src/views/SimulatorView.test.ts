@@ -3,7 +3,12 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import SimulatorView from './SimulatorView.vue'
 import * as api from '../lib/api'
 import * as chart from '../lib/chart'
+import * as kindsLib from '../lib/kinds'
 vi.mock('../lib/api', async (o) => ({ ...((await o()) as object), api: vi.fn() }))
+vi.mock('../lib/kinds', async (o) => ({
+  ...((await o()) as object),
+  getKinds: vi.fn(async () => []),
+}))
 vi.mock('../lib/chart', async (o) => ({
   ...((await o()) as object),
   createTimeSeriesChart: vi.fn(),
@@ -341,14 +346,11 @@ describe('SimulatorView', () => {
 
   it('offers the kinds the server serves, starting from the first', async () => {
     ;(api.api as any).mockReset()
-    ;(api.api as any).mockImplementation(async (path: string) =>
-      path === '/api/kinds'
-        ? [
-            { name: 'Rollout', updateField: 'argoRollout', inPlaceOnly: false },
-            { name: 'Widget', updateField: 'widget', inPlaceOnly: true },
-          ]
-        : [],
-    )
+    ;(api.api as any).mockImplementation(async () => [])
+    ;(kindsLib.getKinds as any).mockResolvedValueOnce([
+      { name: 'Rollout', updateField: 'argoRollout', inPlaceOnly: false },
+      { name: 'Widget', updateField: 'widget', inPlaceOnly: true },
+    ])
     const w = mount(SimulatorView, { global: { stubs: ['TimeRangePicker'] } })
     await flushPromises()
     const select = w.find('#sim-kind')
@@ -359,15 +361,33 @@ describe('SimulatorView', () => {
     expect((select.element as HTMLSelectElement).value).toBe('Rollout')
   })
 
+  it('shows an error in place of the target when the kinds cannot load, and retries', async () => {
+    ;(api.api as any).mockReset()
+    ;(api.api as any).mockImplementation(async () => [])
+    ;(kindsLib.getKinds as any)
+      .mockRejectedValueOnce(new Error('kinds unavailable'))
+      .mockResolvedValueOnce([
+        { name: 'Deployment', updateField: 'deployment', inPlaceOnly: false },
+      ])
+    const w = mount(SimulatorView, { global: { stubs: ['TimeRangePicker'] } })
+    await flushPromises()
+    expect(w.find('[role="alert"]').text()).toContain('kinds unavailable')
+    expect(w.find('#sim-kind').exists()).toBe(false)
+
+    await w.find('[role="alert"] button').trigger('click')
+    await flushPromises()
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+    expect((w.find('#sim-kind').element as HTMLSelectElement).value).toBe('Deployment')
+  })
+
   it('simulates the kind the URL names', async () => {
     const bodies: api.SimulateRequest[] = []
     ;(api.api as any).mockReset()
+    ;(kindsLib.getKinds as any).mockResolvedValueOnce([
+      { name: 'Deployment', updateField: 'deployment', inPlaceOnly: false },
+      { name: 'Job', updateField: 'job', inPlaceOnly: true },
+    ])
     ;(api.api as any).mockImplementation(async (path: string, opts?: RequestInit) => {
-      if (path === '/api/kinds')
-        return [
-          { name: 'Deployment', updateField: 'deployment', inPlaceOnly: false },
-          { name: 'Job', updateField: 'job', inPlaceOnly: true },
-        ]
       if (path === '/api/simulate') {
         bodies.push(JSON.parse(opts!.body as string))
         return simulation()
