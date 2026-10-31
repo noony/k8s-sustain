@@ -50,8 +50,8 @@ func TestSpanOf(t *testing.T) {
 // the instant in each stage's context: the OOM floor raises the request only
 // from the instant of the kill on, a limit-side signal raises the limit only
 // where its values do, a container's own limit is the one it holds now, and
-// the last instant computes what Compute does. The kills come with the
-// series.
+// the last instant computes what Compute does. The kills the history read
+// come with the series.
 func TestComputeRange_TheFullChainAtEachInstant(t *testing.T) {
 	var seen []stageContext
 	limiter := listedSignal{factor: 2}
@@ -65,15 +65,14 @@ func TestComputeRange_TheFullChainAtEachInstant(t *testing.T) {
 			WithMemoryUsage(promclient.ContainerValues{"app": 100 * mib}),
 		}
 	}
-	kill := promclient.OOMKill{Timestamp: t2, Container: "app"}
-	killed := NewInputs(append(usage(0.2), WithOOMKills(map[string]OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}}))...)
+	killed := NewInputs(append(usage(0.2), WithOOMKills(map[string]OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true, KillsInStep: 1}}))...)
 	inputs := &recordedInputs{
 		inputs: map[promclient.WorkloadIdentity]*WorkloadInputs{key: killed},
 		histories: map[promclient.WorkloadIdentity]*History{key: NewHistory([]HistoryPoint{
 			{At: t0, Inputs: NewInputs(usage(0.1)...)},
 			{At: t1, Inputs: NewInputs(append(usage(0.2), setting(limiter, listedValues{"app": 128 * mib}))...)},
 			{At: t2, Inputs: killed},
-		}, kill)},
+		})},
 	}
 	app := limited(nil, corev1.ResourceList{corev1.ResourceCPU: qty("1")})
 	spec := sustainv1alpha1.RightSizingSpec{ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
@@ -113,8 +112,8 @@ func TestComputeRange_TheFullChainAtEachInstant(t *testing.T) {
 			t.Errorf("%s = %v, want %v", what, tc.got, tc.want)
 		}
 	}
-	if !reflect.DeepEqual(got.Kills, []promclient.OOMKill{kill}) {
-		t.Errorf("kills = %v, want %v", got.Kills, kill)
+	if kills, want := OOMKills(got), []promclient.OOMKill{{Timestamp: t2, Container: "app"}}; !reflect.DeepEqual(kills, want) {
+		t.Errorf("kills = %v, want %v", kills, want)
 	}
 	var instants []time.Time
 	for _, sc := range seen {

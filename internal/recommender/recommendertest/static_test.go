@@ -53,8 +53,9 @@ func TestStaticInputs_AnswersEveryHistoryRequestAndRecordsIt(t *testing.T) {
 	end := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	span := recommender.SpanOf(end.Add(-time.Minute), end, time.Minute)
 	history := recommender.NewHistory([]recommender.HistoryPoint{
-		{At: end, Inputs: recommender.NewInputs(recommender.WithCPUUsage(promclient.ContainerValues{"app": 1}))},
-	}, promclient.OOMKill{Timestamp: end, Container: "app"})
+		{At: end, Inputs: recommender.NewInputs(recommender.WithCPUUsage(promclient.ContainerValues{"app": 1}),
+			recommender.WithOOMKills(map[string]recommender.OOM{"app": {Kills: 1, KillsInStep: 1}}))},
+	})
 	boom, gone := errors.New("boom"), errors.New("gone")
 	s := NewStaticInputs().
 		SetHistory(known, history).

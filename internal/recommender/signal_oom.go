@@ -3,6 +3,7 @@ package recommender
 import (
 	"context"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"time"
@@ -86,6 +87,10 @@ type OOM struct {
 	// LiveAt is when the OOM Pod watcher's kill happened, zero when it saw
 	// none within LiveOOMWindow.
 	LiveAt time.Time
+	// KillsInStep counts the kills the kill rule recorded in the step of a
+	// history that ends at the instant the values are read as of: what a
+	// chart marks (OOMKills). Zero outside a history.
+	KillsInStep float64
 }
 
 // recent reports whether the container was OOM-killed recently: in the
@@ -129,10 +134,9 @@ func (oomFloor) query(_ sustainv1alpha1.ResourcesConfigs, shard promclient.Shard
 	return shard.MetricsSelector(oomRules...)
 }
 
-// killsQuery reads the kill rule the 24h rules derive from: its range form
-// carries the kills a chart marks, which no instant of the 24h rules can
-// date.
-func (oomFloor) killsQuery(shard promclient.Shard, step time.Duration) string {
+// historyQuery counts, per step, the kills of the kill rule the 24h rules
+// derive from: no instant of the 24h rules can date a kill a chart marks.
+func (oomFloor) historyQuery(shard promclient.Shard, step time.Duration) string {
 	return promclient.OOMKillsPerStep(shard.Selector(), step)
 }
 
@@ -202,6 +206,8 @@ func (oomFloor) collect(samples []promclient.ShardSample) signalValues {
 		switch s.Metric {
 		case promclient.MetricWorkloadOOM24h:
 			o.Kills += s.Value
+		case promclient.MetricContainerOOMKills:
+			o.KillsInStep += s.Value
 		case promclient.MetricContainerPeakMemory24hBytes:
 			if !o.HasPeak || s.Value > o.PeakBytes {
 				o.PeakBytes, o.HasPeak = s.Value, true
@@ -273,6 +279,25 @@ func TracedOOMFloor(t sustainv1alpha1.ContainerTrace) (TracedOOM, bool) {
 	return out, true
 }
 
+// OOMKills are the kills the history r was computed or read from recorded,
+// one per kill, each dated at the end of the step it fell in, the earliest
+// first: the markers a chart of r draws.
+func OOMKills(r RangeResult) []promclient.OOMKill {
+	if r.history == nil {
+		return nil
+	}
+	var out []promclient.OOMKill
+	for _, p := range r.history.points {
+		ooms := valuesOf[oomValues](p.Inputs, oomFloor{})
+		for _, name := range slices.Sorted(maps.Keys(ooms)) {
+			for range int(math.Round(ooms[name].KillsInStep)) {
+				out = append(out, promclient.OOMKill{Timestamp: p.At, Container: name})
+			}
+		}
+	}
+	return out
+}
+
 // liveOOMInputs is an InputsFetcher that merges the kills the OOM Pod watcher
 // saw into the inputs another fetcher read, so the floor does not wait for the
 // recording rules to surface a kill.
@@ -325,7 +350,7 @@ func (l *liveOOMInputs) FetchHistory(
 		for i, p := range points {
 			points[i].Inputs = withLiveOOMs(p.Inputs, live, p.At)
 		}
-		r.History = NewHistory(points, r.History.kills...)
+		r.History = NewHistory(points)
 		out[id] = r
 	}
 	return out

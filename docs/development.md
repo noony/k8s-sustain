@@ -350,7 +350,8 @@ kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 A [signal](concepts/recommendation-pipeline.md#signals) is one module of
 `internal/recommender` (`signal_usage.go` holds the CPU and memory usage
 signals, `signal_oom.go` the OOM floor) implementing the `signal` interface in
-`signal.go`: its query and shard cost, its Prometheus contract (`contract`),
+`signal.go`: its query and shard cost, what its history reads besides
+(`historyQuery`), its Prometheus contract (`contract`),
 how it collects samples into its values (`collect`), its failure policy, where
 its stage runs (`slot`: base, adjuster or limit adjuster, CPU or memory), its
 contribution to a container's request or limit, and its trace stage. Its
@@ -395,10 +396,12 @@ signal's own `query` as a Prometheus range query (`Client.QueryShardRange`)
 over a `Span`, under the same sharding, retries and fallback, with shards
 planned on the signal's samples per container times the span's instants, and
 collects each instant's samples with the signal's own `collect`. Only the OOM
-signal adds anything: its range read also carries the kills a chart marks
-(`killsQuery`, read from the kill rule its contract declares as a history
-rule), which no instant of its 24h rules can
-date. `ComputeRange` then runs the whole chain at each instant on that
+signal adds anything: its `historyQuery`, run in the same shard, counts per
+step the kills a chart marks, read from the kill rule its contract declares
+as a history rule, which no instant of its 24h rules can date. Its `collect`
+keeps them in its own values, at the instant ending their step, and a chart
+reads them back through `OOMKills`, so no shared type holds them.
+`ComputeRange` then runs the whole chain at each instant on that
 instant's values, the instant in the `stageContext`, without reading anything
 else; it is what a Simulation's charts draw, and `Request.RequestAt` no longer
 exists. `UsageRange` makes the same read for an identity under a Policy's spec
@@ -417,7 +420,9 @@ add a signal:
    it is how `recommendertest.StaticInputs` serves them, at one instant
    (`Set`) or at each instant of a history (`SetHistory`). There is nothing
    to do for the Simulator's charts: the signal's history is its query run
-   over a range, and its stage runs at every instant of it
+   over a range, and its stage runs at every instant of it. Its
+   `historyQuery` returns nothing unless that history must date something no
+   instant of its query can, as the OOM floor's kill markers
 2. List it in `signals` (`internal/recommender/signal.go`). Within a role,
    stages run in list order, which settles a tie between base signals. A base
    signal or adjuster shapes the request; a limit adjuster may only raise the

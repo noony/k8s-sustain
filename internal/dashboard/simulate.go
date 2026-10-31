@@ -165,7 +165,7 @@ func (s *Server) simulationHistory(ctx context.Context, key promclient.WorkloadI
 	out := &simulationHistory{
 		StepSeconds: int64(span.Step / time.Second),
 		Containers:  make(map[string]containerHistory, len(r.Containers)),
-		OOMKills:    r.Kills,
+		OOMKills:    recommender.OOMKills(r),
 	}
 	for name, c := range r.Containers {
 		out.Containers[name] = containerHistory{

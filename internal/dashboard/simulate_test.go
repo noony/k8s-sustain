@@ -136,13 +136,13 @@ func TestRunSimulation_HistoryIsTheComputationAtEachInstant(t *testing.T) {
 			recommender.WithMemoryUsage(promclient.ContainerValues{"main": 64 * mib}),
 		}
 	}
-	killed := append(usage(1), recommender.WithOOMKills(map[string]recommender.OOM{"main": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}}))
+	killed := append(usage(1), recommender.WithOOMKills(map[string]recommender.OOM{"main": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true, KillsInStep: 1}}))
 	kill := promclient.OOMKill{Timestamp: at, Container: "main"}
 	inputs := recommendertest.NewStaticInputs().Set(webKey, killed...).SetHistory(webKey, recommender.NewHistory([]recommender.HistoryPoint{
 		{At: t0, Inputs: recommender.NewInputs(usage(0.5)...)},
 		{At: t1, Inputs: recommender.NewInputs(usage(1)...)},
 		{At: at, Inputs: recommender.NewInputs(killed...)},
-	}, kill))
+	}))
 	srv.Inputs = inputs
 	running := []promclient.TimeValue{{Timestamp: t0, Value: 0.25}, {Timestamp: at, Value: 0.5}}
 	srv.PromClient = &fakePromClient{rangeByLabel: map[string]map[string][]promclient.TimeValue{

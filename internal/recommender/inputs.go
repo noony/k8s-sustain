@@ -103,6 +103,6 @@ type InputsFetcher interface {
 	// then.
 	FetchInputs(ctx context.Context, at time.Time, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult
 	// FetchHistory fetches them at every instant of span, each as FetchInputs
-	// would as of it, with the OOM kills recorded over span.
+	// would as of it, with what a signal's history reads besides.
 	FetchHistory(ctx context.Context, span Span, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]HistoryResult
 }

@@ -257,10 +257,12 @@ type OOMKill struct {
 // OOMKillsPerStep counts, per identity and container of selector, the OOM
 // kills MetricContainerOOMKills recorded in each step of a range query
 // stepping by step. A window of exactly one step tiles the range: every kill
-// sample falls in one step's window, so it is counted once.
+// sample falls in one step's window, so it is counted once. Its series are
+// named after the rule, whose name sum_over_time drops, so a reader can tell
+// them from another query's.
 func OOMKillsPerStep(selector string, step time.Duration) string {
-	return fmt.Sprintf("sum by (namespace, owner_kind, owner_name, container) (sum_over_time(%s%s[%s]))",
-		MetricContainerOOMKills, selector, model.Duration(step))
+	return fmt.Sprintf(`label_replace(sum by (namespace, owner_kind, owner_name, container) (sum_over_time(%s%s[%s])), "__name__", %q, "", "")`,
+		MetricContainerOOMKills, selector, model.Duration(step), MetricContainerOOMKills)
 }
 
 // OOMKillsOf turns one container's OOMKillsPerStep series into its kills,

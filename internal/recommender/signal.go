@@ -31,11 +31,18 @@ type signal interface {
 	samplesPerContainer(cfg sustainv1alpha1.ResourcesConfigs) int
 	// query is the PromQL reading the signal for every identity in shard.
 	query(cfg sustainv1alpha1.ResourcesConfigs, shard promclient.Shard) string
+	// historyQuery is the PromQL a history read runs besides query, for every
+	// identity in shard over a range stepping by step, and empty when it runs
+	// none: what a history dates that no instant of query can, from the
+	// rules contract names HistoryRules. It costs a shard no more than query
+	// does, so shards planned on query's cost hold it, and its samples reach
+	// collect with query's, at the instant that ends their step.
+	historyQuery(shard promclient.Shard, step time.Duration) string
 	// contract is what query reads from Prometheus and what that rests on.
 	contract() PromContract
 	// collect is the signal's values from one identity's samples, empty
 	// values from none. It reads a sample of every rule contract declares,
-	// named as the query returns it.
+	// history rules included, named as its query returns it.
 	collect(samples []promclient.ShardSample) signalValues
 	// slot is where the signal's stage runs.
 	slot() slot

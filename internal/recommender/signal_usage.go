@@ -105,6 +105,8 @@ func (u usage) query(cfg sustainv1alpha1.ResourcesConfigs, shard promclient.Shar
 	return promclient.QuantileOverTime(quantile, u.rule, shard.Selector(), u.window(cfg))
 }
 
+func (usage) historyQuery(promclient.Shard, time.Duration) string { return "" }
+
 // contract: the rule is read as a plain range vector, so its evaluation
 // interval is the percentile's sample resolution and what samplesPerContainer
 // counts.

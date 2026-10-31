@@ -491,8 +491,8 @@ func TestPromInputs_CircuitOpenSurvivesInTheError(t *testing.T) {
 // run over the span as a range query, in shards planned on its samples at
 // every instant: at 60 samples over three instants, a 300-sample budget that
 // packs both identities into one instant query splits them. Each instant's
-// values land on their own identity, and the OOM signal's range form carries
-// the kills, counted in the step they fell in.
+// values land on their own identity, and the OOM signal's history query,
+// run in the same shard, counts the kills in the step they fell in.
 func TestPromInputs_FetchHistoryRunsEachSignalsQueryOverTheSpan(t *testing.T) {
 	span := SpanOf(now.Add(-2*time.Minute), now, time.Minute)
 	t0, t1, t2 := span.Start, span.Start.Add(time.Minute), now
@@ -507,7 +507,7 @@ func TestPromInputs_FetchHistoryRunsEachSignalsQueryOverTheSpan(t *testing.T) {
 		case q.signal == "oom":
 			return []string{series(promclient.MetricWorkloadOOM24h, "api", "app", map[time.Time]float64{t2: 1})}, true
 		case q.signal == "kills":
-			return []string{series("", "api", "app", map[time.Time]float64{t1: 0, t2: 1})}, true
+			return []string{series(promclient.MetricContainerOOMKills, "api", "app", map[time.Time]float64{t1: 0, t2: 2})}, true
 		}
 		return nil, true
 	})
@@ -527,14 +527,21 @@ func TestPromInputs_FetchHistoryRunsEachSignalsQueryOverTheSpan(t *testing.T) {
 		if q.signal == "cpu" && q.expr != cpuUsage.query(cfg, single) {
 			t.Errorf("cpu ran %q, want the instant read's own query %q", q.expr, cpuUsage.query(cfg, single))
 		}
+		if q.signal == "kills" && q.expr != (oomFloor{}).historyQuery(single, span.Step) {
+			t.Errorf("kills ran %q, want the OOM signal's history query %q", q.expr, (oomFloor{}).historyQuery(single, span.Step))
+		}
+	}
+	if kills, oom := prom.shardsFor("kills"), prom.shardsFor("oom"); !reflect.DeepEqual(kills, oom) {
+		t.Errorf("kills read in shards %v, want the OOM signal's %v", kills, oom)
 	}
 	empty := func(at time.Time) HistoryPoint { return HistoryPoint{At: at, Inputs: NewInputs()} }
 	wantAPI := NewHistory([]HistoryPoint{
 		{At: t0, Inputs: NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.1}), WithMemoryUsage(promclient.ContainerValues{"app": 100}))},
-		{At: t1, Inputs: NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.2}), WithMemoryUsage(promclient.ContainerValues{"app": 100}))},
+		{At: t1, Inputs: NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.2}), WithMemoryUsage(promclient.ContainerValues{"app": 100}),
+			WithOOMKills(map[string]OOM{"app": {}}))},
 		{At: t2, Inputs: NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.3}), WithMemoryUsage(promclient.ContainerValues{"app": 100}),
-			WithOOMKills(map[string]OOM{"app": {Kills: 1}}))},
-	}, promclient.OOMKill{Timestamp: t2, Container: "app"})
+			WithOOMKills(map[string]OOM{"app": {Kills: 1, KillsInStep: 2}}))},
+	})
 	if r := got[prodID("api")]; r.Err != nil || !reflect.DeepEqual(r.History, wantAPI) {
 		t.Errorf("api = %+v (%v), want %+v", r.History, r.Err, wantAPI)
 	}
@@ -548,8 +555,8 @@ func TestPromInputs_FetchHistoryRunsEachSignalsQueryOverTheSpan(t *testing.T) {
 }
 
 // A history fails as inputs do: an identity whose required signal cannot be
-// read even on its own has no history. Its kills are best-effort: a history
-// whose kills cannot be read holds none.
+// read even on its own has no history, and one whose best-effort signal
+// cannot be read, its history query included, holds none of its values.
 func TestPromInputs_FetchHistoryFailsAsInputsDo(t *testing.T) {
 	span := SpanOf(now.Add(-time.Minute), now, time.Minute)
 	_, c := startFakeShardProm(t, func(q shardQuery) ([]string, bool) {
@@ -572,6 +579,6 @@ func TestPromInputs_FetchHistoryFailsAsInputsDo(t *testing.T) {
 		{At: now, Inputs: NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.5}))},
 	})
 	if r := got[prodID("good")]; r.Err != nil || !reflect.DeepEqual(r.History, want) {
-		t.Errorf("good = %+v (%v), want its history without kills", r.History, r.Err)
+		t.Errorf("good = %+v (%v), want its history without OOM values", r.History, r.Err)
 	}
 }

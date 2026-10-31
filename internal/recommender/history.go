@@ -60,11 +60,9 @@ func (s Span) timeRange() promclient.TimeRange {
 }
 
 // History is one identity's recommendation inputs at each instant of a span,
-// the earliest first, and the OOM kills recorded over it. It never changes
-// once built.
+// the earliest first. It never changes once built.
 type History struct {
 	points []HistoryPoint
-	kills  []promclient.OOMKill
 }
 
 // HistoryPoint is one identity's inputs as of At.
@@ -73,11 +71,11 @@ type HistoryPoint struct {
 	Inputs *WorkloadInputs
 }
 
-// NewHistory builds a history of points, the earliest first, holding kills.
-// It is for an InputsFetcher serving canned inputs, such as
-// recommendertest.StaticInputs; build each point's inputs with NewInputs.
-func NewHistory(points []HistoryPoint, kills ...promclient.OOMKill) *History {
-	return &History{points: slices.Clone(points), kills: slices.Clone(kills)}
+// NewHistory builds a history of points, the earliest first. It is for an
+// InputsFetcher serving canned inputs, such as recommendertest.StaticInputs;
+// build each point's inputs with NewInputs.
+func NewHistory(points []HistoryPoint) *History {
+	return &History{points: slices.Clone(points)}
 }
 
 // HistoryResult is one identity's history, or the error that made it
@@ -87,12 +85,12 @@ type HistoryResult struct {
 	Err     error
 }
 
-// RangeResult is what a Request computes at each instant of a span.
+// RangeResult is what a Request computes at each instant of a span. It keeps
+// the history it was computed from, which a signal's own accessor reads
+// (OOMKills).
 type RangeResult struct {
 	Containers map[string]ContainerRange
-	// Kills are the identity's OOM kills over the span, each dated at the end
-	// of the step it fell in.
-	Kills []promclient.OOMKill
+	history    *History
 }
 
 // ContainerRange is one container's CPU and memory at each instant of a span.
@@ -179,11 +177,10 @@ func UsageRange(ctx context.Context, inputs InputsFetcher, spec sustainv1alpha1.
 }
 
 func computeRange(req Request, h *History) RangeResult {
-	out := RangeResult{Containers: make(map[string]ContainerRange, len(req.containers))}
+	out := RangeResult{Containers: make(map[string]ContainerRange, len(req.containers)), history: h}
 	if h == nil {
 		return out
 	}
-	out.Kills = slices.Clone(h.kills)
 	for _, p := range h.points {
 		at := req
 		at.inputs, at.now = p.Inputs, p.At

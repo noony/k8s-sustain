@@ -183,11 +183,11 @@ func TestQueryRangeByLabel_BadStep(t *testing.T) {
 
 // The markers read the kill rule, never kube-state-metrics, summed over a
 // window of exactly one step so each kill lands in one point, per identity
-// and container.
+// and container, and named after the rule.
 func TestOOMKillsPerStep_ReadsTheKillRuleOverOneStep(t *testing.T) {
 	got := OOMKillsPerStep(WorkloadSelector("ns", "Deployment", "web"), 5*time.Minute)
 
-	want := `sum by (namespace, owner_kind, owner_name, container) (sum_over_time(k8s_sustain:container_oom_kills{namespace="ns",owner_kind="Deployment",owner_name="web"}[5m]))`
+	want := `label_replace(sum by (namespace, owner_kind, owner_name, container) (sum_over_time(k8s_sustain:container_oom_kills{namespace="ns",owner_kind="Deployment",owner_name="web"}[5m])), "__name__", "k8s_sustain:container_oom_kills", "", "")`
 	if got != want {
 		t.Errorf("query = %q, want %q", got, want)
 	}

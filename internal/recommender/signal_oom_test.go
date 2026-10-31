@@ -507,9 +507,9 @@ func TestOOMFloor_TracesThroughCoordination(t *testing.T) {
 // stays out of it. The decorated history is left as it was.
 func TestWithLiveOOMs_MergesKillsAsOfEachInstantOfAHistory(t *testing.T) {
 	earlier := now.Add(-time.Hour)
-	kill := promclient.OOMKill{Timestamp: now, Container: "app"}
+	killed := WithOOMKills(map[string]OOM{"app": {Kills: 1, KillsInStep: 1}})
 	history := func() *History {
-		return NewHistory([]HistoryPoint{{At: earlier, Inputs: NewInputs()}, {At: now, Inputs: NewInputs()}}, kill)
+		return NewHistory([]HistoryPoint{{At: earlier, Inputs: NewInputs()}, {At: now, Inputs: NewInputs(killed)}})
 	}
 	decorated := history()
 	live := oomSource{"app": liveKill("app", 10*time.Second, 184<<20)}
@@ -519,12 +519,40 @@ func TestWithLiveOOMs_MergesKillsAsOfEachInstantOfAHistory(t *testing.T) {
 
 	want := NewHistory([]HistoryPoint{
 		{At: earlier, Inputs: NewInputs()},
-		{At: now, Inputs: NewInputs(WithOOMKills(map[string]OOM{"app": {LimitBytes: 184 << 20, LiveAt: now.Add(-10 * time.Second)}}))},
-	}, kill)
+		{At: now, Inputs: NewInputs(WithOOMKills(map[string]OOM{"app": {Kills: 1, KillsInStep: 1, LimitBytes: 184 << 20, LiveAt: now.Add(-10 * time.Second)}}))},
+	})
 	if got.Err != nil || !reflect.DeepEqual(got.History, want) {
 		t.Errorf("history = %+v (%v), want %+v", got.History, got.Err, want)
 	}
 	if !reflect.DeepEqual(decorated, history()) {
 		t.Errorf("decorated history = %+v, want it untouched", decorated)
+	}
+}
+
+// A chart marks each kill a history counted, at the end of the step it fell
+// in, the earliest first.
+func TestOOMKills_OnePerKillAtTheEndOfItsStep(t *testing.T) {
+	earlier := now.Add(-time.Hour)
+	killed := func(kills map[string]float64) *WorkloadInputs {
+		ooms := map[string]OOM{}
+		for name, n := range kills {
+			ooms[name] = OOM{Kills: n, KillsInStep: n}
+		}
+		return NewInputs(WithOOMKills(ooms))
+	}
+	r := RangeResult{history: NewHistory([]HistoryPoint{
+		{At: earlier, Inputs: killed(map[string]float64{"sidecar": 1, "app": 2})},
+		{At: now, Inputs: killed(map[string]float64{"app": 0})},
+	})}
+
+	got := OOMKills(r)
+
+	want := []promclient.OOMKill{
+		{Timestamp: earlier, Container: "app"},
+		{Timestamp: earlier, Container: "app"},
+		{Timestamp: earlier, Container: "sidecar"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("kills = %+v, want %+v", got, want)
 	}
 }

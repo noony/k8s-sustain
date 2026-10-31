@@ -1,11 +1,8 @@
 package recommender
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -92,9 +89,9 @@ func (p *PromInputs) FetchInputs(
 
 // FetchHistory fetches every signal over span, one after the other: each
 // signal's own shard query, the one FetchInputs runs, run as a range query
-// under the same sharding, its cost counted at every instant. A failed signal
-// fails an identity's history as FetchInputs fails its inputs. The OOM kills
-// are best-effort: a history whose kills cannot be read holds none.
+// under the same sharding, its cost counted at every instant, with its
+// history query beside it in the same shard. A failed signal fails an
+// identity's history as FetchInputs fails its inputs.
 func (p *PromInputs) FetchHistory(
 	ctx context.Context,
 	span Span,
@@ -118,6 +115,13 @@ func (p *PromInputs) FetchHistory(
 		series, err := p.client.QueryShardRange(ctx, s.query(cfg, shard), span.timeRange(), span.Step)
 		if err != nil {
 			return nil, err
+		}
+		if q := s.historyQuery(shard, span.Step); q != "" {
+			more, err := p.client.QueryShardRange(ctx, q, span.timeRange(), span.Step)
+			if err != nil {
+				return nil, err
+			}
+			series = append(series, more...)
 		}
 		samplesAt := make(map[promclient.WorkloadIdentity][][]promclient.ShardSample, len(shard.Names))
 		for _, sr := range series {
@@ -145,7 +149,6 @@ func (p *PromInputs) FetchHistory(
 			}
 		}, nil
 	})
-	kills := p.fetchKills(ctx, span, reqs)
 
 	out := make(map[promclient.WorkloadIdentity]HistoryResult, len(histories))
 	for id, inputs := range histories {
@@ -153,57 +156,13 @@ func (p *PromInputs) FetchHistory(
 			out[id] = HistoryResult{Err: err}
 			continue
 		}
-		h := &History{points: make([]HistoryPoint, len(inputs)), kills: kills[id]}
+		h := &History{points: make([]HistoryPoint, len(inputs))}
 		for i, in := range inputs {
 			h.points[i] = HistoryPoint{At: span.instant(i), Inputs: in}
 		}
 		out[id] = HistoryResult{History: h}
 	}
 	return out
-}
-
-// killReader is a signal whose range form also reads the OOM kills a chart
-// marks.
-type killReader interface {
-	// killsQuery counts, per container of every identity in shard, the OOM
-	// kills in each step of a range stepping by step.
-	killsQuery(shard promclient.Shard, step time.Duration) string
-}
-
-// fetchKills reads, over span, the OOM kills of every signal that reads them,
-// in shards costing one sample per container at every instant. An identity
-// whose kills cannot be read even on its own gets none.
-func (p *PromInputs) fetchKills(ctx context.Context, span Span, reqs []InputsRequest) map[promclient.WorkloadIdentity][]promclient.OOMKill {
-	logger := log.FromContext(ctx)
-	kills := make(map[promclient.WorkloadIdentity][]promclient.OOMKill)
-	for _, s := range signals {
-		k, ok := s.(killReader)
-		if !ok {
-			continue
-		}
-		shards, _ := p.plan(reqs, span.instants())
-		errs := eachShard(ctx, s.name()+" kills", shards, func(shard promclient.Shard) (func(), error) {
-			series, err := p.client.QueryShardRange(ctx, k.killsQuery(shard, span.Step), span.timeRange(), span.Step)
-			if err != nil {
-				return nil, err
-			}
-			return func() {
-				for _, sr := range series {
-					kills[sr.Identity] = append(kills[sr.Identity], promclient.OOMKillsOf(sr.Container, sr.Points)...)
-				}
-			}, nil
-		})
-		for id, err := range errs {
-			logger.V(1).Info(s.name()+" kills unavailable; the history holds none",
-				"namespace", id.Namespace, "ownerKind", id.OwnerKind, "ownerName", id.OwnerName, "err", err)
-		}
-	}
-	for _, k := range kills {
-		slices.SortFunc(k, func(a, b promclient.OOMKill) int {
-			return cmp.Or(a.Timestamp.Compare(b.Timestamp), strings.Compare(a.Container, b.Container))
-		})
-	}
-	return kills
 }
 
 // fetchSignals reads every signal, one after the other, over shards planned
