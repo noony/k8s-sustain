@@ -219,10 +219,10 @@ export interface TimeValue {
   value: number
 }
 
+/** One OOM kill, dated at the end of the chart step it fell in. */
 export interface OOMEvent {
   timestamp: string
   container: string
-  pod: string
 }
 
 export interface ContainerResources {
@@ -336,15 +336,33 @@ export interface SimulationResult {
   /** How each container's values were derived, stage by stage. */
   trace?: Record<string, ContainerTrace>
   initContainers?: string[]
-  cpuSeries: Record<string, TimeValue[]>
-  memorySeries: Record<string, TimeValue[]>
   resources?: Record<string, ContainerResources>
-  cpuRequests?: Record<string, TimeValue[]>
-  memoryRequests?: Record<string, TimeValue[]>
-  cpuRecommendations?: Record<string, TimeValue[]>
-  memoryRecommendations?: Record<string, TimeValue[]>
+  /** The Simulation at each instant of its chart range; absent when it could not be read. */
+  history?: SimulationHistory
+  /** Why the history could not be read; the numbers above stand without it. */
+  historyError?: string
   /** How long a kill the controller's OOM watcher saw counts, which a Simulation cannot see. */
   liveOOMWindowSeconds: number
+}
+
+/** A Simulation at each instant of its chart range. */
+export interface SimulationHistory {
+  /** The step between its instants: the server derives it from the range, the requested step is only the finest. */
+  stepSeconds: number
+  containers: Record<string, { cpu: ResourceHistory; memory: ResourceHistory }>
+  oomKills?: OOMEvent[]
+}
+
+/** One resource of one container at each instant, in cores or bytes; a series has no point where it has no value. */
+export interface ResourceHistory {
+  /** What the usage signal read: the busiest replica's percentile over the Policy's window. */
+  usage?: TimeValue[]
+  /** What the Simulation computes as of each instant; no limit point where the container would run without one. */
+  recommendedRequest?: TimeValue[]
+  recommendedLimit?: TimeValue[]
+  /** What the pods ran with. */
+  runningRequest?: TimeValue[]
+  runningLimit?: TimeValue[]
 }
 
 export interface BatchSimulateData {

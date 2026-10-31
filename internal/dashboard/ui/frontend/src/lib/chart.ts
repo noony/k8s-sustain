@@ -212,7 +212,7 @@ export interface ChartOpts {
   // comparison charts (e.g. the overview Savings trend) where a shaded
   // background under the baseline series adds noise rather than meaning.
   fill?: boolean
-  oomEvents?: { timestamp: string; pod?: string }[]
+  oomEvents?: { timestamp: string }[]
   onZoomComplete?: (chart: Chart) => void
   // When set, breaks the line at gaps wider than ~1.5× this step. Used to
   // avoid drawing a continuous line across periods where the workload had no
@@ -368,10 +368,7 @@ export function createTimeSeriesChart(
     })
   })
 
-  const oomMarkers = (opts.oomEvents || []).map((ev) => ({
-    x: new Date(ev.timestamp),
-    pod: ev.pod || '',
-  }))
+  const oomMarkers = (opts.oomEvents || []).map((ev) => ({ x: new Date(ev.timestamp) }))
 
   const colors = themeColors()
   const config: ChartConfiguration = {
@@ -569,9 +566,9 @@ export function resetZoom(canvasId: string) {
 }
 
 export function groupOOMEventsByContainer(
-  events?: { container: string; timestamp: string; pod: string }[],
-): Record<string, { timestamp: string; pod: string }[]> {
-  const byContainer: Record<string, { timestamp: string; pod: string }[]> = {}
+  events?: { container: string; timestamp: string }[],
+): Record<string, { timestamp: string }[]> {
+  const byContainer: Record<string, { timestamp: string }[]> = {}
   if (!events || !events.length) return byContainer
   events.forEach((ev) => {
     if (!byContainer[ev.container]) byContainer[ev.container] = []

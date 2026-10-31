@@ -3,6 +3,11 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,13 +15,12 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clocktesting "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
-	"github.com/noony/k8s-sustain/internal/autoscaler"
-	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
@@ -66,37 +70,6 @@ func newCoordinatedSimulateServer(t *testing.T) *Server {
 	return &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: inputs, Logger: testLogger(t)}
 }
 
-// Each chart point is computed as the point value is: with headroom, and with
-// the OOM floor of the container that was killed only.
-func TestRecommendationSeries_ComputesEachPointWithTheIdentitysOOMs(t *testing.T) {
-	const mib = 1 << 20
-	key := promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"}
-	spec := sustainv1alpha1.RightSizingSpec{ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-		CPU: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)}},
-	}}
-	inputs := recommendertest.NewStaticInputs().Set(key,
-		recommender.WithCPUUsage(promclient.ContainerValues{"app": 0.2, "side": 0.2}),
-		recommender.WithMemoryUsage(promclient.ContainerValues{"app": 150 * mib, "side": 150 * mib}),
-		recommender.WithOOMKills(map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}}))
-	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
-	req := recommender.Assemble(context.Background(), inputs, autoscaler.NewNamespacedSnapshot(c), time.Now, spec, []*inventory.Identity{{Key: key}})[0].Request
-	at := time.Unix(1_700_000_000, 0)
-	points := func(v float64) []promclient.TimeValue { return []promclient.TimeValue{{Timestamp: at, Value: v}} }
-
-	mem := recommendationSeries(promclient.ContainerTimeSeries{"app": points(100 * mib), "side": points(100 * mib)}, req, corev1.ResourceMemory)
-	cpu := recommendationSeries(promclient.ContainerTimeSeries{"app": points(0.1)}, req, corev1.ResourceCPU)
-
-	if got := mem["app"][0].Value; got != 200*mib {
-		t.Errorf("app memory = %v, want the 200Mi OOM floor", got)
-	}
-	if got := mem["side"][0].Value; got != 100*mib {
-		t.Errorf("side memory = %v, want its 100Mi point: it was not killed", got)
-	}
-	if got := cpu["app"][0]; got.Value != 0.15 || !got.Timestamp.Equal(at) {
-		t.Errorf("app cpu = %+v, want 0.15 cores (0.1 + 50%%) at the point's time", got)
-	}
-}
-
 // The override merges onto the governing Policy: what it leaves alone is the
 // Policy's, and the effective settings it returns have every default
 // explicit.
@@ -141,35 +114,109 @@ func TestRunSimulation_StartsFromTheChosenPolicy(t *testing.T) {
 	}
 }
 
-// A kept request is recommended nothing, so a Simulation draws no
-// recommendation series for it. That a Simulation without an override equals
-// the controller's Recommendation is held by the controller's
-// TestSimulationRecommendsWhatTheControllerStores.
-func TestRunSimulation_AKeptRequestDrawsNoSeries(t *testing.T) {
-	srv := newCoordinatedSimulateServer(t)
-	ctx := context.Background()
-	var policy sustainv1alpha1.Policy
-	if err := srv.K8sClient.Get(ctx, client.ObjectKey{Name: "p"}, &policy); err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	policy.Spec.RightSizing.ResourcesConfigs.Memory.Requests.KeepRequest = true
-	if err := srv.K8sClient.Update(ctx, &policy); err != nil {
-		t.Fatalf("update: %v", err)
-	}
-	key := promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"}
-	srv.Inputs = recommendertest.NewStaticInputs().Set(key,
-		recommender.WithCPUUsage(promclient.ContainerValues{"main": 1}),
-		recommender.WithMemoryUsage(promclient.ContainerValues{"main": 64 << 20}))
+var webKey = promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"}
 
-	res, err := srv.runSimulation(ctx, simulateRequest{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"})
+// A Simulation's history is its computation at each instant of its chart
+// range, the range's step coarsened to keep within the points a chart holds:
+// the recommended request and limit from every signal's values as of the
+// instant, the OOM floor only from the kill on and coordinated with today's
+// HPA, next to the busiest replica's usage the request was computed from,
+// what the pods ran with, and the kills. That a Simulation without an
+// override equals the controller's Recommendation is held by the
+// controller's TestSimulationRecommendsWhatTheControllerStores.
+func TestRunSimulation_HistoryIsTheComputationAtEachInstant(t *testing.T) {
+	const mib = 1 << 20
+	at := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	t0, t1 := at.Add(-2*time.Hour), at.Add(-time.Hour)
+	srv := newCoordinatedSimulateServer(t)
+	srv.Clock = clocktesting.NewFakePassiveClock(at)
+	usage := func(cores float64) []recommender.InputsOption {
+		return []recommender.InputsOption{
+			recommender.WithCPUUsage(promclient.ContainerValues{"main": cores}),
+			recommender.WithMemoryUsage(promclient.ContainerValues{"main": 64 * mib}),
+		}
+	}
+	killed := append(usage(1), recommender.WithOOMKills(map[string]recommender.OOM{"main": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}}))
+	kill := promclient.OOMKill{Timestamp: at, Container: "main"}
+	inputs := recommendertest.NewStaticInputs().Set(webKey, killed...).SetHistory(webKey, recommender.NewHistory([]recommender.HistoryPoint{
+		{At: t0, Inputs: recommender.NewInputs(usage(0.5)...)},
+		{At: t1, Inputs: recommender.NewInputs(usage(1)...)},
+		{At: at, Inputs: recommender.NewInputs(killed...)},
+	}, kill))
+	srv.Inputs = inputs
+	running := []promclient.TimeValue{{Timestamp: t0, Value: 0.25}, {Timestamp: at, Value: 0.5}}
+	srv.PromClient = &fakePromClient{rangeByLabel: map[string]map[string][]promclient.TimeValue{
+		perContainer("max", promclient.MetricContainerCPURequestsByWorkloadCores, webKey): {"main": running},
+		perContainer("max", promclient.MetricContainerCPULimitsByWorkloadCores, webKey):   {"main": running},
+	}}
+
+	res, err := srv.runSimulation(context.Background(), simulateRequest{
+		Namespace: "default", OwnerKind: "Deployment", OwnerName: "web", Window: "2h", Step: "30m",
+		Override: json.RawMessage(`{"resourcesConfigs":{"memory":{"limits":{"requestsLimitsRatio":2}}}}`),
+	})
 	if err != nil {
 		t.Fatalf("runSimulation: %v", err)
 	}
 
-	if c := res.Containers["main"]; c.CPURequest != "2200m" || c.MemoryRequest != "" {
-		t.Errorf("main = %+v, want its CPU coordinated and its memory request kept", c)
+	if res.History == nil || res.HistoryError != "" {
+		t.Fatalf("history = %+v, error %q; want the history", res.History, res.HistoryError)
 	}
-	if res.CPURecommendations == nil || res.MemRecommendations != nil {
-		t.Errorf("recommendation series cpu=%v memory=%v, want none for the kept memory request", res.CPURecommendations, res.MemRecommendations)
+	if calls := inputs.HistoryCalls(); len(calls) != 1 || !calls[0].Span.End.Equal(at) || calls[0].Span.Step != 30*time.Minute ||
+		!calls[0].Span.Start.Equal(t0) || !reflect.DeepEqual(calls[0].Resources, res.Effective.ResourcesConfigs) {
+		t.Errorf("history calls = %+v, want one over the 2h back from the Simulation's instant, every 30m, under its effective resources", calls)
+	}
+	if res.History.StepSeconds != 1800 {
+		t.Errorf("stepSeconds = %d, want 1800", res.History.StepSeconds)
+	}
+	points := func(vs ...float64) []promclient.TimeValue {
+		out := make([]promclient.TimeValue, len(vs))
+		for i, v := range vs {
+			out[i] = promclient.TimeValue{Timestamp: []time.Time{t0, t1, at}[i], Value: v}
+		}
+		return out
+	}
+	main := res.History.Containers["main"]
+	for what, tc := range map[string]struct{ got, want []promclient.TimeValue }{
+		"cpu usage":                  {main.CPU.Usage, points(0.5, 1, 1)},
+		"cpu recommended request":    {main.CPU.RecommendedRequest, points(1.1, 2.2, 2.2)},
+		"cpu recommended limit":      {main.CPU.RecommendedLimit, nil},
+		"cpu running request":        {main.CPU.RunningRequest, running},
+		"cpu running limit":          {main.CPU.RunningLimit, running},
+		"memory usage":               {main.Memory.Usage, points(64*mib, 64*mib, 64*mib)},
+		"memory recommended request": {main.Memory.RecommendedRequest, points(64*mib, 64*mib, 200*mib)},
+		"memory recommended limit":   {main.Memory.RecommendedLimit, points(128*mib, 128*mib, 400*mib)},
+	} {
+		if !reflect.DeepEqual(tc.got, tc.want) {
+			t.Errorf("%s = %v, want %v", what, tc.got, tc.want)
+		}
+	}
+	if !reflect.DeepEqual(res.History.OOMKills, []promclient.OOMKill{kill}) {
+		t.Errorf("kills = %v, want %v", res.History.OOMKills, kill)
+	}
+}
+
+// A history that cannot be read does not fail the Simulation: its numbers
+// come back with the reason, which the chart shows in its place.
+func TestHandleSimulate_AnUnreadableHistoryKeepsTheNumbers(t *testing.T) {
+	srv := newCoordinatedSimulateServer(t)
+	srv.Inputs = recommendertest.NewStaticInputs().
+		Set(webKey, recommender.WithCPUUsage(promclient.ContainerValues{"main": 1})).
+		FailHistory(webKey, errors.New("query processing would load too many samples into memory"))
+	rec := httptest.NewRecorder()
+
+	srv.handleSimulate(rec, httptest.NewRequest(http.MethodPost, "/api/simulate",
+		mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"})))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Containers   map[string]simulationContainerResult `json:"containers"`
+		History      *simulationHistory                   `json:"history"`
+		HistoryError string                               `json:"historyError"`
+	}
+	decodeEnvelopeData(t, rec.Body, &got)
+	if got.Containers["main"].CPURequest != "2200m" || got.History != nil || !strings.Contains(got.HistoryError, "too many samples") {
+		t.Errorf("containers %+v, history %+v, error %q; want the numbers and the history's error", got.Containers, got.History, got.HistoryError)
 	}
 }

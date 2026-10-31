@@ -3,6 +3,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from
 import {
   api,
   ApiError,
+  type ContainerResources,
   type PolicySummary,
   type SimulationResult,
   type SimulateRequest,
@@ -12,13 +13,7 @@ import {
   type Resource,
   type WorkloadListData,
 } from '../lib/api'
-import {
-  parseCPUQuantity,
-  parseMemoryQuantity,
-  parseStepToMs,
-  formatBytes,
-  formatSeconds,
-} from '../lib/format'
+import { parseCPUQuantity, parseMemoryQuantity, formatBytes, formatSeconds } from '../lib/format'
 import { outcomeLabel } from '../lib/outcomes'
 import { limitModeOf, limitModeOrder, limitModes, limitsPatch, type LimitMode } from '../lib/limits'
 import { patches, setPatch, valueAt, type KeyPath, type ValueAt } from '../lib/patch'
@@ -26,6 +21,7 @@ import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
   destroyAllCharts,
+  groupOOMEventsByContainer,
   zoomedRangeSeconds,
   type ExtraSeries,
   type ChartAnnotation,
@@ -346,100 +342,104 @@ async function runSimulation() {
   }
 }
 
+// One chart per resource: what the usage signal read, what the Simulation
+// computes from it at each instant, and what the pods ran with.
+const chartResources = [
+  {
+    key: 'cpu',
+    canvas: 'simcpu-',
+    color: 'cpu',
+    unit: 'cores',
+    yFormat: (v: number) => v.toFixed(3),
+    parse: parseCPUQuantity,
+    request: 'cpuRequest',
+    limit: 'cpuLimit',
+  },
+  {
+    key: 'memory',
+    canvas: 'simmem-',
+    color: 'mem',
+    unit: 'MiB',
+    transform: (v: number) => v / (1024 * 1024),
+    yFormat: (v: number) => v.toFixed(0),
+    parse: parseMemoryQuantity,
+    request: 'memoryRequest',
+    limit: 'memoryLimit',
+  },
+] as const satisfies {
+  key: Resource
+  request: keyof ContainerResources
+  limit: keyof ContainerResources
+  [k: string]: unknown
+}[]
+
 function renderCharts(data: SimulationResult) {
   destroyAllCharts()
+  const history = data.history
+  if (!history) return
 
-  const containers = Object.keys(data.containers || {})
   const simResources = data.resources || {}
-  const simCpuReq = data.cpuRequests || {}
-  const simMemReq = data.memoryRequests || {}
-  const simCpuRec = data.cpuRecommendations || {}
-  const simMemRec = data.memoryRecommendations || {}
-  const stepMs = parseStepToMs(simulateRangeBody(range.value, Date.now()).step)
+  const kills = groupOOMEventsByContainer(history.oomKills)
+  const stepMs = history.stepSeconds * 1000
   const chartWindow = resolveRange(range.value, Date.now())
 
-  containers.forEach((cname) => {
-    const res = simResources[cname] || {}
-
-    if (data.cpuSeries?.[cname]) {
-      const cpuAnnotations: ChartAnnotation[] = []
-      const cpuExtra: ExtraSeries[] = []
-      if (simCpuReq[cname]?.length) {
-        cpuExtra.push({ data: simCpuReq[cname], label: 'Request', color: 'config', dash: [4, 4] })
-      } else if (res.cpuRequest) {
-        cpuAnnotations.push({
-          value: parseCPUQuantity(res.cpuRequest),
-          label: 'Request: ' + res.cpuRequest,
+  Object.keys(data.containers || {}).forEach((cname) => {
+    const containerHistory = history.containers[cname]
+    if (!containerHistory) return
+    const current = simResources[cname] || {}
+    for (const r of chartResources) {
+      const series = containerHistory[r.key]
+      const annotations: ChartAnnotation[] = []
+      const extra: ExtraSeries[] = []
+      const running = current[r.request]
+      if (series.runningRequest?.length) {
+        extra.push({ data: series.runningRequest, label: 'Request', color: 'config', dash: [4, 4] })
+      } else if (running) {
+        annotations.push({
+          value: r.parse(running),
+          label: 'Request: ' + running,
           color: 'config',
           dash: [4, 4],
         })
       }
-      if (res.cpuLimit)
-        cpuAnnotations.push({
-          value: parseCPUQuantity(res.cpuLimit),
-          label: 'Limit: ' + res.cpuLimit,
+      const runningLimit = current[r.limit]
+      if (series.runningLimit?.length) {
+        extra.push({ data: series.runningLimit, label: 'Limit', color: 'config', dash: [1, 4] })
+      } else if (runningLimit) {
+        annotations.push({
+          value: r.parse(runningLimit),
+          label: 'Limit: ' + runningLimit,
           color: 'config',
           dash: [1, 4],
         })
-      if (simCpuRec[cname]?.length) {
-        cpuExtra.push({
-          data: simCpuRec[cname],
-          label: 'Recommendation',
+      }
+      if (series.recommendedRequest?.length) {
+        extra.push({
+          data: series.recommendedRequest,
+          label: 'Recommended request',
           color: 'rec',
           dash: [8, 4],
           stepped: false,
         })
       }
-      createTimeSeriesChart('simcpu-' + cname, data.cpuSeries[cname], {
-        label: 'CPU Usage',
-        color: 'cpu',
-        unit: 'cores',
-        yFormat: (v) => v.toFixed(3),
-        annotations: cpuAnnotations,
-        extraSeries: cpuExtra,
-        onZoomComplete: onChartZoom,
-        stepMs,
-        window: chartWindow,
-      })
-    }
-
-    if (data.memorySeries?.[cname]) {
-      const memAnnotations: ChartAnnotation[] = []
-      const memExtra: ExtraSeries[] = []
-      if (simMemReq[cname]?.length) {
-        memExtra.push({ data: simMemReq[cname], label: 'Request', color: 'config', dash: [4, 4] })
-      } else if (res.memoryRequest) {
-        memAnnotations.push({
-          value: parseMemoryQuantity(res.memoryRequest),
-          label: 'Request: ' + res.memoryRequest,
-          color: 'config',
-          dash: [4, 4],
-        })
-      }
-      if (res.memoryLimit)
-        memAnnotations.push({
-          value: parseMemoryQuantity(res.memoryLimit),
-          label: 'Limit: ' + res.memoryLimit,
-          color: 'config',
-          dash: [1, 4],
-        })
-      if (simMemRec[cname]?.length) {
-        memExtra.push({
-          data: simMemRec[cname],
-          label: 'Recommendation',
+      if (series.recommendedLimit?.length) {
+        extra.push({
+          data: series.recommendedLimit,
+          label: 'Recommended limit',
           color: 'rec',
-          dash: [8, 4],
+          dash: [2, 3],
           stepped: false,
         })
       }
-      createTimeSeriesChart('simmem-' + cname, data.memorySeries[cname], {
-        label: 'Memory Usage',
-        color: 'mem',
-        unit: 'MiB',
-        transform: (v) => v / (1024 * 1024),
-        yFormat: (v) => v.toFixed(0),
-        annotations: memAnnotations,
-        extraSeries: memExtra,
+      createTimeSeriesChart(r.canvas + cname, series.usage ?? [], {
+        label: 'Usage percentile (busiest replica)',
+        color: r.color,
+        unit: r.unit,
+        transform: 'transform' in r ? r.transform : undefined,
+        yFormat: r.yFormat,
+        annotations,
+        extraSeries: extra,
+        oomEvents: r.key === 'memory' ? kills[cname] || [] : undefined,
         onZoomComplete: onChartZoom,
         stepMs,
         window: chartWindow,
@@ -875,7 +875,20 @@ onUnmounted(() => {
           <TimeRangePicker v-model="range" />
         </div>
       </div>
-      <div v-for="cname in simRegularContainerNames()" :key="cname" class="card">
+      <p v-if="simData.historyError" class="form-error" role="alert" data-test="history-error">
+        History unavailable: {{ simData.historyError }}
+      </p>
+      <p v-else class="form-helper" data-test="history-legend">
+        Each point is the recommendation computed from what every signal read as of that instant,
+        the OOM floor included.<template v-if="simData.effective.autoscalerCoordination.enabled">
+          Autoscaler coordination uses today's autoscaler: it has no history.</template
+        >
+      </p>
+      <div
+        v-for="cname in simData.history ? simRegularContainerNames() : []"
+        :key="cname"
+        class="card"
+      >
         <div class="card-header">
           <h2>
             Container: <code>{{ cname }}</code>
@@ -911,7 +924,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <template v-if="simInitContainerNames().length > 0">
+      <template v-if="simData.history && simInitContainerNames().length > 0">
         <h2 style="margin-top: 16px">Init containers</h2>
         <div v-for="cname in simInitContainerNames()" :key="cname" class="card">
           <div class="card-header">

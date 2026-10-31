@@ -99,8 +99,12 @@ func TestWorkloadMetricsAbsoluteRange(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	gotCPU := prom.capturedCPURange
-	if gotCPU.Start.Unix() != 1718000000 || gotCPU.End.Unix() != 1718003600 {
-		t.Errorf("range = [%d,%d], want [1718000000,1718003600]", gotCPU.Start.Unix(), gotCPU.End.Unix())
+	if len(prom.capturedRanges) == 0 {
+		t.Fatal("no range read")
+	}
+	for _, got := range prom.capturedRanges {
+		if got.Start.Unix() != 1718000000 || got.End.Unix() != 1718003600 {
+			t.Errorf("range = [%d,%d], want [1718000000,1718003600]", got.Start.Unix(), got.End.Unix())
+		}
 	}
 }

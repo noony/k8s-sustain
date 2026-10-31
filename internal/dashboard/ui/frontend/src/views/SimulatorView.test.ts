@@ -2,7 +2,12 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import SimulatorView from './SimulatorView.vue'
 import * as api from '../lib/api'
+import * as chart from '../lib/chart'
 vi.mock('../lib/api', async (o) => ({ ...((await o()) as object), api: vi.fn() }))
+vi.mock('../lib/chart', async (o) => ({
+  ...((await o()) as object),
+  createTimeSeriesChart: vi.fn(),
+}))
 
 // What the server answers for web under policy p: its effective settings
 // differ from every value the recommender would default.
@@ -18,10 +23,57 @@ const simulation = (): api.SimulationResult => ({
   outcome: 'Computed',
   containers: { app: { cpuRequest: '100m' } },
   trace: { app: { cpu: { request: [{ stage: 'percentile', value: '90m' }] } } },
-  cpuSeries: {},
-  memorySeries: {},
   liveOOMWindowSeconds: 1800,
 })
+
+const t0 = '2026-10-05T11:00:00Z'
+const t1 = '2026-10-05T12:00:00Z'
+const at = (timestamp: string, value: number) => ({ timestamp, value })
+
+// web's history over two instants: memory's limit is recommended at the
+// second only, and the pods' memory limit is known only from the spec.
+const withHistory = (): api.SimulationResult => ({
+  ...simulation(),
+  resources: { app: { memoryLimit: '256Mi' } },
+  history: {
+    stepSeconds: 3600,
+    containers: {
+      app: {
+        cpu: {
+          usage: [at(t0, 0.08), at(t1, 0.09)],
+          recommendedRequest: [at(t0, 0.088), at(t1, 0.099)],
+          runningRequest: [at(t0, 0.2), at(t1, 0.2)],
+          runningLimit: [at(t0, 1), at(t1, 1)],
+        },
+        memory: {
+          usage: [at(t0, 64), at(t1, 64)],
+          recommendedRequest: [at(t0, 64), at(t1, 200)],
+          recommendedLimit: [at(t1, 400)],
+          runningRequest: [at(t0, 128), at(t1, 128)],
+        },
+      },
+    },
+    oomKills: [{ timestamp: t1, container: 'app' }],
+  },
+})
+
+// What each chart drew: its usage, then each other line by label.
+function drawn() {
+  return Object.fromEntries(
+    (chart.createTimeSeriesChart as any).mock.calls.map(
+      ([id, usage, opts]: [string, api.TimeValue[], chart.ChartOpts]) => [
+        id,
+        {
+          usage,
+          lines: Object.fromEntries((opts.extraSeries ?? []).map((s) => [s.label, s.data])),
+          annotations: (opts.annotations ?? []).map((a) => a.label),
+          oomEvents: opts.oomEvents,
+          stepMs: opts.stepMs,
+        },
+      ],
+    ),
+  )
+}
 
 function serveSimulator(simulate: (body: api.SimulateRequest) => Promise<unknown>) {
   const bodies: api.SimulateRequest[] = []
@@ -46,7 +98,61 @@ function mountOpened() {
 }
 
 describe('SimulatorView', () => {
-  afterEach(() => vi.useRealTimers())
+  afterEach(() => {
+    vi.useRealTimers()
+    ;(chart.createTimeSeriesChart as any).mockClear()
+  })
+
+  it('charts, per resource, the recommendation computed at each instant over the usage it read', async () => {
+    serveSimulator(async () => withHistory())
+    mountOpened()
+    await flushPromises()
+
+    const charts = drawn()
+    expect(Object.keys(charts).sort()).toEqual(['simcpu-app', 'simmem-app'])
+    expect(charts['simcpu-app']).toEqual({
+      usage: [at(t0, 0.08), at(t1, 0.09)],
+      lines: {
+        Request: [at(t0, 0.2), at(t1, 0.2)],
+        Limit: [at(t0, 1), at(t1, 1)],
+        'Recommended request': [at(t0, 0.088), at(t1, 0.099)],
+      },
+      annotations: [],
+      oomEvents: undefined,
+      stepMs: 3600_000,
+    })
+    expect(charts['simmem-app']).toEqual({
+      usage: [at(t0, 64), at(t1, 64)],
+      lines: {
+        Request: [at(t0, 128), at(t1, 128)],
+        'Recommended request': [at(t0, 64), at(t1, 200)],
+        'Recommended limit': [at(t1, 400)],
+      },
+      annotations: ['Limit: 256Mi'],
+      oomEvents: [{ timestamp: t1, container: 'app' }],
+      stepMs: 3600_000,
+    })
+  })
+
+  it("says coordination uses today's autoscaler", async () => {
+    serveSimulator(async () => withHistory())
+    const w = mountOpened()
+    await flushPromises()
+
+    expect(w.find('[data-test="history-legend"]').text()).toContain("today's autoscaler")
+  })
+
+  it('keeps the numbers and shows why when the history is unavailable', async () => {
+    serveSimulator(async () => ({ ...simulation(), historyError: 'too many samples' }))
+    const w = mountOpened()
+    await flushPromises()
+
+    expect(w.find('[data-test="history-error"]').text()).toBe(
+      'History unavailable: too many samples',
+    )
+    expect(w.find('.rec-card').exists()).toBe(true)
+    expect(chart.createTimeSeriesChart).not.toHaveBeenCalled()
+  })
 
   it('opens on the governing policy: sends no override and shows its effective settings', async () => {
     const bodies = serveSimulator(async () => simulation())

@@ -1,7 +1,9 @@
 package dashboard
 
 import (
+	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"sync"
@@ -25,37 +27,27 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	}
 
 	ctx := r.Context()
+	key := promclient.WorkloadIdentity{Namespace: namespace, OwnerKind: kind, OwnerName: name}
 
 	// Only cpu/memory usage failures abort the response; the rest are
 	// best-effort.
 	var (
-		cpuSeries, memSeries                           promclient.ContainerTimeSeries
-		cpuRequests, memRequests, cpuLimits, memLimits promclient.ContainerTimeSeries
-		oomEvents                                      []promclient.OOMKill
-		cpuErr, memErr                                 error
+		cpuSeries, memSeries promclient.ContainerTimeSeries
+		running              runningSeries
+		oomEvents            []promclient.OOMKill
+		cpuErr, memErr       error
 	)
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		cpuSeries, cpuErr = s.PromClient.QueryCPURangeByContainer(ctx, namespace, kind, name, tr, step)
+		cpuSeries, cpuErr = s.PromClient.QueryRangeByLabel(ctx,
+			perContainer("avg", promclient.MetricContainerCPUUsageByWorkloadRate1m, key), "container", tr, step)
 	})
 	wg.Go(func() {
-		memSeries, memErr = s.PromClient.QueryMemoryRangeByContainer(ctx, namespace, kind, name, tr, step)
+		memSeries, memErr = s.PromClient.QueryRangeByLabel(ctx,
+			perContainer("avg", promclient.MetricContainerMemoryByWorkloadBytes, key), "container", tr, step)
 	})
-	wg.Go(func() {
-		oomEvents, _ = s.PromClient.QueryOOMKillEvents(ctx, namespace, kind, name, tr, step)
-	})
-	wg.Go(func() {
-		cpuRequests, _ = s.PromClient.QueryCPURequestRangeByContainer(ctx, namespace, kind, name, tr, step)
-	})
-	wg.Go(func() {
-		memRequests, _ = s.PromClient.QueryMemoryRequestRangeByContainer(ctx, namespace, kind, name, tr, step)
-	})
-	wg.Go(func() {
-		cpuLimits, _ = s.PromClient.QueryCPULimitRangeByContainer(ctx, namespace, kind, name, tr, step)
-	})
-	wg.Go(func() {
-		memLimits, _ = s.PromClient.QueryMemoryLimitRangeByContainer(ctx, namespace, kind, name, tr, step)
-	})
+	wg.Go(func() { oomEvents = s.oomKills(ctx, key, tr, step) })
+	wg.Go(func() { running = s.running(ctx, key, tr, step) })
 	wg.Wait()
 
 	if cpuErr != nil {
@@ -68,7 +60,7 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	}
 
 	// A failed read is tolerated: resources and init containers come back nil.
-	id, err := s.identity(ctx, promclient.WorkloadIdentity{Namespace: namespace, OwnerKind: kind, OwnerName: name})
+	id, err := s.identity(ctx, key)
 	if err != nil {
 		s.Logger.Error(err, "failed to read the workload identity", "namespace", namespace, "kind", kind, "name", name)
 	}
@@ -80,13 +72,65 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 		"cpu":            cpuSeries,
 		"memory":         memSeries,
 		"resources":      resources,
-		"cpuRequests":    cpuRequests,
-		"memoryRequests": memRequests,
-		"cpuLimits":      cpuLimits,
-		"memoryLimits":   memLimits,
+		"cpuRequests":    running.cpuRequests,
+		"memoryRequests": running.memoryRequests,
+		"cpuLimits":      running.cpuLimits,
+		"memoryLimits":   running.memoryLimits,
 		"oomEvents":      oomEvents,
 		"initContainers": initContainers,
 	})
+}
+
+// perContainer renders rule for the identity key, aggregated per container by
+// agg.
+func perContainer(agg, rule string, key promclient.WorkloadIdentity) string {
+	return fmt.Sprintf("%s by (container) (%s%s)", agg, rule, promclient.WorkloadSelector(key.Namespace, key.OwnerKind, key.OwnerName))
+}
+
+// runningSeries are the requests and limits an identity's containers ran
+// with over a range, per container.
+type runningSeries struct {
+	cpuRequests, memoryRequests, cpuLimits, memoryLimits promclient.ContainerTimeSeries
+}
+
+// running reads the requests and limits key's containers ran with over r,
+// the highest of its pods' at each step. A series that cannot be read is
+// left nil.
+func (s *Server) running(ctx context.Context, key promclient.WorkloadIdentity, r promclient.TimeRange, step string) runningSeries {
+	var out runningSeries
+	var wg sync.WaitGroup
+	for rule, into := range map[string]*promclient.ContainerTimeSeries{
+		promclient.MetricContainerCPURequestsByWorkloadCores:    &out.cpuRequests,
+		promclient.MetricContainerMemoryRequestsByWorkloadBytes: &out.memoryRequests,
+		promclient.MetricContainerCPULimitsByWorkloadCores:      &out.cpuLimits,
+		promclient.MetricContainerMemoryLimitsByWorkloadBytes:   &out.memoryLimits,
+	} {
+		wg.Go(func() {
+			*into, _ = s.PromClient.QueryRangeByLabel(ctx, perContainer("max", rule, key), "container", r, step)
+		})
+	}
+	wg.Wait()
+	return out
+}
+
+// oomKills reads key's OOM kills over r, each dated at the end of the step it
+// fell in, none when they cannot be read: kube-state-metrics may be missing,
+// and the page renders without them.
+func (s *Server) oomKills(ctx context.Context, key promclient.WorkloadIdentity, r promclient.TimeRange, step string) []promclient.OOMKill {
+	stepDur, err := promclient.ParseStep(step)
+	if err != nil {
+		return nil
+	}
+	selector := promclient.WorkloadSelector(key.Namespace, key.OwnerKind, key.OwnerName)
+	perStep, err := s.PromClient.QueryRangeByLabel(ctx, promclient.OOMKillsPerStep(selector, stepDur), "container", r, step)
+	if err != nil {
+		return nil
+	}
+	var out []promclient.OOMKill
+	for _, container := range slices.Sorted(maps.Keys(perStep)) {
+		out = append(out, promclient.OOMEventsOf(container, perStep[container])...)
+	}
+	return out
 }
 
 type containerResources struct {

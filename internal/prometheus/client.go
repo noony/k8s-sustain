@@ -39,14 +39,6 @@ func QuantileOverTime(quantile float64, rule, selector, window string) string {
 	return fmt.Sprintf("quantile_over_time(%.2f, %s%s[%s])", quantile, rule, selector, window)
 }
 
-func avgByContainer(inner string) string {
-	return fmt.Sprintf("avg by (container) (%s)", inner)
-}
-
-func maxByContainer(inner string) string {
-	return fmt.Sprintf("max by (container) (%s)", inner)
-}
-
 // recordQueryFailure counts a failed query against the breaker. ctx must be
 // the per-call WithTimeout child. A collateral abort from an errgroup sibling
 // (a non-context cause) is not counted; the sibling already counted its own.
@@ -85,8 +77,8 @@ func (c *Client) execInstant(ctx context.Context, expr string, ts time.Time, tim
 	return v, nil
 }
 
-// parseStep reads a range query's step, a Prometheus duration.
-func parseStep(step string) (time.Duration, error) {
+// ParseStep reads a range query's step, a Prometheus duration.
+func ParseStep(step string) (time.Duration, error) {
 	d, err := model.ParseDuration(step)
 	if err != nil {
 		return 0, fmt.Errorf("parsing step %q: %w", step, err)
@@ -261,69 +253,11 @@ type TimeValue struct {
 // ContainerTimeSeries maps container name to time-series data points.
 type ContainerTimeSeries map[string][]TimeValue
 
-// QueryCPURangeByContainer returns per-container CPU usage time-series (cores)
-// over the specified range with the given step resolution.
-func (c *Client) QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := avgByContainer(MetricContainerCPUUsageByWorkloadRate1m + WorkloadSelector(namespace, ownerKind, ownerName))
-	return c.queryRangeByContainer(ctx, expr, r, step)
-}
-
-// QueryMemoryRangeByContainer returns per-container memory working set time-series (bytes)
-// over the specified range with the given step resolution.
-func (c *Client) QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := avgByContainer(MetricContainerMemoryByWorkloadBytes + WorkloadSelector(namespace, ownerKind, ownerName))
-	return c.queryRangeByContainer(ctx, expr, r, step)
-}
-
-// QueryCPURequestRangeByContainer returns per-container CPU request time-series (cores).
-func (c *Client) QueryCPURequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	return c.queryMaxByContainerForWorkload(ctx, MetricContainerCPURequestsByWorkloadCores, namespace, ownerKind, ownerName, r, step)
-}
-
-// QueryMemoryRequestRangeByContainer returns per-container memory request time-series (bytes).
-func (c *Client) QueryMemoryRequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	return c.queryMaxByContainerForWorkload(ctx, MetricContainerMemoryRequestsByWorkloadBytes, namespace, ownerKind, ownerName, r, step)
-}
-
-// QueryCPULimitRangeByContainer returns per-container CPU limit time-series
-// (cores) from the per-pod cgroup limit, not the workload spec.
-func (c *Client) QueryCPULimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	return c.queryMaxByContainerForWorkload(ctx, MetricContainerCPULimitsByWorkloadCores, namespace, ownerKind, ownerName, r, step)
-}
-
-// QueryMemoryLimitRangeByContainer returns per-container memory limit time-series (bytes).
-func (c *Client) QueryMemoryLimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	return c.queryMaxByContainerForWorkload(ctx, MetricContainerMemoryLimitsByWorkloadBytes, namespace, ownerKind, ownerName, r, step)
-}
-
-func (c *Client) queryMaxByContainerForWorkload(ctx context.Context, ruleName, namespace, ownerKind, ownerName string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := maxByContainer(ruleName + WorkloadSelector(namespace, ownerKind, ownerName))
-	return c.queryRangeByContainer(ctx, expr, r, step)
-}
-
-// QueryWorkloadCPURecommendationRangeByContainer is the one-workload range
-// counterpart of the recommender's CPU usage signal: at each step, the
-// per-container CPU quantile (cores) of the busiest replica over the trailing
-// recWindow.
-func (c *Client) QueryWorkloadCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := QuantileOverTime(quantile, MetricWorkloadMaxPodCPUCores, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
-	return c.queryRangeByContainer(ctx, expr, r, step)
-}
-
-// QueryWorkloadMemoryRecommendationRangeByContainer is the one-workload range
-// counterpart of the recommender's memory usage signal: at each step, the
-// per-container memory quantile (bytes) of the busiest replica over the
-// trailing recWindow.
-func (c *Client) QueryWorkloadMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	expr := QuantileOverTime(quantile, MetricWorkloadMaxPodMemoryBytes, WorkloadSelector(namespace, ownerKind, ownerName), recWindow)
-	return c.queryRangeByContainer(ctx, expr, r, step)
-}
-
-// OOMKill is one OOM kill of a container.
+// OOMKill is a container's OOM kill, dated at the end of the chart step it
+// fell in.
 type OOMKill struct {
 	Timestamp time.Time `json:"timestamp"`
 	Container string    `json:"container"`
-	Pod       string    `json:"pod"`
 }
 
 // OOMKillsPerStep counts, per identity and container of selector, the OOM
@@ -345,65 +279,6 @@ func OOMEventsOf(container string, perStep []TimeValue) []OOMKill {
 		}
 	}
 	return out
-}
-
-// QueryOOMKillEvents returns a workload's OOM kills over r, one event per kill
-// the MetricContainerOOMKills rule recorded, dated at the end of the step it
-// falls in.
-func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) ([]OOMKill, error) {
-	stepDur, err := parseStep(step)
-	if err != nil {
-		return nil, err
-	}
-
-	// A window of exactly one step tiles the range: every kill sample falls in
-	// one step's window, so it is counted once.
-	expr := fmt.Sprintf("sum by (pod, container) (sum_over_time(%s%s[%s]))",
-		MetricContainerOOMKills, WorkloadSelector(namespace, ownerKind, ownerName), model.Duration(stepDur))
-
-	matrix, err := c.execRange(ctx, expr, r, stepDur, c.queryTimeout)
-	if err != nil {
-		// Non-fatal: the breaker may be open or OOM data missing (no
-		// kube-state-metrics); keep the dashboard rendering. runRange already
-		// recorded any breaker failure.
-		return nil, nil //nolint:nilerr // intentional non-fatal swallow, see comment above
-	}
-
-	var events []OOMKill
-	for _, stream := range matrix {
-		container := string(stream.Metric["container"])
-		if container == "" {
-			continue
-		}
-		for _, v := range stream.Values {
-			for range int(math.Round(float64(v.Value))) {
-				events = append(events, OOMKill{
-					Timestamp: v.Timestamp.Time(),
-					Container: container,
-					Pod:       string(stream.Metric["pod"]),
-				})
-			}
-		}
-	}
-	return events, nil
-}
-
-func (c *Client) queryRangeByContainer(ctx context.Context, expr string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	stepDur, err := parseStep(step)
-	if err != nil {
-		return nil, err
-	}
-	matrix, err := c.execRange(ctx, expr, r, stepDur, c.queryTimeout)
-	if err != nil {
-		return nil, wrapQueryErr("prometheus range query", expr, err)
-	}
-	series := make(ContainerTimeSeries, len(matrix))
-	for _, stream := range matrix {
-		if name := string(stream.Metric["container"]); name != "" {
-			series[name] = timeValues(stream.Values)
-		}
-	}
-	return series, nil
 }
 
 func timeValues(pairs []model.SamplePair) []TimeValue {
@@ -468,7 +343,7 @@ func (c *Client) QueryInstant(ctx context.Context, expr string) (float64, error)
 // QueryRange runs a range query for a single series and returns its time-stamped
 // values. If the query produces multiple series, only the first is returned.
 func (c *Client) QueryRange(ctx context.Context, expr string, r TimeRange, step string) ([]TimeValue, error) {
-	stepDur, err := parseStep(step)
+	stepDur, err := ParseStep(step)
 	if err != nil {
 		return nil, err
 	}
@@ -485,6 +360,27 @@ func (c *Client) QueryRange(ctx context.Context, expr string, r TimeRange, step 
 // QueryByLabel runs an instant query and returns a map of label value to sample value.
 func (c *Client) QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error) {
 	return c.QueryByLabels(ctx, expr, label)
+}
+
+// QueryRangeByLabel runs a range query and returns each series' values keyed
+// by the value of label, for an expression with one series per value of it.
+// A series missing the label is skipped.
+func (c *Client) QueryRangeByLabel(ctx context.Context, expr, label string, r TimeRange, step string) (map[string][]TimeValue, error) {
+	stepDur, err := ParseStep(step)
+	if err != nil {
+		return nil, err
+	}
+	matrix, err := c.execRange(ctx, expr, r, stepDur, dashboardQueryTimeout)
+	if err != nil {
+		return nil, wrapQueryErr("range query", expr, err)
+	}
+	out := make(map[string][]TimeValue, len(matrix))
+	for _, s := range matrix {
+		if v := string(s.Metric[model.LabelName(label)]); v != "" {
+			out[v] = timeValues(s.Values)
+		}
+	}
+	return out, nil
 }
 
 // QueryByLabels runs an instant query and returns a map keyed by the named

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -24,18 +25,18 @@ type simulationResult struct {
 	Policy string `json:"policy,omitempty"`
 	// Effective is what it ran with: the Policy's settings with the override
 	// merged in and every default explicit.
-	Effective          simulationSettings                        `json:"effective"`
-	Outcome            sustainv1alpha1.RecommendationOutcome     `json:"outcome"`
-	Containers         map[string]simulationContainerResult      `json:"containers"`
-	Trace              map[string]sustainv1alpha1.ContainerTrace `json:"trace,omitempty"`
-	InitContainers     []string                                  `json:"initContainers,omitempty"`
-	CPUSeries          promclient.ContainerTimeSeries            `json:"cpuSeries"`
-	MemSeries          promclient.ContainerTimeSeries            `json:"memorySeries"`
-	Resources          map[string]containerResources             `json:"resources,omitempty"`
-	CPURequests        promclient.ContainerTimeSeries            `json:"cpuRequests,omitempty"`
-	MemoryRequests     promclient.ContainerTimeSeries            `json:"memoryRequests,omitempty"`
-	CPURecommendations promclient.ContainerTimeSeries            `json:"cpuRecommendations,omitempty"`
-	MemRecommendations promclient.ContainerTimeSeries            `json:"memoryRecommendations,omitempty"`
+	Effective      simulationSettings                        `json:"effective"`
+	Outcome        sustainv1alpha1.RecommendationOutcome     `json:"outcome"`
+	Containers     map[string]simulationContainerResult      `json:"containers"`
+	Trace          map[string]sustainv1alpha1.ContainerTrace `json:"trace,omitempty"`
+	InitContainers []string                                  `json:"initContainers,omitempty"`
+	Resources      map[string]containerResources             `json:"resources,omitempty"`
+	// History is what the Simulation computes at each instant of its chart
+	// range, nil when it could not be read.
+	History *simulationHistory `json:"history,omitempty"`
+	// HistoryError is why the history could not be read. The Simulation's
+	// numbers stand without it.
+	HistoryError string `json:"historyError,omitempty"`
 }
 
 type simulationContainerResult struct {
@@ -49,13 +50,48 @@ type simulationContainerResult struct {
 	MemoryUsageBytes   float64 `json:"memoryUsageBytes,omitempty"`
 }
 
+// simulationHistory is a Simulation at each instant of its chart range.
+type simulationHistory struct {
+	// StepSeconds is the step between its instants, derived from the range:
+	// the step a request asks for is only the finest it gets.
+	StepSeconds int64                       `json:"stepSeconds"`
+	Containers  map[string]containerHistory `json:"containers"`
+	// OOMKills are the identity's OOM kills over the range, each dated at the
+	// end of the step it fell in.
+	OOMKills []promclient.OOMKill `json:"oomKills,omitempty"`
+}
+
+type containerHistory struct {
+	CPU    resourceHistory `json:"cpu"`
+	Memory resourceHistory `json:"memory"`
+}
+
+// resourceHistory is one resource of one container at each instant, in cores
+// or bytes. A series has no point where it has no value: no recommended
+// request where none is recommended, no limit where the container would run
+// without one.
+type resourceHistory struct {
+	// Usage is what the resource's usage signal read: the busiest replica's
+	// percentile over the Policy's window.
+	Usage []promclient.TimeValue `json:"usage,omitempty"`
+	// RecommendedRequest and RecommendedLimit are what the Simulation computes
+	// as of each instant.
+	RecommendedRequest []promclient.TimeValue `json:"recommendedRequest,omitempty"`
+	RecommendedLimit   []promclient.TimeValue `json:"recommendedLimit,omitempty"`
+	// RunningRequest and RunningLimit are what the pods ran with.
+	RunningRequest []promclient.TimeValue `json:"runningRequest,omitempty"`
+	RunningLimit   []promclient.TimeValue `json:"runningLimit,omitempty"`
+}
+
 var errBasePolicy = errors.New("reading the Policy to simulate")
 
 // runSimulation computes the Request the controller would make of the
 // identity, under the starting Policy's settings with the override merged in:
 // with no override and the governing Policy, exactly the controller's, live
 // OOM kills aside. An identity the inventory does not hold is simulated from
-// whatever Prometheus reports for it.
+// whatever Prometheus reports for it. Its history over the chart range is
+// computed by the same chain, and a history that cannot be read leaves the
+// numbers standing with the reason.
 func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simulationResult, error) {
 	key := promclient.WorkloadIdentity{Namespace: req.Namespace, OwnerKind: req.OwnerKind, OwnerName: req.OwnerName}
 	id, err := s.identity(ctx, key)
@@ -75,63 +111,81 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		return nil, err
 	}
 
-	var tr promclient.TimeRange
-	if req.FromTs > 0 && req.ToTs > 0 {
-		tr = promclient.TimeRange{Start: time.Unix(req.FromTs, 0), End: time.Unix(req.ToTs, 0)}
-	} else {
-		tr, err = promclient.TimeRangeFromWindow(recommender.ResourceWindow(req.Window), time.Now())
-		if err != nil {
-			return nil, fmt.Errorf("resolve chart window: %w", err)
-		}
-	}
-
 	a := recommender.Assemble(ctx, s.Inputs, autoscaler.NewNamespacedSnapshot(s.K8sClient), s.now, settings.rightSizing(), []*inventory.Identity{id})[0]
 	if a.Err != nil {
 		return nil, a.Err
 	}
 	res := recommender.Compute(a.Request)
-	resources := a.Request.Resources()
-	settings.ResourcesConfigs = resources
+	settings.ResourcesConfigs = a.Request.Resources()
+	out := &simulationResult{
+		Policy:         policy,
+		Effective:      settings,
+		Outcome:        res.Outcome.Recorded(),
+		Containers:     simulationContainers(res, a.Request.Inputs()),
+		Trace:          res.Traces,
+		InitContainers: initContainerNamesOf(id),
+		Resources:      containerResourcesOf(id),
+	}
 
-	step := cmp.Or(req.Step, "5m")
-	ns, kind, name := key.Namespace, key.OwnerKind, key.OwnerName
-	cpuSeries, err := s.PromClient.QueryCPURangeByContainer(ctx, ns, kind, name, tr, step)
+	span, err := chartSpan(req, a.Request.Now())
 	if err != nil {
-		return nil, fmt.Errorf("cpu range query: %w", err)
+		return nil, err
 	}
-	memSeries, err := s.PromClient.QueryMemoryRangeByContainer(ctx, ns, kind, name, tr, step)
-	if err != nil {
-		return nil, fmt.Errorf("memory range query: %w", err)
+	if history, err := recommender.ComputeRange(ctx, s.Inputs, a.Request, span); err != nil {
+		out.HistoryError = err.Error()
+	} else {
+		out.History = s.simulationHistory(ctx, key, span, history)
 	}
-	cpuRequests, _ := s.PromClient.QueryCPURequestRangeByContainer(ctx, ns, kind, name, tr, step)
-	memRequests, _ := s.PromClient.QueryMemoryRequestRangeByContainer(ctx, ns, kind, name, tr, step)
+	return out, nil
+}
 
-	// A kept request is recommended nothing, so it has no series to draw.
-	var cpuRecSeries, memRecSeries promclient.ContainerTimeSeries
-	if !resources.CPU.Requests.KeepRequest {
-		cpuRecSeries, _ = s.PromClient.QueryWorkloadCPURecommendationRangeByContainer(ctx, ns, kind, name,
-			recommender.PercentileQuantile(resources.CPU.Requests.Percentile), resources.CPU.Window, tr, step)
+// chartSpan is the span a Simulation's history is read over: the request's
+// absolute range, or its window back from now, the instant the Simulation
+// computes as of, so the history's last instant is the Simulation itself.
+func chartSpan(req simulateRequest, now time.Time) (recommender.Span, error) {
+	var tr promclient.TimeRange
+	if req.FromTs > 0 && req.ToTs > 0 {
+		tr = promclient.TimeRange{Start: time.Unix(req.FromTs, 0), End: time.Unix(req.ToTs, 0)}
+	} else {
+		var err error
+		if tr, err = promclient.TimeRangeFromWindow(recommender.ResourceWindow(req.Window), now); err != nil {
+			return recommender.Span{}, fmt.Errorf("resolve chart window: %w", err)
+		}
 	}
-	if !resources.Memory.Requests.KeepRequest {
-		memRecSeries, _ = s.PromClient.QueryWorkloadMemoryRecommendationRangeByContainer(ctx, ns, kind, name,
-			recommender.PercentileQuantile(resources.Memory.Requests.Percentile), resources.Memory.Window, tr, step)
-	}
+	// The handler validated the step; one it still cannot read is no hint.
+	hint, _ := promclient.ParseStep(cmp.Or(req.Step, "5m"))
+	return recommender.SpanOf(tr.Start.UTC(), tr.End.UTC(), hint), nil
+}
 
-	return &simulationResult{
-		Policy:             policy,
-		Effective:          settings,
-		Outcome:            res.Outcome.Recorded(),
-		Containers:         simulationContainers(res, a.Request.Inputs()),
-		Trace:              res.Traces,
-		InitContainers:     initContainerNamesOf(id),
-		CPUSeries:          cpuSeries,
-		MemSeries:          memSeries,
-		Resources:          containerResourcesOf(id),
-		CPURequests:        cpuRequests,
-		MemoryRequests:     memRequests,
-		CPURecommendations: recommendationSeries(cpuRecSeries, a.Request, corev1.ResourceCPU),
-		MemRecommendations: recommendationSeries(memRecSeries, a.Request, corev1.ResourceMemory),
-	}, nil
+// simulationHistory renders what the Simulation computed over span next to
+// the requests and limits the identity's pods ran with then.
+func (s *Server) simulationHistory(ctx context.Context, key promclient.WorkloadIdentity, span recommender.Span, r recommender.RangeResult) *simulationHistory {
+	step := strconv.FormatInt(int64(span.Step/time.Second), 10) + "s"
+	running := s.running(ctx, key, promclient.TimeRange{Start: span.Start, End: span.End}, step)
+	out := &simulationHistory{
+		StepSeconds: int64(span.Step / time.Second),
+		Containers:  make(map[string]containerHistory, len(r.Containers)),
+		OOMKills:    r.Kills,
+	}
+	for name, c := range r.Containers {
+		out.Containers[name] = containerHistory{
+			CPU: resourceHistory{
+				Usage:              c.CPU.Usage,
+				RecommendedRequest: c.CPU.Request,
+				RecommendedLimit:   c.CPU.Limit,
+				RunningRequest:     running.cpuRequests[name],
+				RunningLimit:       running.cpuLimits[name],
+			},
+			Memory: resourceHistory{
+				Usage:              c.Memory.Usage,
+				RecommendedRequest: c.Memory.Request,
+				RecommendedLimit:   c.Memory.Limit,
+				RunningRequest:     running.memoryRequests[name],
+				RunningLimit:       running.memoryLimits[name],
+			},
+		}
+	}
+	return out
 }
 
 // policySettings reads the settings of the Policy named name; none for an
@@ -171,25 +225,6 @@ func simulationContainers(res recommender.Result, inputs *recommender.WorkloadIn
 			cr.MemoryLimit = rec.MemoryLimit.String()
 		}
 		out[name] = cr
-	}
-	return out
-}
-
-// recommendationSeries computes, at each raw percentile point of res, the
-// request the identity's Request would have computed for the container had
-// the point been its percentile, so the chart shows exactly what would be
-// applied at each step.
-func recommendationSeries(series promclient.ContainerTimeSeries, req recommender.Request, res corev1.ResourceName) promclient.ContainerTimeSeries {
-	if series == nil {
-		return nil
-	}
-	out := make(promclient.ContainerTimeSeries, len(series))
-	for name, points := range series {
-		recs := make([]promclient.TimeValue, len(points))
-		for i, p := range points {
-			recs[i] = promclient.TimeValue{Timestamp: p.Timestamp, Value: req.RequestAt(name, res, p.Value)}
-		}
-		out[name] = recs
 	}
 	return out
 }

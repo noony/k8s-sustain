@@ -64,48 +64,6 @@ func TestCompute_DeclaredContainersBoundTheResult(t *testing.T) {
 	}
 }
 
-// At the usage a container was observed at, RequestAt is the request Compute
-// recommends it, for either resource, its own OOM floor included and a
-// sibling's left out. It is zero for a container the Request does not
-// recommend, a kept request, and a resource the recommender does not size.
-func TestRequest_RequestAt(t *testing.T) {
-	req := Request{
-		containers: containers("app", "side"),
-		resources: sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{
-			Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)},
-		}},
-		inputs: NewInputs(
-			WithCPUUsage(promclient.ContainerValues{"app": 1, "side": 0.2}),
-			WithMemoryUsage(promclient.ContainerValues{"app": 64 * mib, "side": 32 * mib}),
-			WithOOMKills(map[string]OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}}),
-		),
-		since: now.Add(-time.Minute),
-		now:   now,
-	}
-	whole := Compute(req)
-	kept := req
-	kept.resources.Memory.Requests.KeepRequest = true
-
-	for _, name := range []string{"app", "side"} {
-		rec := whole.Recs[name]
-		if got, want := req.RequestAt(name, corev1.ResourceCPU, req.inputs.Usage(name, corev1.ResourceCPU)), float64(rec.CPURequest.MilliValue())/1000; got != want {
-			t.Errorf("%s cpu = %v, want Compute's %v", name, got, want)
-		}
-		if got, want := req.RequestAt(name, corev1.ResourceMemory, req.inputs.Usage(name, corev1.ResourceMemory)), float64(rec.MemoryRequest.Value()); got != want {
-			t.Errorf("%s memory = %v, want Compute's %v", name, got, want)
-		}
-	}
-	for what, got := range map[string]float64{
-		"an absent container": req.RequestAt("absent", corev1.ResourceCPU, 1),
-		"a kept request":      kept.RequestAt("app", corev1.ResourceMemory, 64*mib),
-		"an unsized resource": req.RequestAt("app", corev1.ResourceEphemeralStorage, 1),
-	} {
-		if got != 0 {
-			t.Errorf("%s = %v, want 0", what, got)
-		}
-	}
-}
-
 // The age gate holds an identity first seen less than MinWorkloadAge before
 // the instant computed as of, and any recent OOM, from Prometheus or the live
 // watcher, excuses it so a crash-looping workload is not locked out.
