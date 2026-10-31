@@ -87,11 +87,11 @@
         "healthProbeBindAddress": { "type": "string", "pattern": ":[0-9]+$" },
         "leaderElect": { "type": "boolean" },
         "leaderElectionID": { "type": "string" },
-        "reconcileInterval": { "type": "string", "pattern": "^0*[1-9][0-9]*(s|m|h)$" },
+        "reconcileInterval": { "$ref": "#/definitions/positiveDuration" },
         "workloadConcurrencyLimit": { "type": "integer", "minimum": 1, "maximum": 100 },
         "policyConcurrencyLimit": { "type": "integer", "minimum": 1, "maximum": 100 },
-        "recycleReplacementTimeout": { "type": "string", "pattern": "^[0-9]+(s|m|h)$" },
-        "recommendationRetention": { "type": "string", "pattern": "^0*[1-9][0-9]*(s|m|h)$" },
+        "recycleReplacementTimeout": { "$ref": "#/definitions/duration" },
+        "recommendationRetention": { "$ref": "#/definitions/positiveDuration" },
         "prometheusMaxInflight": { "type": "integer", "minimum": 1, "maximum": 100 },
         "queryShardMaxSamples": { "type": "integer", "minimum": 1000 },
         "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
@@ -288,6 +288,16 @@
     }
   },
   "definitions": {
+    "duration": {
+      "type": "string",
+      "description": "A Go duration of zero or more, as the binary's duration flags parse it: 0, or one or more decimal numbers, each with an optional fraction and a unit (ns, us, \u00b5s, ms, s, m, h), such as 90s, 1.5h or 1h30m.",
+      "pattern": "^[+]?(0|(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|\u00b5s|\u03bcs|ms|s|m|h))+)$"
+    },
+    "positiveDuration": {
+      "type": "string",
+      "description": "A Go duration greater than zero, as the binary's duration flags parse it, such as 90s, 1.5h or 1h30m.",
+      "pattern": "^[+]?(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|\u00b5s|\u03bcs|ms|s|m|h))*([0-9]*[1-9][0-9]*([.][0-9]*)?|[0-9]*[.][0-9]*[1-9][0-9]*)(ns|us|\u00b5s|\u03bcs|ms|s|m|h)(([0-9]+([.][0-9]*)?|[.][0-9]+)(ns|us|\u00b5s|\u03bcs|ms|s|m|h))*$"
+    },
     "probe": {
       "type": "object",
       "additionalProperties": false,

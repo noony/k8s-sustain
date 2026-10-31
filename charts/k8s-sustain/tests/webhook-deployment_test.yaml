@@ -55,9 +55,8 @@ tests:
             - --tls-key-file=/tls/tls.key
             - --excluded-namespaces=k8s-sustain,kube-system,kube-public
 
-  # The webhook no longer queries Prometheus at all: it reads recommendations
-  # from WorkloadRecommendation objects. A --prometheus-address here would be
-  # an unknown flag and the container would refuse to start.
+  # The webhook never queries Prometheus: it reads recommendations from
+  # WorkloadRecommendation objects, and ignores the root Prometheus flags.
   - it: passes no prometheus address to the webhook
     asserts:
       - notMatchRegex:
@@ -115,16 +114,14 @@ tests:
           path: spec.template.spec.volumes[0].secret.secretName
           value: my-tls
 
-  - it: exposes the webhook and health ports with HTTPS probes
+  # The HTTPS listener serves /healthz too; nothing else listens.
+  - it: exposes the webhook port alone, with HTTPS probes on it
     asserts:
       - equal:
           path: spec.template.spec.containers[0].ports
           value:
             - name: webhook
               containerPort: 9443
-              protocol: TCP
-            - name: health
-              containerPort: 8082
               protocol: TCP
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.httpGet

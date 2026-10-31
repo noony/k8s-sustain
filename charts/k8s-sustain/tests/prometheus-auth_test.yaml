@@ -30,9 +30,7 @@ tests:
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
             - --leader-elect=true
-            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
-            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
             - --workload-concurrency-limit=5
             - --policy-concurrency-limit=10
             - --reconcile-interval=5m
@@ -40,15 +38,17 @@ tests:
             - --recommendation-retention=168h
             - --prometheus-max-inflight=8
             - --query-shard-max-samples=10000000
+            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
       - template: templates/dashboard-deployment.yaml
         equal:
           path: spec.template.spec.containers[0].args
           value:
             - dashboard
             - --bind-address=:8090
-            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
             - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
 
   - it: renders nothing when a key is named but no Secret is
     set:
@@ -482,9 +482,7 @@ tests:
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
             - --leader-elect=true
-            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
-            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
             - --workload-concurrency-limit=5
             - --policy-concurrency-limit=10
             - --reconcile-interval=5m
@@ -492,15 +490,17 @@ tests:
             - --recommendation-retention=168h
             - --prometheus-max-inflight=8
             - --query-shard-max-samples=10000000
+            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
       - template: templates/dashboard-deployment.yaml
         equal:
           path: spec.template.spec.containers[0].args
           value:
             - dashboard
             - --bind-address=:8090
-            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
             - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
       - notExists:
           path: spec.template.spec.volumes
       - notExists:

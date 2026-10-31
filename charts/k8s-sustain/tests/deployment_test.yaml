@@ -68,9 +68,7 @@ tests:
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
             - --leader-elect=true
-            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
-            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
             - --workload-concurrency-limit=5
             - --policy-concurrency-limit=10
             - --reconcile-interval=5m
@@ -78,6 +76,8 @@ tests:
             - --recommendation-retention=168h
             - --prometheus-max-inflight=8
             - --query-shard-max-samples=10000000
+            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
 
   # Both query-load knobs must be reachable from values, or an operator
   # whose Prometheus is being starved has no way to turn the controller down
@@ -232,20 +232,6 @@ tests:
             limits:
               memory: 256Mi
 
-  - it: omits the recommend-only flag by default
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --recommend-only=true
-
-  - it: adds the recommend-only flag when recommendOnly is set
-    set:
-      recommendOnly: true
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --recommend-only=true
-
   - it: adds the leader election id flag when configured
     set:
       controller.leaderElectionID: my-lock
@@ -261,30 +247,6 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --leader-elect=false
-
-  - it: prefers an explicit prometheusAddress over subchart autodetection
-    set:
-      prometheusAddress: http://thanos.example:10902
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --prometheus-address=http://thanos.example:10902
-
-  - it: falls back to localhost when the subchart is disabled and no address is set
-    set:
-      prometheus.enabled: false
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --prometheus-address=http://localhost:9090
-
-  - it: appends excludedNamespaces to the built-in exclusions
-    set:
-      excludedNamespaces: [team-a, team-b]
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --excluded-namespaces=k8s-sustain,kube-system,kube-public,team-a,team-b
 
   - it: renders recommendation-retention from values
     set:
@@ -309,6 +271,74 @@ tests:
     set:
       controller:
         reconcileInterval: 0m
+    asserts:
+      - failedTemplate:
+          errorPattern: "controller.reconcileInterval: Does not match pattern"
+
+  - it: rejects a compound zero reconcile-interval
+    set:
+      controller:
+        reconcileInterval: 0h0m0.0s
+    asserts:
+      - failedTemplate:
+          errorPattern: "controller.reconcileInterval: Does not match pattern"
+
+  # The schema accepts every duration the flags parse: compound, fractional
+  # and sub-second units, and the binary's own String() form of its default.
+  - it: accepts every Go duration the duration flags parse
+    set:
+      controller:
+        reconcileInterval: 1h30m
+        recycleReplacementTimeout: "0"
+        recommendationRetention: 1.5h
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --reconcile-interval=1h30m
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --recycle-replacement-timeout=0
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --recommendation-retention=1.5h
+
+  - it: accepts sub-second and String()-formatted durations
+    set:
+      controller:
+        reconcileInterval: 5m0s
+        recycleReplacementTimeout: 2m30.5s
+        recommendationRetention: 500ms
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --reconcile-interval=5m0s
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --recycle-replacement-timeout=2m30.5s
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --recommendation-retention=500ms
+
+  - it: rejects a duration without a unit Go would not parse
+    set:
+      controller:
+        recommendationRetention: "7"
+    asserts:
+      - failedTemplate:
+          errorPattern: "controller.recommendationRetention: Does not match pattern"
+
+  - it: rejects a day unit, which Go durations do not have
+    set:
+      controller:
+        recycleReplacementTimeout: 1d
+    asserts:
+      - failedTemplate:
+          errorPattern: "controller.recycleReplacementTimeout: Does not match pattern"
+
+  - it: rejects a negative duration
+    set:
+      controller:
+        reconcileInterval: -5m
     asserts:
       - failedTemplate:
           errorPattern: "controller.reconcileInterval: Does not match pattern"

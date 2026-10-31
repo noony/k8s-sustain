@@ -91,6 +91,38 @@ Dashboard server name (appends -dashboard to the full name).
 {{- end }}
 
 {{/*
+The namespaces no Policy governs, as a JSON list: the release namespace,
+kube-system and kube-public, then excludedNamespaces. The one list behind every
+component's --excluded-namespaces and the webhook's namespaceSelector.
+*/}}
+{{- define "k8s-sustain.excludedNamespaces" -}}
+{{- concat (list .Release.Namespace "kube-system" "kube-public") (.Values.excludedNamespaces | default list) | uniq | toJson -}}
+{{- end }}
+
+{{/*
+Args for the cluster-scope settings: the excluded namespaces, recommend-only
+and the Prometheus connection, each from one value. The binary binds each to
+one root persistent flag that every subcommand reads alike, so this is the only
+place the components could be configured apart; every Deployment includes it.
+Call with (dict "ctx" . "prometheus" <bool>): the Prometheus connection goes
+only to a component that queries Prometheus. The webhook never does, and would
+otherwise mount credentials it never uses.
+*/}}
+{{- define "k8s-sustain.clusterScopeArgs" -}}
+{{- $ctx := .ctx -}}
+- --excluded-namespaces={{ include "k8s-sustain.excludedNamespaces" $ctx | fromJsonArray | join "," }}
+{{- if $ctx.Values.recommendOnly }}
+- --recommend-only=true
+{{- end }}
+{{- if .prometheus }}
+- --prometheus-address={{ include "k8s-sustain.prometheusAddress" $ctx }}
+{{- with (include "k8s-sustain.prometheusAuthArgs" $ctx | trim) }}
+{{ . }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
 Prometheus address. Auto-detects the bundled prometheus subchart service
 when prometheusAddress is empty and prometheus.enabled=true.
 */}}
@@ -119,8 +151,9 @@ Prometheus transport auth (see the `prometheusAuth` block in values.yaml).
 Everything below is shared verbatim by every component that queries Prometheus
 — today the controller and the dashboard Deployments. The webhook is
 deliberately NOT a consumer: it never queries Prometheus, it only reads
-WorkloadRecommendation objects. Adding a third Prometheus client means adding
-these four includes to it, never re-deriving the flags at the call site.
+WorkloadRecommendation objects. Adding a third Prometheus client means passing
+"prometheus" true to k8s-sustain.clusterScopeArgs and adding the env, volume
+and mount includes to it, never re-deriving the flags at the call site.
 
 The CLI flags, env vars, volumes and mounts are byte-identical between
 components: the binary binds each Prometheus setting to one root flag and one
@@ -196,9 +229,10 @@ client already rejects an inline bearer token together with a bearer token
 file at construction (internal/prometheus/transport.go), so rendering both
 would only defer a startup crash. Fail here, naming both values.
 
-Included from k8s-sustain.prometheusAuthArgs, which every Prometheus-querying
-component includes — so the check runs for the controller and the dashboard
-alike, and one `helm template` is enough to catch the conflict.
+Included from k8s-sustain.prometheusAuthArgs, which k8s-sustain.clusterScopeArgs
+renders for every Prometheus-querying component — so the check runs for the
+controller and the dashboard alike, and one `helm template` is enough to catch
+the conflict.
 */}}
 {{- define "k8s-sustain.prometheusAuthValidate" -}}
 {{- $a := .Values.prometheusAuth | default dict -}}

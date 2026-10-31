@@ -40,9 +40,7 @@ spec:
             {{- if .Values.controller.leaderElectionID }}
             - --leader-election-id={{ .Values.controller.leaderElectionID }}
             {{- end }}
-            - --prometheus-address={{ include "k8s-sustain.prometheusAddress" . }}
             - --log-level={{ .Values.controller.logLevel }}
-            - --excluded-namespaces={{ concat (list .Release.Namespace "kube-system" "kube-public") .Values.excludedNamespaces | join "," }}
             - --workload-concurrency-limit={{ .Values.controller.workloadConcurrencyLimit }}
             - --policy-concurrency-limit={{ .Values.controller.policyConcurrencyLimit }}
             - --reconcile-interval={{ .Values.controller.reconcileInterval }}
@@ -65,12 +63,7 @@ spec:
             {{- with .Values.controller.queryShardMaxSamples }}
             - --query-shard-max-samples={{ int64 . }}
             {{- end }}
-            {{- if .Values.recommendOnly }}
-            - --recommend-only=true
-            {{- end }}
-            {{- with (include "k8s-sustain.prometheusAuthArgs" . | trim) }}
-            {{- . | nindent 12 }}
-            {{- end }}
+            {{- include "k8s-sustain.clusterScopeArgs" (dict "ctx" . "prometheus" true) | nindent 12 }}
           {{- with (include "k8s-sustain.prometheusAuthEnv" . | trim) }}
           env:
             {{- . | nindent 12 }}

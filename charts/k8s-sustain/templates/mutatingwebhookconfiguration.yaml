@@ -32,16 +32,12 @@ webhooks:
       {{- if and (not .Values.webhook.certManager.enabled) .Values.webhook.caBundle }}
       caBundle: {{ .Values.webhook.caBundle }}
       {{- end }}
-    # Exclude the operator's own namespace and system namespaces to avoid loops.
+    # The namespaces every component excludes, the operator's own among them
+    # to avoid loops: the apiserver never sends the webhook their pods.
     namespaceSelector:
       matchExpressions:
         - key: kubernetes.io/metadata.name
           operator: NotIn
           values:
-            - {{ .Release.Namespace }}
-            - kube-system
-            - kube-public
-            {{- range .Values.excludedNamespaces }}
-            - {{ . }}
-            {{- end }}
+            {{- include "k8s-sustain.excludedNamespaces" . | fromJsonArray | toYaml | nindent 12 }}
 {{- end }}

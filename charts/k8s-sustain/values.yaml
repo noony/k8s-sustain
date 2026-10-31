@@ -12,7 +12,8 @@ fullnameOverride: ""
 # patch workloads or mutate pods (dry-run mode).
 recommendOnly: false
 
-# Prometheus server URL, shared by all components (controller, webhook, dashboard).
+# Prometheus server URL, shared by the components that query Prometheus (the
+# controller and the dashboard; the webhook never does).
 # Leave empty to auto-detect the bundled prometheus subchart service.
 # Override only when using an external Prometheus instance.
 # Example: http://prometheus.monitoring.svc:9090
@@ -134,10 +135,12 @@ prometheusAuth:
     # every credential above interceptable.
     insecureSkipVerify: false
 
-# Extra namespaces to exclude from k8s-sustain entirely, shared by both the
-# controller (never recycles pods there) and the webhook (never mutates pods
-# there, and the namespace is dropped from the mutating webhook's selector).
-# The release namespace and kube-system / kube-public are always excluded.
+# Extra namespaces no Policy governs, whatever they opt into, rendered into
+# every component from this one list: the controller never touches their
+# workloads, the webhook never mutates their pods (and they are dropped from
+# the mutating webhook's namespaceSelector), the dashboard shows them governed
+# by none. The release namespace and kube-system / kube-public are always
+# excluded.
 excludedNamespaces: []
 
 controller:
