@@ -139,8 +139,8 @@ func TestContainerMatches(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := ContainerMatches(c.current, c.rec); got != c.want {
-				t.Errorf("ContainerMatches = %v, want %v", got, c.want)
+			if got := containerMatches(c.current, c.rec); got != c.want {
+				t.Errorf("containerMatches = %v, want %v", got, c.want)
 			}
 		})
 	}
@@ -230,7 +230,7 @@ func TestClampRecsToTolerance(t *testing.T) {
 			"app":     {CPURequest: qtyp("995m")}, // sub-threshold decrease -> cleared
 			"sidecar": {CPURequest: qtyp("3m")},   // no current -> passes through unchanged
 		}
-		got := ClampRecsToTolerance(containers, recs, tol5)
+		got := clampRecsToTolerance(containers, recs, tol5)
 		if got["app"].CPURequest != nil {
 			t.Fatalf("app: want cleared, got %s", got["app"].CPURequest.String())
 		}
@@ -245,20 +245,20 @@ func TestClampRecsToTolerance(t *testing.T) {
 
 	t.Run("empty recs returns same map", func(t *testing.T) {
 		recs := map[string]ContainerRecommendation{}
-		if got := ClampRecsToTolerance(containers, recs, tol5); len(got) != 0 {
+		if got := clampRecsToTolerance(containers, recs, tol5); len(got) != 0 {
 			t.Fatalf("want empty, got %d entries", len(got))
 		}
 	})
 }
 
-// ContainerMatches only ever sees a container that exists — the missing case is
+// containerMatches only ever sees a container that exists — the missing case is
 // handled by the caller's mapping and covered in the controller package.
 func TestContainerMatches_MissingResourceMapEntries(t *testing.T) {
 	// Current has neither requests nor limits set at all (nil maps).
 	current := corev1.ResourceRequirements{}
 	// A rec that wants concrete values must report a mismatch.
 	rec := ContainerRecommendation{CPURequest: qtyp("100m"), MemoryLimit: qtyp("256Mi")}
-	if ContainerMatches(current, rec) {
+	if containerMatches(current, rec) {
 		t.Error("expected mismatch: nil resource maps vs concrete recommendation")
 	}
 }

@@ -89,10 +89,14 @@ func applyTo(current corev1.ResourceRequirements, rec ContainerRecommendation) (
 }
 
 func valueEqual(a, b corev1.ResourceRequirements) bool {
-	return a.Requests.Cpu().Cmp(*b.Requests.Cpu()) == 0 &&
-		a.Requests.Memory().Cmp(*b.Requests.Memory()) == 0 &&
+	return requestsEqual(a, b) &&
 		a.Limits.Cpu().Cmp(*b.Limits.Cpu()) == 0 &&
 		a.Limits.Memory().Cmp(*b.Limits.Memory()) == 0
+}
+
+func requestsEqual(a, b corev1.ResourceRequirements) bool {
+	return a.Requests.Cpu().Cmp(*b.Requests.Cpu()) == 0 &&
+		a.Requests.Memory().Cmp(*b.Requests.Memory()) == 0
 }
 
 // setQuantity sets list[name] = *q. A nil q leaves it alone, and so does a q

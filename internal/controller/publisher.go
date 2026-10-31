@@ -143,7 +143,7 @@ func (id *published) publishIdentity(s identitySeries) {
 		gauges.set(workloadStalePods, float64(s.health.pods.Stale), ns, kind, name)
 	}
 	if s.health.blockedOn != "" {
-		gauges.set(workloadRetryState, 1, ns, kind, name, s.health.blockedOn)
+		gauges.set(workloadRetryState, 1, ns, kind, name, string(s.health.blockedOn))
 	}
 	switch a := s.autoscaler; {
 	case a == nil:

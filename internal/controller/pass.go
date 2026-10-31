@@ -75,7 +75,7 @@ type claimed struct {
 // party to only has its outcome recorded (ADR 0002).
 func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.Policy, snap *inventory.Snapshot) passReport {
 	r.recordConflicted(ctx, policy.Name, snap)
-	work := r.workList(policy, snap.GovernedBy(policy.Name))
+	work := r.workList(policy.Name, snap.GovernedBy(policy.Name))
 	claims := r.claim(ctx, policy.Name, work)
 	recs := r.recommend(ctx, policy, work)
 	stored := r.record(ctx, work, claims, recs)
@@ -114,14 +114,12 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 	return report
 }
 
-func (r *PolicyReconciler) workList(policy *sustainv1alpha1.Policy, governed []*inventory.Identity) []passIdentity {
+func (r *PolicyReconciler) workList(policyName string, governed []*inventory.Identity) []passIdentity {
 	work := make([]passIdentity, 0, len(governed))
 	for _, id := range governed {
 		w := passIdentity{id: id}
 		if !id.Departed() {
-			// inventory.TakeForPolicy reads only the kinds policy manages.
-			mode := policy.Spec.RightSizing.Update.Types.ModeForKind(id.Key.OwnerKind)
-			for _, t := range targetsOf(id, policy.Name, *mode) {
+			for _, t := range targetsOf(id, policyName) {
 				if r.ledger.mayRun(t.key()) {
 					w.run = append(w.run, t)
 				} else {

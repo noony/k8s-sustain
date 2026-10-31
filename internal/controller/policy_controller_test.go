@@ -32,6 +32,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 func reconcileOnce(t *testing.T, r *PolicyReconciler, name string) {
@@ -359,8 +360,8 @@ func TestReconcile_FetchFailureFailsOnlyThatIdentity(t *testing.T) {
 	if ready.Status == metav1.ConditionTrue || !strings.Contains(ready.Message, "1 of 2 workloads failed") {
 		t.Errorf("Ready = %s %q, want False naming 1 of 2 workloads failed", ready.Status, ready.Message)
 	}
-	if got := r.ledger.health("Deployment/default/broken").blockedOn; got != phasePrometheus {
-		t.Errorf("broken: blocked on %q, want %q", got, phasePrometheus)
+	if got := r.ledger.health("Deployment/default/broken").blockedOn; got != workload.StepPrometheus {
+		t.Errorf("broken: blocked on %q, want %q", got, workload.StepPrometheus)
 	}
 	if cpu := podCPU(t, r, "default", "broken-pod"); cpu != "10m" {
 		t.Errorf("broken pod CPU = %s, want it untouched at 10m", cpu)
@@ -390,8 +391,8 @@ func TestReconcile_QueryTimeoutIsAFetchFailure(t *testing.T) {
 	if ready.Status == metav1.ConditionTrue || !strings.Contains(ready.Message, "1 of 1 workloads failed") {
 		t.Errorf("Ready = %s %q, want False naming 1 of 1 workloads failed", ready.Status, ready.Message)
 	}
-	if got := r.ledger.health("Deployment/default/web").blockedOn; got != phasePrometheus {
-		t.Errorf("blocked on %q, want %q", got, phasePrometheus)
+	if got := r.ledger.health("Deployment/default/web").blockedOn; got != workload.StepPrometheus {
+		t.Errorf("blocked on %q, want %q", got, workload.StepPrometheus)
 	}
 	if !slices.ContainsFunc(drainEvents(rec), func(e string) bool { return strings.Contains(e, "ReconciliationRetryScheduled") }) {
 		t.Error("want a ReconciliationRetryScheduled event on the workload")
@@ -441,8 +442,8 @@ func TestReconcile_ForbiddenEvictionBlocksAndWarnsOnce(t *testing.T) {
 		t.Errorf("Ready = %s %q, want False", ready.Status, ready.Message)
 	}
 	state := seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, "Deployment", "web")
-	if len(state) != 1 || labelOf(state[0], "reason") != phasePatch {
-		t.Errorf("retry_state = %v, want the identity Blocked on %s", state, phasePatch)
+	if len(state) != 1 || labelOf(state[0], "reason") != string(workload.StepPatch) {
+		t.Errorf("retry_state = %v, want the identity Blocked on %s", state, workload.StepPatch)
 	}
 	if got := policyGauge(t, "k8s_sustain_policy_blocked_count", "p"); got != 1 {
 		t.Errorf("policy_blocked_count = %v, want 1", got)
@@ -722,7 +723,7 @@ func TestReconcile_BackedOffIdentityIsNotFetched(t *testing.T) {
 		ongoingDeployments("p"), expiring, annotatedDeployment("default", "healthy", "p"))
 	r.ledger = newLedger(clk)
 	member := targetFromObject(expiring, "Deployment")
-	r.ledger.record(failedStep(&member, phasePatch, errors.New("apiserver unavailable")))
+	r.ledger.record(failedStep(&member, workload.StepPatch, errors.New("apiserver unavailable")))
 
 	reconcileOnce(t, r, "p")
 
@@ -732,8 +733,8 @@ func TestReconcile_BackedOffIdentityIsNotFetched(t *testing.T) {
 	if !static.Requested(identityOf("default", "Deployment", "healthy")) {
 		t.Error("the healthy identity was not fetched")
 	}
-	if got := r.ledger.health(member.key()).blockedOn; got != phasePatch {
-		t.Errorf("expiring: blocked on %q, want it still Blocked on %s: the member skipped at fetch time must be skipped at apply time", got, phasePatch)
+	if got := r.ledger.health(member.key()).blockedOn; got != workload.StepPatch {
+		t.Errorf("expiring: blocked on %q, want it still Blocked on %s: the member skipped at fetch time must be skipped at apply time", got, workload.StepPatch)
 	}
 }
 

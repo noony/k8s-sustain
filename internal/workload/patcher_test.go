@@ -206,7 +206,13 @@ func testMember() Member {
 	return Member{Kind: "DaemonSet", Object: &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "test", UID: "test-uid"},
 		Spec:       appsv1.DaemonSetSpec{Selector: testSelector()},
-	}}
+	}, Containers: appContainers}
+}
+
+// declaring is m declaring the containers pod runs.
+func declaring(m Member, pod *corev1.Pod) Member {
+	m.Containers, m.InitContainers = pod.Spec.Containers, pod.Spec.InitContainers
+	return m
 }
 
 // runningPod is a small builder for pods of testMember. The pod is Running and
@@ -243,7 +249,7 @@ func runningPod(name string, requests corev1.ResourceList) *corev1.Pod {
 func jobMember() Member {
 	return Member{Kind: "Job", Object: &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "batch", UID: "batch-uid"},
-	}}
+	}, Containers: appContainers}
 }
 
 // jobPod is a runningPod of the Job jobMember names instead of testMember.
@@ -276,7 +282,7 @@ func TestApply_Eviction_HappyPath(t *testing.T) {
 	p := New(c, false /* not in-place */, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "stale" {
@@ -312,12 +318,12 @@ func TestApply_ReturnsChangedCount(t *testing.T) {
 			p := New(c, tc.inPlace, testEvictionOpts()...)
 			recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-			out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
-			if err != nil {
-				t.Fatalf("Apply: %v", err)
+			out := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
+			if out.Err != nil {
+				t.Fatalf("Apply: %v", out.Err)
 			}
-			if out.Changed != 1 {
-				t.Errorf("changed count = %d, want 1 (only the stale pod)", out.Changed)
+			if out.Changed() != 1 {
+				t.Errorf("changed count = %d, want 1 (only the stale pod)", out.Changed())
 			}
 		})
 	}
@@ -356,7 +362,7 @@ func TestApply_SkipsTerminatingAndTerminal(t *testing.T) {
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "pending" {
@@ -389,7 +395,7 @@ func TestApply_Eviction_PDBBlocked_ReturnsNil(t *testing.T) {
 	p := New(c, false)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Errorf("expected nil on PDB block, got %v", err)
 	}
 }
@@ -417,7 +423,7 @@ func TestApply_Eviction_NotFound_ReturnsNil(t *testing.T) {
 	p := New(c, false)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Errorf("expected nil on NotFound, got %v", err)
 	}
 }
@@ -453,7 +459,7 @@ func TestApply_InPlace_HappyPath(t *testing.T) {
 	p := New(c, true /* in-place */)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !resizeCalled {
@@ -526,7 +532,7 @@ func TestApply_InPlace_InfeasibleConditionFallsBackToEviction(t *testing.T) {
 	p := New(c, true, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if resizeCalled {
@@ -574,7 +580,7 @@ func TestApply_InPlace_ErroredResizeFallsBackToEviction(t *testing.T) {
 	p := New(c, true, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if resizeCalled {
@@ -622,7 +628,7 @@ func TestApply_InPlace_InfeasibleWithNewTargetRetriesResize(t *testing.T) {
 	p := New(c, true, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !resizeCalled {
@@ -670,7 +676,7 @@ func TestApply_InPlace_ResizeNotFoundSkips(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !resizeCalled {
@@ -727,7 +733,7 @@ func TestApply_InPlace_ResizeInvalidFallsBackToEviction(t *testing.T) {
 	p := New(c, true, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 2 {
@@ -823,8 +829,12 @@ func TestApply_InPlace_SidecarResizeRejected_BestEffort(t *testing.T) {
 		"sidecar": {CPURequest: qtyp("100m")},
 	}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
-		t.Fatalf("sidecar rejection should be best-effort, got: %v", err)
+	res := p.Apply(context.Background(), declaring(testMember(), stale), recs, ApplySettings{})
+	if res.Err != nil {
+		t.Fatalf("sidecar rejection should be best-effort, got: %v", res.Err)
+	}
+	if !slices.Equal(res.Containers, []string{"app"}) {
+		t.Errorf("changed containers = %v, want only the regular container the resize changed", res.Containers)
 	}
 	if !regularResizeOK {
 		t.Error("regular-container /resize should have succeeded")
@@ -877,7 +887,7 @@ func TestApply_InPlace_DeferredIsNoOp(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if resizeCalled || evictionCalled {
@@ -920,7 +930,7 @@ func TestApply_InPlace_DeferredWithNewTargetPatches(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !resizeCalled {
@@ -967,7 +977,7 @@ func TestApply_InPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if resizeCalled || podPatchCalled || evictionCalled {
@@ -1011,7 +1021,7 @@ func TestApply_InPlace_PodGoneDuringResize_NoError(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("expected NotFound on a vanished pod to be a no-op, got: %v", err)
 	}
 	if evictionCalled {
@@ -1052,9 +1062,9 @@ func TestApply_InPlaceOnly_HappyPath(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
 	if !resizeCalled {
 		t.Error("expected /resize subresource patch to be called")
@@ -1062,8 +1072,8 @@ func TestApply_InPlaceOnly_HappyPath(t *testing.T) {
 	if evictionCalled {
 		t.Error("a Job pod must never be evicted")
 	}
-	if out.Changed != 1 {
-		t.Errorf("resized count = %d, want 1", out.Changed)
+	if out.Changed() != 1 {
+		t.Errorf("resized count = %d, want 1", out.Changed())
 	}
 }
 
@@ -1093,12 +1103,12 @@ func TestApply_InPlaceOnly_ReturnsAppliedCount(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
-	if out.Changed != 1 {
-		t.Errorf("resized count = %d, want 1 (the Invalid-rejected pod must not be counted)", out.Changed)
+	if out.Changed() != 1 {
+		t.Errorf("resized count = %d, want 1 (the Invalid-rejected pod must not be counted)", out.Changed())
 	}
 }
 
@@ -1136,12 +1146,12 @@ func TestApply_InPlaceOnly_ErroredResizeSkipsNoEviction(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
-	if resizeCalled || evictionCalled || out.Changed != 0 {
-		t.Errorf("expected errored Job pod left alone (resize=%v, eviction=%v, resized=%d)", resizeCalled, evictionCalled, out.Changed)
+	if resizeCalled || evictionCalled || out.Changed() != 0 {
+		t.Errorf("expected errored Job pod left alone (resize=%v, eviction=%v, resized=%d)", resizeCalled, evictionCalled, out.Changed())
 	}
 }
 
@@ -1177,12 +1187,12 @@ func TestApply_InPlaceOnly_NoOpWhenInPlaceDisabled(t *testing.T) {
 	p := New(c, false /* inPlace disabled */)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
-	if anyCall || out.Changed != 0 {
-		t.Errorf("a Job pod must be left alone (no API calls, count 0) when inPlace is disabled; resized=%d", out.Changed)
+	if anyCall || out.Changed() != 0 {
+		t.Errorf("a Job pod must be left alone (no API calls, count 0) when inPlace is disabled; resized=%d", out.Changed())
 	}
 }
 
@@ -1216,12 +1226,12 @@ func TestApply_InPlaceOnly_SkipsTerminatingAndNonRunning(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
-	if resizeCalled || out.Changed != 0 {
-		t.Errorf("expected no /resize call and count 0 for terminating or non-Running pods; resized=%d", out.Changed)
+	if resizeCalled || out.Changed() != 0 {
+		t.Errorf("expected no /resize call and count 0 for terminating or non-Running pods; resized=%d", out.Changed())
 	}
 }
 
@@ -1260,12 +1270,12 @@ func TestApply_InPlaceOnly_InfeasibleSkipsNoEviction(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
-	if resizeCalled || out.Changed != 0 {
-		t.Errorf("did not expect /resize (or a non-zero count) for Infeasible status; resized=%d", out.Changed)
+	if resizeCalled || out.Changed() != 0 {
+		t.Errorf("did not expect /resize (or a non-zero count) for Infeasible status; resized=%d", out.Changed())
 	}
 	if evictionCalled {
 		t.Error("a Job pod must never be evicted, even on Infeasible")
@@ -1307,12 +1317,12 @@ func TestApply_InPlaceOnly_InfeasibleWithNewTargetRetries(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
-	if !resizeCalled || out.Changed != 1 {
-		t.Errorf("expected /resize with the NEW target despite stale Infeasible verdict; resized=%d", out.Changed)
+	if !resizeCalled || out.Changed() != 1 {
+		t.Errorf("expected /resize with the NEW target despite stale Infeasible verdict; resized=%d", out.Changed())
 	}
 	if evictionCalled {
 		t.Error("a Job pod must never be evicted")
@@ -1351,15 +1361,15 @@ func TestApply_InPlaceOnly_PerPodInvalidSkipsWithoutDisabling(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
 	if evictionCalled {
 		t.Error("a Job pod must never be evicted, even on per-pod Invalid")
 	}
-	if out.Changed != 0 {
-		t.Errorf("Invalid-rejected pod must not be counted as resized; resized=%d", out.Changed)
+	if out.Changed() != 0 {
+		t.Errorf("Invalid-rejected pod must not be counted as resized; resized=%d", out.Changed())
 	}
 	if !p.InPlace() {
 		t.Error("per-pod Invalid on /resize must NOT disable in-place mode")
@@ -1402,12 +1412,12 @@ func TestApply_InPlaceOnly_PodGoneSkips(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
-	if evictionCalled || podPatchCalled || out.Changed != 0 {
-		t.Errorf("expected gone pod to be skipped (patch=%v, eviction=%v, resized=%d)", podPatchCalled, evictionCalled, out.Changed)
+	if evictionCalled || podPatchCalled || out.Changed() != 0 {
+		t.Errorf("expected gone pod to be skipped (patch=%v, eviction=%v, resized=%d)", podPatchCalled, evictionCalled, out.Changed())
 	}
 }
 
@@ -1432,7 +1442,7 @@ func statefulSetMember() Member {
 	return Member{Kind: "StatefulSet", Object: &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web", UID: "sts-uid"},
 		Spec:       appsv1.StatefulSetSpec{Selector: testSelector()},
-	}}
+	}, Containers: appContainers}
 }
 
 // statefulSetEvictionInterceptor mimics the StatefulSet controller: when a
@@ -1517,7 +1527,7 @@ func TestApply_StatefulSetEvictsByDescendingOrdinal(t *testing.T) {
 	// is already Ready at observation time. A regression would take
 	// readyTimeout * 3, which the deadline below catches early.
 	start := time.Now()
-	if _, err := p.Apply(context.Background(), target, recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), target, recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
@@ -1615,7 +1625,7 @@ func TestApply_InPlaceInvalidFallback_WaitsForReplacement(t *testing.T) {
 	p := New(c, true /* in-place */, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -1665,7 +1675,7 @@ func TestApply_DefaultOrderIsAlphabetical(t *testing.T) {
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	want := []string{"a", "b", "c"}
@@ -1714,7 +1724,7 @@ func TestApply_CrashLoopBackOffAbortsLoop(t *testing.T) {
 	// Expect a non-nil error (the abort) and exactly one eviction (the first
 	// pod) — the loop must NOT continue to evict pod "b" while a peer is
 	// crashlooping.
-	_, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
+	err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err
 	if err == nil {
 		t.Fatal("expected error surfacing CrashLoopBackOff abort, got nil")
 	}
@@ -1765,22 +1775,22 @@ func TestApply_CrashLoopingUpdatedPodHaltsEvictionsAcrossPasses(t *testing.T) {
 		Build()
 	p := New(c, false, testEvictionOpts()...)
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); !errors.Is(err, errCrashLoopBackOff) {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; !errors.Is(err, errCrashLoopBackOff) {
 		t.Fatalf("pass 1: err = %v, want the crash-loop halt", err)
 	}
 	if want := []string{"a"}; !slices.Equal(evicted, want) {
 		t.Fatalf("pass 1 evicted %v, want %v", evicted, want)
 	}
 
-	out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
-	if !errors.Is(err, errCrashLoopBackOff) {
-		t.Fatalf("pass 2: err = %v, want the crash-loop halt reported again", err)
+	out := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
+	if !errors.Is(out.Err, errCrashLoopBackOff) {
+		t.Fatalf("pass 2: err = %v, want the crash-loop halt reported again", out.Err)
 	}
 	if want := []string{"a"}; !slices.Equal(evicted, want) {
 		t.Errorf("pass 2 evicted more pods while a-new crash-loops on the recommendation: %v", evicted)
 	}
-	if out.Changed != 0 {
-		t.Errorf("pass 2 changed = %d, want 0", out.Changed)
+	if out.Changed() != 0 {
+		t.Errorf("pass 2 changed = %d, want 0", out.Changed())
 	}
 }
 
@@ -1801,7 +1811,7 @@ func TestApply_CrashLoopingStalePodIsStillEvicted(t *testing.T) {
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if want := []string{"a", "b"}; !slices.Equal(evicted, want) {
@@ -1825,9 +1835,9 @@ func TestApply_CrashLoopingUpdatedPodWithNothingToEvict(t *testing.T) {
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
 	if len(evicted) != 0 || out.Pods != (PodCounts{Total: 1, Stale: 0}) {
 		t.Errorf("evicted %v, pods %+v; want nothing evicted and the pod counted fresh", evicted, out.Pods)
@@ -1856,7 +1866,7 @@ func TestApply_InPlace_CrashLoopingUpdatedPodHaltsFallbackEviction(t *testing.T)
 	p := New(c, true, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); !errors.Is(err, errCrashLoopBackOff) {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; !errors.Is(err, errCrashLoopBackOff) {
 		t.Fatalf("err = %v, want the crash-loop halt", err)
 	}
 	if len(evicted) != 0 {
@@ -1895,7 +1905,7 @@ func TestApply_HPAScaleDownDoesNotStallEvictionLoop(t *testing.T) {
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	// Both pods should be evicted in order — the wait between them must not
@@ -1936,7 +1946,7 @@ func TestApply_TimesOutWhenReplacementMissing(t *testing.T) {
 	p := New(c, false, WithReadyPollInterval(5*time.Millisecond), WithReadyTimeout(50*time.Millisecond))
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	_, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
+	err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err
 	if err == nil {
 		t.Fatal("expected timeout error when replacement never appears, got nil")
 	}
@@ -1966,7 +1976,7 @@ func deploymentMember(name string, uid types.UID) Member {
 	return Member{Kind: "Deployment", Object: &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: name, UID: uid},
 		Spec:       appsv1.DeploymentSpec{Selector: testSelector()},
-	}}
+	}, Containers: appContainers}
 }
 
 // replicaSetOwnedBy is a builder for ReplicaSets controlled by a Deployment
@@ -2028,7 +2038,7 @@ func TestApply_Eviction_SkipsPodsNotOwnedByTarget(t *testing.T) {
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 	target := deploymentMember("web", "dep-uid")
 
-	if _, err := p.Apply(context.Background(), target, recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), target, recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	want := []string{"owned-1", "owned-2"}
@@ -2092,7 +2102,7 @@ func TestApply_InPlace_SkipsPodsNotOwnedByTarget(t *testing.T) {
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 	target := statefulSetMember()
 
-	if _, err := p.Apply(context.Background(), target, recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), target, recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(resized) != 1 || resized[0] != "web-0" {
@@ -2115,9 +2125,9 @@ func TestApply_SuppressesSmallDecrease(t *testing.T) {
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("995m")}}
 
-	out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{Tolerance: tol5})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), testMember(), recs, ApplySettings{Tolerance: tol5})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
 	if len(evicted) != 0 {
 		t.Fatalf("sub-threshold decrease must not evict, got %v", evicted)
@@ -2139,7 +2149,7 @@ func TestApply_AppliesIncrease(t *testing.T) {
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("1010m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{Tolerance: tol5}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{Tolerance: tol5}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 1 {
@@ -2168,15 +2178,15 @@ func TestApply_InPlaceOnly_SuppressesSmallDecrease(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("995m")}}
 
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
 	if resizeCalled {
 		t.Error("sub-threshold decrease must not trigger an in-place resize")
 	}
-	if out.Changed != 0 {
-		t.Errorf("resized count = %d, want 0", out.Changed)
+	if out.Changed() != 0 {
+		t.Errorf("resized count = %d, want 0", out.Changed())
 	}
 	if want := map[string]int{"cpu": 1}; !maps.Equal(out.Suppressed, want) {
 		t.Fatalf("suppressed = %v, want %v", out.Suppressed, want)
@@ -2210,12 +2220,12 @@ func TestApply_InPlaceOnly_MixedRecAppliesCrossingDimensionOnly(t *testing.T) {
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("900m"), MemoryRequest: qtyp("1000Mi")}}
 
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5})
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5})
+	if out.Err != nil {
+		t.Fatalf("Apply: %v", out.Err)
 	}
-	if out.Changed != 1 {
-		t.Fatalf("resized count = %d, want 1 (CPU crosses threshold)", out.Changed)
+	if out.Changed() != 1 {
+		t.Fatalf("resized count = %d, want 1 (CPU crosses threshold)", out.Changed())
 	}
 	if patched == nil {
 		t.Fatal("expected a /resize patch carrying the CPU change")
@@ -2256,7 +2266,7 @@ func TestApply_InPlace_SuppressedRequestDecreaseNeverLeavesTheLimitBelowIt(t *te
 	// Request -20m is inside the band max(25m, 10m); limit -510m is not.
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("480m"), CPULimit: qtyp("490m")}}
 
-	if _, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5}); err != nil {
+	if err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if patched == nil {
@@ -2276,9 +2286,9 @@ func TestApply_InPlace_SuppressedRequestDecreaseNeverLeavesTheLimitBelowIt(t *te
 				return nil
 			},
 		}).Build()
-	out, err := New(c, true).Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5})
-	if err != nil {
-		t.Fatalf("second Apply: %v", err)
+	out := New(c, true).Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5})
+	if out.Err != nil {
+		t.Fatalf("second Apply: %v", out.Err)
 	}
 	if out.Pods.Stale != 0 {
 		t.Errorf("stale pods = %d, want 0: the pod runs everything that can be applied", out.Pods.Stale)
@@ -2311,8 +2321,12 @@ func TestApply_InPlace_ResizesSidecarsNotClassicInitContainers(t *testing.T) {
 		"sidecar": {CPURequest: qtyp("100m")},
 	}
 
-	if _, err := New(c, true).Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
-		t.Fatalf("Apply: %v", err)
+	res := New(c, true).Apply(context.Background(), declaring(testMember(), pod), recs, ApplySettings{})
+	if res.Err != nil {
+		t.Fatalf("Apply: %v", res.Err)
+	}
+	if want := []string{"app", "sidecar"}; !slices.Equal(res.Containers, want) {
+		t.Errorf("changed containers = %v, want %v: a classic init container is never resized", res.Containers, want)
 	}
 	if sidecarPatch == nil {
 		t.Fatal("expected a sidecar /resize patch")
@@ -2354,7 +2368,7 @@ func TestApply_SafeToEvictFalseBlocksEviction(t *testing.T) {
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "stale" {
@@ -2380,7 +2394,7 @@ func TestApply_SafeToEvictIgnoredWhenOptionSet(t *testing.T) {
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{IgnoreSafeToEvict: true}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{IgnoreSafeToEvict: true}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 1 || evicted[0] != "blocked" {
@@ -2409,7 +2423,7 @@ func TestApply_SafeToEvictNonFalseValueDoesNotBlock(t *testing.T) {
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 2 {
@@ -2439,7 +2453,7 @@ func TestApply_InPlace_InfeasibleFallbackHonorsSafeToEvict(t *testing.T) {
 	p := New(c, true /* in-place */, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
 
-	if _, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+	if err := p.Apply(context.Background(), testMember(), recs, ApplySettings{}).Err; err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(evicted) != 0 {

@@ -3,33 +3,34 @@ package workload
 import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
-// ContainerMatches reports whether applying rec to a container would leave its
+// containerMatches reports whether applying rec to a container would leave its
 // CPU/memory requests and limits unchanged, the limit Inject raises to a
 // request included.
 //
 // It is the single source of truth for "is this container already at the
-// recommended size?": both the controller's recycle decision and the patcher's
-// resize decision MUST gate on it, or they oscillate against each other.
+// recommended size?": the stale count and the resize decision both gate on
+// it, or they oscillate against each other.
 //
 // A nil rec field means "leave alone" and never mismatches. An unset
 // request/limit reads as a zero Quantity, so unset and explicit zero compare
 // equal. Remove*Limit matches only when the current limit is unset or zero.
 // Comparison is numeric, so 1000m and 1 match while 100m and 101m do not.
-func ContainerMatches(current corev1.ResourceRequirements, rec ContainerRecommendation) bool {
+func containerMatches(current corev1.ResourceRequirements, rec ContainerRecommendation) bool {
 	_, _, changed := applyTo(current, rec)
 	return !changed
 }
 
-// DefaultDownsizePercent is the default percent used to compute the relative
-// component of the downsize threshold band when a Policy does not configure one.
-const DefaultDownsizePercent int32 = 5
+// Default downsize threshold of a Policy that configures none: 5% of the
+// current value, at least 10m CPU or 15Mi memory.
+const defaultDownsizePercent int32 = 5
 
-// Default absolute floors of the downsize threshold band, per resource.
 var (
-	DefaultCPUDownsizeFloor    = resource.MustParse("10m")
-	DefaultMemoryDownsizeFloor = resource.MustParse("15Mi")
+	defaultCPUDownsizeFloor    = resource.MustParse("10m")
+	defaultMemoryDownsizeFloor = resource.MustParse("15Mi")
 )
 
 // Tolerance carries the per-resource asymmetric downsize bands. The zero value
@@ -41,11 +42,33 @@ type Tolerance struct {
 	MemFloor   resource.Quantity
 }
 
+// toleranceOf resolves a Policy's per-resource downsize thresholds, each unset
+// value taking its default. Setting both percent and minDecrease to 0 acts on
+// every decrease of that resource.
+func toleranceOf(rs sustainv1alpha1.ResourcesConfigs) Tolerance {
+	cp, cf := downsizeThreshold(rs.CPU.DownsizeThreshold, defaultCPUDownsizeFloor)
+	mp, mf := downsizeThreshold(rs.Memory.DownsizeThreshold, defaultMemoryDownsizeFloor)
+	return Tolerance{CPUPercent: cp, CPUFloor: cf, MemPercent: mp, MemFloor: mf}
+}
+
+func downsizeThreshold(t *sustainv1alpha1.DownsizeThreshold, defFloor resource.Quantity) (int32, resource.Quantity) {
+	pct, floor := defaultDownsizePercent, defFloor
+	if t != nil {
+		if t.Percent != nil {
+			pct = *t.Percent
+		}
+		if t.MinDecrease != nil {
+			floor = *t.MinDecrease
+		}
+	}
+	return pct, floor
+}
+
 // withinDecrease reports whether rec is a DECREASE from current that is smaller
 // than the band max(percent% of current, floor) and should therefore be left
 // alone. A nil rec, an increase, or an exact match return false — those are
 // handled unchanged downstream (nil = leave alone; increase/equal flow through
-// ContainerMatches as today).
+// containerMatches).
 //
 // Arithmetic is in milli-units (MilliValue) so CPU (millicores) and memory
 // (milli-bytes) share one code path. percent is divided into current first to
@@ -71,7 +94,7 @@ func withinDecrease(current, rec *resource.Quantity, percent int32, floor resour
 // clampDecreaseToTolerance returns a copy of rec in which each dimension that is
 // a sub-threshold decrease vs current is cleared to nil ("leave alone").
 // Increases and above-threshold decreases pass through unchanged; limit
-// removals are always significant and never cleared. ContainerMatches and
+// removals are always significant and never cleared. containerMatches and
 // Inject treat the cleared (nil) dimensions as no-ops, so this is the single
 // enforcement point for the asymmetric downsize threshold.
 func clampDecreaseToTolerance(current corev1.ResourceRequirements, rec ContainerRecommendation, tol Tolerance) ContainerRecommendation {
@@ -91,11 +114,11 @@ func clampDecreaseToTolerance(current corev1.ResourceRequirements, rec Container
 	return out
 }
 
-// ClampRecsToTolerance applies clampDecreaseToTolerance to every recommendation
+// clampRecsToTolerance applies clampDecreaseToTolerance to every recommendation
 // whose container is present in current, keyed by container name. Recs whose
 // container is not found pass through unchanged (tolerance can't be evaluated
 // without a current value). The input map is never mutated.
-func ClampRecsToTolerance(current []corev1.Container, recs map[string]ContainerRecommendation, tol Tolerance) map[string]ContainerRecommendation {
+func clampRecsToTolerance(current []corev1.Container, recs map[string]ContainerRecommendation, tol Tolerance) map[string]ContainerRecommendation {
 	if len(recs) == 0 {
 		return recs
 	}

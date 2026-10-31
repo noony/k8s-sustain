@@ -2,8 +2,6 @@ package controller
 
 import (
 	"context"
-	"slices"
-	"strings"
 
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
@@ -48,7 +46,7 @@ func (r *PolicyReconciler) apply(
 				"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
 				"members", len(w.run), "err", stored[i].Error())
 			for j, t := range w.run {
-				run[j] = applyResult{member: t, kind: applyFailed, phase: phaseStore, err: stored[i]}
+				run[j] = applyResult{member: t, kind: applyFailed, phase: workload.StepStore, err: stored[i]}
 			}
 			continue
 		}
@@ -63,17 +61,15 @@ func (r *PolicyReconciler) apply(
 	return out
 }
 
-// reconcileWorkload APPLIES an identity's recommendation to a single workload
-// target: recycles or resizes its pods and emits its events. It does not
-// compute anything and does not write the WorkloadRecommendation — the
-// recommendation pass and its record did both, once for the identity, before any
-// member reached this function.
+// reconcileWorkload applies an identity's recommendation to a single workload
+// target and emits its events. It does not compute anything and does not
+// write the WorkloadRecommendation — the recommendation pass and its record
+// did both, once for the identity, before any member reached this function.
 //
 // rec is the identity's verdict: its Recommendation covers the union of the
-// identity's members' containers, and this function narrows it to the
-// containers this member actually runs. Its fetch failure is reported as each
-// member's failed prometheus step, because retry state is kept per real
-// workload object.
+// identity's members' containers, which workload.Apply narrows to the
+// member's. Its fetch failure is reported as each member's failed prometheus
+// step, because retry state is kept per real workload object.
 func (r *PolicyReconciler) reconcileWorkload(
 	ctx context.Context,
 	policy *sustainv1alpha1.Policy,
@@ -89,8 +85,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 	}
 
 	logger := log.FromContext(ctx).WithValues("kind", t.Kind, "name", t.Name, "namespace", t.Namespace)
-	tol := buildTolerance(policy.Spec.RightSizing.ResourcesConfigs)
-	logger.V(1).Info("reconciling workload", "containers", len(t.Containers), "initContainers", len(t.InitContainers))
+	ctx = log.IntoContext(ctx, logger)
 
 	if info, ok := rec.autoscalers.Members[t.Name]; ok && info.Kind != autoscaler.KindNone {
 		r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "AutoscalerDetected", "AutoscalerDetected",
@@ -99,69 +94,28 @@ func (r *PolicyReconciler) reconcileWorkload(
 	}
 
 	if rec.err != nil {
-		return applyResult{member: t, kind: applyFailed, phase: phasePrometheus, err: rec.err}
+		return applyResult{member: t, kind: applyFailed, phase: workload.StepPrometheus, err: rec.err}
 	}
 
-	// The Policy's excludeInitContainers was applied to the identity: rec
-	// never names an init container it excludes.
-	recs := workload.Inject(t.Containers, t.InitContainers, false, rec.recs).Recs
-	if len(recs) == 0 {
-		logger.V(1).Info("no recommendations available yet (no Prometheus data)")
-		return applyResult{member: t, kind: applyIdle}
-	}
-
-	logger.Info("computed recommendations", "containers", len(recs))
-	logger.V(1).Info("recommendation details", "recommendations", recs)
-
-	if policy.EffectiveRecommendOnly(r.RecommendOnly) {
-		source := "policy"
-		if r.RecommendOnly {
-			source = "flag"
-		}
-		logger.Info("recommend-only: computed recommendations", "source", source, "recommendations", recs)
-		return applyResult{member: t, kind: applyIdle}
-	}
-
-	out, err := r.patcher.Apply(ctx, t.member(), recs, workload.ApplySettings{
-		// OnCreate never touches running pods; the dry run only measures how
-		// many still wait for a rollout to pick up the recommendation.
-		DryRun:            t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate,
-		Tolerance:         tol,
-		IgnoreSafeToEvict: policy.Spec.RightSizing.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations,
-	})
-	if err != nil {
-		switch {
-		case t.UpdateMode == sustainv1alpha1.UpdateModeOnCreate:
-			logger.Info("OnCreate stale-pod count failed, pod counts left unchanged", "error", err.Error())
-			return applyResult{member: t, kind: applyUncounted, suppressed: out.Suppressed}
-		case out.InPlaceOnly:
-			return applyResult{member: t, kind: applyFailed, phase: phaseResize, err: err, suppressed: out.Suppressed}
-		default:
-			return applyResult{member: t, kind: applyFailed, phase: phasePatch, err: err, suppressed: out.Suppressed}
-		}
-	}
-	done := applyResult{member: t, kind: applyDone, pods: out.Pods, suppressed: out.Suppressed}
-
-	// The pod template is never patched, so it differs from the recommendation
-	// on every reconcile: only the patcher's count says whether anything
-	// happened. The container list stays a best-effort approximation — the
-	// patcher decides per live pod, the template is all we have here.
-	if out.Changed == 0 {
-		logger.V(1).Info("no pod resized or evicted, no event emitted")
-		return done
-	}
-	changed := changedContainers(slices.Concat(t.Containers, t.InitContainers), recs, tol)
-	if len(changed) == 0 {
-		return done
-	}
-	if out.InPlaceOnly {
+	res := r.patcher.Apply(ctx, t.member(), rec.recs, workload.ApplySettingsFor(policy, t.Kind, r.RecommendOnly))
+	if res.Kind == workload.ResultDone && res.Changed() > 0 {
 		r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
-			"In-place resized %d %s pod(s) for containers: %v", out.Changed, strings.ToLower(t.Kind), changed)
-	} else {
-		r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
-			"Updated resources on %d pod(s) for containers: %v", out.Changed, changed)
+			"Updated resources on %d pod(s) (%d resized in place, %d evicted) for containers: %v",
+			res.Changed(), len(res.Resized), len(res.Evicted), res.Containers)
+		logger.Info("workload resources updated", "containers", res.Containers, "resized", res.Resized, "evicted", res.Evicted)
 	}
-	logger.Info("workload resources updated", "containers", changed, "pods", out.Changed)
+	return resultOf(t, res)
+}
 
-	return done
+// resultOf is the ledger's view of what Apply did with member t.
+func resultOf(t *workloadTarget, res workload.Result) applyResult {
+	switch {
+	case res.Kind == workload.ResultFailed:
+		return applyResult{member: t, kind: applyFailed, phase: res.Step, err: res.Err, suppressed: res.Suppressed}
+	case res.Kind == workload.ResultIdle:
+		return applyResult{member: t, kind: applyIdle}
+	case !res.Counted:
+		return applyResult{member: t, kind: applyUncounted, suppressed: res.Suppressed}
+	}
+	return applyResult{member: t, kind: applyDone, pods: res.Pods, suppressed: res.Suppressed}
 }
