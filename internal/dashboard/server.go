@@ -101,6 +101,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("POST /api/simulate", s.handleSimulate)
 
+	mux.HandleFunc("GET /api/kinds", s.handleKinds)
+
 	mux.HandleFunc("GET /api/summary", s.handleSummary)
 	mux.HandleFunc("GET /api/summary/trend", s.handleSummaryTrend)
 	mux.HandleFunc("GET /api/summary/activity", s.handleSummaryActivity)

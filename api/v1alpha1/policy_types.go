@@ -1,6 +1,9 @@
 package v1alpha1
 
 import (
+	"reflect"
+	"strings"
+
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -220,6 +223,31 @@ func (t UpdateTypes) ModeForKind(kind string) *UpdateMode {
 		return t.Pod
 	}
 	return nil
+}
+
+// UpdateTypesField returns the JSON name of the UpdateTypes field ModeForKind
+// reads for kind, or "" when it reads none. It is derived from ModeForKind,
+// so the two cannot disagree.
+func UpdateTypesField(kind string) string {
+	var t UpdateTypes
+	v := reflect.ValueOf(&t).Elem()
+	modeType := reflect.TypeFor[*UpdateMode]()
+	for i := range v.NumField() {
+		if v.Field(i).Type() == modeType {
+			v.Field(i).Set(reflect.ValueOf(new(UpdateMode)))
+		}
+	}
+	mode := t.ModeForKind(kind)
+	if mode == nil {
+		return ""
+	}
+	for i := range v.NumField() {
+		if v.Field(i).Type() == modeType && v.Field(i).Interface() == any(mode) {
+			name, _, _ := strings.Cut(v.Type().Field(i).Tag.Get("json"), ",")
+			return name
+		}
+	}
+	return ""
 }
 
 // EffectiveRecommendOnly reports whether recommendations for this policy

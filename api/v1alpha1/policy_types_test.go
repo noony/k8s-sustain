@@ -26,3 +26,18 @@ func TestEffectiveRecommendOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdateTypesField(t *testing.T) {
+	cases := map[string]string{
+		"Deployment": "deployment",
+		"Rollout":    "argoRollout",
+		"Pod":        "pod",
+		"ReplicaSet": "",
+		"":           "",
+	}
+	for kind, want := range cases {
+		if got := UpdateTypesField(kind); got != want {
+			t.Errorf("UpdateTypesField(%q) = %q, want %q", kind, got, want)
+		}
+	}
+}

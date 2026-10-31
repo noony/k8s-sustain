@@ -232,6 +232,7 @@ The dashboard backs every UI page with a small JSON API under `/api/`. The same 
 | `GET` | `/api/workloads/{namespace}/{kind}/{name}` | Identity detail: governing policy (or `conflictingPolicies`), `departed`, mode, `riskState`, drift, OOM 24h, blocked, coordination, events of every member, and the stored `recommendation` (`outcome`, `observedAt`, per-container values, per-container `trace`). Coordination factors come from the trace. `404` for an unknown identity |
 | `GET` | `/api/workloads/{namespace}/{kind}/{name}/metrics` | Usage, request, limit and OOM time-series |
 | `POST` | `/api/simulate` | A [Simulation](#post-apisimulate) of one identity: its governing (or a chosen) Policy with a what-if `override` |
+| `GET` | `/api/kinds` | The workload kinds a Policy can manage, in the controller's order: each one's `name`, the `spec.rightSizing.update.types` field that manages it (`updateField`), and whether its pods are never evicted (`inPlaceOnly`) |
 | `GET` | `/api/summary` | Overview snapshot: savings KPIs and `coordinatedCount`; headroom; `attention` keyed by Risk state (`conflicted`, `blocked`, `at-risk`, `drifted`), each `{total, rows}` with the worst ten rows, where `total` counts the same identities as `/api/workloads` filtered by that state; policy rollups |
 | `GET` | `/api/summary/trend` | Overview savings time-series |
 | `GET` | `/api/summary/activity` | Recent controller events |
