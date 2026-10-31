@@ -53,6 +53,9 @@ theme:
     - content.tabs.link
     - content.tooltips
 
+exclude_docs: |
+  /adr/
+
 validation:
   anchors: warn
   unrecognized_links: warn
@@ -124,17 +127,7 @@ nav:
       - Metrics: reference/metrics.md
       - Recording Rules: reference/recording-rules.md
   - Security: security.md
-  - Development:
-      - Development guide: development.md
-      - Architecture Decisions:
-          - adr/index.md
-          - A single identity is a batch of one: adr/0001-single-identity-is-a-batch-of-one.md
-          - A Conflicted identity freezes its recommendation: adr/0002-conflicted-identity-freezes-its-recommendation.md
-          - A Recommendation is served only to its Policy: adr/0003-a-recommendation-is-served-only-to-its-policy.md
-          - Governance is decided on the pod template: adr/0004-governance-is-decided-on-the-pod-template.md
-          - A limit never falls below its request: adr/0005-a-limit-never-falls-below-its-request.md
-          - The owner-name override is read from the annotation: adr/0006-owner-name-is-read-from-the-annotation.md
-          - The Overview is built from the identity inventory: adr/0007-the-overview-is-built-from-the-identity-inventory.md
+  - Development: development.md
 
 extra:
   version:
