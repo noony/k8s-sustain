@@ -531,28 +531,55 @@ func TestReconcile_ReplicaSetToDeployment(t *testing.T) {
 	}
 }
 
-// The Job is not pre-loaded into the fake client: the watcher falls back to
-// the immediate controller rather than silently dropping the signal, and its
-// Policy governs Jobs.
-func TestReconcile_JobMissingFallsBackToJob(t *testing.T) {
+// A CronJob run's Job that cannot be read leaves the kill unresolved rather
+// than recorded under Job/<run>, an identity the inventory never holds: the
+// pod's next status event retries, and records it under the CronJob once the
+// Job reads.
+func TestReconcile_UnreadableJobLeavesTheKillUnresolved(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pod := newPod("cron-xyz").
 		owner("Job", "cron-123").
 		container("main", "64Mi").
-		statusOOM("main", time.Now(), 0).
+		statusOOM("main", now.Add(-time.Minute), 0).
 		build()
+	controller := true
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name:            "cron-123",
+		Namespace:       "default",
+		OwnerReferences: []metav1.OwnerReference{{Kind: "CronJob", Name: "cron", Controller: &controller}},
+	}}
 
-	sch := newScheme(t)
-	c := clientWith(sch, pod).Build()
-	sink := &stubSink{}
+	jobReadable := false
+	c := clientWith(newScheme(t), pod, job).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*batchv1.Job); ok && !jobReadable {
+					return apierrors.NewInternalError(errFakeRead)
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	sinkCache := NewCache(time.Hour)
+	handler := &stubHandler{}
 
-	reconcile(t, c, sink, nil, pod, time.Now())
+	reconcile(t, c, sinkCache, handler, pod, now)
 
-	calls := sink.snapshot()
-	if len(calls) != 1 {
-		t.Fatalf("sink calls = %d, want 1", len(calls))
+	if got := sinkCache.Size(); got != 0 {
+		t.Fatalf("cache size = %d after a failed Job read, want 0", got)
 	}
-	if calls[0].Key.OwnerKind != "Job" || calls[0].Key.OwnerName != "cron-123" {
-		t.Errorf("owner = %s/%s, want Job/cron-123", calls[0].Key.OwnerKind, calls[0].Key.OwnerName)
+	if got := len(handler.snapshot()); got != 0 {
+		t.Fatalf("handler calls = %d after a failed Job read, want 0", got)
+	}
+
+	jobReadable = true
+	reconcile(t, c, sinkCache, handler, pod, now.Add(time.Second))
+
+	calls := handler.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("handler calls = %d after the retry, want 1", len(calls))
+	}
+	if calls[0].Key.OwnerKind != "CronJob" || calls[0].Key.OwnerName != "cron" {
+		t.Errorf("owner = %s/%s, want CronJob/cron", calls[0].Key.OwnerKind, calls[0].Key.OwnerName)
 	}
 }
 
@@ -1174,17 +1201,15 @@ func TestReconcile_AlreadyResolvedOOMSkipsOwnerAndNamespaceGets(t *testing.T) {
 	}
 }
 
-// TestReconcile_DegradedOwnerResolution_DoesNotMarkResolved pins the fix for a
-// review finding: when ResolvePodOwner's Get fails, Reconcile falls back to
-// the immediate controller ref (immediateController), and nothing later in
-// the pass retries the failed Get. If MarkResolved were still called for this
-// termination, AlreadyResolved would suppress the owner walk on every later
-// status write for up to the cache TTL, even after the apiserver recovers —
-// permanently losing the OOM under the degraded ReplicaSet, which no Policy
-// governs, instead of self-healing to the real Deployment owner. A second
-// reconcile of the same pod (same RestartCount/TerminatedAt) must therefore
-// still retry the ResolvePodOwner Get.
-func TestReconcile_DegradedOwnerResolution_DoesNotMarkResolved(t *testing.T) {
+// TestReconcile_UnresolvedOwner_DoesNotMarkResolved: when ResolvePodOwner's
+// Get fails, nothing later in the pass retries it. If MarkResolved were still
+// called for this termination, AlreadyResolved would suppress the owner walk
+// on every later status write for up to the cache TTL, even after the
+// apiserver recovers — permanently losing the OOM instead of self-healing to
+// the real Deployment owner. A second reconcile of the same pod (same
+// RestartCount/TerminatedAt) must therefore still retry the ResolvePodOwner
+// Get.
+func TestReconcile_UnresolvedOwner_DoesNotMarkResolved(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pod := newPod("app-xyz").
 		owner("ReplicaSet", "app-rs").
@@ -1213,7 +1238,7 @@ func TestReconcile_DegradedOwnerResolution_DoesNotMarkResolved(t *testing.T) {
 		t.Fatalf("rsGets after first reconcile = %d, want 1", rsGets)
 	}
 	if sinkCache.Size() != 0 {
-		t.Fatalf("cache size after first reconcile = %d, want 0: no Policy governs a ReplicaSet", sinkCache.Size())
+		t.Fatalf("cache size after first reconcile = %d, want 0: the owner is unresolved", sinkCache.Size())
 	}
 
 	// Same RestartCount and TerminatedAt as the first pass — simulating an
@@ -1222,7 +1247,7 @@ func TestReconcile_DegradedOwnerResolution_DoesNotMarkResolved(t *testing.T) {
 	reconcile(t, c, sinkCache, nil, pod, now.Add(time.Second))
 
 	if rsGets != 2 {
-		t.Errorf("rsGets after second reconcile = %d, want 2 — a degraded owner resolution must not be marked resolved, so the owner walk must retry", rsGets)
+		t.Errorf("rsGets after second reconcile = %d, want 2 — an unresolved owner must not be marked resolved, so the owner walk must retry", rsGets)
 	}
 }
 

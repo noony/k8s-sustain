@@ -2,9 +2,10 @@ package oomwatch
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -129,27 +130,30 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 		return ctrl.Result{}, nil
 	}
 
-	// Unlike the owner fallback (podReader.PodOwner), a failure reading the
-	// Policies or an annotation level is returned rather than degraded to
-	// "absent": degrading would resolve to a less specific level and silently
-	// un-manage the workload for as long as the read keeps failing (RBAC gap,
-	// apiserver outage). Returning makes controller-runtime requeue with
-	// backoff instead.
-	reader := &podReader{client: w.Client, policies: &w.policies, excluded: w.ExcludedNamespaces, logger: logger}
+	reader := &podReader{client: w.Client, policies: &w.policies, excluded: w.ExcludedNamespaces}
 	decision, err := governance.Decide(ctx, governance.Pod(pod), reader)
+	if errors.Is(err, errOwnerUnresolved) {
+		// Nothing is recorded and nothing marked resolved, so the pod's next
+		// status event retries the walk. The pod's immediate controller is no
+		// substitute: a CronJob's Job or a Deployment's ReplicaSet is an
+		// identity the inventory never holds, so the kill would reach no
+		// recommendation and give k8s_sustain_oom_observed_total a series per
+		// run.
+		logger.V(1).Info("owner resolution failed; leaving the OOM kill unresolved", "err", err)
+		return ctrl.Result{}, nil
+	}
 	if err != nil {
+		// A failure reading the Policies or an annotation level is returned
+		// rather than degraded to "absent": degrading would resolve to a less
+		// specific level and silently un-manage the workload for as long as
+		// the read keeps failing (RBAC gap, apiserver outage). Returning makes
+		// controller-runtime requeue with backoff instead.
 		return ctrl.Result{}, err
 	}
-	// Every read this pass needed has now succeeded, so this is the place to
-	// mark — except on a degraded owner resolution, which no later read of
-	// this pass retries. Marking anyway would suppress the walk for the whole
-	// cache TTL, permanently pinning the OOM under the degraded owner (e.g. a
-	// ReplicaSet, which no Policy governs) instead of self-healing to the real
-	// one.
-	if !reader.degraded {
-		for _, k := range kills {
-			w.Sink.MarkResolved(pod.UID, k.Container, k.RestartCount, k.TerminatedAt)
-		}
+	// Marked only now that every read this pass needed has succeeded: marking
+	// a failed pass would suppress the walk for the whole cache TTL.
+	for _, k := range kills {
+		w.Sink.MarkResolved(pod.UID, k.Container, k.RestartCount, k.TerminatedAt)
 	}
 
 	if !decision.Governed() {
@@ -208,30 +212,21 @@ type podReader struct {
 	client   client.Client
 	policies *governance.PolicyLister
 	excluded []string
-	logger   logr.Logger
-	// degraded records that the owner fell back to the pod's immediate
-	// controller.
-	degraded bool
 }
+
+// errOwnerUnresolved wraps a failed read of a pod's controller chain (its
+// ReplicaSet or Job).
+var errOwnerUnresolved = errors.New("pod owner unresolved")
 
 func (r *podReader) Policies(ctx context.Context) (*governance.Policies, error) {
 	return r.policies.List(ctx, r.client, r.excluded)
 }
 
-// PodOwner falls back to the immediate controller ref so a transient RS/Job
-// Get failure does not fail the pass: a Job's OOM is still recorded under the
-// Job when its Policy manages Jobs. Under a kind no Policy manages (a
-// ReplicaSet) nothing is recorded, and since a degraded pass marks nothing
-// resolved, the pod's next status event retries the walk.
 func (r *podReader) PodOwner(ctx context.Context, pod *corev1.Pod) (string, string, error) {
 	kind, name, err := workload.ResolvePodOwner(ctx, r.client, pod)
-	if err == nil {
-		return kind, name, nil
+	if err != nil {
+		return "", "", fmt.Errorf("%w: %w", errOwnerUnresolved, err)
 	}
-	r.degraded = true
-	kind, name = immediateController(pod)
-	r.logger.V(1).Info("owner resolution failed; falling back to immediate controller",
-		"kind", kind, "name", name, "err", err)
 	return kind, name, nil
 }
 
@@ -250,15 +245,6 @@ func (r *podReader) WorkloadAnnotations(ctx context.Context, namespace, kind, na
 
 func (r *podReader) NamespaceAnnotations(ctx context.Context, namespace string) (map[string]string, error) {
 	return workload.NamespaceAnnotations(ctx, r.client, namespace)
-}
-
-func immediateController(pod *corev1.Pod) (kind, name string) {
-	for _, ref := range pod.OwnerReferences {
-		if ref.Controller != nil && *ref.Controller {
-			return ref.Kind, ref.Name
-		}
-	}
-	return "", ""
 }
 
 // oomKill is one OOM kill a pod's status shows. Container, RestartCount and
