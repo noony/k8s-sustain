@@ -269,7 +269,7 @@ The dashboard has no authentication; expose it only behind something that adds i
 | `httpRoute.annotations` | `{}` | HTTPRoute annotations |
 | `httpRoute.parentRefs` | `gateway` / `http` | Gateways the route attaches to |
 | `httpRoute.hostnames` | `[dashboard.local]` | Hostnames matched |
-| `httpRoute.rules` | `PathPrefix /` | Match rules; each is routed to the dashboard Service port |
+| `httpRoute.rules` | `PathPrefix` match on `/` | Match rules; each is routed to the dashboard Service port |
 
 ---
 

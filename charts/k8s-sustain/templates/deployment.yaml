@@ -53,8 +53,8 @@ spec:
                    would render as an empty `--flag=` on such an upgrade and
                    the container would refuse to start. Omitting the flag
                    instead falls through to the binary's own default, which
-                   internal/controller's defaults-agree test pins to the same
-                   number as values.yaml. */}}
+                   hack/docscheck pins to the values.yaml default of every
+                   value rendered this way. */}}
             {{- with .Values.controller.prometheusMaxInflight }}
             - --prometheus-max-inflight={{ . }}
             {{- end }}
