@@ -28,8 +28,8 @@ const oomKilledReason = "OOMKilled"
 // the "as it happens" SLO.
 const maxConcurrentReconciles = 4
 
-// Watcher reacts to Pod status changes and, on a fresh OOMKill of a pod a
-// Policy governs (governance.Decide), persists it into the Sink and optionally
+// Watcher reacts to Pod status changes and, on an OOM kill of a pod a Policy
+// governs (governance.Decide), persists it into the Sink and optionally
 // notifies an EventHandler so the governing Policy's reconciler re-triggers
 // immediately.
 //
@@ -61,7 +61,7 @@ func (w *Watcher) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // admitPodEventPredicate drops pod events carrying neither the policy
-// annotation nor a fresh OOMKill. Deletes are dropped too: an OOM kill never
+// annotation nor an OOM kill. Deletes are dropped too: an OOM kill never
 // surfaces as a Pod delete, and chasing a deleted pod only races the GC.
 //
 // The OOM-status arm is required because pods inherit only the pod-template
@@ -81,7 +81,7 @@ func admitPodEventPredicate() predicate.Predicate {
 		if !ok {
 			return false
 		}
-		return hasFreshOOM(pod)
+		return len(oomKills(pod)) > 0
 	}
 	return predicate.Funcs{
 		CreateFunc:  func(e event.CreateEvent) bool { return admits(e.Object) },
@@ -91,9 +91,8 @@ func admitPodEventPredicate() predicate.Predicate {
 	}
 }
 
-// Reconcile fetches the pod, skips it fast if it carries no fresh OOMKill,
-// otherwise decides which Policy governs it and scans its container statuses
-// for the kill to record.
+// Reconcile fetches the pod, skips it fast if it shows no OOM kill, otherwise
+// decides which Policy governs it and records its kills.
 //
 // We always return a zero Result: nothing here benefits from requeue, because
 // the Pod informer will fire again on the next status change (e.g. the next
@@ -106,23 +105,22 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	terms := oomTerminations(pod)
-	if len(terms) == 0 {
+	kills := oomKills(pod)
+	if len(kills) == 0 {
 		// Deliberately first, and before any API call: most pod transitions
 		// are not OOM kills, so this keeps the owner/Namespace walk below off
 		// the common path.
 		return ctrl.Result{}, nil
 	}
 
-	// LastTerminationState stays OOMKilled for the rest of the pod's life, so
-	// a chronically OOM-restarting pod re-triggers Reconcile on every status
-	// write. If every termination it reports was already resolved on an
-	// earlier pass, the owner/Namespace walk has nothing new to learn. This
-	// cannot reuse Sink.Record's dedup — that key needs the resolved workload
-	// this walk would first have to produce.
+	// A kill stays in the pod's status for the rest of its life, so every
+	// later status write re-triggers Reconcile. If every kill it shows was
+	// already resolved on an earlier pass, the owner/Namespace walk has
+	// nothing new to learn. This cannot reuse Sink.Record's dedup — that key
+	// needs the resolved workload this walk would first have to produce.
 	allResolved := true
-	for _, t := range terms {
-		if !w.Sink.AlreadyResolved(pod.UID, t.Container, t.RestartCount, t.TerminatedAt) {
+	for _, k := range kills {
+		if !w.Sink.AlreadyResolved(pod.UID, k.Container, k.RestartCount, k.TerminatedAt) {
 			allResolved = false
 			break
 		}
@@ -149,8 +147,8 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 	// ReplicaSet, which no Policy governs) instead of self-healing to the real
 	// one.
 	if !reader.degraded {
-		for _, t := range terms {
-			w.Sink.MarkResolved(pod.UID, t.Container, t.RestartCount, t.TerminatedAt)
+		for _, k := range kills {
+			w.Sink.MarkResolved(pod.UID, k.Container, k.RestartCount, k.TerminatedAt)
 		}
 	}
 
@@ -168,24 +166,18 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 
 	now := w.now()
 
-	for i := range pod.Status.ContainerStatuses {
-		cs := &pod.Status.ContainerStatuses[i]
-		term := cs.LastTerminationState.Terminated
-		if term == nil || term.Reason != oomKilledReason {
-			continue
-		}
-
-		key := Key{WorkloadIdentity: id, Container: cs.Name}
+	for _, k := range kills {
+		key := Key{WorkloadIdentity: id, Container: k.Container}
 
 		record := OOMRecord{
-			Container:     cs.Name,
+			Container:     k.Container,
 			PolicyName:    policyName,
 			ObservedAt:    now,
-			TerminatedAt:  term.FinishedAt.Time,
-			RestartCount:  cs.RestartCount,
+			TerminatedAt:  k.TerminatedAt,
+			RestartCount:  k.RestartCount,
 			PodName:       pod.Name,
 			PodUID:        string(pod.UID),
-			OOMLimitBytes: containerMemLimitBytes(pod, cs.Name),
+			OOMLimitBytes: k.LimitBytes,
 		}
 
 		// Sink.Record is the single source of truth for dedup; fanning out on
@@ -196,8 +188,9 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 				"OOM detected",
 				"ownerKind", id.OwnerKind,
 				"ownerName", id.OwnerName,
-				"container", cs.Name,
-				"restartCount", cs.RestartCount,
+				"container", k.Container,
+				"restarted", k.Restarted,
+				"restartCount", k.RestartCount,
 				"limitBytes", record.OOMLimitBytes,
 			)
 			if w.Handler != nil {
@@ -268,43 +261,50 @@ func immediateController(pod *corev1.Pod) (kind, name string) {
 	return "", ""
 }
 
-func hasFreshOOM(pod *corev1.Pod) bool {
-	for i := range pod.Status.ContainerStatuses {
-		term := pod.Status.ContainerStatuses[i].LastTerminationState.Terminated
-		if term != nil && term.Reason == oomKilledReason {
-			return true
-		}
-	}
-	return false
-}
-
-// containerTermination is the identity oomTerminations extracts for one
-// container's fresh OOMKilled LastTerminationState: enough to key
-// Sink.AlreadyResolved/MarkResolved without needing the resolved workload.
-type containerTermination struct {
-	Container    string
+// oomKill is one OOM kill a pod's status shows. Container, RestartCount and
+// TerminatedAt identify it without the resolved workload, which is what
+// Sink.AlreadyResolved and MarkResolved key on.
+type oomKill struct {
+	Container string
+	// Restarted says the container restarted after the kill; false for a
+	// container that will not restart.
+	Restarted    bool
 	RestartCount int32
 	TerminatedAt time.Time
+	LimitBytes   int64
 }
 
-// oomTerminations returns one containerTermination per container reporting a
-// fresh OOMKilled LastTerminationState — the same signal hasFreshOOM checks,
-// but carrying the identity Reconcile's pre-walk dedup needs.
-func oomTerminations(pod *corev1.Pod) []containerTermination {
-	var out []containerTermination
+// oomKills lists the OOM kills pod's containers show, by the definition the
+// k8s_sustain:container_oom_kills recording rule counts (docs/adr/0010): a
+// last termination that is OOMKilled, which the container restarted after,
+// or, in a pod whose restartPolicy is Never, a current OOMKilled termination.
+// Under Always or OnFailure a current termination is the brief state before
+// the restart, which counts the kill instead.
+func oomKills(pod *corev1.Pod) []oomKill {
+	never := pod.Spec.RestartPolicy == corev1.RestartPolicyNever
+	var out []oomKill
 	for i := range pod.Status.ContainerStatuses {
 		cs := &pod.Status.ContainerStatuses[i]
-		term := cs.LastTerminationState.Terminated
-		if term == nil || term.Reason != oomKilledReason {
+		term, restarted := cs.LastTerminationState.Terminated, true
+		if !isOOMKill(term) && never {
+			term, restarted = cs.State.Terminated, false
+		}
+		if !isOOMKill(term) {
 			continue
 		}
-		out = append(out, containerTermination{
+		out = append(out, oomKill{
 			Container:    cs.Name,
+			Restarted:    restarted,
 			RestartCount: cs.RestartCount,
 			TerminatedAt: term.FinishedAt.Time,
+			LimitBytes:   containerMemLimitBytes(pod, cs.Name),
 		})
 	}
 	return out
+}
+
+func isOOMKill(term *corev1.ContainerStateTerminated) bool {
+	return term != nil && term.Reason == oomKilledReason
 }
 
 // containerMemLimitBytes returns the memory limit (bytes) the kernel actually

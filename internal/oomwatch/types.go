@@ -32,8 +32,9 @@ type OOMRecord struct {
 	// kill. Distinct from TerminatedAt because the watcher may lag a few
 	// scrape intervals behind the actual kill.
 	ObservedAt time.Time
-	// TerminatedAt is pod.Status.ContainerStatuses[*].LastTerminationState
-	// .Terminated.FinishedAt — the kernel-reported time the container exited.
+	// TerminatedAt is the kill's FinishedAt — the kernel-reported time the
+	// container exited — from its last termination, or from its current one
+	// for a container that will not restart.
 	TerminatedAt time.Time
 	// RestartCount is the container restart count at the moment we observed
 	// the OOM. Used together with TerminatedAt as a dedup key so we only emit
@@ -43,10 +44,10 @@ type OOMRecord struct {
 	// keeps the latest pod that contributed to this record.
 	PodName string
 	PodUID  string
-	// OOMLimitBytes is the container's memory limit at the time of the kill,
-	// read from container.Resources.Limits.Memory() on the source pod spec.
-	// Zero when the container had no memory limit (uncommon for OOMKilled but
-	// possible if the kill was triggered by the node-level cgroup).
+	// OOMLimitBytes is the container's memory limit at the time of the kill:
+	// the one the kubelet applied, else the source pod spec's. Zero when the
+	// container had no memory limit (uncommon for OOMKilled but possible if
+	// the kill was triggered by the node-level cgroup).
 	OOMLimitBytes int64
 }
 
@@ -82,10 +83,10 @@ type Sink interface {
 	// or not that pass found a managing Policy.
 	//
 	// It lets Reconcile skip the owner/Namespace walk on repeat status events:
-	// Pod status updates fire on every unrelated field change, but
-	// LastTerminationState only changes on a real restart. It cannot reuse
-	// Record's Key-based dedup, because that Key names the resolved workload
-	// the owner walk would first have to produce.
+	// Pod status updates fire on every unrelated field change, but a kill's
+	// restart count and terminated-at only change with a new kill. It cannot
+	// reuse Record's Key-based dedup, because that Key names the resolved
+	// workload the owner walk would first have to produce.
 	//
 	// Checking and marking are deliberately two calls: MarkResolved runs only
 	// after the owner/Namespace reads succeed, so a transient read failure is

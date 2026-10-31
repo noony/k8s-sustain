@@ -216,6 +216,26 @@ func (b *podBuilder) statusOOM(name string, finishedAt time.Time, restartCount i
 	return b
 }
 
+// statusCurrentOOM reports name as terminated OOMKilled right now, with no
+// earlier termination: what a container shows once killed, until it restarts.
+func (b *podBuilder) statusCurrentOOM(name string, finishedAt time.Time) *podBuilder {
+	b.pod.Status.ContainerStatuses = append(b.pod.Status.ContainerStatuses, corev1.ContainerStatus{
+		Name: name,
+		State: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{
+				Reason:     "OOMKilled",
+				FinishedAt: metav1.NewTime(finishedAt),
+			},
+		},
+	})
+	return b
+}
+
+func (b *podBuilder) restartPolicy(p corev1.RestartPolicy) *podBuilder {
+	b.pod.Spec.RestartPolicy = p
+	return b
+}
+
 // appliedResources sets ContainerStatus.Resources — the limits the kubelet
 // actually applied to the running container. It diverges from pod.Spec while
 // an in-place resize is pending or infeasible, which is exactly the case the
@@ -380,6 +400,102 @@ func TestReconcile_MultiContainerOnlyOOMEmitted(t *testing.T) {
 	}
 	if calls[0].Key.Container != "main" {
 		t.Errorf("container = %q, want main", calls[0].Key.Container)
+	}
+}
+
+func standaloneJob(name string) *batchv1.Job {
+	return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+}
+
+// A container whose pod never restarts it keeps its kill as its current
+// termination: that kill is recorded, dated by that termination.
+func TestReconcile_NeverRestartedContainerOOMRecorded(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	finished := now.Add(-20 * time.Second)
+	pod := newPod("report-x7k").
+		owner("Job", "report").
+		restartPolicy(corev1.RestartPolicyNever).
+		container("main", "64Mi").
+		statusCurrentOOM("main", finished).
+		build()
+
+	c := clientWith(newScheme(t), pod, standaloneJob("report")).Build()
+	sink := &stubSink{}
+	handler := &stubHandler{}
+
+	reconcile(t, c, sink, handler, pod, now)
+
+	calls := sink.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("sink calls = %d, want 1", len(calls))
+	}
+	wantKey := Key{WorkloadIdentity: promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Job", OwnerName: "report"}, Container: "main"}
+	if calls[0].Key != wantKey {
+		t.Errorf("key = %#v, want %#v", calls[0].Key, wantKey)
+	}
+	rec := calls[0].Record
+	if !rec.TerminatedAt.Equal(finished) || rec.RestartCount != 0 || rec.OOMLimitBytes != 64*1024*1024 {
+		t.Errorf("record = %+v, want TerminatedAt %v, RestartCount 0, OOMLimitBytes %d", rec, finished, 64*1024*1024)
+	}
+	if got := len(handler.snapshot()); got != 1 {
+		t.Errorf("handler calls = %d, want 1", got)
+	}
+}
+
+// Under Always or OnFailure a container's current OOMKilled termination is
+// the moment before its restart, which records the kill: on its own it records
+// nothing, so one kill is never recorded twice.
+func TestReconcile_RestartingContainerCurrentOOMNotRecorded(t *testing.T) {
+	for _, policy := range []corev1.RestartPolicy{corev1.RestartPolicyAlways, corev1.RestartPolicyOnFailure, ""} {
+		pod := newPod("app-xyz").
+			owner("StatefulSet", "app").
+			restartPolicy(policy).
+			container("main", "256Mi").
+			statusCurrentOOM("main", time.Now()).
+			build()
+		sink := &stubSink{}
+
+		reconcile(t, clientWith(newScheme(t), pod).Build(), sink, nil, pod, time.Now())
+
+		if got := len(sink.snapshot()); got != 0 {
+			t.Errorf("restartPolicy %q: sink calls = %d, want 0", policy, got)
+		}
+	}
+}
+
+// The kill of a container that will not restart stays in the pod's status
+// for the pod's life: it is resolved once, not on every later status write.
+func TestReconcile_NeverRestartedContainerOOMResolvedOnce(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pod := newPod("report-x7k").
+		owner("Job", "report").
+		restartPolicy(corev1.RestartPolicyNever).
+		container("main", "64Mi").
+		statusCurrentOOM("main", now.Add(-time.Minute)).
+		build()
+
+	var jobGets int
+	c := clientWith(newScheme(t), pod, standaloneJob("report")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*batchv1.Job); ok {
+					jobGets++
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	sinkCache := NewCache(time.Hour)
+	handler := &stubHandler{}
+
+	reconcile(t, c, sinkCache, handler, pod, now)
+	baseline := jobGets
+	reconcile(t, c, sinkCache, handler, pod, now.Add(time.Second))
+
+	if baseline == 0 || jobGets != baseline {
+		t.Errorf("Job Gets = %d after the first reconcile, %d after the second; want the walk once", baseline, jobGets)
+	}
+	if got := len(handler.snapshot()); got != 1 {
+		t.Errorf("handler calls = %d, want 1", got)
 	}
 }
 
@@ -993,11 +1109,10 @@ func TestReconcile_NamespaceAnnotationsReadError_ReturnsError(t *testing.T) {
 }
 
 // TestReconcile_AlreadyResolvedOOMSkipsOwnerAndNamespaceGets pins the fix for
-// a review finding: hasFreshOOM's signal
-// (LastTerminationState.Terminated.Reason == OOMKilled) never clears on its
-// own, so a pod that has ever been OOM-killed re-triggers Reconcile on every
-// later status write too — readiness flips, IP changes, anything — not just
-// the actual kill. Before this fix, every one of those re-runs re-did the
+// a review finding: a kill never clears from the pod's status on its own, so
+// a pod that has ever been OOM-killed re-triggers Reconcile on every later
+// status write too — readiness flips, IP changes, anything — not just the
+// actual kill. Before this fix, every one of those re-runs re-did the
 // full owner+Namespace walk even though nothing about the kill had changed
 // (same RestartCount + TerminatedAt), because Reconcile had no way to know
 // that without doing the very walk the check exists to save. Uses the real
@@ -1131,6 +1246,27 @@ func TestPredicate_AdmitsOOMKilledPodWithoutAnnotation(t *testing.T) {
 	}
 	if !pred.Generic(event.GenericEvent{Object: pod}) {
 		t.Error("GenericFunc dropped an OOM-killed pod with no policy annotation")
+	}
+}
+
+// The filter admits exactly the kills Reconcile records: a not-restarting
+// container's current OOMKilled termination, but not a restarting one's.
+func TestPredicate_AdmitsCurrentOOMOnlyWhenTheContainerWillNotRestart(t *testing.T) {
+	for policy, want := range map[corev1.RestartPolicy]bool{
+		corev1.RestartPolicyNever:     true,
+		corev1.RestartPolicyOnFailure: false,
+		corev1.RestartPolicyAlways:    false,
+	} {
+		pod := newPod("app-xyz").
+			noAnnotation().
+			restartPolicy(policy).
+			container("main", "256Mi").
+			statusCurrentOOM("main", time.Now()).
+			build()
+
+		if got := admitPodEventPredicate().Update(event.UpdateEvent{ObjectOld: pod, ObjectNew: pod}); got != want {
+			t.Errorf("restartPolicy %s: admitted = %v, want %v", policy, got, want)
+		}
 	}
 }
 
