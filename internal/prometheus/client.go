@@ -238,12 +238,6 @@ func New(addr string, opts ...Option) (*Client, error) {
 	return cli, nil
 }
 
-// TimeSeries holds a single time-series: metric labels plus timestamped values.
-type TimeSeries struct {
-	Labels map[string]string `json:"labels"`
-	Values []TimeValue       `json:"values"`
-}
-
 // TimeValue is a single (timestamp, value) data point.
 type TimeValue struct {
 	Timestamp time.Time `json:"timestamp"`
