@@ -449,11 +449,16 @@ func TestApplySettingsFor(t *testing.T) {
 		{name: "Ongoing touches running pods", kind: "Deployment", want: ApplySettings{Tolerance: defaults}},
 		{name: "OnCreate is a dry run", kind: "StatefulSet", want: ApplySettings{DryRun: true, Tolerance: defaults}},
 		{name: "a kind the Policy does not manage is a dry run", kind: "DaemonSet", want: ApplySettings{DryRun: true, Tolerance: defaults}},
-		{name: "the flag is recommend-only", kind: "Deployment", flag: true, want: ApplySettings{RecommendOnly: true, Tolerance: defaults}},
+		{name: "the flag is recommend-only", kind: "Deployment", flag: true, want: ApplySettings{RecommendOnly: RecommendOnlyFlag, Tolerance: defaults}},
 		{
 			name: "the Policy's field is recommend-only", kind: "Deployment",
 			mutate: func(rs *sustainv1alpha1.RightSizingSpec) { rs.RecommendOnly = true },
-			want:   ApplySettings{RecommendOnly: true, Tolerance: defaults},
+			want:   ApplySettings{RecommendOnly: RecommendOnlyPolicy, Tolerance: defaults},
+		},
+		{
+			name: "the flag names itself when the Policy's field agrees", kind: "Deployment", flag: true,
+			mutate: func(rs *sustainv1alpha1.RightSizingSpec) { rs.RecommendOnly = true },
+			want:   ApplySettings{RecommendOnly: RecommendOnlyFlag, Tolerance: defaults},
 		},
 		{
 			name: "the safe-to-evict override", kind: "Deployment",
@@ -514,7 +519,7 @@ func TestApply_NothingToApplyIsIdle(t *testing.T) {
 		recs map[string]ContainerRecommendation
 		s    ApplySettings
 	}{
-		{"recommend-only", applyRecs, ApplySettings{RecommendOnly: true}},
+		{"recommend-only", applyRecs, ApplySettings{RecommendOnly: RecommendOnlyPolicy}},
 		{"no Recommendation for the member's containers", map[string]ContainerRecommendation{"other": {CPURequest: qtyp("200m")}}, ApplySettings{}},
 		{"no Recommendation at all", nil, ApplySettings{}},
 	} {

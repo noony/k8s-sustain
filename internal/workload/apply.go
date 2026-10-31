@@ -40,10 +40,21 @@ type Member struct {
 	Containers, InitContainers []corev1.Container
 }
 
+// RecommendOnly is what makes a member recommend-only, empty when nothing
+// does.
+type RecommendOnly string
+
+const (
+	// RecommendOnlyFlag: the controller's --recommend-only.
+	RecommendOnlyFlag RecommendOnly = "flag"
+	// RecommendOnlyPolicy: the Policy's rightSizing.recommendOnly.
+	RecommendOnlyPolicy RecommendOnly = "policy"
+)
+
 // ApplySettings are the Policy's choices for applying to one member.
 type ApplySettings struct {
-	// RecommendOnly applies nothing and reads no pod.
-	RecommendOnly bool
+	// RecommendOnly, when set, applies nothing and reads no pod.
+	RecommendOnly RecommendOnly
 	// DryRun evaluates the member's pods without touching any, so OnCreate can
 	// count the pods still waiting for a rollout to pick up the
 	// Recommendation.
@@ -60,8 +71,15 @@ type ApplySettings struct {
 func ApplySettingsFor(policy *sustainv1alpha1.Policy, kind string, recommendOnly bool) ApplySettings {
 	rs := policy.Spec.RightSizing
 	mode := rs.Update.Types.ModeForKind(kind)
+	var why RecommendOnly
+	switch {
+	case recommendOnly:
+		why = RecommendOnlyFlag
+	case rs.RecommendOnly:
+		why = RecommendOnlyPolicy
+	}
 	return ApplySettings{
-		RecommendOnly: policy.EffectiveRecommendOnly(recommendOnly),
+		RecommendOnly: why,
 		// Only Ongoing touches running pods; under OnCreate the webhook
 		// applies resources at admission.
 		DryRun:            mode == nil || *mode != sustainv1alpha1.UpdateModeOngoing,
@@ -148,8 +166,8 @@ func (p *Patcher) Apply(ctx context.Context, m Member, recs map[string]Container
 		logger.V(1).Info("no recommendation for the member's containers, nothing to apply")
 		return Result{Kind: ResultIdle}
 	}
-	if s.RecommendOnly {
-		logger.Info("recommend-only: applying nothing", "recommendations", recs)
+	if s.RecommendOnly != "" {
+		logger.Info("recommend-only: applying nothing", "source", s.RecommendOnly, "recommendations", recs)
 		return Result{Kind: ResultIdle}
 	}
 	rule, ok := applyRules[m.Kind]

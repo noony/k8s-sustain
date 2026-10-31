@@ -6,9 +6,10 @@
 #   - the pod is NEVER recycled: same UID, requests stay 500m/256Mi,
 #   - the webhook does not inject either: delete the pod and the replacement
 #     comes back with the template's 500m/256Mi,
-#   - controller logs show `recommend-only: applying nothing` (the webhook
-#     logs `recommend-only: would inject resources` with source=policy on pod
-#     creation — a second positive signal from the same grep).
+#   - controller logs show `recommend-only: applying nothing` with
+#     source=policy (the webhook logs `recommend-only: would inject resources`
+#     with source=policy on pod creation — a second positive signal from the
+#     same grep).
 # The Policy keeps `deployment: Ongoing` on purpose: it is the recommendOnly
 # field, not the update mode, that suppresses the apply.
 #
