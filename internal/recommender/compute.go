@@ -225,13 +225,13 @@ type contributed struct {
 	contribution
 }
 
-// contributionsTo runs, in order, the signals of res in each of roles for
-// container, keeping those with a value for it.
-func contributionsTo(in *WorkloadInputs, container string, res resourceKind, roles ...role) []contributed {
+// contributionsTo runs, in order, the signals of res in each of roles for the
+// container sc sizes, keeping those with a value for it.
+func contributionsTo(sc stageContext, res resourceKind, roles ...role) []contributed {
 	var out []contributed
 	for _, r := range roles {
 		for _, s := range inSlot(slot{role: r, resource: res}) {
-			if ct, ok := s.contribute(in, container); ok {
+			if ct, ok := s.contribute(sc); ok {
 				out = append(out, contributed{signal: s, role: r, contribution: ct})
 			}
 		}
@@ -241,10 +241,10 @@ func contributionsTo(in *WorkloadInputs, container string, res resourceKind, rol
 
 // stagesOf is the trace entry of each of cs, in order. Only cs[determined],
 // if any, reached the final request or limit.
-func stagesOf(cs []contributed, in *WorkloadInputs, container string, determined int) []sustainv1alpha1.TraceStage {
+func stagesOf(cs []contributed, sc stageContext, determined int) []sustainv1alpha1.TraceStage {
 	out := make([]sustainv1alpha1.TraceStage, 0, len(cs))
 	for i, c := range cs {
-		out = append(out, c.signal.stage(in, container, c.value, i == determined))
+		out = append(out, c.signal.stage(sc, c.value, i == determined))
 	}
 	return out
 }
@@ -260,7 +260,9 @@ const (
 // justified is false when no signal justified a request; the sizing is nil
 // then, and when the Policy keeps the request.
 func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justified bool) {
-	contributions := contributionsTo(req.inputs, c.Name, res, base, adjuster)
+	cfg := res.config(req.resources)
+	sc := stageContext{inputs: req.inputs, config: cfg, container: c, now: req.now}
+	contributions := contributionsTo(sc, res, base, adjuster)
 	var value float64
 	winner := -1
 	for i, ct := range contributions {
@@ -269,7 +271,6 @@ func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justifi
 			value, winner = ct.value, i
 		}
 	}
-	cfg := res.config(req.resources)
 	if !justified || cfg.Requests.KeepRequest {
 		return nil, justified
 	}
@@ -284,13 +285,14 @@ func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justifi
 	}
 
 	out := &sizing{request: clamped}
-	out.trace.Request = append(stagesOf(contributions, req.inputs, c.Name, winner),
+	out.trace.Request = append(stagesOf(contributions, sc, winner),
 		quantityStage(stageHeadroom, headroom), quantityStage(stageClamp, clamped))
 	if co != nil {
 		out.request = co.value
 		out.trace.Request = append(out.trace.Request, co.stage())
 	}
-	out.limit, out.trace.Limit = limitChain(res, out.request, c, req.inputs, cfg.Limits)
+	sc.request = &out.request
+	out.limit, out.trace.Limit = limitChain(res, sc)
 	return out, true
 }
 

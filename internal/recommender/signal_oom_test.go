@@ -188,7 +188,7 @@ func TestOOMFloor_Stage(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, ok := oomFloor{}.contribute(&WorkloadInputs{OOM: map[string]OOM{"app": tc.oom}}, "app")
+			c, ok := oomFloor{}.contribute(stageFor(&WorkloadInputs{OOM: map[string]OOM{"app": tc.oom}}, "app"))
 
 			if ok != tc.wantOK {
 				t.Fatalf("contributed = %v, want %v", ok, tc.wantOK)
@@ -207,7 +207,7 @@ func TestOOMFloor_StageRecordsItsFactsAndReadsBack(t *testing.T) {
 	killedAt := now.Add(-10 * time.Second)
 	in := &WorkloadInputs{OOM: map[string]OOM{"app": {Kills: 1, LimitBytes: 200 * mib, LiveAt: killedAt}}}
 
-	st := oomFloor{}.stage(in, "app", 240*mib, true)
+	st := oomFloor{}.stage(stageFor(in, "app"), 240*mib, true)
 
 	if st.Stage != "oomFloor" {
 		t.Fatalf("stage = %q, want oomFloor", st.Stage)

@@ -31,6 +31,12 @@ func containers(names ...string) []corev1.Container {
 	return out
 }
 
+// stageFor is the context of a request stage sizing the container named
+// container from in, as of now.
+func stageFor(in *WorkloadInputs, container string) stageContext {
+	return stageContext{inputs: in, container: corev1.Container{Name: container}, now: now}
+}
+
 // limited is a container named app running with the given requests and
 // limits.
 func limited(requests, limits corev1.ResourceList) corev1.Container {

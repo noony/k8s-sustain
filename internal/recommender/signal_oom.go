@@ -205,8 +205,8 @@ func (oomFloor) slot() slot { return slot{role: adjuster, resource: memoryResour
 // cannot accumulate usage samples, still gets one. An unanchored floor does
 // not: the only request it could produce is the hard 1Mi minimum, which would
 // guarantee the next kill.
-func (oomFloor) contribute(in *WorkloadInputs, container string) (contribution, bool) {
-	o := in.OOM[container]
+func (oomFloor) contribute(sc stageContext) (contribution, bool) {
+	o := sc.inputs.OOM[sc.container.Name]
 	if !o.recent() {
 		return contribution{}, false
 	}
@@ -214,8 +214,8 @@ func (oomFloor) contribute(in *WorkloadInputs, container string) (contribution, 
 	return contribution{value: floor, anchors: anchor != ""}, true
 }
 
-func (oomFloor) stage(in *WorkloadInputs, container string, value float64, determined bool) sustainv1alpha1.TraceStage {
-	o := in.OOM[container]
+func (oomFloor) stage(sc stageContext, value float64, determined bool) sustainv1alpha1.TraceStage {
+	o := sc.inputs.OOM[sc.container.Name]
 	facts := map[string]string{factDetermined: strconv.FormatBool(determined)}
 	if _, anchor := o.floor(); anchor != "" {
 		facts[factAnchor] = anchor

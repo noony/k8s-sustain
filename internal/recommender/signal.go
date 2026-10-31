@@ -6,6 +6,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -43,15 +44,32 @@ type signal interface {
 	excusesAge(in *WorkloadInputs) bool
 	// slot is where the signal's stage runs.
 	slot() slot
-	// contribute is the signal's value for one container's request before
-	// headroom, or for its limit, and false when it has none for that
-	// container.
-	contribute(in *WorkloadInputs, container string) (contribution, bool)
-	// stage is the signal's trace entry for the value it contributed to
-	// container. determined says that value reached the final request or
-	// limit: no other signal beat it and no operator bound or guard replaced
-	// it.
-	stage(in *WorkloadInputs, container string, value float64, determined bool) sustainv1alpha1.TraceStage
+	// contribute is the signal's value for the request of the container sc
+	// sizes, before headroom, or for its limit, and false when it has none
+	// for that container.
+	contribute(sc stageContext) (contribution, bool)
+	// stage is the signal's trace entry for the value it contributed to the
+	// container sc sizes. determined says that value reached the final
+	// request or limit: no other signal beat it and no operator bound or
+	// guard replaced it.
+	stage(sc stageContext, value float64, determined bool) sustainv1alpha1.TraceStage
+}
+
+// stageContext is what every stage of one container's resource sizes with,
+// on the request side and the limit side alike.
+type stageContext struct {
+	inputs *WorkloadInputs
+	// config is the Policy's configuration of the resource.
+	config sustainv1alpha1.ResourceConfig
+	// container is the container as the identity holds it, the union of its
+	// members' containers rather than a live pod's, with the requests and
+	// limits it declares.
+	container corev1.Container
+	// now is the instant the Request computes as of.
+	now time.Time
+	// request is the final request on the limit side, and nil on the request
+	// side, which computes it.
+	request *resource.Quantity
 }
 
 // signals is every signal, in the order their stages run within a role.

@@ -51,15 +51,15 @@ func (listedSignal) excusesAge(*WorkloadInputs) bool   { return false }
 
 func (listedSignal) slot() slot { return slot{role: limitAdjuster, resource: memoryResource} }
 
-func (l listedSignal) contribute(in *WorkloadInputs, container string) (contribution, bool) {
-	o, ok := in.OOM[container]
+func (l listedSignal) contribute(sc stageContext) (contribution, bool) {
+	o, ok := sc.inputs.OOM[sc.container.Name]
 	if !ok || o.LimitBytes == 0 {
 		return contribution{}, false
 	}
 	return contribution{value: o.LimitBytes * l.factor}, true
 }
 
-func (l listedSignal) stage(_ *WorkloadInputs, _ string, value float64, determined bool) sustainv1alpha1.TraceStage {
+func (l listedSignal) stage(_ stageContext, value float64, determined bool) sustainv1alpha1.TraceStage {
 	return sustainv1alpha1.TraceStage{
 		Stage: "listed",
 		Value: memoryResource.quantity(value),

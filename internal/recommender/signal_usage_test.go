@@ -106,14 +106,14 @@ func TestUsage_StageAndTrace(t *testing.T) {
 		{memoryUsage, "105591603"},
 	} {
 		t.Run(tc.signal.name(), func(t *testing.T) {
-			c, ok := tc.signal.contribute(in, "app")
+			c, ok := tc.signal.contribute(stageFor(in, "app"))
 			if !ok || !c.anchors {
 				t.Fatalf("contribution = %+v, %v, want an anchoring value", c, ok)
 			}
-			if _, ok := tc.signal.contribute(in, "absent"); ok {
+			if _, ok := tc.signal.contribute(stageFor(in, "absent")); ok {
 				t.Error("a container without samples contributed")
 			}
-			st := tc.signal.stage(in, "app", c.value, true)
+			st := tc.signal.stage(stageFor(in, "app"), c.value, true)
 			if st.Stage != "percentile" || st.Removed || len(st.Facts) != 0 {
 				t.Errorf("stage = %+v, want a bare percentile", st)
 			}

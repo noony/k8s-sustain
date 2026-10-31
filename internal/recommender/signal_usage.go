@@ -89,12 +89,12 @@ func (u usage) excusesAge(*WorkloadInputs) bool { return false }
 
 func (u usage) slot() slot { return slot{role: base, resource: u.resource} }
 
-func (u usage) contribute(in *WorkloadInputs, container string) (contribution, bool) {
-	v, ok := (*u.resource.usage(in))[container]
+func (u usage) contribute(sc stageContext) (contribution, bool) {
+	v, ok := (*u.resource.usage(sc.inputs))[sc.container.Name]
 	return contribution{value: v, anchors: true}, ok
 }
 
 // stage records the percentile at full precision: nanocores or bytes.
-func (u usage) stage(_ *WorkloadInputs, _ string, value float64, _ bool) sustainv1alpha1.TraceStage {
+func (u usage) stage(_ stageContext, value float64, _ bool) sustainv1alpha1.TraceStage {
 	return sustainv1alpha1.TraceStage{Stage: stagePercentile, Value: u.resource.quantity(value)}
 }
