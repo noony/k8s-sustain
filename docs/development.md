@@ -185,9 +185,9 @@ go run main.go start \
   --log-level=debug
 ```
 
-The flag names are identical on `go run main.go dashboard`; the environment
-variables are not — see
-[Environment variables — the prefixes differ per subcommand](guides/authenticated-prometheus.md#environment-variables-the-prefixes-differ-per-subcommand).
+The Prometheus flags are global, so `go run main.go dashboard` takes the same
+ones, and reads the same environment variables — see
+[Environment variables](guides/authenticated-prometheus.md#environment-variables).
 
 ### Start the webhook
 
@@ -727,6 +727,35 @@ Please ensure `go build ./...` and `go test ./...` pass before opening a PR.
 Implementation notes for maintainers. Behaviour users can observe is
 documented in the guides and references; this section explains why the code
 is shaped the way it is.
+
+### Cluster-scope settings
+
+The settings every component must read alike — `--recommend-only`,
+`--excluded-namespaces` and the Prometheus connection (`--prometheus-address`
+and the transport flags) — are root persistent flags, bound once by
+`config.BindGlobalFlags` to one viper key and one environment variable each,
+which every subcommand's `Load*Config` reads. A subcommand that has no use for
+one ignores it: the webhook accepts the Prometheus flags. A new setting the
+components must agree on goes there, never in a subcommand's `Bind*Flags`,
+where its key would be the subcommand's own.
+
+The chart renders them through one helper, `k8s-sustain.clusterScopeArgs` in
+`_helpers.tpl`, which every Deployment includes; the Prometheus connection only
+for a component that queries Prometheus. `k8s-sustain.excludedNamespaces` is
+the one list (the release namespace, `kube-system`, `kube-public`, then
+`excludedNamespaces`) behind every `--excluded-namespaces` and the webhook's
+`namespaceSelector`. In the binary, each reader holds the excluded namespaces
+in its `governance.PolicyLister` (see [Governance](#governance)).
+
+`hack/docscheck` guards the flags against `docs/reference/cli.md`: each command
+has a row for every flag it registers and none for one it does not (a root
+persistent flag is documented once, under Global flags), with the flag's
+default. It also reads every flag the chart renders straight from a value: the
+value's schema must accept the flag's default, and a value rendered only when
+set (`with`, `if`) must default to the flag's default, since leaving it unset
+falls through to the binary's. Helm value names come from `values.yaml` and its
+schema, and a single backticked default in `docs/reference/helm-values.md` must
+be the one `values.yaml` holds.
 
 ### Prometheus transport
 

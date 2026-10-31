@@ -246,46 +246,31 @@ Reach for `serverName` before `insecureSkipVerify`.
 
 ---
 
-## Environment variables — the prefixes differ per subcommand
+## Environment variables
 
-Each subcommand binds its flags under its own Viper key prefix, so the same
-flag name maps to a **different environment variable** per subcommand:
+Every Prometheus setting is a global flag, read alike by every subcommand, so
+each has one environment variable that the controller and the dashboard both
+read (the webhook ignores them):
 
-| Subcommand | Prefix | Example |
-|---|---|---|
-| Controller (`start`) | `K8SSUSTAIN_` | `K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE` |
-| Webhook (`webhook`) | `K8SSUSTAIN_WEBHOOK_` | `K8SSUSTAIN_WEBHOOK_LOG_LEVEL` |
-| Dashboard (`dashboard`) | `K8SSUSTAIN_DASHBOARD_` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE` |
+| Setting | Variable |
+|---------|----------|
+| Address | `K8SSUSTAIN_PROMETHEUS_ADDRESS` |
+| Bearer token | `K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN` |
+| Bearer token file | `K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE` |
+| Basic auth username | `K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_USERNAME` |
+| Basic auth password | `K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_PASSWORD` |
+| Basic auth password file | `K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_PASSWORD_FILE` |
+| Headers | `K8SSUSTAIN_PROMETHEUS_HEADERS` |
+| TLS CA file | `K8SSUSTAIN_PROMETHEUS_TLS_CA_FILE` |
+| TLS cert file | `K8SSUSTAIN_PROMETHEUS_TLS_CERT_FILE` |
+| TLS key file | `K8SSUSTAIN_PROMETHEUS_TLS_KEY_FILE` |
+| TLS server name | `K8SSUSTAIN_PROMETHEUS_TLS_SERVER_NAME` |
+| TLS insecure skip verify | `K8SSUSTAIN_PROMETHEUS_TLS_INSECURE_SKIP_VERIFY` |
 
-The global `--recommend-only` flag is unprefixed (`K8SSUSTAIN_RECOMMEND_ONLY`)
-on every subcommand; `--config` has no environment variable.
-
-!!! danger "A wrong prefix is silently ignored"
-    `K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE` set on the dashboard does
-    nothing: the dashboard starts, queries Prometheus unauthenticated, and
-    reports "No metrics data available" while the controller works fine.
-    There is no error message. The same applies to shared flags such as
-    `--log-level` and `--excluded-namespaces` on the webhook.
-
-The Prometheus settings (the webhook has none):
-
-| Setting | Controller | Dashboard |
-|---------|------------|-----------|
-| Bearer token | `K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN` |
-| Bearer token file | `K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE` |
-| Basic auth username | `K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_USERNAME` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_USERNAME` |
-| Basic auth password | `K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_PASSWORD` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_PASSWORD` |
-| Basic auth password file | `K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_PASSWORD_FILE` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_PASSWORD_FILE` |
-| Headers | `K8SSUSTAIN_PROMETHEUS_HEADERS` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_HEADERS` |
-| TLS CA file | `K8SSUSTAIN_PROMETHEUS_TLS_CA_FILE` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_TLS_CA_FILE` |
-| TLS cert file | `K8SSUSTAIN_PROMETHEUS_TLS_CERT_FILE` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_TLS_CERT_FILE` |
-| TLS key file | `K8SSUSTAIN_PROMETHEUS_TLS_KEY_FILE` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_TLS_KEY_FILE` |
-| TLS server name | `K8SSUSTAIN_PROMETHEUS_TLS_SERVER_NAME` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_TLS_SERVER_NAME` |
-| TLS insecure skip verify | `K8SSUSTAIN_PROMETHEUS_TLS_INSECURE_SKIP_VERIFY` | `K8SSUSTAIN_DASHBOARD_PROMETHEUS_TLS_INSECURE_SKIP_VERIFY` |
-
-The chart renders the right prefix for each component; this table matters when
-you set environment variables yourself (raw manifests, a kustomize patch,
-`docker run`, local development).
+The chart renders the same variables into both Deployments; this table matters
+when you set them yourself (raw manifests, a kustomize patch, `docker run`,
+local development). Every other flag's variable is listed in the
+[CLI reference](../reference/cli.md#environment-variables).
 
 ---
 
@@ -370,7 +355,7 @@ single comma-separated string and cannot express such a value.
 |---------|--------------|
 | `CrashLoopBackOff` with `reading prometheus bearer token file …: no such file or directory` | With `bearerTokenKey`: the key does not exist in `existingSecret`, or the Secret is in another namespace. With `bearerTokenFile`: the path does not exist in the pod — it mounts nothing |
 | `contains no valid PEM certificate` at startup | `tls.caKey` points at a key holding something other than a PEM bundle |
-| Controller works, dashboard shows "No metrics data available" | Dashboard credentials missing: a `K8SSUSTAIN_PROMETHEUS_*` variable that should be `K8SSUSTAIN_DASHBOARD_PROMETHEUS_*`, a patch applied to only one Deployment, or (projected token) the dashboard ServiceAccount not authorized |
+| Controller works, dashboard shows "No metrics data available" | Dashboard credentials missing: a patch applied to only one Deployment, or (projected token) the dashboard ServiceAccount not authorized |
 | Queries return `401` about an hour after startup | A rotating token was supplied inline — switch to `bearerTokenFile` or `bearerTokenKey` |
 | `helm upgrade` fails with "`… are mutually exclusive`" | A `*File` path set alongside its `*Key` or inline value, or a bearer token combined with basic auth. Keep exactly one |
 | `helm upgrade` fails with "`must be a string`" or "`Invalid type. Expected: string`" on a header | The header value is an unquoted number; write it as `"1234567"` |

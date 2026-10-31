@@ -31,7 +31,7 @@ An identity younger than its Policy's minimum age, which gets no Recommendation 
 ### Recommendations
 
 **Policy**:
-A cluster-wide rule set that governs the identities whose members it accepts: which kinds it manages, how it computes recommendations, and how it applies them. An identity is governed by at most one Policy.
+A cluster-wide rule set that governs the identities whose members it accepts: which kinds it manages, how it computes recommendations, and how it applies them. An identity is governed by at most one Policy, and an identity in an excluded namespace by none, whatever its members opt into; the controller, the webhook and the dashboard exclude the same namespaces.
 
 **WorkloadRecommendation**:
 The stored record of one identity's Recommendation, the Policy that computed it, until when the webhook may serve it, and the outcome of the controller's last decision for it (Computed, NoData, Too young, FetchFailed, Conflicted). The governing Policy writes it; the webhook only asks for one, and records the containers of identities no reconcile sees alive.
