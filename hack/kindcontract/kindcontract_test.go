@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -26,6 +27,8 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/hack/recordingrules"
 	"github.com/noony/k8s-sustain/internal/config"
+	"github.com/noony/k8s-sustain/internal/governance"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -35,6 +38,8 @@ const (
 	repoRoot   = "../.."
 	typesFile  = "api/v1alpha1/policy_types.go"
 	rbacFile   = "charts/k8s-sustain/templates/rbac.yaml"
+	styleFile  = "internal/dashboard/ui/frontend/src/style.css"
+	policyDoc  = "docs/reference/policy.md"
 	valuesFile = recordingrules.ValuesFile
 	// ownerKindRule has no constant in internal/prometheus: no Go code
 	// queries it.
@@ -47,14 +52,18 @@ const (
 var roleNames = []string{"k8s-sustain.fullname", "k8s-sustain.dashboardName"}
 
 // places holds what the checks read that is not a Go function they call:
-// the kinds, the tables and scheme the binaries use, and the chart.
+// the kinds, the tables and scheme the binaries use, the inventory, the
+// chart, the dashboard's badge styles and the Policy reference.
 type places struct {
 	kinds      []string
 	ownerKinds []string
 	disableFor []client.Object
 	scheme     *runtime.Scheme
+	members    func(ctx context.Context, r client.Reader, kind string) ([]client.Object, error)
 	roles      map[string][]rbacv1.PolicyRule
 	rules      map[string][]recordingrules.Rule
+	badges     []string
+	documented []string
 }
 
 func loadPlaces(t *testing.T) places {
@@ -68,9 +77,73 @@ func loadPlaces(t *testing.T) places {
 		ownerKinds: workload.OwnerChainKinds(),
 		disableFor: k8sclient.OwnerChainDisableFor(),
 		scheme:     config.Scheme(),
+		members:    inventoryMembers,
 		roles:      loadRoles(t),
 		rules:      rules,
+		badges:     loadBadges(t),
+		documented: loadDocumentedUpdateTypes(t),
 	}
+}
+
+// inventoryMembers lists the objects of kind that an inventory of r takes as
+// members.
+func inventoryMembers(ctx context.Context, r client.Reader, kind string) ([]client.Object, error) {
+	snap, err := inventory.Take(ctx, r, inventory.Options{Kinds: []string{kind}, Policies: governance.NewPolicyLister(nil)})
+	if err != nil {
+		return nil, err
+	}
+	var objs []client.Object
+	for _, id := range snap.Identities {
+		for _, m := range id.Members {
+			objs = append(objs, m.Object)
+		}
+	}
+	return objs, nil
+}
+
+var badgeClass = regexp.MustCompile(`\.kind-([A-Z][A-Za-z0-9]*)`)
+
+// loadBadges lists the kinds the dashboard's stylesheet colours a badge for.
+func loadBadges(t *testing.T) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoRoot, styleFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, m := range badgeClass.FindAllStringSubmatch(string(b), -1) {
+		kinds = append(kinds, m[1])
+	}
+	slices.Sort(kinds)
+	return slices.Compact(kinds)
+}
+
+var (
+	updateTypesHeading = regexp.MustCompile("(?m)^#+ `spec\\.rightSizing\\.update\\.types`[ \t]*$")
+	fieldRow           = regexp.MustCompile("(?m)^\\| `([A-Za-z0-9]+)` \\|")
+)
+
+// loadDocumentedUpdateTypes lists the fields the Policy reference's update
+// types table has a row for.
+func loadDocumentedUpdateTypes(t *testing.T) []string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(repoRoot, policyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loc := updateTypesHeading.FindIndex(b)
+	if loc == nil {
+		t.Fatalf("%s has no spec.rightSizing.update.types section", policyDoc)
+	}
+	section := string(b[loc[1]:])
+	if next := strings.Index(section, "\n#"); next >= 0 {
+		section = section[:next]
+	}
+	var fields []string
+	for _, m := range fieldRow.FindAllStringSubmatch(section, -1) {
+		fields = append(fields, m[1])
+	}
+	return fields
 }
 
 var (
@@ -310,11 +383,13 @@ var (
 )
 
 // selection is one selector of a kube-state-metrics owner series: the owner
-// kinds it keeps, every one when unfiltered.
+// kinds it keeps, every one when unfiltered, and whether an unless before it
+// in its expression makes it select what the expression drops.
 type selection struct {
 	series     string
 	kinds      []string
 	unfiltered bool
+	excluded   bool
 }
 
 // selections reads expr's owner-series selectors, reporting any whose
@@ -322,16 +397,19 @@ type selection struct {
 func selections(rule, expr string) ([]selection, []string) {
 	var sels []selection
 	var problems []string
-	for _, m := range ownerSeries.FindAllStringSubmatch(expr, -1) {
-		matchers := ownerKindMatchers.FindAllStringSubmatch(m[2], -1)
+	unless := strings.Index(expr, "unless")
+	for _, loc := range ownerSeries.FindAllStringSubmatchIndex(expr, -1) {
+		series, labels := expr[loc[2]:loc[3]], expr[loc[4]:loc[5]]
+		excluded := unless >= 0 && loc[0] > unless
+		matchers := ownerKindMatchers.FindAllStringSubmatch(labels, -1)
 		switch {
 		case len(matchers) == 0:
-			sels = append(sels, selection{series: m[1], unfiltered: true})
+			sels = append(sels, selection{series: series, unfiltered: true, excluded: excluded})
 		case len(matchers) == 1 && (matchers[0][1] == "=" || matchers[0][1] == "=~") && kindAlternation.MatchString(matchers[0][2]):
-			sels = append(sels, selection{series: m[1], kinds: strings.Split(matchers[0][2], "|")})
+			sels = append(sels, selection{series: series, kinds: strings.Split(matchers[0][2], "|"), excluded: excluded})
 		default:
 			problems = append(problems, fmt.Sprintf("%s selects %s{%s}, whose owner_kind matcher the kind contract cannot read: "+
-				`use owner_kind="Kind" or owner_kind=~"KindA|KindB" in %s`, rule, m[1], strings.TrimSpace(m[2]), valuesFile))
+				`use owner_kind="Kind" or owner_kind=~"KindA|KindB" in %s`, rule, series, strings.TrimSpace(labels), valuesFile))
 		}
 	}
 	return sels, problems
@@ -355,7 +433,10 @@ func kindsSelected(sels []selection, keep func(selection) bool) []string {
 // walks through, to exactly the kinds it resolves; pod_workload maps every
 // other supported kind straight from the pod's controller, and
 // pod_owner_kind_internal every other controller kind, as the controller's
-// default does.
+// default does. Where another supported kind owns a kind pod_workload maps
+// straight from the pod's controller, as a CronJob owns its Jobs,
+// ResolveControllerOwner walks past to the owner, so the direct-owner rule
+// drops exactly those pods, or such a pod has two identities.
 func checkRecordingRules(p places) []string {
 	through, problems := resolvedThrough(p)
 	indirect := map[string]bool{barePodKind(): true}
@@ -376,9 +457,11 @@ func checkRecordingRules(p places) []string {
 			continue
 		}
 		var sels []selection
+		perDef := make([][]selection, 0, len(defs))
 		for _, d := range defs {
 			s, unreadable := selections(rule, d.Expr)
 			sels = append(sels, s...)
+			perDef = append(perDef, s)
 			problems = append(problems, unreadable...)
 		}
 		for _, middle := range slices.Sorted(maps.Keys(through)) {
@@ -402,6 +485,22 @@ func checkRecordingRules(p places) []string {
 					"controller does for %q: make the owner_kind regex of the direct-owner kube_pod_owner selector in %s "+
 					"select exactly those", rule, got, direct, valuesFile))
 			}
+			for _, def := range perDef {
+				for _, middle := range direct {
+					mapsDirectly := func(s selection) bool { return isPod(s) && !isMiddle(s) && slices.Contains(s.kinds, middle) }
+					if len(through[middle]) == 0 || !slices.ContainsFunc(def, mapsDirectly) {
+						continue
+					}
+					series := "kube_" + strings.ToLower(middle) + "_owner"
+					dropped := kindsSelected(def, func(s selection) bool { return s.series == series && s.excluded })
+					if !slices.Equal(dropped, through[middle]) {
+						problems = append(problems, fmt.Sprintf("%s maps a pod straight from its %s controller, dropping one whose %s "+
+							"is owned by %q, but workload.ResolveControllerOwner resolves one owned by %q to that owner: make the "+
+							"%s selector in the unless clause of the direct-owner rule in %s select exactly those",
+							rule, middle, middle, dropped, through[middle], series, valuesFile))
+					}
+				}
+			}
 		case ownerKindRule:
 			if !slices.ContainsFunc(sels, func(s selection) bool { return isPod(s) && s.unfiltered }) {
 				problems = append(problems, fmt.Sprintf("%s keeps no kube_pod_owner alternative without an owner_kind matcher, but "+
@@ -412,13 +511,95 @@ func checkRecordingRules(p places) []string {
 	return problems
 }
 
+// checkMembership: an object of a supported kind that
+// ResolveControllerOwner walks past to the supported kind owning it, as it
+// walks past a CronJob's Job, is a member of its owner's identity only, or its
+// pods would count toward two identities.
+func checkMembership(p places) []string {
+	// checkRecordingRules reports a walk that fails.
+	through, _ := resolvedThrough(p)
+	var problems []string
+	for _, middle := range slices.Sorted(maps.Keys(through)) {
+		if !slices.Contains(p.kinds, middle) {
+			continue
+		}
+		for _, top := range through[middle] {
+			obj := workload.ObjectForKind(middle)
+			obj.SetNamespace("ns")
+			obj.SetName("owned")
+			obj.SetOwnerReferences([]metav1.OwnerReference{{Kind: top, Name: "top", Controller: ptr.To(true)}})
+			// Its own scheme, so a kind config.Scheme misses fails the scheme
+			// check alone.
+			s := runtime.NewScheme()
+			utilruntime.Must(clientgoscheme.AddToScheme(s))
+			utilruntime.Must(sustainv1alpha1.AddToScheme(s))
+			s.AddKnownTypes(schema.GroupVersion{Group: workload.GroupResourceForKind(middle).Group, Version: "v1"}, obj, workload.ListForKind(middle))
+			c := fake.NewClientBuilder().WithScheme(s).WithObjects(obj).Build()
+			members, err := p.members(context.Background(), c, middle)
+			if err != nil {
+				problems = append(problems, fmt.Sprintf("taking an inventory of a %s owned by a %s: %v", middle, top, err))
+				continue
+			}
+			if slices.ContainsFunc(members, func(m client.Object) bool { return m.GetName() == "owned" }) {
+				problems = append(problems, fmt.Sprintf("the inventory makes a %s owned by a %s a member, but workload.ResolveControllerOwner "+
+					"resolves its pods to the %s: skip it in the membership filter of addWorkloads in internal/inventory/inventory.go", middle, top, top))
+			}
+		}
+	}
+	return problems
+}
+
+// checkBadges: the dashboard colours each kind's badge, and the SPA holds no
+// kind list, so the stylesheet is the one place the kinds are spelled out.
+func checkBadges(p places) []string {
+	var problems []string
+	for _, kind := range p.kinds {
+		if !slices.Contains(p.badges, kind) {
+			problems = append(problems, fmt.Sprintf("%s has no .kind-%s rule: give the kind's badge a colour", styleFile, kind))
+		}
+	}
+	for _, kind := range p.badges {
+		if !slices.Contains(p.kinds, kind) {
+			problems = append(problems, fmt.Sprintf("%s colours .kind-%s, which is no kind of workload.SupportedKinds: delete the rule", styleFile, kind))
+		}
+	}
+	return problems
+}
+
+// checkDocs: the Policy reference lists every update type, and only those.
+func checkDocs(p places) []string {
+	var problems []string
+	var fields []string
+	for _, kind := range p.kinds {
+		field := sustainv1alpha1.UpdateTypesField(kind)
+		if field == "" {
+			continue
+		}
+		fields = append(fields, field)
+		if !slices.Contains(p.documented, field) {
+			problems = append(problems, fmt.Sprintf("the spec.rightSizing.update.types table of %s has no row for %s, the field "+
+				"managing %s: add one", policyDoc, field, kind))
+		}
+	}
+	for _, field := range p.documented {
+		if !slices.Contains(fields, field) {
+			problems = append(problems, fmt.Sprintf("the spec.rightSizing.update.types table of %s has a row for %s, which manages "+
+				"no kind of workload.SupportedKinds: delete it", policyDoc, field))
+		}
+	}
+	return problems
+}
+
 var checks = map[string]func(places) []string{
 	"update modes":      checkUpdateModes,
 	"objects":           checkObjects,
+	"membership":        checkMembership,
 	"owner-chain reads": checkOwnerChainReads,
 	"scheme":            checkScheme,
 	"RBAC":              checkRBAC,
 	"recording rules":   checkRecordingRules,
+	"badges":            checkBadges,
+	"docs":              checkDocs,
 }
 
 // Every place a workload kind must be registered in agrees with
@@ -474,6 +655,25 @@ func TestChecksReportEachBreach(t *testing.T) {
 			[]string{"workload.PodTemplateOf returns no pod template for a ReplicaSet, so the inventory skips every one: add a case to internal/workload/templates.go"},
 		},
 		{
+			"an owned object the inventory keeps as a member", "membership",
+			func(p *places) {
+				p.members = func(ctx context.Context, r client.Reader, kind string) ([]client.Object, error) {
+					list := workload.ListForKind(kind)
+					if err := r.List(ctx, list); err != nil {
+						return nil, err
+					}
+					var objs []client.Object
+					err := meta.EachListItem(list, func(o runtime.Object) error {
+						objs = append(objs, o.(client.Object))
+						return nil
+					})
+					return objs, err
+				}
+			},
+			[]string{"the inventory makes a Job owned by a CronJob a member, but workload.ResolveControllerOwner resolves its pods to the CronJob: " +
+				"skip it in the membership filter of addWorkloads in internal/inventory/inventory.go"},
+		},
+		{
 			"an owner-chain kind read through an informer", "owner-chain reads",
 			func(p *places) {
 				rollout := reflect.TypeOf(workload.ObjectForKind("Rollout"))
@@ -527,6 +727,18 @@ func TestChecksReportEachBreach(t *testing.T) {
 			[]string{ownerKindRule + ` maps a pod through a ReplicaSet to owner kinds ["Deployment"], but workload.ResolveControllerOwner resolves a ReplicaSet to ["Deployment" "Rollout"]`},
 		},
 		{
+			"a walked-past pod left to the direct-owner rule", "recording rules",
+			func(p *places) {
+				defs := slices.Clone(p.rules[promclient.MetricPodWorkload])
+				for i := range defs {
+					defs[i].Expr = regexp.MustCompile(`unless on\(namespace, pod\)\s*\(`).ReplaceAllString(defs[i].Expr, "or on(namespace, pod) (")
+				}
+				p.rules[promclient.MetricPodWorkload] = defs
+			},
+			[]string{promclient.MetricPodWorkload + ` maps a pod straight from its Job controller, dropping one whose Job is owned by [], but ` +
+				`workload.ResolveControllerOwner resolves one owned by ["CronJob"] to that owner: make the kube_job_owner selector in the unless clause`},
+		},
+		{
 			"no fallback to the controller's own kind", "recording rules",
 			func(p *places) {
 				editRule(p, ownerKindRule, `kube_pod_owner{owner_is_controller="true"}`, `kube_pod_owner{owner_kind="StatefulSet", owner_is_controller="true"}`)
@@ -542,6 +754,25 @@ func TestChecksReportEachBreach(t *testing.T) {
 				ownerKindRule + " selects kube_replicaset_owner{owner_kind=~\"Deploy.*|Rollout\", owner_is_controller=\"true\"}, whose owner_kind matcher the kind contract cannot read",
 				ownerKindRule + " maps a pod through a ReplicaSet to owner kinds []",
 			},
+		},
+		{
+			"a kind without a badge colour", "badges", addKind("Widget"),
+			[]string{styleFile + " has no .kind-Widget rule"},
+		},
+		{
+			"a badge colour for no kind", "badges",
+			func(p *places) { p.badges = append(p.badges, "Gadget") },
+			[]string{styleFile + " colours .kind-Gadget, which is no kind of workload.SupportedKinds"},
+		},
+		{
+			"an update type the reference leaves out", "docs",
+			func(p *places) { p.documented = without(p.documented, func(f string) bool { return f == "daemonSet" }) },
+			[]string{"the spec.rightSizing.update.types table of " + policyDoc + " has no row for daemonSet, the field managing DaemonSet"},
+		},
+		{
+			"a reference row for no update type", "docs",
+			func(p *places) { p.documented = append(p.documented, "widget") },
+			[]string{"the spec.rightSizing.update.types table of " + policyDoc + " has a row for widget, which manages no kind"},
 		},
 	}
 	for _, tc := range cases {

@@ -357,16 +357,18 @@ what fails:
 8. Grant `get`, `list` and `watch` on the kind's resource in both ClusterRoles of `charts/k8s-sustain/templates/rbac.yaml`: the controller's, which the webhook shares, and the dashboard's. Nothing generates RBAC; the chart's is the only one. *Kind contract: RBAC.*
 9. Map the kind's pods in the recording rules, in `prometheusRule.groups` of `charts/k8s-sustain/values.yaml`, as `workload.ResolveControllerOwner` (`internal/workload/ownerref.go`) resolves them. Without this the kind has no usage, so its outcome stays NoData.
     - A pod whose controller is the kind itself: add the kind to the `owner_kind` regex of the direct-owner `k8s_sustain:pod_workload` rule.
-    - A pod owned through an intermediate object, as a Deployment's is through a ReplicaSet: teach `ResolveControllerOwner` the walk. Add the kind to the `kube_<intermediate>_owner` selectors of both `k8s_sustain:pod_workload` and `k8s_sustain:pod_owner_kind_internal`. If the intermediate is itself a supported kind, as a CronJob's Job is, skip its objects owned by the new kind in the inventory's membership filter (`addWorkloads` in `internal/inventory/inventory.go`). Exclude their pods from the direct-owner rule too.
+    - A pod owned through an intermediate object, as a Deployment's is through a ReplicaSet: teach `ResolveControllerOwner` the walk. Add the kind to the `kube_<intermediate>_owner` selectors of both `k8s_sustain:pod_workload` and `k8s_sustain:pod_owner_kind_internal`. If the intermediate is itself a supported kind, as a CronJob's Job is, add the kind to the `kube_<intermediate>_owner` selector in the `unless` clause of the direct-owner rule too, so the rule drops those pods.
 
-    Cover the mapping with a promtool fixture in `charts/k8s-sustain/tests/promtool/`. *Kind contract: recording rules (the membership filter and the direct-owner rule's exclusion are guarded only by their own tests and fixtures).*
+    Cover the mapping with a promtool fixture in `charts/k8s-sustain/tests/promtool/`. *Kind contract: recording rules.*
+10. If the kind owns objects of another supported kind, as a CronJob owns its Jobs, skip those objects in the inventory's membership filter (`addWorkloads` in `internal/inventory/inventory.go`): their pods belong to the new kind's identity only. *Kind contract: membership.*
+11. Give the kind's badge a colour: a `.kind-<Kind>` rule in the dashboard's `src/style.css`. *Kind contract: badges.*
+12. Add the kind's update type to the `spec.rightSizing.update.types` table of `docs/reference/policy.md`. *Kind contract: docs.*
 
-Nothing guards the rest. Each step is optional or e2e:
+Nothing guards the rest, since none of it is a table a test can read:
 
-- Order the kind's evictions in `sortPodsForRecycle` (`internal/workload/patcher.go`), if its pods must be replaced in an order, as a StatefulSet's are.
-- Give the kind a `.kind-<Kind>` badge colour in the dashboard's `src/style.css`; without one its badge is plain.
-- Document it: the update types table in `docs/reference/policy.md` and the guides.
-- Add a scenario to `hack/scenarios/`, listed in `SCENARIOS` in `Makefile.scenarios` and in `hack/scenarios/status.sh`.
+- Order the kind's evictions in `sortPodsForRecycle` (`internal/workload/patcher.go`), if its pods must be replaced in an order, as a StatefulSet's are. Whether they must is a property of the kind's controller.
+- Describe the kind in the guides, and in the Policy example of `docs/reference/policy.md` if it belongs there.
+- Add a scenario to `hack/scenarios/`, listed in `SCENARIOS` in `Makefile.scenarios` and in `hack/scenarios/status.sh`, if the local test cluster can run it: a Rollout scenario would need Argo Rollouts installed.
 
 ## Adding a recommendation signal
 
