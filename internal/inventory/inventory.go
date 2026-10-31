@@ -29,13 +29,9 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// Options narrows a snapshot. Every member of an identity shares its
-// namespace and kind, so a narrowed snapshot still sees whole identities.
-type Options struct {
-	// Namespaces limits the snapshot to these namespaces; empty means all.
-	Namespaces []string
-	// Kinds limits it to these workload.SupportedKinds; empty means all.
-	Kinds []string
+// Basis is what a reader decides and dates every snapshot it takes with,
+// whatever the snapshot reads.
+type Basis struct {
 	// ExcludedNamespaces are governed by no Policy, whatever they opt into.
 	ExcludedNamespaces []string
 	// Policies lists the Policies the snapshot decides with. A caller taking
@@ -47,11 +43,22 @@ type Options struct {
 	Clock clock.PassiveClock
 }
 
-func (o Options) now() time.Time {
-	if o.Clock == nil {
+func (b Basis) now() time.Time {
+	if b.Clock == nil {
 		return time.Now()
 	}
-	return o.Clock.Now()
+	return b.Clock.Now()
+}
+
+// Options is a snapshot's Basis and what narrows it. Every member of an
+// identity shares its namespace and kind, so a narrowed snapshot still sees
+// whole identities.
+type Options struct {
+	Basis
+	// Namespaces limits the snapshot to these namespaces; empty means all.
+	Namespaces []string
+	// Kinds limits it to these workload.SupportedKinds; empty means all.
+	Kinds []string
 }
 
 // Snapshot is the identities in scope when it was taken, sorted by key.
@@ -191,13 +198,13 @@ func Take(ctx context.Context, r client.Reader, opts Options) (*Snapshot, error)
 	return snap, nil
 }
 
-// TakeForPolicy reads the identities policy can govern: Take with opts
-// narrowed to its selector's namespaces and the kinds it manages, whatever
-// opts names. Every identity it returns has a kind policy manages, and is
-// whole: its members share its namespace and kind, so the narrowed read also
-// sees what makes one Conflicted. A Policy managing no kind reads nothing.
-func TakeForPolicy(ctx context.Context, r client.Reader, policy *sustainv1alpha1.Policy, opts Options) (*Snapshot, error) {
-	opts.Kinds = nil
+// TakeForPolicy reads the identities policy can govern: Take narrowed to its
+// selector's namespaces and the kinds it manages. Every identity it returns
+// has a kind policy manages, and is whole: its members share its namespace and
+// kind, so the narrowed read also sees what makes one Conflicted. A Policy
+// managing no kind reads nothing.
+func TakeForPolicy(ctx context.Context, r client.Reader, policy *sustainv1alpha1.Policy, b Basis) (*Snapshot, error) {
+	opts := Options{Basis: b, Namespaces: policy.Spec.Selector.Namespaces}
 	for _, kind := range workload.SupportedKinds {
 		if policy.Spec.RightSizing.Update.Types.ModeForKind(kind) != nil {
 			opts.Kinds = append(opts.Kinds, kind)
@@ -205,9 +212,8 @@ func TakeForPolicy(ctx context.Context, r client.Reader, policy *sustainv1alpha1
 	}
 	// An empty Kinds would read every kind.
 	if len(opts.Kinds) == 0 {
-		return &Snapshot{TakenAt: opts.now()}, nil
+		return &Snapshot{TakenAt: b.now()}, nil
 	}
-	opts.Namespaces = policy.Spec.Selector.Namespaces
 	return Take(ctx, r, opts)
 }
 

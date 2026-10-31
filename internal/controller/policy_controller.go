@@ -219,7 +219,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	start := time.Now()
 	logger.Info("starting reconcile cycle")
 
-	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, inventory.Options{
+	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, inventory.Basis{
 		ExcludedNamespaces: r.ExcludedNamespaces,
 		Policies:           &r.policies,
 		Clock:              r.Clock,
