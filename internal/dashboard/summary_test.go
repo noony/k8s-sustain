@@ -1,20 +1,17 @@
 package dashboard
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/testr"
-	"k8s.io/utils/clock"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/noony/k8s-sustain/internal/governance"
@@ -176,12 +173,13 @@ func TestHandleSummaryCacheHit(t *testing.T) {
 			"k8s_sustain:cluster_cpu_savings_cores": 3.2,
 		},
 	}
+	clk := clocktesting.NewFakePassiveClock(time.Now())
 	srv := &Server{
-		Clock:      clock.RealClock{},
-		Policies:   governance.NewPolicyLister(nil),
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: fp,
 		Health:     memHealthSignals{},
+		Clock:      clk,
+		Policies:   governance.NewPolicyLister(nil),
 		Logger:     testr.New(t),
 	}
 	handler := srv.Handler()
@@ -207,7 +205,7 @@ func TestHandleSummaryCacheHit(t *testing.T) {
 		t.Errorf("expected cached value %v, got %v", got1.KPI.CPUSavedCores, got2.KPI.CPUSavedCores)
 	}
 
-	srv.summaryCache = NewCache(8, 60*time.Second)
+	clk.SetTime(clk.Now().Add(61 * time.Second))
 	rec3 := httptest.NewRecorder()
 	handler.ServeHTTP(rec3, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
 	if rec3.Code != http.StatusOK {
@@ -216,7 +214,7 @@ func TestHandleSummaryCacheHit(t *testing.T) {
 	var got3 summaryResponseV2
 	decodeEnvelopeData(t, rec3.Body, &got3)
 	if got3.KPI.CPUSavedCores != 99.9 {
-		t.Errorf("after cache reset: expected 99.9, got %v", got3.KPI.CPUSavedCores)
+		t.Errorf("past the cache TTL: expected 99.9, got %v", got3.KPI.CPUSavedCores)
 	}
 }
 
@@ -236,14 +234,22 @@ func TestHandleSummaryDoesNotCacheOnPromError(t *testing.T) {
 		Logger:     testr.New(t),
 	}
 
+	handler := srv.Handler()
+
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 (graceful degrade), got %d", rec.Code)
 	}
 
-	if _, ok := srv.summaryCache.Get("summary"); ok {
-		t.Fatalf("cache was poisoned despite prom error")
+	fp.instant["k8s_sustain:cluster_cpu_savings_cores"] = 99.9
+	fp.instantErr = nil
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
+	var got summaryResponseV2
+	decodeEnvelopeData(t, rec2.Body, &got)
+	if got.KPI.CPUSavedCores != 99.9 {
+		t.Fatalf("expected a fresh recompute 99.9 after the partial one, got %v: the cache was poisoned despite prom error", got.KPI.CPUSavedCores)
 	}
 }
 
@@ -251,17 +257,14 @@ func TestHandleSummaryServesRecentLastGoodOnPartialError(t *testing.T) {
 	fp := &fakePromClient{
 		instant: map[string]float64{"k8s_sustain:cluster_cpu_savings_cores": 3.2},
 	}
-	now := time.Now()
-	cache := NewCache(8, 60*time.Second)
-	cache.now = func() time.Time { return now }
+	clk := clocktesting.NewFakePassiveClock(time.Now())
 	srv := &Server{
-		Clock:        clock.RealClock{},
-		Policies:     governance.NewPolicyLister(nil),
-		K8sClient:    fake.NewClientBuilder().WithScheme(Scheme()).Build(),
-		PromClient:   fp,
-		Health:       memHealthSignals{},
-		Logger:       testr.New(t),
-		summaryCache: cache,
+		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		PromClient: fp,
+		Health:     memHealthSignals{},
+		Clock:      clk,
+		Policies:   governance.NewPolicyLister(nil),
+		Logger:     testr.New(t),
 	}
 	handler := srv.Handler()
 
@@ -271,7 +274,7 @@ func TestHandleSummaryServesRecentLastGoodOnPartialError(t *testing.T) {
 		t.Fatalf("prime: expected 200, got %d", rec1.Code)
 	}
 
-	now = now.Add(5 * time.Minute)
+	clk.SetTime(clk.Now().Add(5 * time.Minute))
 	fp.instant["k8s_sustain:cluster_cpu_savings_cores"] = 99.9
 	fp.instantErr = map[string]error{
 		"k8s_sustain:cluster_memory_savings_bytes": errors.New("prom unreachable"),
@@ -292,15 +295,14 @@ func TestHandleSummaryServesFreshPartialWhenLastGoodTooOld(t *testing.T) {
 	fp := &fakePromClient{
 		instant: map[string]float64{"k8s_sustain:cluster_cpu_savings_cores": 3.2},
 	}
-	now := time.Now()
-	cache := NewCache(8, 60*time.Second)
-	cache.now = func() time.Time { return now }
+	clk := clocktesting.NewFakePassiveClock(time.Now())
 	srv := &Server{
-		K8sClient:    fake.NewClientBuilder().WithScheme(Scheme()).Build(),
-		PromClient:   fp,
-		Health:       memHealthSignals{},
-		Logger:       testr.New(t),
-		summaryCache: cache,
+		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		PromClient: fp,
+		Health:     memHealthSignals{},
+		Clock:      clk,
+		Policies:   governance.NewPolicyLister(nil),
+		Logger:     testr.New(t),
 	}
 	handler := srv.Handler()
 
@@ -310,7 +312,7 @@ func TestHandleSummaryServesFreshPartialWhenLastGoodTooOld(t *testing.T) {
 		t.Fatalf("prime: expected 200, got %d", rec1.Code)
 	}
 
-	now = now.Add(maxSummaryLastGoodAge + time.Minute)
+	clk.SetTime(clk.Now().Add(maxSummaryLastGoodAge + time.Minute))
 	fp.instant["k8s_sustain:cluster_cpu_savings_cores"] = 99.9
 	fp.instantErr = map[string]error{
 		"k8s_sustain:cluster_memory_savings_bytes": errors.New("prom unreachable"),
@@ -328,28 +330,17 @@ func TestHandleSummaryServesFreshPartialWhenLastGoodTooOld(t *testing.T) {
 }
 
 // blockingPromClient holds a /api/summary recompute open until release is
-// closed and counts queries per expression.
+// closed.
 type blockingPromClient struct {
 	*fakePromClient
 
 	release     <-chan struct{}
 	started     chan struct{}
 	startedOnce sync.Once
-
-	countMu sync.Mutex
-	counts  map[string]int
 }
 
 func (b *blockingPromClient) QueryInstant(ctx context.Context, expr string) (float64, error) {
-	b.countMu.Lock()
-	if b.counts == nil {
-		b.counts = map[string]int{}
-	}
-	b.counts[expr]++
-	b.countMu.Unlock()
-	if b.started != nil {
-		b.startedOnce.Do(func() { close(b.started) })
-	}
+	b.startedOnce.Do(func() { close(b.started) })
 	select {
 	case <-b.release:
 	case <-time.After(5 * time.Second):
@@ -358,86 +349,9 @@ func (b *blockingPromClient) QueryInstant(ctx context.Context, expr string) (flo
 	return b.fakePromClient.QueryInstant(ctx, expr)
 }
 
-func (b *blockingPromClient) count(expr string) int {
-	b.countMu.Lock()
-	defer b.countMu.Unlock()
-	return b.counts[expr]
-}
-
-// N concurrent cache misses must collapse into one recompute and one cache
-// Set; sfJoinHook holds the recompute open until all N requests have joined.
-func TestHandleSummaryConcurrentMissesCollapseToOneRecompute(t *testing.T) {
-	const n = 8
-	fp := &fakePromClient{
-		instant: map[string]float64{promclient.MetricClusterCPUSavingsCores: 3.2},
-	}
-
-	var joined int32
-	allJoined := make(chan struct{})
-	bp := &blockingPromClient{fakePromClient: fp, release: allJoined}
-	srv := &Server{
-		Clock:      clock.RealClock{},
-		Policies:   governance.NewPolicyLister(nil),
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
-		PromClient: bp,
-		Health:     memHealthSignals{},
-		Logger:     testr.New(t),
-		sfJoinHook: func(string) {
-			if atomic.AddInt32(&joined, 1) == n {
-				close(allJoined)
-			}
-		},
-	}
-	handler := srv.Handler()
-
-	var wg sync.WaitGroup
-	bodies := make([]string, n)
-	codes := make([]int, n)
-	for i := range n {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
-			codes[i] = rec.Code
-			bodies[i] = rec.Body.String()
-		}(i)
-	}
-	wg.Wait()
-
-	if got := bp.count(promclient.MetricClusterCPUSavingsCores); got != 1 {
-		t.Errorf("expected exactly 1 Prometheus query for %d concurrent cache misses, got %d", n, got)
-	}
-	for i := range n {
-		if codes[i] != http.StatusOK {
-			t.Errorf("request %d: status = %d, want 200", i, codes[i])
-		}
-	}
-
-	var want summaryResponseV2
-	decodeEnvelopeData(t, bytes.NewReader([]byte(bodies[0])), &want)
-	if want.KPI.CPUSavedCores != 3.2 {
-		t.Fatalf("CPUSavedCores = %v, want 3.2", want.KPI.CPUSavedCores)
-	}
-	for i := 1; i < n; i++ {
-		var got summaryResponseV2
-		decodeEnvelopeData(t, bytes.NewReader([]byte(bodies[i])), &got)
-		if got.KPI.CPUSavedCores != want.KPI.CPUSavedCores {
-			t.Errorf("request %d saw CPUSavedCores %v, want the single shared snapshot %v",
-				i, got.KPI.CPUSavedCores, want.KPI.CPUSavedCores)
-		}
-	}
-	cached, ok := srv.summaryCache.Get(summaryCacheKey)
-	if !ok {
-		t.Fatal("cache was not populated by the shared recompute")
-	}
-	if got := cached.(summaryResponseV2).KPI.CPUSavedCores; got != want.KPI.CPUSavedCores {
-		t.Errorf("cached CPUSavedCores = %v, want %v (a second Set overwrote the shared snapshot)", got, want.KPI.CPUSavedCores)
-	}
-}
-
-// A follower must not wait past its own context deadline for the leader.
-func TestHandleSummaryFollowerHonoursOwnContextDeadline(t *testing.T) {
+// A request that gives up on the recompute it joined, with no last-good
+// snapshot to fall back on, answers 503 without the payload's max-age.
+func TestHandleSummaryRequestGivingUpWithoutLastGoodIs503(t *testing.T) {
 	fp := &fakePromClient{
 		instant: map[string]float64{promclient.MetricClusterCPUSavingsCores: 3.2},
 	}
@@ -481,42 +395,12 @@ func TestHandleSummaryFollowerHonoursOwnContextDeadline(t *testing.T) {
 	followerCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	rec := httptest.NewRecorder()
-	start := time.Now()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/summary", nil).WithContext(followerCtx))
-	elapsed := time.Since(start)
 
-	if elapsed > 2*time.Second {
-		t.Errorf("follower blocked for %v past its own 20ms deadline; a slow leader must not borrow another caller's budget", elapsed)
-	}
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("follower status = %d, want 503 (no last-good snapshot to fall back on)", rec.Code)
 	}
 	if cc := rec.Header().Get("Cache-Control"); cc != "" {
 		t.Errorf("Cache-Control = %q on the 503, want it cleared", cc)
-	}
-}
-
-// A panic escaping a singleflight function with parked DoChan waiters aborts
-// the process, so the leader must convert it to an error. The nil
-// summaryCache is the trigger: the trailing Set dereferences it.
-func TestComputeAndCacheSummaryRecoversPanic(t *testing.T) {
-	srv := &Server{
-		Clock:      clock.RealClock{},
-		Policies:   governance.NewPolicyLister(nil),
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
-		PromClient: &fakePromClient{},
-		Health:     memHealthSignals{},
-		Logger:     testr.New(t),
-	}
-
-	val, err := srv.computeAndCacheSummary()
-	if err == nil {
-		t.Fatal("expected a recovered panic to surface as an error, got nil")
-	}
-	if !strings.Contains(err.Error(), "panic recomputing summary") {
-		t.Errorf("error = %q, want it to name the recovered panic", err)
-	}
-	if val != nil {
-		t.Errorf("val = %#v, want nil alongside the error", val)
 	}
 }

@@ -3,18 +3,17 @@ package dashboard
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/sync/singleflight"
-
+	"github.com/noony/k8s-sustain/internal/cache"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
@@ -74,18 +73,23 @@ type summaryResponseV2 struct {
 // may be when fresh queries partially fail; 10x the 60s cache TTL.
 const maxSummaryLastGoodAge = 10 * time.Minute
 
-// summaryCacheKey is the single cache and singleflight key for /api/summary.
+// summaryCacheKey is the single cache key for /api/summary.
 const summaryCacheKey = "summary"
 
 // summaryComputeTimeout bounds one shared recompute; it matches
 // httpx.NewServer's WriteTimeout, past which no client is listening.
 const summaryComputeTimeout = 15 * time.Second
 
-// summaryComputation is what one shared recompute hands back to every request
-// that joined it.
-type summaryComputation struct {
+// partialSummary is a recompute some of whose reads failed. It is the fetch's
+// error, so the cache never holds it, yet every request that joined the
+// recompute still gets it.
+type partialSummary struct {
 	resp        summaryResponseV2
 	failedReads int32
+}
+
+func (p *partialSummary) Error() string {
+	return fmt.Sprintf("summary: %d reads failed", p.failedReads)
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
@@ -94,76 +98,43 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	if cached, ok := s.summaryCache.Get(summaryCacheKey); ok {
-		writeJSON(w, http.StatusOK, cached)
-		return
-	}
-
-	// Join the one in-flight recompute; one flight per key also guarantees a
-	// single cache Set per recompute, so a slow one cannot overwrite a newer.
-	ch := s.summarySF.DoChan(summaryCacheKey, s.computeAndCacheSummary)
-	if s.sfJoinHook != nil {
-		s.sfJoinHook(summaryCacheKey)
-	}
-
-	var res singleflight.Result
-	select {
-	case <-r.Context().Done():
-		// Do not block past this request's own deadline waiting on the leader.
-		if lastGood, ok := s.summaryCache.GetLastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
+	resp, err := s.summary.Get(r.Context(), summaryCacheKey)
+	var partial *partialSummary
+	var panicked *cache.PanicError
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, resp)
+	case errors.As(err, &partial):
+		// Prefer a recent last-good snapshot over the fresh-but-partial result.
+		s.Logger.V(1).Info("summary: reads failed", "count", partial.failedReads)
+		if lastGood, ok := s.summarySnapshot.LastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
+			writeJSON(w, http.StatusOK, lastGood)
+			return
+		}
+		writeJSON(w, http.StatusOK, partial.resp)
+	case errors.As(err, &panicked):
+		// Re-panic on the request goroutine so the recovery middleware handles
+		// it, and drop max-age first.
+		w.Header().Del("Cache-Control")
+		panic(fmt.Errorf("panic recomputing summary: %v\n%s", panicked.Value, panicked.Stack))
+	default:
+		// The request gave up before the recompute finished.
+		if lastGood, ok := s.summarySnapshot.LastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
 			writeJSON(w, http.StatusOK, lastGood)
 			return
 		}
 		// Drop the payload's max-age so the 503 is not cached for a minute.
 		w.Header().Del("Cache-Control")
 		writeError(w, http.StatusServiceUnavailable, "summary recomputation did not complete before the request was cancelled")
-		return
-	case res = <-ch:
 	}
-
-	if res.Err != nil {
-		// Only a recovered panic reaches here; re-panic on the request goroutine
-		// so the recovery middleware handles it, and drop max-age first.
-		w.Header().Del("Cache-Control")
-		panic(res.Err)
-	}
-	out := res.Val.(summaryComputation)
-
-	if out.failedReads == 0 {
-		writeJSON(w, http.StatusOK, out.resp)
-		return
-	}
-
-	// Partial failure: never poison the cache. Prefer a recent last-good
-	// snapshot over the fresh-but-partial result.
-	s.Logger.V(1).Info("summary: reads failed", "count", out.failedReads)
-	if lastGood, ok := s.summaryCache.GetLastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
-		writeJSON(w, http.StatusOK, lastGood)
-		return
-	}
-	writeJSON(w, http.StatusOK, out.resp)
 }
 
-// computeAndCacheSummary is the singleflight leader. It runs on a detached
-// context because other requests may still be waiting after the leading
-// request is cancelled. The recover is load-bearing: a panic escaping a
-// singleflight function with DoChan waiters takes the whole process down.
-func (s *Server) computeAndCacheSummary() (val any, err error) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			val = nil
-			err = fmt.Errorf("panic recomputing summary: %v\n%s", rec, debug.Stack())
-		}
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), summaryComputeTimeout)
-	defer cancel()
-
+func (s *Server) fetchSummary(ctx context.Context, _ string) (summaryResponseV2, error) {
 	resp, failedReads := s.computeSummary(ctx)
-	if failedReads == 0 {
-		s.summaryCache.Set(summaryCacheKey, resp)
+	if failedReads > 0 {
+		return summaryResponseV2{}, &partialSummary{resp: resp, failedReads: failedReads}
 	}
-	return summaryComputation{resp: resp, failedReads: failedReads}, nil
+	return resp, nil
 }
 
 func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) {
