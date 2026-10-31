@@ -19,9 +19,15 @@ import (
 
 func qty(s string) *resource.Quantity { q := resource.MustParse(s); return &q }
 
+// lifetimes are the controller settings every test writes under: a 5m
+// reconcile interval, so a 30m staleness budget, and a 72h retention window.
+var lifetimes = wlrcache.Lifetimes{ReconcileInterval: 5 * time.Minute, Retention: 72 * time.Hour}
+
 // computed is a WorkloadRecommendation of identity Deployment/web, governed by
-// and computed under Policy "p" age ago, holding a Recommendation for "app".
+// and computed under Policy "p" age ago, holding a Recommendation for "app",
+// stamped servable as a live identity's.
 func computed(age time.Duration, now time.Time) *sustainv1alpha1.WorkloadRecommendation {
+	observedAt := now.Add(-age)
 	return &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: wlrcache.Name("Deployment", "web")},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
@@ -29,14 +35,22 @@ func computed(age time.Duration, now time.Time) *sustainv1alpha1.WorkloadRecomme
 			Policy:      "p",
 		},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
-			ObservedAt: metav1.NewTime(now.Add(-age)),
-			Outcome:    sustainv1alpha1.OutcomeComputed,
-			ComputedBy: "p",
+			ObservedAt:    metav1.NewTime(observedAt),
+			ServableUntil: metav1.NewTime(observedAt.Add(lifetimes.StalenessBudget())),
+			Outcome:       sustainv1alpha1.OutcomeComputed,
+			ComputedBy:    "p",
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
 				"app": {CPURequest: qty("200m"), MemoryRequest: qty("256Mi")},
 			},
 		},
 	}
+}
+
+// servableFor is w stamped servable for d past now, negative for a stamp
+// already past.
+func servableFor(w *sustainv1alpha1.WorkloadRecommendation, now time.Time, d time.Duration) *sustainv1alpha1.WorkloadRecommendation {
+	w.Status.ServableUntil = metav1.NewTime(now.Add(d))
+	return w
 }
 
 func TestNameIsKindDashName(t *testing.T) {
@@ -63,7 +77,8 @@ func TestNameTruncatesLongNamesWithAStableHash(t *testing.T) {
 }
 
 // The read verdict in every state an object can be in, for a pod of Policy
-// "p" admitted now under the default freshness bounds.
+// "p" admitted now. Whether a Recommendation is served depends on the
+// servableUntil stamped on it alone: the reader holds no setting of its own.
 func TestReadVerdictPerState(t *testing.T) {
 	now := time.Now()
 	for _, tc := range []struct {
@@ -111,23 +126,34 @@ func TestReadVerdictPerState(t *testing.T) {
 		}, wlrcache.Withheld},
 		{"computed five minutes ago", func() *sustainv1alpha1.WorkloadRecommendation { return computed(5*time.Minute, now) }, wlrcache.Fresh},
 		{"computed two hours ago", func() *sustainv1alpha1.WorkloadRecommendation { return computed(2*time.Hour, now) }, wlrcache.Stale},
-		{"departed, computed a day ago", func() *sustainv1alpha1.WorkloadRecommendation {
-			w := computed(24*time.Hour, now)
+		{"computed a day ago, stamped servable for another hour", func() *sustainv1alpha1.WorkloadRecommendation {
+			return servableFor(computed(24*time.Hour, now), now, time.Hour)
+		}, wlrcache.Fresh},
+		{"servable until this very instant", func() *sustainv1alpha1.WorkloadRecommendation {
+			return servableFor(computed(time.Minute, now), now, 0)
+		}, wlrcache.Stale},
+		{"never stamped", func() *sustainv1alpha1.WorkloadRecommendation {
+			w := computed(time.Minute, now)
+			w.Status.ServableUntil = metav1.Time{}
+			return w
+		}, wlrcache.Stale},
+		{"departed, servable for two more days", func() *sustainv1alpha1.WorkloadRecommendation {
+			w := servableFor(computed(24*time.Hour, now), now, 48*time.Hour)
 			w.Status.Departed = true
 			return w
 		}, wlrcache.Retained},
-		{"departed past the retention window", func() *sustainv1alpha1.WorkloadRecommendation {
-			w := computed(200*time.Hour, now)
+		{"departed, past its servableUntil", func() *sustainv1alpha1.WorkloadRecommendation {
+			w := servableFor(computed(80*time.Hour, now), now, -8*time.Hour)
 			w.Status.Departed = true
 			return w
 		}, wlrcache.Stale},
-		{"Conflicted, frozen a day ago", func() *sustainv1alpha1.WorkloadRecommendation {
-			w := computed(24*time.Hour, now)
+		{"Conflicted, servable for two more days", func() *sustainv1alpha1.WorkloadRecommendation {
+			w := servableFor(computed(24*time.Hour, now), now, 48*time.Hour)
 			w.Status.Outcome = sustainv1alpha1.OutcomeConflicted
 			return w
 		}, wlrcache.Retained},
-		{"Conflicted past the retention window", func() *sustainv1alpha1.WorkloadRecommendation {
-			w := computed(200*time.Hour, now)
+		{"Conflicted, past its servableUntil", func() *sustainv1alpha1.WorkloadRecommendation {
+			w := servableFor(computed(80*time.Hour, now), now, -8*time.Hour)
 			w.Status.Outcome = sustainv1alpha1.OutcomeConflicted
 			return w
 		}, wlrcache.Stale},
@@ -138,7 +164,7 @@ func TestReadVerdictPerState(t *testing.T) {
 		}, wlrcache.Stale},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := wlrcache.Read(tc.known(), "p", now, wlrcache.Freshness{})
+			got := wlrcache.Read(tc.known(), "p", now)
 			if got.Verdict != tc.want {
 				t.Fatalf("verdict = %s, want %s", got.Verdict, tc.want)
 			}
@@ -158,37 +184,8 @@ func withoutRecommendation(now time.Time, outcome sustainv1alpha1.Recommendation
 		w := computed(2*time.Hour, now)
 		w.Status.Outcome = outcome
 		w.Status.Containers = nil
+		w.Status.ServableUntil = metav1.Time{}
 		return w
-	}
-}
-
-// Departed is what waives the staleness budget, so an object of the same age
-// that is neither departed nor Conflicted must still trip it: a broader waiver
-// would serve whatever a stuck controller last wrote.
-func TestReadWaivesStalenessOnlyForRetainedRecommendations(t *testing.T) {
-	now := time.Now()
-	live := computed(24*time.Hour, now)
-	if got := wlrcache.Read(live, "p", now, wlrcache.Freshness{}).Verdict; got != wlrcache.Stale {
-		t.Errorf("live object a day old: verdict = %s, want stale", got)
-	}
-	departed := computed(24*time.Hour, now)
-	departed.Status.Departed = true
-	if got := wlrcache.Read(departed, "p", now, wlrcache.Freshness{}).Verdict; got != wlrcache.Retained {
-		t.Errorf("departed object a day old: verdict = %s, want retained", got)
-	}
-}
-
-// The handler's own bounds replace the defaults.
-func TestReadAppliesTheGivenFreshness(t *testing.T) {
-	now := time.Now()
-	f := wlrcache.Freshness{Staleness: time.Hour, Retention: 24 * time.Hour}
-	if got := wlrcache.Read(computed(45*time.Minute, now), "p", now, f).Verdict; got != wlrcache.Fresh {
-		t.Errorf("45m old under a 1h staleness: verdict = %s, want fresh", got)
-	}
-	departed := computed(30*time.Hour, now)
-	departed.Status.Departed = true
-	if got := wlrcache.Read(departed, "p", now, f).Verdict; got != wlrcache.Stale {
-		t.Errorf("departed 30h ago under a 24h retention: verdict = %s, want stale", got)
 	}
 }
 
@@ -201,7 +198,7 @@ func TestReadCarriesTheWholeRecommendation(t *testing.T) {
 		CPURequest: qty("200m"), MemoryRequest: qty("256Mi"), MemoryLimit: qty("512Mi"),
 		RemoveCPULimit: true,
 	}
-	got := wlrcache.Read(w, "p", now, wlrcache.Freshness{}).Recs["app"]
+	got := wlrcache.Read(w, "p", now).Recs["app"]
 	if got.CPURequest.Cmp(*qty("200m")) != 0 || got.MemoryRequest.Cmp(*qty("256Mi")) != 0 ||
 		got.MemoryLimit.Cmp(*qty("512Mi")) != 0 {
 		t.Errorf("recs[app] = %+v, want the stored quantities", got)
@@ -325,7 +322,7 @@ func TestRequestCreatesAStubCarryingThePodsSnapshot(t *testing.T) {
 	if !got.Status.ObservedResources["prep"].Init {
 		t.Error("prep not marked Init: ExcludeInitContainers cannot be honoured without it")
 	}
-	if v := wlrcache.Read(got, "p", time.Now(), wlrcache.Freshness{}).Verdict; v != wlrcache.Undecided {
+	if v := wlrcache.Read(got, "p", time.Now()).Verdict; v != wlrcache.Undecided {
 		t.Errorf("verdict on a fresh stub = %s, want undecided", v)
 	}
 }
@@ -337,7 +334,7 @@ func TestRequestCreatesAStubCarryingThePodsSnapshot(t *testing.T) {
 func TestRequestLosingTheCreateRaceLeavesTheWinnersObject(t *testing.T) {
 	c := newCluster(t)
 	union := snapshotOf("100m", "app", "sidecar")
-	if _, err := wlrcache.Ensure(context.Background(), c, web, "p", union); err != nil {
+	if _, err := wlrcache.Ensure(context.Background(), c, web, "p", union, lifetimes); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
 
@@ -452,7 +449,7 @@ func TestShouldRequest(t *testing.T) {
 // into. It carries no decision until the pass records one.
 func TestEnsureCreatesAnUndecidedObject(t *testing.T) {
 	c := newCluster(t)
-	known, err := wlrcache.Ensure(context.Background(), c, task, "p", snapshotOf("100m", "main"))
+	known, err := wlrcache.Ensure(context.Background(), c, task, "p", snapshotOf("100m", "main"), lifetimes)
 	if err != nil {
 		t.Fatalf("Ensure must not depend on reading back its own create: %v", err)
 	}
@@ -484,7 +481,7 @@ func TestEnsureClaimsAStubTheCacheHasNotSeen(t *testing.T) {
 	}
 
 	union := snapshotOf("100m", "app", "sidecar")
-	known, err := wlrcache.Ensure(context.Background(), c, web, "p", union)
+	known, err := wlrcache.Ensure(context.Background(), c, web, "p", union, lifetimes)
 	if err != nil {
 		t.Fatalf("Ensure after a stub its cache has not seen: %v", err)
 	}
@@ -509,7 +506,7 @@ func TestEnsureReplacesTheSnapshotOnlyWhenItDiffers(t *testing.T) {
 	ensure := func(observed map[string]sustainv1alpha1.ObservedContainerResources) int {
 		t.Helper()
 		_, before := c.writes()
-		if _, err := wlrcache.Ensure(context.Background(), c, web, "p", observed); err != nil {
+		if _, err := wlrcache.Ensure(context.Background(), c, web, "p", observed, lifetimes); err != nil {
 			t.Fatalf("Ensure: %v", err)
 		}
 		_, after := c.writes()
@@ -533,16 +530,22 @@ func TestEnsureReplacesTheSnapshotOnlyWhenItDiffers(t *testing.T) {
 }
 
 // An identity with a live member is not departed; the claim says so and
-// touches nothing a pass decided.
+// touches nothing a pass decided. Its Recommendation is servable for the
+// staleness budget again, not the retention window: a live identity whose
+// passes stop recording must stop being injected.
 func TestEnsureClearsDepartedAndKeepsTheDecision(t *testing.T) {
 	now := time.Now()
-	departed := computed(30*time.Minute, now)
+	departed := computed(2*time.Hour, now)
 	departed.Labels = map[string]string{sustainv1alpha1.WLRPolicyLabel: "p"}
 	departed.Status.Departed = true
+	departed.Status.ServableUntil = metav1.NewTime(departed.Status.ObservedAt.Add(lifetimes.Retention))
 	c := newCluster(t, departed)
 	before := c.mustStored(t, web)
+	if v := wlrcache.Read(before, "p", now).Verdict; v != wlrcache.Retained {
+		t.Fatalf("while departed: verdict = %s, want retained", v)
+	}
 
-	if _, err := wlrcache.Ensure(context.Background(), c, web, "p", nil); err != nil {
+	if _, err := wlrcache.Ensure(context.Background(), c, web, "p", nil, lifetimes); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
 
@@ -553,6 +556,12 @@ func TestEnsureClearsDepartedAndKeepsTheDecision(t *testing.T) {
 	if cpuOf(t, got, "app") != "200m" || got.Status.Outcome != sustainv1alpha1.OutcomeComputed ||
 		!got.Status.ObservedAt.Equal(&before.Status.ObservedAt) {
 		t.Errorf("status = %+v, want the Recommendation, outcome and observedAt untouched", got.Status)
+	}
+	if want := before.Status.ObservedAt.Add(lifetimes.StalenessBudget()); !got.Status.ServableUntil.Time.Equal(want) {
+		t.Errorf("servableUntil = %v, want the staleness budget past observedAt, %v", got.Status.ServableUntil, want)
+	}
+	if v := wlrcache.Read(got, "p", now).Verdict; v != wlrcache.Stale {
+		t.Errorf("live again, computed two hours ago: verdict = %s, want stale", v)
 	}
 }
 
@@ -570,15 +579,15 @@ func TestAnAdoptedRecommendationIsWithheldUntilTheAdoptingPolicyComputesItsOwn(t
 	verdicts := func(step string, wantP, wantQ wlrcache.Verdict) {
 		t.Helper()
 		got := c.mustStored(t, web)
-		if v := wlrcache.Read(got, "p", now, wlrcache.Freshness{}).Verdict; v != wantP {
+		if v := wlrcache.Read(got, "p", now).Verdict; v != wantP {
 			t.Errorf("%s: verdict for a pod of p = %s, want %s", step, v, wantP)
 		}
-		if v := wlrcache.Read(got, "q", now, wlrcache.Freshness{}).Verdict; v != wantQ {
+		if v := wlrcache.Read(got, "q", now).Verdict; v != wantQ {
 			t.Errorf("%s: verdict for a pod of q = %s, want %s", step, v, wantQ)
 		}
 	}
 
-	if _, err := wlrcache.Ensure(context.Background(), c, web, "q", nil); err != nil {
+	if _, err := wlrcache.Ensure(context.Background(), c, web, "q", nil, lifetimes); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
 	got := c.mustStored(t, web)
@@ -593,13 +602,13 @@ func TestAnAdoptedRecommendationIsWithheldUntilTheAdoptingPolicyComputesItsOwn(t
 	for _, outcome := range []sustainv1alpha1.RecommendationOutcome{
 		sustainv1alpha1.OutcomeFetchFailed, sustainv1alpha1.OutcomeNoData, sustainv1alpha1.OutcomeTooYoung,
 	} {
-		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), wlrcache.Decision{Outcome: outcome}, now); err != nil {
+		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), wlrcache.Decision{Outcome: outcome}, now, lifetimes); err != nil {
 			t.Fatalf("Record %s: %v", outcome, err)
 		}
 		verdicts("q recorded "+string(outcome), wlrcache.Withheld, wlrcache.Withheld)
 	}
 
-	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), computedDecision("300m"), now); err != nil {
+	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), computedDecision("300m"), now, lifetimes); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 	if got := c.mustStored(t, web); got.Status.ComputedBy != "q" || cpuOf(t, got, "app") != "300m" {
@@ -615,20 +624,21 @@ func TestAConflictResolvedToTheOtherPolicyWithholdsTheFrozenRecommendation(t *te
 	frozen := computed(time.Hour, now)
 	frozen.Labels = map[string]string{sustainv1alpha1.WLRPolicyLabel: "p"}
 	frozen.Status.Outcome = sustainv1alpha1.OutcomeConflicted
+	frozen.Status.ServableUntil = metav1.NewTime(frozen.Status.ObservedAt.Add(lifetimes.Retention))
 	c := newCluster(t, frozen)
-	if v := wlrcache.Read(c.mustStored(t, web), "p", now, wlrcache.Freshness{}).Verdict; v != wlrcache.Retained {
+	if v := wlrcache.Read(c.mustStored(t, web), "p", now).Verdict; v != wlrcache.Retained {
 		t.Fatalf("while Conflicted: verdict for p = %s, want retained", v)
 	}
 
-	known, err := wlrcache.Ensure(context.Background(), c, web, "q", nil)
+	known, err := wlrcache.Ensure(context.Background(), c, web, "q", nil, lifetimes)
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	if err := wlrcache.Record(context.Background(), c, known, wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeFetchFailed}, now); err != nil {
+	if err := wlrcache.Record(context.Background(), c, known, wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeFetchFailed}, now, lifetimes); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
-	if v := wlrcache.Read(c.mustStored(t, web), "q", now, wlrcache.Freshness{}).Verdict; v != wlrcache.Withheld {
+	if v := wlrcache.Read(c.mustStored(t, web), "q", now).Verdict; v != wlrcache.Withheld {
 		t.Errorf("after the conflict resolved to q: verdict for q = %s, want withheld", v)
 	}
 }
@@ -639,13 +649,13 @@ func TestAConflictResolvedToTheOtherPolicyWithholdsTheFrozenRecommendation(t *te
 // on template resources.
 func TestRecordStoresIntoTheObjectEnsureReturnedWhileTheCacheLags(t *testing.T) {
 	c := newCluster(t)
-	known, err := wlrcache.Ensure(context.Background(), c, web, "p", snapshotOf("100m", "app"))
+	known, err := wlrcache.Ensure(context.Background(), c, web, "p", snapshotOf("100m", "app"), lifetimes)
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
 
 	now := time.Now()
-	if err := wlrcache.Record(context.Background(), c, known, computedDecision("250m"), now); err != nil {
+	if err := wlrcache.Record(context.Background(), c, known, computedDecision("250m"), now, lifetimes); err != nil {
 		t.Fatalf("Record must not depend on reading the object back: %v", err)
 	}
 
@@ -653,7 +663,7 @@ func TestRecordStoresIntoTheObjectEnsureReturnedWhileTheCacheLags(t *testing.T) 
 	if cpuOf(t, got, "app") != "250m" {
 		t.Errorf("stored CPU = %s, want 250m", cpuOf(t, got, "app"))
 	}
-	if v := wlrcache.Read(got, "p", now, wlrcache.Freshness{}).Verdict; v != wlrcache.Fresh {
+	if v := wlrcache.Read(got, "p", now).Verdict; v != wlrcache.Fresh {
 		t.Errorf("verdict = %s, want fresh", v)
 	}
 	if len(got.Status.ObservedResources) != 1 {
@@ -678,7 +688,7 @@ func TestRecordComputedStoresTheWholeRecommendation(t *testing.T) {
 			Limit:   []sustainv1alpha1.TraceStage{{Stage: "noLimit", Removed: true}},
 		}}},
 	}
-	if err := wlrcache.Record(context.Background(), c, known, d, now); err != nil {
+	if err := wlrcache.Record(context.Background(), c, known, d, now, lifetimes); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
@@ -702,7 +712,7 @@ func TestRecordIsANoOpForAnUnchangedDecision(t *testing.T) {
 	now := time.Now()
 	record := func(d wlrcache.Decision, at time.Time) {
 		t.Helper()
-		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), d, at); err != nil {
+		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), d, at, lifetimes); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
 	}
@@ -724,16 +734,16 @@ func TestRecordIsANoOpForAnUnchangedDecision(t *testing.T) {
 }
 
 // An unchanged Recommendation is still rewritten once its observedAt is
-// RefreshInterval old: otherwise a stable workload's object ages into the
-// staleness budget and the webhook stops serving it.
+// RefreshInterval old: otherwise a stable workload's object ages past its
+// servableUntil and the webhook stops serving it.
 func TestRecordRefreshesObservedAtOnceItIsRefreshIntervalOld(t *testing.T) {
 	c := newCluster(t, computed(time.Hour, time.Now()))
 	start := time.Now()
-	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), computedDecision("250m"), start); err != nil {
+	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), computedDecision("250m"), start, lifetimes); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 	later := start.Add(wlrcache.RefreshInterval + time.Second)
-	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), computedDecision("250m"), later); err != nil {
+	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), computedDecision("250m"), later, lifetimes); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 	if got := c.mustStored(t, web).Status.ObservedAt; got.Time.Before(later.Add(-time.Second)) {
@@ -753,7 +763,7 @@ func TestRecordWritesTheTraceOnlyWithTheValues(t *testing.T) {
 		d.Traces = map[string]sustainv1alpha1.ContainerTrace{"app": {CPU: &sustainv1alpha1.ResourceTrace{
 			Request: []sustainv1alpha1.TraceStage{{Stage: "percentile", Value: qty(percentile)}, {Stage: "clamp", Value: &req}},
 		}}}
-		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), d, now); err != nil {
+		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), d, now, lifetimes); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
 		return c.mustStored(t, web)
@@ -790,7 +800,7 @@ func TestRecordKeepsTheLastRecommendationForEveryOtherOutcome(t *testing.T) {
 			c := newCluster(t, stored)
 
 			d := wlrcache.Decision{Outcome: outcome}
-			if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), d, time.Now()); err != nil {
+			if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), d, time.Now(), lifetimes); err != nil {
 				t.Fatalf("Record: %v", err)
 			}
 
@@ -812,12 +822,12 @@ func TestRecordKeepsTheLastRecommendationForEveryOtherOutcome(t *testing.T) {
 // read it — so a record with nothing to land in must fail, never no-op.
 func TestRecordFailsWithoutAnObject(t *testing.T) {
 	c := newCluster(t)
-	if err := wlrcache.Record(context.Background(), c, nil, computedDecision("250m"), time.Now()); err == nil {
+	if err := wlrcache.Record(context.Background(), c, nil, computedDecision("250m"), time.Now(), lifetimes); err == nil {
 		t.Error("Record into no object returned nil")
 	}
 
 	gone := computed(time.Minute, time.Now())
-	if err := wlrcache.Record(context.Background(), c, gone, computedDecision("250m"), time.Now()); err == nil {
+	if err := wlrcache.Record(context.Background(), c, gone, computedDecision("250m"), time.Now(), lifetimes); err == nil {
 		t.Error("Record into an object that no longer exists returned nil")
 	}
 }
@@ -837,10 +847,10 @@ func TestADepartedIdentityCostsAtMostOneStatusWritePerRefreshInterval(t *testing
 	const cycles = 12
 	for i := range cycles {
 		now := start.Add(time.Duration(i) * cycle)
-		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), departed, now); err != nil {
+		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), departed, now, lifetimes); err != nil {
 			t.Fatalf("cycle %d: %v", i, err)
 		}
-		if v := wlrcache.Read(c.mustStored(t, web), "p", now, wlrcache.Freshness{}).Verdict; v != wlrcache.Retained {
+		if v := wlrcache.Read(c.mustStored(t, web), "p", now).Verdict; v != wlrcache.Retained {
 			t.Fatalf("cycle %d: verdict = %s, want retained", i, v)
 		}
 	}
@@ -852,7 +862,7 @@ func TestADepartedIdentityCostsAtMostOneStatusWritePerRefreshInterval(t *testing
 	_, before := c.writes()
 	for i := range cycles {
 		now := start.Add(time.Duration(cycles+i) * cycle)
-		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), nodata, now); err != nil {
+		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), nodata, now, lifetimes); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
 	}
@@ -868,24 +878,24 @@ func TestDepartedFollowsTheIdentity(t *testing.T) {
 	c := newCluster(t, computed(0, start))
 	departed := computedDecision("200m")
 	departed.Departed = true
-	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), departed, start); err != nil {
+	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), departed, start, lifetimes); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	if v := wlrcache.Read(c.mustStored(t, web), "p", start.Add(24*time.Hour), wlrcache.Freshness{}).Verdict; v != wlrcache.Retained {
+	if v := wlrcache.Read(c.mustStored(t, web), "p", start.Add(24*time.Hour)).Verdict; v != wlrcache.Retained {
 		t.Errorf("a day after the last member went: verdict = %s, want retained", v)
 	}
 
-	if _, err := wlrcache.Ensure(context.Background(), c, web, "p", nil); err != nil {
+	if _, err := wlrcache.Ensure(context.Background(), c, web, "p", nil, lifetimes); err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
 	if c.mustStored(t, web).Status.Departed {
 		t.Error("the claim on a live identity left it departed")
 	}
 
-	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), departed, start.Add(time.Minute)); err != nil {
+	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), departed, start.Add(time.Minute), lifetimes); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
-	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), computedDecision("200m"), start.Add(2*time.Minute)); err != nil {
+	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), computedDecision("200m"), start.Add(2*time.Minute), lifetimes); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 	if c.mustStored(t, web).Status.Departed {
@@ -904,7 +914,7 @@ func TestRecordingConflictedFreezesTheRecommendationAndClearsDeparted(t *testing
 	c := newCluster(t, stored)
 
 	d := wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeConflicted}
-	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), d, now); err != nil {
+	if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), d, now, lifetimes); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
@@ -915,8 +925,90 @@ func TestRecordingConflictedFreezesTheRecommendationAndClearsDeparted(t *testing
 	if got.Spec.Policy != "p" || cpuOf(t, got, "app") != "200m" || !got.Status.ObservedAt.Equal(&stored.Status.ObservedAt) {
 		t.Errorf("object = %+v, want spec.policy, Recommendation and observedAt frozen", got)
 	}
-	if v := wlrcache.Read(got, "p", now, wlrcache.Freshness{}).Verdict; v != wlrcache.Retained {
+	if v := wlrcache.Read(got, "p", now).Verdict; v != wlrcache.Retained {
 		t.Errorf("verdict = %s, want retained", v)
+	}
+}
+
+// Every record stamps until when its Recommendation is served, from what it
+// stores: the staleness budget past observedAt for a live identity, the
+// retention window for a departed or Conflicted one. Only Computed moves
+// observedAt, so no other outcome extends the stamp.
+func TestRecordStampsServableUntilByWhereTheIdentityStands(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	computedAt := now.Add(-20 * time.Minute)
+	for _, tc := range []struct {
+		name string
+		d    wlrcache.Decision
+		want time.Time
+	}{
+		{"live, Computed", computedDecision("250m"), now.Add(lifetimes.StalenessBudget())},
+		{"live, NoData", wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeNoData}, computedAt.Add(lifetimes.StalenessBudget())},
+		{"live, TooYoung", wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeTooYoung}, computedAt.Add(lifetimes.StalenessBudget())},
+		{"live, FetchFailed", wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeFetchFailed}, computedAt.Add(lifetimes.StalenessBudget())},
+		{"departed, Computed", wlrcache.Decision{
+			Outcome: sustainv1alpha1.OutcomeComputed, Departed: true,
+			Recs: map[string]workload.ContainerRecommendation{"app": {CPURequest: qty("250m")}},
+		}, now.Add(lifetimes.Retention)},
+		{"departed, NoData", wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeNoData, Departed: true}, computedAt.Add(lifetimes.Retention)},
+		{"Conflicted", wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeConflicted}, computedAt.Add(lifetimes.Retention)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCluster(t, computed(now.Sub(computedAt), now))
+			if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), tc.d, now, lifetimes); err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+			if got := c.mustStored(t, web).Status.ServableUntil; !got.Time.Equal(tc.want) {
+				t.Errorf("servableUntil = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTheStalenessBudgetIsThreeReconcileIntervalsAndAtLeastThirtyMinutes(t *testing.T) {
+	for interval, want := range map[time.Duration]time.Duration{
+		30 * time.Second: 30 * time.Minute,
+		5 * time.Minute:  30 * time.Minute,
+		10 * time.Minute: 30 * time.Minute,
+		20 * time.Minute: time.Hour,
+		6 * time.Hour:    18 * time.Hour,
+	} {
+		if got := (wlrcache.Lifetimes{ReconcileInterval: interval}).StalenessBudget(); got != want {
+			t.Errorf("budget at a %s interval = %s, want %s", interval, got, want)
+		}
+	}
+}
+
+// A stable Recommendation is rewritten only every RefreshInterval, yet must
+// stay servable whatever the reconcile interval, even when a pass runs one
+// interval late. This is what keeps RefreshInterval well below
+// MinStalenessBudget: intervals just under 10m, where three of them start to
+// set the budget, are where the two come closest.
+func TestAStableRecommendationStaysServableThroughALatePass(t *testing.T) {
+	for _, interval := range []time.Duration{
+		30 * time.Second, time.Minute, 5 * time.Minute, 400 * time.Second, 9 * time.Minute,
+		590 * time.Second, 10 * time.Minute, 15 * time.Minute, time.Hour, 6 * time.Hour,
+	} {
+		t.Run(interval.String(), func(t *testing.T) {
+			l := wlrcache.Lifetimes{ReconcileInterval: interval, Retention: lifetimes.Retention}
+			c := newCluster(t)
+			if _, err := wlrcache.Ensure(context.Background(), c, web, "p", nil, l); err != nil {
+				t.Fatalf("Ensure: %v", err)
+			}
+			c.warm()
+			start := time.Now().Truncate(time.Second)
+			passes := 3 + int(2*wlrcache.RefreshInterval/interval)
+			for i := range passes {
+				at := start.Add(time.Duration(i) * interval)
+				if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), computedDecision("250m"), at, l); err != nil {
+					t.Fatalf("pass %d: %v", i, err)
+				}
+				lateNext := at.Add(2*interval - time.Second)
+				if v := wlrcache.Read(c.mustStored(t, web), "p", lateNext).Verdict; v != wlrcache.Fresh {
+					t.Fatalf("after pass %d, just before a pass one interval late: verdict = %s, want fresh", i, v)
+				}
+			}
+		})
 	}
 }
 
@@ -934,25 +1026,23 @@ func TestExpiredPerStanding(t *testing.T) {
 	statusless := object("p", 48*time.Hour, 0)
 	statusless.Status = sustainv1alpha1.WorkloadRecommendationStatus{}
 	for _, tc := range []struct {
-		name      string
-		known     *sustainv1alpha1.WorkloadRecommendation
-		standing  wlrcache.Standing
-		retention time.Duration
-		want      bool
+		name     string
+		known    *sustainv1alpha1.WorkloadRecommendation
+		standing wlrcache.Standing
+		want     bool
 	}{
-		{"another Policy's object", object("q", 48*time.Hour, time.Hour), wlrcache.Ungoverned, retention, false},
-		{"created within the grace period", object("p", time.Minute, 0), wlrcache.Ungoverned, retention, false},
-		{"governed", object("p", 48*time.Hour, time.Hour), wlrcache.Governed, retention, false},
-		{"ungoverned", object("p", 48*time.Hour, time.Hour), wlrcache.Ungoverned, retention, true},
-		{"departed within retention", object("p", 48*time.Hour, time.Hour), wlrcache.Departed, retention, false},
-		{"departed past retention", object("p", 200*time.Hour, 80*time.Hour), wlrcache.Departed, retention, true},
-		{"departed, retention disabled", object("p", 48*time.Hour, time.Hour), wlrcache.Departed, 0, true},
-		{"departed, never computed, created within retention", statusless, wlrcache.Departed, retention, false},
-		{"Conflicted within retention", object("p", 48*time.Hour, time.Hour), wlrcache.Conflicted, retention, false},
-		{"Conflicted past retention", object("p", 200*time.Hour, 80*time.Hour), wlrcache.Conflicted, retention, true},
+		{"another Policy's object", object("q", 48*time.Hour, time.Hour), wlrcache.Ungoverned, false},
+		{"created within the grace period", object("p", time.Minute, 0), wlrcache.Ungoverned, false},
+		{"governed", object("p", 48*time.Hour, time.Hour), wlrcache.Governed, false},
+		{"ungoverned", object("p", 48*time.Hour, time.Hour), wlrcache.Ungoverned, true},
+		{"departed within retention", object("p", 48*time.Hour, time.Hour), wlrcache.Departed, false},
+		{"departed past retention", object("p", 200*time.Hour, 80*time.Hour), wlrcache.Departed, true},
+		{"departed, never computed, created within retention", statusless, wlrcache.Departed, false},
+		{"Conflicted within retention", object("p", 48*time.Hour, time.Hour), wlrcache.Conflicted, false},
+		{"Conflicted past retention", object("p", 200*time.Hour, 80*time.Hour), wlrcache.Conflicted, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := wlrcache.Expired(tc.known, "p", tc.standing, now, tc.retention); got != tc.want {
+			if got := wlrcache.Expired(tc.known, "p", tc.standing, now, retention); got != tc.want {
 				t.Errorf("Expired = %v, want %v", got, tc.want)
 			}
 		})

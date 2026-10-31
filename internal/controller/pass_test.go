@@ -213,10 +213,10 @@ func TestReconcile_RefreshesDepartedIdentity(t *testing.T) {
 }
 
 // The pass records a departed identity's decision together with the fact that
-// it has no live member left, which is what waives the webhook's staleness gate
-// for its retained Recommendation: its observedAt stops advancing once its
-// samples age out, so without the mark every run after the first would start
-// on template resources.
+// it has no live member left, which is what stamps its retained Recommendation
+// servable for the retention window rather than the staleness budget: its
+// observedAt stops advancing once its samples age out, so without the mark
+// every run after the first would start on template resources.
 func TestReconcile_MarksDepartedIdentity(t *testing.T) {
 	const ns = "airflow-departs"
 	wlr := departedWLR(ns)

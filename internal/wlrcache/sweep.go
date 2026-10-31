@@ -31,9 +31,8 @@ const sweepGrace = 10 * time.Minute
 // Expired reports whether policy's sweep deletes known, whose identity stands
 // at s. An object naming another Policy is that Policy's to judge, and one
 // created within the grace period is kept. A Departed or Conflicted
-// identity's Recommendation is kept for the retention window (zero or less
-// keeps nothing), counted from when it was last computed; an Ungoverned
-// identity's object is deleted.
+// identity's Recommendation is kept for the retention window, counted from
+// when it was last computed; an Ungoverned identity's object is deleted.
 func Expired(known *sustainv1alpha1.WorkloadRecommendation, policy string, s Standing, now time.Time, retention time.Duration) bool {
 	if known.Spec.Policy != policy {
 		return false
@@ -45,17 +44,8 @@ func Expired(known *sustainv1alpha1.WorkloadRecommendation, policy string, s Sta
 	case Ungoverned:
 		return true
 	case Departed, Conflicted:
-		return retention <= 0 || now.Sub(lastComputed(known)) > retention
+		return now.Sub(lastComputed(known.CreationTimestamp, known.Status.ObservedAt).Time) > retention
 	default:
 		return false
 	}
-}
-
-// lastComputed is ObservedAt, or the creation time when nothing was computed
-// since.
-func lastComputed(known *sustainv1alpha1.WorkloadRecommendation) time.Time {
-	if known.CreationTimestamp.After(known.Status.ObservedAt.Time) {
-		return known.CreationTimestamp.Time
-	}
-	return known.Status.ObservedAt.Time
 }

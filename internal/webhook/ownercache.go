@@ -10,7 +10,8 @@ import (
 // (see Handler.ownerAnnotations) is trusted. 30s is sized against the
 // read-amplification this cache exists to fix — a rolling restart creates N
 // pods behind the same owner in a burst — and is deliberately far shorter than
-// CacheStaleness: this is load-shedding for a hot read, not a source of truth.
+// the staleness budget a Recommendation is served for: this is load-shedding
+// for a hot read, not a source of truth.
 //
 // The cost is that a workload gaining or losing the policy annotation may take
 // up to this TTL to be seen by admission. Acceptable because the controller

@@ -23,8 +23,8 @@ const (
 	// Withheld: the object, or the Recommendation it holds, belongs to a
 	// Policy other than the pod's.
 	Withheld
-	// Stale: the Recommendation is older than the staleness budget or, when
-	// it is retained, than the retention window.
+	// Stale: the Recommendation is past the servableUntil its controller
+	// stamped, or carries none.
 	Stale
 	// Fresh: the Recommendation is current and is injected.
 	Fresh
@@ -57,30 +57,6 @@ func (v Verdict) String() string {
 	}
 }
 
-// Freshness bounds how old a Recommendation may be and still be served. A
-// zero field means its default.
-type Freshness struct {
-	// Staleness bounds a Recommendation the controller keeps refreshing.
-	Staleness time.Duration
-	// Retention bounds one it keeps frozen, for a Departed or Conflicted
-	// identity. It must be the controller's --recommendation-retention.
-	Retention time.Duration
-}
-
-func (f Freshness) staleness() time.Duration {
-	if f.Staleness <= 0 {
-		return DefaultStaleness
-	}
-	return f.Staleness
-}
-
-func (f Freshness) retention() time.Duration {
-	if f.Retention <= 0 {
-		return DefaultRetention
-	}
-	return f.Retention
-}
-
 // Reading is the verdict on one stored WorkloadRecommendation.
 type Reading struct {
 	Verdict Verdict
@@ -93,7 +69,10 @@ type Reading struct {
 // Recommendation is served only to pods of the Policy that computed it
 // (ADR 0003): one the object holds from before another Policy adopted it is
 // withheld until that Policy records its own, whatever it records meanwhile.
-func Read(known *sustainv1alpha1.WorkloadRecommendation, policy string, now time.Time, f Freshness) Reading {
+// It is served only before the servableUntil the controller stamped
+// (ADR 0008): an absolute time, so a controller that stops writing stops
+// injection.
+func Read(known *sustainv1alpha1.WorkloadRecommendation, policy string, now time.Time) Reading {
 	if known == nil {
 		return Reading{Verdict: Absent}
 	}
@@ -101,7 +80,7 @@ func Read(known *sustainv1alpha1.WorkloadRecommendation, policy string, now time
 		return Reading{Verdict: Withheld}
 	}
 	// Checked before staleness: an object without a Recommendation has no
-	// ObservedAt to age.
+	// servableUntil.
 	if len(known.Status.Containers) == 0 {
 		if known.Status.Outcome == "" {
 			return Reading{Verdict: Undecided}
@@ -111,22 +90,11 @@ func Read(known *sustainv1alpha1.WorkloadRecommendation, policy string, now time
 	if known.Status.ComputedBy != policy {
 		return Reading{Verdict: Withheld}
 	}
-	// A retained Recommendation is exempt from the staleness budget: its
-	// ObservedAt is deliberately frozen at the last Computed pass, so gating on
-	// it would put a daily Job back on template resources on every run but its
-	// first. The waiver is bounded here rather than left to the controller's
-	// sweep, because the sweep is skipped whenever the inventory cannot be read,
-	// and a wedged controller would otherwise disable the staleness gate
-	// outright for these objects.
-	retained := known.Status.Departed || known.Status.Outcome == sustainv1alpha1.OutcomeConflicted
-	age := now.Sub(known.Status.ObservedAt.Time)
 	switch {
-	case retained && age > f.retention():
+	case !now.Before(known.Status.ServableUntil.Time):
 		return Reading{Verdict: Stale}
-	case retained:
+	case known.Status.Departed || known.Status.Outcome == sustainv1alpha1.OutcomeConflicted:
 		return Reading{Verdict: Retained, Recs: recsFromStatus(known.Status)}
-	case age > f.staleness():
-		return Reading{Verdict: Stale}
 	default:
 		return Reading{Verdict: Fresh, Recs: recsFromStatus(known.Status)}
 	}

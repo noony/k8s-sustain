@@ -220,6 +220,31 @@ func TestControllerConfig_RecommendationRetentionDefault(t *testing.T) {
 	}
 }
 
+// Every Recommendation is stamped servable for a window derived from the
+// reconcile interval or the retention window, so either at zero or less would
+// have the webhook inject nothing: the controller refuses to start instead.
+func TestControllerConfig_RejectsANonPositiveIntervalOrRetention(t *testing.T) {
+	for _, tc := range []struct{ env, value, flag string }{
+		{"K8SSUSTAIN_RECONCILE_INTERVAL", "0s", "--reconcile-interval"},
+		{"K8SSUSTAIN_RECONCILE_INTERVAL", "-5m", "--reconcile-interval"},
+		{"K8SSUSTAIN_RECOMMENDATION_RETENTION", "0s", "--recommendation-retention"},
+		{"K8SSUSTAIN_RECOMMENDATION_RETENTION", "-1h", "--recommendation-retention"},
+	} {
+		t.Run(tc.env+"="+tc.value, func(t *testing.T) {
+			t.Cleanup(viper.Reset)
+			viper.Reset()
+			cmd := &cobra.Command{}
+			BindControllerFlags(cmd)
+			t.Setenv(tc.env, tc.value)
+			InitViper()
+
+			if _, err := LoadControllerConfig(); err == nil || !strings.Contains(err.Error(), tc.flag) {
+				t.Errorf("err = %v, want one naming %s", err, tc.flag)
+			}
+		})
+	}
+}
+
 func TestControllerConfig_PolicyConcurrencyLimitDefault(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()

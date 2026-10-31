@@ -21,6 +21,10 @@ import (
 // wlrPolicyLabel labels each WorkloadRecommendation with its Policy.
 const wlrPolicyLabel = sustainv1alpha1.WLRPolicyLabel
 
+func (r *PolicyReconciler) lifetimes() wlrcache.Lifetimes {
+	return wlrcache.Lifetimes{ReconcileInterval: r.ReconcileInterval, Retention: r.RecommendationRetention}
+}
+
 // onConflict says what a conflicting delete means on a cleanup path.
 type onConflict int
 
@@ -138,7 +142,7 @@ func (r *PolicyReconciler) recordConflicted(ctx context.Context, policyName stri
 			continue
 		}
 		decision := wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeConflicted}
-		if err := wlrcache.Record(ctx, r.Client, id.Recommendation, decision, time.Now()); err != nil {
+		if err := wlrcache.Record(ctx, r.Client, id.Recommendation, decision, time.Now(), r.lifetimes()); err != nil {
 			logger.V(1).Info("failed to record the Conflicted outcome", "name", id.Recommendation.Name,
 				"namespace", id.Recommendation.Namespace, "err", err)
 		}

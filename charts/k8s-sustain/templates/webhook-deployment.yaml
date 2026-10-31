@@ -41,22 +41,6 @@ spec:
             - --tls-cert-file=/tls/tls.crt
             - --tls-key-file=/tls/tls.key
             - --excluded-namespaces={{ concat (list .Release.Namespace "kube-system" "kube-public") .Values.excludedNamespaces | join "," }}
-            {{- /* Deliberately the CONTROLLER's value, not a webhook-specific
-                   one. It bounds the single path where the webhook injects from
-                   a recommendation older than its staleness budget (an identity
-                   the controller marked departed), and the bound only means
-                   anything if it is the window after which the controller's own
-                   sweep deletes the object. One value, two flags, no drift.
-
-                   Rendered under `with` so a `helm upgrade --reuse-values` that
-                   somehow lacks the key omits the flag and falls through to the
-                   binary's default rather than rendering an empty `--flag=` the
-                   container refuses to start on — see the sibling comment in
-                   deployment.yaml. config.DefaultRecommendationRetention is that
-                   default for both binaries. */}}
-            {{- with .Values.controller.recommendationRetention }}
-            - --recommendation-retention={{ . }}
-            {{- end }}
             {{- if .Values.recommendOnly }}
             - --recommend-only=true
             {{- end }}

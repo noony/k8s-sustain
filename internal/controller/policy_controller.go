@@ -75,8 +75,9 @@ type PolicyReconciler struct {
 	// patcher default.
 	RecycleReplacementTimeout time.Duration
 
-	// RecommendationRetention is how long a WorkloadRecommendation outlives a
-	// workload whose object is gone. Zero disables retention.
+	// RecommendationRetention is how long a Departed or Conflicted identity's
+	// Recommendation is served and its WorkloadRecommendation kept, past its
+	// last computation. The config rejects zero or less.
 	RecommendationRetention time.Duration
 
 	// OrphanReapInterval is how often orphaned WorkloadRecommendations are

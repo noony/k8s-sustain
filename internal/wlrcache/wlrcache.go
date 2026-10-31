@@ -12,6 +12,14 @@
 //     and computedBy, the Policy the Recommendation is served to (ADR 0003).
 //   - Read is what a stored object means to a pod being admitted, and Expired
 //     whether a sweep deletes it.
+//   - Sweep, Release and Reap are the only deletes: a Policy's objects judged
+//     against where their identities stand, a deleted Policy's objects, and
+//     objects naming a Policy that no longer exists.
+//
+// Every status write of Ensure and Record stamps servableUntil from the same
+// formula over the status it writes (ADR 0008), so Read needs no setting of
+// its own and a wedged controller stops injection. Request writes only the
+// snapshot, which the formula does not read.
 //
 // # Never re-read after a write
 //
@@ -37,6 +45,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -75,20 +84,66 @@ func keyOf(ref sustainv1alpha1.WorkloadReference) types.NamespacedName {
 
 // RefreshInterval bounds how long an unchanged WorkloadRecommendation status
 // may keep its old ObservedAt before a writer rewrites it just to bump the
-// timestamp. Must stay well under DefaultStaleness.
+// timestamp, and with it servableUntil. Must stay well under
+// MinStalenessBudget: a Recommendation is up to RefreshInterval plus one
+// reconcile interval old when a pass refreshes it, and must outlive a pass
+// that runs late.
 const RefreshInterval = 10 * time.Minute
 
-// DefaultStaleness is the default bound on the age of a Recommendation the
-// controller keeps refreshing: one full reconcile interval (5m) plus headroom
+// MinStalenessBudget is the shortest a live identity's Recommendation stays
+// servable past its last computation, whatever the reconcile interval: room
 // for a backed-up controller and small clock skew.
-const DefaultStaleness = 30 * time.Minute
+const MinStalenessBudget = 30 * time.Minute
 
-// DefaultRetention is the default --recommendation-retention, shared by the
-// controller, which keeps a Departed or Conflicted identity's object that
-// long, and the webhook, which stops serving it after that long: two literals
-// could drift into a window where the webhook serves what the controller
-// considers expired.
+// DefaultRetention is the default --recommendation-retention.
 const DefaultRetention = 168 * time.Hour
+
+// Lifetimes are the controller's settings that decide how long a stored
+// Recommendation is served, and how long a sweep keeps the object of an
+// identity nothing refreshes.
+type Lifetimes struct {
+	// ReconcileInterval is --reconcile-interval, which sizes the staleness
+	// budget.
+	ReconcileInterval time.Duration
+	// Retention is --recommendation-retention: how long a Departed or
+	// Conflicted identity's Recommendation is served and its object kept,
+	// past its last computation.
+	Retention time.Duration
+}
+
+// StalenessBudget is how long a live identity's Recommendation stays servable
+// past its last computation: three reconcile intervals, so a pass can run late
+// or fail before the webhook stops injecting it, and never less than
+// MinStalenessBudget.
+func (l Lifetimes) StalenessBudget() time.Duration {
+	return max(MinStalenessBudget, 3*l.ReconcileInterval)
+}
+
+// servableUntil is the time status's Recommendation stays servable: the
+// staleness budget past its last computation for a live identity, the
+// retention window for a Departed or Conflicted one, whose Recommendation
+// nothing refreshes. Unset without a Recommendation. Truncated to the second
+// the API stores, so restamping a stored status reproduces the stored value.
+func (l Lifetimes) servableUntil(created metav1.Time, status sustainv1alpha1.WorkloadRecommendationStatus) metav1.Time {
+	if len(status.Containers) == 0 {
+		return metav1.Time{}
+	}
+	last := lastComputed(created, status.ObservedAt)
+	window := l.StalenessBudget()
+	if status.Departed || status.Outcome == sustainv1alpha1.OutcomeConflicted {
+		window = l.Retention
+	}
+	return metav1.NewTime(last.Rfc3339Copy().Add(window)).Rfc3339Copy()
+}
+
+// lastComputed is observedAt, or the creation time when nothing was computed
+// since.
+func lastComputed(created, observedAt metav1.Time) metav1.Time {
+	if created.After(observedAt.Time) {
+		return created
+	}
+	return observedAt
+}
 
 // BuildObservedResources snapshots per-container requests/limits so the
 // recommendation record keeps showing what the workload actually ran with
@@ -169,10 +224,11 @@ func observedEqual(a, b map[string]sustainv1alpha1.ObservedContainerResources) b
 	return true
 }
 
-// statusEquivalent compares two statuses ignoring ObservedAt and Trace, so
-// write amplification scales with change rather than workload count. The
-// trace moves with every sample (a percentile that rounds to the same request)
-// and is only worth a write together with the values it explains.
+// statusEquivalent compares two statuses ignoring ObservedAt, ServableUntil
+// and Trace, so write amplification scales with change rather than workload
+// count. The trace moves with every sample (a percentile that rounds to the
+// same request) and is only worth a write together with the values it
+// explains.
 func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
 	if a.Outcome != b.Outcome || a.ComputedBy != b.ComputedBy || a.Departed != b.Departed ||
 		len(a.Containers) != len(b.Containers) {

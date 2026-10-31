@@ -295,6 +295,24 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --recommendation-retention=24h
 
+  # The controller refuses to start on either at zero: the webhook would serve
+  # nothing. The schema says so at install time instead of a CrashLoopBackOff.
+  - it: rejects a zero recommendation-retention
+    set:
+      controller:
+        recommendationRetention: 0s
+    asserts:
+      - failedTemplate:
+          errorPattern: "controller.recommendationRetention: Does not match pattern"
+
+  - it: rejects a zero reconcile-interval
+    set:
+      controller:
+        reconcileInterval: 0m
+    asserts:
+      - failedTemplate:
+          errorPattern: "controller.reconcileInterval: Does not match pattern"
+
   - it: uses image.tag over the chart appVersion when set
     set:
       image.tag: v9.9.9

@@ -153,7 +153,8 @@ func (r *PolicyReconciler) claim(ctx context.Context, policyName string, work []
 			out[i] = claimed{wlr: id.Recommendation}
 			continue
 		}
-		wlr, err := wlrcache.Ensure(ctx, r.Client, wlrcache.WorkloadRef(id.Key), policyName, wlrcache.BuildObservedResources(id.Containers, id.InitContainers))
+		wlr, err := wlrcache.Ensure(ctx, r.Client, wlrcache.WorkloadRef(id.Key), policyName,
+			wlrcache.BuildObservedResources(id.Containers, id.InitContainers), r.lifetimes())
 		out[i] = claimed{wlr: wlr, err: err}
 		if err != nil {
 			logger.Error(err, "failed to ensure the WorkloadRecommendation is current; "+
@@ -182,7 +183,7 @@ func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, clai
 		default:
 			d := recs[i].decision(w.id.Departed())
 			g.Go(func() error {
-				errs[i] = wlrcache.Record(ctx, r.Client, claims[i].wlr, d, time.Now())
+				errs[i] = wlrcache.Record(ctx, r.Client, claims[i].wlr, d, time.Now(), r.lifetimes())
 				return nil
 			})
 		}

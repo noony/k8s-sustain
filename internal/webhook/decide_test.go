@@ -28,6 +28,7 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/governance"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -273,6 +274,7 @@ func TestDecide(t *testing.T) {
 			name: "a stale Recommendation",
 			objs: []client.Object{basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate), webRS(), webWLR(func(w *sustainv1alpha1.WorkloadRecommendation) {
 				w.Status.ObservedAt = metav1.NewTime(time.Now().Add(-24 * time.Hour))
+				w.Status.ServableUntil = metav1.NewTime(time.Now().Add(-24*time.Hour + wlrcache.MinStalenessBudget))
 				withSnapshot(w)
 			})},
 			pod:    webPod("p"),
@@ -284,6 +286,7 @@ func TestDecide(t *testing.T) {
 			objs: []client.Object{basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate), webRS(), webWLR(func(w *sustainv1alpha1.WorkloadRecommendation) {
 				w.Status.Departed = true
 				w.Status.ObservedAt = metav1.NewTime(time.Now().Add(-200 * time.Hour))
+				w.Status.ServableUntil = metav1.NewTime(time.Now().Add(-200*time.Hour + wlrcache.DefaultRetention))
 				withSnapshot(w)
 			})},
 			pod:    webPod("p"),
