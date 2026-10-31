@@ -102,16 +102,16 @@ func (p *PromInputs) FetchHistory(
 	reqs []InputsRequest,
 ) map[promclient.WorkloadIdentity]HistoryResult {
 	instants := span.instants()
-	points := make(map[promclient.WorkloadIdentity][]*WorkloadInputs, len(reqs))
+	histories := make(map[promclient.WorkloadIdentity][]*WorkloadInputs, len(reqs))
 	for _, r := range reqs {
-		if points[r.Identity] != nil {
+		if histories[r.Identity] != nil {
 			continue
 		}
-		at := make([]*WorkloadInputs, instants)
-		for i := range at {
-			at[i] = emptyInputs()
+		inputs := make([]*WorkloadInputs, instants)
+		for i := range inputs {
+			inputs[i] = emptyInputs()
 		}
-		points[r.Identity] = at
+		histories[r.Identity] = inputs
 	}
 
 	failed := p.fetchSignals(ctx, cfg, reqs, instants, func(s signal, shard promclient.Shard) (func(), error) {
@@ -119,42 +119,42 @@ func (p *PromInputs) FetchHistory(
 		if err != nil {
 			return nil, err
 		}
-		byInstant := make(map[promclient.WorkloadIdentity][][]promclient.ShardSample, len(shard.Names))
+		samplesAt := make(map[promclient.WorkloadIdentity][][]promclient.ShardSample, len(shard.Names))
 		for _, sr := range series {
-			at := byInstant[sr.Identity]
-			if at == nil {
-				at = make([][]promclient.ShardSample, instants)
-				byInstant[sr.Identity] = at
+			byInstant := samplesAt[sr.Identity]
+			if byInstant == nil {
+				byInstant = make([][]promclient.ShardSample, instants)
+				samplesAt[sr.Identity] = byInstant
 			}
 			for _, pt := range sr.Points {
 				if i, ok := span.index(pt.Timestamp); ok {
-					at[i] = append(at[i], promclient.ShardSample{Identity: sr.Identity, Container: sr.Container, Metric: sr.Metric, Value: pt.Value})
+					byInstant[i] = append(byInstant[i], promclient.ShardSample{Identity: sr.Identity, Container: sr.Container, Metric: sr.Metric, Value: pt.Value})
 				}
 			}
 		}
 		return func() {
 			for _, id := range shard.Identities() {
-				samples := byInstant[id]
-				for i, in := range points[id] {
-					var at []promclient.ShardSample
-					if samples != nil {
-						at = samples[i]
+				byInstant := samplesAt[id]
+				for i, in := range histories[id] {
+					var samples []promclient.ShardSample
+					if byInstant != nil {
+						samples = byInstant[i]
 					}
-					in.set(s, s.collect(at))
+					in.set(s, s.collect(samples))
 				}
 			}
 		}, nil
 	})
 	kills := p.fetchKills(ctx, span, reqs)
 
-	out := make(map[promclient.WorkloadIdentity]HistoryResult, len(points))
-	for id, at := range points {
+	out := make(map[promclient.WorkloadIdentity]HistoryResult, len(histories))
+	for id, inputs := range histories {
 		if err := failed[id]; err != nil {
 			out[id] = HistoryResult{Err: err}
 			continue
 		}
-		h := &History{points: make([]HistoryPoint, len(at)), kills: kills[id]}
-		for i, in := range at {
+		h := &History{points: make([]HistoryPoint, len(inputs)), kills: kills[id]}
+		for i, in := range inputs {
 			h.points[i] = HistoryPoint{At: span.instant(i), Inputs: in}
 		}
 		out[id] = HistoryResult{History: h}
