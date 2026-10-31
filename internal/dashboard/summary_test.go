@@ -97,7 +97,7 @@ func (f *fakePromClient) QueryWorkloadMemoryRecommendationRangeByContainer(_ con
 	return promclient.ContainerTimeSeries{}, nil
 }
 
-func (f *fakePromClient) QueryOOMKillEvents(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) ([]promclient.OOMEvent, error) {
+func (f *fakePromClient) QueryOOMKillEvents(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) ([]promclient.OOMKill, error) {
 	return nil, nil
 }
 

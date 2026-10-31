@@ -305,7 +305,7 @@ func TestQueryOOMKillEvents_OneEventPerKill(t *testing.T) {
 		t.Fatalf("QueryOOMKillEvents: %v", err)
 	}
 	at := func(sec int64) time.Time { return time.Unix(sec, 0) }
-	want := []OOMEvent{
+	want := []OOMKill{
 		{Timestamp: at(1700000000), Container: "app", Pod: "pod-1"},
 		{Timestamp: at(1700000300), Container: "app", Pod: "pod-1"},
 		{Timestamp: at(1700000300), Container: "app", Pod: "pod-1"},

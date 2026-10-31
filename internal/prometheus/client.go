@@ -314,8 +314,8 @@ func (c *Client) QueryWorkloadMemoryRecommendationRangeByContainer(ctx context.C
 	return c.queryRangeByContainer(ctx, expr, r, step)
 }
 
-// OOMEvent represents a single OOM kill event for a container.
-type OOMEvent struct {
+// OOMKill is one OOM kill of a container.
+type OOMKill struct {
 	Timestamp time.Time `json:"timestamp"`
 	Container string    `json:"container"`
 	Pod       string    `json:"pod"`
@@ -324,7 +324,7 @@ type OOMEvent struct {
 // QueryOOMKillEvents returns a workload's OOM kills over r, one event per kill
 // the MetricContainerOOMKills rule recorded, dated at the end of the step it
 // falls in.
-func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) ([]OOMEvent, error) {
+func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) ([]OOMKill, error) {
 	stepDur, err := model.ParseDuration(step)
 	if err != nil {
 		return nil, fmt.Errorf("parsing step %q: %w", step, err)
@@ -343,7 +343,7 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		return nil, nil //nolint:nilerr // intentional non-fatal swallow, see comment above
 	}
 
-	var events []OOMEvent
+	var events []OOMKill
 	for _, stream := range matrix {
 		container := string(stream.Metric["container"])
 		if container == "" {
@@ -351,7 +351,7 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 		}
 		for _, v := range stream.Values {
 			for range int(math.Round(float64(v.Value))) {
-				events = append(events, OOMEvent{
+				events = append(events, OOMKill{
 					Timestamp: v.Timestamp.Time(),
 					Container: container,
 					Pod:       string(stream.Metric["pod"]),
