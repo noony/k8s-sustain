@@ -415,13 +415,10 @@ func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map
 // the kubelet reports, for a regular or sidecar container, requests other
 // than its spec's, or none at all, which may hide one.
 func stagedRequests(pod *corev1.Pod) bool {
-	enacted := map[string]*corev1.ResourceRequirements{}
-	for _, s := range slices.Concat(pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses) {
-		enacted[s.Name] = s.Resources
-	}
+	enacted := enactedResources(pod)
 	staged := func(c corev1.Container) bool {
-		r := enacted[c.Name]
-		return r == nil || !requestsEqual(c.Resources, *r)
+		r, ok := enacted[c.Name]
+		return !ok || !requestsEqual(c.Resources, r)
 	}
 	return slices.ContainsFunc(pod.Spec.Containers, staged) ||
 		slices.ContainsFunc(pod.Spec.InitContainers, func(c corev1.Container) bool {
@@ -438,6 +435,8 @@ const (
 	resizeInvalid
 	// resizeGone: the pod no longer exists.
 	resizeGone
+	// resizeFailed: the request failed otherwise; the error says why.
+	resizeFailed
 )
 
 // submitInPlaceResize patches the /resize subresource with the diff from
@@ -459,7 +458,7 @@ func (p *Patcher) submitInPlaceResize(ctx context.Context, pod, base *corev1.Pod
 		logger.Info("pod gone before in-place resize, skipping")
 		return resizeGone, nil
 	default:
-		return resizeAccepted, err
+		return resizeFailed, err
 	}
 }
 
@@ -734,19 +733,31 @@ func resized(logger logr.Logger, pod *corev1.Pod, recs map[string]ContainerRecom
 }
 
 // running returns the pod's containers and init containers with the
-// resources they run with: those the kubelet reports it enacted, which lag
-// the spec while a resize is staged, or else the spec's.
+// resources they run with: those the kubelet reports it enacted, or else the
+// spec's.
 func running(pod *corev1.Pod) (containers, initContainers []corev1.Container) {
-	enacted := func(cs []corev1.Container, statuses []corev1.ContainerStatus) []corev1.Container {
+	enacted := enactedResources(pod)
+	withEnacted := func(cs []corev1.Container) []corev1.Container {
 		out := slices.Clone(cs)
 		for i := range out {
-			for _, s := range statuses {
-				if s.Name == out[i].Name && s.Resources != nil {
-					out[i].Resources = *s.Resources
-				}
+			if r, ok := enacted[out[i].Name]; ok {
+				out[i].Resources = r
 			}
 		}
 		return out
 	}
-	return enacted(pod.Spec.Containers, pod.Status.ContainerStatuses), enacted(pod.Spec.InitContainers, pod.Status.InitContainerStatuses)
+	return withEnacted(pod.Spec.Containers), withEnacted(pod.Spec.InitContainers)
+}
+
+// enactedResources maps each container, regular or init, whose status reports
+// them to the resources the kubelet enacted, which lag the spec while a resize
+// is staged.
+func enactedResources(pod *corev1.Pod) map[string]corev1.ResourceRequirements {
+	out := map[string]corev1.ResourceRequirements{}
+	for _, s := range slices.Concat(pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses) {
+		if s.Resources != nil {
+			out[s.Name] = *s.Resources
+		}
+	}
+	return out
 }
