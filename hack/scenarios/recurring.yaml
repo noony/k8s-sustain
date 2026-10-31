@@ -129,13 +129,12 @@
 #
 # The OOM-aware memory floor does NOT rescue either case, and structurally
 # cannot on this pod shape. Both detection paths — internal/oomwatch's
-# hasFreshOOM, and the Prometheus-side
-# kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} which
-# kube-state-metrics also sources from LastTerminationState — key off a
-# container's LastTerminationState, which Kubernetes only populates after a
-# RESTART. These pods are restartPolicy: Never and die exactly once. The
-# live capture above shows it directly: lastState was {} on the OOM-killed
-# pod. Neither path can ever match here.
+# hasFreshOOM, and the Prometheus-side k8s_sustain:workload_oom_24h, which
+# counts restarts whose kube_pod_container_status_last_terminated_reason is
+# OOMKilled — key off a container's LastTerminationState, which Kubernetes
+# only populates after a RESTART. These pods are restartPolicy: Never and die
+# exactly once. The live capture above shows it directly: lastState was {} on
+# the OOM-killed pod. Neither path can ever match here.
 #
 # ===========================================================================
 # WHAT TO WATCH, AND WHEN — read this before assuming a wait is a hang

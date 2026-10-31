@@ -72,11 +72,11 @@ Every row, badge, KPI and attention list shows one **Risk state** per workload i
 
 1. **Conflicted** — the identity's members opt into different Policies, so no Policy governs it and its recommendation is frozen (see [Conflicted identities](../concepts/workload-recommendations.md#conflicted-identities)).
 2. **Blocked** — the controller's last attempt to apply the identity's recommendation to a member failed, transiently (retried with backoff) or permanently (retried every reconcile, e.g. missing RBAC), and none has succeeded since.
-3. **At risk** — an OOM kill in the last 24 hours.
+3. **At risk** — an OOM kill in the last 24 hours. A kill counts when its container restarts after it, so the kill of a `restartPolicy: Never` container never counts.
 4. **Drifted** — pods whose running resources still differ from the recommendation beyond the policy's `downsizeThreshold`; a decrease the policy suppresses is not drift.
 5. **Safe** — none of the above.
 
-An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. Blocked, At risk and Drifted come from the controller's identity-keyed metrics and the `k8s_sustain:workload_oom_24h` rule (see [Metrics](../reference/metrics.md#what-owner_kind-and-owner_name-name)), so an owner-name group shows its members' combined state under the group's name. Conflicted comes from the identity inventory the dashboard shares with the controller.
+An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. Blocked, At risk and Drifted come from the controller's identity-keyed metrics and the [`k8s_sustain:workload_oom_24h`](../reference/recording-rules.md#k8s_sustainworkload_oom_24h) rule (see [Metrics](../reference/metrics.md#what-owner_kind-and-owner_name-name)), so an owner-name group shows its members' combined state under the group's name. Conflicted comes from the identity inventory the dashboard shares with the controller.
 
 Every view counts the same identities: those of the inventory, so a signal left behind by a deleted workload counts nowhere. Each Risk-state count on the Overview equals the Workloads list filtered by that state.
 
