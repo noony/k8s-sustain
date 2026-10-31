@@ -44,9 +44,8 @@ const autoscalerReadConcurrency = 4
 // (a departed identity has none), and leaves init containers out when spec
 // excludes them. An identity with no containers at all, one the inventory has
 // not seen, is recommended for every container its inputs report. Every
-// Request computes as of one instant read from now once the fetch returned;
-// a caller whose inputs are decorated with WithLiveOOMs passes the decorator's
-// clock.
+// Request computes as of one instant, read from now once, before the fetch,
+// which reads every input as of it.
 func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers, now func() time.Time, spec sustainv1alpha1.RightSizingSpec, ids []*inventory.Identity) []Assembled {
 	resources := WithDefaults(spec.ResourcesConfigs)
 	out := make([]Assembled, len(ids))
@@ -62,11 +61,9 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 		reqs[i] = InputsRequest{Identity: id.Key, Containers: len(containers)}
 	}
 
-	read := readAutoscalers(ctx, autoscalers, ids)
-	fetched := inputs.FetchInputs(ctx, resources, reqs)
-	// Taken after the fetch, which can take minutes: kills it merged in must
-	// not postdate the instant they are computed as of.
 	at := now()
+	read := readAutoscalers(ctx, autoscalers, ids)
+	fetched := inputs.FetchInputs(ctx, at, resources, reqs)
 	groups := read()
 	for i, id := range ids {
 		group := groups[i]

@@ -379,7 +379,7 @@ func TestExecInstant_GenuineErrorCountsOne(t *testing.T) {
 	c, _ := New(server.URL)
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryShard(context.Background(), webShardQuery)
+	_, err := c.QueryShard(context.Background(), webShardQuery, time.Now())
 	if err == nil {
 		t.Fatal("expected an error from the failing query")
 	}
@@ -400,7 +400,7 @@ func TestExecInstant_PerCallTimeoutCountsOne(t *testing.T) {
 	c, _ := New(server.URL, WithQueryTimeout(50*time.Millisecond))
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryShard(context.Background(), webShardQuery)
+	_, err := c.QueryShard(context.Background(), webShardQuery, time.Now())
 	if err == nil {
 		t.Fatal("expected an error from the per-call timeout")
 	}
@@ -445,7 +445,7 @@ func TestExecInstant_ParentCancelCountsOne(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := c.QueryShard(ctx, webShardQuery)
+	_, err := c.QueryShard(ctx, webShardQuery, time.Now())
 	if err == nil {
 		t.Fatal("expected an error from the parent-context cancellation")
 	}
@@ -476,7 +476,7 @@ func TestExecInstant_OuterSiblingCancelCountsZero(t *testing.T) {
 	}()
 	defer cancelCause(nil)
 
-	_, err := c.QueryShard(ctx, webShardQuery)
+	_, err := c.QueryShard(ctx, webShardQuery, time.Now())
 	if err == nil {
 		t.Fatal("expected an error from the sibling cancellation")
 	}
@@ -583,11 +583,11 @@ func TestErrgroupSiblings_SingleOutageCountsOnce(t *testing.T) {
 
 	g, gctx := errgroup.WithContext(context.Background())
 	g.Go(func() error {
-		_, err := c.QueryShard(gctx, webShardQuery)
+		_, err := c.QueryShard(gctx, webShardQuery, time.Now())
 		return err
 	})
 	g.Go(func() error {
-		_, err := c.QueryShard(gctx, `k8s_sustain:workload_max_pod_memory:bytes{namespace="ns"}`)
+		_, err := c.QueryShard(gctx, `k8s_sustain:workload_max_pod_memory:bytes{namespace="ns"}`, time.Now())
 		return err
 	})
 	if err := g.Wait(); err == nil {

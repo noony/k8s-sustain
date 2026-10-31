@@ -35,7 +35,7 @@ type fixedInputs struct {
 	failed promclient.WorkloadIdentity
 }
 
-func (f fixedInputs) FetchInputs(_ context.Context, _ sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
+func (f fixedInputs) FetchInputs(_ context.Context, _ time.Time, _ sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
 	out := make(map[promclient.WorkloadIdentity]InputsResult, len(reqs))
 	for _, r := range reqs {
 		if r.Identity == f.failed {
@@ -52,29 +52,31 @@ var liveID = promclient.WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployme
 // fetchLive reads in through the live-OOM decorator holding live, at now.
 func fetchLive(t *testing.T, in *WorkloadInputs, live oomSource) *WorkloadInputs {
 	t.Helper()
-	got := WithLiveOOMs(fixedInputs{in: in}, live, func() time.Time { return now }).
-		FetchInputs(context.Background(), sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}})[liveID]
+	got := WithLiveOOMs(fixedInputs{in: in}, live).
+		FetchInputs(context.Background(), now, sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}})[liveID]
 	if got.Err != nil {
 		t.Fatalf("fetch: %v", got.Err)
 	}
 	return got.Inputs
 }
 
-// The decorator merges a kill the watcher saw within LiveOOMWindow of its
-// clock into the fetched OOMs, anchoring on the higher of the two limits, and
-// ignores an older one. The decorated fetcher's inputs are left as they were,
-// and an identity whose inputs could not be read stays failed.
+// The decorator merges a kill the watcher saw within LiveOOMWindow of the
+// instant fetched as of into the fetched OOMs, anchoring on the higher of the
+// two limits, and ignores an older one and one after the instant. The
+// decorated fetcher's inputs are left as they were, and an identity whose
+// inputs could not be read stays failed.
 func TestWithLiveOOMs_MergesKillsSeenWithinTheWindow(t *testing.T) {
 	prom := NewInputs(WithOOMKills(map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}}))
 	live := oomSource{
 		"app":   liveKill("app", 10*time.Second, 184<<20),
 		"side":  liveKill("side", LiveOOMWindow, 50<<20),
 		"stale": liveKill("stale", LiveOOMWindow+time.Second, 50<<20),
+		"later": liveKill("later", -time.Second, 50<<20),
 	}
 	failed := promclient.WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "down"}
 
-	got := WithLiveOOMs(fixedInputs{in: prom, failed: failed}, live, func() time.Time { return now }).
-		FetchInputs(context.Background(), sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}, {Identity: failed}})
+	got := WithLiveOOMs(fixedInputs{in: prom, failed: failed}, live).
+		FetchInputs(context.Background(), now, sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}, {Identity: failed}})
 
 	want := NewInputs(WithOOMKills(map[string]OOM{
 		"app":  {Kills: 1, LimitBytes: 184 << 20, LiveAt: now.Add(-10 * time.Second)},

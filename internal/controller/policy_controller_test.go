@@ -703,10 +703,10 @@ type clockAdvancingInputs struct {
 }
 
 func (s clockAdvancingInputs) FetchInputs(
-	ctx context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []recommender.InputsRequest,
+	ctx context.Context, at time.Time, cfg sustainv1alpha1.ResourcesConfigs, reqs []recommender.InputsRequest,
 ) map[promclient.WorkloadIdentity]recommender.InputsResult {
 	s.clk.SetTime(s.clk.Now().Add(s.took))
-	return s.StaticInputs.FetchInputs(ctx, cfg, reqs)
+	return s.StaticInputs.FetchInputs(ctx, at, cfg, reqs)
 }
 
 // An identity whose members are all in retry backoff is not fetched, and the

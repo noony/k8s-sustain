@@ -269,39 +269,39 @@ func TracedOOMFloor(t sustainv1alpha1.ContainerTrace) (TracedOOM, bool) {
 type liveOOMInputs struct {
 	inputs InputsFetcher
 	source oomwatch.Source
-	now    func() time.Time
 }
 
-// WithLiveOOMs decorates inputs with the kills source holds. A kill counts
-// while the watcher saw it within LiveOOMWindow of now.
-func WithLiveOOMs(inputs InputsFetcher, source oomwatch.Source, now func() time.Time) InputsFetcher {
-	return &liveOOMInputs{inputs: inputs, source: source, now: now}
+// WithLiveOOMs decorates inputs with the kills source holds. A kill counts as
+// of an instant when it happened at or before it and the watcher saw it within
+// LiveOOMWindow of it.
+func WithLiveOOMs(inputs InputsFetcher, source oomwatch.Source) InputsFetcher {
+	return &liveOOMInputs{inputs: inputs, source: source}
 }
 
-// FetchInputs merges every fetched identity's kills into its inputs, read
-// after the fetch so a kill seen while it ran counts. An identity whose
-// inputs could not be read stays failed.
+// FetchInputs merges every fetched identity's kills as of at into its inputs.
+// An identity whose inputs could not be read stays failed.
 func (l *liveOOMInputs) FetchInputs(
 	ctx context.Context,
+	at time.Time,
 	cfg sustainv1alpha1.ResourcesConfigs,
 	reqs []InputsRequest,
 ) map[promclient.WorkloadIdentity]InputsResult {
-	out := l.inputs.FetchInputs(ctx, cfg, reqs)
-	now := l.now()
+	out := l.inputs.FetchInputs(ctx, at, cfg, reqs)
 	for id, r := range out {
 		if r.Inputs == nil {
 			continue
 		}
-		r.Inputs = withLiveOOMs(r.Inputs, l.source.ByWorkload(id), now)
+		r.Inputs = withLiveOOMs(r.Inputs, l.source.ByWorkload(id), at)
 		out[id] = r
 	}
 	return out
 }
 
-// withLiveOOMs returns in with the watcher's kills merged into its OOM kills.
-// Kills the watcher saw longer than LiveOOMWindow before now are ignored. in
-// itself is left untouched: the decorated fetcher may still hold it.
-func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord, now time.Time) *WorkloadInputs {
+// withLiveOOMs returns in with the watcher's kills as of at merged into its
+// OOM kills: a kill after at, or one the watcher saw longer than
+// LiveOOMWindow before it, is ignored. in itself is left untouched: the
+// decorated fetcher may still hold it.
+func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord, at time.Time) *WorkloadInputs {
 	if len(live) == 0 {
 		return in
 	}
@@ -310,16 +310,20 @@ func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord, now t
 		merged = make(oomValues, len(live))
 	}
 	for container, rec := range live {
-		if rec == nil || now.Sub(rec.ObservedAt) > LiveOOMWindow {
+		if rec == nil || at.Sub(rec.ObservedAt) > LiveOOMWindow {
+			continue
+		}
+		// FinishedAt dates the kill but the kubelet may leave it unset; the
+		// watcher seeing an OOMKilled termination is still a kill.
+		killedAt := rec.TerminatedAt
+		if killedAt.IsZero() {
+			killedAt = rec.ObservedAt
+		}
+		if killedAt.After(at) {
 			continue
 		}
 		o := merged[container]
-		// FinishedAt dates the kill but the kubelet may leave it unset; the
-		// watcher seeing an OOMKilled termination is still a kill.
-		o.LiveAt = rec.TerminatedAt
-		if o.LiveAt.IsZero() {
-			o.LiveAt = rec.ObservedAt
-		}
+		o.LiveAt = killedAt
 		o.LimitBytes = max(o.LimitBytes, float64(rec.OOMLimitBytes))
 		merged[container] = o
 	}

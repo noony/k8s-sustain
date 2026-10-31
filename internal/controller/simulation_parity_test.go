@@ -214,8 +214,8 @@ func simulate(t *testing.T, srv *dashboard.Server, name string) simulation {
 // WorkloadRecommendation, from the same objects and inputs at the same
 // instant: with init containers excluded or not, for an owner-name group
 // coordinated against the HPA of one of its members, and for an identity Too
-// young at that instant. Every fetch either side makes is under the settings
-// and for the containers the controller's is.
+// young at that instant. Every fetch either side makes is as of that instant,
+// under the settings and for the containers the controller's is.
 func TestSimulationRecommendsWhatTheControllerStores(t *testing.T) {
 	for _, excludeInit := range []bool{false, true} {
 		t.Run("excludeInitContainers="+strconv.FormatBool(excludeInit), func(t *testing.T) {
@@ -301,6 +301,11 @@ func TestSimulationRecommendsWhatTheControllerStores(t *testing.T) {
 			sized := map[promclient.WorkloadIdentity]int{}
 			for _, req := range calls[0].Requests {
 				sized[req.Identity] = req.Containers
+			}
+			for i, call := range calls {
+				if !call.At.Equal(parityInstant) {
+					t.Errorf("fetch %d as of %v, want the parity instant %v", i, call.At, parityInstant)
+				}
 			}
 			for _, call := range calls[1:] {
 				if !equality.Semantic.DeepEqual(call.Resources, calls[0].Resources) {

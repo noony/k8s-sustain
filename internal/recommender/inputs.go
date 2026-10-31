@@ -3,6 +3,7 @@ package recommender
 import (
 	"context"
 	"maps"
+	"time"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -94,9 +95,10 @@ type InputsResult struct {
 }
 
 // InputsFetcher fetches the recommendation inputs of many identities at once,
-// all under one ResourcesConfigs. The result holds exactly one entry per
-// requested identity. An identity with no samples gets empty Inputs, not an
-// error: an error means its inputs could not be read at all.
+// all under one ResourcesConfigs, as of the instant at: what every signal read
+// then. The result holds exactly one entry per requested identity. An
+// identity with no samples gets empty Inputs, not an error: an error means
+// its inputs could not be read at all.
 type InputsFetcher interface {
-	FetchInputs(ctx context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult
+	FetchInputs(ctx context.Context, at time.Time, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult
 }

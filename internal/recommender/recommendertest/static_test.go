@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -22,7 +23,8 @@ func TestStaticInputs_AnswersEveryRequestAndRecordsIt(t *testing.T) {
 
 	cfg := sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Window: "24h"}}
 
-	got := s.FetchInputs(context.Background(), cfg, []recommender.InputsRequest{
+	at := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	got := s.FetchInputs(context.Background(), at, cfg, []recommender.InputsRequest{
 		{Identity: known, Containers: 1}, {Identity: broken}, {Identity: unknown},
 	})
 
@@ -35,8 +37,8 @@ func TestStaticInputs_AnswersEveryRequestAndRecordsIt(t *testing.T) {
 	if r := got[unknown]; r.Err != nil || !reflect.DeepEqual(r.Inputs, recommender.NewInputs()) {
 		t.Errorf("unknown = %+v, want empty inputs", r)
 	}
-	if calls := s.Calls(); len(calls) != 1 || len(calls[0].Requests) != 3 || calls[0].Resources.CPU.Window != "24h" {
-		t.Errorf("calls = %+v, want one call of three requests under its settings", calls)
+	if calls := s.Calls(); len(calls) != 1 || len(calls[0].Requests) != 3 || calls[0].Resources.CPU.Window != "24h" || !calls[0].At.Equal(at) {
+		t.Errorf("calls = %+v, want one call of three requests as of its instant, under its settings", calls)
 	}
 	if !s.Requested(unknown) {
 		t.Error("Requested(unknown) = false after it was fetched")

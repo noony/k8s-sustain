@@ -106,7 +106,7 @@ func TestSignals_AListedSignalIsFetchedAndComputed(t *testing.T) {
 	cfg := promInputsCfg()
 	cfg.Memory.Limits.EqualsToRequest = true
 
-	got := NewPromInputs(c, 100).FetchInputs(context.Background(), cfg, reqsFor(1, "api", "bad", "web"))
+	got := NewPromInputs(c, 100).FetchInputs(context.Background(), now, cfg, reqsFor(1, "api", "bad", "web"))
 
 	if n := prom.count("cpu", 1); n != 3 {
 		t.Errorf("cpu: %d one-identity queries, want 3 at 60 samples each against a budget of 100", n)

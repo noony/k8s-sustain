@@ -6,6 +6,7 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"time"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -18,7 +19,7 @@ import (
 // identity gets empty inputs, as Prometheus answers for an identity with no
 // samples. Inputs are built with recommender.NewInputs, so they read exactly
 // as PromInputs' do. Every call is recorded so a test can assert on what was
-// fetched, and under which settings.
+// fetched, as of which instant and under which settings.
 type StaticInputs struct {
 	mu     sync.Mutex
 	inputs map[promclient.WorkloadIdentity]*recommender.WorkloadInputs
@@ -26,9 +27,10 @@ type StaticInputs struct {
 	calls  []Call
 }
 
-// Call is one FetchInputs call: the settings it fetched under and the
-// requests it made.
+// Call is one FetchInputs call: the instant it fetched as of, the settings it
+// fetched under and the requests it made.
 type Call struct {
+	At        time.Time
 	Resources sustainv1alpha1.ResourcesConfigs
 	Requests  []recommender.InputsRequest
 }
@@ -65,12 +67,13 @@ func (s *StaticInputs) Fail(id promclient.WorkloadIdentity, err error) *StaticIn
 // FetchInputs answers every request from what Set and Fail configured.
 func (s *StaticInputs) FetchInputs(
 	_ context.Context,
+	at time.Time,
 	cfg sustainv1alpha1.ResourcesConfigs,
 	reqs []recommender.InputsRequest,
 ) map[promclient.WorkloadIdentity]recommender.InputsResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.calls = append(s.calls, Call{Resources: *cfg.DeepCopy(), Requests: slices.Clone(reqs)})
+	s.calls = append(s.calls, Call{At: at, Resources: *cfg.DeepCopy(), Requests: slices.Clone(reqs)})
 	out := make(map[promclient.WorkloadIdentity]recommender.InputsResult, len(reqs))
 	for _, r := range reqs {
 		if err, ok := s.errs[r.Identity]; ok {
